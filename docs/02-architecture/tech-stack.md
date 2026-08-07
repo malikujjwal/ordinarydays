@@ -1,0 +1,607 @@
+# Tech stack
+
+**Status:** canonical for dependency and layering decisions. The locked choices come from
+the project brief; everything marked `> **Decision:**` is a judgement call made here.
+
+Read alongside `data-model.md` (storage shapes) and `api-contract.md` (wire shapes). This
+document says *what we install* and *how the code is arranged*. It does not restate
+entities or endpoints.
+
+---
+
+## 1. Repository layout
+
+pnpm workspaces + Turborepo. One repo, five workspace roots.
+
+```
+ordinarydays/
+├─ apps/
+│  └─ mobile/            Expo app. Ships to iOS via EAS and to web via static export.
+├─ services/
+│  └─ api/               The single Lambda: Hono router, handlers, services, repositories.
+├─ packages/
+│  ├─ shared/            Types, Zod schemas, recurrence engine, money math, API client.
+│  └─ ui/                Design-system primitives (RN + RNW compatible).
+├─ infra/                AWS CDK v2 app.
+├─ docs/
+├─ pnpm-workspace.yaml
+├─ turbo.json
+└─ package.json          Root scripts only. No runtime dependencies here.
+```
+
+`pnpm-workspace.yaml`:
+
+```yaml
+packages:
+  - "apps/*"
+  - "services/*"
+  - "packages/*"
+  - "infra"
+```
+
+Turborepo pipeline (`turbo.json`, abbreviated):
+
+```json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build":     { "dependsOn": ["^build"], "outputs": ["dist/**", ".expo/**"] },
+    "typecheck": { "dependsOn": ["^build"] },
+    "test":      { "dependsOn": ["^build"], "outputs": ["coverage/**"] },
+    "lint":      {},
+    "gen:openapi": { "outputs": ["../../docs/generated/openapi.json"] }
+  }
+}
+```
+
+Turborepo exists for two things only: task graph ordering (`shared` builds before `api`
+and `mobile`) and remote-cache-free local caching so CI reruns skip unchanged packages.
+We do not use Turborepo remote caching — it is another vendor account for no benefit at
+this scale.
+
+---
+
+## 2. Dependency table
+
+Exact versions are pinned in `pnpm-lock.yaml`. The table gives the **minimum major** we
+target. `pnpm` is configured with `save-exact=true` in `.npmrc`, so `package.json` carries
+exact versions and the lockfile is the single source of truth. Renovate/Dependabot raises
+version bumps as PRs (see `security-privacy.md` §7).
+
+### 2.1 Language and toolchain
+
+| Package | Min major | What it is for | Why it beat the alternative |
+| --- | --- | --- | --- |
+| `typescript` | 5.x | Types everywhere, `strict: true`, `noUncheckedIndexedAccess: true` | JS with JSDoc types is unusable for a shared schema package. Flow is dead. |
+| `pnpm` | 9.x | Package manager, workspaces | Content-addressed store means the monorepo installs once; strict node_modules catches phantom dependencies that npm/yarn-classic hide. Yarn Berry PnP breaks React Native's Metro resolver. |
+| `turbo` | 2.x | Task graph + local cache | Nx is a heavier framework with generators and plugins we do not want. `pnpm -r run` alone has no dependency-aware ordering or caching. |
+| `node` | 22.x | Runtime for Lambda, CI, and tooling | Matches the Lambda `nodejs22.x` runtime exactly, so local behaviour equals deployed behaviour. Pinned in `.nvmrc` and in the CI setup step. |
+| `git-cliff` | 2.x | Generates `CHANGELOG.md` from Conventional Commits in `deploy-prod.yml` | Required by `04-conventions/git-workflow.md` §5.4. A hand-maintained changelog goes stale; `git-cliff` reads the commit history we already lint. |
+
+### 2.2 Client
+
+| Package | Min major | What it is for | Why it beat the alternative |
+| --- | --- | --- | --- |
+| `expo` | SDK 54 | App framework, native module layer, EAS Build, OTA updates | Bare React Native means hand-managing Xcode projects, CocoaPods, and native upgrades solo. Expo's prebuild + EAS removes the Mac-in-the-loop requirement for most builds. |
+| `expo-router` | 4.x (ships with SDK 54) | File-based routing, shared between native and web | React Navigation alone requires hand-written navigator trees and has no URL story on web. Expo Router gives real URLs on web and deep links on iOS from the same file tree. |
+| `react-native` | 0.81+ (whatever SDK 54 pins) | The runtime | — |
+| `react-native-web` | 0.20+ | Renders RN primitives to DOM | The alternative is a second Next.js web app duplicating every screen. One founder cannot maintain two clients. |
+| `react` / `react-dom` | 19.x | — | — |
+| `@react-navigation/native` + `@react-navigation/bottom-tabs` | 7.x | The navigation engine Expo Router is built on | Not a choice — Expo Router delegates to it. We depend on it directly only for typed navigation helpers and tab-bar customisation. |
+| `@tanstack/react-query` | 5.x | **Server state**: fetching, caching, retries, optimistic updates, offline mutation queue | Redux Toolkit Query is coupled to Redux. SWR has no mutation queue or persisted cache. Hand-rolled `useEffect` fetching produces exactly the bugs Query already solved. |
+| `zustand` | 5.x | **Client state**: UI-only state — composer draft, filter selections, sheet visibility, onboarding step | Redux for this volume of state is ceremony. Context re-renders the whole subtree. Jotai is fine but Zustand's single-store-per-domain model is easier for an agent to follow. |
+| `zod` | 3.x (or 4.x once the ecosystem's `zod-to-openapi` follows) | Runtime validation + type inference, defined once in `packages/shared` | Yup has weaker inference. `io-ts` is unreadable. Valibot is smaller but lacks the OpenAPI generator we rely on. |
+| `react-native-reanimated` | 4.x | Gesture-driven and layout animations on the UI thread — swipe actions, sheet transitions, checkbox spring | The `Animated` API drops frames on the JS thread during list scrolling, which is exactly when Today's swipe actions fire. |
+| `react-native-gesture-handler` | 2.x | Native-thread gestures backing swipe rows | Peer requirement of Reanimated gestures; RN's `PanResponder` is JS-thread bound. |
+| `expo-image` | 3.x | Attachment and poster rendering, with disk + memory caching and blurhash placeholders | RN's `Image` has no persistent disk cache and no placeholder story; posters are the heaviest content in the app. |
+| `expo-notifications` | 0.3x/1.x (SDK-pinned) | Push token registration, permission prompts, local notification scheduling, notification response handling | Bare `@react-native-firebase/messaging` drags in Firebase for a feature Expo Push already covers for free. |
+| `expo-image-picker` | 16.x (SDK-pinned) | Camera + library access for the photo/screenshot capture path | `react-native-image-picker` needs manual native config; Expo's version handles the iOS permission strings via app config. |
+| `expo-secure-store` | 14.x (SDK-pinned) | Keychain-backed token storage on iOS | `AsyncStorage` is plaintext on disk. See `auth.md` §4. |
+| `expo-crypto` | 14.x (SDK-pinned) | `Idempotency-Key` UUID generation, PKCE verifier/challenge | `crypto.randomUUID` is not present in the Hermes global scope on all SDK versions. |
+| `date-fns` | 4.x | Date arithmetic, formatting, comparison | Moment is deprecated. Luxon is good but heavier and duplicates what `date-fns-tz` gives us. `Temporal` is not yet available on Hermes. |
+| `date-fns-tz` | 3.x | IANA-zone conversion between user-local wall-clock time and UTC instants | Required by `data-model.md` §6 (DST-stable expansion). Nothing else in the `date-fns` family does zone maths. |
+| `react-native-svg` | 15.x (SDK-pinned) | Renders the hand-authored icon set in `packages/ui/src/icons/` on native and web | Required by `04-conventions/design-system.md` §5.4. An icon font ships 60–200 KB of glyphs for ~30 shapes and cannot take a per-instance colour. Expo-managed, so installed with `npx expo install`. |
+
+> **Decision:** TanStack Query for server state, Zustand for client state. Neither replaces
+> the other. The rule enforced in review: **if the value originated from the API, it lives
+> in Query's cache and nowhere else.** No copying server data into Zustand — that is how
+> stale-state bugs start. Zustand holds only values that would be meaningless to persist
+> server-side.
+
+### 2.3 Server
+
+| Package | Min major | What it is for | Why it beat the alternative |
+| --- | --- | --- | --- |
+| `hono` | 4.x | HTTP router, middleware chain, request/response primitives inside one Lambda | Express pulls in a large dependency tree and its Lambda adapters are slow to boot. Fastify is Node-server-shaped, not edge/handler-shaped. Hono has a first-party `aws-lambda` adapter, zero dependencies, and boots in single-digit milliseconds. |
+| `@hono/zod-validator` | 0.4+ | Wires the shared Zod schemas into route validation | Hand-written `schema.parse(await c.req.json())` in every handler is the same thing with more places to forget it. |
+| `aws-jwt-verify` | 5.x | Verifies Cognito ID tokens: signature, `iss`, `aud`, `token_use`, expiry, with cached JWKS | AWS-maintained, understands Cognito's claim conventions. `jose` + hand-rolled JWKS caching is the same code with our bugs in it. |
+| `@aws-sdk/client-dynamodb` + `@aws-sdk/lib-dynamodb` | 3.x | DynamoDB access; `lib-dynamodb`'s `DynamoDBDocumentClient` marshals plain JS objects | Raw `AttributeValue` maps (`{"S": "..."}`) everywhere is unreadable and error-prone. ElectroDB/OneTable add an entity abstraction over a key design we have already specified by hand in `data-model.md`; a second source of truth for keys is a liability. |
+| `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` | 3.x | Presigned `PUT` URLs for attachment upload | Uploading through Lambda burns duration and hits the 6 MB payload limit. |
+| `@aws-sdk/client-scheduler` | 3.x | Creating/deleting one-shot EventBridge schedules for reminders | — |
+| `@aws-sdk/client-sesv2` | 3.x | Invite and RSVP emails | — |
+| `@aws-sdk/client-secrets-manager` | 3.x | Reading the Anthropic API key in Phase 7 | — |
+| `ulid` | 2.x | Prefixed, time-sortable entity IDs (`act_01J…`) per `data-model.md` §8 | UUIDv4 has no sort order, so `sk` ranges lose their natural ordering. UUIDv7 is close but `ulid` has the crockford-base32 encoding we already specified. |
+| `pino` | 9.x | Structured JSON logs, one line per event, redaction of PII fields | `console.log` produces unparseable text in CloudWatch Logs Insights. Winston is heavier and slower to boot. AWS Powertools Logger is good but pulls in the wider Powertools surface for one feature. |
+| `esbuild` | 0.25+ | Bundles the Lambda to a single minified ESM file with `@aws-sdk/*` treated correctly | `webpack` is slow and configuration-heavy. `rollup` needs plugins for node resolution. SWC does not bundle. Sub-second builds keep the deploy loop tight. |
+
+> **Decision:** we bundle the AWS SDK v3 clients into the artifact rather than relying on
+> the Lambda runtime's bundled copy. The runtime's version drifts and is only partially
+> present; a self-contained bundle makes local, CI, and deployed behaviour identical. Cost
+> is roughly 1–2 MB of artifact per SDK client used, which is well inside limits and, once
+> tree-shaken and minified, adds only a few milliseconds to cold start.
+
+### 2.4 Infrastructure
+
+| Package | Min major | What it is for | Why it beat the alternative |
+| --- | --- | --- | --- |
+| `aws-cdk-lib` | 2.x | All infrastructure as TypeScript constructs | See `decisions.md` ADR-007. Terraform is another language and state backend; SAM only covers serverless primitives and its YAML cannot express the Cognito + CloudFront + Scheduler surface cleanly; Serverless Framework changed its licence and adds a vendor dashboard. |
+| `constructs` | 10.x | CDK's construct base library | Peer requirement. |
+| `aws-cdk` (CLI) | 2.x | `cdk deploy`, `cdk diff`, `cdk synth` | Installed as a dev dependency in `infra/`, never globally, so CI and local use the same version. |
+
+### 2.5 Quality and testing
+
+| Package | Min major | What it is for | Why it beat the alternative |
+| --- | --- | --- | --- |
+| `vitest` | 3.x | Unit tests for `packages/shared` and `services/api` | Jest's ESM support is still awkward and it is slow on a monorepo. Vitest reuses the esbuild transform we already have, runs in-band watch mode fast, and its `expect` API is Jest-compatible so agents write familiar assertions. |
+| `@vitest/coverage-v8` | 3.x | Coverage gates. `packages/shared/src/recurrence/**` and `.../money/**` are held at 100% statements/branches. | — |
+| `fast-check` | 3.x | Property-based tests (dev dependency of `packages/shared` only) for money splitting, lexo ranks, and recurrence | Required by `04-conventions/testing.md` §7. Example-based tests prove the cases someone thought of; these three modules have invariants that must hold for every input. |
+| `aws-sdk-client-mock` + `aws-sdk-client-mock-jest` | 4.x | Unit-level mocking of SDK clients for service-layer tests | Hand-rolled stubs of `send()` drift from the SDK's actual command shapes. |
+| `@playwright/test` | 1.4x | Web E2E against the exported static site | Cypress cannot drive multiple origins cleanly (the Cognito Hosted UI redirect) and is slower in CI. |
+| `maestro` | 1.x (CLI, not an npm dep) | iOS E2E flows on simulator and device | Detox requires a custom debug build and a brittle native bridge. Maestro's YAML flows are readable by an agent and run against the same build TestFlight gets. |
+| `@biomejs/biome` | 2.x | Linting **and** formatting, one tool, one config | See decision below. |
+| `syncpack` | 13.x | Keeps dependency versions identical across workspaces | Divergent React versions between `apps/mobile` and `packages/ui` produce hook-dispatcher errors that take a day to diagnose. |
+
+> **Decision:** Biome over ESLint + Prettier. One binary, one config file, no plugin
+> resolution graph, and roughly an order of magnitude faster on a monorepo — lint+format
+> finishes in under a second, so it runs on every pre-commit hook without friction. The
+> cost is real: the React Native and `react-hooks` ESLint plugin ecosystem is richer, and
+> Biome's rule coverage for `exhaustive-deps` is newer. We accept that because the rules
+> we depend on most (`noUnusedVariables`, `useExhaustiveDependencies`, import sorting,
+> `noExplicitAny`) are all present. **Revisit if** a React Native-specific lint rule we
+> need turns out to have no Biome equivalent; the fallback is ESLint flat config +
+> Prettier, which is a half-day migration.
+
+Config lives at the repo root in `biome.json` with per-workspace overrides. `lefthook`
+runs `biome check --write --staged` pre-commit.
+
+---
+
+## 3. Client architecture
+
+### 3.1 Expo Router file layout
+
+```
+apps/mobile/
+├─ app/
+│  ├─ _layout.tsx                  Root: providers (Query, auth, theme, gesture root)
+│  ├─ +not-found.tsx
+│  ├─ (auth)/
+│  │  ├─ _layout.tsx               Redirects to (app) if a session exists
+│  │  ├─ sign-in.tsx
+│  │  ├─ sign-up.tsx
+│  │  └─ verify.tsx
+│  ├─ (app)/
+│  │  ├─ _layout.tsx               Auth guard + bottom tabs (native) / sidebar (web)
+│  │  ├─ (tabs)/
+│  │  │  ├─ _layout.tsx
+│  │  │  ├─ index.tsx              Today
+│  │  │  ├─ plans.tsx
+│  │  │  └─ lists.tsx
+│  │  ├─ activity/
+│  │  │  ├─ [id].tsx               Plan / activity detail
+│  │  │  └─ [id]/expenses.tsx
+│  │  ├─ list/
+│  │  │  └─ [id].tsx
+│  │  ├─ people/
+│  │  │  ├─ index.tsx
+│  │  │  └─ [id].tsx
+│  │  ├─ compose.tsx               Presented modally: the unified Add screen
+│  │  ├─ compose/review.tsx        The capture review screen (concept §13)
+│  │  └─ settings/
+│  │     ├─ index.tsx
+│  │     ├─ notifications.tsx
+│  │     └─ account.tsx
+│  └─ invite/
+│     └─ [token].tsx               Public invite page. Web-only route; see §3.5.
+├─ src/
+│  ├─ components/                  Screen-specific composites
+│  ├─ features/                    Vertical slices: agenda/, lists/, people/, expenses/
+│  │  └─ agenda/
+│  │     ├─ hooks/useAgenda.ts
+│  │     ├─ components/AgendaSection.tsx
+│  │     └─ model/partition.ts     Pure helpers, unit-tested
+│  ├─ hooks/                       Cross-feature hooks (useSession, useTimezone)
+│  ├─ lib/                         queryClient.ts, apiClient.ts, storage.ts, analytics.ts
+│  └─ stores/                      Zustand stores, one per UI domain
+├─ app.config.ts
+└─ eas.json
+```
+
+### 3.2 Layering
+
+Four layers, strictly one-directional. A screen never talks to `fetch`; a hook never
+renders.
+
+| Layer | Location | Rules |
+| --- | --- | --- |
+| Route / screen | `app/**` | Reads params, composes feature components, owns nothing. No data fetching logic beyond calling a feature hook. Under ~150 lines. |
+| Feature component | `src/features/<f>/components/**` | Presentational + local interaction. Receives data as props or from a feature hook. No direct API calls. |
+| Feature hook | `src/features/<f>/hooks/**` | The only place `useQuery`/`useMutation` appears. Owns query keys, optimistic updates, invalidation. Returns view-ready data. |
+| API client | `packages/shared/src/client/**` | Typed functions, one per endpoint, that validate responses with the shared Zod schemas. No React. |
+
+`packages/ui` sits beside all of this: pure primitives (`Text`, `Stack`, `Button`, `Sheet`,
+`Checkbox`, `Row`) with no knowledge of activities, lists, or the API.
+
+### 3.3 Consuming the shared package
+
+`packages/shared` is consumed as a **workspace source dependency**, not a built artifact,
+during development:
+
+```json
+// apps/mobile/package.json
+{ "dependencies": { "@od/shared": "workspace:*", "@od/ui": "workspace:*" } }
+```
+
+Metro must be told to watch the workspace root, or edits to `shared` will not hot-reload:
+
+```js
+// apps/mobile/metro.config.js
+const { getDefaultConfig } = require('expo/metro-config');
+const path = require('node:path');
+
+const workspaceRoot = path.resolve(__dirname, '../..');
+const projectRoot = __dirname;
+const config = getDefaultConfig(projectRoot);
+
+config.watchFolders = [workspaceRoot];
+config.resolver.nodeModulesPaths = [
+  path.resolve(projectRoot, 'node_modules'),
+  path.resolve(workspaceRoot, 'node_modules'),
+];
+config.resolver.disableHierarchicalLookup = true;
+module.exports = config;
+```
+
+`packages/shared` exports through explicit subpath entries so the client never
+accidentally imports server-only code:
+
+```json
+// packages/shared/package.json
+{
+  "exports": {
+    ".":            "./src/index.ts",
+    "./schemas":    "./src/schemas/index.ts",
+    "./types":      "./src/types/index.ts",
+    "./recurrence": "./src/recurrence/index.ts",
+    "./money":      "./src/money/index.ts",
+    "./client":     "./src/client/index.ts",
+    "./errors":     "./src/errors.ts"
+  }
+}
+```
+
+For `services/api` and `infra`, `shared` is compiled by `tsc` to `dist/` as part of
+`turbo build`. For the Expo app, Metro consumes the TypeScript source directly.
+
+### 3.4 Offline and optimistic updates
+
+The app must be usable on a subway. Three mechanisms, in order of importance.
+
+**1. Persisted query cache.** TanStack Query's cache is persisted to `AsyncStorage`
+(native) / `localStorage` (web) via `@tanstack/query-async-storage-persister`. On cold
+start the app renders last-known agenda data immediately and revalidates in the
+background.
+
+```ts
+// src/lib/queryClient.ts
+export const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,               // matches the API's 60 s client-cache guidance
+      gcTime: 7 * 24 * 60 * 60 * 1000, // a week of offline history
+      retry: (failureCount, error) =>
+        isRetryable(error) && failureCount < 3,
+      networkMode: 'offlineFirst',
+    },
+    mutations: { networkMode: 'offlineFirst', retry: 3 },
+  },
+});
+```
+
+**2. Optimistic updates on the interactions that must feel instant.** Specifically:
+task completion, occurrence snooze/skip, list-item check, RSVP change, and list-item
+reorder. Pattern, applied uniformly:
+
+```ts
+useMutation({
+  mutationFn: (v) => api.completeActivity(v),
+  onMutate: async (v) => {
+    await queryClient.cancelQueries({ queryKey: agendaKey(v.date) });
+    const previous = queryClient.getQueryData(agendaKey(v.date));
+    queryClient.setQueryData(agendaKey(v.date), (old) => applyCompletion(old, v));
+    return { previous };
+  },
+  onError: (_e, v, ctx) => queryClient.setQueryData(agendaKey(v.date), ctx?.previous),
+  onSettled: (_d, _e, v) => queryClient.invalidateQueries({ queryKey: agendaKey(v.date) }),
+});
+```
+
+`applyCompletion` and its siblings live in `src/features/*/model/` as pure functions and
+are unit-tested — the optimistic projection must agree with what the server will return,
+or the row will visibly flip back.
+
+**3. Offline mutation queue.** Mutations use `mutationKey` + a persisted mutation cache
+with `queryClient.resumePausedMutations()` on reconnect (`@react-native-community/netinfo`
+drives the online manager). Every creating `POST` carries a client-generated
+`Idempotency-Key` (`expo-crypto`'s `randomUUID`), generated once at `onMutate` time and
+reused on every retry — this is why the API's idempotency records exist.
+
+Scope guard: we do not build a full local-first replica (no SQLite mirror, no CRDT). The
+agenda is a server-computed projection; reimplementing recurrence expansion against a
+local store would duplicate the hardest logic in the product. Offline means "read what you
+had, queue what you did", not "work indefinitely disconnected".
+
+### 3.5 One codebase, two platforms
+
+**Platform-specific files.** Metro and the web bundler resolve `.ios.tsx` / `.web.tsx` /
+`.native.tsx` suffixes automatically. We use this sparingly — only where the platforms
+genuinely differ:
+
+| File | Why it forks |
+| --- | --- |
+| `src/lib/storage.web.ts` / `storage.ios.ts` | Keychain vs. in-memory + cookie. See `auth.md` §4. |
+| `src/lib/push.web.ts` | No-op stub; web push is out of scope for v1. |
+| `src/components/DateTimePicker.web.tsx` | Native wheel picker vs. `<input type="datetime-local">`. |
+| `src/lib/haptics.web.ts` | No-op. |
+
+Everything else uses `Platform.select()` inline for one- or two-line divergences, or
+`Platform.OS === 'web'` guards. A file that is 60% platform branches should be split; a
+file with one branch should not.
+
+**Responsive layout.** Breakpoints live in `packages/ui/src/theme/breakpoints.ts` and are
+read through a `useBreakpoint()` hook backed by `useWindowDimensions()`:
+
+| Name | Min width | Layout |
+| --- | --- | --- |
+| `compact` | 0 | Single column, bottom tab bar, modals as full-screen sheets. iPhone and narrow browser windows. |
+| `medium` | 768 | Single column capped at 720 px and centred; tab bar becomes a left rail. iPad, small laptop. |
+| `expanded` | 1200 | Two panes: list on the left (400 px), detail on the right. Modals become centred dialogs. |
+
+Layout is expressed in flexbox and percentage/`maxWidth` constraints, never in absolute
+pixel positions, so the same tree reflows. No `Dimensions.get()` at module scope — it is
+wrong after rotation and wrong on web resize.
+
+**What web deliberately does differently:**
+
+| Behaviour | iOS | Web | Reason |
+| --- | --- | --- | --- |
+| Public invite page (`/invite/:token`) | Not routed; deep links open the authed plan | The primary surface. Server-agnostic static page that fetches `/public/v1/invites/:token` | Non-users have no app. This route is the entire point of concept §15. |
+| Push notifications | `expo-notifications` + Expo Push | Not implemented | Web Push needs a service worker, VAPID keys, and a separate permission model. Out of scope for v1. |
+| Camera capture | Camera + library via `expo-image-picker` | File input (library/screenshot only) | No reliable cross-browser camera capture worth the code. |
+| Token storage | Keychain via `expo-secure-store` | In-memory access token + HTTP-only refresh cookie | `auth.md` §4. |
+| Navigation gestures | Swipe-back, sheet drag | Browser back/forward, real URLs, no drag-to-dismiss | Users expect the browser's model on web. |
+| Animations | Reanimated worklets | Reanimated's web build (CSS/WAAPI backend); heavy list animations disabled at `compact` | Web animation fidelity is not worth debugging; correctness first. |
+| Haptics | Yes | No-op | No API. |
+| Offline | Persisted cache + mutation queue | Persisted cache only; mutation queue disabled | A browser tab is usually closed, not backgrounded. Queued mutations that never flush are worse than an error toast. |
+
+**The web build ships as a static export.** `npx expo export --platform web` produces
+`dist/` — HTML, JS, and assets, no server. Expo Router is configured with
+`web.output: "static"` in `app.config.ts` so each route pre-renders to its own HTML file,
+which gives the invite page a real URL that CloudFront can serve and crawlers can read.
+CloudFront handles SPA fallback for dynamic segments (see `aws-services.md`).
+
+---
+
+## 4. Server architecture
+
+### 4.1 Shape
+
+One Lambda function, `od-api-{env}`, Node 22 on ARM64, invoked by API Gateway HTTP API
+with a `$default` route so **all** paths reach the same function. Hono does the routing
+inside.
+
+```
+services/api/src/
+├─ index.ts               handler = handle(app)  — the Lambda entry point
+├─ app.ts                 Hono instance, middleware chain, route mounting
+├─ middleware/
+│  ├─ requestId.ts
+│  ├─ logger.ts
+│  ├─ auth.ts             aws-jwt-verify
+│  ├─ rateLimit.ts
+│  ├─ idempotency.ts
+│  └─ errorHandler.ts
+├─ routes/                one file per resource; mirrors api-contract.md §2
+│  ├─ me.ts   agenda.ts   activities.ts   participants.ts   attachments.ts
+│  ├─ lists.ts  people.ts  expenses.ts  notifications.ts  capture.ts
+│  └─ public/invites.ts
+├─ handlers/              request → DTO → service call → response envelope
+├─ services/              business rules. No AWS SDK types cross this boundary.
+├─ repositories/          DynamoDB access. The only place pk/sk strings are constructed.
+├─ lib/
+│  ├─ ddb.ts              DocumentClient singleton
+│  ├─ logger.ts           pino instance
+│  ├─ errors.ts           AppError -> re-exports the shared error codes
+│  └─ config.ts           env parsing, validated with Zod at module load
+└─ reminder/              the separate reminder Lambda's entry point (see infrastructure.md)
+```
+
+### 4.2 Middleware chain, in order
+
+Order is load-bearing. Each entry states what it does and why it sits where it does.
+
+| # | Middleware | Does | Why here |
+| --- | --- | --- | --- |
+| 1 | `requestId` | Reads `X-Request-Id` or generates `req_<ulid>`; puts it on the context and the response header | Everything downstream logs it, including failures in later middleware. |
+| 2 | `logger` | pino child logger bound to `requestId`, `route`, `userId` (once known); logs one line on completion with status and duration | Must wrap everything so timing includes all work. Redacts per `security-privacy.md` §4. |
+| 3 | `errorHandler` (`app.onError`) | Maps thrown errors to the contract's error envelope | Registered early so it catches throws from every later middleware. |
+| 4 | `cors` | Allows the web origins only (`https://ordinarydays.app`, `https://dev.ordinarydays.app`, `http://localhost:8081`); `credentials: true` | Must answer `OPTIONS` before auth rejects it as unauthenticated. |
+| 5 | `securityHeaders` | `X-Content-Type-Options`, `Referrer-Policy`, `Cache-Control: no-store` by default | Cheap, applies to every response including errors. |
+| 6 | `bodyLimit` | Rejects bodies over 256 KB with `413` | Before parsing, so a large body is never buffered into a JS object. |
+| 7 | `routeSplit` | `/public/v1/*` skips auth; everything else requires it. A path matching neither returns `404`. | The single place the public/private boundary is decided. See `auth.md` §7. |
+| 8 | `auth` | Verifies the bearer ID token with the module-scope `CognitoJwtVerifier`; sets `c.set('user', { userId, email, emailVerified })` | After CORS/limits, before anything that reads user data. |
+| 9 | `rateLimit` | DynamoDB counter keyed by `userId` (authed) or hashed IP (public); returns `429` + `Retry-After` | Needs the identity from step 8 for authed routes; runs with the IP key for public ones. |
+| 10 | `idempotency` | On `POST` creates: reads `IDEM#<userId>#<key>`; on hit returns the stored response; on miss stores the response after the handler succeeds | After rate limiting so a retry storm cannot write idempotency records for free. |
+| 11 | `zValidator` (per route) | Validates params/query/body against the shared Zod schema | Route-local, because the schema differs per route. |
+| 12 | Handler | — | — |
+
+Authorisation (owner vs. participant vs. stranger) is **not** in this chain — it needs the
+loaded activity. It lives in a single `assertActivityAccess(userId, activityId, level)`
+helper in `services/authz.ts`, called at the top of every activity-scoped service method,
+per `api-contract.md` §3.
+
+### 4.3 Layering
+
+```
+route (Hono)  →  handler  →  service  →  repository  →  DynamoDBDocumentClient
+```
+
+| Layer | Owns | Must not |
+| --- | --- | --- |
+| Route | Path, method, per-route validator, calling one handler | Contain business logic |
+| Handler | Mapping validated input to a service argument; wrapping the result in the `{ data, meta }` envelope; choosing the status code | Touch the AWS SDK; construct keys |
+| Service | Business rules, authorisation checks, orchestration across repositories, transaction composition, domain errors | Know about HTTP, Hono, headers, or status codes |
+| Repository | Key construction (`ACT#${id}` etc.), `Query`/`GetItem`/`TransactWriteItems`, cursor encode/decode, `schemaVersion` upgrade-on-read | Know about users' permissions or HTTP |
+| `lib/ddb.ts` | One `DynamoDBDocumentClient` created at module scope with `removeUndefinedValues: true` | Be re-created per request |
+
+Pure domain logic — recurrence expansion, split arithmetic, lexo ranks — lives in
+`packages/shared`, not in `services/`. The service layer calls it. That is what makes it
+testable without AWS and reusable by the client for optimistic updates.
+
+### 4.4 Error to HTTP mapping
+
+One error class, one table, one place.
+
+```ts
+// services/api/src/lib/errors.ts
+import type { ErrorCode } from '@od/shared/errors';
+
+export class AppError extends Error {
+  constructor(
+    readonly code: ErrorCode,
+    message: string,
+    readonly details?: { path: string; message: string }[],
+    readonly retryAfterSeconds?: number,
+  ) { super(message); }
+}
+```
+
+| Error code | HTTP | Thrown when | Body notes |
+| --- | --- | --- | --- |
+| `unauthenticated` | 401 | Missing, malformed, expired, or unverifiable token | `WWW-Authenticate: Bearer` |
+| `forbidden` | 403 | Authenticated, identified as a participant, attempting an owner-only action | Only used where existence is already known to the caller |
+| `not_found` | 404 | Resource absent **or** caller has no relationship to it | Never 403 for strangers — `api-contract.md` §3 |
+| `validation_failed` | 400 | Zod failure, 62-day window exceeded, unparseable cursor | `details[]` from `ZodError.issues`, path-mapped |
+| `conflict` | 409 | `If-Match` mismatch, deleting a person still on an active activity | Includes current `updatedAt` |
+| `participant_limit_exceeded` | 422 | > 50 participants | — |
+| `series_limit_exceeded` | 200 | > 200 active series — returned as a `warnings[]` entry, not an error | Response still succeeds |
+| `invite_expired` | 410 | Invite past expiry | Public surface |
+| `invite_revoked` | 410 | `revoked: true` | Public surface |
+| `rate_limited` | 429 | Over the limits in `api-contract.md` §4 | `Retry-After` |
+| `not_implemented` | 501 | `/v1/capture/*` before Phase 7 | Stable stub |
+| `upgrade_required` | 426 | Kill-switched client version | `updateUrl` in details |
+| `internal` | 500 | Anything uncaught | Message is always the literal string `"An unexpected error occurred."` — never the exception text |
+
+`errorHandler` also translates `ZodError` → `validation_failed` and known DynamoDB errors:
+`ConditionalCheckFailedException` → `conflict`, `TransactionCanceledException` with a
+conditional-check reason → `conflict`, `ProvisionedThroughputExceededException` /
+`RequestLimitExceeded` → `503` with `Retry-After: 1`. Every 5xx logs at `error` with the
+stack; every 4xx logs at `warn` without one.
+
+### 4.5 Cold start budget
+
+**Budget: under 400 ms of init duration (p95) and under 700 ms total for a cold
+`GET /v1/agenda`.** Warm p95 target is 60 ms server-side.
+
+How it is held:
+
+| Lever | Detail |
+| --- | --- |
+| ARM64 (Graviton2) | Cheaper per GB-second and, for this workload, no slower to boot than x86. |
+| Memory 1024 MB | CPU scales with memory. 512 MB roughly doubles init time; above 1024 MB gains flatten. Re-measure with a power-tuning run before Phase 5 and adjust — this figure is a starting point, not a measurement. |
+| esbuild bundle, ESM, minified, `target: node22` | One file, no `require` resolution walk over `node_modules` at boot. |
+| Tree-shaken SDK imports | Import specific clients (`@aws-sdk/client-dynamodb`), never `aws-sdk`. Only clients actually used per code path are imported at module scope; SES, Scheduler, and Secrets Manager clients are lazily created inside the functions that need them. |
+| Module-scope singletons | `DynamoDBDocumentClient`, `CognitoJwtVerifier`, and the pino logger are created once outside the handler and reused across warm invocations. The JWKS is fetched once and cached. |
+| No dependency injection container, no ORM, no decorators, no `reflect-metadata` | Each of these adds tens of milliseconds of boot for no benefit at this size. |
+| `NODE_OPTIONS` free of `--enable-source-maps` in prod | Source maps cost boot time; we ship them to the artifact store, not the runtime. Dev enables them. |
+| Bundle size ceiling | CI fails if the zipped artifact exceeds **5 MB**. Checked in the build job. |
+
+Explicitly **not** used: provisioned concurrency (it bills continuously and would break the
+$0 target), SnapStart (Java/.NET only), and Lambda extensions.
+
+A cold start budget test runs in CI as part of the deploy job: after a dev deploy, invoke
+the function three times with a forced cold start (update an environment variable to
+recycle execution environments) and fail the job if p95 init duration exceeds 400 ms.
+
+---
+
+## 5. `packages/shared`
+
+The reason the monorepo exists. Everything here is isomorphic: no Node built-ins beyond
+`node:crypto` behind a platform shim, no AWS SDK, no React.
+
+```
+packages/shared/src/
+├─ index.ts
+├─ types/           Activity, Recurrence, List, Person, Expense, … (data-model.md §4)
+├─ schemas/         Zod schemas + inferred types. One file per resource.
+│  ├─ activity.ts   createActivityInput, patchActivityInput, activity
+│  ├─ list.ts  person.ts  expense.ts  agenda.ts  invite.ts  capture.ts
+│  └─ common.ts     isoDate, hhmm, ianaTimezone, cents, ulidId, cursor
+├─ recurrence/
+│  ├─ expand.ts     expandRecurrence(rec, from, to, tz) — pure, no I/O
+│  └─ describe.ts   "Every weekday at 6:00 PM" for the UI
+├─ money/
+│  ├─ split.ts      equal/exact/shares splitting with exact remainder distribution
+│  └─ balance.ts    net balance computation from expense + settlement lists
+├─ rank/            lexoRankBetween(a, b) for list reordering
+├─ client/          Typed API client: one function per endpoint
+│  ├─ http.ts       fetch wrapper: base URL, auth header injection, retry, error mapping
+│  └─ endpoints/*.ts
+├─ errors.ts        The closed ErrorCode union + AppErrorBody type
+├─ constants.ts     Limits: MAX_PARTICIPANTS=50, MAX_AGENDA_DAYS=62, MAX_UPLOAD_BYTES
+└─ openapi.ts       zod-to-openapi registration; emits docs/generated/openapi.json
+```
+
+### 5.1 The one rule
+
+> **A validation schema is defined exactly once, in `packages/shared/src/schemas/`, and is
+> imported by both the Lambda and the client. Neither side may define its own.**
+
+Consequences that follow from it, and are enforced in review:
+
+- The Lambda validates inbound requests with the same object the client used to build the
+  request. A field the client can send is a field the server accepts, by construction.
+- Types are **inferred**, never hand-written alongside a schema:
+  `export type CreateActivityInput = z.infer<typeof createActivityInput>;`
+- The client validates responses too, in dev and test builds. In production the response
+  parse is `safeParse` and a failure logs a warning rather than throwing — a server that
+  added a field must not break a shipped app.
+- `docs/generated/openapi.json` is generated from these schemas and checked in. CI
+  regenerates and fails on a diff, so the spec cannot drift.
+- Any limit that both sides enforce (participant cap, agenda window, upload size) is a
+  constant in `constants.ts`, imported by both. Two copies of `50` is a bug waiting.
+
+### 5.2 What must never enter `shared`
+
+React or React Native imports (that is `packages/ui`), AWS SDK clients, `process.env`
+reads, DynamoDB key construction, or anything that makes a network call other than through
+the injected `fetch` in `client/http.ts`.
+
+---
+
+## 6. Version policy
+
+- **Exact versions are pinned in `pnpm-lock.yaml`.** `.npmrc` sets `save-exact=true`;
+  `package.json` therefore also carries exact versions, not ranges. The lockfile is
+  committed and CI installs with `--frozen-lockfile`.
+- The table in §2 gives the **minimum major** we target. Anything at or above that major
+  is acceptable; anything below is not.
+- Expo-managed packages (`expo-*`, `react-native`, `react`, `react-native-web`,
+  `react-native-reanimated`, `react-native-gesture-handler`) are upgraded **only** via
+  `npx expo install --fix` after an SDK bump. Their versions are dictated by the SDK, not
+  by us. `npx expo-doctor` runs in CI and fails on a mismatch.
+- Node is pinned in `.nvmrc`, `package.json#engines`, and the CDK Lambda runtime
+  (`Runtime.NODEJS_22_X`). All three must agree; a CI check asserts it.
+- Dependency updates arrive as grouped Dependabot PRs weekly (patch/minor grouped, major
+  individual). See `security-privacy.md` §7.

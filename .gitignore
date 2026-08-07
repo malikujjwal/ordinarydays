@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Expo
+.expo/
+.expo-shared/
+web-build/
+ios/
+android/
+
+# EAS
+credentials.json
+*.p8
+*.p12
+*.mobileprovision
+*.certSigningRequest
+
+# CDK
+cdk.out/
+cdk.context.json
+.cdk.staging/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+aws-exports.js
+
+# Test and coverage
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+.maestro/tests/*.log
+
+# Local DynamoDB
+.dynamodb/
+shared-local-instance.db
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Generated — one deliberate exception, see docs/02-architecture/api-contract.md §6
+docs/generated/*
+!docs/generated/openapi.json
