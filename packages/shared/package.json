@@ -42,13 +42,17 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b",
-    "test": "tsc -b && vitest run"
+    "typecheck": "tsc -b && tsc -p tsconfig.scripts.json",
+    "test": "tsc -b && vitest run",
+    "gen:openapi": "tsx scripts/gen-openapi.ts"
   },
   "dependencies": {
+    "@asteasolutions/zod-to-openapi": "9.1.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "openapi3-ts": "4.6.1",
+    "tsx": "4.23.11",
     "vitest": "3.2.7"
   }
 }

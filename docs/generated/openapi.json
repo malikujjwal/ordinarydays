@@ -1,0 +1,173 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Ordinary Days API",
+    "version": "0.1.0",
+    "description": "The API behind Today, Plans and Lists. Generated from the Zod schemas in `packages/shared`; never edited by hand."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local development"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok"
+                ]
+              },
+              "sha": {
+                "type": "string",
+                "minLength": 1
+              },
+              "stage": {
+                "type": "string",
+                "enum": [
+                  "local",
+                  "dev",
+                  "prod"
+                ]
+              },
+              "coldStart": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "status",
+              "sha",
+              "stage",
+              "coldStart"
+            ]
+          },
+          "meta": {
+            "type": "object",
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "nextCursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+                "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+              }
+            },
+            "required": [
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "unauthenticated",
+                  "forbidden",
+                  "not_found",
+                  "validation_failed",
+                  "payload_too_large",
+                  "conflict",
+                  "rate_limited",
+                  "series_limit_exceeded",
+                  "participant_limit_exceeded",
+                  "invite_expired",
+                  "invite_revoked",
+                  "not_implemented",
+                  "upgrade_required",
+                  "internal"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "message"
+                  ]
+                }
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "requestId"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "summary": "Liveness and build identity",
+        "description": "Returns the deployed git SHA and stage. Performs no I/O — a liveness signal that fails because the table is throttled is not a liveness signal. Unauthenticated by exception in `routeSplit`, and the only route in `/v1` that is.",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "The service is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected failure. The message is always the literal safe string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

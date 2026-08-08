@@ -19,7 +19,8 @@ export const healthData = z.object({
   coldStart: z.boolean(),
 });
 
-export const healthResponse = envelope(healthData);
+/** `.meta({ id })` names it in the OpenAPI document — see the note in `error.ts`. */
+export const healthResponse = envelope(healthData).meta({ id: 'HealthResponse' });
 
 export type HealthData = z.infer<typeof healthData>;
 export type HealthResponse = z.infer<typeof healthResponse>;

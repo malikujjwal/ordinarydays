@@ -18,6 +18,7 @@
     "lint:fix": "biome check --write .",
     "depcruise": "depcruise --config .dependency-cruiser.cjs apps packages services infra",
     "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
+    "gen:openapi:check": "pnpm gen:openapi && git diff --exit-code docs/generated/openapi.json",
     "e2e:web": "playwright test",
     "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm depcruise"
   },

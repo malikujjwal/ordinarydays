@@ -27,7 +27,9 @@ export default defineConfig({
         'src/index.ts',
         'src/**/index.ts',
         'src/types/**',
-        'src/openapi.ts',
+        // `src/openapi.ts` is deliberately NOT excluded. It is pure — it builds a document
+        // and writes nothing — so it is covered like anything else, and the file-writing
+        // half lives in `scripts/gen-openapi.ts`.
       ],
       thresholds: {
         // `testing.md` §9, `packages/shared` overall.

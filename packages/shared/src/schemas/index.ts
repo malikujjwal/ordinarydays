@@ -7,4 +7,5 @@
  */
 export * from './common.js';
 export * from './envelope.js';
+export * from './error.js';
 export * from './health.js';
