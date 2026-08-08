@@ -379,6 +379,7 @@ packages:
 onlyBuiltDependencies:
   - esbuild
   - "@biomejs/biome"
+  - lefthook
 ```
 
 `onlyBuiltDependencies` is the supply-chain control from `security-privacy.md` §7: install

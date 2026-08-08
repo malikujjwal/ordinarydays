@@ -20,6 +20,13 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm depcruise"
   },
   "devDependencies": {
-    "turbo": "2.10.9"
+    "@biomejs/biome": "2.5.7",
+    "@commitlint/cli": "21.2.1",
+    "@commitlint/config-conventional": "21.2.0",
+    "@types/node": "22.20.1",
+    "lefthook": "1.13.6",
+    "syncpack": "13.0.4",
+    "turbo": "2.10.9",
+    "typescript": "5.9.3"
   }
 }

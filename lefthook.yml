@@ -1,0 +1,22 @@
+# Git hooks. See docs/02-architecture/tech-stack.md section 2.5 and
+# docs/03-implementation/phase-00-foundations.md P0-06.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: biome
+      run: pnpm exec biome check --write --staged --no-errors-on-unmatched
+      stage_fixed: true
+
+    # gitleaks is a Go binary, not an npm dependency, so a fresh clone may not
+    # have it yet. Skipping loudly beats blocking the commit or passing in
+    # silence - CI runs gitleaks unconditionally (infrastructure.md section 7).
+    - name: gitleaks
+      run: gitleaks protect --staged --redact
+      skip:
+        - run: test -z "$(command -v gitleaks)"
+      fail_text: gitleaks found a secret in the staged changes. Rotate it, do not just unstage it.
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      run: pnpm exec commitlint --edit {1}

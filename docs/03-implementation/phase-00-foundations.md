@@ -306,18 +306,36 @@ five workspaces.
 **Files.** `biome.json`, `lefthook.yml`, `.syncpackrc`, `tsconfig.base.json`, and a
 `tsconfig.json` per workspace extending it.
 
-**Approach.** `tsconfig.base.json` sets `strict: true`, `noUncheckedIndexedAccess: true`,
-`exactOptionalPropertyTypes: true`, `moduleResolution: "bundler"`, `target: "ES2023"`,
+**Approach.** `tsconfig.base.json` is
+[`../04-conventions/repo-structure.md#53-typescript-project-references`](../04-conventions/repo-structure.md#53-typescript-project-references)
+verbatim — `strict: true`, `noUncheckedIndexedAccess: true`, `exactOptionalPropertyTypes:
+true`, `moduleResolution: "Bundler"`, `target: "ES2022"` with `lib: ["ES2023", "DOM"]`,
 `verbatimModuleSyntax: true`, `skipLibCheck: true`, and `composite: true`.
+
+> **Corrected in P0-06:** this paragraph read `target: "ES2023"`. `repo-structure.md` §5.3
+> says `ES2022` with an `ES2023` lib, `coding-standards.md` §1.1 names §5.3 as the authority
+> on compiler options, and §5.3 is the complete config rather than a partial restatement of
+> it. The lib is `ES2023` either way, so the only difference was whether a handful of ES2023
+> syntax features downlevel.
 
 **Project references and path aliases** are set up here, not retrofitted, exactly as
 [`../04-conventions/repo-structure.md#53-typescript-project-references`](../04-conventions/repo-structure.md#53-typescript-project-references)
 and §5.4 specify. `services/api` and `apps/mobile` each reference `packages/shared`;
-`apps/mobile` also references `packages/ui`; `infra` references `packages/shared`. The
-aliases (`@od/shared/*`, `@od/ui`, and the in-package `~/*`) are declared once in
-`tsconfig.base.json` and mirrored in `metro.config.js` (P0-19) and in the Vitest configs
-(P0-24). Three copies of the same alias table drifting apart is the failure mode; a unit
-test that resolves one alias per consumer is the cheapest guard.
+`apps/mobile` also references `packages/ui`; `infra` references `packages/shared`.
+
+**There are no `@od/*` entries in tsconfig `paths`.** Cross-package resolution is pnpm
+workspace links plus each package's `exports` map (`tech-stack.md` §3.3), which Metro,
+esbuild and `tsc` all understand. The only alias is `@/*` → `./src/*`, declared in
+`apps/mobile/tsconfig.json` alone and mirrored in `metro.config.js` (P0-19), the Babel
+module resolver, and the Vitest configs (P0-24). Two copies of that one-line table drifting
+apart is the failure mode; a resolution test per consumer is the cheapest guard.
+
+> **Corrected in P0-06:** this paragraph previously required `@od/shared/*`, `@od/ui` and
+> an in-package `~/*` to be declared in `tsconfig.base.json`. `repo-structure.md` §5.4 says
+> the opposite in as many words — "Do **not** add tsconfig `paths` entries for `@od/*`" —
+> and gives the reason: a `paths` entry lets `tsc` resolve an import that Metro cannot,
+> which is the exact failure the workspace links exist to prevent. §5.4 also names the
+> in-package alias `@/*`, not `~/*`. The canonical doc wins on both counts.
 
 `biome.json` at the root with per-workspace overrides. Enable `noUnusedVariables`,
 `useExhaustiveDependencies`, `noExplicitAny`, and import sorting (`organizeImports`).

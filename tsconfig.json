@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/ui" },
+    { "path": "apps/mobile" },
+    { "path": "services/api" },
+    { "path": "infra" }
+  ]
+}

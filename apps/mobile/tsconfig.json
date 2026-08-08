@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "paths": { "@/*": ["./src/*"] } },
+  "files": [],
+  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/ui" }]
+}

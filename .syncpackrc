@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/syncpack@13.0.4/dist/schema.json",
+  "semverGroups": [
+    {
+      "label": "Exact versions everywhere, to agree with save-exact=true in .npmrc",
+      "packages": ["**"],
+      "dependencyTypes": ["**"],
+      "dependencies": ["**"],
+      "range": ""
+    }
+  ]
+}
