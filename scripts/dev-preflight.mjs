@@ -128,6 +128,34 @@ async function ensureDynamo() {
   );
 }
 
+// ── The shared package ──────────────────────────────────────────────────────────────────
+/**
+ * `packages/shared` has to be **compiled** before anything reaches it through Node.
+ *
+ * Its `exports` map resolves `react-native` to `src/*.ts` and everything else to
+ * `dist/*.js` (`tech-stack.md` §3.3, amended in P0-12). Metro takes the first branch and is
+ * fine; the create-table script and the API's dev server take the second, and `dist/` is
+ * build output, so it does not exist in a fresh clone.
+ *
+ * Found by the P0-23 clean-clone check and by nothing before it — every machine that had
+ * already run `pnpm build` or `pnpm verify` had a `dist/` lying around, which is precisely
+ * the class of bug that check exists to find.
+ */
+function ensureSharedBuilt() {
+  if (existsSync(join(root, 'packages', 'shared', 'dist', 'table', 'index.js'))) return;
+
+  act(
+    'building @od/shared (its dist/ is what Node resolves, and a fresh clone has none)',
+  );
+  const result = sh('pnpm', ['--filter', '@od/shared', 'build'], { stdio: 'pipe' });
+  if (result.status !== 0) {
+    fail(
+      '@od/shared could not be built, and the API cannot start without it.',
+      `Run \`pnpm --filter @od/shared build\` to see why:\n${(result.stderr ?? '').trim()}`,
+    );
+  }
+}
+
 // ── The table ───────────────────────────────────────────────────────────────────────────
 /**
  * `ListTables` over plain HTTP, with a credential string that is present but meaningless.
@@ -195,6 +223,7 @@ function ensureEnv() {
 // ── Run ─────────────────────────────────────────────────────────────────────────────────
 checkNode();
 ensureEnv();
+ensureSharedBuilt();
 await ensureDynamo();
 await ensureTable();
 
