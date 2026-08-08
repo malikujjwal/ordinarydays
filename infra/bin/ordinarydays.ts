@@ -20,9 +20,12 @@ import { applyAppTags } from '../lib/tags.js';
  * undefined at synth is a synth that only works on a machine with credentials configured.
  * Phase 4 pins the environment when it first deploys. §1.2 is amended to say so.
  *
- * For the same reason no stack here may ever call `HostedZone.fromLookup`, `Vpc.fromLookup`
- * or any other context lookup. A lookup added carelessly turns a green CI job into one that
- * passes only on the founder's laptop.
+ * For the same reason no stack here may call `HostedZone.fromLookup`, `Vpc.fromLookup` or
+ * any other context lookup **while CI synthesises without credentials**, which is every
+ * phase up to 4. A lookup added carelessly turns a green CI job into one that passes only
+ * on the founder's laptop. P5-01 introduces the first one deliberately, once the zone
+ * exists and CI has a deploy role, together with the `cdk.context.json` it writes; the
+ * scope was left off this sentence in P0-09 and is restored in P0-18.
  *
  * The stage comes from the **stack name** (`cdk deploy 'od-*-dev'`), never from a `-c stage=`
  * context flag, so there is no way to synth dev config into a prod stack name.

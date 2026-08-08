@@ -11,12 +11,20 @@ import { applyStackTags } from '../tags.js';
  * group or network in this architecture, and a stack called `NetworkStack` invites someone
  * to add one.
  *
- * Stays an empty shell through **P0-18**. It gains the hosted zone, the edge certificate
- * for `*.{domain}` and the API certificate in **Phase 5**, when the domain is first
- * registered. Until then no stage sets `cfg.domain`, so there is nothing to certify.
+ * A shell, and P0-18 leaves it one. It gains the zone reference, the edge certificate for
+ * `*.{domain}` and the API certificate in **P5-01**, when the domain is first registered —
+ * registering it in Route 53 is what creates the public hosted zone, so this stack refers to
+ * a zone rather than declaring one. Until then no stage sets `cfg.domain`, so there is
+ * nothing to certify, and it is not in Phase 4's dev deploy set (**P4-05**).
  *
- * When it is filled: no `HostedZone.fromLookup`. A context lookup needs credentials at
- * synth time and turns a green CI job into one that passes only on the founder's laptop.
+ * > **Corrected in P0-18: the `HostedZone.fromLookup` ban is a Phase 0 rule, not a
+ * > permanent one.** This said "when it is filled: no `HostedZone.fromLookup`", which reads
+ * > as a prohibition on the very thing P5-01 instructs — it looks the zone up, because by
+ * > then the zone exists and CI has a deploy role. The real rule, from P0-09, is that **no
+ * > context lookup may exist while CI synthesises without credentials**, which is exactly
+ * > the period this stack spends as a shell. A lookup added here today turns a green CI job
+ * > into one that passes only on the founder's laptop; the same lookup added in P5-01 comes
+ * > with a checked-in `cdk.context.json` and a note about clearing it when it goes stale.
  */
 export interface DnsStackProps extends cdk.StackProps {
   cfg: EnvConfig;

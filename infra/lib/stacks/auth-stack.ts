@@ -7,9 +7,16 @@ import type { DnsStack } from './dns-stack.js';
 /**
  * `od-auth-{stage}` — Cognito (`infrastructure.md` §1.1).
  *
- * Stays an empty shell through **P0-18**. It gains the user pool, the three app clients
- * (`auth.md` §1.7), the user pool domain, the Apple identity provider, and the pre-sign-up
- * and post-confirmation Lambdas in **Phase 4**, which is when identity stops being deferred.
+ * A shell, and P0-18 leaves it one. It gains the user pool, the three app clients
+ * (`auth.md` §1.7), the user pool domain and the pre-sign-up and post-confirmation Lambdas
+ * in **P4-08**, and the Apple identity provider in **P4-10** — Phase 4, which is when
+ * identity stops being deferred. It is the one shell of the three that Phase 4 deploys.
+ *
+ * Nothing is exported from it yet, deliberately. `ApiStack` already takes it as a prop and
+ * reads nothing off it; the user pool id and client ids appear here when P4-08 creates the
+ * things they identify. A field declared before its resource exists reads as an implemented
+ * control that is not one — the same argument that kept `AUTH_MODE` out of `ApiStack` in
+ * P0-15.
  *
  * Takes `dns` because the Cognito custom domain needs the zone once one exists. The
  * construct is passed, never an `Fn::ImportValue` string (§1.2).
