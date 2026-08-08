@@ -1,3 +1,4 @@
+import { isRetryable } from '@od/shared/client';
 import { QueryClient } from '@tanstack/react-query';
 
 /**
@@ -25,9 +26,21 @@ export const queryClient = new QueryClient({
        * and the default turns "show me what you had" into a spinner.
        */
       networkMode: 'offlineFirst',
-      // §3.4's retry predicate needs `isRetryable`, which arrives with the typed client in
-      // P0-20. Until then the library default (3 attempts) applies, which is the same
-      // count without the error-class check.
+      /**
+       * §3.4's predicate, now that `isRetryable` exists (P0-20). Its real work is the
+       * error-class check: the library default retries **everything** three times, so a
+       * `validation_failed` — which will fail identically forever — cost four round trips
+       * and delayed the error the user needs to see by several seconds.
+       *
+       * ⚠️ These retries **multiply** with the client's own. `createHttpClient` already
+       * retries a network failure or a 5xx up to three times, so a retryable error can now
+       * produce up to sixteen requests before the UI gives up. That is the two canonical
+       * defaults composing, not a decision either doc took: `tech-stack.md` §3.4 specifies
+       * this predicate and P0-20 specifies the transport retries, and neither mentions the
+       * other. Raised in P0-20 for a decision; the shape of the fix is to let one layer own
+       * it, and the transport is the layer that can see a `Retry-After`.
+       */
+      retry: (failureCount, error) => isRetryable(error) && failureCount < 3,
     },
     mutations: { networkMode: 'offlineFirst', retry: 3 },
   },

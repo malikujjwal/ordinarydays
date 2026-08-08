@@ -1,5 +1,5 @@
 import type { HttpClientConfig } from '@od/shared/client';
-import { nullTokenProvider } from '@od/shared/client';
+import { createHttpClient, nullTokenProvider } from '@od/shared/client';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
@@ -11,7 +11,8 @@ import { Platform } from 'react-native';
  * This module is the one boundary that turns Expo's `extra` into that argument, so there is
  * exactly one file to look at when the app is talking to the wrong API.
  *
- * P0-20 adds the client itself and consumes `httpClientConfig` unchanged.
+ * P0-20 built the client on top of it. `httpClientConfig` was not changed to accommodate
+ * it — the seam held, which is the point of having written it first.
  */
 
 /** The port `services/api` listens on locally. Set in P0-21's local server. */
@@ -79,4 +80,16 @@ export const httpClientConfig: HttpClientConfig = {
   clientVersion: `${Platform.OS === 'web' ? 'web' : Platform.OS}/${
     Constants.expoConfig?.version ?? '0.0.0'
   }`,
+  /**
+   * `__DEV__` is Expo's own "this is not a production bundle" flag, which is exactly the
+   * distinction the setting needs — not the profile, because a `dev`-profile build handed to
+   * a tester is still a shipped app that must not crash on a field the server added.
+   */
+  strictResponses: __DEV__,
 };
+
+/**
+ * The app's single client. Module scope, like `queryClient`: it holds no per-render state,
+ * and a new one per component would rebuild the header set on every mount.
+ */
+export const apiClient = createHttpClient(httpClientConfig);
