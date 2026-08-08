@@ -1,2 +1,12 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalise every text file to LF in the index AND in the working tree.
+#
+# `text=auto` alone normalises only the index; with core.autocrlf=true a Windows
+# checkout still gets CRLF working copies, and Biome formats to LF, so `pnpm lint`
+# fails on files nobody has edited. `eol=lf` pins the working tree too, which is
+# what keeps the formatter, the repo and every platform agreeing.
+* text=auto eol=lf
+
+# Lockfiles and generated artefacts: same rule, stated explicitly so a future
+# `binary` or `-text` override is a deliberate act rather than an accident.
+pnpm-lock.yaml text eol=lf
+docs/generated/openapi.json text eol=lf

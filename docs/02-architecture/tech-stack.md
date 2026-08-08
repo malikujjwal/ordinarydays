@@ -72,11 +72,32 @@ version bumps as PRs (see `security-privacy.md` §7).
 
 | Package | Min major | What it is for | Why it beat the alternative |
 | --- | --- | --- | --- |
-| `typescript` | 5.x | Types everywhere, `strict: true`, `noUncheckedIndexedAccess: true` | JS with JSDoc types is unusable for a shared schema package. Flow is dead. |
+| `typescript` | 7.x | Types everywhere, `strict: true`, `noUncheckedIndexedAccess: true` | JS with JSDoc types is unusable for a shared schema package. Flow is dead. **7.x is the native (Go) compiler**, shipped as prebuilt per-platform binaries the way `esbuild` is — see the decision below. |
 | `pnpm` | 9.x | Package manager, workspaces | Content-addressed store means the monorepo installs once; strict node_modules catches phantom dependencies that npm/yarn-classic hide. Yarn Berry PnP breaks React Native's Metro resolver. |
 | `turbo` | 2.x | Task graph + local cache | Nx is a heavier framework with generators and plugins we do not want. `pnpm -r run` alone has no dependency-aware ordering or caching. |
 | `node` | 22.x | Runtime for Lambda, CI, and tooling | Matches the Lambda `nodejs22.x` runtime exactly, so local behaviour equals deployed behaviour. Pinned in `.nvmrc` and in the CI setup step. |
 | `git-cliff` | 2.x | Generates `CHANGELOG.md` from Conventional Commits in `deploy-prod.yml` | Required by `04-conventions/git-workflow.md` §5.4. A hand-maintained changelog goes stale; `git-cliff` reads the commit history we already lint. |
+
+> **Decision:** TypeScript **7**, the native compiler, rather than staying on 5.x. Taken in
+> P0-06 while the repository has no TypeScript in it, because the migration cost is the one
+> thing here that only grows — every module added on 5.x is a module to re-verify later, and
+> `packages/shared` starts filling up in the very next task.
+>
+> The risk is that a ground-up compiler rewrite silently drops a check we depend on, which
+> would be invisible until it let a real bug through. So the pin was not taken on trust.
+> Every option `04-conventions/coding-standards.md` §1.1 calls non-negotiable was asserted to
+> still produce its error under 7.0.2 — `strictNullChecks` (TS2322),
+> `noUncheckedIndexedAccess` (TS2322), `exactOptionalPropertyTypes` (TS2375),
+> `noImplicitOverride` (TS4114), `noFallthroughCasesInSwitch` (TS7029) and
+> `verbatimModuleSyntax` (TS1205) — and a two-project composite build was checked to order
+> its references correctly, emit `.d.ts` plus declaration maps, and carry
+> `noUncheckedIndexedAccess` across the reference boundary. Re-run that check on any future
+> major bump; a flag that stops firing is worse than one that never existed.
+>
+> **Revisit if** an editor, `ts-node`, `tsx`, Metro, Vitest or `NodejsFunction`'s esbuild
+> step turns out to need the JavaScript compiler's API surface, which the native build does
+> not expose in full. The fallback is pinning 5.9.x, and it is a one-line change while the
+> only consumers are `tsc -b` invocations.
 
 ### 2.2 Client
 
