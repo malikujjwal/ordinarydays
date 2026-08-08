@@ -1,5 +1,14 @@
 {
   "$schema": "https://unpkg.com/syncpack@13.0.4/dist/schema.json",
+  "versionGroups": [
+    {
+      "label": "Workspace packages are linked by protocol, not pinned by version",
+      "dependencies": ["@od/**"],
+      "dependencyTypes": ["**"],
+      "packages": ["**"],
+      "isIgnored": true
+    }
+  ],
   "semverGroups": [
     {
       "label": "Exact versions everywhere, to agree with save-exact=true in .npmrc",

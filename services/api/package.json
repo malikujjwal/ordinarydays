@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@hono/node-server": "1.19.17",
+    "tsx": "4.23.11",
     "vitest": "3.2.7"
   }
 }

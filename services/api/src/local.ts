@@ -14,8 +14,7 @@ import { logger } from './lib/logger.js';
 const port = Number(process.env.PORT ?? 3000);
 
 serve({ fetch: createApp().fetch, port, hostname: '0.0.0.0' }, (info) => {
-  logger.info(
-    { port: info.port, stage: config.STAGE, ddbEndpoint: config.DDB_ENDPOINT },
-    'api listening',
-  );
+  // `stage` is not repeated here: pino's `base` already puts it on every line, and a
+  // duplicate key in a JSON log makes CloudWatch Logs Insights parse the line wrong.
+  logger.info({ port: info.port, ddbEndpoint: config.DDB_ENDPOINT }, 'api listening');
 });
