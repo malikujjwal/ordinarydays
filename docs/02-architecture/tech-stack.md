@@ -96,6 +96,7 @@ version bumps as PRs (see `security-privacy.md` §7).
 | `expo-image` | 3.x | Attachment and poster rendering, with disk + memory caching and blurhash placeholders | RN's `Image` has no persistent disk cache and no placeholder story; posters are the heaviest content in the app. |
 | `expo-notifications` | 0.3x/1.x (SDK-pinned) | Push token registration, permission prompts, local notification scheduling, notification response handling | Bare `@react-native-firebase/messaging` drags in Firebase for a feature Expo Push already covers for free. |
 | `expo-image-picker` | 16.x (SDK-pinned) | Camera + library access for the photo/screenshot capture path | `react-native-image-picker` needs manual native config; Expo's version handles the iOS permission strings via app config. |
+| `expo-contacts` | 15.x (SDK-pinned) | **`presentContactPickerAsync` only** — the OS contact picker behind `⊕ Choose from Contacts` in the participant picker (Phase 6, P6-35) | A picker, not a sync. The system picker runs out of process and returns the one contact the user tapped, so no `CONTACTS` read permission is requested, the App Store privacy label does not grow, and no address book is stored. `react-native-contacts` only offers the bulk-read API, which is the thing being avoided. Every other `expo-contacts` export is banned by lint. |
 | `expo-secure-store` | 14.x (SDK-pinned) | Keychain-backed token storage on iOS | `AsyncStorage` is plaintext on disk. See `auth.md` §4. |
 | `expo-crypto` | 14.x (SDK-pinned) | `Idempotency-Key` UUID generation, PKCE verifier/challenge | `crypto.randomUUID` is not present in the Hermes global scope on all SDK versions. |
 | `date-fns` | 4.x | Date arithmetic, formatting, comparison | Moment is deprecated. Luxon is good but heavier and duplicates what `date-fns-tz` gives us. `Temporal` is not yet available on Hermes. |
@@ -119,7 +120,7 @@ version bumps as PRs (see `security-privacy.md` §7).
 | `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` | 3.x | Presigned `PUT` URLs for attachment upload | Uploading through Lambda burns duration and hits the 6 MB payload limit. |
 | `@aws-sdk/client-scheduler` | 3.x | Creating/deleting one-shot EventBridge schedules for reminders | — |
 | `@aws-sdk/client-sesv2` | 3.x | Invite and RSVP emails | — |
-| `@aws-sdk/client-secrets-manager` | 3.x | Reading the Anthropic API key in Phase 7 | — |
+| `@aws-sdk/client-secrets-manager` | 3.x | Reading the Anthropic API key in Phase 8 | — |
 | `ulid` | 2.x | Prefixed, time-sortable entity IDs (`act_01J…`) per `data-model.md` §8 | UUIDv4 has no sort order, so `sk` ranges lose their natural ordering. UUIDv7 is close but `ulid` has the crockford-base32 encoding we already specified. |
 | `pino` | 9.x | Structured JSON logs, one line per event, redaction of PII fields | `console.log` produces unparseable text in CloudWatch Logs Insights. Winston is heavier and slower to boot. AWS Powertools Logger is good but pulls in the wider Powertools surface for one feature. |
 | `esbuild` | 0.25+ | Bundles the Lambda to a single minified ESM file with `@aws-sdk/*` treated correctly | `webpack` is slow and configuration-heavy. `rollup` needs plugins for node resolution. SWC does not bundle. Sub-second builds keep the deploy loop tight. |
@@ -148,8 +149,11 @@ version bumps as PRs (see `security-privacy.md` §7).
 | `aws-sdk-client-mock` + `aws-sdk-client-mock-jest` | 4.x | Unit-level mocking of SDK clients for service-layer tests | Hand-rolled stubs of `send()` drift from the SDK's actual command shapes. |
 | `@playwright/test` | 1.4x | Web E2E against the exported static site | Cypress cannot drive multiple origins cleanly (the Cognito Hosted UI redirect) and is slower in CI. |
 | `maestro` | 1.x (CLI, not an npm dep) | iOS E2E flows on simulator and device | Detox requires a custom debug build and a brittle native bridge. Maestro's YAML flows are readable by an agent and run against the same build TestFlight gets. |
+| `minio/minio` | latest (Docker image, not an npm dep) | The local S3-compatible object store for attachments, alongside `amazon/dynamodb-local` in `docker-compose.yml` (`infrastructure.md` §6.1) | Attachments must be buildable and testable in Phases 0–3, when nothing is deployed. MinIO implements the S3 API including SigV4 presigned `PUT`, so the application code stays `@aws-sdk/client-s3` and only the endpoint differs. `s3rver` and LocalStack's free S3 are less faithful on presigned-URL signature validation, which is precisely what these tests must exercise. |
 | `@biomejs/biome` | 2.x | Linting **and** formatting, one tool, one config | See decision below. |
 | `syncpack` | 13.x | Keeps dependency versions identical across workspaces | Divergent React versions between `apps/mobile` and `packages/ui` produce hook-dispatcher errors that take a day to diagnose. |
+| `lefthook` | 1.x | Git hooks: `biome check --write --staged` and the commit-message lint pre-commit/commit-msg (P0-06) | Husky + lint-staged is two packages, a shell shim per hook and a `node_modules` round-trip per commit. Lefthook is one Go binary driven by a single `lefthook.yml`, runs hooks in parallel, and is fast enough that nobody reaches for `--no-verify`. |
+| `dependency-cruiser` | 16.x | Enforces the seven import rules in `04-conventions/repo-structure.md` §3 as a **required CI check** (P0-27) | The rules are architectural, not stylistic, so a lint rule cannot express them. `dependency-cruiser` validates the real module graph, detects cycles at file granularity, and fails `ci.yml` with the offending edge named. |
 
 > **Decision:** Biome over ESLint + Prettier. One binary, one config file, no plugin
 > resolution graph, and roughly an order of magnitude faster on a monorepo — lint+format
@@ -382,6 +386,7 @@ wrong after rotation and wrong on web resize.
 | Navigation gestures | Swipe-back, sheet drag | Browser back/forward, real URLs, no drag-to-dismiss | Users expect the browser's model on web. |
 | Animations | Reanimated worklets | Reanimated's web build (CSS/WAAPI backend); heavy list animations disabled at `compact` | Web animation fidelity is not worth debugging; correctness first. |
 | Haptics | Yes | No-op | No API. |
+| `⊕ Choose from Contacts` in the participant picker | OS contact picker via `expo-contacts` | **Row not rendered.** Manual name + email entry only | There is no OS picker on the web. The browser Contact Picker API is Chromium-on-Android only, so a shim would give web a capability iOS Safari and desktop lack. `03-implementation/phase-06-sharing.md` P6-37. |
 | Offline | Persisted cache + mutation queue | Persisted cache only; mutation queue disabled | A browser tab is usually closed, not backgrounded. Queued mutations that never flush are worse than an error toast. |
 
 **The web build ships as a static export.** `npx expo export --platform web` produces
@@ -439,7 +444,7 @@ Order is load-bearing. Each entry states what it does and why it sits where it d
 | 5 | `securityHeaders` | `X-Content-Type-Options`, `Referrer-Policy`, `Cache-Control: no-store` by default | Cheap, applies to every response including errors. |
 | 6 | `bodyLimit` | Rejects bodies over 256 KB with `413` | Before parsing, so a large body is never buffered into a JS object. |
 | 7 | `routeSplit` | `/public/v1/*` skips auth; everything else requires it. A path matching neither returns `404`. | The single place the public/private boundary is decided. See `auth.md` §7. |
-| 8 | `auth` | Verifies the bearer ID token with the module-scope `CognitoJwtVerifier`; sets `c.set('user', { userId, email, emailVerified })` | After CORS/limits, before anything that reads user data. |
+| 8 | `identity` | Delegates to the module-scope `IdentityProvider` selected by `AUTH_MODE` and sets `c.set('userId', …)`. `LocalIdentityProvider` returns the constant `usr_local_dev`; `CognitoIdentityProvider` verifies the bearer ID token with `CognitoJwtVerifier` and returns the `custom:app_user_id` claim. | After CORS/limits, before anything that reads user data. Nothing downstream knows which provider ran — see `phase-01-activity-core.md` P1-01. |
 | 9 | `rateLimit` | DynamoDB counter keyed by `userId` (authed) or hashed IP (public); returns `429` + `Retry-After` | Needs the identity from step 8 for authed routes; runs with the IP key for public ones. |
 | 10 | `idempotency` | On `POST` creates: reads `IDEM#<userId>#<key>`; on hit returns the stored response; on miss stores the response after the handler succeeds | After rate limiting so a retry storm cannot write idempotency records for free. |
 | 11 | `zValidator` (per route) | Validates params/query/body against the shared Zod schema | Route-local, because the schema differs per route. |
@@ -498,7 +503,7 @@ export class AppError extends Error {
 | `invite_expired` | 410 | Invite past expiry | Public surface |
 | `invite_revoked` | 410 | `revoked: true` | Public surface |
 | `rate_limited` | 429 | Over the limits in `api-contract.md` §4 | `Retry-After` |
-| `not_implemented` | 501 | `/v1/capture/*` before Phase 7 | Stable stub |
+| `not_implemented` | 501 | `/v1/capture/*` before Phase 8 | Stable stub |
 | `upgrade_required` | 426 | Kill-switched client version | `updateUrl` in details |
 | `internal` | 500 | Anything uncaught | Message is always the literal string `"An unexpected error occurred."` — never the exception text |
 
@@ -518,7 +523,7 @@ How it is held:
 | Lever | Detail |
 | --- | --- |
 | ARM64 (Graviton2) | Cheaper per GB-second and, for this workload, no slower to boot than x86. |
-| Memory 1024 MB | CPU scales with memory. 512 MB roughly doubles init time; above 1024 MB gains flatten. Re-measure with a power-tuning run before Phase 5 and adjust — this figure is a starting point, not a measurement. |
+| Memory 1024 MB | CPU scales with memory. 512 MB roughly doubles init time; above 1024 MB gains flatten. Re-measure with a power-tuning run before Phase 6 and adjust — this figure is a starting point, not a measurement. |
 | esbuild bundle, ESM, minified, `target: node22` | One file, no `require` resolution walk over `node_modules` at boot. |
 | Tree-shaken SDK imports | Import specific clients (`@aws-sdk/client-dynamodb`), never `aws-sdk`. Only clients actually used per code path are imported at module scope; SES, Scheduler, and Secrets Manager clients are lazily created inside the functions that need them. |
 | Module-scope singletons | `DynamoDBDocumentClient`, `CognitoJwtVerifier`, and the pino logger are created once outside the handler and reused across warm invocations. The JWKS is fetched once and cached. |
@@ -553,7 +558,8 @@ packages/shared/src/
 │  └─ describe.ts   "Every weekday at 6:00 PM" for the UI
 ├─ money/
 │  ├─ split.ts      equal/exact/shares splitting with exact remainder distribution
-│  └─ balance.ts    net balance computation from expense + settlement lists
+│  └─ balance.ts    net balance computation from Expense rows and settledPersonIds;
+│                   Settlement rows are audit-only and never balance deltas
 ├─ rank/            lexoRankBetween(a, b) for list reordering
 ├─ client/          Typed API client: one function per endpoint
 │  ├─ http.ts       fetch wrapper: base URL, auth header injection, retry, error mapping

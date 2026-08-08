@@ -37,7 +37,7 @@ downstream follows.
 | **New S3 storage / month** | **3 MB** | **180 MB** | **1.8 GB** |
 | **S3 storage after 12 months** | **36 MB** | **2.2 GB** | **22 GB** |
 | CloudFront egress / month | ~0.2 GB | ~15 GB | ~150 GB |
-| Invite / RSVP emails / month | 5 | 400 | 5,000 |
+| Plan-invite and list-invite emails / month | 5 | 400 | 5,000 |
 | Reminders fired / month | 60 | 3,000 | 30,000 |
 | Lambda avg warm duration | 80 ms | 80 ms | 80 ms |
 
@@ -198,8 +198,10 @@ read directly from the internet (see §5).
 Nearly all of our records are aliases to CloudFront and API Gateway, which are free to
 query. So the hosted zone fee is the whole cost, and it is fixed regardless of scale.
 
-**This is the first real AWS charge, and it appears at one user.** The $0-of-AWS-spend
-target is therefore approximately-$0.50, from day one. Worth stating plainly rather than
+**This is the first real AWS charge in the project's life, and it appears at one user.** It
+arrives in **Phase 5**, when the domain is registered and `DnsStack` is deployed — not
+earlier, because there is no hosted zone before then (§2.15). From that point the
+$0-of-AWS-spend target is really approximately-$0.50. Worth stating plainly rather than
 discovering it on the first bill.
 
 ### 2.8 AWS Certificate Manager
@@ -238,7 +240,7 @@ accumulate toward an account quota and never pay for stale schedules.
 
 Dev stays in the SES sandbox indefinitely — the only recipient is the founder's own
 verified address, so sandbox costs nothing and needs no review. Production access is
-requested in Phase 5; budget several days for the review.
+requested in Phase 6; budget several days for the review.
 
 ### 2.11 SSM Parameter Store and Secrets Manager
 
@@ -249,8 +251,8 @@ requested in Phase 5; budget several days for the review.
 
 | Scale | Monthly cost |
 | --- | --- |
-| Any, Phase 1–6 | **$0.00** (Parameter Store only) |
-| Any, Phase 7+ | **~$0.40** (one Secrets Manager secret for the Anthropic key) |
+| Any, Phases 0–7 | **$0.00** (Parameter Store only) |
+| Any, Phase 8+ | **~$0.40** (one Secrets Manager secret for the Anthropic key) |
 
 The reasoning for the split is in `aws-services.md` §1.11.
 
@@ -271,7 +273,7 @@ lines (request completion plus, sometimes, a warning).
 | 1,000 users | ~750 MB | 8 | **$0.00** |
 
 Comfortably inside 5 GB even at 1,000 users. Two things keep it there: **no custom
-metrics** in Phase 1–6 (the free allowance is only 10, and each extra is $0.30/month), and
+metrics** before Phase 8 (the free allowance is only 10, and each extra is $0.30/month), and
 **explicit retention** on every log group — 14 days in dev, 30 in prod. The CloudWatch
 default is "never expire", and a forgotten log group is the most common way a hobby AWS
 account accrues storage charges quietly for years.
@@ -296,8 +298,37 @@ Cost Anomaly Detection is free.
 Where it goes at 1,000 users in year 2: Route 53 $0.50, Budgets $0.60, API Gateway $0.90,
 SES $0.50, DynamoDB $0.45, S3 $0.39, everything else $0.00.
 
-Add $0.40/month from Phase 7 for the Secrets Manager secret, and the model API spend in
+Add $0.40/month from Phase 8 for the Secrets Manager secret, and the model API spend in
 §3.4, which dwarfs all of the above.
+
+### 2.15 When the spend actually starts
+
+Every figure in §2.14 is a *steady-state* number for a deployed system. Development is
+local-first, so it does not apply for most of the build.
+
+| Phase | What exists in AWS | AWS spend |
+| --- | --- | --- |
+| 0 | The account, a $1 budget, a cost anomaly monitor, IAM Identity Center, the CDK bootstrap stack, the GitHub OIDC provider and one deploy role. Plus one throwaway `SmokeStack` (a single SSM parameter), deployed and destroyed inside P0-31. | **$0.00** |
+| 1–3 | Unchanged. Nothing is deployed. The product runs against DynamoDB Local with `AUTH_MODE=local`. | **$0.00** |
+| 4 | The permanent dev environment: `AccountStack`, `DataStack`, `AuthStack`, `ApiStack`, `ObservabilityStack`. No domain, no CloudFront, no `SchedulerStack`, no prod. | **$0.00** — free-tier; single-digit cents at most |
+| 5 | Route 53 hosted zone, ACM certificates, prod stacks, SES, EventBridge Scheduler, CloudFront. | **~$0.50–$1.10/month** |
+
+The same table, resource by resource, is in `03-implementation/roadmap.md` §3.1.
+
+**AWS spend is $0 for Phases 0 through 3** because nothing is deployed. The bootstrap
+residue that survives Phase 0 is priced at zero at rest: an empty S3 bucket, an unused ECR
+repository, five IAM roles, an OIDC provider, budgets and Cost Anomaly Detection. The only
+Phase 0 cost is the temporary $1 card authorisation on account signup, which is not a
+charge. **The first real charge in the project's life is the Route 53 hosted zone in Phase
+5** at $0.50/month — the domain registration (§3.2) is the first invoice, and it is a
+registrar fee rather than an AWS service fee. Phase 4's deployed dev environment sits
+entirely inside **always-free** allowances rather than the 12-month free tier: Cognito's
+10,000 MAU, Lambda's 1M requests and 400,000 GB-seconds, DynamoDB on-demand's 25 GB and its
+per-request rates at one user's volume, API Gateway's first year, CloudWatch's 5 GB of logs
+and 10 custom metrics, and SSM Parameter Store's standard tier. One founder signing in and
+exercising the app does not approach any of those, so a deployed dev environment with no
+domain, no CloudFront distribution and no prod stacks bills nothing. That is what makes it
+safe to leave dev running between Phases 4 and 5 rather than tearing it down each evening.
 
 ---
 
@@ -310,7 +341,7 @@ Sign in with Apple (`auth.md` §2.2) and for push notification credentials. Auto
 letting it lapse pulls the app from the store and breaks Sign in with Apple.
 
 **$8.25/month amortised.** This is the largest recurring cost in the entire project until
-Phase 7.
+Phase 8.
 
 ### 3.2 Domain — approximately $12–15/year
 
@@ -348,19 +379,19 @@ native changes on the store-review path.
 **Check the current EAS plan limits at <https://expo.dev/pricing> before planning a release
 week around them** — the free-tier build quota is the number most likely to have changed.
 
-### 3.4 Phase 7 model API spend
+### 3.4 Phase 8 model API spend
 
 This is the one line item that can become the dominant cost, and it is the reason capture
-is deferred to Phase 7 and rate-limited to 20 requests/hour per user
+is deferred to Phase 8 and rate-limited to 20 requests/hour per user
 (`api-contract.md` §4).
 
 **Per-parse token estimates** (system prompt + user input + structured output):
 
 | Operation | Input tokens | Output tokens |
 | --- | --- | --- |
-| `POST /v1/capture/parse` (text → activity) | ~800 | ~300 |
-| `POST /v1/capture/link` (URL → activity; includes fetched page excerpt) | ~2,000 | ~300 |
-| `POST /v1/capture/extract` (image → event) | ~2,500 (image tokens dominate) | ~400 |
+| `POST /v1/capture/parse` (text → fields for the caller-selected target) | ~800 | ~300 |
+| `POST /v1/capture/link` (URL → fields for the selected target; includes fetched page excerpt) | ~2,000 | ~300 |
+| `POST /v1/capture/extract` (image → fields for the selected target) | ~2,500 (image tokens dominate) | ~400 |
 
 **Cost = (input tokens × input rate) + (output tokens × output rate).** Worked at
 illustrative rates of **$3.00 per million input tokens and $15.00 per million output
@@ -412,7 +443,7 @@ bill. Each has a specific guardrail.
 | **Data transfer out of S3 bypassing CloudFront** | A presigned GET URL, or a direct `s3.amazonaws.com` URL in a client, sends bytes straight out of S3 at standard egress rates instead of through CloudFront's 1 TB free allowance. | S3 egress is charged per GB from the first byte; CloudFront's first TB is free. Serving 100 GB directly instead of through CloudFront turns $0 into a real charge. | **Block Public Access on all four settings**, on every bucket. Bucket policy grants `s3:GetObject` **only** to `cloudfront.amazonaws.com` conditioned on the distribution ARN — a presigned GET from anywhere else is denied by the bucket policy. Reads are only ever issued as `media.ordinarydays.app` URLs. Presigned URLs are issued for `PUT` only, never `GET`. |
 | **Forgotten dev resources** | A dev stack left running, a test table with data, an orphaned CloudFront distribution from an abandoned experiment. | Small individually; the problem is that nobody looks. | Everything is in CDK, so `cdk destroy 'od-*-dev'` removes the whole environment cleanly. Cost allocation tags (`Stage`, `Component`) make an orphan visible in Cost Explorer. The nightly workflow posts the month-to-date cost to a GitHub issue if it exceeds $1. |
 | **Log retention set to "never expire"** | The CloudWatch default. A log group created outside the `NodeLambda` construct inherits it. | $0.03/GB-month forever, on data nobody will read after a week. | Retention is set explicitly in the shared `NodeLambda` construct (`infrastructure.md` §1.3), so it cannot be forgotten for a Lambda. A CDK assertion test fails the build if any `AWS::Logs::LogGroup` in a synthesised template lacks a `RetentionInDays`. |
-| **Model API abuse (Phase 7)** | A script hammers `/v1/capture/parse`. Each call costs real money at the model provider, and AWS guardrails do not see it at all. | Unbounded, and **invisible to AWS Budgets** — it is a third-party bill. | 20 req/hour per user. A per-account monthly spend counter in DynamoDB that hard-stops at a configured ceiling. Spend alerts configured in the Anthropic console, independently of AWS. Capture requires authentication — it is never on the public surface. |
+| **Model API abuse (Phase 8)** | A script hammers `/v1/capture/parse`. Each call costs real money at the model provider, and AWS guardrails do not see it at all. | Unbounded, and **invisible to AWS Budgets** — it is a third-party bill. | 20 req/hour per user. A per-account monthly spend counter in DynamoDB that hard-stops at a configured ceiling. Spend alerts configured in the Anthropic console, independently of AWS. Capture requires authentication — it is never on the public surface. |
 
 ---
 
@@ -613,7 +644,7 @@ constraints, in the order they are reached:
 | **~10,000 users** | **Cognito's 10,000 MAU allowance is exhausted.** This is the first genuinely material step change, because it is per-MAU with no ceiling. |
 | **~65,000 users** | CloudFront crosses 1 TB egress/month. |
 | **~12,000 users** | DynamoDB storage passes 25 GB. Beyond that, per-GB-month. |
-| **Phase 7, any scale** | Model API spend, which at 1,000 users is already ~35× the AWS bill. **This, not AWS, is what makes the product cost money.** |
+| **Phase 8, any scale** | Model API spend, which at 1,000 users is already ~35× the AWS bill. **This, not AWS, is what makes the product cost money.** |
 
 Practical reading of that table:
 
@@ -621,7 +652,7 @@ Practical reading of that table:
   the Apple Developer Program at $8.25/month amortised is the largest line item by a
   factor of three.
 - The first architectural decision that costs real money is **shipping AI capture**, not
-  adding users. Phase 7 needs a revenue answer before it needs a scale answer.
+  adding users. Phase 8 needs a revenue answer before it needs a scale answer.
 - The first AWS service that costs real money at scale is **Cognito**, at 10,000 MAU. That
   is a good problem, and by then the migration options (or the pricing conversation) are
   worth having.

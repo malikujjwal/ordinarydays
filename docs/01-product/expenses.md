@@ -34,7 +34,7 @@ way to record spending that is not attached to something that happened.
 | --- | --- | --- | --- |
 | Description | Single-line text, 1–120 chars | Yes | Empty |
 | Amount | Currency keypad, minor units | Yes | Empty. Must be > 0. |
-| Currency | Picker, shown only when the user has ever used more than one | No | Profile currency |
+| Currency | A small always-tappable affix on the amount field that opens the picker — collapsed, never hidden | No | Profile currency |
 | Paid by | Participant picker, single-select | Yes | The current user |
 | Split between | Participant multi-select | Yes | **All** participants of the plan, including the payer, including guests |
 | Split mode | Segmented: Equal / Exact / Shares | Yes | `Equal` |
@@ -43,6 +43,10 @@ way to record spending that is not attached to something that happened.
 
 The sheet cannot be saved while the split does not reconcile (§3.4). The reconciliation
 line is always visible: `$120.00 split · $0.00 left to assign`.
+
+The currency affix is collapsed rather than hidden so the *first* foreign-currency expense
+can be entered at all — a picker that only appears once two currencies exist can never be
+reached the first time.
 
 ### 2.2 Split modes
 
@@ -77,7 +81,20 @@ authenticated session. The owner records on their behalf.
 
 Every add, edit and delete writes a system entry to the plan's updates feed
 (`Ujjwal added Hotel · $340.00`) and notifies the other participants
-([`notifications.md`](notifications.md#7-notification-catalogue), `expense_added`).
+([`notifications.md`](notifications.md#7-notification-catalogue), `expense_added`). An
+edit's entry keeps the before and after — `Ujjwal edited Train: $120.00 → $138.00` — and
+the notification body may carry the same old → new amounts, so a changed figure is never a
+silent rewrite (decision 2026-08-07).
+
+An Expense with any settled pairwise obligation cannot be edited or deleted. The attempted
+action returns `settlement_conflict` and the UI says `Undo settlement before changing this
+expense`, linking to the exact Settlement rows. This keeps settlement history immutable and
+prevents an expense edit from silently reopening somebody's balance. After the user
+explicitly undoes those settlements, ordinary edit and delete rules apply.
+
+Deleting the whole plan gets the same honesty: the delete-plan confirmation names how many
+expenses it carries, the totals per currency, and any unsettled amounts
+([`interaction-contract.md`](interaction-contract.md)).
 
 ---
 
@@ -145,6 +162,11 @@ prints "≈".
 | `shares[i] < 1` or non-integer | `validation_failed` |
 | Currency not ISO 4217 | `validation_failed` |
 
+A refund is not a negative expense — `amountCents <= 0` stays banned. The blessed pattern
+is a mirrored expense: enter `Refund — house` with the payer and split reversed from the
+original, so the correction is its own auditable line and every balance moves by ordinary
+arithmetic.
+
 ---
 
 ## 4. The plan-level owes summary
@@ -182,12 +204,18 @@ Positive means the plan owes them; negative means they owe the plan. The sum of 
 `net_p` in a single currency is always exactly zero, which is the arithmetic check the
 tests assert.
 
-> **Decision:** the plan-level summary shows **per-person nets**, plus a `Suggested
-> settle-up` block that reduces those nets to the fewest transfers using a deterministic
-> greedy match (largest debtor pays largest creditor, repeat; ties broken by ascending
-> `personId`). The suggestion is always rendered *below* the per-person nets, never instead
-> of them, and every suggested transfer is tappable through to the expenses that produced
-> it. A minimised transfer set on its own would be an unexplained number.
+> **Decision — the suggested settle-up is pairwise, not minimised.** Amended 2026-08-07;
+> supersedes the greedy largest-debtor-pays-largest-creditor match. The plan-level summary
+> shows **per-person nets**, plus a `Suggested settle-up` block whose transfers are exactly
+> the pairwise nets between participants within this plan: one line per debtor → creditor
+> pair with a nonzero net, ordered by ascending debtor `personId` then ascending creditor
+> `personId` so rendering is stable and reproducible. Transfers are never rerouted or
+> multilaterally minimised — a minimised set tells Ben to pay Alice money he never owed
+> her, which is exactly the substitution §5.1 forbids everywhere, and it produces
+> suggestions that `Mark settled` cannot record, because settlement is pairwise. Every
+> suggested line is a real pairwise obligation, recordable as-is. The suggestion is always
+> rendered *below* the per-person nets, never instead of them, and every suggested transfer
+> is tappable through to the expenses that produced it.
 
 ---
 
@@ -206,6 +234,23 @@ netCents < 0  =>  the user owes them
 It is deliberately pairwise. The app never nets Alice's debt against Ben's credit, because
 Alice and Ben have no relationship in this app and would not accept the substitution.
 
+> **Decision — sharing money creates the People substrate.** Confirmed 2026-08-07. §5.2's
+> "every expense where both participate" includes pairs who never shared anything with each
+> other directly: participant Sam pays $90 of groceries split three ways including guest
+> Priya, and Priya owes Sam $30 despite there being no share-er/share-ee relationship between
+> them. So when an expense is created or edited such that its payer and split set contains a
+> pair of participants who do not yet have each other as People, the server creates the
+> missing `Person` rows in the same transaction — the same `personId` mirrored into each
+> affected app user's partition, display name copied, guest state carried, no email or other
+> contact details copied — plus the directional `PLINK#` rows, and then rebuilds balances for
+> both users. A guest has no partition; their mirrored side is created if and when they link
+> an account ([`sharing-and-people.md`](sharing-and-people.md#61-how-people-are-derived)
+> §6.1,
+> [`../02-architecture/data-model.md`](../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items)
+> §7). This is bookkeeping behind the user's explicit expense commit, not an auto-created
+> contact: without it the pair has no `Balance`, no Person view and no `Mark settled` entry
+> point, and their obligation could never reach settled.
+
 Multi-currency: a `Balance` row exists per `(personId, currency)`. The Person view renders
 one line per currency. They are never added together and never converted
 ([`../02-architecture/data-model.md#10-what-is-deliberately-not-modelled-in-v1`](../02-architecture/data-model.md#10-what-is-deliberately-not-modelled-in-v1)).
@@ -221,9 +266,9 @@ else if paidBy == person and user   in splits:  −= splits[user].amountCents
 else:                                            contributes 0
 ```
 
-Then subtract the sum of `Settlement.amountCents` already recorded in the direction of
-payment. Settlements and settled expenses are two views of the same fact; the recompute
-uses settled-expense exclusion as the primary mechanism and settlements as the audit trail.
+Do not subtract a settlement a second time. Marking an obligation settled makes the
+corresponding expense-person contribution zero; the `Settlement` row is the audit trail for
+that status change and its computed total is display metadata, not another balance delta.
 
 `Balance` is a **cache**, refreshed asynchronously by the DynamoDB stream handler on every
 expense or settlement write, and recomputable from scratch at any time. A stale cache is a
@@ -238,13 +283,13 @@ display bug, never a source of truth.
 | --- | --- |
 | Every balance rendered anywhere is tappable | The shared `<Balance>` component requires an `onPress` prop; a lint rule fails the build if it is passed `undefined`. |
 | The tap target reaches the underlying expenses | `GET /v1/people/:id/balance?include=expenses` returns the net **and** every contributing expense line. |
-| The breakdown lists, per expense: the plan, the date, the description, the full amount, who paid, this person's share, this user's share, and settlement state | Response schema, tested. |
+| The breakdown lists, per expense: the plan, the date, the description, the full amount, who paid, this person's share, this user's share, and settlement state — a settled line names **who marked it settled and when** (`settled by Alice · 2 Aug`), on whichever side of the obligation the viewer sits | Response schema, tested. |
 | The breakdown reconciles visibly | A footer row shows `Total unsettled  $42.50` matching the headline figure exactly. If they disagree, the client shows the recomputed figure and reports the discrepancy, rather than showing the cached one. |
 | Direction is stated in words | `Alice owes you $42.50`, never `+42.50` or a red/green number alone. |
 | Zero is not rendered | A zero balance with no unsettled expenses shows no line at all. A zero balance with unsettled expenses in both directions shows `Settled up` with the drill-down still available. |
 
 ```
-Alice · balance                                    Settle up
+Alice · balance                                  Mark settled
 
   Alice owes you $42.50
 
@@ -258,55 +303,75 @@ Alice · balance                                    Settle up
   Total unsettled                $42.50
 ```
 
+> **Decision — the plan name on a drill-down line is a snapshot.** Confirmed 2026-08-07.
+> Each line renders the Expense's own `activityTitle` — copied onto the Expense at write
+> time and rewritten by the plan-rename write path — never a live read of the plan
+> ([`../02-architecture/data-model.md`](../02-architecture/data-model.md#48-expense-balance-settlement)
+> §4.8). It is one shared field: a rename rewrites it for every viewer, current and former
+> alike. After someone leaves a plan, their `finance_only` link keeps these drill-downs
+> working, and the title they see is whatever the snapshot field holds — a denormalised
+> copy, never a live plan read, because a finance-only link must not expose the plan.
+
 ---
 
 ## 6. Settlement
 
-The app records that a debt was settled. It does not move money (§8).
+The app records **which expense obligations the user considers settled**. It does not move
+money and does not record how, where, or how much money changed hands outside the app (§8).
 
 ### 6.1 Semantics
 
-A `Settlement` is an immutable record: `personId`, `amountCents`, `currency`, optional
-note, `settledAt`, and `coversExpenseIds[]`. The last field is required and non-empty.
+A `Settlement` is an immutable audit record: `personId`, server-computed `amountCents`,
+server-derived `currency` and `direction`, `settledAt`, and `coversExpenseIds[]`. The last
+field contains 1–25 distinct ids. The user supplies only the person and selected obligation
+ids; the server records the exact source Activity, Expense, and owner-scoped debtor behind
+each id. All other values describe those source expenses and are never payment input.
 
-> **Decision — settlements are expense-scoped, and the amount is computed, not typed.**
-> The user selects which expenses a payment covers; the app computes the total. There is no
-> free-form "record a payment of $50" with nothing behind it, because that produces exactly
-> the unexplained number the product forbids. A user who was handed a round number selects
-> the expenses it actually covers and leaves the remainder outstanding.
+> **Decision — settlements are expense-scoped status changes, not payment records.** The
+> user selects which expense obligations are now settled; the app computes their total for
+> history and explanation, while balance arithmetic simply makes those contributions zero.
+> The total is never subtracted again. There is no free-form payment amount, payment method,
+> transaction reference, cash remainder, credit or stored value. If Alice and Ujjwal settle
+> outside the app, Ordinary Days only records the obligations they chose to close.
 
 ### 6.2 The flow
 
-1. Person view → `Settle up`, or a plan's per-person net row → `Settle up`.
+1. Person view → `Mark settled`, or a plan's per-person net row → `Mark settled`.
 2. A sheet lists every unsettled expense between the two people, in the relevant direction,
    each with a checkbox, all checked by default.
-3. The running total updates as boxes are unchecked: `Settling $42.50 of $42.50`.
-4. `Mark as settled` issues `POST /v1/settlements` with `coversExpenseIds` and the computed
-   `amountCents`.
+3. The running total updates as boxes are unchecked: `Selected $42.50 of $42.50`.
+4. `Mark settled` issues `POST /v1/settlements` with `personId` and 1–25 distinct
+   `coversExpenseIds` only.
 5. The server marks each covered expense settled **with respect to that pair**, writes the
    `Settlement`, and triggers a balance recompute.
 
-### 6.3 Partial settlement
+> **Decision — every pair an expense names has these entry points.** Confirmed 2026-08-07.
+> Step 1 assumes a Person view exists for the other party. Expense participation creates the
+> People substrate (§5.1), so two non-owner participants linked only by an expense — Sam and
+> Priya above — each get the Person view, the balance line and this `Mark settled` sheet.
+> Without that rule their obligation could never reach settled.
 
-Unchecking any expense in step 2 is a partial settlement. It is a first-class case, not an
-error state.
+### 6.3 Settling only some expenses
+
+Unchecking any expense in step 2 settles only the selected obligations. It is a first-class
+case, not an error state and not a claim about a partial payment.
 
 - The covered expenses become settled; the rest stay outstanding.
 - The balance drops by exactly the covered amount.
-- Multiple partial settlements accumulate; the history shows each.
+- Multiple settlement actions accumulate; the history shows each.
 - There is no concept of a partially settled *expense*. An individual expense is settled
-  with respect to a pair, or it is not. To split one expense across two payments, the user
-  settles it in whichever payment they choose; a $0.01-level reconciliation is not a
-  problem this product solves.
+  with respect to a pair, or it is not. The user marks it settled only when they consider
+  that obligation resolved. How many external transfers it took is outside this product.
 
 ### 6.4 Settled state on a multi-person expense
 
 `Expense.settled` is a denormalised boolean over **all** debtors:
 
-- The per-pair truth is derived: expense *E* is settled with respect to `(user, person)`
-  when some `Settlement` for that person lists `E` in `coversExpenseIds`.
-- `Expense.settled` is set to `true` by the stream handler only when every non-payer in
-  `splits[]` has such a settlement.
+- The per-pair truth is on the Expense: *E* is settled with respect to a debtor when that
+  debtor's id is in `Expense.settledPersonIds`.
+- The settlement transaction recomputes `Expense.settled` to `true` only when every
+  non-payer debtor in `splits[]` is in `settledPersonIds`. The stream worker recomputes the
+  Balance cache from those Expense fields; it does not derive settled state from audit rows.
 - The UI shows `Settled` on an expense line only when `Expense.settled` is true, and
   `Partly settled · 1 of 3` otherwise. Both are drill-downs.
 
@@ -319,14 +384,27 @@ Reached from Person view → balance → `History`.
 ```
 Settlement history · Alice
 
-  2 Aug   Alice paid you $54.00        3 expenses   ›
-  6 Jul   You paid Alice $19.25        1 expense    ›
+  2 Aug   $54.00 marked settled        3 expenses   ›
+  6 Jul   $19.25 marked settled        1 expense    ›
 ```
 
+> **Decision — settlement history is two-sided; undo is not.** Confirmed 2026-08-07. The
+> history includes settlements where the viewer is the **counterparty**, not only the ones
+> they created, and every row names who marked it settled and when. The counterparty read
+> is derived from the covered Expenses' own `settlementIdByPersonId` — no second audit row
+> is ever written
+> ([`../02-architecture/data-model.md`](../02-architecture/data-model.md#5-access-patterns)
+> access pattern 12b,
+> [`../02-architecture/api-contract.md`](../02-architecture/api-contract.md#29-expenses-and-settlement)
+> §2.9). `Undo settlement` remains **creator-only**: the counterparty can see that Alice
+> marked the dinner settled, and can ask her to undo it, but cannot delete her audit row.
+
 Each row expands to the covered expenses. Settlements are **never edited**. A mistake is
-corrected with `Undo settlement`, available from the row's overflow, which deletes the
-`Settlement`, un-settles exactly the expenses it covered, and recomputes. The deletion is
-itself recorded in the plan's updates feed for any affected plan.
+corrected with `Undo settlement`, available from the row's overflow on settlements the
+viewer created, which deletes the
+`Settlement`, reopens exactly that Settlement's debtor obligation on each covered Expense,
+leaves every other debtor's state untouched, and recomputes. The deletion is itself recorded
+in the plan's updates feed for any affected plan.
 
 ### 6.6 Guests with expenses but no account
 
@@ -335,15 +413,23 @@ no `userId` is required at any point.
 
 | Aspect | Behaviour |
 | --- | --- |
-| Recording | The owner records what the guest paid and owes. |
+| Recording | The owner (or any participant, per §2.3) records the original expense payer and what the guest owes. |
 | Visibility to the guest | **None.** The public invite page never shows expenses ([`sharing-and-people.md`](sharing-and-people.md#43-fields-the-public-projection-must-never-expose)). There is no expense-sharing link in v1. |
 | Notifications | Guests are never emailed about expenses. |
-| Settlement | Recorded by the owner, in the same sheet, on the guest's behalf. |
+| Settlement | The owner marks selected obligations settled, in the same sheet, on the guest's behalf. No external payment details are recorded. |
 | If the guest registers later | `person.linkedUserId` is set and every existing expense and balance becomes visible to them from their side, in their own Person view of the owner ([`sharing-and-people.md`](sharing-and-people.md#5-guest--registered-user-linking)). Nothing is duplicated because the `personId` never changed. |
 
-> **Decision:** there is no way to show a guest their balance in v1. Sending someone a link
-> that reveals what they owe, to an address that could be forwarded, is a privacy exposure
-> that needs more design than the feature is worth right now.
+> **Decision — a guest is never shown their own balance, and this is settled, not pending.**
+> Confirmed 2026-08-07. There is no guest balance view, no expense-sharing link, and no
+> figure of any kind on the public invite page. Sending an amount owed to an email address
+> that can be forwarded is a disclosure the product will not make.
+>
+> **State the consequence plainly:** the person who owes the money is the one the app will
+> not tell. The owner is expected to tell them out of band — a message, a conversation, the
+> same way the debt was incurred. An engineer who meets this gap should not close it. It is
+> not an oversight, and a "helpful" read-only balance link is a product change that needs the
+> founder, not a pull request
+> ([`../00-open-decisions.md`](../00-open-decisions.md) #11).
 
 ---
 
@@ -474,8 +560,10 @@ Suggested settle-up
   Ben pays you    $146.33
 ```
 
-Here the suggestion is trivial because there is one creditor. With two creditors the greedy
-match runs, and each suggested line still drills through to the expenses behind it.
+Here the suggested lines coincide with the per-person nets because there is one creditor.
+With more people paying, each nonzero debtor → creditor **pairwise** net renders as its own
+line — never rerouted through a third person (§4) — and each suggested line still drills
+through to the expenses behind it.
 
 Person-level balances after the trip, before any settlement:
 
@@ -483,20 +571,18 @@ Person-level balances after the trip, before any settlement:
   dinner, and the user owes her `$71.00` on the train. `11333 + 3350 − 7100 = 7583`. ✓
 - `Ben owes you $146.33`.
 
-**Partial settlement.** Alice hands over $40 in cash. There is no expense worth exactly
-$40, so the user opens `Settle up` with Alice, unchecks Dinner, and settles Hotel only —
-but the pairwise hotel amount is $113.33, more than she paid. The correct action is to
-settle **Dinner** (`$33.50`) alone:
+**Settling selected obligations.** Alice and the user resolve the Dinner share outside the
+app. The app does not ask whether that happened by cash, transfer, favour or any other method.
+The user opens `Mark settled`, selects **Dinner** (`$33.50`) and leaves Hotel outstanding:
 
 ```
 POST /v1/settlements
-{ personId: 'psn_b', amountCents: 3350, currency: 'USD',
-  coversExpenseIds: ['exp_dinner'], note: 'cash' }
+{ personId: 'psn_b', coversExpenseIds: ['exp_dinner'] }
 ```
 
-New balance: `7583 − 3350 = 4233` → `Alice owes you $42.33`. The remaining $6.50 of her
-cash is not recorded anywhere, because the app tracks settled expenses, not a running cash
-ledger. This is the deliberate limit described in §6.1 and §8.
+New balance: `7583 − 3350 = 4233` → `Alice owes you $42.33`. That number describes the
+remaining expense obligations in Ordinary Days. It makes no claim about the amount or method
+of any external payment; those facts are deliberately not captured (§6.1, §8).
 
 ---
 
@@ -506,13 +592,14 @@ Not built, not planned, and to be rejected in review.
 
 | Not this | Note |
 | --- | --- |
-| Payment rails — Venmo, PayPal, Stripe, bank links, card processing, open banking | The app records that something is settled. It never moves money and never holds funds. |
+| Payment rails or external payment records — Venmo, PayPal, Stripe, bank links, cash, transfer amounts, transaction references | The app records that selected expense obligations are settled. It never moves money, holds funds, or records how settlement happened. |
 | Budgets, spending limits, category budgets | Not a finance app. |
 | Financial analytics, spend-by-category charts, monthly reports, trends | The only aggregates are per-plan totals and per-person balances. |
 | Multi-currency conversion, FX rates, a base currency | Expenses keep their own currency and are shown separately. See [`../02-architecture/data-model.md#10-what-is-deliberately-not-modelled-in-v1`](../02-architecture/data-model.md#10-what-is-deliberately-not-modelled-in-v1). |
 | Receipt scanning and OCR line-item extraction | Attachments on a plan can include a receipt photo. Nothing is read out of it. |
 | Recurring or scheduled expenses | Recurrence is a property of activities, not of money. |
 | Tax, tip, or service-charge calculators | Enter the amount that was actually charged. |
+| Percentage splits | Use `exact` or `shares`. A percentage is one of those wearing a display format, plus a rounding step this product refuses to have. |
 | Debt simplification across people who are not both in the same plan | Balances are pairwise (§5.1). |
 | Interest, reminders escalating in tone, or any nagging beyond the single opt-in unsettled reminder in [`notifications.md`](notifications.md#7-notification-catalogue) | Money between friends is not a collections problem. |
 | Exporting to accounting software | A CSV export of a plan's expenses is a reasonable later addition; it is not in v1. |

@@ -7,9 +7,11 @@ context, decision, consequences, alternatives rejected.
 accepted decision is not re-litigated in a pull request — it is changed by a new ADR that
 supersedes it.
 
-All entries below are dated **2026-08-06**, the date the architecture documents were
-written. Entries 1–11 record decisions made in the project brief; 12 onward record
-decisions made in the architecture documents themselves.
+Entries 1–30 are dated **2026-08-06**, the date the architecture documents were written.
+Entries 1–11 record decisions made in the project brief; 12–30 record decisions made in the
+architecture documents themselves. Later entries carry their own dates and record decisions
+made after that pass: 31–36 the list-model change, 37–40 plans without dates, 41–44
+shared lists, and 45–51 the review resolutions of 2026-08-07.
 
 ---
 
@@ -94,8 +96,8 @@ deployed app.
 Amplify Hosting is also rejected in favour of S3 + CloudFront.
 
 **Consequences.**
-- More code to write in Phase 1: a Hono app, middleware, repositories, and CDK stacks that
-  Amplify would have generated.
+- More code to write in Phases 0 and 1: a Hono app, middleware, repositories, and CDK stacks
+  that Amplify would have generated.
 - Complete control over the DynamoDB key design, which is the core of the data model and
   which Amplify's generated schema would fight.
 - Authorisation lives in a middleware chain we control and can read, not in an annotation
@@ -254,7 +256,7 @@ repo, with shared types where they help.
 
 ---
 
-## ADR-008 — AI capture deferred to Phase 7, behind a stable contract from Phase 1
+## ADR-008 — AI capture deferred to Phase 8, behind a stable contract from Phase 1
 
 **Status:** Accepted · **Date:** 2026-08-06
 
@@ -265,7 +267,7 @@ necessary for the app to be useful. Model API spend at 1,000 users is projected 
 
 **Decision.** `/v1/capture/parse`, `/v1/capture/extract`, and `/v1/capture/link` ship as
 `501 not_implemented` stubs from Phase 1, with the full `ParsedCapture` response type
-defined in `packages/shared` from the start. Phase 7 implements them against the Anthropic
+defined in `packages/shared` from the start. Phase 8 implements them against the Anthropic
 API with the key in Secrets Manager, behind a `CaptureProvider` interface.
 
 **Consequences.**
@@ -282,7 +284,7 @@ API with the key in Secrets Manager, behind a `CaptureProvider` interface.
 **Alternatives rejected.**
 - *Ship capture in Phase 1.* Unbounded cost before there is any usage signal, and it would
   block the core planning loop on prompt engineering.
-- *Do not define the contract until Phase 7.* Guarantees the client capture flow is
+- *Do not define the contract until Phase 8.* Guarantees the client capture flow is
   rewritten. The whole point of stubbing is that the integration is written once.
 - *On-device models.* Not accurate enough for structured extraction from a poster, and it
   would tie the feature to iOS.
@@ -341,7 +343,7 @@ resource names, separated by deploy role scope and a GitHub environment approval
 - Blast radius is larger: a mistake with account-wide reach affects both environments. The
   mitigations are prod-only deletion protection, `RemovalPolicy.RETAIN`, PITR, stage-scoped
   deploy roles, and the production environment approval gate.
-- Dev may be wiped freely until Phase 4 (`data-model.md` §9); prod cannot.
+- Dev may be wiped freely until Phase 5 (`data-model.md` §9); prod cannot.
 
 **Alternatives rejected.**
 - *Two accounts under an Organization.* The correct long-term answer. Rejected now for the
@@ -361,18 +363,24 @@ resource names, separated by deploy role scope and a GitHub environment approval
 (Task, Meal, Watch, Event, Outing, Custom). The obvious modelling mistake is to create a
 table per noun.
 
-**Decision.** One stored entity, `Activity`, with a `type` field and a discriminated
-`details` sub-document. A "Plan" is an Activity with `schedule.date` set — there is no
-`isPlan` flag and no `Plan` table. "Today" is a query, not a stored thing. Lists are the
-one genuinely separate entity, because they hold things with no committed date.
+**Decision.** One stored entity, `Activity`, with an explicit `objectKind: 'task' | 'plan'`,
+a `type` field, and a discriminated `details` sub-document. `objectKind` records which
+creation target the user or labelled entry point chose; it is not a second entity. There is
+no `Plan` table. "Today" is a query, not a stored thing. Lists are the one genuinely separate
+entity because ListItems are not schedulable Activities.
+
+> **Amended by ADR-045 and ADR-046.** This entry originally read "a Plan is an Activity with
+> `schedule.date` set", then derived plan-hood from type and participants. Both derivations
+> are superseded. A date is scheduling state; `objectKind` is explicit intent.
 
 **Consequences.**
 - The lifecycle in the concept document — capture, organise, schedule, share, do, follow up
   — is one code path, not six near-duplicates.
-- A Watch can become a Custom by changing one field. Type is a guide, not a category
-  (concept §1), and the storage reflects that.
-- Every activity type gets participants, expenses, reminders, recurrence, and attachments
-  for free, because they hang off the same partition.
+- A Watch can become a Custom without changing its `objectKind`. Type is a guide, not the
+  Task/Plan decision, and the storage reflects that.
+- The one Activity partition supports expenses, reminders, recurrence, and attachments for
+  both object kinds, plus participants for Plans. Prep-task collaboration is inherited from
+  the parent Plan rather than stored as direct Task participants.
 - `details` must be validated as a discriminated union where `details.kind === type`, or
   the flexibility becomes a source of malformed data.
 - Type-specific behaviour lives in the presentation layer and in small pure helpers, not in
@@ -382,8 +390,9 @@ one genuinely separate entity, because they hold things with no committed date.
 **Alternatives rejected.**
 - *A table per type.* Six half-products. The founding insight of the concept is that these
   are not separate mini-apps; splitting the storage guarantees the code fragments.
-- *A `Plan` entity distinct from `Activity`.* Every scheduled activity is a plan. A separate
-  entity would mean a conversion step, two IDs for one thing, and a synchronisation bug.
+- *A `Plan` entity distinct from `Activity`.* A plan is an Activity carrying commitment or
+  coordination, dated or not. A separate entity would mean a conversion step, two IDs for one
+  thing, and a synchronisation bug on the day a date lands.
 
 ---
 
@@ -517,7 +526,7 @@ pull request that implements this.** Double-submit CSRF tokens on all three.
 $0.40 per secret per month; Parameter Store `SecureString` is free at standard tier.
 
 **Decision.** SSM Parameter Store `SecureString` for everything, at `/od/{stage}/…`. The
-one exception is the Phase 7 Anthropic API key, which lives in Secrets Manager.
+one exception is the Phase 8 Anthropic API key, which lives in Secrets Manager.
 
 **Consequences.**
 - $0/month for secret storage in Phases 1–6, consistent with the cost target.
@@ -550,7 +559,7 @@ JSON logs (`pino`) plus CloudWatch Logs Insights.
   question a trace would, for free.
 - No SDK instrumentation, so no added cold-start cost.
 - No free-tier consumption and no per-trace charge.
-- If a genuinely multi-hop path appears — the Phase 6 Streams work, or Phase 7's model
+- If a genuinely multi-hop path appears — the Phase 7 Streams work, or Phase 8's model
   calls — turning it on is one CDK line plus an IAM policy. Deferring costs nothing.
 
 **Alternatives rejected.**
@@ -604,7 +613,7 @@ per million requests after the 12-month free tier.
   rejected there never invokes Lambda.
 - Structured access logs.
 - Roughly $0.90/month at 1,000 users in year two. Acceptable.
-- **Revisit at Phase 6** if API Gateway becomes a meaningful line item. Migrating is a CDK
+- **Revisit at Phase 7** if API Gateway becomes a meaningful line item. Migrating is a CDK
   change plus a DNS cutover, and Hono's adapter supports both payload formats.
 
 **Alternatives rejected.**
@@ -709,7 +718,7 @@ allowed to see. Presigned URLs are issued for `PUT` only, never `GET`.
 - Direct S3 egress is impossible: the bucket policy grants `s3:GetObject` only to
   `cloudfront.amazonaws.com` conditioned on the distribution ARN. This also keeps all image
   traffic inside CloudFront's 1 TB free egress rather than paying S3 egress rates.
-- **Signed URLs are the Phase 6 hardening step** if media ever becomes sensitive enough to
+- **Signed URLs are the Phase 7 hardening step** if media ever becomes sensitive enough to
   justify the key management. Listed as an open question below.
 
 **Alternatives rejected.**
@@ -777,7 +786,7 @@ tree-shaken. Nothing AWS-related is marked external.
 
 ---
 
-## ADR-026 — No custom CloudWatch metrics in Phases 1–6
+## ADR-026 — No custom CloudWatch metrics before Phase 8
 
 **Status:** Accepted · **Date:** 2026-08-06
 
@@ -794,8 +803,8 @@ with Logs Insights queries, checked into `infra/observability/queries/`.
   fine.
 - Alarms are on AWS-published metrics only, which covers every failure mode in
   `aws-services.md` §1.12.
-- Phase 6 may add a handful of Embedded Metric Format counters if a real operational
-  question needs one.
+- Phase 8 adds the first handful of Embedded Metric Format counters, for capture (P8-29),
+  because the model spend there is the one thing a log query cannot watch cheaply enough.
 
 **Alternatives rejected.**
 - *Custom metrics from day one.* Pays monthly for dashboards nobody looks at yet.
@@ -902,18 +911,1085 @@ OIDC provider, and the two deploy roles — move to a separate `AccountStack` de
 
 ---
 
+## ADR-031 — Three list behaviours, not eight list kinds
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** Lists were modelled as a closed enum of eight `ListKind` values — `groceries`,
+`shopping`, `packing`, `general`, `restaurants`, `places`, `meals`, `watchlist`. The enum
+carried two unrelated jobs at once: it told the application how to behave, and it told the
+user what the list was for. That coupling has three costs. Adding "Bars to try" or "Books to
+read" means a schema change, a migration and a new branch in every exhaustive map. The enum
+is simultaneously too small for what users want to keep lists of and too large for the
+number of genuinely different code paths — `groceries`, `shopping` and `packing` differed
+from each other in nothing but their label and icon. And `general` became the dumping ground
+for everything the enum did not anticipate, which is the enum admitting it is the wrong
+shape.
+
+**Decision.** Replace `ListKind` with `ListBehaviour`, exactly three values:
+
+| Behaviour | Why it exists |
+| --- | --- |
+| `collection` | An ordered list of items. Differences between groceries, packing, restaurants and reference lists are capability flags on the row, not code. |
+| `watch` | Items group under status headings and carry season and episode. The only behaviour whose item list is grouped rather than flat. |
+| `meals` | Items carry structured `ingredients`, which feed the ingredients-to-list flow and map onto `Activity.details` for `type: 'meal'`. |
+
+What a `collection` can do is carried by `ListCapabilities` — `checkable` and
+`supportsLocation` — stored on the list and editable by the user. The user sees no such word
+as "behaviour"; they see a template name and an icon (ADR-032). Scheduling is an explicit
+Plan-creation action, so no capability chooses an Activity type.
+
+**The standard for a fourth behaviour:** *does the application actually behave differently,
+or does only the label differ?* A fourth behaviour must name at least one of: a different
+item layout, a typed field no other behaviour carries, or a cross-entity flow that exists
+nowhere else. If the answer is a different name, a different icon, or a different default
+for a flag that already exists, it is a template and it needs no ADR. `Simple` versus
+`Checklist` fails this test — they are `collection` with `checkable` false and true.
+`Groceries`, `Shopping`, `Packing`, `Restaurants` and `Places` all fail it too.
+
+**Consequences.**
+- The exhaustive `Record<ListKind, ActivityType>` map disappears. The scheduling request
+  carries the type the user confirmed; neither behaviour nor template maps to one.
+- The item renderer branches on three behaviours and reads flags. Adding a list type adds no
+  branch, so the renderer stops growing.
+- Behaviour is user-changeable, which the closed enum never had to handle. `collection →
+  watch` or `meals` initialises `details` on every item; the reverse direction drops typed
+  fields and is gated behind an explicit confirmation (`api-contract.md` §2.7).
+- `data-model.md` §10 lists a fourth behaviour as deliberately not modelled, so adding one
+  is a product decision rather than a pull request.
+
+**Alternatives rejected.**
+- *Keep the eight kinds and add more.* Every new kind is a schema change plus a branch in
+  every exhaustive map, and the enum never converges — there is no finite list of things
+  people keep lists of.
+- *One behaviour and pure capability flags.* Grouping watch items under status headings and
+  typing meal ingredients are real differences in the application, not flags. Flattening
+  them would push the branch into the renderer under a different name and lose the
+  `ingredients` typing that the meal scheduling path depends on.
+- *A free-text `kind` string with no meaning to the server.* Loses the capability defaults
+  and turns every list into a bare checklist.
+
+---
+
+## ADR-032 — List templates are declarative presets, copied at creation
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** Three behaviours are not what a user picks from. They pick "Groceries",
+"Packing for a trip", "Restaurants to try". Something has to hold that vocabulary, and it
+must be cheap enough to extend that adding "Bars to try" is not a project.
+
+**Decision.** A declarative catalogue in `packages/shared/src/lists/templates.ts`: a plain
+array of `ListTemplate` records, each holding a `templateKey`, chooser label, one-line summary,
+editable default title, icon, behaviour, capability defaults, slot and empty-state copy. It is
+unbounded — adding an entry is a config change with no schema change, no branch and no migration.
+
+Templates are **seeds, not live references**. `POST /v1/lists` resolves the template once
+and copies behaviour, capabilities, slot, icon and empty-state copy onto the `List`.
+`templateKey` is retained as immutable provenance and analytics only; no renderer or read
+path resolves it back through the catalogue.
+
+The flow is selection-first: the user chooses a template/style, then confirms its visible,
+editable default title and creates the list. Both `templateKey` and `title` are required. The
+server resolves only that exact catalogue entry; it does not rank or replace it from title
+text, and there is no title-suggestion endpoint or implicit `simple-list` fallback. Create
+does not accept behaviour, capability, slot, icon or empty-state-copy overrides; supported
+structural settings are explicit later changes, while the copied presentation stays local to
+that List.
+When an explicitly selected template is used to create a list from a Plan, the server stores
+`sourceActivityId` and forces `slot: null`, so one trip's list cannot silently become a
+standing destination.
+
+**Consequences.**
+- Editing a template changes what new lists get and never touches an existing list. The same
+  freezing principle as `sourceLabel` on a grocery item: a list must not change shape
+  underneath the person holding it.
+- The cost is drift. Two users who each made a "Groceries" list six months apart can hold
+  different seeded behaviour, capabilities, slot, icon or empty-state copy, and there is no
+  backfill. This is recorded as a tension in
+  `feature-to-schema-map.md` §11 rather than treated as a bug.
+- The catalogue is a static asset, so `GET /v1/list-templates` is cacheable for 24 hours and
+  needs no storage.
+- A create request with no template is invalid, so there is exactly one explicit
+  selection-first code path and no fallback path to keep in sync.
+- A user customises the supported List settings—behaviour, capabilities and slot—directly.
+  They never edit a template, because a template is not a thing they own; copied icon and
+  empty-state guidance remain local presentation values without a v1 editor.
+
+**Alternatives rejected.**
+- *Resolve seeded fields from the template at read time.* Makes every list a live view of a
+  catalogue the user cannot see, so a release could silently make a list checkable or move
+  where their ingredients go. It also couples the client's rendering to a shipped constant
+  the server does not control.
+- *Store templates in DynamoDB.* A read on every creation, a migration path, and an admin
+  surface, for data that changes when the app ships.
+- *User-authored templates.* Deferred — see `../00-open-decisions.md`. The catalogue ships
+  with the app in v1, and a user's own list with edited capabilities already covers most of
+  the want.
+
+---
+
+## ADR-033 — Semantic default slots, not behaviour-keyed defaults
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** "Add these ingredients to a shopping list" needs a target. When lists were
+keyed by kind, `kind === 'groceries'` answered it. Once groceries, packing and shopping are
+all `collection`, behaviour cannot: the flow would have to choose between a user's Costco
+list, their corner-shop list and their packing list for Lisbon, and it has nothing to choose
+on.
+
+**Decision.** A `slot` on the `List` — `groceries | watch | meals`, or `null` — declaring
+that the list is eligible to be a destination, plus `User.defaultLists`, a `slot → listId`
+map recording which one wins when several are eligible. Resolution for any "add to X" flow
+is four steps: one eligible list, use it silently; several with a default set, use the
+default, show it, and allow an override **for that operation only**; several with no
+default, ask once and store the answer; none, return no destination. General and ingredient
+flows then offer the full standard New-list catalogue unselected. A typed Watch destination,
+already chosen explicitly by the user, offers exactly the three Watch records in canonical
+relative order, also unselected. Slot resolution never chooses or returns a template; the
+client applies that eligibility constraint. Creating the List and then adding the items are
+separate named confirmations.
+
+`slot` is seeded from the template and changeable in settings, so a user who built a plain
+collection for their shopping can promote it. Per-occasion templates such as packing seed
+`null`.
+
+**Consequences.**
+- The destination is a stated preference, not an inference. The user can see it, change it
+  in settings, and predict it.
+- Three slots is a closed set that mirrors the three cross-entity flows that exist. A fourth
+  slot needs a fourth flow first.
+- Opening a list writes nothing, so browsing a list cannot change where future items go.
+- A one-off override is a request parameter, not a profile write, so choosing a different
+  destination once does not quietly become permanent.
+- The sheet must show the resolved destination even when it did not ask, or step 2 becomes
+  invisible and the user cannot tell where their items went.
+
+**Alternatives rejected.**
+- *Most-recently-used.* Explicitly rejected. It makes the destination a side effect of
+  browsing: opening a list to check whether you already have eggs would silently redirect
+  tomorrow's ingredients. Destinations must be chosen, not accumulated.
+- *Always ask.* A modal on every ingredient add, forever, for a user with one grocery list.
+- *Key the default off `behaviour`.* The problem this decision exists to solve — every
+  collection would be equally eligible.
+- *A single `isDefault` boolean per list.* Cannot express "this is my groceries list and
+  that is my watchlist" without a second field naming what it is default *for*, which is the
+  slot under another name.
+
+---
+
+## ADR-034 — A list-item Activity pointer is singular per viewer in v1
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** The relationship between a list item and Activities derived from it is
+one-to-many: ten episodes can be scheduled from one watchlist entry, and two members of a
+shared restaurant list can make unrelated private Plans. A single Activity id on the shared
+ListItem makes one member's private Plan visible as a dead link to everybody else and lets a
+second member overwrite or rename it.
+
+**Decision.** The ListItem carries no Activity id. The list partition stores a fixed-key
+`ListItemActivityLink` at `LNK#<viewerUserId>#<itemId>`, containing one current `activityId`
+for that viewer and item. Each Activity keeps `listItemId` and `listId` back-pointers.
+
+`Just me` writes only the caller's pointer. `Choose people` writes pointers for the caller
+and selected registered Plan participants who are active members of the source list. A
+nonparticipant member receives no pointer. A later scheduling action replaces only its
+viewers' pointers.
+
+**Consequences.**
+- The list row renders at most one caller-specific state line — `Planned Saturday · 7 PM` —
+  and every state line opens an Activity the caller can read.
+- An unbounded array on a hot, frequently rewritten item is avoided, along with the write
+  contention and item-size growth it brings.
+- Different list members can schedule the same item independently; another viewer's pointer
+  is neither a conflict nor response data.
+- History is not queryable from the list side. The Activity back-pointers preserve
+  provenance, but v1 does not offer "every time I watched this show".
+- The list-detail projection must filter `LNK#` rows to the caller before Activity lookup or
+  serialisation. This privacy boundary is tested in `security-privacy.md` §1 row 15a.
+- The item title seeds a new Plan once and is not mirrored afterwards. Otherwise a list
+  editor could rename an inaccessible private Plan.
+
+**Upgrade path.** When history is needed, add Activity-specific link rows under the existing
+list partition and keep `LNK#<viewer>#<item>` as the current pointer. That is additive and
+backfillable from each Activity's `listItemId`, `listId`, owner, and participants.
+
+**Alternatives rejected.**
+- *An array of activity ids on the item.* Unbounded growth on the row the UI writes most.
+- *One global pointer on the ListItem.* Leaks inaccessible Plan existence and cannot
+  represent independent scheduling by members.
+- *No pointer at all, deriving the link from the Activity side.* Rendering a list of 200
+  items would need a query per item or a GSI whose only job is this one line of subtitle.
+
+---
+
+## ADR-035 — Lists are independent collections, not a staging area for plans
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** The original concept frames the product as a pipeline: *Lists → Plans → Today*.
+Read as architecture, that says a list is where things wait until they become plans, and an
+item that never gets scheduled is unfinished. Building it that way produces a Lists tab that
+behaves like an inbox: a queue to be drained, with completion pressure attached to every
+row.
+
+Most real lists are not queues. Favourite restaurants, books read, bars in the
+neighbourhood, gift ideas, things to pack — these are references. Some are never scheduled,
+and nothing is wrong when they are not.
+
+**Decision.** Lists are independent collections. A list that never produces an Activity is a
+complete, finished thing. The bridge to Activities is optional in both directions: an item
+may be scheduled, an activity may generate a list, and neither is required by the other.
+Nothing in the storage, the API or the UI treats an unscheduled item as pending.
+
+**This supersedes the *Lists → Plans → Today* framing as an architectural statement.** The
+original concept still wins on intent, and it is right about what matters: the connection
+between the three surfaces is the product, nothing is duplicated when a list item becomes a
+plan, and the loop closes when the plan is done. What changes is only the claim that the
+arrow is the point. It is one of the things a list can do.
+
+**Consequences.**
+- The Lists index is a set of destinations rather than a queue, so it needs no "remaining"
+  count, no completion pressure and no aging.
+- A list item with no caller-visible `ListItemActivityLink` is the ordinary case, and the
+  schema treats it as one row with no Activity lifecycle.
+- `sourceActivityId` on a list is a provenance label, not ownership: deleting a trip leaves
+  its packing list, and completing a trip does not archive it.
+- Scheduling stays a first-class flow with a first-class endpoint. Nothing about this
+  decision demotes it.
+- `feature-to-schema-map.md` §4 leads with the unlinked list and treats scheduling as the
+  second case, so an agent reading it builds the common case first.
+
+**Alternatives rejected.**
+- *Lists as a queue of unscheduled Activities.* Was considered and rejected in ADR-011 for
+  storage reasons; it is rejected here for product reasons as well. Every reference item
+  would carry a status, an index entry and an implied obligation.
+- *Two list types, "reference" and "actionable".* A behaviour that fails the ADR-031 test —
+  the application would do nothing differently, and users would put items in the wrong one.
+
+---
+
+## ADR-036 — Capture is manual until Phase 8, and the Phase 5 launch is a manual planner
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** ADR-008 defers the capture implementation to Phase 8 behind a contract stubbed
+from Phase 1. What that ADR does not say out loud is what the ordering costs, and the
+omission invites a well-meaning agent to "fix" the roadmap by pulling capture forward.
+
+Stated honestly: **the Phase 5 demo does not contain the product's differentiator.** What
+ships to TestFlight is a manual planner. Everything a tester sees at that point — Today,
+Plans, Lists, reminders, recurrence — they typed in themselves. Natural-language and image
+capture, the thing the concept leads with, is three phases later.
+
+That was chosen, not conceded. `/v1/capture/parse` and `/v1/capture/extract` receive an
+explicit `CreationTarget` and return only fields compatible with that target; a model
+integration built before the Activity and ListItem models are settled gets rewritten when
+those models move. Capture also has no product without a place to land: the review screen is
+a host that confirms extracted values against a real Task, visible Plan type, or selected
+list. It never chooses participants. Confirming into a surface that does not exist yet is not
+testable. Building the integration first would mean paying model spend to debug a schema.
+
+**Decision.** The sequencing stands. v1 at Phase 5 ships as a manual planner and is
+described as one. Capture arrives at Phase 8, after the activity model is stable and the
+review-screen host works. No phase is reordered to bring it forward, and the Phase 5
+milestone is not written as though it contains it.
+
+**Consequences.**
+- Phase 5 must be honest in every place it is described. `03-implementation/roadmap.md`
+  §1.6 says so; App Store copy, TestFlight release notes and any demo must match.
+- Early testers evaluate the planning loop on its own merits, which is the useful signal: if
+  manual entry is not good enough, capture does not rescue it.
+- The gap between "what the concept promises" and "what the beta does" is real and will come
+  up in tester feedback. That feedback is about Phase 8's priority, not evidence that the
+  order was wrong.
+- OQ-6 (does capture sit behind a paid tier) can be answered against real usage numbers
+  gathered in Phases 5–7 rather than against a guess.
+- An agent asked to move capture earlier cites this ADR and stops.
+
+**Alternatives rejected.**
+- *Ship a reduced capture in Phase 5 — text only, no images.* The text path is the one that
+  most needs a settled activity model, and it carries the same per-call cost, the same abuse
+  surface and the same review screen. It halves the value and none of the work.
+- *Delay v1 until capture is ready.* Nothing ships for three extra phases, the planning
+  loop gets no real-user feedback, and the first thing real users see is also the first
+  thing that can produce a wrong answer.
+- *Describe Phase 5 as feature-complete and treat capture as an enhancement.* It is not an
+  enhancement; it is the reason the product is interesting. Overselling the milestone would
+  make the tester feedback unreadable.
+
+---
+
+## ADR-037 — Plans can exist without a date, in a fourth GSI1 bucket
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** The model had three GSI1 buckets: `#S` for dated activities, `#N` for undated
+ones, and `#R` for recurring series. That put every undated activity in one place, and the
+Today screen read `#N` into its ANYTIME section. The consequence, which nobody noticed until
+the Plans tab was written out in full: `Dinner at Zahav with Alice and Ben, date TBD` — an
+agreed, shared, undecided plan — appeared on Today's Anytime list, immediately below
+`Submit the insurance form`.
+
+Those two things are not the same kind of thing. One is an errand you will do at some point
+today. The other is a plan waiting for somebody to pick a day, and putting it on Today either
+nags the user about a decision they have not made or trains them to ignore the section.
+
+**Decision.** A fourth GSI1 bucket, `#P` — "Needs a date" — holding undated Activities whose
+explicit `objectKind` is `plan`. It is served by a new `GET /v1/plans` and rendered as the
+first of the Plans tab's three stages. **The agenda never queries it**, which is a property
+of the endpoint rather than a filter applied afterwards.
+
+`#N` narrows to mean exactly one thing: an undated `objectKind: 'task'` Activity.
+
+**Consequences.**
+- The Plans tab becomes three stages — Needs a date, Upcoming, Past — and stops being a
+  wider-window Today.
+- An undated activity is a first-class stored thing with a place to be seen, so "save it now,
+  decide later" is a supported path rather than a gap.
+- One more bucket to keep correct on every write that changes a date, recurrence, or explicit
+  `objectKind`. That risk is contained by ADR-038.
+- Today's ANYTIME section gets narrower and more honest. It holds errands.
+- **Needs a date never nudges**: no badge, no count, no notification, no aging. It is a place
+  to look, not a backlog to clear — the same rule that keeps Today from becoming a guilt
+  list. The endpoint returns no count for a client to badge, which is the cheapest possible
+  enforcement.
+
+**Alternatives rejected.**
+- *Keep one undated bucket and filter in the client.* The filter is the bucket rule written a
+  second time, in the wrong layer, where no server test covers it.
+- *Keep one bucket and let Today show everything undated.* This is the status quo and it is
+  the defect.
+- *A `needsDate` boolean on the Activity.* A second source of truth beside `schedule.date`
+  and `objectKind`, which can disagree with both.
+- *A separate `Plan` entity.* Rejected by ADR-011 and still rejected. A plan is an Activity
+  with `objectKind: 'plan'`; the difference is one stored discriminator, not another table.
+
+---
+
+## ADR-038 — Bucket derivation is one pure function, and the rule reads explicit intent
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** Four buckets is one more than three, and the interesting question is not how many
+there are but where the decision is made. A bucket rule spread across a repository, a schedule
+service and a client renderer is a rule with three implementations that agree until they do
+not. The Task-versus-Plan decision is already explicit, so the function must preserve it
+rather than classify it again.
+
+**Decision.** Exactly one pure function, `deriveGsi1Bucket`, in
+`packages/shared/src/activities/bucket.ts`, with no I/O and its own test matrix:
+
+```ts
+if (a.recurrence)                                return 'R';
+if (a.schedule?.date)                            return 'S';
+if (a.objectKind === 'plan')                     return 'P';
+return 'N';
+```
+
+Order is part of the specification. One caller — the function that builds an `ActivityIndex`
+item. The bucket is recomputed and the index entry rewritten whenever one of its inputs
+changes: a date is set or cleared, `objectKind` is explicitly changed, or recurrence is added
+or removed. Participant and `type` writes are not inputs.
+
+**The `objectKind` branch is the load-bearing part.** A private, undated Plan belongs in
+Needs a date because the user called it a Plan, not because a classifier noticed its type.
+An undated Task belongs in Anytime. People, dates, and model output cannot silently move it
+between those meanings.
+
+**Consequences.**
+- The rule is testable in isolation, at 100% branch coverage, with no database.
+- Every transition that must trigger an index rewrite is enumerated, so a write path that
+  forgets one is a missing test rather than a bug found by a user in the wrong tab.
+- The client never names a bucket. It chooses `objectKind`; the server maps that stored intent
+  to the index key.
+
+**Alternatives rejected.**
+- *Participants or type decide.* Both reinterpret other fields as intent and make the same
+  title land differently after an unrelated edit.
+- *A lookup table keyed by type.* It turns a presentation guide into a classifier and ignores
+  the user's Task/Plan choice.
+- *Let the client pass the bucket.* A client that can name its own index partition is a
+  tenancy and correctness problem at once.
+
+---
+
+## ADR-039 — `lastActivityAt` is a separate field from `updatedAt`
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** The Needs-a-date stage has to be ordered. Oldest-first builds a queue with the
+most ignored thing at the head, which is a backlog, and that stage is explicitly not one.
+The useful order is most-recently-discussed: an RSVP, a posted update or an added expense
+means people are talking about this plan, and it should float up.
+
+The obvious implementation is to sort on `updatedAt`. `updatedAt` also backs `If-Match` on
+`PATCH /v1/activities/:id`.
+
+**Decision.** Two fields.
+
+| Field | Bumped by | Read by |
+| --- | --- | --- |
+| `updatedAt` | Edits to the Activity itself | `If-Match`, and nothing else |
+| `lastActivityAt` | RSVP changes, posted updates, added expenses | The `#P` bucket's sort key, and nothing else |
+
+`lastActivityAt` is initialised to `createdAt`. An edit never bumps it; a discussion never
+bumps `updatedAt`.
+
+**Consequences.**
+- A participant's RSVP cannot fail an owner's open edit sheet with a `409` about a change
+  that touched none of the fields they were editing.
+- The Needs-a-date list does not resort when somebody fixes a typo in a title.
+- Every write path has to know which field it is bumping. A path that bumps both is wrong in
+  a way that only appears under concurrent use, so the distinction is stated in the data
+  model and tested in Phase 2 with an `If-Match` that must survive a `lastActivityAt` bump.
+- Eight extra bytes per activity.
+
+**Alternatives rejected.**
+- *One timestamp.* Produces `409`s nobody can act on, and the honest fix — a three-way merge
+  over fields that did not conflict — is real work to recover from a collision the model
+  invented.
+- *A version integer for `If-Match` and `updatedAt` for sorting.* Same problem in the other
+  direction, plus a migration, plus a concurrency token that is not a timestamp and therefore
+  reads as a different mechanism everywhere it appears.
+- *Derive the order at read time from the newest `UPD#` item.* A query per row on the one
+  screen that is a list of rows.
+
+---
+
+## ADR-040 — Changing a plan's date resets every RSVP, with no new enum value
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** Once a plan can exist without a date (ADR-037), people can respond to it before
+a day is picked. When a date lands, their stored `going` is still there. Rendering that as
+"Alice is going on Saturday" claims consent she never gave — she agreed to the idea of
+Zahav, not to Saturday the 15th — in a product whose stated posture is *suggest, never
+assume*.
+
+The related question is vocabulary. `Going` is the wrong word for a plan with no date;
+`Interested` is right. `Interested` looks like a fifth RSVP value.
+
+**Decision.** Two rules, designed together.
+
+1. **Setting or changing a plan's date resets every non-declined participant's `rsvp` to
+   `pending`**, clears `respondedAt`, sets `rsvpForDate` to the new date, writes a system
+   update and notifies. A **time-only** change on the same date keeps every response.
+   Clearing a date keeps them too — re-asking somebody to un-agree is noise. The owner's own
+   row is never reset. The response carries `rsvpReset: true` so the client says so rather
+   than letting people discover it. *(Amended 2026-08-07: `declined` rows are excluded —
+   neither reset nor notified, app user and guest alike. A declined participant left the
+   conversation, and a date change is not an invitation; their route back is `Rejoin`. This
+   supersedes the "partial rule" rejection below for the declined case only — `pending`,
+   `going` and `maybe` still all reset. See phase-06 P6-15.)*
+2. **The labels change with the same signal; the stored values never change.** `going` renders
+   as `Interested` when there is no date and `Going` when there is; `declined` renders as
+   `Pass` or `Decline`. **`interested` is not added to the enum.**
+
+**Consequences.**
+- `rsvpForDate` exists so a reset is provably correct rather than inferred, and so the client
+  can render "Alice said yes to Saturday".
+- The reschedule write grows by one `PART#` item per participant. At the 50-participant cap
+  the transaction reaches 103 items, past DynamoDB's limit, so there is a threshold and a
+  two-phase write above it with a marker that makes every read return `pending` in between.
+  That machinery exists because of this rule and is recorded as a tension in
+  `feature-to-schema-map.md` §11.
+- Users lose responses when a date moves. That is the intent, and the confirmation before the
+  write names how many people are affected — counting those who actually replied, so a plan
+  nobody has answered shows no confirmation at all.
+- Storing `interested` would have forced a data migration on the exact event that changes the
+  word, which is the strongest possible argument against storing it.
+
+**Alternatives rejected.**
+- *Carry responses forward and notify.* Cheaper, and it puts words in somebody's mouth. The
+  first time a user turns up to a Saturday they never agreed to, the product has lied about
+  them to their friends.
+- *Reset only for people who said `going`.* `maybe` to an undated idea is not `maybe` to a
+  Saturday either, and the partial rule is harder to explain than the total one.
+- *Add `interested` to the enum.* A migration every time somebody picks a date, for a word.
+- *Ask the owner whether to reset.* A choice between "correct" and "convenient" offered at
+  the moment the owner is least inclined to pick correct.
+
+---
+
+## ADR-041 — Lists are shareable, using the same People layer as plans
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** A grocery list in a household is used by more than one person. So is a packing
+list for a trip that two people are taking, and a list of places to go on a weekend away.
+Lists were single-owner, so the workaround was a screenshot or a second app.
+
+The question was not whether to share lists but whether sharing them meant a second sharing
+system: a second invite mechanism, a second identity model, a second set of authorisation
+rules.
+
+**Decision.** Lists are shareable **through the existing People layer**. A `ListMember` is
+keyed by `personId`, the same `Person` rows that back plan participants; the share sheet is
+the same participant picker with a different submit handler and a different cap; membership
+uses the List pointer as its access grant. Confirming an app-user share creates or reuses the
+member in the owner's People and the owner in the member's People, then writes an active
+`PersonListLink` (`LLINK#`) on both sides. An accountless invite has only the owner-side
+invited link until verified signup activates the reciprocal side. One sharing system, two
+shareable objects.
+
+Two roles (ADR-043), app users only (ADR-043), 20 people total including the owner and pending
+invitations, and three concurrency rules —
+checking is set not toggled, items sort by `(rank, itemId)`, duplicate titles are never
+merged.
+
+**Consequences.**
+- No new invite token, no new public surface. **A list has no public projection at all**, so
+  unlike a plan there is nothing a stranger can be shown and nothing to leak.
+- The People page and Person view read active `LLINK#` rows for `sharedListCount` and Lists
+  one of the two people explicitly shared with the other. The link is discovery/lifecycle
+  data and never authorises list access; the `USER#/LIST#` pointer is still the only grant.
+- Two non-owner co-members do not automatically become People. That would expose a list
+  roster as a social graph without either person choosing it.
+- List membership never changes `upcomingCount`, `lastActivityAt`, FREQUENT, RECENT or the
+  relevance sort. An invited owner-side link is not displayed as already sharing a list.
+- Duplicate-person merge and `GUESTEMAIL#` linking migrate and activate `ListMember` and
+  `LLINK#` references as well as Plan references.
+- The threat model gains a second multi-user object, which `security-privacy.md` §1 now names
+  explicitly rather than implying.
+- One new email template, because an invitee with no account has to be told.
+  `01-product/notifications.md` §6.3 carries it as `list_invitation_email`, so SES now sends
+  **four** messages, not three.
+- A shared plan **suggests** sharing the lists it generates and never does it automatically.
+  For packing this is not a nicety: each person packs their own bag.
+
+**Alternatives rejected.**
+- *A separate list-sharing mechanism with its own tokens and links.* Two authorisation
+  surfaces, two leak surfaces, two sets of tests, for the same underlying question.
+- *Sharing a list by attaching it to a shared plan.* Ties a household grocery list to a plan
+  that does not exist, and makes the list's membership a derived value that changes when
+  somebody leaves the plan.
+- *Not sharing lists in v1.* The grocery case is the single most common list in the product
+  and it is the one most obviously wrong when only one person can hold it.
+
+---
+
+## ADR-042 — The canonical list moves to `LIST#`, and its index entries are near-pure pointers
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** The list lived at `USER#<owner>` / `LIST#<listId>`, with a mirror at
+`LIST#<listId>` / `META` so it could be read by id. That is a sensible single-owner layout and
+it does not survive a second member: whose partition holds the truth?
+
+Separately, activity index entries carry denormalised display data — title, time, type — so
+the Today feed renders from one query. The obvious move is to make list index entries match.
+
+**Decision.** Two parts.
+
+1. **The canonical list is `LIST#<listId>` / `META`.** The `USER#<u>` / `LIST#<listId>` rows
+   are index entries, one for the owner and each active non-owner. Invited people have no
+   pointer or access until verified signup. The mirror is gone; there is one copy.
+2. **The list index entry carries `role` and `addedAt` and nothing else.** No title, no icon,
+   no counts. The Lists tab is one `Query` for the pointers plus one `BatchGetItem` for the
+   `META` rows.
+
+Part 2 is deliberately **not** how `ActivityIndex` works, and the asymmetry is justified: an
+activity feed is time-ranged and sorted, so its index must carry sortable denormalised data or
+the feed needs a batch get per page. A user may own at most 100 Lists but may receive more
+memberships from other owners, so the Lists index pages 50 pointers at a time and BatchGets
+one page. It still needs no denormalised display fields.
+
+**Consequences.**
+- Renaming a shared list is **one write**, whoever makes it, however many members exist.
+  With a denormalised title it would be one write per member.
+- A grocery list two people are ticking through generates **no fan-out write per tick**.
+- Each Lists-tab page costs one `BatchGetItem` for at most 50 current `META` rows.
+- **The pointer is the access check.** Its absence is a `404`; its `role` is read without a
+  second query. That is what makes an invited-but-not-joined member unable to read anything:
+  there is no partition to write a pointer into, so there is nothing to find.
+- A pointer that ever gains a title reintroduces both costs at once, so its attribute set is
+  compared to a literal list in a test.
+- The two index shapes differ, which someone will read as an inconsistency. It is written
+  down in the data model, here, and in `feature-to-schema-map.md` §4.1 so the answer is
+  findable.
+
+**Alternatives rejected.**
+- *Keep the canonical row in the owner's partition and add member pointers to it.* Every
+  member's read goes through a partition they do not own, and deleting the owner's account
+  raises the question of where the list lives.
+- *Denormalise the title onto the pointer.* One write per member on every rename, and a
+  fan-out on any field the tab renders. Saves one `BatchGetItem`.
+- *Keep the mirror and write both.* Two writes on every list-level edit, forever, and a
+  window where they disagree.
+
+---
+
+## ADR-043 — List membership is app users only, with two roles
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** Plans support guests: a person with no account can open an invite link, see the
+plan and RSVP. The natural question is whether lists should work the same way — a link that
+lets anybody add items.
+
+Separately, the role model. Plans have owner and participant. Lists could have three roles —
+owner, editor, viewer — or two.
+
+**Decision.** Two rules.
+
+1. **App users only.** There is no guest list editing and no public list link. An invitee
+   with no account gets an email, installs, signs up, and the list appears, reusing the
+   `GUESTEMAIL#` linking that already exists for guests. Until then their `ListMember` row has
+   `status: 'invited'`, no `userId` and **no index entry**.
+2. **Two roles.** `owner` can do everything including delete, member management and changing
+   `behaviour`, `capabilities` and `slot`. `member` can add, edit, check, reorder and delete
+   **items**, rename the list, and leave it. A member cannot change behaviour or capabilities
+   — those drop typed fields from every item and are destructive under the interaction
+   contract — and cannot delete the list or remove anyone but themselves.
+
+The roles are access roles on `ListIndex`. The owner is represented by `List.ownerId` and an
+owner pointer, never by a `MEMBER#` row. Every physical `ListMember` is a non-owner with fixed
+role `member`; the roster API synthesises the owner first. Accordingly `memberCount` is one
+plus the number of physical member rows, including invited rows.
+
+Cap: **20 people total, including the owner and pending invitations**, lower than the 50 for a
+plan. This is a household feature, not a broadcast one.
+
+**Consequences.**
+- Every item mutation has an identity to attribute it to, which is the reason the rule exists.
+  An anonymous editor on a shared list is an item nobody can be asked about.
+- A list has no public surface, so it has no projection to leak and needs no allow-list DTO,
+  no token, no rate limiter and no `/public/v1` route. That is a real reduction in the attack
+  surface compared with plans.
+- An invited member can read **nothing** until they sign up, enforced structurally rather than
+  by a status check: no pointer, so `404`.
+- A read-only viewer is deferred, not designed. It is recorded in `00-open-decisions.md`.
+- Adding a member is a small transaction — at most seven items including reciprocal People
+  and `LLINK#` rows — so unlike participants there
+  is no batching machinery and members are added one at a time.
+
+**Alternatives rejected.**
+- *Guest list editing via a token, like plan invites.* Every item write would be attributable
+  only to a browser, the list would gain a public surface with a leak question attached, and
+  a shared link would be a write capability handed to whoever forwards it.
+- *Three roles with a viewer.* A third branch in every item route for a case nobody has
+  asked for. Deferring it costs nothing; access roles are stored on the index pointer, so
+  adding one later is additive.
+- *A 50-member cap to match plans.* Fifty people editing one grocery list is not a use case,
+  and the lower cap keeps the roster bounded and unpaginated.
+
+---
+
+## ADR-044 — No `If-Match` on list item writes
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** Every other mutable object in the product uses optimistic concurrency:
+`PATCH /v1/activities/:id` carries `If-Match: <updatedAt>` and a mismatch is a `409`. Applying
+the same rule to list items is the consistent choice.
+
+It is also unusable. The dominant list operation is ticking a checkbox in a shop, often
+offline, often while somebody else is ticking the same list. Under `If-Match`, every one of
+those is a potential `409` about a change the user has no interest in and no way to resolve.
+
+**Decision.** **Item writes carry no `If-Match`.** Last write wins on a field. **List-level
+edits — title, capabilities, behaviour, slot — do carry `If-Match`**, because those are the
+changes worth protecting and nobody makes them in a shop.
+
+`checked` in particular is **set, never toggled**. `SET checked = NOT checked` is banned
+outright: it reads identically in one client and flips the value back in two, and it breaks
+the offline queue, where the same intent may be delivered twice.
+
+**Consequences.**
+- Two members checking the same item converge with no merge logic, no conflict banner and no
+  `409`. The operation is idempotent and commutative, which is also what makes it safe to
+  queue offline.
+- Two members editing the same item's **title** in the same minute: one silently wins, with no
+  signal to either. That is the honest cost and it is recorded as a tension rather than
+  hidden. It is small because item titles are short, rarely edited, and trivially retyped.
+- Two members inserting at the same position compute the **same** `lexoRank`, because the rank
+  function is pure and neither knows about the other. Identical ranks are expected, not
+  exceptional, and the total order `(rank, itemId)` resolves them identically on every device
+  with no coordination. A comparator that sorts on `rank` alone leaves the outcome to engine
+  sort stability.
+- Two members adding the same title get two rows. **Never auto-merged** — silently swallowing
+  somebody's entry is worse than a visible duplicate they can delete.
+- Reordering is the one list operation that cannot be queued offline, because `afterItemId`
+  is resolved against neighbours at flush time. It is refused with an explanation rather than
+  queued and quietly misapplied.
+- There is no CRDT. Reconnection is "refetch wins, then replay the queue", and the cases that
+  rule handles badly are enumerated in `../03-implementation/phase-09-followup-and-launch.md`
+  P9-08 rather than engineered around. ADR-024 already rejects a local-first replica; this is
+  the same reasoning applied to a second writer rather than a second device.
+
+**Alternatives rejected.**
+- *`If-Match` on everything.* Constant spurious `409`s on checkboxes, an offline queue that
+  parks half a shopping trip in a conflict banner, and no benefit — the conflicting field is
+  a boolean whose two writers agree.
+- *`If-Match` on title but not on `checked`.* A per-field concurrency policy on one endpoint,
+  which is harder to explain than either uniform rule and produces a `409` on a `PATCH` that
+  happened to carry two fields.
+- *A CRDT for list items.* A second storage engine on the client, a merge implementation the
+  server does not share, and a class of bug that appears only with two devices at once — for
+  a household grocery list.
+
+---
+
+## ADR-045 — Plan identity is explicit on Activity, not derived from a date, type, or people
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** ADR-011 first defined a Plan from `schedule.date`; ADR-037 then needed undated
+Plans and derived them from `type` plus participants. Both rules let an unrelated edit change
+what the object *is*: adding Alice to an undated Task moved it into Plans, and changing a type
+could do the same. They also left no way to distinguish a private idea the user deliberately
+made a Plan from a title the server happened to classify.
+
+**Decision.**
+
+> **A Plan is an Activity with `objectKind: 'plan'`, selected explicitly by the user or a
+> labelled contextual entry point. A date changes scheduling state, not identity.**
+
+That sentence is canonical in
+[`data-model.md`](data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity)
+§1 and no document may say otherwise. `deriveGsi1Bucket` (ADR-038) is the mechanical
+expression of it: an undated `plan` goes to `#P`, an undated `task` goes to `#N`, and a date
+moves either to `#S` without changing `objectKind`.
+
+Conversion is supported only as an explicit `PATCH /v1/activities/:id`. Task → Plan must
+include `objectKind: 'plan'` and a Plan type the user selected. Plan → Task must include
+`{ objectKind: 'task', type: 'task' }` and is allowed only when `participantCount`,
+`expenseTotalCents`, and `childCount` are all zero. Otherwise the server returns
+`409 conflict` naming every non-zero blocker and its current value. Text, date, type, and
+participant edits never initiate either conversion.
+
+**Consequences.**
+- Scheduling is `POST /v1/activities/:id/schedule` rewriting one index entry. It does not
+  promote a Task to a Plan or choose an object kind.
+- Unscheduling is symmetric and lossless. The plan returns to Needs a date with its
+  participants, updates, expenses and prep tasks intact, because none of them were attached
+  to the date.
+- The RSVP reset (ADR-040) is a consequence of a *scheduling state* change, not of an
+  identity change — which is why responses are reset but everything else on the plan
+  survives.
+- Date suggestions (ADR-049) are coherent only under this rule. A dateless plan you can
+  propose dates against is a plan; under the old definition it would have been a plan that
+  did not exist yet.
+- Copy follows the rule: the product says "needs a date", never "not yet a plan".
+- Participant, type, text, and date mutations never rewrite `objectKind`. Only the guarded
+  conversion request above changes it; the write then updates the canonical record and its
+  index projection atomically.
+
+**Alternatives rejected.**
+- *Keep the date-based definition and call undated things something else.* That is a second
+  noun in a product whose whole discipline is three, and it would need its own screen,
+  vocabulary and conversion step.
+- *Infer from participants and type.* Makes Plan identity a side effect and cannot represent
+  a private Plan without treating every non-task type as one.
+- *A separate `Plan` entity.* Adds a conversion and a second id where a discriminator on the
+  one schedulable entity is enough.
+
+---
+
+## ADR-046 — Global Add and capture require an explicit creation target
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** A title-only request forced the server or model to decide whether a thought was
+a Task, Plan, or ListItem and which Activity type it was. That is not harmless convenience:
+it decides where the thought lives, whether it has a checkbox, and whether adding people is
+appropriate. The same words can legitimately mean different things depending on the entry
+point.
+
+**Decision.** The client or labelled entry point chooses a `CreationTarget` before any create
+or capture call:
+
+```ts
+type CreationTarget =
+  | { objectKind: 'task'; type: 'task' }
+  | { objectKind: 'plan'; type: PlanType }
+  | { objectKind: 'listItem'; listId: string };
+```
+
+`PlanType = Exclude<ActivityType, 'task'>`, corresponding to the five visible Plan kinds:
+General (`custom`), Meal, Watch, Event, and Outing. There is no invisible task-flavoured Plan.
+
+`POST /v1/activities` requires `objectKind` and `type`; neither has a server default. A
+ListItem is created only through its list-scoped endpoint. Capture receives the selected
+target, echoes it, and returns only fields valid for it. It never returns a different target,
+chooses participants, or writes anything. The complete contract and entry-point map are in
+[`api-contract.md`](api-contract.md#23-activities) §2.3 and §2.11.
+
+**Consequences.**
+- Missing `objectKind` or `type` is `400 validation_failed`, not a hidden fallback.
+- Global Add has three explicit outcomes: Task and Plan call `/v1/activities`; List item
+  requires a chosen list and calls `/v1/lists/:id/items`.
+- Contextual labels are target selection: `Add a task`, `Add prep task`, and `Add item` fix
+  the target without another chooser. `Plan this item` fixes `objectKind: 'plan'` but still
+  requires the caller-confirmed Plan kind and audience.
+- AI can extract a date or location without deciding the user's organising intent. Text such
+  as "with Alice" does not add Alice; sharing remains a separate confirmation.
+- Idempotency is scoped to the final create endpoint, not to capture.
+
+**Alternatives rejected.**
+- *Default ambiguous input to Task.* Fast, but it silently answers the product's main
+  organising question and makes a wrong destination look like user intent.
+- *Let capture classify the target.* Produces the same hidden decision with a confidence
+  score and makes the manual and AI paths disagree.
+- *One generic create endpoint for all three targets.* Either accepts an invalid union of
+  fields or branches on data the client could state directly; list access is clearer in the
+  list-scoped route.
+
+---
+
+## ADR-047 — Reminders are per user, stored in the activity partition
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** `Activity` carried a `reminders[]` array. On a private activity that is correct.
+On a shared plan it is a leak and a nuisance in one field: the creator's "leave in 15
+minutes" is stored on the object everybody reads, so it either fires on everybody's phone or
+is visible to everybody, and a participant who wants their own reminder has nowhere to put
+it.
+
+**Decision.** **`Activity.reminders[]` is removed.** A reminder is an item in the activity
+partition keyed `REM#<userId>#<reminderId>`, per
+[`data-model.md`](data-model.md#31-activity-partition) §3.1 and §4.3. A shared plan has **one
+schedule and many reminder sets**. `GET`/`POST`/`DELETE /v1/activities/:id/reminders` operate
+on the caller's own rows only
+([`api-contract.md`](api-contract.md#24a-reminders--per-user) §2.4a).
+
+**Consequences.**
+- **One `Query` still serves both readers.** `pk = ACT#<a>` returns the whole plan; the detail
+  handler filters `REM#` to the caller before responding (access pattern 4) and the reminder
+  scheduler keeps all of them and fans out per user (access pattern 4b). No second index, no
+  second query, no second code path.
+- Keying on `userId` is symmetric with `PART#` and `EXP#`, so the partition has one shape
+  rather than one shape plus an exception.
+- Joining a shared plan creates the joiner's **own** row only from their own explicitly set
+  `User.defaultReminderOffset`; `0` means At the time, while absent/null means Off. Nobody
+  inherits anybody else's, and nobody is opted into a push they did not ask for.
+- The Phase 5 reminder Lambda fans out per user rather than reading one array, and skips a
+  user with no registered device without affecting anyone else's reminder.
+- Leak vector: a detail response that forgets the filter shows one user a another user's
+  reminder offset, which is a statement about their travel time and their day. It is in the
+  threat model (`security-privacy.md` §1 row 15) with a test, not left to review.
+- Cost: three endpoints and a filter, against a field that needed neither.
+
+**Alternatives rejected.**
+- *Keep `reminders[]` and tag each entry with a `userId`.* The whole array still ships to
+  every reader of the activity, so the leak is unchanged and the filter has to happen at
+  render time in every client. It also makes two users' concurrent reminder edits a
+  read-modify-write on one item.
+- *A separate `USER#<u>` / `REM#<activityId>` partition.* The detail screen becomes two
+  queries and the scheduler needs a reverse index to find every reminder on one activity.
+- *One reminder set per plan, owner-controlled.* That is the leak restated as a feature: the
+  owner would be choosing when everyone else's phone buzzes.
+
+---
+
+## ADR-048 — Completion is global and owner-only
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** `Occurrence` carries no participant identity, so "completed" is a fact about the
+thing, not about a person. The completion endpoints did not say who may assert that fact, and
+one edge case in the Phase 2 plan said a participant could complete their own occurrence —
+which the storage cannot represent.
+
+**Decision.** **Only the owner may complete, skip, snooze or uncomplete**, and the result is
+the same for everyone. Participants get `403`. The rule is canonical in
+[`data-model.md`](data-model.md#45-occurrence) §4.5 and
+[`api-contract.md`](api-contract.md#3-authorisation-rules) §3, and is enforced in the
+authorisation middleware rather than per handler.
+
+> **Amended by ADR-051.** This entry originally applied to every activity. It applies to
+> **plans**; a prep task follows the shared-checklist rule and may be completed by any
+> participant of its parent. The rest of this ADR is unchanged.
+
+**Consequences.**
+- An `Occurrence` says *the thing happened*. There is exactly one answer to "did the dinner
+  happen", and it is the owner's.
+- A participant who did not go sets their RSVP to `declined`; a participant who wants the
+  plan off their day leaves it. Both already exist and both are honest.
+- The agenda expansion never has to answer "whose occurrence is this?", so it stays one
+  merge over one set of `OCC#` rows.
+- Per-participant completion is a real feature with a real cost — `OCC#<date>#<userId>`, a
+  per-caller expansion, and a completion state on every agenda row that means something
+  different depending on who is reading. It is deferred, recorded in
+  [`../00-open-decisions.md`](../00-open-decisions.md), not forgotten.
+- A participant's `403` on `complete` is an acceptance test in Phase 2 and a row in the
+  Phase 6 authorisation matrix.
+
+**Alternatives rejected.**
+- *Let a participant complete their own occurrence.* Unrepresentable without a per-user
+  occurrence key, and the intermediate state — an activity that is completed for two people
+  and pending for three — has no defined rendering.
+- *Let any participant complete for everyone.* One person can then close a plan the owner is
+  still expecting to happen, with no undo affordance for the owner.
+
+---
+
+## ADR-049 — Date suggestions: any participant proposes, only the owner schedules
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** ADR-037 gave undated plans a home. It did not give them a way to move. Needs a
+date was therefore a holding area: the owner could schedule, and everybody else could wait.
+The missing piece is small and specific — a participant needs to be able to say "how about
+Thursday?" without being able to decide for everyone.
+
+**Decision.** A `DateSuggestion` item at `SUGG#<isoTs>#<suggestionId>` in the activity
+partition ([`data-model.md`](data-model.md#43a-datesuggestion) §4.3a).
+
+- Any participant may add `{ date, time?, note? }`. **Max 5 per activity.**
+- Others toggle themselves into `worksFor` — an availability signal, not a vote and not a
+  like.
+- **Only the owner schedules**, with `POST /v1/activities/:id/schedule { fromSuggestionId }`,
+  which copies the date and time and then runs the ordinary scheduling path including the
+  RSVP reset (ADR-040).
+- All suggestions are deleted once the activity is scheduled.
+- Guests on the public invite page cannot suggest. They read and RSVP.
+
+**Consequences.**
+- Needs a date becomes a planning surface rather than a queue, without acquiring a scheduling
+  poll, a deadline, or a quorum rule.
+- The cap of 5 is what keeps it a nudge. A plan with eleven candidate dates is a poll, and a
+  poll needs closing rules, tie-breaks and a notification cadence this product does not want.
+- `worksFor` is the only reaction-shaped thing in the product. It earns its place by being
+  the actual coordination signal rather than sentiment.
+- Scheduling from a suggestion still resets every RSVP, because the reset is about the date
+  landing, not about where the date came from. Somebody marking a suggestion as workable has
+  not agreed to attend.
+- Suggestions are deleted rather than archived, so the plan detail has no stale "we
+  considered Thursday" section and no second timeline beside the updates feed.
+- It adds one sort-key prefix, four endpoints and five tasks in Phase 6. No new table, no new
+  index, no new query.
+
+**Alternatives rejected.**
+- *Let any participant schedule.* One person picking the date for a plan somebody else owns
+  is the same failure as ADR-048's, and it fires every participant's index-entry rewrite and
+  RSVP reset.
+- *A full availability poll — date grid, per-person yes/no/maybe, automatic winner.* A
+  separate product. It needs closing rules and nagging, and Needs a date is explicitly
+  allowed to nag nobody (ADR-037).
+- *Suggestions as ordinary updates-feed entries.* No structure to toggle against, no cap, and
+  no way to schedule from one without parsing prose.
+- *Keeping suggestions after scheduling, for history.* A record of dates that did not happen,
+  shown on every future read of the plan, for no decision anybody will make again.
+
+---
+
+## ADR-050 — No date ranges in v1
+
+**Status:** Accepted · **Date:** 2026-08-07
+
+**Context.** A weekend trip, a three-day festival and a week away are all obvious things to
+put in a planner, and `schedule.endDate` is an obvious field to add. It was proposed, deferred
+before Phase 0 (open decision 8), and re-litigated in the review of 2026-08-07.
+
+**Decision.** **Upheld. `schedule` has a `date` and never an `endDate` in v1.** A multi-day
+trip is **one activity on its start date**, with prep tasks and lists hanging off it.
+
+The consequence is stated rather than designed around: **the trip does not appear on Today on
+days two and three.** No v1 screen, example, mock or fixture may show a date range.
+
+**Consequences.**
+- The agenda stays one `BETWEEN` query on `gsi1sk`. Ranges would need either an index entry
+  per day of the range — a fan-out on every reschedule, multiplied by every participant — or
+  a second query on every agenda read for activities that straddle the window. Both are paid
+  on every request by every user, for a feature a minority need.
+- `.ics` export keeps one `DTSTART`/`DTEND` pair derived from one date, and the recurrence
+  expansion has one nominal date per occurrence to key `OCC#` rows against.
+- `Recurrence.endDate` is unaffected and stays. It terminates a *series*; it does not give one
+  occurrence a duration. Do not confuse the two fields when reading the schema.
+- Someone planning a three-day trip sees it on Today on day one and finds it under the trip's
+  own detail screen thereafter. The prep tasks, which are the things with dates, are on the
+  days they belong to.
+- The upgrade path is additive when it arrives: `endDate` plus a second index entry per day,
+  behind a real request.
+
+**Alternatives rejected.**
+- *`schedule.endDate` with a straddling query on every agenda read.* A second query on the
+  most-hit endpoint in the product, permanently, to serve a case nobody has yet complained
+  about.
+- *One index entry per day of the range.* Bounded only by the range length, rewritten on every
+  reschedule, fanned out across every participant. A two-week holiday becomes 14 entries per
+  person.
+- *A parent activity with one child per day.* Fourteen rows the user did not create, each
+  completable independently, and a deletion cascade to design. It contradicts "suggest, never
+  auto-create".
+- *Rendering the range on the client from a duration field.* The client would show the trip on
+  day two while the server's agenda does not return it, so Today and Plans would disagree
+  about the same activity.
+
+---
+
+## ADR-051 — Completion authority follows the object: a prep task is not a plan
+
+**Status:** Accepted · **Date:** 2026-08-07 · **Amends:** ADR-048
+
+**Context.** ADR-048 made completion global and owner-only, which is right for a plan. It was
+then read as covering prep tasks too, on the argument that a prep task is its own Activity
+whose `ownerId` belongs to whoever typed it, so the ordinary owner check already let a
+participant tick the ones they added and no participant branch was needed. That argument does
+not hold. A prep task created inside somebody else's shared plan is usually owned by the plan
+owner, and the case the product actually wants is the opposite one: Alice books the hotel for
+a trip we are planning together and ticks `Book hotel` whether or not she typed it.
+
+**Decision.** Completion authority follows the object.
+
+- Completing a **plan** asserts a shared fact about an event — it happened or it did not —
+  so **only the owner** may complete, skip, snooze or uncomplete it. ADR-048, unchanged.
+- Completing a **prep task** ticks an item on a shared checklist, so **any participant of the
+  parent plan may complete, uncomplete and edit it, whoever created it**.
+
+This is the consistent reading rather than a special case: a prep task behaves like an item
+on a shared list, and in both places a collaborator may check a shared checklist item.
+
+It costs **one rule in `authz.ts`** — *a participant of the parent may act on a child* —
+applied once in the middleware, not per endpoint. When the loaded activity carries a
+`parentActivityId`, the check also consults the **parent's** `PART#` rows. Canonical in
+[`api-contract.md`](api-contract.md#3-authorisation-rules) §3.
+
+**Consequences.**
+- One extra `GetItem` — the parent's `PART#<personId>` row — on an authorised call to a child
+  activity, or a cached parent lookup where the handler already holds the parent. It fires
+  only when `parentActivityId` is present.
+- `parentActivityId` is read from the **stored** child item, never from the request, so a
+  caller cannot name a parent to borrow its permissions
+  ([`security-privacy.md`](security-privacy.md#1-threat-model) row 1a).
+- Nesting is capped at two levels
+  ([`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md#3-prep-tasks) §3), so
+  the walk is one hop and cannot recurse.
+- Three test cases, in Phase 2 (P2-13) and walked with real participants in Phase 6 (P6-28):
+  the child's owner, a participant of the parent who did not create the child, and a stranger
+  getting `404`.
+- Nothing about `Occurrence` changes. There is still no participant identity on a completion,
+  and per-participant completion of a *plan* stays deferred
+  ([`../00-open-decisions.md`](../00-open-decisions.md) item 31).
+
+**Alternatives rejected.**
+- *Keep the owner-only reading for prep tasks.* It makes the plan owner a bottleneck on the
+  exact work a shared plan exists to divide, and it depends on a claim about `ownerId` that
+  is false for prep tasks added inside somebody else's plan.
+- *Only the creator of a prep task may complete it.* The same bottleneck, one person smaller,
+  and it means a checklist item nobody can tick once its author leaves the plan.
+- *Grant it per endpoint rather than in the middleware.* Six handlers each deciding what a
+  parent means is how authorisation rules drift apart.
+
+---
+
 ## Open questions
 
 Genuinely undecided. Each needs a decision before the phase named.
 
 | # | Question | Needed by | Notes |
 | --- | --- | --- | --- |
-| OQ-1 | Should media move to CloudFront **signed URLs**? | Phase 6 | ADR-023 accepts unguessable keys for now. If users start attaching documents, receipts, or anything with a face in it that they would not share, signed URLs become worth the key management. Decide after seeing what people actually upload. |
-| OQ-2 | Can the GitHub deploy roles be scoped **per stack prefix** at the CDK bootstrap level? | Phase 3 | Today the stage separation relies on the GitHub `production` environment approval gate. CDK's bootstrap roles are account-wide, so `od-github-deploy-dev` could in principle assume a role that touches prod stacks. Investigate per-stack deploy roles or a policy condition on the CloudFormation stack name. |
-| OQ-5 | Which **model** and which **provider** for Phase 7 capture? | Phase 7 | ADR-008 defers this behind a `CaptureProvider` interface. The decision needs a real accuracy evaluation against a corpus of actual posters and screenshots, plus current pricing, plus written confirmation that API inputs are excluded from training. |
-| OQ-6 | Is there a **paid tier**, and does capture sit behind it? | Phase 7 | `cost-model.md` §3.4 projects model spend at roughly 35× the AWS bill at 1,000 users. Unlimited free capture does not work economically. A free monthly quota with paid capture above it probably does. This is a product decision, not a technical one. |
+| OQ-1 | Should media move to CloudFront **signed URLs**? | Phase 7 | ADR-023 accepts unguessable keys for now. If users start attaching documents, receipts, or anything with a face in it that they would not share, signed URLs become worth the key management. Decide after seeing what people actually upload. |
+| OQ-2 | Can the GitHub deploy roles be scoped **per stack prefix** at the CDK bootstrap level? | Phase 5 | The prod stacks a dev role could reach do not exist until Phase 5, and the deploy roles themselves are not created until Phase 4 (P4-06). Today the stage separation relies on the GitHub `production` environment approval gate. CDK's bootstrap roles are account-wide, so `od-github-deploy-dev` could in principle assume a role that touches prod stacks. Investigate per-stack deploy roles or a policy condition on the CloudFormation stack name. |
+| OQ-5 | Which **model** and which **provider** for Phase 8 capture? | Phase 8 | ADR-008 defers this behind a `CaptureProvider` interface. The decision needs a real accuracy evaluation against a corpus of actual posters and screenshots, plus current pricing, plus written confirmation that API inputs are excluded from training. |
+| OQ-6 | Is there a **paid tier**, and does capture sit behind it? | Phase 8 | `cost-model.md` §3.4 projects model spend at roughly 35× the AWS bill at 1,000 users. Unlimited free capture does not work economically. A free monthly quota with paid capture above it probably does. This is a product decision, not a technical one. |
 | OQ-7 | When does **prod move to its own AWS account**? | When a second person gets access | ADR-010 accepts one account for now and states the trigger. The migration path (bootstrap the new account, export/import the table, cut DNS over) should be written down before it is needed. |
-| OQ-8 | Does the **web build need web push**? | Phase 6 | Currently a no-op stub. Requires a service worker, VAPID keys, and a separate permission model, none of which Expo abstracts. Only worth it if web turns out to be a primary surface rather than the invite-page surface. |
+| OQ-8 | Does the **web build need web push**? | Phase 7 | Currently a no-op stub. Requires a service worker, VAPID keys, and a separate permission model, none of which Expo abstracts. Only worth it if web turns out to be a primary surface rather than the invite-page surface. |
 
 ---
 
@@ -924,9 +2000,9 @@ answer and where it was made.
 
 | # | Question | Resolved in | Resolution |
 | --- | --- | --- | --- |
-| OQ-3 | What is the **Lambda memory setting** that actually minimises cost and latency? | `03-implementation/phase-08-followup-and-launch.md` P8-15 | Run AWS Lambda Power Tuning against the dev API function over 512/768/1024/1536/2048 MB, record the curve in `docs/05-operations/perf/lambda-power-tuning.md`, and set `memorySize` from it. **Unresolved:** `phase-04-ship-v1.md` P4-28 also claims this measurement for Phase 4. One of the two owns it; pick one. |
-| OQ-4 | Does **refresh token rotation** need a CDK escape hatch? | `03-implementation/phase-01-activity-core.md` P1-01 | Check the CDK version in the lockfile; if the `UserPoolClient` L2 has no property, use the `CfnUserPoolClient` escape hatch in `auth.md` §1.6 with a 60-second retry grace period. Rotation is not optional. |
-| OQ-9 | What is the **guest-email lookup partition**? | `03-implementation/phase-05-sharing.md` P5-25 | `GUESTEMAIL#<lowercased-email>` is now in `data-model.md` §3.4 with access pattern 14b. |
-| OQ-10 | Do the three **web auth endpoints** belong on the public prefix? | `03-implementation/phase-01-activity-core.md` P1-22 | Yes, on `/public/v1/auth/*`, with their own limit of 10 req/min per IP and an additional 60/hour per IP on `/refresh`. Recorded in `api-contract.md` §2.0. |
-| OQ-11 | Is `zod` v4 viable, or does `zod-to-openapi` pin us to v3? | `03-implementation/phase-00-foundations.md` P0-09 | Decided at scaffold time from the lockfile: pin `zod@3` if `zod-to-openapi` does not support v4, with the pin commented in `package.json`. `tech-stack.md` §2.2 carries the resulting range. |
-| OQ-12 | Does **`.ics` generation** need a library, and which one? | `03-implementation/phase-05-sharing.md` P5-08 | No library. A typed builder in `packages/shared/src/ics/` with its own escaping, 75-octet folding, golden files and a parser-oracle test. |
+| OQ-3 | What is the **Lambda memory setting** that actually minimises cost and latency? | `03-implementation/phase-05-ship-v1.md` P5-33 and `phase-09-followup-and-launch.md` P9-15 | Phase 5 runs a synthetic power-tuning curve to choose the safe launch setting. Phase 9 repeats the same 512/768/1024/1536/2048 MB comparison against representative real traffic, records the final curve in `docs/05-operations/perf/lambda-power-tuning.md`, and may revise `memorySize`. Measuring twice is deliberate: launch baseline first, production closure second. |
+| OQ-4 | Does **refresh token rotation** need a CDK escape hatch? | `03-implementation/phase-04-deploy-and-identity.md` P4-09 | Check the CDK version in the lockfile; if the `UserPoolClient` L2 has no property, use the `CfnUserPoolClient` escape hatch in `auth.md` §1.6 with a 60-second retry grace period. Rotation is not optional. |
+| OQ-9 | What is the **guest-email lookup partition**? | `03-implementation/phase-06-sharing.md` P6-27 | `GUESTEMAIL#<lowercased-email>` is now in `data-model.md` §3.4 with access pattern 14b. |
+| OQ-10 | Do the three **web auth endpoints** belong on the public prefix? | `03-implementation/phase-04-deploy-and-identity.md` P4-18 | Yes, on `/public/v1/auth/*`, with their own limit of 10 req/min per IP and an additional 60/hour per IP on `/refresh`. Recorded in `api-contract.md` §2.0. |
+| OQ-11 | Is `zod` v4 viable, or does `zod-to-openapi` pin us to v3? | `03-implementation/phase-00-foundations.md` P0-07 | Decided at scaffold time from the lockfile: pin `zod@3` if `zod-to-openapi` does not support v4, with the pin commented in `package.json`. `tech-stack.md` §2.2 carries the resulting range. |
+| OQ-12 | Does **`.ics` generation** need a library, and which one? | `03-implementation/phase-06-sharing.md` P6-08 | No library. A typed builder in `packages/shared/src/ics/` with its own escaping, 75-octet folding, golden files and a parser-oracle test. |

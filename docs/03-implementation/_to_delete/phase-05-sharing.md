@@ -1,9 +1,19 @@
 # Phase 5 — Sharing and invites
 
+> **Superseded phase number.** The canonical implementation plan is
+> [`phase-06-sharing.md`](phase-06-sharing.md). This file remains only for old links; when the
+> two differ, the Phase 6 document governs.
+>
+> Shared Lists and their People lifecycle are intentionally absent from this old numbering.
+> Implement the canonical Phase 6 `ListMember`, reciprocal Person/`LLINK#`, guest activation,
+> removal/list-delete and no-inferred-sharing tasks; this legacy Plan-only text cannot narrow
+> them. The canonical explicit-intent rule also governs later capture: source words never set
+> reminder/notification state.
+
 ## Goal
 
 At the end of this phase a plan stops being a private note and becomes a thing two or more
-people can coordinate around. An owner can add people to any activity from one picker;
+people can coordinate around. An owner can add people to a Plan from one picker;
 app users receive an in-app invitation, a push, and the plan on their own Today with a
 pending RSVP; everyone else receives a link to a public page that works with no account, no
 install, and no interstitial, and that lets them answer Going / Maybe / Can't go and put the
@@ -698,7 +708,7 @@ item**. Two participant additions in one transaction would both update
 | Create activity with `participants[]` | 2 base (`ACT#/META`, owner `IDX#`) + up to 6 per participant | 302 | **No** — see below |
 | Reschedule | `ACT#/META` + one `IDX#` per participating **app user**, owner included | 52 | Yes |
 | Remove participant | `ACT#/PART#` delete, their `IDX#` delete, both `PLINK#` deletes, `INVITE#` revoke, `ACT#/META` counter | 6 | Yes |
-| Delete activity | Every item in the `ACT#` partition + every participant's `IDX#` + both directions of every `PLINK#` + list-item pointer clears | 200+ | **No** — see P5-24 |
+| Delete activity | Guard settled child Expenses first; then every item in the `ACT#` partition + every Expense locator + every participant's `IDX#` + both directions of every `PLINK#` + list-item pointer clears | 200+ | **No** — see P5-24 |
 
 > **Decision — creation fans out in batches, not in one transaction.** `POST /v1/activities`
 > writes `ACT#/META` and the owner's `IDX#` in a two-item transaction and returns as soon as
@@ -736,7 +746,8 @@ part-way leaves the activity and the earlier participants intact; a replayed
 
 ### P5-12 — `POST /v1/activities/:id/participants`
 
-**What to build.** The one endpoint that turns a private activity into a shared one.
+**What to build.** The one endpoint that turns a private Plan into a shared Plan. Tasks and
+ListItems use different collaboration models and are rejected here.
 
 **Files.** `services/api/src/routes/participants.ts`,
 `services/api/src/handlers/participants.ts`,
@@ -744,7 +755,9 @@ part-way leaves the activity and the earlier participants intact; a replayed
 
 **Approach.** Body is either `{ personId }` or `{ displayName, email? }`. The service:
 
-1. `assertActivityAccess(userId, activityId, 'owner')`.
+1. `assertActivityAccess(userId, activityId, 'owner')`, then require
+   `activity.objectKind === 'plan'`; a Task returns `409 object_kind_conflict` before any
+   Person, Participant, Invite or visibility row is written.
 2. Enforces `participantCount < 50`, else `422 participant_limit_exceeded`.
 3. Resolves or creates the `Person` in the **caller's** partition.
 4. Decides guest vs app user: an email that matches an `EMAIL#<lowercased>` row belongs to a
@@ -776,7 +789,7 @@ part-way leaves the activity and the earlier participants intact; a replayed
 owner adds a guest by an email that matches a registered user (asserts `linkedUserId` is set
 and an `ActivityIndex` appears in that user's partition); participant tries to add someone
 (`403`); stranger tries (`404`); the 51st add (`422`); a duplicate add (`200`, idempotent);
-`visibility` flips exactly once.
+a Task returns `409` and remains unchanged; `visibility` flips exactly once.
 
 ---
 
@@ -823,8 +836,9 @@ participant cannot change another's; owner can; a declined participant gets `404
 participant leaving.
 
 **Approach.** Removing revokes that person's personalised invite token in the same
-transaction, deletes their `IDX#` and both `PLINK#` rows, and decrements the counter.
-Leaving does the same for the caller and writes a `participant_left` inbox entry for the
+transaction, deletes their `IDX#`, and decrements the counter. If no retained Expense
+references the relationship, delete both `PLINK#` rows; otherwise change their scope to
+`finance_only`. Leaving does the same for the caller and writes a `participant_left` inbox entry for the
 owner. Removal is confirmed in the UI and has **no undo**
 ([`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §4.1);
 re-adding sends a fresh invitation with a new token.
@@ -833,10 +847,14 @@ re-adding sends a fresh invitation with a new token.
 plan. Removing a person who has expenses on the plan is allowed and does **not** delete the
 expenses — the arithmetic must still reconcile
 ([`../01-product/expenses.md`](../01-product/expenses.md) §4). Their name stays on the
-expense rows. This is stated here because the obvious implementation deletes too much.
+expense rows. A finance-only `PLINK#` grants only the exact balance/expense/settlement
+projection, never Plan access or People activity history; Phase 6 consumes it. This is stated
+here because the obvious implementation deletes too much.
 
 **Tests.** Owner removes; participant leaves; participant cannot remove another; the token is
-`410` immediately after removal; expenses survive removal; the owner cannot leave.
+`410` immediately after removal; expenses and both finance-only links survive removal and a
+full balance rebuild remains identical; without Expenses both links are deleted; the owner
+cannot leave.
 
 ---
 
@@ -1072,11 +1090,11 @@ within 12 hours is delivered immediately
 - A muted plan suppresses every push for that user without affecting anyone else's.
 - Uncancelling re-notifies, per
   [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §4.1.
-- A private activity (no participants) notifies nobody and writes no feed entry.
+- A private Plan (no participants) notifies nobody and writes no feed entry.
 
 **Tests.** A table-driven test over `classifyChange` covering every field in the model,
 asserting `material`, `codes` and `notify` for each. Integration tests asserting exactly one
-push and one email per multi-field edit, zero notifications on a private activity, and that a
+push and one email per multi-field edit, zero notifications on a private Plan, and that a
 guest with a revoked token receives nothing.
 
 ---
@@ -1138,16 +1156,21 @@ of its tokens including shareable ones.
 (GSI1 sort keys change with the date). At the 50-participant cap this is 52 items, inside the
 100 limit. Guests have no `IDX#`, so they cost nothing here.
 
-**Delete.** Cannot be one transaction. Two phases:
+**Delete.** Before either phase, query child Expenses. Any non-empty
+`settlementIdByPersonId` returns `409 settlement_conflict` with every distinct blocking id
+and writes no tombstone; explicit Undo is the only way forward. Once clear, deletion cannot
+be one transaction and uses two phases:
 
 1. **Tombstone**, transactional, two items: set `ACT#/META.deletedAt` and delete the owner's
    `IDX#`. From this instant the plan is gone from every read path, because every read either
    goes through GSI1 or checks `deletedAt`.
 2. **Cascade**, a resumable job keyed by a `USER#<owner>/DELJOB#<activityId>` item. It pages
    the `ACT#` partition and issues `BatchWriteItem` calls of 25, deleting participants,
-   expenses, updates, occurrences and attachments, then deletes each participant's `IDX#` and
-   both directions of every `PLINK#`, revokes every `INVITE#`, and clears
-   `listItem.linkedActivityId` on any linked list item. It records progress on the job item
+   expenses and each Expense's global locator, updates, occurrences and attachments, then
+   deletes each participant's `IDX#` and
+   both directions of every `PLINK#`, revokes every `INVITE#`, and conditionally deletes only
+   this Activity's viewer-local `LNK#<viewerUserId>#<listItemId>` rows. It never updates the
+   ListItem itself. The job records progress
    and is safe to run twice.
 
 The cascade runs inline for small plans (fewer than 60 items total, which is the common case)
@@ -1161,8 +1184,10 @@ problem, not just an untidy one.
 
 **Tests.** Delete of a plan with 50 participants, 20 expenses, 40 updates and 3 attachments
 removes every item and every index entry; the job resumes correctly when killed mid-way; the
-plan is invisible immediately after phase one; a linked list item survives with a cleared
-pointer.
+plan is invisible immediately after phase one; a linked list item survives unchanged while
+only the deleted Plan's viewer-local links disappear. A settled Expense blocks before the
+tombstone and returns its exact Settlement ids; after explicit Undo, every Expense locator is
+removed by the resumable cascade.
 
 ---
 
@@ -1389,7 +1414,7 @@ the owner receives the notification.
 
 ## Acceptance criteria
 
-1. Adding the first participant to any activity of any type flips `visibility` to `shared`,
+1. Adding the first participant to a Plan of any Plan kind flips `visibility` to `shared`,
    and removing the last participant leaves it `shared`.
 2. An app user added to a plan receives a push, an inbox entry, and the plan on their Today
    with `rsvp: 'pending'` and an inline three-button RSVP control, within one agenda refresh.

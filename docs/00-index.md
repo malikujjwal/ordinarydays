@@ -24,6 +24,12 @@ that owns your task ID → the product spec for the feature → `02-architecture
 
 ---
 
+## 00 — Root
+
+| Document | Read it when |
+| --- | --- |
+| [00-open-decisions.md](00-open-decisions.md) | You want the decisions made on the founder's behalf during planning, the phase by which each must be settled, and what has been confirmed or deferred. |
+
 ## 01 — Product
 
 What the app does. Behaviour is decided here; mechanics are not.
@@ -32,13 +38,13 @@ What the app does. Behaviour is decided here; mechanics are not.
 | --- | --- |
 | [original-concept.md](01-product/original-concept.md) | You need the founder's intent. Wins over every other doc on questions of *what the product should do*. |
 | [overview.md](01-product/overview.md) | Onboarding, or you need the principles as testable rules. |
-| [activities.md](01-product/activities.md) | Working on creation, the Add screen, any type-specific form, or the activity lifecycle. |
+| [activities.md](01-product/activities.md) | Working on creation, the explicit Task / Plan / List item choice, contextual Add entry points, any type-specific form, or the activity lifecycle. |
 | [today-and-tasks.md](01-product/today-and-tasks.md) | Working on the Today screen, tasks, recurrence, snooze, overdue, or passed plans. |
-| [plans-and-lists.md](01-product/plans-and-lists.md) | Working on plan detail, lists, the list→plan bridge, meals, or watch tracking. |
+| [plans-and-lists.md](01-product/plans-and-lists.md) | Working on the three-stage Plans tab including Needs a date, plan detail, explicit new-List template choice, lists, shared lists, or the explicit `Plan this item` bridge and its Just me / Choose people choice. |
 | [sharing-and-people.md](01-product/sharing-and-people.md) | Working on participants, invites, the public invite page, guests, or the People layer. |
 | [expenses.md](01-product/expenses.md) | Working on expenses, splits, balances, or settlement. |
-| [ai-capture.md](01-product/ai-capture.md) | Working on natural-language capture, image-to-event, or the review screen. Phase 7. |
-| [notifications.md](01-product/notifications.md) | Working on reminders, push, or the in-app inbox. |
+| [ai-capture.md](01-product/ai-capture.md) | Working on field extraction after the user has explicitly chosen Task, Plan, or a destination List. Capture never chooses object kind, Plan type, sharing, or reminder state. Phase 8. |
+| [notifications.md](01-product/notifications.md) | Working on reminders, push, the in-app inbox, the notification catalogue, or the four transactional emails. |
 | [interaction-contract.md](01-product/interaction-contract.md) | Working on any interactive surface. The gesture and state contract is universal. |
 
 ## 02 — Architecture
@@ -48,6 +54,7 @@ How it is built. Mechanics are decided here.
 | Document | Read it when |
 | --- | --- |
 | [data-model.md](02-architecture/data-model.md) | **Anything touching storage.** The single-table design, entity shapes, access patterns, recurrence expansion, and transaction boundaries. |
+| [feature-to-schema-map.md](02-architecture/feature-to-schema-map.md) | You want to see a product flow traced end to end through the schema, or you think a feature needs a new table. Read it before proposing a model change. |
 | [api-contract.md](02-architecture/api-contract.md) | Adding or calling any endpoint. The client never calls something that is not in here. |
 | [tech-stack.md](02-architecture/tech-stack.md) | Choosing a library, or you need the client/server layering. |
 | [aws-services.md](02-architecture/aws-services.md) | You need to know which AWS service does what, and what it costs. |
@@ -59,20 +66,22 @@ How it is built. Mechanics are decided here.
 
 ## 03 — Implementation
 
-The plan. Nine phases, ~300 tasks.
+The plan. Ten phases, 359 tasks. Phases 0–3 are local-first: nothing is deployed to AWS
+until Phase 4.
 
 | Document | Read it when |
 | --- | --- |
 | [roadmap.md](03-implementation/roadmap.md) | Planning, sequencing, or deciding what to parallelise. Includes the risk register. |
-| [phase-00-foundations.md](03-implementation/phase-00-foundations.md) | AWS account, CDK bootstrap, monorepo, CI, hello-world end to end. |
-| [phase-01-activity-core.md](03-implementation/phase-01-activity-core.md) | Auth, the repository layer, Activity CRUD, the Add screen and creation forms. |
-| [phase-02-today-and-tasks.md](03-implementation/phase-02-today-and-tasks.md) | The recurrence engine, the agenda endpoint, the Today screen. |
-| [phase-03-plans-and-lists.md](03-implementation/phase-03-plans-and-lists.md) | Lists, the list→plan bridge, plan detail, attachments. |
-| [phase-04-ship-v1.md](03-implementation/phase-04-ship-v1.md) | Web hosting, EAS builds, push, TestFlight, App Store setup. |
-| [phase-05-sharing.md](03-implementation/phase-05-sharing.md) | Participants, RSVP, invites, the public page, calendar export, SES. |
-| [phase-06-people-and-expenses.md](03-implementation/phase-06-people-and-expenses.md) | The People layer, expenses, balances, settlement, Streams. |
-| [phase-07-ai-capture.md](03-implementation/phase-07-ai-capture.md) | Model integration, extraction, the review screen, eval harness, spend controls. |
-| [phase-08-followup-and-launch.md](03-implementation/phase-08-followup-and-launch.md) | Follow-up suggestions, shortcuts, offline, widgets, public launch. |
+| [phase-00-foundations.md](03-implementation/phase-00-foundations.md) | AWS account and budgets, the monorepo, CI, the eight CDK stacks written but not deployed, hello-world end to end on a laptop. |
+| [phase-01-activity-core.md](03-implementation/phase-01-activity-core.md) | The identity seam, the repository layer, Activity CRUD, explicit Add intent, per-user reminder rows, the Add screen and creation forms. |
+| [phase-02-today-and-tasks.md](03-implementation/phase-02-today-and-tasks.md) | The recurrence engine, the GSI1 bucket rule, `lastActivityAt`, the agenda endpoint, owner-only plan completion with the parent-participant rule for prep tasks, the reminder endpoints, the Today screen. |
+| [phase-03-plans-and-lists.md](03-implementation/phase-03-plans-and-lists.md) | Lists, the explicit private/shared list-item → Plan bridge, the three-stage Plans tab, plan detail, attachments. |
+| [phase-04-deploy-and-identity.md](03-implementation/phase-04-deploy-and-identity.md) | The first real deploy, Cognito, Sign in with Apple, token storage, the auth screens. |
+| [phase-05-ship-v1.md](03-implementation/phase-05-ship-v1.md) | Domain and DNS, prod, web hosting, EAS builds, push, TestFlight, App Store setup. |
+| [phase-06-sharing.md](03-implementation/phase-06-sharing.md) | Participants, RSVP and its reset on a date change, date suggestions, invites, the public page and its date-sensitive vocabulary, calendar export, SES, shared lists. |
+| [phase-07-people-and-expenses.md](03-implementation/phase-07-people-and-expenses.md) | The People layer, expenses, balances, settlement, Streams. |
+| [phase-08-ai-capture.md](03-implementation/phase-08-ai-capture.md) | Target-constrained field extraction, the review screen, eval harness and spend controls; no intent or type classification. |
+| [phase-09-followup-and-launch.md](03-implementation/phase-09-followup-and-launch.md) | Follow-up suggestions, shortcuts, offline, widgets, public launch. |
 | [definition-of-done.md](03-implementation/definition-of-done.md) | **Before opening any PR.** |
 
 ## 04 — Conventions
@@ -96,13 +105,13 @@ in advance. The phase task that produces each one is named beside it.
 | Path | Produced by |
 | --- | --- |
 | `generated/openapi.json` | `pnpm gen:openapi` from the Zod schemas, from Phase 0. Checked in; CI fails if stale. |
-| `05-operations/runbook.md` | Phase 8 — on-call and incident procedures |
-| `05-operations/flags.md` | Phase 4 — the feature-flag and kill-switch register |
-| `05-operations/launch-checklist.md`, `launch-report.md` | Phase 8 |
-| `05-operations/app-store-submission.md` | Phase 4 — the submission record and review notes |
-| `05-operations/ses-production-access.md` | Phase 5 — the SES review request and its outcome |
-| `05-operations/accessibility-audit.md` | Phase 8 |
-| `05-operations/perf/lambda-power-tuning.md` | Phase 8 — the memory/cost curve |
+| `05-operations/runbook.md` | Phase 9 — on-call and incident procedures |
+| `05-operations/flags.md` | Phase 5 — the feature-flag and kill-switch register |
+| `05-operations/launch-checklist.md`, `launch-report.md` | Phase 9 |
+| `05-operations/app-store-submission.md` | Phase 5 — the submission record and review notes |
+| `05-operations/ses-production-access.md` | Phase 6 — the SES review request and its outcome |
+| `05-operations/accessibility-audit.md` | Phase 9 |
+| `05-operations/perf/lambda-power-tuning.md` | Phase 9 — the memory/cost curve |
 
 Create `docs/05-operations/` when the first of these is produced, not before.
 

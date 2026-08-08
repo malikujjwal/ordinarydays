@@ -124,7 +124,7 @@ export function completionVerb(type: ActivityType): string {
 }
 ```
 
-The same applies to `ActivityStatus`, `ListKind`, `ErrorCode`, `splitMode`, and every
+The same applies to `ActivityStatus`, `ListBehaviour`, `ErrorCode`, `splitMode`, and every
 `details.kind` branch.
 
 ### 1.6 `satisfies` over annotation
@@ -132,24 +132,27 @@ The same applies to `ActivityStatus`, `ListKind`, `ErrorCode`, `splitMode`, and 
 Use `satisfies` when you want the check without widening the inferred type.
 
 ```ts
-// Annotation widens: LIST_KIND_TO_TYPE[k] is ActivityType, and the keys are lost.
-const map: Record<ListKind, ActivityType> = { watchlist: 'watch', /* … */ };
+// Annotation widens: map.task is IconName, and the literal keys are lost.
+const map: Record<ActivityType, IconName> = { task: 'check-square', /* … */ };
 
 // satisfies keeps the literal types AND checks completeness.
-export const LIST_KIND_TO_ACTIVITY_TYPE = {
-  watchlist: 'watch',
-  meals: 'meal',
-  restaurants: 'outing',
-  places: 'outing',
-  groceries: 'task',
-  shopping: 'task',
-  packing: 'task',
-  general: 'custom',
-} as const satisfies Record<ListKind, ActivityType>;
+export const ACTIVITY_TYPE_ICON = {
+  task:   'check-square',
+  meal:   'bowl',
+  watch:  'play-rect',
+  event:  'ticket',
+  outing: 'map-pin',
+  custom: 'diamond',
+} as const satisfies Record<ActivityType, IconName>;
 ```
 
-Adding a `ListKind` without adding a row here is a compile error, which is exactly what
-`api-contract.md` §2.7 requires.
+Adding an `ActivityType` without adding a row here is a compile error, which is exactly what
+`design-system.md` §5.2 requires.
+
+Use this pattern only over a **genuinely closed** enum — `ActivityType`, `ListBehaviour`,
+`ActivityStatus`, `DefaultSlot`. Do not build an exhaustive map over something open-ended
+such as a list template key; templates are configuration and a new one must never be a
+compile error (`../02-architecture/data-model.md` §4.6).
 
 ### 1.7 Branded types
 
@@ -417,7 +420,7 @@ step follows the remainder's sign. That is a property-based test case, not a com
 | --- | --- |
 | `Cents` brand, arithmetic | `packages/shared/src/money/cents.ts` |
 | Splitting, reconciliation | `packages/shared/src/money/split.ts` |
-| Net balance from expenses + settlements | `packages/shared/src/money/balance.ts` |
+| Net balance from unsettled expense obligations; settlement rows are audit-only | `packages/shared/src/money/balance.ts` |
 | Display formatting | `packages/shared/src/money/format.ts` |
 
 Nothing in `services/api` or `apps/mobile` does money arithmetic. They call these.
@@ -434,7 +437,7 @@ mixed:
 
 | Kind | Type | Format | Means | Used for |
 | --- | --- | --- | --- | --- |
-| Wall-clock date | `WallDate` | `YYYY-MM-DD` | A day on a calendar, with no zone | `schedule.date`, `recurrence.startDate`, occurrence keys, agenda windows |
+| Wall-clock date | `WallDate` | `YYYY-MM-DD` | A day on a calendar, with no zone | `schedule.date`, segment `effectiveFrom`, occurrence keys, agenda windows |
 | Wall-clock time | `WallTime` | `HH:mm` | A time on a clock, with no zone | `schedule.time`, `endTime`, `overrideTime` |
 | Wall-clock stamp | `WallStamp` | `YYYY-MM-DDTHH:mm` | The GSI1 sort key | `gsi1sk` for the scheduled bucket |
 | Zone | `TimeZone` | IANA string | Where the wall clock is | `schedule.timezone` |
@@ -621,7 +624,7 @@ return a useful error instead of being killed.
 | --- | --- |
 | DynamoDB (SDK `requestHandler`) | 3 s per attempt, 2 attempts |
 | SES, Scheduler, SSM | 3 s |
-| Anthropic API (Phase 7) | 20 s, with the Lambda timeout raised on that route only |
+| Anthropic API (Phase 8) | 20 s, with the Lambda timeout raised on that route only |
 | Client → API (`shared/client/http.ts`) | 10 s via `AbortSignal.timeout(10_000)` |
 
 ### 6.4 Retry with jitter
@@ -685,7 +688,7 @@ Every log line, without exception, carries:
 | `version` | Build SHA, injected at bundle time | Which code produced this |
 | `route` | Hono's matched route pattern, not the raw path | `/v1/activities/:id`, so lines group |
 | `method` | — | — |
-| `userId` | Set by `auth` middleware once known | Scope of an incident (`security-privacy.md` §9.4) |
+| `userId` | Set by the `identity` middleware once known | Scope of an incident (`security-privacy.md` §9.4) |
 
 The completion line adds `status` and `durationMs`. A repository line adds `op`
 (`Query`/`GetItem`/`TransactWriteItems`), `entity`, and `consumedCapacity` when returned.
@@ -1014,7 +1017,7 @@ Operational notes:
 | It restates the code | `// increment the counter` |
 | It is a section banner in a 40-line file | |
 | It is commented-out code | Delete it; git remembers |
-| It is a TODO without an owner and a task ID | `// TODO(P5-11): …` or nothing |
+| It is a TODO without an owner and a task ID | `// TODO(P6-11): …` or nothing |
 
 Every non-obvious decision gets **one line**. A paragraph of prose in a source file usually
 belongs in a doc, with the source carrying a one-line pointer to it.
@@ -1060,3 +1063,6 @@ canonical doc.
 22. A commented-out block, a `console.log`, or a TODO without a task ID.
 23. A test that asserts nothing, or is skipped without a linked issue.
 24. An interactive element without `accessibilityRole` and `accessibilityLabel`.
+25. Toggling a list item's `checked` — `SET checked = NOT checked` — instead of setting it.
+    Lists are shared and edited offline, so a toggle is not idempotent and flips the item
+    back when two members tick it (`data-model.md` §4.6, `plans-and-lists.md` §5.11.5).

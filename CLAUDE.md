@@ -8,28 +8,41 @@ type. Do not start writing code from the issue title alone.
 
 ## What this product is, in one paragraph
 
-Ordinary Days is a lightweight organiser for everyday life. You capture something you want
-to do, it becomes a plan, it shows up on your day, you do it, and anything that follows
-from it — expenses, episode progress, the next occurrence — is handled. It is deliberately
-not Jira, not Notion, not a nutrition tracker, not a TV tracker, and not a social network.
-The user-facing mental model is exactly three words: **Today · Plans · Lists**.
+Ordinary Days is a lightweight organiser for everyday life. The user explicitly chooses
+whether they are adding a **Task**, a **Plan**, or a **List item**; the words they type never
+make that decision for them. Plans can then be scheduled and shared, Tasks appear on the day
+they belong to, and Lists keep possibilities without turning them into commitments. Anything
+that follows — expenses, episode progress, the next occurrence — is handled. It is
+deliberately not Jira, not Notion, not a nutrition tracker, not a TV tracker, and not a
+social network. The user-facing mental model is exactly three words: **Today · Plans · Lists**.
 
 ---
 
-## The five rules that break the product if you get them wrong
+## The six rules that break the product if you get them wrong
 
 1. **There is one schedulable entity: `Activity`.** Task, Meal, Watch, Event, Outing and
-   Custom are a `type` field, not six tables. A "Plan" is an Activity with a date. "Today"
-   is a query, not storage. If you are creating a `Plan` table or a `Meal` table, you have
+   Custom are a `type` field, not six tables. A "Plan" is an Activity the user intends to
+   make happen, **with or without a date yet** — an undated one sits in Plans → Needs a
+   date. "Today" is a query, not storage. If you are creating a `Plan` table or a `Meal`
+   table, you have
    misread the model — see `docs/02-architecture/data-model.md` §1.
-2. **Recurring activities are one row, never materialised into the future.** Completing or
+2. **Object intent is explicit, never inferred from words.** Global Add asks `Task`, `Plan`,
+   or `List item` before capture. Only a labelled contextual action fixes the choice: Today's
+   `Add a task`, Plan detail's `Add a prep task`, or an open List's `Add an item`. The Plans
+   tab uses Global Add and keeps all three choices unselected. Text, photos, links, heuristics and models may fill visible fields only after
+   that choice. They never choose or change the object kind, activity type, destination List,
+   participants, sharing state, or reminder/notification state. A reminder comes only from
+   its visible control or the user's explicitly saved default; `remind me` in source text does
+   not set one. A new List's template/style is also a visible choice; its typed name never
+   selects behaviour. Every commit button names the exact write and destination.
+3. **Recurring activities are one row, never materialised into the future.** Completing or
    snoozing an occurrence writes an `Occurrence` override and must never mutate the series.
-3. **Money is integer cents.** No floats, anywhere, ever. And no balance is ever shown
+4. **Money is integer cents.** No floats, anywhere, ever. And no balance is ever shown
    without the underlying expenses being reachable.
-4. **Suggest, never auto-create.** Nothing is scheduled, generated, or created on the
+5. **Suggest, never auto-create.** Nothing is scheduled, generated, or created on the
    user's behalf without an explicit confirmation. This applies to the next episode, to
    generated lists, and above all to anything a model extracted from a photo.
-5. **Tap a row opens detail. It never mutates data.** The only exception is the task
+6. **Tap a row opens detail. It never mutates data.** The only exception is the task
    checkbox.
 
 ---
@@ -42,6 +55,7 @@ The user-facing mental model is exactly three words: **Today · Plans · Lists**
 | A new screen or UI change | `docs/01-product/` for the relevant feature, `docs/01-product/interaction-contract.md`, `docs/04-conventions/design-system.md` |
 | A new API endpoint | `docs/02-architecture/api-contract.md`, `docs/02-architecture/data-model.md`, `docs/04-conventions/agent-playbook.md` §"How to add a new API endpoint" |
 | Anything touching storage | `docs/02-architecture/data-model.md` — all of it |
+| You think a feature needs a new table | `docs/02-architecture/feature-to-schema-map.md` — it almost certainly does not |
 | Recurrence | `docs/02-architecture/data-model.md` §6, `docs/01-product/today-and-tasks.md` §6 |
 | Expenses or balances | `docs/01-product/expenses.md`, `docs/02-architecture/data-model.md` §4.8 |
 | Sharing, invites, the public page | `docs/01-product/sharing-and-people.md`, `docs/02-architecture/security-privacy.md` |
@@ -109,7 +123,7 @@ pnpm --filter @od/infra cdk diff --context env=dev
 ## Working alongside other agents
 
 One agent owns one task ID and one branch. Branch names are
-`<type>/<PHASE-TASK>-<slug>`, e.g. `feat/P2-07-recurrence-engine`. If your change touches
+`<type>/<PHASE-TASK>-<slug>`, e.g. `feat/P2-01-recurrence-engine`. If your change touches
 `packages/shared/src/types/`, `packages/shared/src/schemas/`, or `infra/`, say so in your
 PR title — those are high-contention files and there is a merge-order rule in
 `docs/04-conventions/git-workflow.md`.

@@ -28,43 +28,51 @@ around those three concepts.
 
 ## 1. Activities
 
-Everything the user creates starts as an **activity**.
+Every **Task** or **Plan** the user creates is stored as an **Activity**. A **List item** is
+a separate `ListItem`. The explicit creation choice is persisted as `objectKind: 'task'`
+or `objectKind: 'plan'`; the app never reconstructs intent from words, dates, or people.
 
 Activity types are not rigid categories. They are **guides that make creation easier** by
 exposing the appropriate fields and behavior.
 
-| Activity type | Purpose                                     |
+| Explicit choice | Purpose                                     |
 | ------------- | ------------------------------------------- |
 | Task          | Something the user needs to accomplish      |
 | Meal          | Something the user plans to eat/cook        |
 | Watch         | Movie, show, or episode                     |
 | Event         | Concert, appointment, festival, etc.        |
 | Outing        | Restaurant, hike, coffee, shopping, etc.    |
-| Custom        | Anything that does not fit the guided types |
+| General Plan  | Anything that does not fit the guided Plan kinds |
 
-There is deliberately **no category-management system**. A user can always choose Custom
-rather than having to create and manage new categories.
+There is deliberately **no category-management system**. A user can always choose
+**Plan → General** rather than having to create and manage new categories. Tasks remain
+solo; coordinated work is a General or guided Plan.
 
 ## 2. Unified Add experience
 
-A prominent **Add** button should be available throughout the application. Instead of
-forcing users to choose a type first, creation supports natural capture.
+A prominent **Add** button should be available throughout the application. Global Add asks
+one plain-language question first: **Task / Plan / List item**. Plan then asks
+**General / Meal / Watch / Event / Outing**; List item asks for its destination list. None
+is selected or inferred, and General is a visible choice rather than a fallback.
 
-The screen starts with: **What are you planning?**
+Only after that selection can the user type naturally, take a photo, upload a screenshot,
+or paste a link. Capture may suggest compatible fields on the selected form, but never the
+object, Plan kind, people, sharing, destination, reminder/notification state, or save action.
+A reminder comes only from its visible control or the user's explicitly saved default; words
+such as `remind me` do not set one.
 
-The user can type naturally, take a photo, upload a screenshot, paste a link, or choose
-Task / Meal / Watch / Event / Outing / Custom.
-
-For example: `Watch Severance with Alice Friday at 8` infers:
+For example, after the user explicitly chooses **Plan → Watch**,
+`Watch Severance with Alice Friday at 8` may suggest:
 
 ```
 Watch
 Severance
 Friday · 8:00 PM
-With Alice
 ```
 
-The type is a suggestion and can be changed.
+Alice is added only through the People picker. The selected Watch kind is not a suggestion.
+The final button is `Save plan`. The same text after **List item → Movies to watch** creates
+only a ListItem via `Add to Movies to watch`.
 
 > **Activity types guide creation rather than restrict it.**
 
@@ -77,16 +85,16 @@ The app should only show fields relevant to what is being created.
 **Meal:** Meal, Date/time, Breakfast/lunch/dinner/snack, People, Ingredients, Add selected
 ingredients to Groceries
 
-**Watch:** Movie/show, Season/episode, Date/time, People, Streaming service, Save to
-Watchlist
+**Watch:** Movie/show, Season/episode, Date/time, People, Streaming service, optional
+explicit `Also add a list item to <list name>` (off by default)
 
 **Event:** Title, Date/time, Location, Description, People, Source image/link
 
 **Outing:** Place, Date/time, People, Location, Reservation details, Notes
 
-**Custom:** Title, Date, Optional time, People, Reminder, Repeat, Notes
+**General:** Title, Date, Optional time, People, Reminder, Repeat, Notes
 
-Custom activities remain deliberately generic.
+General Plans remain deliberately generic. They are stored as Activity `type: 'custom'`.
 
 ## 4. Today
 
@@ -158,8 +166,9 @@ weekend trip, restaurant outing.
 Plans can contain: date/time, location, people, RSVPs, description, source image/link,
 preparation tasks, related lists, expenses, notes, updates.
 
-Plans can be created manually, from natural language, from a List item, from a photo, from
-a screenshot, or from a pasted link.
+After the user explicitly chooses Plan and its visible kind, compatible fields can be
+entered manually or assisted by natural language, a ListItem, a photo, a screenshot, or a
+pasted link. None of those sources selects Plan or its kind.
 
 ## 8. Lists
 
@@ -167,12 +176,17 @@ Lists hold things the user wants to remember **without necessarily committing to
 will do them**: Watchlist, Meals to try, Restaurants to try, Places to visit, Groceries,
 Shopping, Packing, General lists.
 
-> **Lists → Plans → Today**
+`New list` shows an explicit style catalogue first — Blank, Checklist, Groceries,
+Restaurants to try, Watchlist, Meals to try, and the other shipped styles. The user taps one, then accepts or
+edits its visible title. List names never trigger string matching, template suggestions, or
+fallback behaviour.
+
+> **Lists and Plans are independent; `Plan this item` is an explicit optional bridge.**
 
 ```
 Watchlist
 Severance
-        ↓ Schedule
+        ↓ Plan this item · choose Watch
 Watch Severance Friday at 8
         ↓ Plan
 Friday
@@ -217,7 +231,10 @@ lists rather than generating lots of lists automatically.
 
 ## 10. List item → Plan
 
-An item should not be duplicated when scheduled.
+`Plan this item` copies compatible values into a new Plan draft once and leaves the ListItem
+byte-identical. The action always asks for Plan kind with nothing pre-selected, then asks
+**Just me / Choose people** with nothing pre-selected. List membership is never copied into
+the Plan.
 
 ```
 Restaurants to try
@@ -231,7 +248,8 @@ Zahav
 Planned Saturday · 7 PM
 ```
 
-The original list item remains connected to the plan. Similarly:
+The current viewer gets a private navigation/state pointer to the Plan. Another list member
+can make a different Plan from the same item without changing this row. Similarly:
 
 ```
 Severance
@@ -269,8 +287,9 @@ The app is not trying to replace TV Time or Trakt. Its differentiator is connect
 
 ## 13. Image-to-event creation
 
-The user can take a picture of a poster, event page, flyer, invitation, or screenshot. The
-app extracts title, date, start time, end time, location, description, price, and
+The user first chooses **Plan → Event**, then takes a picture of a poster, event page,
+flyer, invitation, or screenshot. The app extracts compatible title, date, start time, end
+time, location, description, price, and
 ticket/registration link, then displays a **review screen**. Uncertain fields should be
 highlighted.
 
@@ -313,9 +332,8 @@ Skipped, Cancelled. But completion language should feel natural to the activity.
 | Meal        | Had it / Cooked        |
 | Watch       | Watched                |
 | Event       | Attended               |
-| Appointment | Done                   |
 | Outing      | Done                   |
-| Custom      | Done, when appropriate |
+| General     | Done, when appropriate |
 
 ## 18. Passed plans
 
@@ -342,9 +360,10 @@ Once users collaborate, the app naturally develops a **People layer**. But this 
 social network. There are no followers, feeds, likes, public profiles, or relationship
 scores.
 
-> **Plans connect people.**
+> **Shared Plans and Lists connect people.**
 
-People data is derived automatically from shared plans and expenses.
+People data is derived automatically from explicit shared Plans, shared Lists and expenses;
+it is never inferred from words in a title or note.
 
 ## 21. Person view
 
@@ -361,20 +380,25 @@ Watch Severance      Aug 23
 RECENT
 Movie Night          Attended · $18 unsettled
 Beach Trip           Attended · Settled
+
+LISTS TOGETHER
+Groceries             14 items
+Packing · New York     8 items
 ```
 
-This screen answers *What are Alice and I doing together?* and *Do we owe each other
-anything?*
+This screen answers *What are Alice and I doing together?*, *Do we owe each other
+anything?*, and *What are we keeping together?*
 
 ## 22. People page
 
 People does not need to be primary navigation. It can live under Profile or Search. Sort
-by: upcoming shared plans, outstanding balances, recent shared activity.
+by: upcoming shared plans, outstanding balances, recent shared activity. Shared-list
+membership is shown but does not affect this relevance order.
 
 ## 23. Frequent collaborators
 
-When adding participants, show FREQUENT and RECENT people. No explicit friend system is
-necessary — people emerge through activity.
+When adding participants or list members, show FREQUENT and RECENT people. No explicit
+friend system is necessary — people emerge through explicitly shared objects.
 
 ## 24. Guests
 
@@ -385,8 +409,8 @@ existing plans and expenses can be connected to the account rather than duplicat
 ## 25. Expenses
 
 Expenses belong primarily to **shared Plans**. Each expense records amount, paid by,
-participants, equal/custom split, notes, settlement status. The app calculates who owes
-whom.
+participants, equal/custom split, notes, per-debtor obligation state (`settledPersonIds`),
+and a derived all-debtors `settled` rollup. The app calculates who owes whom.
 
 ## 26. Person-level balances
 
@@ -396,9 +420,10 @@ unexplained balance number.
 
 ## 27. Settlement
 
-The app initially only needs to track whether something has been settled. Do not initially
-build bank integrations, Venmo integration, payment processing, credit cards, personal
-budgeting, or financial analytics.
+The app tracks exactly which selected expense obligations the user considers settled. It
+does not record the amount, method, reference, or number of transfers that happened outside
+the app. Do not build bank integrations, Venmo integration, payment processing, credit
+cards, personal budgeting, or financial analytics.
 
 > **We did something together — who owes whom?**
 
@@ -414,12 +439,13 @@ Relevant for upcoming tasks, upcoming plans, invitations, RSVP changes, plan cha
 shared-plan updates, expense additions, unsettled expense reminders. Users should control
 reminders per activity.
 
-## 30. Custom activities
+## 30. General Plans
 
-Custom solves edge cases without adding category complexity: study session, meditation,
-game night, practice guitar, read, call family. Eventually, frequently used Custom
-activities could become reusable **shortcuts** remembering typical time, recurrence,
-people, and reminder. This is a later personalization feature.
+General solves edge cases without adding category complexity: study session, meditation,
+game night, practice guitar, read, call family. Eventually, frequently used General
+Plans could become reusable **shortcuts** remembering title, typical time, recurrence and the
+creator's reminder. A shortcut never stores or preselects people, audience, or sharing; those
+remain explicit each time. This is a later personalization feature.
 
 ---
 
@@ -428,19 +454,18 @@ people, and reminder. This is a later personalization feature.
 ```
 DISCOVER / REMEMBER
         ↓
-CAPTURE            Type · Voice · Photo · Screenshot · Link
+CHOOSE OBJECT      Task · Plan · List item
         ↓
-ACTIVITY           Task · Meal · Watch · Event · Outing · Custom
+CHOOSE DETAIL      Plan: General / Meal / Watch / Event / Outing
+                   List item: destination list
         ↓
-SAVE OR SCHEDULE
+CAPTURE FIELDS     Type · Photo · Screenshot · Link
         ↓
-List                  Plan
-  ↓                      ↓
-Schedule later        Add people
-  ↓                   Add tasks/lists
-Plan                  Share
+NAMED WRITE        Save task · Save plan · Add to <list>
         ↓
-TODAY
+Activity or ListItem
+        ↓
+Plan/Task date reaches Today; `Plan this item` is an optional explicit bridge
         ↓
 DO IT
         ↓

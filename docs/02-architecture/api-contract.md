@@ -107,12 +107,12 @@ Rate limits: 10 req/min per IP on all three, and additionally 60/hour per IP on
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/v1/me` | Profile, preferences, timezone, currency, onboarding state |
-| `PATCH` | `/v1/me` | `displayName`, `timezone`, `currency`, `weekStartsOn`, `defaultReminderOffset` |
+| `PATCH` | `/v1/me` | `displayName`, `timezone`, `currency`, `weekStartsOn`, `defaultReminderOffset` (integer `[-10080, 0]`, including `0` for At the time; `null` clears to Off), `defaultLists` (a `slot → listId` map — see [`data-model.md`](data-model.md#default-slots)) |
 | `POST` | `/v1/me/devices` | Register an Expo push token. Body: `{ expoPushToken, platform, deviceName }` |
 | `DELETE` | `/v1/me/devices/:deviceId` | |
-| `DELETE` | `/v1/me` | Account deletion. Soft-deletes, purges after 30 days. Required by App Store. |
-| `GET` | `/v1/me/export` | Data export. Returns a presigned link, valid 24 hours, to a JSON file of the user's activities, lists and settings. Phase 4. |
-| `GET` | `/v1/me/suggestions?kind=meal` | Derived suggestions — the FAVOURITES group on the Add screen. Computed from completed activities, cached one hour. Never a stored flag. Phase 8. |
+| `DELETE` | `/v1/me` | Account deletion. Soft-deletes, purges after 30 days. The confirmation discloses that shared-plan financial history survives the purge: Expenses and Settlement audit rows on shared plans with surviving participants are retained with the display name replaced by `Deleted user`, balances involving the account become read-only history, and owned shared plans are cancelled with notification first (`data-model.md` §7, decision 2026-08-07). Whole-Settlement Undo applies only to financial rows nothing retains; the purge checkpoints this cleanup so no retained Expense points to missing Settlement history. Required by App Store. |
+| `GET` | `/v1/me/export` | Data export. The export object remains available for 24 hours; each request returns a fresh short-lived presigned link to a JSON file of the user's activities, lists and settings. A literally 24-hour link is unachievable with Lambda role credentials — see phase-05 P5-24. Phase 5. |
+| `GET` | `/v1/me/suggestions?kind=meal` | Derived suggestions — the FAVOURITES group on the Add screen. Computed from completed activities, cached one hour. Never a stored flag. Phase 9. |
 
 ### 2.1a Health
 
@@ -187,6 +187,58 @@ Both may be combined: `?include=anytime_unscheduled,overdue`.
 - Window capped at 62 days → `400 validation_failed`.
 - Response is cacheable client-side for 60 s; server sends `ETag`.
 
+Agenda **never** returns activities in the `#P` (Needs a date) bucket. An undecided group
+plan is not a thing you have to do today.
+
+### 2.2a Plans
+
+```
+GET /v1/plans
+```
+
+Powers the Plans tab, which has three stages:
+
+```json
+{
+  "data": {
+    "needsDate": [ { "…": "AgendaItem + rsvpSummary, most recently discussed first" } ],
+    "upcoming":  [ { "date": "2026-08-15", "items": [ ] } ],
+    "past":      [ { "…": "newest first, paginated" } ]
+  }
+}
+```
+
+| Stage | Source | Order |
+| --- | --- | --- |
+| `needsDate` | `GSI1` `gsi1pk = U#<u>#P` | `lastActivityAt` descending — the plan being discussed floats up, not the oldest |
+| `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, from today forward | date ascending |
+| `past` | same bucket, before today | date descending, `?cursor=` |
+
+`needsDate` items carry an `rsvpSummary` so the row can render
+`Alice interested · Ben hasn't replied` without a second call. Counts alone are not enough
+for that string, so each group carries the first two display names as well:
+
+```ts
+interface RsvpSummary {
+  interested: { count: number; names: string[] };   // names: up to 2, then "+3 more"
+  maybe:      { count: number; names: string[] };
+  pass:       { count: number; names: string[] };
+  pending:    { count: number; names: string[] };
+}
+```
+
+`needsDate` items also carry `suggestionCount: number`, which drives the row's third line
+(`2 dates suggested`). The suggestions themselves are not inlined — the row shows a count,
+the detail screen shows the list.
+
+The group keys are the **undated** labels because this field only ever appears on
+needs-a-date rows. They map to the stored values in
+[`data-model.md` §7.1](data-model.md#71-rsvp-consent-does-not-survive-a-date-change) and
+introduce no new enum member.
+
+**Needs a date never nudges.** No badge, no count on the tab, no reminder. It is a place to
+look, not a backlog to clear — the same reason Today is not allowed to become a guilt list.
+
 Also:
 
 | Method | Path | Notes |
@@ -197,23 +249,37 @@ Also:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `POST` | `/v1/activities` | Create. Body = `CreateActivityInput`. Requires `Idempotency-Key`. |
-| `GET` | `/v1/activities/:id` | Full detail: activity + participants + expenses + updates + attachments + children. One DynamoDB Query. |
-| `PATCH` | `/v1/activities/:id` | Partial update. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
-| `DELETE` | `/v1/activities/:id` | Owner only. Cascades per `data-model.md` §7. |
-| `POST` | `/v1/activities/:id/schedule` | `{ date, time?, endTime?, timezone }`. Also used to *unschedule* with `{ date: null }`. |
-| `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. With `occurrenceDate` → writes an Occurrence, never touches the series. |
-| `POST` | `/v1/activities/:id/uncomplete` | Reverses the above. |
-| `POST` | `/v1/activities/:id/skip` | `{ occurrenceDate? }` |
-| `POST` | `/v1/activities/:id/snooze` | `{ occurrenceDate, until }` — `until` is `HH:mm` (same day) or an ISO instant. |
+| `POST` | `/v1/activities` | Create a **Task or Plan chosen by the client**. Body = `CreateActivityInput`; both `objectKind` and `type` are required. Requires `Idempotency-Key`. |
+| `GET` | `/v1/activities/:id` | Full detail: activity + participants + expenses + updates + attachments + children + **the caller's own reminders** + date suggestions. One DynamoDB Query; the `REM#` rows are filtered to the caller in the projection before responding. Stored `listId` / `listItemId` are included only when the caller also passes `assertListAccess`; a Plan participant outside the list receives no reverse link. |
+| `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
+| `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7 and deletes every child Expense locator with its row. |
+| `POST` | `/v1/activities/:id/schedule` | `{ date, time?, endTime?, timezone }`. Also used to *unschedule* with `{ date: null }`. **Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies** (declined rows are neither reset nor notified — decision 2026-08-07) — see [`data-model.md` §7.1](data-model.md#71-rsvp-consent-does-not-survive-a-date-change). A time-only change does not. The response includes `rsvpReset: true` so the client can say so rather than letting people discover it. |
+| `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. With `occurrenceDate` → writes an Occurrence, never touches the series. **Owner only** — completion is global, see [`data-model.md` §4.5](data-model.md#45-occurrence). |
+| `POST` | `/v1/activities/:id/uncomplete` | Reverses the above. Owner only. |
+| `POST` | `/v1/activities/:id/skip` | `{ occurrenceDate? }`. Owner only. |
+| `POST` | `/v1/activities/:id/snooze` | `{ occurrenceDate, until }` — `until` is `HH:mm` (same day) or an ISO instant. Owner only. |
 | `POST` | `/v1/activities/:id/duplicate` | |
 | `GET` | `/v1/activities/:id/ics` | Single-event `.ics`. Authenticated variant of the public one. |
+
+`CreationTarget` is the contract shared by Global Add, contextual entry points, and capture:
+
+```ts
+type PlanType = Exclude<ActivityType, 'task'>;
+
+type CreationTarget =
+  | { objectKind: 'task'; type: 'task' }
+  | { objectKind: 'plan'; type: PlanType }
+  | { objectKind: 'listItem'; listId: string };
+```
+
+It is selected by the client or fixed by the entry point **before** a create or capture call.
+The server never derives it from title text, list behaviour, participants, a date, or model
+output.
 
 `CreateActivityInput`:
 
 ```ts
-{
-  type: ActivityType;
+interface ActivityCreateFields {
   title: string;                       // 1..200
   notes?: string;                      // ..4000
   schedule?: { date, time?, endTime?, timezone };
@@ -222,24 +288,105 @@ Also:
   location?: { label, address?, lat?, lng?, mapUrl? };
   details?: ActivityDetails;           // must match `type`
   parentActivityId?: string;
-  fromListItem?: { listId: string; itemId: string };
-  participants?: ({ personId: string } | { displayName: string; email?: string })[];
   attachmentIds?: string[];
   sourceUrl?: string;
 }
+
+type ParticipantInput =
+  | { personId: string }
+  | { displayName: string; email?: string };
+
+type CreateActivityInput = ActivityCreateFields & (
+  | { objectKind: 'task'; type: 'task'; participants?: never }
+  | { objectKind: 'plan'; type: PlanType; participants?: ParticipantInput[] }
+);
 ```
+
+**There is no title-only Activity request and no server default.** Omitting `objectKind` or
+`type` returns `400 validation_failed`. Task requires `type: 'task'` and cannot carry direct
+participants. Plan requires one of the five visible Plan kinds — `custom` (General), `meal`,
+`watch`, `event`, or `outing` — and may be private or shared. There is no hidden
+`objectKind: 'plan', type: 'task'` combination. Dates, participant changes, and type changes
+never silently rewrite `objectKind`.
+
+The entry points map to writes as follows. There is deliberately no generic `/v1/add`
+endpoint whose handler guesses what the user meant.
+
+| Entry point | Selected target | Create endpoint |
+| --- | --- | --- |
+| Global Add → Task | `{ objectKind: 'task', type: 'task' }` | `POST /v1/activities` |
+| Global Add → Plan | `{ objectKind: 'plan', type: <the PlanType the user chose> }` | `POST /v1/activities` |
+| Global Add → List item | `{ objectKind: 'listItem', listId: <the list the user chose> }` | `POST /v1/lists/:listId/items` |
+| Today inline `Add a task` | Task target, fixed by the labelled affordance; date supplied by context | `POST /v1/activities` |
+| Plan detail `Add prep task` | Task target, fixed by the labelled affordance; `parentActivityId` supplied by context | `POST /v1/activities` |
+| List inline `Add item` | List-item target, fixed by the list path | `POST /v1/lists/:listId/items` |
+| List item `Plan this item` | Plan target, with Plan kind and audience explicitly confirmed in the creation sheet | `POST /v1/lists/:listId/items/:itemId/schedule` |
+
+`fromListItem`, `listId`, and `itemId` are not accepted by `POST /v1/activities`. Only the
+list-scoped scheduling endpoint may establish that relationship, after list access has been
+checked.
+
+**Explicit Task↔Plan conversion.** An ordinary patch keeps `objectKind` unchanged. Editing
+the title, notes, schedule, recurrence, type, or participants never infers or triggers a
+conversion.
+
+- Task → Plan requires one request containing both `objectKind: 'plan'` and a
+  **user-selected** `type: PlanType`. The server does not choose the Plan type from the
+  Task's text or other fields.
+- Plan → Task requires one request containing `{ objectKind: 'task', type: 'task' }` and is
+  accepted only when `participantCount === 0`, `expenseTotalCents === 0`, and
+  `childCount === 0`.
+- If any Plan → Task precondition is non-zero, the server returns `409 conflict`. The error's
+  `details` array names every blocking field and its current value, for example
+  `participantCount: 2` and `expenseTotalCents: 5400`; zero-value fields are omitted. The
+  client uses those blockers to explain what must be removed or resolved before trying again.
+- A type that is incompatible with the current `objectKind`, without the matching explicit
+  conversion, returns `400 validation_failed` rather than changing identity.
 
 ### 2.4 Participants and RSVP
 
 | Method | Path | Notes |
 | --- | --- | --- |
 | `POST` | `/v1/activities/:id/participants` | Add one. Existing contact by `personId`, or new by `{ displayName, email? }`. Returns the created `Participant` and, for guests, an `inviteUrl`. |
-| `PATCH` | `/v1/activities/:id/participants/:personId` | `{ rsvp }`. A participant may only change their own RSVP; the owner may change anyone's. |
+| `PATCH` | `/v1/activities/:id/participants/:personId` | `{ rsvp }`. A participant may only change their own RSVP; the owner may change anyone's. The server stamps `rsvpForDate` from the plan's current date **read in the same transaction** as the RSVP write, so a response racing a date change cannot record consent to the new date (`data-model.md` §4.7, §7.1). |
 | `DELETE` | `/v1/activities/:id/participants/:personId` | Owner only, or self (leave a plan). |
 | `POST` | `/v1/activities/:id/invites` | Create a shareable (non-personalised) link. Returns `{ token, url, expiresAt }`. |
 | `DELETE` | `/v1/activities/:id/invites/:token` | Revoke. |
 
 Cap: 50 participants per activity → `422 participant_limit_exceeded`.
+Participant and invite endpoints require `objectKind: 'plan'`; a Task returns
+`400 validation_failed`. Prep-task collaboration comes only from its parent Plan's access
+rule and does not create direct participant rows.
+
+### 2.4a Reminders — per user
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `GET` | `/v1/activities/:id/reminders` | **The caller's own reminders only.** Never anyone else's, on any plan, ever. |
+| `POST` | `/v1/activities/:id/reminders` | `{ offsetMinutes }`. Any participant, for themselves. Max 3 per user per activity. |
+| `DELETE` | `/v1/activities/:id/reminders/:reminderId` | Only your own. |
+
+On a shared plan there is **one schedule and many reminder sets**. `CreateActivityInput`'s
+`reminders` field creates rows for the **creator only**. When somebody joins a shared plan, an
+explicitly set `defaultReminderOffset` creates their own row—including `0`; `null`/absent
+creates none. Nobody inherits the creator's.
+
+### 2.4b Date suggestions
+
+Turns Needs a date into a planning surface rather than a holding area. Any participant may
+propose; only the owner may decide.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `GET` | `/v1/activities/:id/suggestions` | Included in the activity detail response; this exists for polling. |
+| `POST` | `/v1/activities/:id/suggestions` | `{ date, time?, note? }`. Any participant. Max 5 per activity → `422`. |
+| `DELETE` | `/v1/activities/:id/suggestions/:suggestionId` | Author or owner. |
+| `POST` | `/v1/activities/:id/suggestions/:suggestionId/works` | Toggles the caller in `worksFor`. An availability signal, not a vote. |
+
+The owner schedules from one with
+`POST /v1/activities/:id/schedule { fromSuggestionId }`, which copies the date and time and
+then runs the ordinary scheduling path — including the RSVP reset. All suggestions are
+deleted once the activity is scheduled. Guests cannot suggest; they read and RSVP.
 
 ### 2.5 Updates (the plan's activity feed)
 
@@ -247,6 +394,7 @@ Cap: 50 participants per activity → `422 participant_limit_exceeded`.
 | --- | --- | --- |
 | `GET` | `/v1/activities/:id/updates?cursor=` | Newest first. |
 | `POST` | `/v1/activities/:id/updates` | `{ body }`. System entries ("Alice is going", "Time changed to 8 PM") are written server-side with `kind: 'system'`. |
+| `DELETE` | `/v1/activities/:id/updates/:updateId` | Author only, and only on `kind: 'user'` entries — a system entry is the record of what happened and is undeletable. Anything else → `404`. Matches phase-03 P3-19. |
 
 ### 2.6 Attachments
 
@@ -256,6 +404,9 @@ Cap: 50 participants per activity → `422 participant_limit_exceeded`.
 | `POST` | `/v1/activities/:id/attachments` | Confirm the upload and link it. |
 | `DELETE` | `/v1/activities/:id/attachments/:attachmentId` | |
 
+`Set as cover` is `PATCH /v1/activities/:id { primaryAttachmentId }`; the server validates
+the id against the activity's own `ATT#` rows before accepting it (phase-03 P3-22).
+
 Images are served through CloudFront with a signed-URL or a per-object random key path
 (`u/<userId>/<ulid>.<ext>`). Never make the bucket public.
 
@@ -263,33 +414,99 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/v1/lists` | |
-| `POST` | `/v1/lists` | `{ kind, title, sourceActivityId? }` |
-| `GET` | `/v1/lists/:id?includeItems=true` | |
-| `PATCH` | `/v1/lists/:id` | |
-| `DELETE` | `/v1/lists/:id` | |
+| `GET` | `/v1/lists?cursor=` | Pages active List pointers 50 at a time, then BatchGets that page's current `META` rows. The 100 cap applies to Lists the caller owns, not memberships received from other owners. |
+| `POST` | `/v1/lists` | `{ title, templateKey, sourceActivityId? }`. `title` and `templateKey` are required; `templateKey` must be the template/style the user selected. The server copies behaviour, capabilities, icon, empty-state copy and slot from that exact catalogue entry; it never matches the title or substitutes another template. When `sourceActivityId` is present and names an owned Plan, the copied `slot` is forced to `null` so a per-Plan list cannot silently become a standing destination. Create rejects client-supplied `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy`; only explicit later settings may change their supported subset. |
+| `GET` | `/v1/lists/:id?includeItems=true` | Includes only the caller's `viewerLink` for each item. Links belonging to other members are removed before serialisation. |
+| `PATCH` | `/v1/lists/:id` | `{ title?, capabilities?, slot?, behaviour? }`. See the change rules below. |
+| `DELETE` | `/v1/lists/:id` | Owner only. The cascade removes every member pointer, `LLINK#` relationship and per-viewer `LNK#`; it does not delete owner-scoped People records. |
 | `GET` | `/v1/lists/:id/items?cursor=` | |
-| `POST` | `/v1/lists/:id/items` | `{ title, note?, details?, afterItemId? }` — `afterItemId` drives the lexo rank. |
-| `POST` | `/v1/lists/:id/items/bulk` | `{ items: [...] }` — used by "add ingredients to Groceries". |
-| `PATCH` | `/v1/lists/:id/items/:itemId` | `{ title?, checked?, note?, details?, afterItemId? }` |
+| `POST` | `/v1/lists/:id/items` | `{ title, note?, location?, details?, afterItemId? }` — `afterItemId` drives the lexo rank. |
+| `POST` | `/v1/lists/:id/items/bulk` | `{ items: [...] }` — used by the ingredients-to-list flow. |
+| `PATCH` | `/v1/lists/:id/items/:itemId` | `{ title?, checked?, note?, location?, details?, afterItemId? }` |
 | `DELETE` | `/v1/lists/:id/items/:itemId` | |
-| `POST` | `/v1/lists/:id/items/:itemId/schedule` | **The Lists → Plans bridge.** Body is a `CreateActivityInput` minus `type` (inferred from `list.kind`). Creates the Activity, links it to the item, returns both. Does not duplicate the item. |
-| `POST` | `/v1/lists/:id/clear-checked` | |
+| `POST` | `/v1/lists/:id/items/:itemId/schedule` | **The optional bridge to Activities.** Body = `ScheduleListItemInput` below. Creates an explicit Plan and the permitted per-viewer link pointers; the ListItem itself is not replaced or given a global Activity id. A Watch Plan's explicitly enabled second-object action may create the item first and then call this endpoint with the reviewed Plan fields; the endpoint still requires type and audience and infers neither from the item. |
+| `POST` | `/v1/lists/:id/clear-checked` | Only when `capabilities.checkable`. |
+| `GET` | `/v1/list-templates` | The exact shared template catalogue. Static and cacheable for 24 h. The mobile creation chooser bundles a projection of the same shared module so first-launch offline does not depend on this request; no client owns a second map of labels or defaults. |
+| `GET` | `/v1/lists/:id/members` | The first response row is the owner, synthesised from `List.ownerId`, the owner's `ListIndex` pointer and profile; there is no owner `MEMBER#` row. The owner then receives every non-owner active and invited row. A member receives the synthesised owner and active non-owner roster only; pending identities and addresses are removed server-side. |
+| `POST` | `/v1/lists/:id/members` | `{ personId }` or `{ displayName, email }`. Owner only and always an explicit confirmation. A registered add is active immediately and creates/reuses reciprocal owner-scoped People records plus active `LLINK#` rows on both sides. If the email belongs to no account, it creates an invited member and owner-side invited `LLINK#`, sends email, and writes no recipient pointer. Invited members count toward `memberCount` and the cap of 20 people total, including the owner, but not `sharedListCount`. |
+| `DELETE` | `/v1/lists/:id/members/:personId` | Owner removes any non-owner; a member may remove **themselves** (leave). Deletes the member's index entry and both active `LLINK#` rows, or the owner's invited link for a pending member. Authored items and both People records stay. |
 
-List kind → default activity type when scheduling:
+`ScheduleListItemInput` is deliberately not `CreateActivityInput` with fields removed by
+convention. It is a separate schema so neither audience nor type can be inferred:
 
-| `list.kind` | activity `type` |
+```ts
+interface ScheduleListItemInput {
+  creationTarget: { objectKind: 'plan'; type: PlanType };
+  audience:
+    | { mode: 'just_me' }
+    | { mode: 'selected_people'; participants: ParticipantInput[] }; // at least one
+  title?: string;                       // omitted => copy item title once
+  notes?: string;
+  schedule?: { date, time?, endTime?, timezone };
+  recurrence?: Recurrence;
+  reminders?: { offsetMinutes: number }[]; // caller only
+  location?: { label, address?, lat?, lng?, mapUrl? };
+  details?: ActivityDetails;            // must match creationTarget.type
+  attachmentIds?: string[];
+  sourceUrl?: string;
+}
+```
+
+The schedule sheet labels the two audience choices **Just me** and **Choose people**. It
+does not preselect every list member. `just_me` creates a private Plan owned by the caller.
+`selected_people` creates a Plan with exactly the people supplied; list membership grants no
+Plan access by itself, and a selected participant need not be a member of the source list.
+The server never reads `List.behaviour`, `templateKey`, or `capabilities` to choose the
+Activity type.
+
+The response is `{ activity, item, viewerLink }`, where `viewerLink` is the caller's
+`ListItemActivityLink`. For a private Plan, only the caller gets a link pointer. For a shared
+Plan, the caller and each selected registered participant who is also an active member of
+the source list get one. Guests and selected people outside the list get Plan access but no
+list pointer. Consequently:
+
+- a nonparticipant list member sees the ordinary item with no state line and no Activity id;
+- each visible state line opens an Activity the caller is authorised to read;
+- different members may schedule the same shared item independently; an existing pointer
+  owned by somebody else is never a `409` condition;
+- one viewer has at most one current pointer per item. A later scheduling action replaces
+  that viewer's pointer only; v1 does not expose link history or fall back to an older link;
+- adding or removing a Plan participant adds or removes their pointer only when they are an
+  active member of the source list. Leaving the list makes every pointer there unreachable;
+- the item title seeds the Plan title once. Later title edits are independent. A member who
+  can edit a shared list must never rename another member's private Plan indirectly.
+
+The list-detail projection filters `LNK#` rows to the authenticated user **before** it looks
+up linked Activities and before it serialises the response. The Activity access check still
+runs; a stale pointer is omitted and queued for cleanup rather than producing a dead link.
+
+**Change rules on `PATCH /v1/lists/:id`** — the product-wide additive/destructive rule
+(`../01-product/interaction-contract.md`):
+
+| Change | Behaviour |
 | --- | --- |
-| `watchlist` | `watch` |
-| `meals` | `meal` |
-| `restaurants` | `outing` |
-| `places` | `outing` |
-| `groceries`, `shopping`, `packing` | `task` |
-| `general` | `custom` |
+| `capabilities.checkable` false → true | Applies immediately. Nothing is lost. |
+| `capabilities.checkable` true → false | Applies immediately. `checked` is retained on items, not cleared, so re-enabling restores it. |
+| `behaviour` `collection` → `watch` or `meals` | Applies immediately, initialising `details` on every item with the default status. |
+| `behaviour` `watch` or `meals` → anything | **Destructive.** Requires `?confirmDataLoss=true`; without it returns `409 conflict` with a body naming the fields and the exact number of items affected, so the client can render "…will remove season, episode and watch status from 7 items." |
+| `slot` | Free. Changing it does not move any items. |
 
-The client may override the inferred type. It is a suggestion, per the product principle.
+`templateKey` is immutable after creation. It records provenance and analytics only; the
+stored List carries its copied icon and empty-state copy, so no read path resolves the key.
 
-### 2.7a Shortcuts — Phase 8
+**Default-slot resolution.** Any "add these to X" flow (ingredients to a shopping list,
+save to a watchlist) follows the four-step rule in
+[`data-model.md`](data-model.md#default-slots): one eligible list, use it; several with a
+default, use the default and let the user override for this operation only; several with no
+default, ask once and store the answer in `user.defaultLists`; none, return no destination.
+The client may then offer `New list`. General and ingredient flows open the full standard
+catalogue with no selection. A Watch destination—the user already enabled the typed Watch
+second-object control—shows exactly `watchlist`, `movies-to-watch`, and `tv-shows` in their
+canonical relative order, with no selection. This is an eligibility constraint, not title or
+model inference. `Create list` and the later named add-to-list action are separate requests
+and confirmations. Opening a list must never change where future items go.
+
+### 2.7a Shortcuts — Phase 9
 
 Reusable templates for `custom` activities only (concept §30). Stored at
 `USER#<u>` / `SHORTCUT#<shortcutId>`. Cap: 12 per user, so the list needs no pagination.
@@ -305,13 +522,50 @@ Reusable templates for `custom` activities only (concept §30). Stored at
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/v1/people?sort=relevance` | Sorted by upcoming shared plans → outstanding balance → recency (concept §22). |
+| `GET` | `/v1/people?sort=relevance` | Returns every owner-scoped Person plus computed `sharedListCount` from active `LLINK#` rows. Sorted by upcoming shared plans → outstanding balance → recency → display name (concept §22); list membership is a summary fallback, never a relevance key. |
 | `GET` | `/v1/people/suggested` | FREQUENT + RECENT buckets for the participant picker (concept §23). |
 | `POST` | `/v1/people` | Create a contact manually. |
-| `GET` | `/v1/people/:id` | The person view: upcoming together, recent together, net balance. |
+| `GET` | `/v1/people/:id?listsCursor=` | The person view: upcoming together, recent together, net balance, and active Lists one of you explicitly shared with the other. `listsCursor` continues only the `listsTogether` projection. |
 | `PATCH` | `/v1/people/:id` | |
-| `DELETE` | `/v1/people/:id` | Blocked with `409` if they participate in any non-completed activity. |
-| `POST` | `/v1/people/:id/merge` | `{ intoPersonId }`. Used when a guest registers. |
+| `DELETE` | `/v1/people/:id` | Blocked with `409` if they participate in any non-completed activity or have any invited/active List membership. `details[]` names each blocker and its `plan` or `list` type. |
+| `POST` | `/v1/people/:id/merge` | `{ intoPersonId }`. Moves Plan, expense and List membership/link references onto the survivor; see merge rules below. |
+
+`GET /v1/people/:id` returns the bounded list projection in addition to the existing fields:
+
+```ts
+interface PersonListTogether {
+  listId: string;
+  title: string;
+  icon: string;
+  itemCount: number;
+  addedAt: string;
+}
+
+interface PersonViewResponse {
+  person: Person & { sharedListCount: number };
+  upcoming: ActivitySummary[];
+  recent: ActivitySummary[];
+  balances: BalanceSummary[];
+  listsTogether: PersonListTogether[];
+  listsTogetherCursor?: string;
+}
+```
+
+`listsTogether` follows active `LLINK#` rows newest first, then re-checks the caller's exact
+`USER#/LIST#` access before returning current List metadata. It means Lists one of the two
+people explicitly shared with the other — it does **not** turn two non-owner co-members into
+People. The initial response includes up to 20 and `listsTogetherCursor`; `See all` sends it
+back as `listsCursor` for 20-row pages. Do not treat the owned-list creation cap as a cap on memberships
+received from other owners. Invited links are omitted. `Nothing together yet` requires no
+shared Plans, no active shared Lists and no balance.
+
+People merge is resumable and idempotent, and List membership mutation for either Person is
+locked while it runs. A source-only membership moves to the target; if the target is linked,
+it activates with a recipient pointer, reciprocal Person and both active links, otherwise its
+invited link and Person-level email locator move. If both People occur on one List, one
+membership survives: active wins over invited, the earlier immutable `addedAt` is retained,
+redundant links are removed and `memberCount` is decremented once. Two different
+`linkedUserId` values still refuse the merge.
 
 ### 2.9 Expenses and settlement
 
@@ -319,69 +573,150 @@ Reusable templates for `custom` activities only (concept §30). Stored at
 | --- | --- | --- |
 | `GET` | `/v1/activities/:id/expenses` | Includes a computed `owes` summary for the activity. |
 | `POST` | `/v1/activities/:id/expenses` | `{ description, amountCents, currency, paidByPersonId, splitMode, splits }`. Server validates that splits sum exactly to `amountCents`. |
-| `PATCH` | `/v1/activities/:id/expenses/:expenseId` | |
-| `DELETE` | `/v1/activities/:id/expenses/:expenseId` | |
+| `PATCH` | `/v1/activities/:id/expenses/:expenseId` | Returns `409 settlement_conflict` when any pairwise obligation on the Expense is settled. The response names the blocking Settlement ids; the user must explicitly undo them first. No settlement state is cleared as a side effect of editing. |
+| `DELETE` | `/v1/activities/:id/expenses/:expenseId` | Uses the same settlement guard. It never edits or deletes Settlement history implicitly. |
 | `GET` | `/v1/balances` | All net balances. |
 | `GET` | `/v1/people/:id/balance?include=expenses` | Net figure **plus** the underlying expense lines. The client must never render a balance without being able to drill in. |
-| `POST` | `/v1/settlements` | `{ personId, amountCents, currency, note?, coversExpenseIds }` → marks those expenses settled. |
-| `GET` | `/v1/settlements?personId=` | |
-| `DELETE` | `/v1/settlements/:settlementId` | Undo a settlement. Clears `settledPersonIds` on each covered expense. |
-| `POST` | `/v1/balances/recalculate` | Full rebuild of the caller's balances from `Expense` and `Settlement` rows. 3 / hour per user. Returns the rebuilt balances and the rows written and deleted. |
+| `POST` | `/v1/settlements` | `{ personId, coversExpenseIds }` with 1–25 distinct ids → marks those pairwise expense obligations settled. The server derives exact per-Expense debtor provenance, `direction`, `currency`, and display-only `amountCents`; the request schema rejects every caller-supplied payment detail, including `amountCents`, `note`, `method`, `reference`, and `remainder`. |
+| `GET` | `/v1/settlements?personId=` | Two-sided history (decision 2026-08-07): returns settlements the caller created **and** settlements where the caller is the counterparty. The counterparty rows are derived from the covered Expenses' `settlementIdByPersonId` (`data-model.md` access pattern 12b) — no second audit row is ever written. Every row names who marked it settled and when. |
+| `DELETE` | `/v1/settlements/:settlementId` | Undo a settlement. Resolves the id through its locator, verifies the caller owns the audit row, then removes only that Settlement's exact debtor id from each covered Expense and recomputes its all-debtors roll-up. Other debtors remain untouched. Creator-only by decision (2026-08-07): a counterparty sees the settlement in history but cannot undo it. |
+| `POST` | `/v1/balances/recalculate` | Full rebuild of the caller's balances from `Expense` rows and their per-person settled state. `Settlement` rows are audit history and are **not** subtracted as deltas. 3 / hour per user. Returns the rebuilt balances and the rows written and deleted. |
+
+The balance drill-down, settlement, and Undo services may follow a `finance_only` PersonLink
+after somebody leaves a Plan. That link authorises only the exact Expense-person obligations
+returned by the financial projection; it does not authorise `GET /v1/activities/:id`, expose
+the Plan title/notes/participants, or restore an Activity index entry. Ordinary Person
+history filters it out. The plan name a finance-only drill-down shows is the Expense's own
+`activityTitle` snapshot (`data-model.md` §4.8) — one shared denormalised field, rewritten
+on rename for every viewer — never a live plan read.
 
 Split arithmetic rule: distribute remainder cents to the first N participants in
 `personId` sort order so totals reconcile exactly. Unit-test it. Never round to floats.
+
+For `POST /v1/settlements`, `coversExpenseIds` contains **1–25 distinct, globally unique**
+ids. Each resolves through an Expense locator to an unsettled obligation between the caller
+and their caller-local `personId`; the service then authorises the resolved Activity. All
+selected obligations must have the same currency and direction. Duplicate, mixed-currency,
+mixed-direction, already-settled, unrelated, or missing ids return `400 validation_failed`
+and write nothing. In one transaction the server:
+
+1. computes each pairwise obligation from `paidByPersonId` and `splits`;
+2. sums those obligations to the positive, display-only `amountCents` and derives
+   `direction: 'they_owed_user' | 'user_owed_them'` plus `currency`;
+3. derives and stores each source Expense's exact owner-scoped debtor id—never blindly the
+   request's caller-local `personId`—in the Settlement's `coverage`;
+4. conditionally adds that debtor to each Expense's `settledPersonIds`, stores
+   `settlementIdByPersonId[debtor]`, and recomputes its all-debtors `settled` boolean; and
+5. writes the immutable Settlement audit row plus its `SETTLEMENT#<id>` locator and returns it.
+
+Balance computation then reads Expense contributions exactly once: a contribution whose
+debtor is in `settledPersonIds` contributes zero; every other pairwise contribution keeps its
+sign. It never subtracts `Settlement.amountCents` again. Deleting a Settlement resolves the
+locator, then reverses only step 4 for the exact `(activityId, expenseId, debtorPersonId)`
+triples whose reverse map still names that Settlement. It deletes the audit and locator rows
+and triggers the same Expense-only balance recomputation.
 
 ### 2.10 Public (unauthenticated) invite surface
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/public/v1/invites/:token` | Plan details for the public page. Returns only what the invite is allowed to reveal: title, date/time, location, description, poster image, organiser display name, RSVP counts. **Never** returns expenses, notes, other participants' emails, or any other activity. |
-| `POST` | `/public/v1/invites/:token/rsvp` | `{ response: 'going'\|'maybe'\|'declined', displayName?, email? }`. Rate-limited by IP. |
+| `GET` | `/public/v1/invites/:token` | Plan details for the public page. Returns only what the invite is allowed to reveal: title, date/time **or `dateStatus: 'undecided'`**, location, description, poster image, organiser display name, RSVP counts. **Never** returns expenses, notes, reminders, date suggestions, other participants' emails, or any other activity. |
+| `POST` | `/public/v1/invites/:token/rsvp` | `{ response: 'going'\|'maybe'\|'declined', displayName?, email? }`. Rate-limited by IP. An `email` that matches a **verified** `EMAIL#` record attaches the RSVP to that existing user instead of creating a guest; an unverified or absent email takes the guest path unchanged. |
 | `GET` | `/public/v1/invites/:token/ics` | `text/calendar` download. |
 | `GET` | `/public/v1/invites/:token/calendar/google` | `302` to a Google Calendar template URL. |
 | `GET` | `/public/v1/invites/:token/stop` | Revokes the token and returns a plain confirmation page. The entire unsubscribe mechanism for invite emails. |
 
-Invite tokens expire 90 days after the plan's date. Expired → `410 invite_expired`.
+**The guest page uses the same date-sensitive vocabulary as the app.** An undated plan's
+page says the date is still being decided and offers **Interested / Maybe / Pass**; a dated
+one offers **Going / Maybe / Decline**. Asking "Are you coming?" about a plan with no date
+is incoherent, and a guest is exactly the person least equipped to work out what it means.
+The stored values are the same four in both cases — see
+[`data-model.md` §7.1](data-model.md#71-rsvp-consent-does-not-survive-a-date-change).
 
-### 2.11 Capture — Phase 7, stubbed earlier
+A guest who responded to an undated plan is reset and re-emailed when the date lands, on the
+same rule as an app user. Guests cannot add date suggestions.
+
+Invite tokens expire 90 days after the plan's date, or 90 days after creation while it has
+no date. Expired → `410 invite_expired`.
+
+### 2.11 Capture — Phase 8, stubbed earlier
 
 These ship as **stubs returning `501 not_implemented` from Phase 1**, so the client
 integration is written once and the AI work slots in behind a stable contract.
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `POST` | `/v1/capture/parse` | `{ text, tz }` → `ParsedCapture` |
-| `POST` | `/v1/capture/extract` | `{ attachmentId }` → `ParsedCapture` (image → event) |
-| `POST` | `/v1/capture/link` | `{ url }` → `ParsedCapture` |
+| `POST` | `/v1/capture/parse` | `{ text, tz, creationTarget }` → `ParsedCapture` |
+| `POST` | `/v1/capture/extract` | `{ attachmentId, creationTarget }` → `ParsedCapture` |
+| `POST` | `/v1/capture/link` | `{ url, creationTarget }` → `ParsedCapture` |
 
 ```ts
 interface ParsedCapture {
-  suggestedType: ActivityType;
+  creationTarget: CreationTarget;       // exact echo of the request, never model-selected
   confidence: number;                  // 0..1 overall
-  fields: {
-    [K in keyof CreateActivityInput]?: {
-      value: unknown;
-      confidence: number;              // < 0.7 => client highlights it for review
-      sourceSpan?: [number, number];   // character range in the input text
-    }
-  };
-  unresolvedPeople?: string[];         // names we couldn't match to a contact
+  fields: Record<string, {
+    value: unknown;
+    confidence: number;                // < 0.7 => client highlights it for review
+    sourceSpan?: [number, number];     // character range in the input text
+  }>;
+  ignored?: {
+    reason: 'incompatible_with_target' | 'sharing_requires_user_action';
+    sourceSpan?: [number, number];
+  }[];
   rawModelOutput?: string;             // dev only, stripped in prod
 }
 ```
 
-**The server never creates an activity from a parse result.** It returns a draft; the
-client shows the review screen; the user confirms; the client calls
-`POST /v1/activities`. This is a hard product rule (concept §13) and a security property.
+The request is invalid without `creationTarget`; there is no compatibility default. The
+allow-list for `fields` is selected from that target, not from what the model thinks the
+input resembles:
+
+| Target | Fields capture may return |
+| --- | --- |
+| `{ objectKind: 'task', type: 'task' }` | `title`, `notes`, `schedule`, `recurrence`, `location`, `sourceUrl` |
+| `{ objectKind: 'plan', type: PlanType }` | The common Activity fields above plus only the `details` fields valid for that already-selected visible Plan type |
+| `{ objectKind: 'listItem', listId }` | `title`, `note`, `location`, and only `details` fields valid for the target list's stored behaviour. The route checks list membership before parsing. |
+
+`objectKind`, `type`, `listId`, `participants`, `audience`, `visibility`, membership,
+`reminders`, `offsetMinutes`, and notification actions are never model output and never appear
+inside `fields`. A phrase such as “with Alice” may be retained in `ignored` for the review UI,
+but capture does not resolve Alice, add her, or turn a Task into a Plan. A phrase such as
+“remind me an hour before” remains source text and never changes the visible Reminder control.
+Sharing and reminder setup are always separate user actions; the only reminder value that may
+already be visible is the user's explicitly saved default.
+
+**The server never creates a Task, Plan, or ListItem from a parse result.** It returns a
+target-compatible draft; the client shows the matching review form; the user confirms; the
+client calls the endpoint named by `creationTarget`. This is a hard product rule (concept
+§13) and a security property.
 
 ### 2.12 Notifications
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/v1/notifications?cursor=` | In-app inbox: invitations, RSVP changes, plan changes, expense additions. |
+| `GET` | `/v1/notifications?cursor=` | In-app inbox. |
 | `POST` | `/v1/notifications/:id/read` | |
 | `POST` | `/v1/notifications/read-all` | |
 | `GET`/`PATCH` | `/v1/me/notification-preferences` | Per-category toggles + quiet hours. |
+
+Categories, which are the toggle keys and a closed enum in
+`packages/shared/src/notifications.ts`. The authoritative catalogue of individual
+notification keys, their triggers and their copy lives in
+[`../01-product/notifications.md`](../01-product/notifications.md) §7.
+
+| Category | Covers |
+| --- | --- |
+| `reminders` | The caller's own `REM#` rows firing. Never anyone else's, on any plan. |
+| `invitations` | Plan invitations and list invitations |
+| `rsvp` | Someone responded, or a response was reset by a date change |
+| `plan_changes` | `plan_date_set`, `plan_date_changed`, time and location edits |
+| `plan_activity` | Posted updates on a shared plan. Off by default. |
+| `expenses` | An expense was added or edited on a shared plan |
+| `unsettled` | Outstanding balance nudges. Off by default. |
+| `lists` | `added_to_list` and the batched `list_items_added` digest |
+
+`lists` is batched, never per-item. The digest rule is in
+[`../01-product/notifications.md`](../01-product/notifications.md) §3.7.
 
 ---
 
@@ -392,12 +727,54 @@ Enforced in a single middleware, not scattered through handlers.
 | Actor | Can |
 | --- | --- |
 | Owner | Everything on their activity, including delete and removing participants. |
-| Participant (app user) | Read the activity, change **their own** RSVP, add updates, add expenses, mark their own occurrence complete. Cannot reschedule, rename, delete, or remove others. |
+| Participant (app user) | Read the activity, change **their own** RSVP, manage **their own** reminders, add and withdraw date suggestions, mark a suggestion as workable, add updates, add expenses. **Cannot complete, skip or snooze the plan** — that is global and owner-only. Cannot reschedule, rename, delete, or remove others. |
+| Participant, on a **prep task** of a plan they are in | May complete, uncomplete and edit it, whoever created it. This **does** require a rule beyond the owner check: *a participant of the parent may act on a child*. See the decision below. |
+| List owner | Everything on their list, including delete, member management, and changing `behaviour`, `capabilities` or `slot`. |
+| List member | Full CRUD on **items**, plus rename the list, schedule an item using an explicit audience, and leave it. Can receive only their own per-viewer Activity link in a list response. Cannot change behaviour or capabilities (destructive under the interaction contract), delete the list, or remove anyone but themselves. |
 | Guest with valid invite token | Read the public projection, set their own RSVP. Nothing else. |
 | Anyone else | `404 not_found` — never `403`, to avoid leaking existence. |
 
 Ownership is checked by loading `ACT#<id>/META` and comparing `ownerId`, plus a
-`PART#<personId>` lookup for participant access. Never trust an ID in the path.
+`PART#<personId>` lookup for participant access. When the activity has a
+`parentActivityId`, the check also consults the **parent's** participant set. For lists, the
+same middleware requires the caller's exact `USER#<userId>` / `LIST#<listId>` pointer, then
+loads `LIST#<id>/META` for ownership and capabilities. `MEMBER#` is roster and lifecycle
+state; `LLINK#` is People discovery state. **Neither can substitute for the pointer or
+authorise a list read.** Never trust an ID in the path.
+
+The owner has no `MEMBER#` row: their roster entry is derived from `LIST#/META`, their owner
+pointer and profile. Consequently `memberCount` is the owner plus physical non-owner member
+rows, and a private list has `memberCount: 1` with zero `MEMBER#` rows.
+
+> **Decision: completion authority follows the object, and a prep task is not a plan.**
+>
+> Completing a *plan* asserts a shared fact about an event — it happened, or it did not —
+> so only the owner may say so. Completing a *prep task* ticks an item on a shared
+> checklist. If Alice books the hotel for a trip we are planning together, she must be able
+> to tick "Book hotel" whether or not she typed it.
+>
+> So a prep task behaves like an item on a **shared list**, not like a plan outcome, and
+> that is the consistent reading rather than a special case: in both places, a collaborator
+> may check a shared checklist item. It costs one rule in `authz.ts` — a participant of the
+> parent may act on a child — applied once, not per endpoint.
+
+**Two self-service exceptions**, both of which must be explicit in the middleware rather
+than emergent from an owner check:
+
+- A participant may `DELETE /v1/activities/:id/participants/:personId` **for themselves** —
+  leaving a plan.
+- A list member may `DELETE /v1/lists/:id/members/:personId` **for themselves** — leaving a
+  list.
+
+Everything else under those two paths is owner-only. A member with
+`status: 'invited'` who has not yet signed up can read nothing: they have no `userId`, so
+no request can authenticate as them.
+
+List membership and Plan participation are independent grants. Access to a shared ListItem
+does not grant access to a Plan another member created from it. Every list response therefore
+projects `ListItemActivityLink` by the token's user id and then applies ordinary Activity
+authorisation to the referenced id; it never returns another viewer's pointer for the client
+to hide.
 
 ---
 
@@ -423,7 +800,7 @@ counter, `429 rate_limited` with `Retry-After`.
 - Breaking changes create `/v2` for that resource only; `/v1` stays for 90 days.
 - The mobile client sends `X-Client-Version`; the server may return
   `426 upgrade_required` with an `updateUrl` to force an update for a genuinely broken
-  build. Wire this in Phase 4, before the first TestFlight.
+  build. Wire this in Phase 5, before the first TestFlight.
 
 ---
 

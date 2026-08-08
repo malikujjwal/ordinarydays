@@ -1,5 +1,16 @@
 # Phase 6 — People and expenses
 
+> **Legacy compatibility document — not canonical.** This file is retained only so old links
+> continue to resolve. The implementation plan of record is
+> [`phase-07-people-and-expenses.md`](phase-07-people-and-expenses.md), and that canonical file
+> governs whenever the two differ. Phase 6 is normatively
+> [`phase-06-sharing.md`](phase-06-sharing.md). Do not schedule or implement work from this
+> legacy numbering.
+>
+> **Shared-List compatibility:** all People reads, delete guards, merge work and UI below
+> include the canonical `ListMember`/reciprocal `LLINK#` contract from those two files. Any
+> Plan-only wording in an old external link does not narrow that contract.
+
 ## Goal
 
 At the end of this phase the app can answer the question the money feature exists for: *we
@@ -7,10 +18,11 @@ did something together — who owes whom?* A shared plan carries expenses with e
 shares splits whose arithmetic reconciles to the cent every time, in integer minor units,
 with no float anywhere in the path. The plan shows a per-person owes summary and a suggested
 settle-up that drills through to the expenses behind it. A People layer appears — derived
-only from shared plans, never from a contact import or a friend graph — with a People page, a
+from explicitly shared Plans or Lists and manual contacts, never from words, a contact import
+or a friend graph — with a People page, a
 Person view, and pairwise net balances that are always tappable through to the individual
-expenses that produced them. Settling is recorded against specific expenses, never as a bare
-number. DynamoDB Streams are enabled and a worker keeps the `Balance` cache fresh, with a
+expenses that produced them. Settlement marks selected expense obligations resolved; the app
+never records how, where, or how much money moved outside it. DynamoDB Streams are enabled and a worker keeps the `Balance` cache fresh, with a
 dead-letter queue, a divergence alarm, and the ability to rebuild any balance from source
 rows at any time. A guest with no account participates in all of it, keyed only by
 `personId`.
@@ -32,13 +44,10 @@ in [`../02-architecture/data-model.md`](../02-architecture/data-model.md) §3.2,
 `(personId, currency)`; the three-segment key satisfies both access pattern 11
 (`sk begins_with BAL#`) and a per-person read (`sk begins_with BAL#<personId>#`).
 
-One canonical-document amendment is still required and must land with the code that needs it:
-
-- **`Expense.settledPersonIds: string[]`** is added to
-  [`../02-architecture/data-model.md`](../02-architecture/data-model.md) §4.8, holding the
-  non-payer `personId`s that a settlement has covered. Without it, "is this expense settled
-  with respect to this pair" requires reading every settlement on every balance read. It is
-  additive and defaults to `[]` on read.
+The canonical model already includes **`Expense.settledPersonIds: string[]`**
+([`../02-architecture/data-model.md`](../02-architecture/data-model.md) §4.8), holding the
+debtor `personId`s whose pairwise obligation the user marked settled. It defaults to `[]` on
+read. Balance computation reads this Expense state; Settlement rows remain audit history.
 
 ## Deliverables
 
@@ -57,7 +66,8 @@ One canonical-document amendment is still required and must land with the code t
       returning the computed figure, the cached figure, a divergence flag, and every
       contributing expense line.
 - [ ] `POST /v1/balances/recalculate` — a full rebuild from source rows.
-- [ ] Settlements: expense-scoped, computed amounts, partial settlement, history, and undo.
+- [ ] Settlements: expense-scoped status changes, server-computed audit totals, selected
+      subsets, history, and undo — with no external-payment input or copy.
 - [ ] The People page, the Person view, `POST /v1/people`, `PATCH`, `DELETE` with `409`,
       and `POST /v1/people/:id/merge`.
 - [ ] FREQUENT and RECENT ranking in `GET /v1/people/suggested`.
@@ -97,7 +107,7 @@ One canonical-document amendment is still required and must land with the code t
 | P6-25 | Plan detail: EXPENSES section and the owes summary | mobile | P6-09 | no | M |
 | P6-26 | The `<Balance>` component and its lint rule | ui/ci | P6-02 | yes | M |
 | P6-27 | The balance drill-down screen | mobile | P6-14, P6-26 | no | M |
-| P6-28 | The settle-up sheet, partial settlement, and history | mobile | P6-16 | no | L |
+| P6-28 | The mark-settled sheet, selected obligations, and history | mobile | P6-16 | no | L |
 | P6-29 | People page and Person view | mobile | P6-19 | no | L |
 | P6-30 | Guests with expenses, and materialising a linked guest's balances | api | P6-11, P6-13 | no | M |
 | P6-31 | Multi-currency rendering rules | mobile | P6-02 | no | S |
@@ -276,8 +286,8 @@ expected output, including §7.4's `$249.99` over five shares producing
 
 ### P6-04 — Pairwise balance computation
 
-**What to build.** The pure function that turns expenses and settlements into the number a
-Person view shows.
+**What to build.** The pure function that turns Expenses and their `settledPersonIds` into
+the number a Person view shows. Settlement audit rows are not an input.
 
 **Files.** `packages/shared/src/money/balance.ts`.
 
@@ -414,10 +424,10 @@ are rejected.
 **What to build.** `POST`, `PATCH` and `DELETE /v1/activities/:id/expenses[/:expenseId]`.
 
 **Approach.** An expense is `ACT#<a>/EXP#<expenseId>`, so it is already in the partition the
-plan detail reads. Each write is a transaction of two items: the `EXP#` row and an
-`ADD expenseTotalCents :delta` on `ACT#/META`. Balance recalculation is **not** done here — it
-is the stream worker's job (P6-11), which is what makes this write path two items regardless
-of how many people are involved.
+plan detail reads. Create writes that row, an `EXPENSE#<expenseId>/META` locator, and an
+`ADD expenseTotalCents :delta` on `ACT#/META`; edit leaves the locator unchanged; delete
+removes it. Balance recalculation is **not** done here — it is the stream worker's job
+(P6-11), so the write count remains constant regardless of how many people are involved.
 
 Authorship, per [`../01-product/expenses.md`](../01-product/expenses.md) §2.3: any
 participant may add; the author (`expense.createdBy === callerUserId`) may edit or delete
@@ -427,16 +437,20 @@ non-participant gets `404`.
 Every write appends a system entry to the updates feed and notifies the other participants
 (P6-23).
 
-**Edge cases.** Editing an expense that has already been settled with respect to some pair
-clears those `settledPersonIds` and writes a feed entry saying so — changing the number after
-someone has settled must not silently leave a stale settlement. Deleting an expense that a
-settlement covers removes it from that settlement's `coversExpenseIds`; a settlement left
-covering nothing is deleted and the deletion is recorded. Multiple currencies on one plan are
-legal and are never summed.
+**Edge cases.** Editing or deleting an Expense with any settled pairwise obligation returns
+`409 settlement_conflict`, names the blocking Settlement ids from
+`settlementIdByPersonId`, and writes nothing. The UI
+links to `Undo settlement`; only after that explicit action may the Expense change. Settlement
+rows are immutable and `coversExpenseIds` is never fixed up behind the user's back. Multiple
+currencies on one plan are legal and are never summed. The parent Activity delete route uses
+the same aggregate guard across every child Expense; after all blocking Settlements are
+explicitly undone, its cascade removes every `EXPENSE#` locator with the Expense rows.
 
-**Tests.** Integration tests for each actor × each verb; the counter delta on create, edit and
-delete; settled-state clearing on edit; the settlement fix-up on delete; a currency mismatch
-between the expense and the plan's other expenses is allowed.
+**Tests.** Integration tests for each actor × each verb; the locator and counter delta on
+create/edit/delete; the settled-expense edit/delete guard returns every distinct blocking id
+and is a zero-write conflict; a currency mismatch between the expense and the plan's other
+expenses is allowed. Deleting the parent returns the union of blocking ids and writes no
+tombstone; after Undo, deletion leaves no Expense locator.
 
 ---
 
@@ -506,9 +520,8 @@ change a balance.
 | `filters` | see below | |
 
 ```jsonc
-// Only expense and settlement writes can move a balance.
+// Expense state is the only balance source, including state changed by settlement/undo.
 { "dynamodb": { "Keys": { "sk": { "S": [ { "prefix": "EXP#" } ] } } } }
-{ "dynamodb": { "Keys": { "sk": { "S": [ { "prefix": "SETTLE#" } ] } } } }
 ```
 
 Filtering at the source is both a cost control and a correctness control: without it every
@@ -523,7 +536,7 @@ recovery path.
 
 **Tests.** CDK assertions: the stream is enabled with `NEW_AND_OLD_IMAGES`; the mapping has
 `FunctionResponseTypes: ['ReportBatchItemFailures']`, a `DestinationConfig.OnFailure`, and
-both filter patterns. An integration test against DynamoDB Local Streams asserting a task
+the `EXP#` filter pattern. An integration test against DynamoDB Local Streams asserting a task
 write produces no invocation and an expense write produces one.
 
 ---
@@ -544,14 +557,16 @@ write produces no invocation and an expense write produces one.
 
 **The algorithm.**
 
-1. **Collect.** For every record in the batch, derive the affected pairs. An `EXP#` record
+1. **Collect.** For every `EXP#` record in the batch, derive the affected pairs. The record
    gives the `activityId` from the `pk`; the participants come from the record's new and old
    images (`paidByPersonId` and every `splits[].personId`, from **both** images so a removal
-   is handled). A `SETTLE#` record gives `ownerId` and `personId` directly.
+   is handled). Settlement and Undo both mutate these source Expense rows, so audit-only
+   `SETTLE#` events are deliberately not a second trigger or input.
 2. **Deduplicate.** Reduce the batch to a set of `(ownerUserId, personId, currency)` tuples.
    A burst of five edits to one plan becomes one recompute per affected pair.
 3. **Recompute.** For each tuple: `Query USER#<owner> sk begins_with PLINK#<personId>#` to get
-   the shared activity ids (access pattern 10), then one `Query pk=ACT#<a> sk begins_with EXP#`
+   both `shared_activity` and `finance_only` source ids (access pattern 10a), then one
+   `Query pk=ACT#<a> sk begins_with EXP#`
    per activity, then `computePairBalance` from P6-04.
 4. **Write.** `PutItem` on `USER#<owner>/BAL#<personId>#<currency>` with
 
@@ -600,6 +615,11 @@ of 100 records touching one pair produces exactly one recompute and one write; a
 on record 7 returns exactly record 7 in `batchItemFailures`. Integration tests against
 DynamoDB Local: add three expenses, assert the balance; delete one, assert it changes; run the
 worker twice on the same event, assert the balance is unchanged.
+
+Remove a participant while a retained Expense exists: Plan access and `IDX#` disappear, both
+relationship links become `finance_only`, and stream replay plus a full rebuild preserve the
+same balance. The expense-only drill-down, settlement, and Undo still work; Plan detail is
+`404`. Delete the last Expense and assert the finance-only links disappear.
 
 ---
 
@@ -722,30 +742,42 @@ three; a rebuild deletes a `BAL#` row whose expenses were all deleted.
 **What to build.** `POST /v1/settlements`, `GET /v1/settlements?personId=`, and
 `DELETE /v1/settlements/:id` (`Undo settlement`).
 
-**Approach.** `POST` takes `{ personId, currency, coversExpenseIds, note? }`. The server
-**computes** `amountCents` from the covered expenses; a client-supplied amount that disagrees
-is `validation_failed`. `coversExpenseIds` must be non-empty — there is no free-form "record a
-payment", because that produces exactly the unexplained number the product forbids
-([`../01-product/expenses.md`](../01-product/expenses.md) §6.1).
+**Approach.** `POST` takes exactly `{ personId, coversExpenseIds }` under a strict schema.
+The list must contain 1–25 **distinct** globally unique ids. Each id resolves through its
+`EXPENSE#` locator and the service authorises the source Activity. The server resolves the
+pairwise obligations and derives their one currency, direction, debtor, and display-only
+`amountCents`; mixed currency, mixed direction, duplicate, unrelated, missing, or
+already-settled obligations are `validation_failed`.
+Amount, currency, note, method, reference, remainder, credit, and all other external-payment
+fields are rejected ([`../01-product/expenses.md`](../01-product/expenses.md) §6.1).
 
-The write is one transaction: the `SETTLE#` row plus an `ADD settledPersonIds :debtor` on each
-covered `EXP#` row. At the 25-expense cap per settlement this is 26 items, inside the
-transaction limit; more than 25 covered expenses is `validation_failed` with `Settle these in
-two goes.`
+Before writing, the server builds one exact
+`{ activityId, expenseId, debtorPersonId }` coverage entry per source Expense; the request's
+caller-local `personId` is never copied blindly into an Expense owned by another user. The
+write is one transaction: the immutable `SETTLE#` audit row, its `SETTLEMENT#<id>` locator,
+and a conditional String-Set `ADD settledPersonIds :debtor`,
+`settlementIdByPersonId[debtor] = :settlementId`, and derived `settled` update on each covered
+`EXP#` row. At the 25-expense cap this is 27 items, inside the transaction limit; more than
+25 covered expenses is `validation_failed` with `Settle these in two goes.`
 
-Settlements are **never edited**. `Undo settlement` deletes the row, removes the debtor from
-each covered expense's `settledPersonIds`, writes a feed entry on each affected plan, and lets
-the stream recompute. It requires a confirmation and has no undo of its own.
+Settlements are **never edited**. Its server-derived total explains history and is never
+applied as another balance delta. `Undo settlement` resolves and authorises the locator,
+then removes only each recorded debtor whose reverse map still equals this Settlement,
+recomputes each Expense's all-debtors roll-up, deletes the audit and locator rows, writes a
+feed entry on each affected plan, and lets the Expense stream recompute. Other debtors on the
+same Expense remain untouched. It requires a confirmation and has no undo of its own.
 
-**Edge cases.** Partial settlement is the normal case, not an error state: unchecking any
-expense settles the rest. An expense is settled with respect to a pair or it is not; there is
-no partially-settled expense. Settling an expense already settled for that pair is a no-op.
-Two settlements racing on the same expense are safe because `ADD` on a string set is
-idempotent.
+**Edge cases.** Selecting a subset is normal: selected obligations close and unchecked ones
+stay outstanding. This is not a partial-payment model. An expense is settled with respect to
+a pair or it is not. An already-settled obligation is rejected so two audit rows cannot cover
+it; racing transactions use a condition, so one succeeds and one returns `409` with no
+partial write.
 
-**Tests.** The §7.5 partial-settlement walkthrough asserted to the cent. A client-supplied
-wrong amount is rejected. An empty `coversExpenseIds` is rejected. Undo restores the exact
-prior balance. 26 expense ids is rejected.
+**Tests.** The §7.5 selected-obligations walkthrough asserted to the cent. Requests containing
+amount, currency, note, method or reference are rejected by the strict schema. Empty,
+duplicate, mixed-direction, mixed-currency, unrelated and already-settled selections are
+rejected. Undo restores the exact prior balance without changing another debtor. Twenty-six
+expense ids is rejected; a settlement id resolves without a `Scan`.
 
 ---
 
@@ -754,8 +786,8 @@ prior balance. 26 expense ids is rejected.
 **What to build.** The denormalised boolean and the `Partly settled · 1 of 3` state.
 
 **Approach.** Per-pair truth is `settledPersonIds.includes(debtorPersonId)`.
-`Expense.settled` is set to `true` by the stream worker only when every non-payer in
-`splits[]` appears in `settledPersonIds`, and back to `false` when that stops being true. The
+`Expense.settled` is updated in the same transaction and is `true` only when every non-payer
+in `splits[]` appears in `settledPersonIds`, and returns to `false` when that stops being true. The
 UI shows `Settled` only on the boolean and `Partly settled · n of m` otherwise; both are
 drill-downs.
 
@@ -772,20 +804,21 @@ because it has no debtors. Adding a participant to an existing expense's splits 
 **What to build.** `POST /v1/people`, `GET /v1/people?sort=relevance`, `PATCH`, `DELETE`.
 
 **Approach.** `POST` is the one manual route into the People layer; every other route into it
-is a side effect of sharing a plan. `GET` returns the flat list with the sort precedence from
+is a side effect of explicitly sharing a Plan or List. `GET` returns the flat list plus active
+`sharedListCount` from `LLINK#`, with the sort precedence from
 [`../01-product/sharing-and-people.md`](../01-product/sharing-and-people.md) §6.3:
 `upcomingCount` descending, then absolute outstanding balance descending, then
 `lastActivityAt` descending, then `displayName` ascending. The alternate sorts (`Name`,
 `Balance`) are client-side re-orderings of the same response.
 
-`DELETE` returns `409 conflict` while the person participates in any non-completed activity,
-with the blocking plans named in `details[]` so the UI can explain it.
+`DELETE` returns `409 conflict` while the person participates in any non-completed activity
+or invited/active List membership, with typed Plan/List blockers in `details[]`.
 
 Adding or changing an email that matches a registered user links immediately
 (Phase 5 P5-25) and writes the `GUESTEMAIL#` row.
 
-**Tests.** The four-level sort with a fixture that exercises every tie-break. `409` with the
-blocking plan names. Email-change linking. Tenant isolation.
+**Tests.** The unchanged four-level sort, active-versus-invited list count, a list-only Person,
+typed Plan/List `409` blockers, email-change linking and tenant isolation.
 
 ---
 
@@ -797,14 +830,17 @@ blocking plan names. Email-change linking. Tenant isolation.
 ascending, the last 5 past ones descending with outcome and settlement state, and the
 **computed** balances per currency (the same computation as P6-14, not the cache). Upcoming
 and recent come from `PLINK#<personId>#` (access pattern 10) in one query each, sliced
-around today's sort timestamp.
+around today's sort timestamp. Access-checked active `LLINK#<personId>#` rows provide
+`listsTogether`, paged 20 at a time by `?listsCursor=` / `listsTogetherCursor`; arbitrary
+non-owner co-membership does not.
 
-**Edge cases.** A person with no shared plans returns empty lists and the UI shows
-`Nothing together yet`. A deleted-account participant keeps their display name with
+**Edge cases.** `Nothing together yet` requires no shared Plans, active shared Lists or
+balance. A deleted-account participant keeps their display name with
 `linkedUserId` cleared.
 
-**Tests.** The payload against a fixture with 12 upcoming and 30 past plans; the caps; the
-balance matches `GET /v1/people/:id/balance`.
+**Tests.** The payload against a fixture with 12 upcoming, 30 past Plans and 25 active Lists;
+the caps; List pagination has no gap or duplicate; the balance matches
+`GET /v1/people/:id/balance`.
 
 ---
 
@@ -841,11 +877,19 @@ make inevitable.
 **Approach.** `{ intoPersonId }`. The surviving person keeps its `personId`. The merge moves
 every reference from the source to the target: `Participant.personId` on every shared
 activity, `Expense.paidByPersonId` and `splits[].personId`, `Settlement.personId` and
-`settledPersonIds`, and every `PLINK#` row; then deletes the source `PERSON#` row, its
+`settledPersonIds`, `settlementIdByPersonId`, affected Settlement `coverage`, and every
+`PLINK#` row, `ListMember`/owner-member `LLINK#` references and the applicable Person-level
+guest locator; then deletes the source `PERSON#` row, its
 `GUESTEMAIL#` entry and its `BAL#` rows, and triggers a rebuild for the target.
 
-It is a resumable job keyed `USER#<u>/MERGEJOB#<sourcePersonId>`, not a transaction — the
-reference count is unbounded.
+This explicit identity normalisation is the sole exception to the rule that Settlement audit
+rows are byte-immutable: amount, currency, direction, time, and covered Expense identity do
+not change, but owner-scoped Person references, the history sort key, and the locator may be
+rewritten together. A per-user merge lock makes expense create/edit/delete, settlement, Undo,
+List membership mutations for either Person and a second merge return `409
+person_merge_in_progress`. The job is resumable and idempotent,
+keyed `USER#<u>/MERGEJOB#<sourcePersonId>`; each source record and its locator/reverse map move
+atomically before the checkpoint advances, because the total reference count is unbounded.
 
 **Edge cases.** Merging two people who are both participants of the same activity would
 produce two `PART#` rows for one `personId`; the merge collapses them, keeping the more
@@ -855,13 +899,18 @@ re-validated — this is the only place two split lines merge, and getting it wr
 reconciliation, so it has its own test. Merging a linked user into a guest is refused;
 merge into the linked one.
 
+Source-only List membership moves to the target. A same-List collision collapses once: active
+wins, the earlier immutable `addedAt` remains, redundant reciprocal links are removed and
+`memberCount` decrements once. Conflicting linked identities are refused.
+
 **Tests.** A merge across 3 activities, 5 expenses and 2 settlements leaves every balance
-identical before and after. The same-activity collapse. The same-expense sum. The refusal
-case. Resumption after a killed job.
+identical before and after. Undo of either Settlement still reopens its exact obligation. The
+same-activity collapse. The same-expense sum. The refusal case. A concurrent settlement is
+blocked. Resumption after a killed job produces no duplicate history or stale locator.
 
 ---
 
-### P6-22 — `PLINK#` and counter maintenance, plus the daily reconciliation job
+### P6-22 — `PLINK#`, `LLINK#` and counter integrity, plus the daily reconciliation job
 
 **What to build.** Keep `upcomingCount`, `lastActivityAt` and the `PLINK#` sort timestamps
 true, and detect it when they are not.
@@ -875,6 +924,8 @@ with the delta before correcting it. Divergence is a bug report, not a routine r
 **Tests.** Each write path updates the counters; the reconciliation job corrects a
 hand-corrupted counter and logs; a person whose only plan moves from future to past has their
 count decremented.
+List writes never affect `PLINK#`, activity counters, FREQUENT or RECENT; reconciliation also
+detects dangling or non-reciprocal active `LLINK#` rows.
 
 ---
 
@@ -982,19 +1033,22 @@ computed figure and triggers the rebuild; each line links to its plan's expense 
 
 ---
 
-### P6-28 — The settle-up sheet, partial settlement, and history
+### P6-28 — The mark-settled sheet, selected obligations, and history
 
 **What to build.** The flow in
 [`../01-product/expenses.md`](../01-product/expenses.md) §6.2 and the history in §6.5.
 
 **Approach.** The sheet lists every unsettled expense between the two people in the relevant
-direction, each checked by default, with a running `Settling $42.50 of $42.50` that updates as
-boxes are unchecked. `Mark as settled` posts the ids and the computed amount. History is
+direction, each checked by default, with a running `Selected $42.50 of $42.50` that updates as
+boxes are unchecked. The entry action and final button are `Mark settled`; the request posts
+only `personId` and the selected ids. The running total is preview, and the server-derived
+total is authoritative. History is
 reached from the balance screen, each row expands to the covered expenses, and the row's
 overflow offers `Undo settlement` behind a confirmation.
 
-**Tests.** Full and partial settlement; the running total; the expense cap message at 26;
-undo restores the prior balance; history pagination.
+**Tests.** All obligations and a selected subset; the running total; the expense cap message
+at 26; undo restores the prior balance; history pagination; no payment amount/method field or
+copy renders.
 
 ---
 
@@ -1008,11 +1062,14 @@ The list is flat, with a one-line summary and a balance chip when non-zero, and 
 control offering Relevance / Name / Balance. The Person view shows the header, the tappable
 `n upcoming together`, the balance line (always tappable, hidden when zero with nothing
 unsettled), UPCOMING and RECENT capped at 5 with `See all`, and
-`Plan something with <name>`, which opens Add with them pre-selected.
+`LISTS TOGETHER` capped visually at 5 with paginated `See all`, and
+`Plan something with <name>`, which opens the unselected five-kind Plan chooser, then the
+chosen Plan form with that named person pre-selected. Title words never select the kind or
+add anybody else.
 
 **Tests.** Sort ordering matches the server's; the balance chip is absent at zero; every
-aggregate has a drill-down; `Plan something with` pre-selects; `Delete` shows the `409`
-explanation naming the blocking plans.
+aggregate has a drill-down; `Plan something with` pre-selects; list-only summaries work;
+`Delete` names typed blocking Plans and Lists.
 
 ---
 
@@ -1050,8 +1107,8 @@ from both directions.
 deletes is blocked by the `409` rule while any non-completed plan involves them; after
 completion, deletion is allowed and the expenses keep the name.
 
-**Tests.** A full guest lifecycle integration test: invite a guest, record two expenses and a
-partial settlement, assert the owner's balance; then sign the guest up with the matching
+**Tests.** A full guest lifecycle integration test: invite a guest, record two expenses and
+mark one selected obligation settled, assert the owner's balance; then sign the guest up with the matching
 verified email and assert their side shows the mirrored balance to the cent, with the same
 `personId` and no duplicated expense. Assert the public invite response for that plan contains
 no expense field before and after.
@@ -1081,8 +1138,8 @@ executable end-to-end test.
 
 **Approach.** Seed the New York Trip with `psn_a` (owner), `psn_b` (app user) and `psn_c`
 (guest); add the hotel, train and dinner expenses exactly as specified; assert the plan nets,
-the suggested settle-up, both pairwise balances, and then run the $33.50 partial settlement
-and assert the resulting `$42.33`. Run the whole thing through the real API against DynamoDB
+the suggested settle-up, both pairwise balances, and then mark the $33.50 Dinner obligation
+settled while leaving Hotel outstanding, asserting the resulting `$42.33`. Run the whole thing through the real API against DynamoDB
 Local with the stream worker invoked synchronously, so the cache and the computed figure are
 both asserted.
 
@@ -1121,7 +1178,8 @@ end to end.
     to exactly zero per currency, and a suggested settle-up of at most `n − 1` transfers, each
     carrying the expense ids behind it.
 12. DynamoDB Streams are enabled with `NEW_AND_OLD_IMAGES`, and the event source mapping
-    filters to `EXP#` and `SETTLE#` prefixes. A task, list or RSVP write does not invoke the
+    filters to the `EXP#` prefix only. Settlement audit rows are not balance inputs; their
+    transaction's Expense updates invoke the worker. A task, list or RSVP write does not invoke the
     worker.
 13. The worker recomputes from source rows and never applies a delta. Delivering the same
     record twice, or a batch of 100 records for one pair, produces exactly the same balance
@@ -1130,8 +1188,9 @@ end to end.
     stale write fails its condition and is counted, not logged as an error.
 15. A record that fails deterministically is isolated by bisection, retried three times, and
     lands in `od-balance-dlq-{stage}`. An alarm fires on the first message.
-16. `rebuildBalancesForUser` reconstructs every balance from `Expense` and `Settlement` rows
-    alone, writes what is justified, and **deletes** any `BAL#` row that is not.
+16. `rebuildBalancesForUser` reconstructs every balance from Expense contributions and their
+    `settledPersonIds` alone, writes what is justified, and **deletes** any `BAL#` row that is
+    not. Settlement audit rows are never subtracted again.
 17. `GET /v1/people/:id/balance?include=expenses` recomputes from source on every request,
     returns `computedNetCents`, `cachedNetCents` and `divergent`, repairs the cache when they
     disagree, and logs `balance_divergence`.
@@ -1141,24 +1200,33 @@ end to end.
     level, and a CI script rejects `onPress={undefined}`.
 20. A balance is never rendered as a bare signed number or as colour alone. Direction is
     always words. A zero net with no unsettled expenses renders nothing.
-21. `POST /v1/settlements` computes `amountCents` from `coversExpenseIds`, rejects an empty
-    list, rejects a disagreeing client-supplied amount, and marks each covered expense settled
-    with respect to that pair only.
-22. Partial settlement leaves the unchecked expenses outstanding and drops the balance by
-    exactly the covered amount. `Undo settlement` restores the prior balance exactly.
-23. `Expense.settled` is `true` only when every non-payer in `splits[]` has a covering
-    settlement, and flips back when an edit adds a debtor.
+21. `POST /v1/settlements` accepts only `personId` and 1–25 distinct `coversExpenseIds`,
+    resolves each without a Scan, computes exact per-Expense coverage and audit metadata,
+    rejects an empty/duplicate/mixed/unrelated/already-settled list,
+    rejects caller-supplied amount, currency, direction, note or payment fields, and marks
+    each covered expense settled with respect to that pair only. Undo resolves by
+    `settlementId` and preserves every other debtor's state.
+22. Marking a selected subset settled leaves unchecked obligations outstanding and drops the
+    balance by exactly the covered amount without recording an external payment. `Undo
+    settlement` restores the prior balance exactly.
+23. `Expense.settled` is `true` exactly when every non-payer debtor id in `splits[]` is in
+    `settledPersonIds`. It is recomputed on create, allowed edit, settlement, and undo. An
+    Expense with an actually settled obligation is `409` on edit/delete until Undo; only a
+    no-obligation expense can move from vacuously settled to unsettled when an edit adds a debtor.
 24. A guest can be a payer and a split member, accrues a balance in the owner's partition,
     sees none of it on the public page, and is never emailed about money.
 25. A guest who registers finds their balances materialised on their side, to the cent,
     against the same `personId`, with no duplicated expense.
-26. `DELETE /v1/people/:id` returns `409` naming the blocking plans while the person is on any
-    non-completed activity.
+26. `DELETE /v1/people/:id` returns `409` naming typed Plan/List blockers while the person is
+    on any non-completed activity or invited/active List membership; list-only People expose
+    active count and access-checked `listsTogether`, never invited links.
 27. `POST /v1/people/:id/merge` leaves every balance identical before and after, collapses
-    duplicate participants on one activity, and sums duplicate split lines with the total
-    re-validated.
+    duplicate participants on one activity, sums duplicate split lines with the total
+    re-validated, migrates/deduplicates ListMember/`LLINK#`/guest-locator references, and
+    preserves exact Settlement undo after an interrupted/resumed merge.
 28. FREQUENT uses ≥ 3 shared activities in 180 days and RECENT a shared activity in 30 days;
-    the frequency count appears in no response and no screen.
+    the frequency count appears in no response and no screen; List membership affects none of
+    these rankings or activity counters.
 29. Two currencies are never added together on any screen or in any response.
 30. The §7.5 worked example passes end to end through the real API with the stream worker
     running.
@@ -1167,7 +1235,7 @@ end to end.
 
 | Not in Phase 6 | Why |
 | --- | --- |
-| Payment rails: Venmo, PayPal, Stripe, bank links, open banking, card processing | The app records that something is settled. It never moves money. |
+| Payment rails or external-payment records: Venmo, PayPal, Stripe, bank links, cash, transfer amounts, methods or references | The app records only which obligations were marked settled. It never moves money or records how settlement happened. |
 | Budgets, spending limits, category budgets | Not a finance app. |
 | Spend-by-category charts, monthly reports, trends, any analytics over money | The only aggregates are per-plan totals and pairwise balances. |
 | Currency conversion, FX rates, a base currency, an approximate combined total | [`../02-architecture/data-model.md`](../02-architecture/data-model.md) §10 |
@@ -1194,7 +1262,7 @@ end to end.
 | 6 | **A stale `BAL#` row is shown as fact** on the Person view. | The drill-down never reads the cache; the People page does, and is repaired within one stream event. |
 | 7 | **`BAL#<personId>` without a currency segment** silently overwrites one currency's balance with another's. | The key change is a prerequisite of this phase, with the data-model amendment in the same PR. |
 | 8 | **Merging two people who share an expense** breaks reconciliation if the split lines are not summed. | Explicit rule, explicit test, and the split total re-validated after the merge. |
-| 9 | **Deleting an expense that a settlement covers** leaves a settlement referencing nothing. | The delete path fixes up `coversExpenseIds` and removes an empty settlement, recorded in the feed. |
+| 9 | **Editing or deleting an expense that a settlement covers** rewrites immutable history or silently reopens a balance. | Both paths return `409 settlement_conflict` until the user explicitly chooses `Undo settlement`; no Expense or Settlement row changes on the failed request. |
 | 10 | **Per-recipient notification bodies** are easy to compute once and send to everyone, leaking another person's share figure. | The share line is computed per recipient; a test asserts two recipients receive different bodies. |
 | 11 | **A pair with very many shared activities** makes the recompute slow enough to time out. | 200-activity bound with a warning, sized so it has never been reached; the fix if it is reached is a running total, not a longer timeout. |
 | 12 | **On-demand DynamoDB plus a stream handler** is the documented recipe for a runaway bill. | Source-side filtering, reserved concurrency on the worker, the `ddb-write-spike` alarm, and the no-self-trigger rule in row 4. |

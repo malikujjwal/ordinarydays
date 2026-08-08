@@ -1,9 +1,12 @@
 # Ordinary Days
 
-A personal life planner for capturing things you want to do, turning them into actual
-plans, and coordinating them with other people when it matters.
+A personal life planner where you explicitly add a Task, a Plan, or a List item. Tasks and
+Plans can be scheduled; Plans and Lists can be shared; Tasks keep no direct participant
+roster. Typed words and AI may help
+fill fields, but never decide which of those three things the user meant, which Plan kind to
+use, which List behaviour to create, who it is shared with, or whether to set a reminder.
 
-> Capture it → organise it → schedule it → share it → do it → follow up.
+> Choose it → capture it → organise it → schedule it → share it → do it → follow up.
 
 The user-facing mental model is three words: **Today · Plans · Lists**. Meals, TV, events,
 outings, expenses and people are not separate mini-apps — they all move through the same
@@ -71,7 +74,7 @@ The four sets:
 | --- | --- |
 | [`docs/01-product/`](docs/01-product/) | What the app does |
 | [`docs/02-architecture/`](docs/02-architecture/) | How it is built |
-| [`docs/03-implementation/`](docs/03-implementation/) | The nine-phase plan and every task in it |
+| [`docs/03-implementation/`](docs/03-implementation/) | The ten-phase plan and every task in it |
 | [`docs/04-conventions/`](docs/04-conventions/) | How we work |
 
 ## Getting started

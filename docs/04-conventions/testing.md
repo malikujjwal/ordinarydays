@@ -48,6 +48,7 @@ calculation.
 | `packages/shared/src/rank/lexoRank.ts` | Ordering corruption is silent and permanent |
 | `packages/shared/src/time/**` | The wall-clock/instant distinction is the model's spine |
 | Every Zod schema's rejection cases, not just its acceptance cases | The schema is the security boundary (`security-privacy.md` §4.1) |
+| Capture schemas reject a missing request target, a changed echoed target, target/type keys inside model fields, participant or sharing writes, and every reminder/notification key (`reminder`, `reminders`, `offsetMinutes`) | Text and models may fill only fields compatible with the user's explicit choice; reminders come only from the visible control or an explicitly saved default |
 | Every service method in `services/api/src/services/**` | Authorisation lives here |
 | `middleware/errorHandler.ts` — one case per row of the mapping table | A wrong status is a client bug that looks like a server bug |
 | `lib/cursor.ts` — round-trip, tamper rejection, cross-user rejection | A crafted cursor is a tenant-isolation hole |
@@ -67,11 +68,12 @@ elaborate mocking. Required cases:
 
 | Case | Assertion |
 | --- | --- |
-| `daily`, `weekly`, `monthly`, `weekdays`, `interval_days` over a 62-day window | Exact date list |
-| `byWeekday` with multiple days, `byMonthDay` including day 31 in a 30-day month | The 31st is skipped, not clamped to the 30th |
+| `daily`, `weekly`, `monthly`, `weekdays`, `interval_days` over a 62-day window, and `yearly` over a multi-year window | Exact date list |
+| `byWeekday` with multiple days, `byMonthDay` including day 31 in a 30-day month | Month-end clamping: the 31st emits the last day of the shorter month, never skipped and never spilled into the next (`today-and-tasks.md` §6.1) |
+| A `yearly` series with explicit `byMonth` + `byMonthDay`, and one with neither | The anchors drive expansion when present; the segment's `effectiveFrom` is the fallback for a hand-constructed series (`data-model.md` §4.2) |
 | DST spring-forward and autumn-back in `America/New_York` and `Europe/London` | A 6 PM daily task is 6 PM local on every date, and its `Instant` shifts by an hour |
 | `endDate` and `count` termination, and both together | The tighter bound wins |
-| Window entirely before `startDate`, entirely after `endDate` | Empty array, no throw |
+| Window entirely before the first segment's `effectiveFrom`, entirely after `endDate` | Empty array, no throw |
 | A window of exactly 62 days and of 63 days | 62 expands; 63 is rejected upstream |
 | Occurrence overrides: `completed`, `skipped`, `snoozed`, `rescheduled` | Merge behaviour per `data-model.md` §6 step 5 |
 | `after_completion` mode | At most **one** future occurrence; never projected |
@@ -90,8 +92,13 @@ add up — which erodes trust in the whole product faster than any crash
 | `exact` splits that do not sum to the total | `ValidationError`, never a silent adjustment |
 | A negative total (refund) | Rounds toward zero, sum exact |
 | A one-cent total across three people | 1, 0, 0 in `personId` order |
-| Balance from expenses + settlements, in both directions | Sign convention per `data-model.md` §4.8 |
-| A settlement covering a subset of expenses | Only those become `settled` |
+| Balance from unsettled expense obligations, in both directions | Sign convention per `data-model.md` §4.8; settlement audit rows are never subtracted a second time |
+| Marking a selected subset of expense obligations settled | Only those contributions become zero; the stored total is computed from them |
+| A mark-settled request containing an amount, method, reference, remainder or credit | Rejected; external payment details are outside the app's model |
+| Editing or deleting an Expense with a settled obligation | `409 settlement_conflict`, blocking Settlement ids returned, and every Expense, Settlement, and Balance row byte-identical |
+| Deleting an Activity with any settled child obligation | The same `409`, no tombstone, exact distinct blocking ids; after explicit Undo, the cascade removes every Expense locator |
+| Undoing one debtor on a multi-person Expense | Only the exact debtor recorded in that Settlement's coverage reopens; every other debtor and reverse reference is unchanged |
+| Duplicate `coversExpenseIds` or an unknown settlement id | Strict validation / `404`; no inflated audit total, Scan, or partial write |
 
 ### 2.3 Style
 
@@ -160,7 +167,7 @@ Fixtures are **built per test**, never shared. See §8.
 ```ts
 const alice = aUser().build();
 const bob   = aUser().build();
-const plan  = anActivity({ ownerId: alice.userId, type: 'outing' })
+const plan  = anActivity({ ownerId: alice.userId, objectKind: 'plan', type: 'outing' })
   .scheduledOn('2026-08-08', '19:00', 'America/New_York')
   .withParticipant(bob)
   .build();
@@ -174,10 +181,13 @@ await seed(TABLE_NAME, [alice, bob, plan]);
 | --- | --- |
 | Every access pattern in `data-model.md` §5 | One test per numbered row. A pattern with no test is not implemented. |
 | **Tenant isolation** | Two seeded users; every user-scoped query for A returns zero items belonging to B. This is the test that stops the worst bug the product can have (`security-privacy.md` §1 row 4). |
-| GSI1 projection | An `ActivityIndex` item appears in the right bucket (`#S`/`#N`/`#R`) and moves buckets when scheduled or unscheduled |
+| GSI1 projection | An `ActivityIndex` item appears in the right one of the **four** buckets (`#S`/`#P`/`#N`/`#R`) and moves buckets when scheduled or unscheduled. An undated shared or non-`task` activity lands in `#P`, not `#N`, and `#P` is never returned by the agenda |
+| List membership fan-out | An index entry exists at `USER#<u>` / `LIST#<l>` for every **active** member and for nobody else; an `invited` member has none. The canonical row stays at `LIST#<l>` / `META`, so a rename is one write regardless of member count |
 | Transactions | Each row of `data-model.md` §7: all items written, or none. Assert the "none" case by forcing a condition failure. |
 | Participant fan-out | An index entry exists for the owner and for every participating app user; guests get none |
-| Occurrence writes | Completing an occurrence writes only `ACT#/OCC#<date>` and leaves `ACT#/META` byte-identical |
+| Occurrence writes | Completing an occurrence writes only `ACT#/OCC#<date>` and leaves `ACT#/META` byte-identical. An `Occurrence` carries **no** user field: completion is global and owner-only |
+| **Per-user reminders** | A partition holding `REM#` rows for two users returns both to the reminder scheduler (access pattern 4b) and **only the caller's** to the plan-detail projection (access pattern 4). Assert against the serialised response, not against a field: the other user's offset, id and existence must appear nowhere |
+| Date suggestions | The 5-per-activity cap holds under two concurrent creates; scheduling the activity deletes every `SUGG#` row; unscheduling restores none |
 | List-item scheduling | Two rows, bidirectionally linked, item **not** duplicated |
 | `schemaVersion` upgrade-on-read | A v1 item read through a v2 repository comes back upgraded and is persisted on next write |
 | Pagination | A cursor round-trips; a cursor from user A rejected for user B; `limit` respected |
@@ -228,8 +238,7 @@ deploying anything and without Docker.
 // services/api/test/routes/activities.test.ts
 import { mockClient } from 'aws-sdk-client-mock';
 import { DynamoDBDocumentClient, TransactWriteCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { app } from '../../src/app';
-import { authedHeaders } from '../helpers/auth';
+import { withUser, authedHeaders } from '../helpers/auth';
 
 const ddb = mockClient(DynamoDBDocumentClient);
 beforeEach(() => ddb.reset());
@@ -237,9 +246,10 @@ beforeEach(() => ddb.reset());
 it('creates an activity and returns 201 with the envelope', async () => {
   ddb.on(TransactWriteCommand).resolves({});
 
+  const app = withUser('usr_01JTESTTESTTESTTESTTESTTES');
   const res = await app.request('/v1/activities', {
     method: 'POST',
-    headers: authedHeaders({ userId: 'usr_01J...', idempotencyKey: 'e1c…' }),
+    headers: authedHeaders({ idempotencyKey: 'e1c…' }),
     body: JSON.stringify({ type: 'task', title: 'Call the apartment office' }),
   });
 
@@ -269,35 +279,60 @@ return the right rows". Both are needed; neither substitutes for the other.
 
 ### 4.3 The auth-context helper
 
-Route tests must not depend on Cognito or the network. The `dev-bypass` auth mode already
-exists for exactly this (`infrastructure.md` §6.2) and is guarded by `STAGE === 'local'`.
+Route tests must not depend on Cognito or the network. `AUTH_MODE` has exactly two values,
+`local` and `cognito` (`infrastructure.md` §6.2); there is **no `dev-bypass` mode and no
+`X-Dev-User` header**. A test that needs a specific user injects a stub `IdentityProvider`
+through `createApp` instead — the same capability, with nothing in the production bundle to
+guard.
 
 ```ts
 // services/api/test/helpers/auth.ts
+import { createApp } from '../../src/app';
+import type { IdentityProvider } from '../../src/middleware/identity';
+
+/** An IdentityProvider that always resolves to the given user. */
+export const stubIdentity = (userId: string): IdentityProvider => ({
+  resolve: async () => userId as UserId,
+});
+
+/** An app whose identity seam is pinned to one user. */
+export const withUser = (userId: string) =>
+  createApp({ identityProvider: stubIdentity(userId) });
+
+/** The non-identity headers a normal request carries. */
 export function authedHeaders(opts: {
-  userId?: string;
-  email?: string;
   idempotencyKey?: string;
   clientVersion?: string;
 } = {}): Record<string, string> {
-  const userId = opts.userId ?? 'usr_01JTESTTESTTESTTESTTESTTES';
   return {
     'content-type': 'application/json',
-    'x-dev-user': userId,                                   // consumed by AUTH_MODE=dev-bypass
     'x-request-id': `req_test_${randomSuffix()}`,
     'x-client-timezone': 'America/New_York',
     'x-client-version': opts.clientVersion ?? 'ios/1.0.0',
     ...(opts.idempotencyKey ? { 'idempotency-key': opts.idempotencyKey } : {}),
   };
 }
-
-/** No auth header at all — for the 401 case. */
-export const anonHeaders = (): Record<string, string> => ({ 'content-type': 'application/json' });
 ```
 
-`vitest.config.ts` for `services/api` sets `STAGE=local` and `AUTH_MODE=dev-bypass`. A
-separate unit test asserts that the bypass throws when `STAGE !== 'local'` — that test is
-the reason the bypass is safe to have.
+Cross-tenant tests build two apps — `withUser('usr_a')` and `withUser('usr_b')` — and assert that
+B's requests for A's identifiers return `404`. The default app under `AUTH_MODE=local`
+resolves every request to `usr_local_dev`, which is what the single-user happy paths use.
+
+`vitest.config.ts` for `services/api` sets `STAGE=local` and `AUTH_MODE=local`. A separate
+unit test asserts the startup guard throws when `AUTH_MODE=local` and `STAGE !== 'local'`,
+and does **not** throw for `AUTH_MODE=cognito` with `STAGE=local` — the guard is
+one-directional on purpose.
+
+The `401` case is tested against an app whose provider throws
+`AppError('unauthenticated')`, not by omitting a header:
+
+```ts
+/** No identity — for the 401 case. */
+export const appUnauthenticated = () =>
+  createApp({
+    identityProvider: { resolve: async () => { throw new AppError('unauthenticated'); } },
+  });
+```
 
 ### 4.4 What every endpoint gets
 
@@ -310,6 +345,13 @@ One test file per resource, and for **every** endpoint in `api-contract.md` §2,
 
 Creating `POST`s add a fifth: the same `Idempotency-Key` twice returns the stored response
 with `200` and writes once.
+
+Any route the authorisation matrix marks **owner-only** adds a sixth: a *participant* — who
+can see the activity — gets `403`, not `404`, **and nothing is written**. Assert the second
+half by counting the partition before and after; a handler that writes and then refuses passes
+a status-code assertion and fails this one. The four completion routes (`complete`,
+`uncomplete`, `skip`, `snooze`) are the ones this exists for
+([`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §3).
 
 ---
 
@@ -361,9 +403,9 @@ site after `deploy-dev.yml` (`infrastructure.md` §7.2), and locally against
 | Flow | Spec | Why it is E2E |
 | --- | --- | --- |
 | Sign up, verify, land on Today | `auth.spec.ts` | Crosses Cognito's hosted redirect — nothing below E2E can prove it |
-| Create an activity from the Add screen and see it on Today | `create-activity.spec.ts` | Client → API → agenda projection |
+| Choose **Task** in global Add, save it, and see it on Today | `create-activity.spec.ts` | Explicit object intent → API → agenda projection; the title never selects the kind |
 | Complete a task and undo it | `complete-undo.spec.ts` | Optimistic update, compensating call, toast |
-| Schedule a list item and confirm the item is linked, not duplicated | `list-to-plan.spec.ts` | The product's central rule (`data-model.md` §4.6) |
+| Use **Plan this item**, choose a Plan kind and audience, and confirm the item is linked, not duplicated | `list-to-plan.spec.ts` | Explicit kind/audience plus the central linkage rule (`data-model.md` §4.6) |
 | Add a guest participant and open the invite link in a fresh context | `invite-rsvp.spec.ts` | The public surface, unauthenticated |
 | Add an expense, view the balance, drill down to the lines | `expenses.spec.ts` | "No unexplained numbers" (`overview.md` §4.5) |
 | Reschedule from the time column | `reschedule.spec.ts` | U4 across the whole stack |
@@ -423,7 +465,7 @@ TestFlight submission.
 | Property | Statement |
 | --- | --- |
 | Monotonic | Output dates are strictly ascending, with no duplicates |
-| In-window | Every emitted date is within `[from, to]` and on or after `startDate` |
+| In-window | Every emitted date is within `[from, to]` and on or after its segment's `effectiveFrom` |
 | Termination | The count never exceeds `count`, and no date is after `endDate` |
 | Window composition | Expanding `[a,c]` equals expanding `[a,b]` concatenated with `[b+1,c]` |
 | Zone stability | For a timed series, the local wall-clock time is identical on every emitted date, in every IANA zone tried, across DST boundaries |
@@ -454,6 +496,7 @@ export function anActivity(overrides: Partial<Activity> = {}) {
   const base: Activity = {
     activityId: newActivityId(FIXED_SEED_TIME),
     ownerId: 'usr_01JTESTTESTTESTTESTTESTTES' as UserId,
+    objectKind: 'task',
     type: 'task',
     status: 'saved',
     title: 'Test activity',
@@ -471,6 +514,8 @@ export function anActivity(overrides: Partial<Activity> = {}) {
     build: () => structuredClone(base),
     scheduledOn: (date: string, time?: string, tz = 'America/New_York') => /* … */,
     withParticipant: (p: Person) => /* … */,
+    withReminderFor: (userId: UserId, offsetMinutes: number) => /* … */,
+    withSuggestionFrom: (userId: UserId, date: string, time?: string) => /* … */,
     recurringWeekly: (byWeekday: number[]) => /* … */,
   };
 }
@@ -481,17 +526,26 @@ Rules:
 - `build()` returns a **deep clone**. Two calls never share a reference.
 - Defaults are valid and boring. A builder that produces an invalid entity by default makes
   every test a puzzle.
+- `objectKind` is always explicit. `withParticipant` rejects `objectKind: 'task'`; tests for
+  coordinated work must deliberately build a Plan and choose one of its visible kinds.
+- `withReminderFor` and `withSuggestionFrom` build **sibling items in the activity's
+  partition**, not fields on the returned `Activity`. There is no `reminders[]` on an
+  `Activity` and there never was one to restore; a builder that adds one would reintroduce
+  the shape the model removed. Both take an explicit `userId` precisely so the two-user leak
+  tests (§3.3) are one line to set up.
 - Overrides are explicit at the call site, so a test reads as "given an activity that is
   *scheduled on Saturday with two participants*".
 - One builder per entity: `anActivity`, `aUser`, `aPerson`, `aList`, `aListItem`,
-  `anExpense`, `aSettlement`, `anAgendaItem`, `anInvite`.
+  `aListMember`, `aPersonListLink`, `anExpense`, `aSettlement`, `anAgendaItem`, `anInvite`.
 
 ### 8.2 The seed script
 
-`infra/scripts/seed-dev.ts` (and `services/api/scripts/seed.ts` for the local table) writes
+`services/api/scripts/seed-local.ts` (the local table, from Phase 1 P1-21) and
+`infra/scripts/seed-dev.ts` (the deployed dev table, from Phase 4 P4-30) write
 a founder-sized, deterministic data set: 2 users, 1 shared person plus 4 contacts, ~40
 activities spanning last week to next month, 2 recurring series with a snoozed and a skipped
-occurrence, 4 lists with items including one linked to an activity, 6 expenses producing a
+occurrence, 4 lists with items including one registered reciprocal `LLINK#` pair, one invited
+owner-only link and one caller-visible per-viewer Plan link, 6 expenses producing a
 non-zero balance in both directions, and 1 outstanding invite.
 
 It is seeded from a **fixed random seed** so screenshots and E2E assertions are stable, is

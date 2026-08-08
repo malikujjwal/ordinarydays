@@ -13,9 +13,11 @@ canonical doc wins and you raise the conflict.
 
 ### 1.1 Find your task ID
 
-Every unit of work has an ID of the form `P<phase>-<task>` — `P2-07`, `P4-11` — defined in
-`docs/03-implementation/phase-<n>.md`. You are given one. If you were not given one, stop and
-ask; do not invent one, and do not start work "to be helpful".
+Every unit of work has an ID of the form `P<phase>-<task>` — `P2-07`, `P5-11` — defined in
+`docs/03-implementation/phase-<n>.md`. **Only the ten phase files named in
+`docs/00-index.md` define task IDs**; if any other file matching `phase-*.md` exists in the
+repo, it is superseded and must not be scheduled from. You are given one. If you were not
+given one, stop and ask; do not invent one, and do not start work "to be helpful".
 
 Your task ID determines your branch (`git-workflow.md` §1.1), your commit footer, your PR
 title, and the scope you are allowed to touch.
@@ -34,12 +36,14 @@ path is relative to `docs/`.
 | **Plans, prep tasks, Lists, the Lists↔Plans bridge** | `01-product/plans-and-lists.md` · `02-architecture/data-model.md` §4.6 · `02-architecture/api-contract.md` §2.7 |
 | **Recurrence** | `02-architecture/data-model.md` §4.2, §4.5, §6 · `01-product/today-and-tasks.md` · `04-conventions/testing.md` §2.2 |
 | **People, sharing, invites, RSVP** | `01-product/sharing-and-people.md` · `02-architecture/api-contract.md` §2.4, §2.10 · `02-architecture/data-model.md` §4.7, §4.9 · `02-architecture/security-privacy.md` §1 rows 3, 13 |
+| **Date suggestions on an undated plan** | `02-architecture/data-model.md` §4.3a · `02-architecture/api-contract.md` §2.4b, §3 · `02-architecture/decisions.md` ADR-049 |
+| **Shared lists: members, roles, invites** | `01-product/plans-and-lists.md` §5.11 (behaviour) · `02-architecture/data-model.md` §3.3, §4.6 (storage) · `02-architecture/api-contract.md` §2.7, §3 |
 | **Expenses, balances, settlement** | `01-product/expenses.md` · `02-architecture/data-model.md` §4.8 · `02-architecture/api-contract.md` §2.9 · `04-conventions/coding-standards.md` §3 |
-| **An API endpoint** | `02-architecture/api-contract.md` (all) · `02-architecture/data-model.md` §5, §7 · `02-architecture/tech-stack.md` §4 · §9 below |
+| **An API endpoint** | `02-architecture/api-contract.md` (all) · `02-architecture/data-model.md` §5, §7 · `02-architecture/tech-stack.md` §4 · §7 below |
 | **A repository or a key design** | `02-architecture/data-model.md` §3, §5, §7, §9 · `04-conventions/testing.md` §3 |
 | **Auth, tokens, sessions** | `02-architecture/auth.md` · `02-architecture/security-privacy.md` §1 rows 1, 10 |
-| **Notifications, reminders** | `01-product/notifications.md` · `02-architecture/aws-services.md` · `02-architecture/infrastructure.md` §1.1 |
-| **AI capture** | `01-product/ai-capture.md` · `02-architecture/api-contract.md` §2.11 · `02-architecture/security-privacy.md` §1 row 7 |
+| **Notifications, reminders** | `01-product/notifications.md` · `02-architecture/data-model.md` §3.1, §4.3 (reminders are **per user**) · `02-architecture/api-contract.md` §2.4a · `02-architecture/aws-services.md` · `02-architecture/infrastructure.md` §1.1 · `02-architecture/security-privacy.md` §1 row 15 |
+| **AI capture** | `01-product/activities.md` §2 · `01-product/plans-and-lists.md` §2 · `01-product/ai-capture.md` · `02-architecture/api-contract.md` §2.11 · `02-architecture/security-privacy.md` §1 row 7. The caller-selected target is mandatory; capture never selects or changes it and never sets a reminder from source words. |
 | **CDK, AWS resources, deploys** | `02-architecture/infrastructure.md` · `02-architecture/aws-services.md` · `02-architecture/cost-model.md` |
 | **CI, workflows, releases** | `02-architecture/infrastructure.md` §7 · `04-conventions/git-workflow.md` |
 | **A `packages/ui` primitive** | `04-conventions/design-system.md` · `01-product/interaction-contract.md` §2, §6 |
@@ -129,7 +133,7 @@ It is a §8 trigger.
 - [ ] `pnpm --filter @od/api test:int` passes, if I touched a repository or a key.
 - [ ] `pnpm run gen:openapi` run, and the diff is committed, if I touched a schema or an
       endpoint.
-- [ ] None of the 24 rejection smells in `coding-standards.md` §11 is present.
+- [ ] None of the 25 rejection smells in `coding-standards.md` §11 is present.
 - [ ] Tests exist at the right layer, with the required cases (`testing.md` §4.4 for
       endpoints, §2.2 for recurrence and money).
 - [ ] Canonical docs updated: `data-model.md` §5 row, `api-contract.md` §2 row,
@@ -167,9 +171,18 @@ rejection. Read the whole section once; you will make one of these otherwise.
 
 ### 6.1 Creating a Plan, Meal, or Task entity
 
-There is **one** schedulable entity: `Activity`. "Plan" is the word for an Activity whose
-`schedule.date` is set. The six types are a field, not six tables
-(`data-model.md` §1, `activities.md` §1).
+There is **one** schedulable entity: `Activity`. The rule, canonical in `data-model.md` §1 and
+ADR-045:
+
+> **A Plan is an Activity with commitment or coordination. A date changes its scheduling
+> state, not its identity.**
+
+So an undated plan is a plan, not a draft of one (`plans-and-lists.md` §1), and scheduling is
+`POST /v1/activities/:id/schedule` rewriting one index entry — not a conversion, a promotion,
+or a second entity. The six stored types are a required field, not six tables
+(`data-model.md` §1, `activities.md` §1). On create, that field comes only from the explicit
+**Task** choice or the explicit Plan-kind choice; a title, parser, model or server default
+must never supply it.
 
 ```ts
 // Wrong
@@ -312,24 +325,32 @@ The required test asserts that `ACT#/META` is byte-identical before and after
 
 ### 6.8 Duplicating a list item when scheduling it
 
-Scheduling a `ListItem` creates an Activity and links the two. Two rows, one concept,
-bidirectionally linked. The item is not copied, not deleted, and not moved
-(`data-model.md` §4.6, `api-contract.md` §2.7).
+`Plan this item` first requires an explicit Plan kind and **Just me / Choose people**
+audience. Confirming creates an Activity with provenance back to the item and a
+`ListItemActivityLink` for each authorised viewer who is also a list member. The ListItem
+itself is byte-identical: it is not copied, deleted, moved, checked or given a global
+Activity id (`data-model.md` §4.6, `api-contract.md` §2.7).
 
 ```ts
 // Wrong — now there are two "Severance S2 E4"s and neither knows about the other.
-const activity = await activityService.create({ type: 'watch', title: item.title, … });
+const activity = await activityService.create({ type: inferredType, title: item.title, … });
 await listRepository.deleteItem(listId, itemId);
 
-// Right — one transaction, two pointers.
+// Right — the request already contains the user's Plan kind and audience.
 await transact([
-  putActivity({ ...draft, listItemId: item.itemId, listId }),
+  putActivity({ ...draft, objectKind: 'plan', type: selectedPlanType,
+                listItemId: item.itemId, listId }),
   putActivityIndex(ownerId, activity.activityId),
-  patchListItem(listId, item.itemId, { linkedActivityId: activity.activityId }),
+  ...viewerUserIds.map((viewerUserId) =>
+    putListItemActivityLink({ listId, itemId, viewerUserId, activityId: activity.activityId })
+  ),
 ]);
 ```
 
-Deleting either side clears the other's pointer. It never cascade-deletes.
+Another list member can plan the same item independently and cannot see this link unless
+they were explicitly selected for the Plan. Deleting the Activity removes only its matching
+viewer links. Deleting the ListItem clears Activity back-pointers but never cascade-deletes
+an Activity.
 
 ### 6.9 Auto-creating something the product says must be suggested
 
@@ -341,7 +362,7 @@ in the same interaction.
 // Wrong — all four of these.
 onMealCompleted:      await listService.addItems(groceriesListId, meal.ingredients);
 onWatchCompleted:     await activityService.create({ …nextEpisode });
-onTripPlanCreated:    await listService.create({ kind: 'packing', sourceActivityId });
+onTripPlanCreated:    await listService.create({ templateKey: 'packing', sourceActivityId });
 onCaptureParsed:      await activityService.create(parsed.fields);
 
 // Right — return a suggestion; the client renders it; the user confirms; the client calls
@@ -392,25 +413,34 @@ return c.json({ data: toActivity(item) });
 
 The endpoint test asserts `expect(body.data).not.toHaveProperty('pk')`. Add it.
 
-### 6.12 Scheduling an activity from a capture parse result
+### 6.12 Filling a chosen destination from a capture parse result
 
-The server never creates an Activity from a parse result. It returns a draft; the client
-shows the review screen; the user confirms; the client calls `POST /v1/activities`. This is a
+Before parsing begins, the user or contextual entry point has already selected `Task`, a
+specific Plan kind, or a specific List. That target is sent with the capture request and is
+immutable for the parse. The server never chooses a target, creates an Activity or adds a
+ListItem from a parse result. It returns compatible draft fields; the client shows the
+review screen; the user confirms with `Save task`, `Save plan`, or `Add to {list}`. This is a
 product rule **and** the structural defence against prompt injection
 (`api-contract.md` §2.11, `security-privacy.md` §1 row 7, `ai-capture.md`).
 
+Reminder state is outside every capture allow-list. `reminder`, `reminders`, `offsetMinutes`
+and notification actions from model output are rejected; text such as `remind me tomorrow`
+cannot change the form's Reminder control. Only that visible control or the user's explicitly
+saved default can supply a reminder.
+
 ```ts
 // Wrong — a poster that says "ignore previous instructions" now writes to the database.
-const parsed = await captureService.parse(text);
+const parsed = await captureService.parse({ text });
 const activity = await activityService.create(parsed.fields);
 return c.json({ data: activity }, 201);
 
 // Right
-const parsed = await captureService.parse(text);
-return c.json({ data: parsed });     // ParsedCapture, with per-field confidence
+const parsed = await captureService.parse({ target: input.target, text: input.text });
+return c.json({ data: parsed });     // compatible fields only, with per-field confidence
 ```
 
-The model has no tools, no credentials, and no write path. Keep it that way.
+The model has no tools, no credentials, no write path, and no ability to return a different
+object kind, Plan kind, List, participant set or sharing state. Keep it that way.
 
 ---
 
@@ -563,25 +593,34 @@ messages, and UI copy is what keeps a distributed set of agents building one pro
 | Term | Definition |
 | --- | --- |
 | **Activity** | The single stored schedulable entity. Everything a user creates is one. Carries `type`, `status`, an optional `schedule`, and a type-specific `details` sub-document. There is no other schedulable entity. |
-| **Plan** | The user-facing word for an Activity whose `schedule.date` is set. Not an entity, not a flag, not a table. |
+| **Plan** | The user-facing word for an Activity the user intends to make happen, alone or with people. **A date is not what makes it one** — an undated plan sits in Plans → Needs a date. Not an entity, not a flag, not a table. |
+| **Needs a date** | The first stage of the Plans tab, served by the `#P` GSI1 bucket: Activities with explicit `objectKind: 'plan'` and no date. Sorted by `lastActivityAt` descending. It never reaches Today, never carries a badge or a count, and is never nudged (`plans-and-lists.md` §1.3.2). |
 | **Activity type** | One of `task`, `meal`, `watch`, `event`, `outing`, `custom`. It guides which fields the form shows, which verb completion uses, and whether a checkbox renders. It never restricts what can be done. |
-| **List** | A named container for things with no committed date. One of eight `kind`s. A deliberately simple entity, separate from Activity. |
-| **ListItem** | A row in a List. May link to an Activity via `linkedActivityId` when scheduled. Never duplicated into an Activity. |
-| **Occurrence** | One dated instance of a recurring series. A row exists only for a *modified* occurrence — completed, skipped, snoozed, rescheduled. Absence means "scheduled, not yet acted on". |
+| **List** | An independent collection of things worth remembering. Carries one of three `ListBehaviour` values plus a `capabilities` record; there is no list `kind`. Separate from Activity and independent of it — a list that never produces an Activity is complete. **Shareable**, with 20 people total including the owner and pending invitations; only app users can edit. Its canonical row lives in its own `LIST#<l>` partition, never in the owner's. |
+| **List member** | A non-owner person on a shared list, stored at `LIST#<l>` / `MEMBER#<personId>` with fixed role `member`. `status` is `invited` or `active`; an invited member has no `userId`, `reciprocalPersonId` or list index entry and can read nothing. Its immutable `addedAt` is shared by the ListIndex and reciprocal `LLINK#` keys. The owner has no `MEMBER#` row: ownership is `List.ownerId` plus the owner's `ListIndex` pointer, and the API synthesises their first roster row. `memberCount` includes that owner, so pending invitations count toward the 20-person cap. |
+| **List index entry** | The `USER#<u>` / `LIST#<l>` pointer, one per **active** member. It is a near-pure pointer carrying `role` and `addedAt` and nothing else — no title, no counts — which is why renaming a shared list is one write and why the pointer's presence *is* the access check. Deliberately unlike an activity index entry, which must carry sortable display data. |
+| **List behaviour** | `collection`, `watch` or `meals`. What the *application* does differently. Exactly three; adding a fourth is a product decision. |
+| **List template** | A declarative preset — chooser label, one-line summary, editable default title, icon, behaviour, capability defaults, slot and empty-state copy — copied onto a List at creation and never re-resolved. `templateKey` remains provenance only. Unbounded; adding one is a config entry, never a code branch. |
+| **ListItem** | A row in a List. `Plan this item` leaves it unchanged; the Activity carries provenance and the List partition carries caller-scoped `ListItemActivityLink` pointers. Different members may plan the same item independently. Never duplicated into an Activity. |
+| **Occurrence** | One dated instance of a recurring series. A row exists only for a *modified* occurrence — completed, skipped, snoozed, rescheduled. Absence means "scheduled, not yet acted on". It carries **no participant identity**: completion is global, and on a plan only the owner may complete, skip or snooze (ADR-048). A prep task is a shared checklist item, so any participant of its parent may complete one (ADR-051). |
+| **Reminder** | A `REM#<userId>#<reminderId>` item in the Activity's partition, belonging to **one user**. A shared plan has one schedule and many reminder sets; nobody inherits anybody else's. `Activity` has no `reminders[]` field. Read paths filter to the caller; the reminder scheduler keeps them all and fans out per user (ADR-047). |
+| **DateSuggestion** | A `SUGG#` item proposing `{ date, time?, note? }` on an undated plan. Any participant adds one, capped at 5; others toggle themselves into `worksFor`, which is **availability, not a vote and not consent**; only the owner schedules, and every suggestion is deleted when they do. Guests cannot suggest (ADR-049). |
 | **Series** | An Activity carrying a `recurrence`. It is one row; its future occurrences are computed at read time and never materialised. |
-| **Recurrence** | The rule on a series: frequency, interval, weekdays, month days, start, end or count. Mode is `fixed` in v1; `after_completion` is Phase 8+. |
+| **Recurrence** | The rule on a series: frequency, interval, weekdays, month days, months, start, end or count. The Repeat sheet always writes explicit anchors — `byMonth` + `byMonthDay` for `yearly`, `byMonthDay` for `monthly`. Mode is `fixed` in v1; `after_completion` is Phase 9+. |
 | **Participant** | A Person attached to a specific Activity, with an `rsvp` and a `role`. Stored in the Activity's partition. Capped at 50 per Activity. |
-| **Person** | A contact in one user's own address book. Lives under that user's partition. May link to a registered user via `linkedUserId`. There is no global user directory. |
+| **Person** | A contact in one user's own address book. Lives under that user's partition and may link to a registered user via `linkedUserId`. It can arise from a manual add or an explicitly shared Plan/List; words never create it. A registered List share creates/reuses one on each side, not a global relationship or co-member graph. `PLINK#` is shared-Plan/finance projection; `LLINK#` is explicit List discovery/lifecycle projection; neither replaces the actual Activity/List access grant. |
+| **Person↔list link** | `USER#<u>` / `LLINK#<personId>#<addedAt>#<listId>`. Active reciprocal rows power `sharedListCount` and `LISTS TOGETHER`; an invited owner-side row exists only for signup and lifecycle guards. It never affects People relevance/FREQUENT/RECENT and is never accepted by `assertListAccess`. |
 | **Guest** | A Participant who is not a registered app user. Reaches the plan only through an invite link and the public projection. Gets no index entry and never appears on anyone's Today. |
 | **Invite** | A capability token (22 chars, 128 bits of entropy, not a ULID) that grants read of one Activity's public projection and the ability to set one RSVP. Expires 90 days after the plan's date. |
-| **Balance** | The cached net figure between the owner and one Person. Positive means they owe the owner. Always recomputable from the underlying Expenses and Settlements, and always drillable in the UI. |
-| **Settlement** | A record that money changed hands, naming the exact Expenses it covers. Never a bare number with no provenance. |
+| **Balance** | The cached net figure between the owner and one Person. Positive means they owe the owner. Always recomputable from Expenses and each Expense's `settledPersonIds` only; Settlement rows are audit history, never a second delta. Always drillable in the UI. |
+| **Settlement** | An audit row saying the signed-in user marked selected expense obligations settled. It names the exact Expenses and stores their server-computed total for display; it does not assert how, where or how much money moved outside the app. |
 | **Agenda** | The read-time projection that powers Today and Plans: one date window, with recurring series expanded and occurrence overrides applied. Served by `GET /v1/agenda`. Owns no data. |
 | **AgendaItem** | The trimmed per-row shape the agenda endpoint returns. Not the full Activity. Adding a field to it is a deliberate act. |
-| **Capture** | The entry step of the lifecycle: text, photo, screenshot, or link becomes a draft. Returns a `ParsedCapture` for the user to review. Never writes. Phase 7; stubbed as `501` before that. |
+| **Capture** | A field-filling step used only after the target is explicit: Task, a user-chosen Plan kind, or a specific List. Text, photo, screenshot or link becomes compatible draft fields for review. It may suggest visible date/time fields but never chooses or changes object kind, Plan kind, List, participants, sharing, or reminder/notification state, never commits a schedule, and never writes. Reminder comes only from its visible control or the user's explicitly saved default. Phase 8; stubbed as `501` before that. |
 | **Shortcut** | A reserved concept on `details.shortcutId` for `custom` activities: a saved template for something a user creates repeatedly. Modelled but not built in v1. Do not implement it. |
 | **Prep task** | An Activity of type `task` with `parentActivityId` set to a plan. Has its own schedule and completion. Nesting is capped at two levels. |
-| **Index entry** | The `USER#<u>/IDX#<a>` item that carries `GSI1` attributes and puts an Activity on a user's Today, Plans, or Inbox feed. One exists per owner and per participating app user; guests get none. |
+| **Activity index entry** | The `USER#<u>/IDX#<a>` item that carries `GSI1` attributes and puts an Activity on a user's Today, Plans, or Inbox feed. One exists per owner and per participating app user; guests get none. Distinct from a **list index entry**, above. |
+| **`lastActivityAt` vs `updatedAt`** | Two fields, never one. `lastActivityAt` is bumped by RSVP changes, posted updates and added expenses — "this plan is being discussed" — and sorts Needs a date descending. `updatedAt` is bumped only by edits to the Activity itself, because it backs the `If-Match` optimistic-concurrency header. Bumping one field for both would make somebody's RSVP fail an unrelated open edit sheet with `409`. |
 | **lexoRank** | The fractional-index string that orders ListItems, so a reorder is a single-item write rather than a renumber. Base62, ASCII-collation-ordered, generated by `lexoRankBetween`. |
 | **Wall-clock time** | A date or time with no zone attached — `YYYY-MM-DD`, `HH:mm`. What "Today" and "6 PM" mean to a user. Stored separately from the absolute instant. |
 | **Instant** | An absolute moment, ISO 8601 with an offset. Used for reminders, `.ics` export, and audit timestamps. Derived from wall-clock time plus a zone, never the other way round for scheduling logic. |

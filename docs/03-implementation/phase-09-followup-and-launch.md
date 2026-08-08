@@ -1,4 +1,4 @@
-# Phase 8 — Follow-up, personalisation and public launch
+# Phase 9 — Follow-up, personalisation and public launch
 
 ## Goal
 
@@ -7,8 +7,9 @@ next step that makes sense — update the episode, add the ingredients, review t
 and never writes anything without a tap. The app remembers what a person does repeatedly:
 favourite meals, custom-activity shortcuts, the next episode. It works on a subway, with a
 persisted cache and a mutation queue whose conflict rules are written down rather than
-emergent. It reaches into iOS properly, with a share extension that accepts a link, a
-screenshot or a photo, and a home-screen widget that shows what is next without the app
+emergent — including for a shared grocery list two people are ticking through from two
+shops, one of them with no signal. It reaches into iOS properly, with a share extension
+that accepts a link, a screenshot or a photo, and a home-screen widget that shows what is next without the app
 running. Performance and accessibility stop being aspirations and become measured numbers with
 gates. And then it ships: App Store review passed, phased release running, crash reporting
 live, alarms confirmed, and a runbook that tells one person what to do at 2 a.m.
@@ -19,11 +20,12 @@ live, alarms confirmed, and a runbook that tells one person what to do at 2 a.m.
 | --- | --- | --- |
 | 1 | Phases 0–7 complete and deployed to prod | Phases 0–7 |
 | 2 | The completion endpoints and outcome verbs work for every type | Phase 2 |
-| 3 | Watchlist items, `details.watchlistItemId`, and meal ingredients exist | Phase 3 |
-| 4 | Balances, settlements and the `Balance` cache work | Phase 6 |
+| 3 | Watch ListItems, viewer-local `LNK#` rows, Activity `listId` / `listItemId` provenance, and meal ingredients exist | Phase 3 |
+| 4 | Balances, obligation-settlement status and the `Balance` cache work | Phase 7 |
+| 4a | Shared lists ship: members, roles, the leave flow, and item writes with no `If-Match` | Phase 6. The offline tasks here are the first place a second writer meets a cached copy. |
 | 5 | TanStack Query with the persisted cache and `Idempotency-Key` on every creating `POST` | Phase 1 |
-| 6 | An Apple Developer Program membership, an App Store Connect app record, and a live privacy policy URL | Phase 4 |
-| 7 | EAS build and submit profiles, and an `expo-updates` channel per environment | Phase 4 |
+| 6 | An Apple Developer Program membership, an App Store Connect app record, and a live privacy policy URL | Phase 5 |
+| 7 | EAS build and submit profiles, and an `expo-updates` channel per environment | Phase 5 |
 
 ## Deliverables
 
@@ -33,7 +35,8 @@ live, alarms confirmed, and a runbook that tells one person what to do at 2 a.m.
 - [ ] The last two recurrence modes: completion-relative and custom `rrule`.
 - [ ] The opt-in monthly unsettled-expense reminder.
 - [ ] Offline: a specified persisted cache, a durable mutation queue, and written conflict
-      rules.
+      rules — including which shared-list mutations queue safely, which are refused, and what
+      happens when a shared list changes underneath a cached copy.
 - [ ] An iOS share extension accepting a URL, plain text or one image.
 - [ ] A home-screen widget in two sizes, reading a snapshot, never the network.
 - [ ] Performance budgets measured and gated in CI.
@@ -48,57 +51,60 @@ live, alarms confirmed, and a runbook that tells one person what to do at 2 a.m.
 
 | ID | Title | Area | Depends on | Parallel-safe | Size |
 | --- | --- | --- | --- | --- | --- |
-| P8-01 | Follow-up suggestion presentation | mobile | — | yes | M |
-| P8-02 | Watch progress increment and the next-episode suggestion | mobile/api | P8-01 | no | M |
-| P8-03 | Meal follow-up and meal favourites | mobile/api | P8-01 | no | M |
-| P8-04 | Custom-activity shortcuts | mobile/api | — | no | L |
-| P8-05 | The monthly unsettled-expense reminder | api/infra | — | yes | M |
-| P8-06 | Offline: the persisted cache and its allow-list | mobile | — | no | L |
-| P8-07 | Offline: the mutation queue | mobile | P8-06 | no | L |
-| P8-08 | Offline: conflict resolution | mobile | P8-07 | no | L |
-| P8-09 | Offline: indicators, limits and undo | mobile | P8-07 | no | M |
-| P8-10 | Offline: the upload queue | mobile | P8-07 | no | M |
-| P8-11 | The iOS share extension target | mobile | — | yes | L |
-| P8-12 | Share payload ingestion | mobile | P8-11 | no | M |
-| P8-13 | The widget target and the snapshot writer | mobile | — | yes | L |
-| P8-14 | Widget timelines, deep links and the privacy toggle | mobile | P8-13 | no | M |
-| P8-15 | Lambda power tuning and the memory decision | infra | — | yes | M |
-| P8-16 | Server performance pass: agenda, projections, round trips | api | P8-15 | no | M |
-| P8-17 | Client performance pass: lists, renders, images | mobile | — | yes | L |
-| P8-18 | Web bundle budget and route splitting | web/ci | — | yes | M |
-| P8-19 | Accessibility audit and automated checks | mobile/ci | — | no | L |
-| P8-20 | Dynamic type and AX5 layout pass | mobile | P8-19 | no | M |
-| P8-21 | Contrast, dark mode and reduce-motion pass | mobile | P8-19 | no | M |
-| P8-22 | VoiceOver labels and accessibility E2E | mobile/ci | P8-19 | no | M |
-| P8-23 | Crash and error reporting | mobile/ci | — | yes | M |
-| P8-24 | Analytics via structured logs and a query pack | api/infra | — | yes | M |
-| P8-25 | App Store Connect setup, metadata and privacy labels | ops | — | yes | M |
-| P8-26 | Screenshots, review notes and the demo account | ops | P8-25 | no | M |
-| P8-27 | The release pipeline: EAS production build and submit | ci | P8-25 | no | M |
-| P8-28 | EAS Update channel and a hotfix rehearsal | ci | P8-27 | no | M |
-| P8-29 | Phased release and a rollback rehearsal | ops | P8-27 | no | M |
-| P8-30 | The operations runbook | docs | — | yes | L |
-| P8-31 | Launch checklist execution | ops | all | no | M |
-| P8-32 | Post-launch day-1 and day-7 verification | ops | P8-31 | no | S |
-| P8-33 | Retention and maintenance job hardening | api | — | yes | M |
-| P8-34 | Completion-relative recurrence (`mode: 'after_completion'`) | shared/api | — | yes | L |
-| P8-35 | Custom recurrence via RFC 5545 `rrule` | shared/api | P8-34 | no | L |
+| P9-01 | Follow-up suggestion presentation | mobile | — | yes | M |
+| P9-02 | Watch progress increment and the next-episode suggestion | mobile/api | P9-01 | no | M |
+| P9-03 | Meal follow-up and meal favourites | mobile/api | P9-01 | no | M |
+| P9-04 | Custom-activity shortcuts | mobile/api | — | no | L |
+| P9-05 | The monthly unsettled-expense reminder | api/infra | — | yes | M |
+| P9-06 | Offline: the persisted cache and its allow-list | mobile | — | no | L |
+| P9-07 | Offline: the mutation queue | mobile | P9-06 | no | L |
+| P9-08 | Offline: conflict resolution | mobile | P9-07 | no | L |
+| P9-09 | Offline: indicators, limits and undo | mobile | P9-07 | no | M |
+| P9-10 | Offline: the upload queue | mobile | P9-07 | no | M |
+| P9-11 | The iOS share extension target | mobile | — | yes | L |
+| P9-12 | Share payload ingestion | mobile | P9-11 | no | M |
+| P9-13 | The widget target and the snapshot writer | mobile | — | yes | L |
+| P9-14 | Widget timelines, deep links and the privacy toggle | mobile | P9-13 | no | M |
+| P9-15 | Lambda power tuning and the memory decision | infra | — | yes | M |
+| P9-16 | Server performance pass: agenda, projections, round trips | api | P9-15 | no | M |
+| P9-17 | Client performance pass: lists, renders, images | mobile | — | yes | L |
+| P9-18 | Web bundle budget and route splitting | web/ci | — | yes | M |
+| P9-19 | Accessibility audit and automated checks | mobile/ci | — | no | L |
+| P9-20 | Dynamic type and AX5 layout pass | mobile | P9-19 | no | M |
+| P9-21 | Contrast, dark mode and reduce-motion pass | mobile | P9-19 | no | M |
+| P9-22 | VoiceOver labels and accessibility E2E | mobile/ci | P9-19 | no | M |
+| P9-23 | Crash and error reporting | mobile/ci | — | yes | M |
+| P9-24 | Analytics via structured logs and a query pack | api/infra | — | yes | M |
+| P9-25 | App Store Connect setup, metadata and privacy labels | ops | — | yes | M |
+| P9-26 | Screenshots, review notes and the demo account | ops | P9-25 | no | M |
+| P9-27 | The release pipeline: EAS production build and submit | ci | P9-25 | no | M |
+| P9-28 | EAS Update channel and a hotfix rehearsal | ci | P9-27 | no | M |
+| P9-29 | Phased release and a rollback rehearsal | ops | P9-27 | no | M |
+| P9-30 | The operations runbook | docs | — | yes | L |
+| P9-31 | Launch checklist execution | ops | all | no | M |
+| P9-32 | Post-launch day-1 and day-7 verification | ops | P9-31 | no | S |
+| P9-33 | Retention and maintenance job hardening | api | — | yes | M |
+| P9-34 | Completion-relative recurrence (`mode: 'after_completion'`) | shared/api | — | yes | L |
+| P9-35 | Custom recurrence via RFC 5545 `rrule` | shared/api | P9-34 | no | L |
 
 ---
 
-### P8-01 — Follow-up suggestion presentation
+### P9-01 — Follow-up suggestion presentation
 
 **What to build.** The single contextual next step in
 [`../01-product/activities.md`](../01-product/activities.md) §5.3.
 
 **Approach.** Completion returns, alongside the updated activity, a `followUp` object naming
-**at most one** suggestion. It renders inline in the same toast slot as the confirmation, is
-dismissible, is never pre-selected, and never writes on its own.
+**at most one** suggestion. Its presentation rules — one at a time, inline in the
+confirmation toast slot, dismissible, never pre-selected, never writing on its own — are the
+product-wide invariant in
+[`../01-product/interaction-contract.md`](../01-product/interaction-contract.md#1a-product-wide-invariants)
+§1a.2, not a rule local to this task.
 
 | Completed | Suggestion | On tap |
 | --- | --- | --- |
-| `watch`, a show with season and episode | `Watched S2 E4. Update progress to S2 E5?` | Updates the watchlist item, then offers `Schedule S2 E5?` as a **separate** second step |
-| `meal` with ingredients | `Add anything to Groceries?` | Opens the ingredient picker; writes only what the user selects |
+| `watch`, a show with season and episode | `{list name} · currently S2 E4 — Update to S2 E5?` | Updates that named item, then offers `Create a Plan for S2 E6?` as a **separate** second step |
+| `meal` with ingredients | `Add ingredients to a list?` | Opens the ingredient picker, then the destination sheet (P3-42); names the destination before writing only what the user selects, where they chose |
 | Any type, ≥ 1 participant and ≥ 1 expense | `Review expenses?` | Navigates. No write. |
 | Any type, ≥ 2 participants and 0 expenses | `Add an expense?` | Opens the sheet. No write until saved. |
 | A recurring occurrence | Nothing | The next occurrence already exists |
@@ -112,45 +118,62 @@ none.
 
 ---
 
-### P8-02 — Watch progress increment and the next-episode suggestion
+### P9-02 — Watch progress increment and the next-episode suggestion
 
 **What to build.** The behaviour in
 [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §8.4, without the bug
 the concept explicitly warns against.
 
-**Approach.** Completing a watch session with `outcome: 'watched'` does exactly three things
-server-side: sets the activity's completion fields; if `details.watchlistItemId` resolves,
-updates that item's season and episode to the session's values and flips `watchStatus` from
-`want` to `watching`; and returns the follow-up. Tapping `Schedule S2 E6?` opens the
-**schedule sheet** pre-filled with the next episode, the same participants, the same service
-and the same time next week — and creates nothing until the user confirms in that sheet.
+**Approach.** Completing a watch session with `outcome: 'watched'` writes the Activity's
+completion fields and returns at most one follow-up. It never updates a ListItem. When the
+Activity's `listId` / `listItemId` provenance resolves to a Watch item the owner may access,
+and the caller's `LNK#<viewer>#<itemId>` row still points to this Activity, the follow-up names
+the source list and offers `Update to S2 E5?`. Only tapping that named action
+issues the ListItem `PATCH`, copies the watched season and episode, and changes `want` to
+`watching`; its response may then offer the separate action `Create a Plan for S2 E6?`.
+
+Tapping `Create a Plan for S2 E6?` explicitly fixes the destination as **Plan**, then opens an unselected
+Plan-kind choice: **General**, **Meal**,
+**Watch**, **Event**, or **Outing**. Only after the user chooses **Watch** does the editor show
+the next episode, service, and same-time-next-week values for review. Audience is also
+unselected: the user must choose **Just me** or **Choose people**. If they choose people, the
+previous Plan's participants may appear as unchecked suggestions but are never preselected.
+Nothing is created until the user taps **Save plan**.
 
 > A code path that writes an Activity directly from the follow-up is a bug, not a shortcut.
 > An integration test asserts that completing a watch session creates exactly zero new
 > activities.
 
-For a movie, the follow-up is `Mark as watched?`, which flips the item to `watched`.
+For a movie, the follow-up is `Update {list name} item to Watched?`; only tapping it flips
+that named item to `watched`.
 
-**Tests.** Progress updates on the item and not on the series; `want → watching` is the only
-automatic status transition and is undoable; zero activities are created by completion; the
-schedule sheet is pre-filled correctly and its cancellation leaves nothing behind.
+**Tests.** Completion leaves the ListItem byte-identical. Accepting the progress follow-up
+updates only that item and is undoable; declining it writes nothing. Zero activities are
+created by completion or progress update; Plan kind and audience start unselected; no
+participant is preselected; cancellation leaves nothing behind.
 
 ---
 
-### P8-03 — Meal follow-up and meal favourites
+### P9-03 — Meal follow-up and meal favourites
 
 **What to build.** The ingredients-to-groceries follow-up, and the lightest possible
 personalisation on top of it.
 
 **Approach.** The follow-up opens the ingredient picker with every ingredient unchecked;
-`Add selected` posts to the Groceries list with `sourceActivityId` and a `sourceLabel` so the
-item reads `Chicken — Sunday dinner`.
+`Add selected` resolves the destination through the `groceries` slot rule
+([`../02-architecture/data-model.md#default-slots`](../02-architecture/data-model.md#default-slots),
+implemented in P3-12), shows it, and posts there with `sourceActivityId` and a `sourceLabel`
+so the item reads `Chicken — Sunday dinner`. There is no single "the Groceries list" to post
+to; the destination is whichever list holds the slot, and the user can change it for that one
+operation.
 
 **Favourites** are derived, not a new entity: a meal title the user has completed **three or
 more times** appears in a `FAVOURITES` group at the top of the Add → Meal title suggestions and
 at the top of the Meals list's add row, pre-filling the slot and the ingredients from the most
 recent instance. It is computed server-side from completed `meal` activities and returned by
-`GET /v1/me/suggestions?kind=meal`, cached for an hour.
+`GET /v1/me/suggestions?kind=meal`, cached for an hour. The `Meals list` here means any list
+with `behaviour: 'meals'`; where the user has several, the `meals` slot picks the one the add
+row belongs to, by the same rule.
 
 > **Decision:** favourites are a derived ordering, never a stored favourite flag and never a
 > star the user has to maintain. There is no "add to favourites" affordance, because a list a
@@ -166,24 +189,25 @@ the most recent instance; no favourite entity exists in the data model.
 
 ---
 
-### P8-04 — Custom-activity shortcuts
+### P9-04 — Custom-activity shortcuts
 
 **What to build.** Concept §30's reusable shortcuts, using the `details.shortcutId` field that
 has been in the model since Phase 1 and unwritten until now.
 
-**Approach.** A shortcut stores a title, a default time, a recurrence, participants and a
-reminder offset. It is created **from an existing activity** — the `⋯` menu on a completed or
-scheduled `custom` activity offers `Make this a shortcut` — never from a blank form, so a
-shortcut always describes something the user has actually done.
+**Approach.** A shortcut stores a title, a default time, a recurrence and a reminder offset —
+never participants or sharing. It is created **from an existing General Plan** — the `⋯` menu
+on a completed or scheduled `custom` Plan offers `Make this a shortcut` — never from a blank
+form, so a shortcut always describes something the user has actually done.
 
 Storage: `USER#<u>` / `SHORTCUT#<shortcutId>`, a new item type added to
 [`../02-architecture/data-model.md`](../02-architecture/data-model.md) §3.2 in the same pull
 request. Endpoints: `GET`/`POST`/`PATCH`/`DELETE /v1/shortcuts`. Cap: **12 per user**, which is
 more than anyone will use and small enough that the list is a `Query` with no pagination.
 
-Shortcuts appear as chips on the Add screen below the six type chips, and only once the user
-has at least one. Tapping one opens the creation form pre-filled and confirms nothing until
-Save.
+Shortcuts appear only after the user explicitly chooses **Plan**, then **General**, and only
+once the user has at least one. Tapping one opens the Plan form with its compatible fields
+visible for review; audience remains unselected and no person is preselected. It creates
+nothing until **Save plan**.
 
 > **Decision:** shortcuts are limited to `custom` activities. Extending them to the five guided
 > types would overlap with those types' own defaults and with meal favourites, and the concept
@@ -194,13 +218,14 @@ Save.
 `details.shortcutId` is left pointing at a deleted id and is treated as absent on read.
 Renaming a shortcut does not rename past activities.
 
-**Tests.** Creation from an activity copies the right fields; the cap; the chips appear only
-with ≥ 1 shortcut; a deleted shortcut leaves activities intact; a shortcut creates nothing
-until Save.
+**Tests.** Creation from a General Plan copies only the allowed fields; the cap; shortcuts
+appear only after the explicit Plan → General choices; no shortcut stores or preselects people
+or sharing; a deleted shortcut leaves activities intact; a shortcut creates nothing until
+**Save plan**.
 
 ---
 
-### P8-05 — The monthly unsettled-expense reminder
+### P9-05 — The monthly unsettled-expense reminder
 
 **What to build.** `unsettled_monthly` from
 [`../01-product/notifications.md`](../01-product/notifications.md) §7 — the one money nudge,
@@ -222,7 +247,7 @@ handling at the month boundary; no inbox entry.
 
 ---
 
-### P8-06 — Offline: the persisted cache and its allow-list
+### P9-06 — Offline: the persisted cache and its allow-list
 
 **What to build.** Exactly what survives a cold start with no network.
 
@@ -234,7 +259,8 @@ per query key**, not blanket, via the persister's `shouldDehydrateQuery` predica
 | --- | --- | --- | --- |
 | `agenda` | Yes | today − 7 to today + 30 | Today must work fully offline |
 | `activity detail` | Yes | Any opened in the last 7 days | The plan you are standing in front of |
-| `lists` index and items | Yes | All non-archived lists | A grocery list in a shop with no signal is the canonical case |
+| `lists` index and items | Yes | All non-archived lists, **shared ones included** | A shopping list in a shop with no signal is the canonical case, and it is usually the shared one |
+| `list-templates` | Yes | — | Static, and the creation sheet must work offline |
 | `me`, `notification-preferences` | Yes | — | Small, and needed to render anything |
 | `people` index | Yes | — | Small, and the picker needs it |
 | `balances`, `people/:id/balance`, `activities/:id/expenses` | **No** | — | See the decision below |
@@ -247,21 +273,54 @@ per query key**, not blanket, via the persister's `shouldDehydrateQuery` predica
 > degrades to last-known data because a stale plan title is harmless; a stale figure that
 > someone acts on is not, and it would be an unexplained number by another route.
 
+**A shared list can change underneath its cached copy, and the cache does not pretend
+otherwise.** Another member may have added, checked, reordered or deleted items since the
+copy was taken, and there is no push channel that tells the device so. What the client does
+about it:
+
+- A cached shared list renders normally. There is no warning banner, because the list being
+  slightly out of date is the ordinary condition of a shared list, online or off, and a
+  banner that is always up says nothing.
+- The list detail screen refetches on focus and on reconnect. That is the whole
+  reconciliation: **the server's copy replaces the cached one**, then the pending queue
+  reapplies on top (P9-08 rule 12).
+- A cached list the caller has been **removed** from refetches to `404`. The client drops it
+  from the index, drops its queued mutations for that list, and shows one banner reading
+  `You're no longer on "Groceries".` It does not retry, and it does not keep the rows around
+  as an orphan.
+- `memberCount` and the members list are cached with the list and are the most likely field
+  to be stale. Nothing is gated on them, so a wrong count is a cosmetic error for one
+  refetch.
+
+> **Decision — no CRDT, and no local merge of item sets.** The reconciliation is "refetch
+> wins, then replay the queue". That is honestly weaker than a convergent data type: an item
+> another member **deleted** while this device was offline reappears if this device had a
+> queued edit to it, and an item added by both members with the same title exists twice
+> (which is the canonical rule anyway — duplicates are never auto-merged). Both outcomes are
+> visible, are what the user would see if the two edits had happened a second apart online,
+> and are fixed by deleting a row. A CRDT would cost a second storage engine on the client,
+> a merge implementation the server does not share, and a class of bug that only appears on
+> two devices at once — for a household grocery list. The limits are stated here so nobody
+> discovers them and calls them a defect.
+
 Cache size is capped at **5 MB** serialised, with a throttle of 1 s between writes. On exceed,
 activity details are evicted oldest-first, then agenda days outside today ± 3. The cache is
 versioned by a `buster` string containing the app version, so an upgrade discards a cache whose
 shape changed rather than rehydrating it into new code.
 
 **Web** persists the same query cache to `localStorage` with a 2 MB cap, and persists **no**
-mutations (P8-07).
+mutations (P9-07).
 
 **Tests.** Airplane-mode cold start renders Today, Plans, Lists and a recently-opened plan; a
 balance renders the unavailable state; the cache stays under the cap with 200 activities;
-a version bump discards the cache; a capture result is never written to storage.
+a version bump discards the cache; a capture result is never written to storage. Plus: a
+cached shared list renders with no banner; a refetch returning a changed item set replaces
+the cached one and then reapplies pending mutations; a refetch returning `404` drops the
+list, drops its queued mutations and shows the removal banner exactly once.
 
 ---
 
-### P8-07 — Offline: the mutation queue
+### P9-07 — Offline: the mutation queue
 
 **What to build.** The queue in
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §5.4.
@@ -291,6 +350,36 @@ The details that make it actually work:
 - **Cap: 200 pending mutations.** Beyond it, new writes are refused with `You're offline and
   there's a lot waiting to sync.`
 
+**Which shared-list mutations are safe to queue, and which are not.** A list with one member
+has no concurrency, so this table is about shared lists; the client does not branch on
+`memberCount`, it applies the stricter rule everywhere, because a private list can become
+shared between the queue and the flush.
+
+| Mutation | Queueable | Why |
+| --- | --- | --- |
+| Check / uncheck an item | **Yes** | `checked` is **set, not toggled**, so the operation is idempotent and commutative. Two members setting `true` converge on `true` whatever order the writes land in, and a replay is a no-op. This is the one that had to be safe, because it is the whole point of an offline grocery list. |
+| Add an item | **Yes** | A create with an `Idempotency-Key`. Two members adding the same title produce two rows, which is the canonical rule — duplicates are never auto-merged — and is what would happen online. |
+| Edit an item's title, note or location | **Yes** | Last write wins on a field. No `If-Match` on item writes, by design. |
+| Delete an item | **Yes** | Idempotent. A delete of an item another member already deleted returns `404`, which rule 5 treats as success. |
+| **Reorder an item** | **No** | Not commutative. `afterItemId` is resolved against neighbours **at flush time**, so a rank computed against a list that has since changed puts the item somewhere the user did not mean, silently and with no error. |
+| Rename the list | Yes, but `If-Match` applies | List-level edits carry `If-Match` (rule 2). A `409` names the field, as for an activity. |
+| Change capabilities, behaviour or slot | Yes, `If-Match`, owner only | Destructive changes are confirmed before they are queued, so a queued one was already agreed to. |
+| Add or remove a member | **No** | Membership changes need a server round trip to resolve an address to an account or a `status`, and the sheet's per-person result is the user's feedback. The share sheet is disabled offline with `Sharing needs a connection.` |
+
+**Reordering offline.** The drag is refused, not queued: the row springs back and a toast
+reads `Reordering needs a connection.` This is the honest failure. The alternative — queue
+the reorder and resolve it at flush — produces a list whose order changed while nobody was
+looking, which is worse than not being able to drag for a minute. On a private list the same
+rule applies, because the client does not know at drag time whether the list will still be
+private at flush time.
+
+> **Decision — refuse rather than resolve.** A queued reorder could be made to work by
+> storing the computed rank rather than `afterItemId`, which would make it a plain
+> last-write-wins field edit. It is rejected because the client would then be computing
+> ranks, and the rule that the server owns ranks and the client sends `afterItemId` (P3-03)
+> is what keeps one implementation of the ordering. One offline gesture is a smaller loss
+> than a second rank generator.
+
 > **Decision — web has no mutation queue.** A browser tab is closed, not backgrounded, so a
 > queue that never flushes is worse than an error at the moment of failure. Web keeps the queue
 > in memory for the session and warns on unload when it is non-empty.
@@ -300,11 +389,18 @@ registered before rehydration (asserted by a test that rehydrates a mutation and
 a function); the idempotency key is stable across three retries; two edits to one activity
 apply in order; occurrence writes collapse; the 200 cap refuses with the specified copy.
 
+Plus one test per row of the queueable table: a check queued offline flushes and the item is
+`checked` exactly once even when the same intent is delivered twice; two devices queueing a
+check on the same item both flush without a `409` and converge; a drag offline is refused
+with the specified copy and enqueues nothing; the share sheet is disabled offline; a queued
+delete of an item another member already deleted is dropped silently under rule 5.
+
 ---
 
-### P8-08 — Offline: conflict resolution
+### P9-08 — Offline: conflict resolution
 
-**What to build.** The rules, written down, so that reconnection is predictable.
+**What to build.** The rules, written down, so that reconnection is predictable — including
+for the two objects more than one person can write to, a shared plan and a shared list.
 
 **The rules.**
 
@@ -321,8 +417,11 @@ apply in order; occurrence writes collapse; the 200 cap refuses with the specifi
    "non-overlapping edits are re-applied, overlapping ones are dropped and named", made
    precise.
 4. **State-setters are last-write-wins with no `If-Match`.** Completion, un-completion, skip,
-   snooze, RSVP change and list-item check are idempotent settings of a state, not merges.
-   Re-applying one is harmless, and a `409` on them would be noise.
+   snooze, RSVP change and **every list-item write** are idempotent settings of a state, not
+   merges. Re-applying one is harmless, and a `409` on them would be noise. `checked` in
+   particular is set, never toggled, which is what makes it survive the queue with no merge
+   logic — a toggle would flip twice on a duplicate delivery and land on the wrong value.
+   List-*level* edits — title, capabilities, behaviour, slot — are rule 2, not rule 4.
 5. **A `404` on a queued mutation is success.** The thing is already gone; drop it silently
    and count it.
 6. **A `403` is dropped and named.** The user lost permission — usually they were removed from
@@ -337,20 +436,47 @@ apply in order; occurrence writes collapse; the 200 cap refuses with the specifi
     with an expandable list naming each item and the reason.
 11. **Undo works offline.** It is a compensating local operation plus a queued call, and the
     queue's per-entity FIFO guarantees it lands after the operation it compensates.
+12. **A shared object is refetched, not merged.** On reconnect, for every shared list and
+    every shared plan with queued mutations: flush the queue, then refetch, and let the
+    server's response replace the cached copy. There is no client-side merge of item sets and
+    no CRDT (P9-06). The order matters — flushing first means the refetch already contains
+    this device's writes, so the screen does not visibly flicker back and forward.
+13. **Losing access is a drop, not a failure.** A `404` on a list route, or a `403`, means the
+    caller was removed while offline. Every queued mutation for that `listId` is discarded
+    without a per-mutation error, the list leaves the cache, and one banner names the list.
+    Rules 5 and 6 handle the individual calls; this rule stops twelve grocery items producing
+    twelve lines in the banner.
+
+**What this honestly does not do.** Stated so nobody meets it and files it as a bug:
+
+| Situation | Outcome |
+| --- | --- |
+| Another member deleted an item this device edited offline | The edit recreates nothing — the `PATCH` `404`s and is dropped (rule 5). The item stays deleted. |
+| Another member deleted an item this device **added a duplicate of** | Both exist. Duplicates are never auto-merged, online or off. |
+| Both members added the same title offline | Two rows, visible, deletable. This is the canonical rule, not a sync artefact. |
+| Another member reordered while this device was offline | This device's order is replaced by the server's on refetch. No local reorder was queued (P9-07), so nothing is lost. |
+| Two members checked the same item | Converges. This is the case that had to work and the only one the design optimises for. |
 
 **Edge cases.** A queued edit to an activity that was deleted server-side hits rule 5. A queued
 RSVP for a plan the user was removed from hits rule 6. A queued expense on a plan whose
 participants changed can fail validation at flush time (rule 9) — the banner names the expense
-and the user re-enters it, which is the honest outcome.
+and the user re-enters it, which is the honest outcome. A queued RSVP for a plan whose date
+changed while the device was offline **still applies**: it sets the participant's response
+against the current date, and the reset (Phase 6 P6-15) already moved them to `pending`, so
+the queued answer is a fresh answer to the new date rather than a stale one to the old.
 
 **Tests.** Each rule as a named test. A three-way merge test where the user changed the title
 and the server changed the time: both survive. A test where both changed the title: the
 server's wins and the banner names it. A test that the base value used is the one captured at
-edit time, not at flush time.
+edit time, not at flush time. For rule 12: a shared list with three queued checks reconnects,
+flushes, refetches, and ends with the server's item set plus all three checks applied, in one
+render pass. For rule 13: a member removed while offline with twelve queued item writes gets
+**one** banner and zero error toasts, and no request is retried. Plus one test per row of the
+"does not do" table, asserting the stated outcome rather than a better one.
 
 ---
 
-### P8-09 — Offline: indicators, limits and undo
+### P9-09 — Offline: indicators, limits and undo
 
 **What to build.** The visible surface of the above.
 
@@ -366,7 +492,7 @@ once, politely, not on every state change.
 
 ---
 
-### P8-10 — Offline: the upload queue
+### P9-10 — Offline: the upload queue
 
 **What to build.** Attachments taken offline.
 
@@ -385,7 +511,7 @@ refresh; the reaper.
 
 ---
 
-### P8-11 — The iOS share extension target
+### P9-11 — The iOS share extension target
 
 **What to build.** The iOS share sheet entry point.
 
@@ -395,13 +521,13 @@ refresh; the reaper.
 | --- | --- |
 | `public.url`, `public.plain-text`, `public.image` | Video, files, PDFs, multiple attachments |
 | Exactly one attachment per share | Batch import |
-| Hand off to the main app and open the Add screen | Any compose UI inside the extension |
+| Hand off to the main app and open Global Add with **Task**, **Plan**, and **List item** unselected | Any compose UI inside the extension |
 | ≤ 10 MB image, matching the upload cap | Saving without opening the app |
 
 > **Decision — a non-UI extension that hands off, not a compose UI.** A UI extension means a
 > second React Native runtime in a memory-constrained process, a second copy of the auth
 > state, and a second creation path to keep in sync with the Add screen. Handing the payload
-> to the main app and opening the Add screen reuses everything and takes about a second longer
+> to the main app and opening Global Add reuses everything and takes about a second longer
 > for the user. The extension's whole job is: accept, write to the App Group, open the app.
 
 **Approach.** A local Expo config plugin, `apps/mobile/plugins/withShareExtension.ts`, adds the
@@ -422,29 +548,37 @@ the request.
 same deep-link handler. A payload older than 10 minutes is discarded on read, so a stale share
 never appears days later.
 
-**Tests.** A Maestro flow sharing a URL from Safari; unit tests for the payload writer and
-reader; a test asserting the extension target requests no network entitlement and no keychain
-group.
+**Tests.** A Maestro flow sharing a URL from Safari and asserting all three Global Add choices
+start unselected; unit tests for the payload writer and reader; a test asserting the extension
+target requests no network entitlement and no keychain group.
 
 ---
 
-### P8-12 — Share payload ingestion
+### P9-12 — Share payload ingestion
 
 **What to build.** What the app does with the handed-off payload.
 
-**Approach.** The deep-link handler reads the group container, deletes the payload, and opens
-`compose` pre-filled: a URL goes into `sourceUrl` and, if capture is enabled and the user has
-seen the link privacy sheet, triggers `POST /v1/capture/link`; plain text becomes the title and
-triggers `POST /v1/capture/parse`; an image is attached and triggers
-`POST /v1/capture/extract`. With capture disabled or `501`, the payload still lands and the user
-types the details — the degraded path, again, is the same one v1 shipped.
+**Approach.** The deep-link handler reads the group container, deletes the payload, retains it
+in a local draft, and opens Global Add with **Task**, **Plan**, and **List item** all unselected.
+The payload cannot start capture yet. The user first chooses the destination; **Plan** then
+requires an unselected **General / Meal / Watch / Event / Outing** choice, and **List item**
+requires an explicit destination list. Only then may the app call `POST /v1/capture/link`,
+`POST /v1/capture/parse`, or `POST /v1/capture/extract` with that immutable
+`CreationTarget`. Capture may suggest compatible, visible fields for review, but it never
+chooses or changes the target, Plan kind, list, people, audience, sharing, or
+reminder/notification state, and it never writes. With capture disabled or `501`, the payload still lands in the same chosen form. A
+write happens only through the named final action: **Save task**, **Save plan**, or
+**Add to {list}**.
 
-**Tests.** Each payload kind; capture enabled and disabled; the payload is deleted after read;
-a stale payload is discarded.
+**Tests.** Each payload kind; all choices initially unselected; capture is never called before
+the complete `CreationTarget` exists; each capture request echoes that target; capture enabled
+and disabled; no capture response can set target, Plan kind, list, people, audience, sharing,
+or reminder/notification state; no write before the named final action; the payload is deleted after read; a stale payload is
+discarded.
 
 ---
 
-### P8-13 — The widget target and the snapshot writer
+### P9-13 — The widget target and the snapshot writer
 
 **What to build.** A home-screen widget that shows what is next.
 
@@ -477,7 +611,7 @@ snapshot test of both widget sizes at default and largest dynamic type.
 
 ---
 
-### P8-14 — Widget timelines, deep links and the privacy toggle
+### P9-14 — Widget timelines, deep links and the privacy toggle
 
 **What to build.** Keeping the widget current, and not putting a private plan on a lock screen
 without permission.
@@ -498,7 +632,7 @@ screen; the privacy toggle changes what the writer stores, not just what the wid
 
 ---
 
-### P8-15 — Lambda power tuning and the memory decision
+### P9-15 — Lambda power tuning and the memory decision
 
 **What to build.** The measurement that closes OQ-3.
 
@@ -513,7 +647,7 @@ state machine afterwards.
 
 ---
 
-### P8-16 — Server performance pass
+### P9-16 — Server performance pass
 
 **What to build.** The measured version of the budgets.
 
@@ -538,7 +672,7 @@ dev, failing the job on a budget breach.
 
 ---
 
-### P8-17 — Client performance pass
+### P9-17 — Client performance pass
 
 **What to build.** A Today screen that scrolls at 60 fps with a hundred rows on an older
 device.
@@ -565,7 +699,7 @@ scroll-performance measurement recorded in `docs/05-operations/perf/`.
 
 ---
 
-### P8-18 — Web bundle budget and route splitting
+### P9-18 — Web bundle budget and route splitting
 
 **What to build.** A web build that loads quickly on the one route strangers see.
 
@@ -586,7 +720,7 @@ per-route numbers written to the job summary.
 
 ---
 
-### P8-19 — Accessibility audit and automated checks
+### P9-19 — Accessibility audit and automated checks
 
 **What to build.** A pass over every screen against
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §6, and the
@@ -604,7 +738,7 @@ interactive element is smaller than 44 × 44.
 
 ---
 
-### P8-20 — Dynamic type and AX5 layout pass
+### P9-20 — Dynamic type and AX5 layout pass
 
 **What to build.** Layouts that survive the largest accessibility text size.
 
@@ -620,7 +754,7 @@ overflow.
 
 ---
 
-### P8-21 — Contrast, dark mode and reduce-motion pass
+### P9-21 — Contrast, dark mode and reduce-motion pass
 
 **What to build.** The colour and motion requirements, verified rather than assumed.
 
@@ -638,7 +772,7 @@ Reduce Motion disables the animation config; a review checklist item for the col
 
 ---
 
-### P8-22 — VoiceOver labels and accessibility E2E
+### P9-22 — VoiceOver labels and accessibility E2E
 
 **What to build.** The label table in
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §6.2, verified.
@@ -650,12 +784,13 @@ without swiping. State is spoken, not implied by colour. Counts are spoken in fu
 formatter.
 
 **Tests.** A table-driven test per row type; Maestro flows performed entirely through
-accessibility actions — complete a task, snooze an occurrence, RSVP, and settle up — with no
-swipe and no coordinate tap.
+accessibility actions — complete a task, snooze an occurrence, RSVP, and **Mark selected
+obligations settled** — with no swipe and no coordinate tap. The settlement action records
+status only; it never asks for or stores an external payment amount, method or reference.
 
 ---
 
-### P8-23 — Crash and error reporting
+### P9-23 — Crash and error reporting
 
 **What to build.** Enough visibility to fix what breaks on other people's phones.
 
@@ -681,7 +816,7 @@ id changes after a simulated reinstall.
 
 ---
 
-### P8-24 — Analytics via structured logs and a query pack
+### P9-24 — Analytics via structured logs and a query pack
 
 **What to build.** Answers to product questions without a tracking SDK.
 
@@ -697,7 +832,7 @@ errors — a broken query discovered during an incident is a query that does not
 
 ---
 
-### P8-25 — App Store Connect setup, metadata and privacy labels
+### P9-25 — App Store Connect setup, metadata and privacy labels
 
 **What to build.** Everything App Store Connect asks for, filled in accurately.
 
@@ -711,7 +846,7 @@ Privacy nutrition labels, exactly as in
 **data used to track you: none**; data linked to you: email address, name, other user contact
 info, user content, photos, coarse location (user-entered addresses only), financial info
 (expense amounts), device id (the Expo push token); data not linked to you: crash and
-performance diagnostics. If Phase 7 shipped, the model-provider disclosure is reflected here
+performance diagnostics. If Phase 8 shipped, the model-provider disclosure is reflected here
 and in the policy.
 
 **Tests.** A checklist in `docs/05-operations/app-store-submission.md`, walked before
@@ -719,7 +854,7 @@ submission, with each item initialled and dated.
 
 ---
 
-### P8-26 — Screenshots, review notes and the demo account
+### P9-26 — Screenshots, review notes and the demo account
 
 **What to build.** The material a reviewer needs to approve on the first attempt.
 
@@ -738,7 +873,7 @@ scheduled job before each submission.
 
 ---
 
-### P8-27 — The release pipeline: EAS production build and submit
+### P9-27 — The release pipeline: EAS production build and submit
 
 **What to build.** A repeatable release, not a laptop ritual.
 
@@ -755,7 +890,7 @@ smoke-tested on a device before the real submission.
 
 ---
 
-### P8-28 — EAS Update channel and a hotfix rehearsal
+### P9-28 — EAS Update channel and a hotfix rehearsal
 
 **What to build.** The ability to fix a JavaScript bug in minutes instead of days.
 
@@ -772,7 +907,7 @@ profile so a production build cannot receive dev updates.
 
 ---
 
-### P8-29 — Phased release and a rollback rehearsal
+### P9-29 — Phased release and a rollback rehearsal
 
 **What to build.** A launch that can be stopped.
 
@@ -794,7 +929,7 @@ the runbook.
 
 ---
 
-### P8-30 — The operations runbook
+### P9-30 — The operations runbook
 
 **What to build.** `docs/05-operations/runbook.md` — the document the founder reads at 2 a.m.
 
@@ -805,7 +940,7 @@ the runbook.
 | Contacts and access | AWS sign-in, App Store Connect, the provider console, the domain registrar, where the MFA seeds are backed up |
 | Alarm index | Every alarm, what it means, what to check first, and what to do |
 | Take the API offline | The three commands from `security-privacy.md` §9.3, with the reversal for each |
-| Roll back | The five options from P8-29 with timings |
+| Roll back | The five options from P9-29 with timings |
 | Revoke a user's tokens; revoke everyone's | §9.1, including the `min-token-issued-at` kill switch |
 | Rotate a secret | §9.2, with the ordering warning |
 | Capture kill switch | Set `/od/prod/capture/enabled=false`; expected user-visible effect; how to verify |
@@ -817,12 +952,12 @@ the runbook.
 | Cost spike | Where to look in Cost Explorer, which guardrail to tighten first |
 | Post-incident | The write-up template and where incidents live |
 
-**Tests.** Every command in the runbook is executed once against dev during P8-31 and the
+**Tests.** Every command in the runbook is executed once against dev during P9-31 and the
 output pasted in. A command in a runbook that has never been run is a guess.
 
 ---
 
-### P8-31 — Launch checklist execution
+### P9-31 — Launch checklist execution
 
 **What to build.** The gate. Every item verified, dated and initialled in
 `docs/05-operations/launch-checklist.md`.
@@ -870,7 +1005,7 @@ output pasted in. A command in a runbook that has never been run is a guess.
 
 ---
 
-### P8-32 — Post-launch day-1 and day-7 verification
+### P9-32 — Post-launch day-1 and day-7 verification
 
 **What to build.** The two checks that catch what launch day hides.
 
@@ -885,24 +1020,29 @@ estimates in `cost-model.md` §1 with the measured values**, as that document in
 
 ---
 
-### P8-33 — Retention and maintenance job hardening
+### P9-33 — Retention and maintenance job hardening
 
 **What to build.** The scheduled work that keeps the table honest, made reliable now that there
 are real users.
 
 **Approach.** The daily maintenance job gains: notification-inbox retention at 90 days;
-GSI1 archival of completed and past items after 60 days (removing the index attributes, keeping
+the 60-day GSI1 archival sweep, whose scope is **exempting past `#S` items** (decision
+locked 2026-08-07): a scheduled plan whose date has passed keeps its index attributes
+forever, because Plans → Past is a permanent surface, not a cache — the sweep's remaining
+scope is **completed and cancelled items only** (removing the index attributes, keeping
 the item); soft-deleted account purge at 30 days; orphaned `tmp/` S3 object reaping; stale
 `DELJOB#`, `LINKJOB#` and `MERGEJOB#` detection with an alarm; person counter reconciliation
-from Phase 6; and a sampled balance-divergence check over 1% of users. Each step is independent,
+from Phase 7; and a sampled balance-divergence check over 1% of users. Each step is independent,
 idempotent, logs a count, and a failure in one does not stop the others.
 
-**Tests.** Each step against a seeded table; idempotency; a failing step does not abort the
+**Tests.** Each step against a seeded table; a past `#S` plan older than 60 days is
+untouched by the sweep and still appears in Plans → Past, while a completed item of the
+same age loses its index attributes; idempotency; a failing step does not abort the
 job; the alarm fires on a stale job item.
 
 ---
 
-### P8-34 — Completion-relative recurrence
+### P9-34 — Completion-relative recurrence
 
 **What to build.** `Recurrence.mode: 'after_completion'` — "three days after I last watered
 the plants" — which the model has carried since Phase 1 and which
@@ -913,7 +1053,7 @@ to this phase.
 Repeat sheet in `apps/mobile/src/features/activities/`.
 
 **Approach.** The next occurrence is `last completion date + interval`. If the series has
-never been completed, it is `startDate`. It produces **at most one future occurrence** — a
+never been completed, it is the active segment's `effectiveFrom` (data-model §4.2). It produces **at most one future occurrence** — a
 completion-relative series is not projected forward, because the second occurrence's date
 depends on when the first is completed and inventing it would put a wrong date on the agenda.
 
@@ -927,7 +1067,7 @@ which would be a different rule.
 **Edge cases.** A completion recorded for a past date moves the next occurrence backwards,
 possibly into the past — clamp the emitted date to today rather than showing it as overdue,
 because the user has just told the app they did it. Un-completing removes the occurrence and
-the next date reverts to the previous completion or to `startDate`. Switching an existing
+the next date reverts to the previous completion or to the active segment's `effectiveFrom`. Switching an existing
 series between modes is allowed and recomputes from the same completion history. A
 completion-relative series never appears more than once in a 62-day window, which is the
 assertion that catches a regression into the `fixed` path.
@@ -939,7 +1079,7 @@ this module requires.
 
 ---
 
-### P8-35 — Custom recurrence via RFC 5545 `rrule`
+### P9-35 — Custom recurrence via RFC 5545 `rrule`
 
 **What to build.** `Recurrence.freq: 'custom'` with an `rrule` string, the last unimplemented
 member of the recurrence enum.
@@ -980,14 +1120,17 @@ between the Repeat sheet's construction and `describe.ts`'s rendering; 100% bran
 
 1. Completion presents at most one follow-up, from the documented precedence, and dismissing
    it writes nothing.
-2. Completing a watch session updates the watchlist item's progress and creates **zero**
-   activities. `Schedule S2 E6?` opens the schedule sheet and creates nothing until confirmed.
-3. `want → watching` is the only automatic status transition in the product, and it is
-   undoable.
+2. Completing a watch session leaves its source ListItem unchanged and creates **zero**
+   activities. Tapping the separately named progress action updates only that item. `Create a
+   Plan for S2 E6?` fixes only the **Plan** destination; Plan kind and audience remain
+   unselected, no participant is preselected, and nothing exists until **Save plan**.
+3. The explicit progress action may apply `want → watching`, and that item update is
+   undoable. Dismissing it writes nothing.
 4. Meal favourites are derived from three or more completions, require no curation, and add no
    entity to the data model.
-5. Custom shortcuts are created only from an existing activity, are capped at 12, apply only to
-   `custom`, and create nothing until Save.
+5. Custom shortcuts are created only from an existing General Plan, are capped at 12, appear
+   only after explicit Plan → General choices, store no people or sharing, and create nothing
+   until **Save plan**.
 6. `unsettled_monthly` is off by default, fires at most once per calendar month, lists at most
    two balances, writes no inbox entry, and is held by quiet hours.
 7. With no network and a cold start, Today, Plans, Lists and any plan opened in the last 7 days
@@ -1006,59 +1149,76 @@ between the Repeat sheet's construction and `describe.ts`'s rendering; 100% bran
 13. A queued mutation returning `404` is dropped silently; `403` and other `4xx` are dropped and
     named; `429` retries after `Retry-After`; `5xx` retries with backoff up to six attempts and
     then parks in an `Unsent changes` list the user can see.
-14. Completion, RSVP, skip, snooze and list-item check are last-write-wins with no `If-Match`.
+14. Completion, RSVP, skip, snooze and every list-item write are last-write-wins with no
+    `If-Match`. No code path writes `SET checked = NOT checked`, asserted by a grep.
 15. The 200-mutation cap refuses new writes with the specified copy, and web persists no
     mutation queue.
-16. The share extension accepts a URL, plain text or one image up to 10 MB, hands off to the
-    main app, has no compose UI, requests no keychain access, and discards a payload older than
-    10 minutes.
-17. The widget renders from an App Group snapshot, never calls the API, holds no credential,
+16. Checking an item offline flushes to exactly one `checked: true` even when the same
+    intent is delivered twice, and two devices checking the same item offline converge with
+    no `409`.
+17. Reordering a list item offline is refused with `Reordering needs a connection.`,
+    enqueues nothing, and the row springs back. The list share sheet is disabled offline.
+18. On reconnect, a shared list flushes its queue, refetches, and ends with the server's item
+    set plus every queued mutation applied — no client-side merge of item sets exists in the
+    codebase.
+19. A member removed from a shared list while offline gets **one** banner naming the list,
+    has every queued mutation for it discarded without a per-mutation error, and the list
+    leaves the cache.
+20. The share extension accepts a URL, plain text or one image up to 10 MB, hands off to Global
+    Add with **Task**, **Plan**, and **List item** unselected, has no compose UI, requests no
+    keychain access, and discards a payload older than 10 minutes. Capture waits for a complete,
+    explicit `CreationTarget`, never chooses target/type/people/sharing/reminder state, and
+    never writes.
+21. The widget renders from an App Group snapshot, never calls the API, holds no credential,
     shows `Nothing planned today` when empty, renders the empty state for a snapshot older than
     24 hours, and is cleared on sign-out.
-18. The widget's `Hide plan titles` setting changes what the **writer stores**, not just what
+22. The widget's `Hide plan titles` setting changes what the **writer stores**, not just what
     the widget renders.
-19. Lambda memory is set from a recorded power-tuning curve; OQ-3 is closed.
-20. Cold `GET /v1/agenda` ≤ 700 ms, warm server-side p95 ≤ 60 ms, init p95 ≤ 400 ms, ≤ 4
+23. Lambda memory is set from a recorded power-tuning curve; OQ-3 is closed.
+24. Cold `GET /v1/agenda` ≤ 700 ms, warm server-side p95 ≤ 60 ms, init p95 ≤ 400 ms, ≤ 4
     DynamoDB round trips per agenda request.
-21. App launch to first painted row ≤ 1.0 s warm and ≤ 2.0 s cold (S3); Today scrolls at ≥ 58
+25. App launch to first painted row ≤ 1.0 s warm and ≤ 2.0 s cold (S3); Today scrolls at ≥ 58
     fps average with 100 rows on an iPhone 11.
-22. `/invite/[token]` initial JS ≤ 120 KB gzipped; any authenticated route ≤ 350 KB; total first
+26. `/invite/[token]` initial JS ≤ 120 KB gzipped; any authenticated route ≤ 350 KB; total first
     authenticated load ≤ 900 KB; the Lambda artifact ≤ 5 MB.
-23. `axe-core` reports zero `serious` or `critical` violations on every web route.
-24. Every interactive element is at least 44 × 44 with 8 pt of separation, verified by an
+27. `axe-core` reports zero `serious` or `critical` violations on every web route.
+28. Every interactive element is at least 44 × 44 with 8 pt of separation, verified by an
     automated test.
-25. Every screen is verified at the largest accessibility text size with no clipping and no
+29. Every screen is verified at the largest accessibility text size with no clipping and no
     horizontal scrolling at 320 pt; `allowFontScaling={false}` appears nowhere.
-26. Every foreground/background pair meets 4.5:1 (3:1 for large text and control boundaries) in
+30. Every foreground/background pair meets 4.5:1 (3:1 for large text and control boundaries) in
     both light and dark themes.
-27. Colour is never the sole carrier of meaning, verified against the four documented cases.
-28. Every swipe action is reachable as an accessibility action; four Maestro flows complete
+31. Colour is never the sole carrier of meaning, verified against the four documented cases.
+32. Every swipe action is reachable as an accessibility action; four Maestro flows complete
     core journeys using only accessibility actions.
-29. Crash reporting produces symbolicated stacks with no user content in any event, and the
+33. Crash reporting produces symbolicated stacks with no user content in any event, and the
     install id does not survive a reinstall.
-30. No third-party product-analytics SDK, no advertising identifier, and no cross-reinstall
+34. No third-party product-analytics SDK, no advertising identifier, and no cross-reinstall
     identifier exists in the app.
-31. Every declared privacy label matches what the app actually collects.
-32. The launch checklist is complete, dated and initialled; every command in the runbook has
+35. Every declared privacy label matches what the app actually collects.
+36. The launch checklist is complete, dated and initialled; every command in the runbook has
     been run against dev at least once.
-33. Rollback and the OTA hotfix path are both rehearsed and timed, with the timings in the
+37. Rollback and the OTA hotfix path are both rehearsed and timed, with the timings in the
     runbook.
-34. Day-1 and day-7 reports are recorded, and `cost-model.md` §1's estimates are replaced with
+38. Day-1 and day-7 reports are recorded, and `cost-model.md` §1's estimates are replaced with
     measured values.
-35. `mode: 'after_completion'` produces **at most one** future occurrence, computed as the last
-    completion date plus the interval, or `startDate` when never completed. Un-completing
+39. `mode: 'after_completion'` produces **at most one** future occurrence, computed as the last
+    completion date plus the interval, or the active segment's `effectiveFrom` when never completed. Un-completing
     reverts it. It is described as `3 days after each time you do it`, never `Every 3 days`.
-36. `freq: 'custom'` accepts only the allow-listed RFC 5545 properties and rejects every other
+40. `freq: 'custom'` accepts only the allow-listed RFC 5545 properties and rejects every other
     one with `validation_failed`. The expansion deduplicates two occurrences of one series on
     one date rather than rendering a duplicate row.
-37. The recurrence module remains at 100% statements, branches, functions and lines after both
+41. The recurrence module remains at 100% statements, branches, functions and lines after both
     modes land.
 
 ## Out of scope for this phase
 
-| Not in Phase 8 | Why |
+| Not in Phase 9 | Why |
 | --- | --- |
 | A local-first replica: SQLite mirror, CRDTs, offline recurrence expansion | ADR-024. Offline means "read what you had, queue what you did". Reimplementing recurrence against a local store duplicates the hardest logic in the product. |
+| A convergent merge for shared lists — an OR-set of items, a client-side three-way merge of item sets, or any resolution beyond "refetch wins, then replay the queue" | ADR-024 and ADR-044. The limits of the simple rule are written into P9-08 rather than engineered around. |
+| Queued reordering of list items, and any client-side rank computation | P9-07. The server owns ranks; the client sends `afterItemId`. Reordering offline is refused, not deferred. |
+| A real-time channel for shared lists — WebSockets, polling, or a push on another member's edit | Not in v1. Refetch on focus and on reconnect is the whole reconciliation. |
 | Web push, a service worker, a browser permission prompt (OQ-8) | Only worth it if web becomes a primary surface rather than the invite surface. |
 | Android | One platform, one queue, one review process at a time. |
 | iPad-specific layouts beyond the responsive breakpoints | The `medium` and `expanded` breakpoints already work; a bespoke iPad experience is a separate project. |
@@ -1078,15 +1238,19 @@ between the Repeat sheet's construction and `describe.ts`'s rendering; 100% bran
 | 2 | **An idempotency key regenerated on retry** creates duplicates on a flaky network — the exact failure the key exists to prevent. | Generated once at `onMutate` and persisted with the variables; a test asserts stability across three retries. |
 | 3 | **Deriving a date at flush time** completes the wrong day when the queue drains overnight. | Dates are captured in the variables at `onMutate`; tested explicitly. |
 | 4 | **Serving money from a stale cache** produces an unexplained number, which the product forbids. | Balances and expenses are never persisted; offline shows an explicit unavailable state. |
-| 5 | **A conflict policy that is emergent rather than written** produces different behaviour per screen and is impossible to test. | Eleven numbered rules, each with a named test. |
-| 6 | **A UI share extension** means a second RN runtime in a memory-limited process and a second creation path to keep in sync. | Non-UI hand-off. |
-| 7 | **A widget that authenticates** needs a token in a second process and a refresh path in an extension with seconds of budget. | Snapshot file only; no network, no credential. |
-| 8 | **Lock-screen widget content** exposes plan titles to anyone holding the phone. | An explicit setting that changes what is written, not just what is rendered. |
-| 9 | **Native changes cannot be hot-fixed.** Assuming otherwise during an incident wastes the first hour. | The OTA rule is in the runbook, and the hotfix path is rehearsed before launch. |
-| 10 | **A PITR restore reintroduces deleted users' data.** | The runbook's restore procedure has the re-run-the-deletion-queue step next to the command, because it is the step that gets forgotten. |
-| 11 | **An unconfirmed SNS subscription** means every alarm goes nowhere, silently, and is only discovered during an incident. | The launch checklist tests one alarm end to end. |
-| 12 | **App Review rejections that are entirely predictable**: missing account deletion, missing Sign in with Apple, a demo account with no data, a privacy label that does not match. | Each is a checklist item with a named guideline; the demo account is seeded with a shared plan, an expense and a recurring task. |
-| 13 | **Screenshots containing real data.** | Generated from a seeded simulator with fictional content; a review step before submission. |
-| 14 | **Launching without measured performance** means the budgets are aspirations and the first bad review is the measurement. | Every budget is a CI gate or a recorded measurement before the checklist can be signed. |
-| 15 | **A crash reporter that captures user content** turns a debugging tool into a privacy incident. | `sendDefaultPii: false`, `beforeSend` scrubbing on the same list as `pino`, and a test that asserts none of the redacted values are emitted. |
-| 16 | **Post-launch drift**: the cost model, the perf budgets and the runbook are written once and never revisited. | Day-1 and day-7 reports are tasks with owners, and the cost model explicitly instructs replacing its estimates with measurements. |
+| 5 | **A conflict policy that is emergent rather than written** produces different behaviour per screen and is impossible to test. | Thirteen numbered rules, each with a named test, plus a table of what the policy honestly does not do. |
+| 6 | **A queued reorder resolves `afterItemId` against a list that changed**, so the item lands somewhere the user did not mean, silently. | Reordering is refused offline, not queued (P9-07), with copy that says why. The alternative — a client-computed rank — would put a second rank generator in the product. |
+| 7 | **`checked` is treated as a toggle in the optimistic path** even though the server sets it, so a duplicate queue delivery flips it back. | Set, never toggle, on both sides; criterion 14's grep and criterion 16's double-delivery test. |
+| 8 | **A shared list is merged locally** because "refetch wins" loses an edit in some case, and the fix grows into a half-CRDT nobody can test. | The rule is one line (rule 12), its limits are a table, and ADR-044 records the trade. A merge implementation the server does not share is a second source of truth. |
+| 9 | **Losing access to a shared list produces one error per queued mutation**, so a user removed from a grocery list sees twelve toasts. | Rule 13 drops the whole `listId` at once and emits one banner; criterion 19 counts the banners and asserts zero retries. |
+| 10 | **A UI share extension** means a second RN runtime in a memory-limited process and a second creation path to keep in sync. | Non-UI hand-off. |
+| 11 | **A widget that authenticates** needs a token in a second process and a refresh path in an extension with seconds of budget. | Snapshot file only; no network, no credential. |
+| 12 | **Lock-screen widget content** exposes plan titles to anyone holding the phone. | An explicit setting that changes what is written, not just what is rendered. |
+| 13 | **Native changes cannot be hot-fixed.** Assuming otherwise during an incident wastes the first hour. | The OTA rule is in the runbook, and the hotfix path is rehearsed before launch. |
+| 14 | **A PITR restore reintroduces deleted users' data.** | The runbook's restore procedure has the re-run-the-deletion-queue step next to the command, because it is the step that gets forgotten. |
+| 15 | **An unconfirmed SNS subscription** means every alarm goes nowhere, silently, and is only discovered during an incident. | The launch checklist tests one alarm end to end. |
+| 16 | **App Review rejections that are entirely predictable**: missing account deletion, missing Sign in with Apple, a demo account with no data, a privacy label that does not match. | Each is a checklist item with a named guideline; the demo account is seeded with a shared plan, an expense and a recurring task. |
+| 17 | **Screenshots containing real data.** | Generated from a seeded simulator with fictional content; a review step before submission. |
+| 18 | **Launching without measured performance** means the budgets are aspirations and the first bad review is the measurement. | Every budget is a CI gate or a recorded measurement before the checklist can be signed. |
+| 19 | **A crash reporter that captures user content** turns a debugging tool into a privacy incident. | `sendDefaultPii: false`, `beforeSend` scrubbing on the same list as `pino`, and a test that asserts none of the redacted values are emitted. |
+| 20 | **Post-launch drift**: the cost model, the perf budgets and the runbook are written once and never revisited. | Day-1 and day-7 reports are tasks with owners, and the cost model explicitly instructs replacing its estimates with measurements. |

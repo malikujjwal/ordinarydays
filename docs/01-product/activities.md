@@ -10,16 +10,19 @@ This document specifies what the user sees and what each control writes.
 
 ## 1. The universal Activity
 
-Everything the user creates is one Activity. A meal, a TV episode, a dentist appointment, a
-weekend trip, a reminder to call the apartment office, and a prep task hanging off a trip
-are all the same stored entity with a different `type` and a different `details`
-sub-document.
+Every Task or Plan the user creates is one Activity. A meal, a TV episode, a dentist
+appointment, a weekend trip, a reminder to call the apartment office, and a prep task
+hanging off a trip are all the same stored entity with a different `type` and a different
+`details` sub-document. A List item is deliberately different: it is a `ListItem`, never an
+Activity chosen on the user's behalf.
 
-There is no `Plan` entity and no `Meal` entity. "Plan" is the word for an Activity whose
-`schedule.date` is set. See
+There is no separate `Plan` entity and no `Meal` entity. "Plan" is the user's explicit
+creation choice, persisted on the Activity as `objectKind: 'plan'`; Task is persisted as
+`objectKind: 'task'`. A date changes scheduling state, not identity. The rule is stated once in
+[`overview.md`](overview.md#31-four-concepts-connected-where-it-is-useful) §3.1 and is canonical in
 [`../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity`](../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity).
 
-### 1.1 The six types are creation guides
+### 1.1 The six stored types are explicit creation guides
 
 | `type` | Guides creation of | Sets `details.kind` |
 | --- | --- | --- |
@@ -28,7 +31,14 @@ There is no `Plan` entity and no `Meal` entity. "Plan" is the word for an Activi
 | `watch` | A movie, show, or episode | `watch` |
 | `event` | A concert, appointment, festival, ticketed thing | `event` |
 | `outing` | A restaurant, hike, coffee, shopping trip | `outing` |
-| `custom` | Anything that does not fit the above | `custom` |
+| `custom` | **General** — a Plan that does not fit the guided kinds | `custom` |
+
+The global `+` first asks **Task**, **Plan**, or **List item**. Choosing Task fixes
+`objectKind: 'task'` and `type: 'task'`. Choosing Plan fixes `objectKind: 'plan'`, then
+requires one visible choice: **General**, **Meal**,
+**Watch**, **Event**, or **Outing**. General maps to `custom`; it is never an omitted value
+or a hidden default. The words entered afterward and any capture response cannot select or
+change either choice.
 
 The type controls three things and nothing else:
 
@@ -37,132 +47,157 @@ The type controls three things and nothing else:
 3. **Whether the row renders a checkbox** — `task` only, everywhere in the product
    (see [`today-and-tasks.md`](today-and-tasks.md) §3).
 
-The type never controls whether an Activity can be scheduled, shared, given expenses,
-given prep tasks, attached to a list item, or shown on Today. Every type supports every one
-of those. This is the "types guide, never restrict" rule from
+Within Plans, Plan kind never controls whether the Activity can be scheduled, shared, given
+expenses, given prep tasks, attached to a list item, or shown on Today. Every Plan kind
+supports those operations. Tasks are intentionally solo: they cannot gain direct participants or
+expenses; coordinated work is created as **Plan → General** or another visible Plan kind.
+This is the "types guide, never restrict" rule from
 [`overview.md`](overview.md#41-types-guide-never-restrict).
 
 ### 1.2 No category management
 
-There is no UI to add, rename, delete, colour, reorder or nest a type. A user who feels a
-type is missing chooses `custom`. `custom` is not a lesser type: it takes a title, date,
-optional time, people, reminder, repeat and notes, which is everything most activities
-need.
+There is no UI to add, rename, delete, colour, reorder or nest a type. A user whose Plan
+does not fit a guided kind explicitly chooses **General**, stored as `custom`. General is
+not a lesser kind: it takes a title, date, optional time, people, reminder, repeat and
+notes, which is everything most Plans need.
 
 ---
 
-## 2. The unified Add experience
+## 2. The explicit Add experience
 
 ### 2.1 Entry points
 
 The Add affordance is reachable from every primary screen and must never be more than one
-tap away.
+tap away. A global add always asks what to create. A contextual add states what it creates
+in its label and skips only that already-answered choice.
 
 | Surface | Affordance |
 | --- | --- |
-| Today | Floating action button, bottom-right, above the tab bar. |
-| Plans | Same FAB. Pre-fills `schedule.date` with the date currently in view. |
-| Lists (list detail) | Inline "Add item" row at the bottom of the list, plus the FAB. The inline row creates a **ListItem**, not an Activity. |
-| Plan detail | "Add prep task" in the prep-tasks section, pre-filling `parentActivityId`. |
-| Web | The FAB, plus the global keyboard shortcut `N` (§7.2). |
-| iOS share sheet | Sharing a URL or image into Ordinary Days opens the Add screen with that input pre-loaded (Phase 8, P8-11). |
+| Today | Global `+`, bottom-right, above the tab bar. Opens **Task / Plan / List item**. After a choice, today may pre-fill `schedule.date`; it never pre-selects the choice. The ANYTIME section also has contextual `+ Add a task`. |
+| Plans | Global `+`. Opens the same three choices. After Task or Plan is chosen, a date currently in view may pre-fill `schedule.date`. |
+| Lists (list detail) | Contextual `+ Add an item` at the bottom fixes **List item** and the current list as its destination. The global `+` still opens all three choices. |
+| Plan detail | Contextual `+ Add a prep task` fixes **Task** and pre-fills `parentActivityId`. |
+| Web | The global `+`, plus the global keyboard shortcut `N` (§7.2), both opening the same chooser. |
+| iOS share sheet | Holds the shared URL or image locally, then asks **Task / Plan / List item**. Plan also asks its kind; List item asks its destination. Only then does capture inspect the payload (Phase 9, P9-11). |
 
-### 2.2 The "What are you planning?" screen
+### 2.2 The global object chooser
 
-Opening Add presents one screen. It does **not** ask the user to pick a type first.
+Opening global `+` or pressing `N` presents one required, unselected choice:
 
 ```
-┌──────────────────────────────────────────┐
-│  Cancel                            Save  │
-│                                          │
-│  What are you planning?                  │
-│  ┌────────────────────────────────────┐  │
-│  │ (text input, autofocused)          │  │
-│  └────────────────────────────────────┘  │
-│                                          │
-│  [ Camera ] [ Photos ] [ Link ]          │
-│                                          │
-│  Task  Meal  Watch  Event  Outing  Custom│
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│  Cancel                              │
+│                                      │
+│  What would you like to add?         │
+│                                      │
+│  Task                              › │
+│  Plan                              › │
+│  List item                         › │
+└──────────────────────────────────────┘
 ```
 
-Behaviour:
+No row is selected, recommended, reordered from history, or bypassed by typed or shared
+content. Each row determines the stored object before capture starts:
 
-- The text field is focused and the keyboard is up on open. Typing a title and hitting Save
-  is the fastest path and must complete in under 5 seconds
-  ([`overview.md`](overview.md#7-success-criteria-for-v1) S1).
-- The six type chips are a horizontally scrollable row, always visible. Tapping one skips
-  suggestion entirely and opens that type's form (§4) with the typed text as the title.
-- **Camera / Photos / Link** are the non-text entry modes (§2.3).
-- Nothing is written to the server until the user commits. Closing the Add screen with
-  non-empty content prompts "Discard this?" with Discard / Keep editing.
+| Choice | Next required choice | Result |
+| --- | --- | --- |
+| **Task** | None | Task form; every create request sends `objectKind: 'task'`, `type: 'task'`. |
+| **Plan** | **General / Meal / Watch / Event / Outing**, with none selected | The matching Plan form sends `objectKind: 'plan'`; General sends `type: 'custom'`. |
+| **List item** | A destination list, unless a contextual list already fixed it | List-item form; its final button names that list. |
 
-> **Decision:** voice capture is listed in the concept's flow diagram but is not a v1
-> entry mode. iOS dictation on the text field covers it at zero cost. Do not build a
-> separate voice pipeline.
+General is a real, visible choice. The app must not silently use it when no Plan kind was
+selected. Back returns to the chooser without writing. Closing a non-empty form prompts
+`Discard this?` with `Discard` / `Keep editing`.
 
-### 2.3 Entry modes
+### 2.3 Contextual entry and capture modes
+
+`+ Add a task`, `+ Add an item`, and `+ Add a prep task` are explicit choices expressed by
+their entry-point labels. They open the corresponding form directly. The current list or
+parent plan is also explicit in the surrounding screen, so no destination is inferred.
+
+Once object kind — and, for a Plan, Plan kind — is fixed, the form's title field is focused
+and the keyboard is up. Text, Camera, Photos, and Link can then help fill **compatible
+fields on that form only**:
 
 | Mode | Input | What happens | Endpoint |
 | --- | --- | --- | --- |
-| **Type** | Free text in the input | On Save (or after a 600 ms pause of ≥ 8 characters, whichever is first), the text is sent for parsing and the type suggestion appears. | `POST /v1/capture/parse` |
-| **Photo** | Camera capture | Image is uploaded, then extracted. Shows an inline progress state on the Add screen. | `POST /v1/attachments/upload-url` → `POST /v1/capture/extract` |
+| **Type** | Free text | After a 600 ms pause of ≥ 8 characters, automatic capture may suggest values for visible fields. It cannot suggest a different object or Plan kind. | `POST /v1/capture/parse` |
+| **Photo** | Camera capture | Uploads, then suggests compatible visible field values. | `POST /v1/attachments/upload-url` → `POST /v1/capture/extract` |
 | **Screenshot** | Picked from the photo library | Identical to Photo. | Same as Photo |
-| **Link** | A pasted or shared URL | The URL is fetched and parsed. The URL is retained on `activity.sourceUrl` regardless of parse success. | `POST /v1/capture/link` |
-| **Pick a type** | Tap a type chip | No parsing. Straight to the form. | none |
+| **Link** | Pasted or shared URL | Suggests compatible visible fields; the URL remains in the selected object's supported source or note field. | `POST /v1/capture/link` |
 
-All three capture endpoints return `501 not_implemented` until Phase 7 — see
-[`../02-architecture/api-contract.md#211-capture--phase-7-stubbed-earlier`](../02-architecture/api-contract.md#211-capture--phase-7-stubbed-earlier)
-and [`ai-capture.md`](ai-capture.md). Until then:
+Nothing is written until the named final button is activated. Typing a person's name does
+not add a person or propose sharing; people are added only through the visible People
+picker. Typing `remind me` never sets a reminder; the separate visible Reminder control stays
+`Off` or shows the user's explicitly saved default until the user changes it. Capture never
+chooses a list destination or turns one selected object into another.
 
-- **Type mode** falls back silently: no suggestion banner appears, and the type chips
-  remain the way to proceed. The typed text becomes the title. The user is never shown an
-  error for a `501` on the type path.
-- **Photo / Screenshot / Link** modes show the fallback described in
-  [`ai-capture.md`](ai-capture.md) §6: the image is still attached and the link is still
-  retained, and the user completes the form manually.
+All three capture endpoints return `501 not_implemented` until Phase 8 — see
+[`../02-architecture/api-contract.md#211-capture--phase-8-stubbed-earlier`](../02-architecture/api-contract.md#211-capture--phase-8-stubbed-earlier)
+and [`ai-capture.md`](ai-capture.md). Until then, the selected manual form remains fully
+usable, preserving the text, image, or URL. No object or type fallback is needed because
+the user already selected both.
 
-### 2.4 How the type suggestion is presented and overridden
+> **Decision:** voice capture is listed in the concept's flow diagram but is not a v1
+> entry mode. iOS dictation on the selected form's text field covers it at zero cost. Do
+> not build a separate voice pipeline.
 
-When a parse returns, the Add screen transitions to the suggested type's form with the
-parsed fields filled in. Above the form sits a single-line suggestion banner:
+### 2.4 Assistance never owns intent
 
-```
-Watch · from what you typed                          Change
-```
+The selected object and Plan kind remain visible in the form header, for example
+`Plan · Watch`. They are not a suggestion banner. An explicit `Change` action may return to
+the relevant chooser; capture cannot invoke it.
 
 Rules:
 
-1. The suggestion banner is **never modal** and never blocks Save.
-2. Tapping **Change** reveals the six type chips inline. Selecting a different type applies
-   the type-change field-mapping rules in §6.3 to the draft, in memory, before any write.
-3. Any field the parse filled with `confidence < 0.7` is highlighted per
-   [`ai-capture.md`](ai-capture.md) §3. A highlighted field never blocks Save either; it is
-   a visual cue, not a validation error.
-4. If `suggestedType` has confidence `< 0.5`, the app does **not** pre-select a type. It
-   shows the six chips with the parsed title filled in and the banner reads
-   `Not sure what this is — pick one`.
-5. The chosen type is what is sent as `type` in `POST /v1/activities`. The server never
-   infers a type.
+1. There is no `suggestedType` presentation, type-confidence threshold, or automatic type
+   pre-selection. A returned type-like value is ignored and never rendered.
+2. Capture may fill only fields allowed by the already selected form. A field with
+   confidence `< 0.7` is highlighted per [`ai-capture.md`](ai-capture.md) §3, but never
+   blocks the form.
+3. Capture never suggests people, sharing, privacy, a list destination, another stored
+   object, a reminder/notification action, or the save action. Those remain explicit
+   controls; a saved reminder default is user-owned configuration, not text inference.
+4. Changing object or Plan kind is a separate user action. The app previews any fields that
+   would be dropped and follows §6.3; it performs no write until the new form is saved.
 
-### 2.5 Save behaviour
+### 2.5 Named write behaviour
 
-- **Save** is enabled as soon as `title` is non-empty after trimming. Every other field on
-  every type is optional.
-- Save issues one `POST /v1/activities` with an `Idempotency-Key` (a client-generated
-  UUID, regenerated only when the draft changes).
-- On success the Add screen dismisses and the app shows a confirmation toast anchored to
-  where the item landed:
+- A non-empty trimmed title enables the final action because object and Plan kind have
+  already been chosen. Every other field remains optional.
+- Final buttons name exactly what will be written:
 
-  | Draft state | Toast | Toast action |
+  | Selected object | Button | Write |
   | --- | --- | --- |
-  | Has `schedule.date` = today | `Added to Today` | `View` |
-  | Has `schedule.date` ≠ today | `Planned for Fri, 8 Aug` | `View` |
-  | No `schedule.date` | `Saved` | `Schedule` |
+  | Task | `Save task` | One `POST /v1/activities` with `objectKind: 'task'`, `type: 'task'`. |
+  | Plan | `Save plan` | One `POST /v1/activities` with `objectKind: 'plan'` and the explicitly selected Plan kind's type. |
+  | List item | `Add to <list name>` | One `POST /v1/lists/:id/items` to the list named on the button. |
 
-  The toast persists for 4 seconds and is dismissible by swipe.
-- On failure the Add screen stays open with the draft intact and an inline error banner.
-  See [`interaction-contract.md`](interaction-contract.md) §5.
+- The client always includes the selected `type`. It never omits the field and never relies
+  on a server default. Each write carries its normal idempotency key.
+- If the user explicitly enables a second-object write, the button names both writes and
+  the destination: for example `Save plan and add 3 items to Groceries`. A generic `Save`
+  button must never hide a list write.
+- On success the form dismisses and the toast names the object and destination:
+
+  | Result | Toast | Toast action |
+  | --- | --- | --- |
+  | Task dated today | `Task · added to Today` | `View` |
+  | Task dated another day | `Task · planned for Fri, 8 Aug` | `View` |
+  | Undated solo Task | `Task · saved to Anytime` | `View` |
+  | Undated Plan | `<kind> plan · saved to Needs a date` | `View` |
+  | Dated Plan | `<kind> plan · planned for Fri, 8 Aug` | `View` |
+  | Task or Plan dated a past day | `Task · logged for Tue, 4 Aug` / `<kind> plan · logged for Tue, 4 Aug` | `View` |
+  | List item | `Added to <list name>` | `View list` |
+
+  Creating with a past date is allowed and intended — it is the retro-log path. A
+  past-dated Activity lands in Plans → Past on its own date, carrying the resolution
+  prompt ([`today-and-tasks.md`](today-and-tasks.md#82-resolution-prompts) §8.2) so it can
+  be resolved on the spot.
+
+  The toast persists for 4 seconds and is dismissible by swipe. On failure the selected
+  form stays open with its draft intact and an inline error banner; see
+  [`interaction-contract.md`](interaction-contract.md) §5.
 
 ---
 
@@ -184,12 +219,13 @@ Rules that apply to every type's form.
    | Time | Only enabled when a date is set. Opens a time picker in 5-minute increments. Clearing it makes the item all-day / Anytime. |
    | End time | Only shown once a start time exists. Must be after the start time; a same-day end time before the start is a `validation_failed`. |
    | People | Opens the participant picker — see [`sharing-and-people.md`](sharing-and-people.md) §2. |
-   | Reminder | Only enabled when a date is set. Options in [`notifications.md`](notifications.md) §3. |
-   | Repeat | Only enabled when a date is set. Options in [`today-and-tasks.md`](today-and-tasks.md) §5.1. |
+   | Reminder | Only enabled when a date is set. Sets **your own** reminder and nobody else's — reminders are per person, per activity ([`notifications.md`](notifications.md#21-per-activity-reminder-control) §2.1). Options in [`notifications.md`](notifications.md) §3. |
+   | Repeat | Only enabled when a date is set. Options in [`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1, which include Daily, Weekdays, Weekly, Monthly, Yearly, Every X days and Selected weekdays. On an existing series the sheet always shows and edits the **active rule segment**; an "all future" edit appends a segment and never rewrites the segments already written ([`today-and-tasks.md`](today-and-tasks.md#62-one-row-per-series) §6.2). Ends closes the whole series, whatever its segments. `Never` on a series with recorded completions confirms first, in the §1a.1 shape, because it stops that history rendering — count, copy and the `End series` alternative per [`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1. |
    | Notes | Multi-line, max 4000 characters, no formatting. |
    | Location | Free-text label plus optional address. v1 has no map picker and no geocoding. |
 
-5. **Validation errors are inline and per-field**, shown on blur and again on Save attempt.
+5. **Validation errors are inline and per-field**, shown on blur and again when the named
+   final write action is attempted.
    They map one-to-one onto the `details[]` entries of a `validation_failed` error
    (see [`../02-architecture/api-contract.md#1-shape`](../02-architecture/api-contract.md#1-shape)).
 6. **Character limits:** `title` 1–200, `notes` 0–4000, any free-text sub-field
@@ -197,7 +233,7 @@ Rules that apply to every type's form.
 
 > **Decision:** v1 has no location autocomplete, no geocoding and no map. `location.lat`,
 > `location.lng` and `location.mapUrl` exist in the model but are only populated by capture
-> extraction (Phase 7) or by a pasted maps URL. The form collects `label` and `address` as
+> extraction (Phase 8) or by a pasted maps URL. The form collects `label` and `address` as
 > plain text.
 
 ---
@@ -215,7 +251,7 @@ Columns: **Field** (label as shown), **Control**, **Req.**, **Validation**, **De
 | Title | Single-line text | Yes | 1–200 chars after trim | Text from the Add screen | `title` |
 | Date | Date picker with quick chips | No | Valid `YYYY-MM-DD` | Today if the user came from Today's FAB; otherwise empty | `schedule.date` |
 | Time | Time picker, 5-min steps | No | `HH:mm`; requires a date | Empty | `schedule.time` |
-| Reminder | Select | No | Requires a date | User's `defaultReminderOffset` if a time is set; `Off` if all-day | `reminders[]` |
+| Reminder | Select | No | Requires a date | User's explicitly saved `defaultReminderOffset` if a time is set; otherwise `Off`. New accounts ship Off. | `reminders[]` on input → your own `REM#` item |
 | Repeat | Select → recurrence sheet | No | Requires a date | `Never` | `recurrence` |
 | Related plan | Plan picker (search over upcoming Activities) | No | Must be an Activity the user owns or participates in | Pre-filled when opened from a plan | `parentActivityId` |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
@@ -232,13 +268,15 @@ Columns: **Field** (label as shown), **Control**, **Req.**, **Validation**, **De
 | Slot | Segmented: Breakfast / Lunch / Dinner / Snack | No | One of the four | Inferred from Time if a time is set and no slot chosen: < 11:00 breakfast, < 15:00 lunch, < 17:00 snack, else dinner | `details.mealSlot` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Ingredients | Repeating rows: name + optional quantity, each with a checkbox | No | Name 1–120; max 60 rows | Empty | `details.ingredients[]` (`name`, `quantity`) |
-| Add selected ingredients to Groceries | Toggle + list picker, shown only when ≥ 1 ingredient row exists | No | Target list must be `kind: 'groceries'` | Off, target = the user's first groceries list | Post-create `POST /v1/lists/:id/items/bulk`; sets `details.ingredients[].addedToListId` |
+| Add selected ingredients to… | Toggle + destination dropdown, shown only when ≥ 1 ingredient row exists. The destination is named in the label (`Add selected ingredients to Groceries`) | No | Any list the user picks; the dropdown offers lists holding the `groceries` slot first, then the rest | Off. The destination resolves through the **`groceries` slot** by the four-step rule in [`plans-and-lists.md`](plans-and-lists.md) §5.8 — never "the first groceries list", never the most recently used one. With no eligible list the row reads `Choose or create a list`; New list opens the unselected style catalogue and returns here after the separate `Create list` action | After an existing or newly created destination is visibly confirmed, `POST /v1/lists/:id/items/bulk`; sets `details.ingredients[].addedToListId` |
 | Recipe link | Single-line URL | No | Valid absolute `http(s)` URL | Empty | `details.recipeUrl` |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
-Ingredient checkboxes default to **checked**; the "Add selected" toggle defaults to
-**off**. Nothing is written to Groceries unless the user turns the toggle on — this is the
-"suggest, never auto-create" rule. See [`plans-and-lists.md`](plans-and-lists.md) §6.
+Ingredient checkboxes default to **unchecked**; the "Add selected" toggle defaults to
+**off**. The user selects the exact ingredients to copy. Nothing is written to any list
+unless the user turns the toggle on — this is the
+"suggest, never auto-create" rule. See [`plans-and-lists.md`](plans-and-lists.md) §7.3 for
+the flow and §5.8 for how the destination is chosen.
 
 ### 4.3 Watch
 
@@ -253,10 +291,13 @@ Ingredient checkboxes default to **checked**; the "Add selected" toggle defaults
 | Time | Time picker | No | `HH:mm`; requires a date | Empty | `schedule.time` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Streaming service | Single-line text with recent-values suggestions | No | 0–120, free text | The service last used by this user | `details.service` |
-| Save to Watchlist | Toggle | No | — | **On** when there is no date; **off** when a date is set and the activity did not come from a watchlist item | Post-create `POST /v1/lists/:id/items`; sets `details.watchlistItemId` |
+| Also add to… | Toggle + destination dropdown. Once resolved, the label names both the object and list (`Also add a list item to Movies to watch`) | No | Destination must be a list whose behaviour is `watch` | **Off in every context.** The destination resolves through the **`watch` slot** by the four-step rule in [`plans-and-lists.md`](plans-and-lists.md) §5.8. It never assumes a single list named `Watchlist` exists; with none eligible the row reads `Choose or create a Watch list`. `New list` shows exactly **Watchlist / Movies to watch / TV shows** in their canonical relative order, with nothing selected; this eligibility filter follows the user's explicit Watch destination choice, never the title. `Create list` and the later `Save plan and add…` are separate confirmations | The named final action first creates the ListItem with `POST /v1/lists/:id/items`, then submits the reviewed Watch Plan through that item's `/schedule` bridge, which creates the Plan and viewer-local `LNK#<viewer>#<itemId>` pointer. The ListItem carries no global link field |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
-`details.service` is free text by design. There is no catalogue and no provider list.
+`details.service` is free text by design. There is no catalogue and no provider list. A
+Watch Plan never creates a ListItem just because it has no date. If the user turns on the
+second-object control, the final button reads, for example,
+`Save plan and add Severance to Movies to watch`.
 
 ### 4.4 Event
 
@@ -273,7 +314,7 @@ Ingredient checkboxes default to **checked**; the "Add selected" toggle defaults
 | Ticket link | Single-line URL | No | Valid absolute `http(s)` URL | Empty | `details.ticketUrl` |
 | Organiser | Single-line text | No | 0–120 | Empty | `details.organiser` |
 | Source image / link | Attachment thumbnail + URL row | No | Image ≤ 10 MB, image MIME only | Populated by photo/link capture | `attachmentIds[]`, `sourceUrl` |
-| Reminder | Select | No | Requires a date | Default offset if a time is set | `reminders[]` |
+| Reminder | Select | No | Requires a date | Explicitly saved default if set and a time exists; otherwise `Off` | `reminders[]` on input → your own `REM#` item |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
 `details.description` and `notes` are distinct: description is shown on the public invite
@@ -293,7 +334,7 @@ page, notes are private and never leave the owner's view. See
 | Reservation | Disclosure group: name, time, party size, reference | No | Party size 1–99; reservation time `HH:mm` | Reservation name = user's display name; reservation time = `schedule.time` | `details.reservation.{name,time,partySize,reference}` |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
-### 4.6 Custom
+### 4.6 General (`custom`)
 
 | Field | Control | Req. | Validation | Default | Maps to |
 | --- | --- | --- | --- | --- | --- |
@@ -301,26 +342,26 @@ page, notes are private and never leave the owner's view. See
 | Date | Date picker | No | Valid date | Empty | `schedule.date` |
 | Time | Time picker | No | `HH:mm`; requires a date | Empty | `schedule.time` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
-| Reminder | Select | No | Requires a date | Default offset if a time is set | `reminders[]` |
+| Reminder | Select | No | Requires a date | Explicitly saved default if set and a time exists; otherwise `Off` | `reminders[]` on input → your own `REM#` item |
 | Repeat | Select → recurrence sheet | No | Requires a date | `Never` | `recurrence` |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
 `details` is `{ kind: 'custom' }`. `details.shortcutId` exists in the model for a later
 personalisation feature (concept §30) and is not written in v1.
 
-### 4.7 Fields available on every type, off the creation form
+### 4.7 Fields available after creation
 
-These are reachable from the Activity detail screen for every type, regardless of what the
-creation form showed:
+Every Task and Plan can add notes, attachments, a schedule, reminders, recurrence, a
+related-list link, and prep tasks where relevant. Every **Plan kind** additionally exposes:
 
 - Participants and sharing.
-- Prep tasks (child activities).
-- Attachments.
 - Expenses (only meaningful once there are participants — see
   [`expenses.md`](expenses.md) §2.1).
-- Notes.
 - Updates feed.
-- Related lists.
+
+Tasks never expose People, sharing, or expenses. If a to-do needs coordination, the user
+creates or explicitly changes it to **Plan → General**; the app never changes it because a
+name was typed.
 
 That an Outing's creation form does not show a Reminder field does not mean an Outing
 cannot have a reminder; it means the form stays short. Add it from the detail screen.
@@ -336,8 +377,8 @@ cannot have a reminder; it means the form stays short. Add it from the detail sc
 
 | State | Meaning | How it is reached |
 | --- | --- | --- |
-| `saved` | Exists, no date committed. Lives in Anytime / the Inbox. | Created without `schedule.date`, or a date is cleared. |
-| `scheduled` | Has a date, optionally a time. **This is a Plan.** | `POST /v1/activities/:id/schedule` or created with a date. |
+| `saved` | Exists, no date committed. `objectKind: 'plan'` lives in **Plans → Needs a date**; `objectKind: 'task'` lives in Today's **Anytime** ([`plans-and-lists.md`](plans-and-lists.md) §1.2). | Created without `schedule.date`, or a date is cleared. |
+| `scheduled` | Has a date, optionally a time. It appears in Plans → Upcoming and can reach Today. | `POST /v1/activities/:id/schedule` or created with a date. |
 | `completed` | The user says it happened. | `POST /v1/activities/:id/complete` |
 | `skipped` | Deliberately not done, no guilt attached. | `POST /v1/activities/:id/skip` |
 | `cancelled` | The plan itself is off; distinct from the user personally skipping it. | `PATCH /v1/activities/:id` with `status: 'cancelled'` from the overflow menu. |
@@ -352,6 +393,17 @@ Rules:
 - `cancelled` on a shared plan notifies participants
   ([`notifications.md`](notifications.md) §7, `plan_cancelled`). `skipped` never notifies
   anyone; it is a private statement.
+- **On a shared plan, only the owner may complete, skip or snooze.** Completion is global:
+  it says *the thing happened*, not *I was there*, and the result is the same for everyone
+  on the plan
+  ([`../02-architecture/data-model.md#45-occurrence`](../02-architecture/data-model.md#45-occurrence)).
+  A participant who did not go sets their RSVP to declined; a participant who wants the plan
+  off their day leaves it
+  ([`sharing-and-people.md`](sharing-and-people.md#34-what-a-participant-can-and-cannot-change)
+  §3.4). Participants see the plan's state and no completion control — not a disabled one.
+  Per-participant completion is deferred, not forgotten. This is about the **plan**: its prep
+  tasks are shared checklist items and any participant of the plan may tick one
+  ([`plans-and-lists.md`](plans-and-lists.md#3-prep-tasks) §3).
 
 State transitions:
 
@@ -383,8 +435,8 @@ records; the label is presentation only.
 
 Notes:
 
-- "Appointment" in concept §17 is not a type. An appointment is an `event`; the concept's
-  "Done" for appointments is covered by `event` → Attended, and the row is not a checkbox.
+- "Appointment" is an example of the **Event** Plan kind, not a separate kind. Its outcome
+  is `event` → Attended, and the row is not a checkbox.
 - The secondary label appears only in the passed-plan prompt described in
   [`today-and-tasks.md`](today-and-tasks.md) §6, and in the overflow menu.
 - `didnt_happen` and `didnt_go` set `status: 'skipped'`, not `completed`. They are the
@@ -393,18 +445,27 @@ Notes:
 ### 5.3 Follow-up suggestions
 
 Completion may present exactly one contextual follow-up, inline, in the same toast slot as
-the confirmation. It is always dismissible and never pre-selected.
+the confirmation. It is always dismissible and never pre-selected. Each row below is an
+instance of the cross-object rule in
+[`interaction-contract.md`](interaction-contract.md#1a-product-wide-invariants) §1a.2, which
+owns the general statement.
 
-| Completed type | Follow-up offered | Creates on tap |
+| Completed type | Follow-up offered | Writes on tap |
 | --- | --- | --- |
-| `watch` (show, with season/episode) | `Watched S2 E4. Update progress to S2 E5?` | Updates the linked watchlist item's `details.episode`. Then offers `Schedule S2 E5?` as a second, separate step. |
-| `meal` with ingredients | `Add anything to Groceries?` | Opens the ingredient picker; writes only what the user selects. |
-| Any type with ≥ 1 participant and ≥ 1 expense | `Review expenses?` | Navigates to the plan's expense section. No write. |
-| Any type with ≥ 2 participants and 0 expenses | `Add an expense?` | Opens the add-expense sheet. No write until saved. |
+| `watch` (show, with season/episode) | `{list name} · currently S2 E4 — Update to S2 E5?` | Sets that named item's `details.season` / `details.episode` to the session's values, and `want` → `watching`. Then offers `Create a Plan for S2 E6?` as a second, separate step. |
+| `watch` (movie) | `Update {list name} item to Watched?` | Sets that named item's `watchStatus` to `watched`. |
+| `meal` with ingredients | `Add ingredients to a list?` | Opens the ingredient picker; writes only what the user selects, to the destination resolved and visibly named by [`plans-and-lists.md`](plans-and-lists.md) §5.8. |
+| Any Plan kind explicitly created from a list item, where completing it is evidence about that item | `Mark {item title} visited in {list name}?` | On tap, sets that named item's `checked` when the list is `checkable` ([`plans-and-lists.md`](plans-and-lists.md) §5.10). Completion alone leaves the item unchanged. |
+| Any Plan with ≥ 1 participant and ≥ 1 expense | `Review expenses?` | Navigates to the plan's expense section. No write. |
+| Any Plan with ≥ 2 participants and 0 expenses | `Add an expense?` | Opens the add-expense sheet. No write until saved. |
+| Any Plan with ≥ 1 incomplete prep task | `2 prep tasks are still open — keep them?` with `Keep` · `Complete all` · `Delete` — the count is the real number of open prep children | Completing the plan itself leaves the prep tasks untouched, consistent with the parent-deletion rule ([`today-and-tasks.md`](today-and-tasks.md#55-related-plan) §5.5). `Keep` — and dismissing — writes nothing. `Complete all` completes each open prep child. `Delete` deletes them. Every option is an explicit tap. |
 | Recurring occurrence | Nothing. The next occurrence already exists by definition. | — |
 
-No follow-up ever writes without the tap. See
-[`overview.md`](overview.md#44-suggest-never-auto-create).
+When the prep-task row and another row both apply, the prep-task question is the one
+follow-up shown: it is the only one about live to-dos left behind.
+
+No follow-up ever writes without the tap, and completion itself writes nothing outside the
+Activity. See [`overview.md`](overview.md#44-suggest-never-auto-create).
 
 ---
 
@@ -430,32 +491,59 @@ No follow-up ever writes without the tap. See
 
 - Tapping the date or time anywhere in the product opens the reschedule sheet. It never
   edits in place on the row.
-- Clearing the date on an activity with participants warns:
-  `Removing the date un-plans this for everyone. Continue?`
+- Clearing the date on an activity with participants warns, per
+  [`interaction-contract.md`](interaction-contract.md#1a1-additive-changes-happen-immediately-destructive-changes-explain-what-will-be-lost)
+  §1a.1: `This takes it off everyone's day and moves it back to Needs a date.` with
+  `Keeps: the plan, everyone on it, and their replies.` and a `Remove the date` button. The
+  plan is still a plan; it no longer has a day (§1.2 of
+  [`plans-and-lists.md`](plans-and-lists.md#12-where-an-explicitly-chosen-object-with-no-date-appears)).
 - Rescheduling a **recurring series** presents a two-option sheet: `This occurrence only` /
-  `All future occurrences`. The first writes an `Occurrence` with `overrideTime`; the
-  second patches `recurrence`. There is no "all occurrences including past" option.
+  `All future occurrences`. The first writes an `Occurrence` with `overrideTime` and/or
+  `overrideDate` and never touches the series — a single occurrence can move to another
+  day, where it is emitted on its override date with a `moved from` affix
+  ([`today-and-tasks.md`](today-and-tasks.md#63-occurrence-semantics) §6.3). The second **appends a rule segment** to `recurrence`, effective from
+  the edited occurrence's date — or from today, when the sheet was opened from the series'
+  detail screen outside any occurrence context. Past segments and past occurrences are
+  untouched, so history keeps rendering as it happened
+  ([`today-and-tasks.md`](today-and-tasks.md#62-one-row-per-series) §6.2). At the
+  20-segment cap the write returns `validation_failed`; the sheet explains it and suggests
+  ending the series and starting a new one. There is no "all occurrences including past"
+  option.
 
-### 6.3 Changing an activity's type
+### 6.3 Changing object or Plan kind
 
-Type is mutable — see the rule in
+`objectKind` changes only through an explicit conversion action. A Plan's `type` is mutable
+among General (`custom`), Meal, Watch, Event, and Outing — see the rule in
 [`../02-architecture/data-model.md#41-activity`](../02-architecture/data-model.md#41-activity):
 "Changing type keeps `details` fields that still apply and drops the rest (log what was
 dropped)."
 
 The user-facing contract:
 
-1. Changing type is done from the detail screen's overflow menu → `Change type`, or inline
-   on the Add screen before the first save.
-2. Fields on `Activity` itself — `title`, `notes`, `schedule`, `recurrence`, `reminders`,
-   `location`, participants, expenses, attachments, prep tasks, list links — are **never**
-   lost when the type changes.
-3. Fields on `details` are mapped where a same-meaning field exists, and otherwise dropped.
+1. The detail overflow offers `Change Plan kind` on a Plan, `Change to Plan` on a Task, and
+   `Change to Task` on a Plan. Before first save, `Change` returns to the chooser because no
+   object exists yet. Text, AI, adding a date, and adding or removing fields never invoke a
+   conversion.
+2. **Task → Plan** opens the unselected **General / Meal / Watch / Event / Outing** chooser.
+   The user must choose one; General is not assumed. Common fields are preserved, then the
+   selected Plan form opens for review. No write occurs until `Save changes`.
+3. **Plan → Task** is available only when the Plan has zero participants, zero expenses,
+   and zero prep children. Otherwise the action is blocked and names exactly what must be
+   removed first, for example `Remove 2 people and 1 expense before changing this to a
+   Task.` Each count links to that section. The conversion never deletes coordinated data
+   as a side effect.
+4. Common fields on `Activity` — `title`, `notes`, `schedule`, `recurrence`, `location`,
+   attachments, reminders, and viewer-local list pointers — are preserved. Plan-specific
+   `details` fields are mapped where a same-meaning field exists and otherwise require the
+   loss preview below. Reminders are separate per-user items, not a
+   field on the Activity
+   ([`../02-architecture/data-model.md#43-reminder`](../02-architecture/data-model.md#43-reminder)).
+5. Fields on `details` are mapped where a same-meaning field exists, and otherwise dropped.
    The mapping table is exhaustive:
 
    | From → To | Carried over | Dropped |
    | --- | --- | --- |
-   | `watch` → any | — | `mediaTitle`, `mediaKind`, `season`, `episode`, `episodeTitle`, `service`. `watchlistItemId` is unlinked (the watchlist item's `linkedActivityId` is cleared, the item is **not** deleted). |
+   | `watch` → any | — | `mediaTitle`, `mediaKind`, `season`, `episode`, `episodeTitle`, `service`. Any viewer-local `LNK#` pointer remains; changing Plan kind never mutates the source ListItem. |
    | `meal` → any | — | `mealSlot`, `recipeUrl`. `ingredients[]` is dropped, but any grocery items already created from it keep their `sourceActivityId` and their provenance label. |
    | `event` → `outing` | `description` → `notes` (appended, separated by a blank line, if `notes` is non-empty) | `priceCents`, `currency`, `ticketUrl`, `organiser` |
    | `event` → any other | `description` → `notes` (same append rule) | `priceCents`, `currency`, `ticketUrl`, `organiser` |
@@ -463,14 +551,21 @@ The user-facing contract:
    | `outing` → any other | Same as above | `reservation` object |
    | any → `watch` | `title` → `details.mediaTitle` | — |
    | any → `outing` | `title` → `details.placeName` | — |
-   | `task` ↔ `custom` | Everything (both have empty or near-empty `details`) | — |
-   | any → `task` / `custom` | — | The whole source `details` payload beyond the mappings above |
+   | Task → any Plan kind | All common Activity fields | No Task-specific details exist |
+   | any Plan kind → Task | All common Activity fields | The source `details` payload beyond mappings above |
+   | any Plan kind → `custom` (General) | — | The whole source `details` payload beyond the mappings above |
 
-4. **Before** the change is applied, the client shows a confirmation listing exactly what
-   will be lost, by label:
+6. **Before** a lossy kind change or allowed Plan → Task conversion is applied, the client
+   shows the confirmation required by the
+   product-wide additive/destructive rule
+   ([`interaction-contract.md`](interaction-contract.md#1a-product-wide-invariants) §1a.1).
+   That section owns the shape — the object named, the fields listed by their user-facing
+   labels, the count of affected records, the `Keeps:` line, `Cancel` first, and the verb
+   repeated on the destructive button. A type change is one instance of it, and the fields
+   it names come from the mapping table in point 5:
 
    ```
-   Change Watch → Task?
+   Change Watch → Outing?
 
    This will remove:
      Season and episode (S2 E4)
@@ -479,26 +574,77 @@ The user-facing contract:
    Keeps: title, date, time, people, notes, reminders.
    ```
 
-   If nothing would be dropped, no confirmation is shown.
-5. The server logs the dropped payload at `info` with the `activityId`, the old type and
+   A type change affects exactly one record, so the count is carried by the object name
+   rather than stated separately. If nothing would be dropped, the change is additive and no
+   confirmation is shown at all.
+7. The server logs the dropped payload at `info` with the `activityId`, the old type and
    the old `details` object, so a support request can recover it from CloudWatch within the
    retention window. It is not restorable through the UI.
-6. Changing type does **not** change `status`, `completedAt`, or `outcome`. An `event` that
+8. An explicit Task → Plan write sets `objectKind: 'plan'` and the chosen Plan `type`; an
+   allowed Plan → Task write sets `objectKind: 'task'`, `type: 'task'`. A Plan-kind-only
+   change leaves `objectKind` unchanged. No conversion changes `status`, `completedAt`, or
+   `outcome`. An `event` that
    was `attended` and is changed to `outing` stays completed with `outcome: 'attended'`,
    and the detail screen renders the historical verb.
 
 ### 6.4 Deleting
 
-- Delete is owner-only, in the overflow menu, and always confirms:
-  `Delete "<title>"? This can't be undone.` with Delete / Cancel.
-- For a shared activity the confirmation adds:
+- Delete is owner-only, in the overflow menu, and always confirms, in the §1a.1 shape
+  ([`interaction-contract.md`](interaction-contract.md#1a-product-wide-invariants)). The
+  base confirmation names what is removed, with real counts wherever counts exist — notes,
+  attachments, reminders, occurrences — and carries a `Keeps:` line whenever anything
+  survives:
+
+  ```
+  Delete "Paris weekend"?
+
+  This removes: the plan, its notes, 3 attachments and 2 reminders.
+
+  Keeps: its 2 prep tasks, which become ordinary tasks.
+
+                                        [ Cancel ]  [ Delete plan ]
+  ```
+
+  A line with nothing to name is omitted, and the destructive button repeats the verb
+  (`Delete task` / `Delete plan`). A bare `Delete "<title>"? This can't be undone.` with
+  no `This removes:` line is a §1a.1 defect — it was exactly this dialog's old copy.
+- For a shared Plan the confirmation adds:
   `<n> people will lose access to this plan.`
-- For a recurring series the confirmation asks `This occurrence` / `Whole series`. The
-  first writes a `skipped` occurrence; the second deletes the Activity.
+- Where a viewer-local `LNK#` pointer exists, the confirmation says what survives:
+  `The item stays on "Restaurants to try".`
+- If any Expense on the Activity has a settled obligation, Delete is blocked before the
+  confirmation with `Undo settlement before deleting this plan`, linking to every blocking
+  Settlement. Deletion never silently discards settled Expense state or its audit history.
+- For a recurring series, Delete opens a sheet with three options, in this order:
+  `This occurrence` · `End series` · `Delete whole series`.
+  - `This occurrence` writes a `skipped` occurrence. The series is untouched.
+  - `End series` is the primary, gentler affordance: it sets the series' end to today
+    (`recurrence.endDate`, through the normal `PATCH`), so no further occurrences are
+    emitted. The Activity row, every rule segment, and every past occurrence are kept —
+    nothing stored is removed, so there is no confirmation; it applies immediately with
+    the standard 6-second undo, which clears the end date again.
+  - `Delete whole series` is the destructive option, styled as such and listed last. Its
+    confirmation follows the §1a.1 shape and must name the history destroyed, with the
+    real count of stored past completions (the series' `Occurrence` rows with
+    `status: 'completed'`, counted before the dialog renders):
+
+    ```
+    Delete "Gym"?
+
+    This removes: the series and its 40 past completions.
+
+                                      [ Cancel ]  [ Delete series ]
+    ```
+
+    A series with no recorded completions names `the series` alone. The `Keeps:` line
+    appears whenever anything survives — prep tasks or a viewer-local `LNK#` pointer, per
+    the surrounding bullets. A dialog that says only `This can't be undone.` here is a
+    defect: it hides exactly the loss this copy exists to name.
 - Deletion cascades per
   [`../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items`](../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items).
-  A linked ListItem is **not** deleted; its `linkedActivityId` is cleared and it returns to
-  looking like an ordinary unscheduled list item.
+  Any viewer-local `LNK#` pointers to the Plan are deleted. The source ListItem is
+  byte-identical and survives. After all settlement guards are clear, every Expense locator
+  is removed with its Expense row.
 - Delete has no undo. Completion does — see
   [`interaction-contract.md`](interaction-contract.md) §4.
 
@@ -511,15 +657,23 @@ The user-facing contract:
 | Behaviour | Rule |
 | --- | --- |
 | Inline add on Today | The Anytime section has a persistent `+ Add a task` row at its foot. Typing a title and pressing Return creates a `task` with today's date and no time, and immediately re-focuses the input so several can be entered in a row. |
-| Inline add on a list | The list detail's `+ Add item` row creates a `ListItem`, never an Activity. Return commits and re-focuses. |
-| Inline add of a prep task | Same behaviour inside a plan's prep-tasks section, creating a `task` with `parentActivityId` set. |
-| Add from Today's FAB | Pre-fills `schedule.date` = today. |
-| Add from Plans on a date | Pre-fills `schedule.date` = the date in view. |
-| Repeat-last-type | The Add screen remembers the last type the user explicitly chose via a chip and shows that chip first in the row. It does **not** pre-select it. |
-| Duplicate | `POST /v1/activities/:id/duplicate` copies title, type, details, location, notes and reminders. It does **not** copy schedule, participants, expenses, attachments or completion state, and the copy opens in the edit state with the title suffixed ` (copy)`. |
+| Inline add on a list | The list detail's `+ Add an item` row creates a `ListItem` in that list, never an Activity. Return commits with the accessible action `Add to <list name>` and re-focuses. |
+| Inline add of a prep task | The plan's `+ Add a prep task` row creates a `task` with `parentActivityId` set. |
+| Global `+` from Today | Opens **Task / Plan / List item**. After the user chooses Task or Plan, the form may pre-fill `schedule.date` = today. |
+| Global `+` from Plans on a date | Opens the same chooser. After Task or Plan is chosen, the form may pre-fill the date in view. |
+| Remembered choices | Object and Plan-kind choices always appear in the fixed documented order, unselected. Last-used values never reorder, pre-select, or bypass them. |
+| Duplicate | `POST /v1/activities/:id/duplicate` copies `objectKind`, title, type, details, location and notes. It does **not** copy schedule, reminders, participants, expenses, attachments, prep children, generated or attached lists, or completion state. The copy opens in the edit state with the title suffixed ` (copy)`. |
 
 > **Decision:** duplicate deliberately drops participants. Re-inviting people is a
 > deliberate act; silently re-inviting on duplicate would send unexpected notifications.
+
+> **Decision — duplicate also drops reminders, prep children and lists (2026-08-07).** A
+> reminder is an offset from a schedule, and the copy has no schedule: the old text copied
+> "your own reminders" into a dateless state the UI itself forbids (Reminder requires a
+> date, §4.1). Prep children and generated or attached lists are likewise not copied —
+> they are structure, not content, and copying them would quietly multiply real to-dos and
+> list rows, which is auto-creation by another name. Set a date on the copy and a reminder
+> is one visible control away.
 
 ### 7.2 Keyboard and web affordances
 
@@ -529,16 +683,17 @@ React Native Web builds share one codebase, so these are web-only behaviours gua
 
 | Key | Context | Action |
 | --- | --- | --- |
-| `N` | Anywhere outside a text field | Open Add |
+| `N` | Anywhere outside a text field | Open the global **Task / Plan / List item** chooser |
 | `T` / `P` / `L` | Anywhere outside a text field | Go to Today / Plans / Lists |
-| `Return` | Add screen, title focused | Save (if title non-empty) |
-| `Cmd/Ctrl + Return` | Any form | Save |
+| `Return` | Selected Task, Plan, or List-item form, title focused | Activate `Save task`, `Save plan`, or `Add to <list name>` when valid |
+| `Cmd/Ctrl + Return` | Any selected creation form | Activate its visible named write button |
 | `Esc` | Any sheet or Add screen | Cancel, with the discard prompt if dirty |
-| `1`–`6` | Add screen, title focused, with a modifier (`Alt`) | Select type chip 1–6 in order Task, Meal, Watch, Event, Outing, Custom |
-| `Cmd/Ctrl + V` | Add screen | If the clipboard holds a URL, switch to Link mode; if it holds an image, switch to Screenshot mode |
+| `Alt + 1`–`3` | Global object chooser | Choose Task, Plan, or List item, in that order |
+| `Alt + 1`–`5` | Plan-kind chooser | Choose General, Meal, Watch, Event, or Outing, in that order |
+| `Cmd/Ctrl + V` | A selected creation form | If the clipboard holds a URL, switch to Link mode; if it holds an image, switch to Screenshot mode. The chooser never inspects the clipboard. |
 | `↑` / `↓` | Any row list | Move focus between rows |
 | `Space` | A focused task row | Toggle completion |
 | `Return` | A focused row | Open detail |
 
-Text inputs on web support paste of an image directly into the Add field, which is treated
-as Screenshot mode.
+Text inputs on web support paste of an image directly into a selected creation form, which
+is treated as Screenshot mode. Pasting cannot skip the object or Plan-kind chooser.

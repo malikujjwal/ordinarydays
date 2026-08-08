@@ -8,6 +8,13 @@ Everything is AWS CDK v2 in TypeScript, in `infra/`. The only console work in th
 project is the account creation and hardening in §3 — after that, a change that is not in
 `infra/` did not happen.
 
+> **Read §6 first.** This project is local-first: **nothing is deployed to AWS during
+> Phases 0 to 3.** The stacks below are written and synthesise in CI from Phase 0, but the
+> first lasting deployment is Phase 4 and the first domain is Phase 5. For four of the ten
+> phases the *only* environment that exists is a laptop running DynamoDB Local, the Hono app
+> under Node, and Metro — **§6 Local development**, not §3 or §4, is the section you want.
+> §3's runbook opens with a table showing which of its steps happens in which phase.
+
 ---
 
 ## 1. CDK app layout
@@ -46,11 +53,11 @@ The suggested split from the brief is adopted with two adjustments, marked below
 | Stack | Name pattern | Resources |
 | --- | --- | --- |
 | `DnsStack` | `od-dns-{env}` | Route 53 hosted zone lookup, ACM certificate for `*.{domain}` (edge), ACM certificate for the API domain. Exports the zone and both certificate ARNs. |
-| `AuthStack` | `od-auth-{env}` | Cognito user pool, the two app clients, the user pool domain, the Apple identity provider, pre-sign-up and post-confirmation Lambdas and their roles. |
+| `AuthStack` | `od-auth-{env}` | Cognito user pool, the three app clients (`auth.md` §1.7), the user pool domain, the Apple identity provider, pre-sign-up and post-confirmation Lambdas and their roles. |
 | `DataStack` | `od-data-{env}` | DynamoDB table `od-main-{env}` + `GSI1`, S3 media bucket + lifecycle rules + CORS. Exports table and bucket. |
 | `ApiStack` | `od-api-{env}` | API Lambda, its execution role, the HTTP API, the `$default` route, the custom domain + API mapping + A record, access log group, throttle settings. |
 | `WebStack` | `od-web-{env}` | Web S3 bucket, CloudFront distribution, OAC, cache and response-header policies, the URI-rewrite CloudFront Function, A/AAAA records, plus the **media** CloudFront distribution (see adjustment 1). |
-| `SchedulerStack` | `od-scheduler-{env}` | EventBridge schedule group, the reminder Lambda + role, the scheduler-invocation role the API assumes to create schedules, the daily maintenance rule (Phase 6). |
+| `SchedulerStack` | `od-scheduler-{env}` | EventBridge schedule group, the reminder Lambda + role, the scheduler-invocation role the API assumes to create schedules, the daily maintenance rule (Phase 5, P5-22). |
 | `ObservabilityStack` | `od-observability-{env}` | The `od-alerts-{env}` SNS topic + email subscription, all CloudWatch alarms, the CloudWatch dashboard. |
 | `AccountStack` | `od-account` | Account-scoped, environment-independent (see adjustment 2): AWS Budgets, Cost Anomaly Detection monitor, the GitHub OIDC provider and the two deploy roles. |
 
@@ -198,7 +205,7 @@ The isolation that actually matters is achieved without a second account:
   ambiguous.
 - Prod stateful resources have `RemovalPolicy.RETAIN`, DynamoDB deletion protection, S3
   versioning, and PITR. Dev has none of these and may be wiped freely
-  (`data-model.md` §9 explicitly permits this until Phase 4).
+  (`data-model.md` §9 explicitly permits this until Phase 5).
 - The GitHub deploy roles are scoped by stack name prefix: `od-github-deploy-dev` may not
   touch `od-*-prod` stacks, and vice versa. A dev pipeline literally cannot deploy to
   prod.
@@ -272,7 +279,7 @@ there is no way to accidentally synth dev config into a prod stack name.
 | IAM role | `od-<name>-role-<stage>` | `od-api-role-prod` |
 | SSM parameter | `/od/<stage>/<domain>/<key>` | `/od/prod/auth/apple/key-id` |
 | CloudWatch alarm | `od-<stage>-<metric>` | `od-prod-api-5xx` |
-| EventBridge schedule | `rem_<activityId>_<reminderId>` | (deterministic, so delete needs no lookup) |
+| EventBridge schedule | `rem_<activityId>_<userId>_<reminderId>_<occurrenceDate>` | (deterministic, so delete needs no lookup — see `../01-product/notifications.md` §3.1) |
 
 S3 bucket names include the account ID because bucket names are globally unique across all
 of AWS and `od-media-prod` will already be taken.
@@ -299,7 +306,31 @@ they are activated, and they are not retroactive. Do this early.
 
 ## 3. Bootstrap runbook
 
-Run once, in order. Steps 1–4 are console/manual; everything after is scripted.
+Run once, in the order below. Steps 3.1–3.4 are console/manual; everything after is
+scripted.
+
+**This runbook is not executed in one sitting.** Development is local-first: nothing is
+deployed for the first four phases, so the runbook is spread across three of them.
+
+| Step | Phase | Why then |
+| --- | --- | --- |
+| §3.1 Create the AWS account | **0** (P0-01) | Opening the account takes minutes, and the Paid Plan choice must be made before the six-month Free Plan clock matters. |
+| §3.2 Harden the root account | **0** (P0-02) | Worth having in place before anyone is under pressure to deploy. |
+| §3.3 Administrative identity (IAM Identity Center) | **0** (P0-04) | Same. No long-lived key on the laptop, ever. |
+| §3.4 Budgets before anything else | **0** (P0-03) | The safety net has to predate the first charge. |
+| §3.6 Bootstrap CDK | **0** (P0-31), verified in **4** (P4-04) | Phase 0 ends with one throwaway `cdk deploy` of a single trivial `SmokeStack`, immediately destroyed, purely to prove the OIDC → bootstrap → deploy path works. Phase 4 verifies that bootstrap rather than repeating it. |
+| §3.8 GitHub OIDC role | **0** (P0-31) partially, **4** (P4-06) fully | Phase 0 lands only the OIDC provider and `od-github-deploy-dev`, because the smoke test needs them. The full `AccountStack` deploy is Phase 4. |
+| §3.9 First deploy | **4** (P4-06, P4-13) | The **permanent dev environment** — `AccountStack`, `DataStack`, `AuthStack`, `ApiStack`. This is the first lasting deployment in the project. No domain, no CloudFront, no prod: the API is reached at its `execute-api` endpoint and Cognito at its default hosted-UI domain. |
+| §3.5 Register the domain | **5** (P5-01) | The domain, `DnsStack`, DNS and the hosted zone. This is also the first recurring AWS charge (`cost-model.md` §2.15). |
+| §3.7 Certificates | **5** (P5-01) | ACM validates through the hosted zone, so it cannot happen before §3.5. |
+| §3.9 again, for prod | **5** (P5-08) | Prod, deployed from a tag behind the GitHub environment approval. |
+
+What survives Phase 0 inside AWS is exactly: the account, the console budget and anomaly
+monitor, IAM Identity Center and its permission set, the CDK bootstrap stack, and the GitHub
+OIDC provider with one deploy role. Every one of those is $0/month at rest. Everything else
+is destroyed. Local development for Phases 0–3 uses DynamoDB Local and `AUTH_MODE=local`
+(§6), with no AWS credentials at all — see `03-implementation/phase-00-foundations.md` P0-31
+for the reasoning.
 
 ### 3.1 Create the AWS account
 
@@ -402,6 +433,9 @@ type "AWS services" → alert subscription with the same email, threshold $5.
 
 ### 3.5 Register the domain
 
+> **Phase 5 (P5-01).** Skip this in Phases 0–4. There is no domain until v1 ships, which is
+> why the Phase 4 dev environment runs on `execute-api` and `amazoncognito.com` hostnames.
+
 ```bash
 # Check availability and price first
 aws route53domains check-domain-availability \
@@ -465,6 +499,8 @@ in `cdk.json`:
 > party ever gets deploy access.
 
 ### 3.7 Certificates
+
+> **Phase 5 (P5-01).** Depends on §3.5.
 
 CDK creates and DNS-validates both certificates automatically, because the hosted zone is
 in the same account. No manual step is required — this is the main reason Route 53 was
@@ -557,6 +593,10 @@ open question in `decisions.md`.
 
 ### 3.9 First deploy
 
+> **Phase 4 (P4-06, P4-13).** This is the first lasting deployment in the project.
+> `DnsStack` stays out of the deploy set until Phase 5, and `ApiStack` deploys with no
+> custom domain (P4-05).
+
 ```bash
 cd infra
 pnpm exec cdk deploy od-account
@@ -565,6 +605,8 @@ pnpm exec cdk deploy 'od-*-dev' --require-approval never
 
 Then confirm the SNS email subscription that lands in the alert inbox — an unconfirmed
 subscription means every alarm goes nowhere, silently.
+
+Prod follows in Phase 5 (P5-08), from a tag, behind the GitHub environment approval.
 
 ---
 
@@ -667,7 +709,7 @@ and a real deploy, or the next `cdk deploy` will silently re-apply the bad versi
 **2. Redeploy the previous tag.** Slower (a few minutes) but leaves CDK and reality in
 agreement. This is the correct action once the fire is out.
 
-Optionally, from Phase 5: gradual deployment with `LambdaDeploymentGroup`
+Optionally, from Phase 6: gradual deployment with `LambdaDeploymentGroup`
 (`LINEAR_10PERCENT_EVERY_1MINUTE`) and a CloudWatch alarm on the alias's error rate, so a
 bad deploy auto-rolls-back without a human. It costs nothing (CodeDeploy for Lambda is
 free) and adds ~10 minutes to a prod deploy. Worth it once there are users who notice.
@@ -694,7 +736,7 @@ Rules for backfill scripts:
 - Before a prod backfill, take an on-demand backup:
   `aws dynamodb create-backup --table-name od-main-prod --backup-name pre-migration-NNNN`.
 
-Until Phase 4 ships to TestFlight, a breaking change may simply wipe `od-main-dev`
+Until Phase 5 ships to TestFlight, a breaking change may simply wipe `od-main-dev`
 (`data-model.md` §9). After that, migrations are mandatory.
 
 ---
@@ -707,7 +749,7 @@ Until Phase 4 ships to TestFlight, a breaking change may simply wipe `od-main-de
 | --- | --- | --- | --- |
 | **Identifiers** (not secret) | table name, bucket name, user pool ID, app client ID, API base URL | Lambda environment variables; Expo `app.config.ts` `extra` for the client | Everything |
 | **Server secrets** | Apple Sign in private key, Expo push access token | SSM Parameter Store `SecureString` at `/od/{stage}/…` | The API Lambda, at cold start |
-| **High-value secrets** | Anthropic API key (Phase 7) | Secrets Manager `od/{stage}/anthropic-api-key` | The API Lambda, at cold start |
+| **High-value secrets** | Anthropic API key (Phase 8) | Secrets Manager `od/{stage}/anthropic-api-key` | The API Lambda, at cold start |
 | **CI secrets** | none for AWS (OIDC), `EXPO_TOKEN` for EAS, `APPLE_APP_SPECIFIC_PASSWORD` | GitHub Actions repository/environment secrets | The relevant workflow job only |
 | **Local dev secrets** | anything the founder needs locally | `.env.local`, gitignored, never committed | Local processes |
 
@@ -765,10 +807,17 @@ policy on the API role grants `ssm:GetParameter` on `/od/{stage}/*` only, plus
 
 ## 6. Local development
 
-The goal: the full stack runs on a laptop with no AWS credentials and no internet, except
-for the parts that genuinely cannot (Cognito sign-in, push delivery).
+**This is the primary development workflow, not a convenience.** For Phases 0 to 3 —
+foundations, activity core, Today and tasks, plans and lists — it is the *only* environment
+that exists. The whole product is built, run and tested here before a single stack is
+deployed, and it stays the default loop afterwards: a change that breaks `pnpm dev` is a
+regression even in Phase 9.
 
-### 6.1 DynamoDB Local
+The goal: the full stack runs on a laptop with no AWS credentials and no internet, except
+for the parts that genuinely cannot, and those do not exist until Phase 4 (Cognito sign-in)
+and Phase 5 (push delivery). Until then there is nothing to reach for.
+
+### 6.1 DynamoDB Local and MinIO
 
 ```yaml
 # docker-compose.yml (repo root)
@@ -786,19 +835,41 @@ services:
       DYNAMO_ENDPOINT: http://dynamodb:8000
       AWS_REGION: us-east-1
     depends_on: [dynamodb]
+  # Joins the stack in Phase 3 (P3-21), the first consumer of object storage.
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: local
+      MINIO_ROOT_PASSWORD: localsecret
+    volumes: ["./.minio-data:/data"]
 ```
 
 ```bash
 docker compose up -d
 pnpm --filter @od/api ddb:create-table   # scripts/create-local-table.ts, same schema as CDK
 pnpm --filter @od/api ddb:seed           # a founder-sized fixture set
+pnpm --filter @od/api s3:create-bucket   # creates od-media-local in MinIO, idempotent
 open http://localhost:8001               # browse items
+open http://localhost:9001               # browse objects
 ```
 
 `ddb:create-table` must produce the **same** key schema and GSI as `DataStack`. It reads
 the definitions from a shared module that `DataStack` also imports, so the two cannot
 drift. A test asserts that the synthesised CloudFormation table definition matches the
 local one.
+
+**MinIO is the local media bucket.** It speaks the S3 API, including SigV4 presigned `PUT`,
+so the attachment code path is `@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner`
+exactly as it is when deployed. What differs between a laptop and `dev` is the endpoint and
+the credentials — configuration, never a branch in application code. MinIO's root password
+is the local `AWS_SECRET_ACCESS_KEY` because MinIO requires at least eight characters, and
+DynamoDB Local accepts any value.
+
+MinIO does not model CloudFront, OAC or Block Public Access. Those are properties of the
+deployed bucket and distribution, asserted by the CDK tests until the stacks are deployed and
+exercised against the real media domain in Phase 5 — see `phase-05-ship-v1.md`.
 
 ### 6.2 Running the API locally
 
@@ -834,25 +905,60 @@ TABLE_NAME=od-main-local
 DDB_ENDPOINT=http://localhost:8000
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=local
-AWS_SECRET_ACCESS_KEY=local
+AWS_SECRET_ACCESS_KEY=localsecret
 MEDIA_BUCKET=od-media-local
-COGNITO_USER_POOL_ID=us-east-1_xxxxxxxxx     # the real dev pool
-COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx  # the real dev client
-AUTH_MODE=cognito                             # or: dev-bypass
+S3_ENDPOINT=http://localhost:9000
+AUTH_MODE=local
 ```
 
-`lib/ddb.ts` reads `DDB_ENDPOINT` and points the client at DynamoDB Local when it is set.
-That is the only local/deployed branch in the runtime code.
+There is no user pool until Phase 4, so the `COGNITO_*` variables are simply absent for
+Phases 0–3. From Phase 4 a developer who wants to sign in against the deployed dev pool
+adds them and flips `AUTH_MODE=cognito`:
 
-**Auth locally.** Two modes, controlled by `AUTH_MODE`:
+```
+COGNITO_USER_POOL_ID=us-east-1_xxxxxxxxx      # the real dev pool
+COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx  # the real dev client
+AUTH_MODE=cognito
+```
 
-- `cognito` (default): sign in against the **real dev Cognito pool** from the Expo dev
-  client and send the real ID token to `localhost:3000`. `aws-jwt-verify` needs only the
-  public JWKS, which is reachable over the internet. This is the mode to develop in.
-- `dev-bypass`: the auth middleware accepts a header `X-Dev-User: usr_...` and skips
-  verification. **Guarded by an assertion that `STAGE === 'local'`**, so it cannot exist in
-  a deployed build; a unit test asserts the guard. This mode exists only for repository and
-  integration tests that must not depend on the network.
+`lib/ddb.ts` reads `DDB_ENDPOINT` and points the client at DynamoDB Local when it is set;
+`lib/s3.ts` reads `S3_ENDPOINT` the same way and adds `forcePathStyle: true` when it is
+present, because MinIO does not serve virtual-hosted bucket subdomains. Both are client
+construction, not conditional logic: no handler, service or repository sees the difference,
+and these two variables are the only local/deployed divergence in the runtime code.
+
+**Auth locally.** `AUTH_MODE` is a Zod enum of exactly `'local' | 'cognito'`, parsed in
+`services/api/src/lib/config.ts`. It has **no default**: an unset value throws at startup.
+It selects one of two `IdentityProvider` implementations behind the seam described in
+`phase-01-activity-core.md` P1-01, and nothing downstream of the seam knows which is in use:
+
+- `local`: `LocalIdentityProvider` returns the constant user ID `usr_local_dev`. It reads
+  no header, parses no token, and makes no network call. This is the default development
+  loop for Phases 0–3 and it still works unchanged after Phase 4.
+- `cognito`: `CognitoIdentityProvider` verifies the bearer ID token against the **real dev
+  Cognito pool** (§5.1 of `auth.md`). `aws-jwt-verify` needs only the public JWKS, which is
+  reachable over the internet, so this works from a laptop against `localhost:3000`.
+
+> **There is no `dev-bypass` mode and no `X-Dev-User` header.** A header-driven bypass is
+> shipped code that reads attacker-controlled input to decide who you are, guarded only by
+> an environment check. Tests that need a second user inject a stub provider instead:
+> `createApp({ identityProvider: stubIdentity('usr_other') })`. See `testing.md` §4.3.
+
+**The startup guard is one-directional.** `AUTH_MODE=local` with `STAGE !== 'local'` throws
+at module load and refuses to serve a request. `AUTH_MODE=cognito` with `STAGE=local` is
+**allowed** and is exactly how a developer signs in against the deployed dev user pool from
+a laptop. Do not make the check symmetric.
+
+**`AUTH_MODE` may appear in exactly two files:** `services/api/src/lib/config.ts` and
+`services/api/src/middleware/identity.ts`. No handler, service or repository contains an
+`if (AUTH_MODE …)` branch. This is enforced by a grep check in `ci.yml`, alongside the three
+in [`../04-conventions/repo-structure.md#4-how-the-rules-are-enforced`](../04-conventions/repo-structure.md#4-how-the-rules-are-enforced):
+
+```bash
+! grep -rn "AUTH_MODE" services/api/src apps packages \
+    --include=*.ts \
+    --exclude=config.ts --exclude=identity.ts
+```
 
 ### 6.3 Expo dev server
 
@@ -938,6 +1044,13 @@ The corresponding EAS build profiles:
 ## 7. CI/CD
 
 Five workflows in `.github/workflows/`. Each does one thing.
+
+They do not all arrive at once. `ci.yml` (§7.1) is Phase 0 (P0-29) and is the only one that
+runs for the first four phases, alongside a `workflow_dispatch`-only `deploy-smoke.yml` that
+exists solely to prove the deploy path once (P0-31). `deploy-dev.yml` arrives in Phase 4
+(P4-14); `deploy-prod.yml` and `mobile.yml` in Phase 5 (P5-08, P5-11). `nightly.yml`'s audit
+and dependency checks can run from Phase 0; its cost query only becomes meaningful once
+something is deployed in Phase 4.
 
 ### 7.1 `ci.yml` — validation on every PR
 

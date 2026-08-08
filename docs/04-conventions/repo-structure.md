@@ -47,7 +47,7 @@ ordinarydays/
 │     │  ├─ local.ts             Node server for local dev. Never bundled.
 │     │  ├─ app.ts               Hono instance, middleware chain, route mounting.
 │     │  ├─ middleware/          requestId, logger, errorHandler, cors, securityHeaders,
-│     │  │                       bodyLimit, routeSplit, auth, rateLimit, idempotency
+│     │  │                       bodyLimit, routeSplit, identity, rateLimit, idempotency
 │     │  ├─ routes/              One file per resource. Mirrors api-contract.md §2.
 │     │  │  ├─ me.ts  agenda.ts  activities.ts  participants.ts  attachments.ts
 │     │  │  ├─ lists.ts  people.ts  expenses.ts  notifications.ts  capture.ts
@@ -62,7 +62,7 @@ ordinarydays/
 │     │  ├─ reminder/            The reminder Lambda's entry point + its handler.
 │     │  └─ lib/                 ddb.ts, logger.ts, errors.ts, config.ts, secrets.ts,
 │     │                          cursor.ts, clock.ts
-│     ├─ scripts/                create-local-table.ts, seed.ts
+│     ├─ scripts/                create-local-table.ts, seed-local.ts
 │     ├─ test/                   Integration tests + DynamoDB Local harness
 │     └─ tsconfig.json  package.json  vitest.config.ts
 │
@@ -117,7 +117,7 @@ ordinarydays/
 │  └─ CODEOWNERS
 │
 ├─ scripts/                      Repo-level node scripts: smoke.mjs, check-bundle-size.mjs
-├─ docker-compose.yml            DynamoDB Local + dynamodb-admin
+├─ docker-compose.yml            DynamoDB Local + dynamodb-admin + MinIO (local S3, Phase 3)
 ├─ pnpm-workspace.yaml  turbo.json  biome.json  lefthook.yml
 ├─ .dependency-cruiser.cjs  .npmrc  .nvmrc  .gitignore  .env.example
 └─ package.json                  Root scripts only. No runtime dependencies.
@@ -245,7 +245,14 @@ export const TABLE = {
   sortKey: 'sk',
   ttlAttribute: 'ttl',
   indexes: [
-    { name: 'GSI1', partitionKey: 'gsi1pk', sortKey: 'gsi1sk', projection: 'ALL' },
+    {
+      name: 'GSI1',
+      partitionKey: 'gsi1pk',
+      sortKey: 'gsi1sk',
+      // INCLUDE, never ALL — aws-services.md §1.4 and data-model.md §3.5.
+      projection: 'INCLUDE',
+      nonKeyAttributes: [/* the AgendaItem fields, and nothing else */],
+    },
   ],
 } as const;
 ```
@@ -344,13 +351,15 @@ module.exports = {
 };
 ```
 
-Alongside it, three cheap checks in `ci.yml`:
+Alongside it, four cheap checks in `ci.yml`. The first three land with the dependency-cruiser
+config in Phase 0 (P0-27); the fourth arrives with the identity seam in Phase 1 (P1-01):
 
 | Check | Command | Catches |
 | --- | --- | --- |
 | No `Scan` in app code | `! grep -rn "ScanCommand\|\.scan(" services/api/src apps packages` | `data-model.md` §5 |
 | No raw key literals outside the repo layer | `! grep -rnE "'(ACT\|USER\|LIST\|INVITE\|EMAIL\|IDEM)#" --include=*.ts services/api/src --exclude-dir=repositories` | §2.4 |
 | No `dangerouslySetInnerHTML` | `! grep -rn "dangerouslySetInnerHTML" apps packages` | `security-privacy.md` §1 row 6 |
+| `AUTH_MODE` confined to two files | `! grep -rn "AUTH_MODE" services/api/src apps packages --include=*.ts --exclude=config.ts --exclude=identity.ts` | The identity seam (`infrastructure.md` §6.2) |
 
 Each runs as its own step so the failure message names the rule that was broken.
 
@@ -573,7 +582,7 @@ PR.
 | Enums | None. Use string literal unions (`coding-standards.md` §1.4) |
 | Query keys | `camelCase` factory functions: `agendaKey(date)`, `activityKey(id)` |
 | Repository methods | Verb-first, storage-neutral: `getActivity`, `listItemsForList`, `putOccurrence` |
-| Service methods | Domain-first: `scheduleActivity`, `settleWithPerson` |
+| Service methods | Domain-first: `scheduleActivity`, `markExpenseObligationsSettled` |
 | Test names | A sentence: `it('distributes remainder cents to the lowest personIds', …)` |
 
 ### 8.3 Branches
@@ -581,7 +590,7 @@ PR.
 `<type>/<phase-task-id>-<slug>`, all lowercase except the task ID.
 
 ```
-feat/P2-07-recurrence-engine
+feat/P2-01-recurrence-engine
 fix/P3-12-agenda-dst-boundary
 chore/P1-04-biome-config
 docs/P0-02-conventions

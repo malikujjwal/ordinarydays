@@ -2,55 +2,66 @@
 
 ## Goal
 
-At the end of this phase the project exists as a running system with no product in it. An
-AWS account is open on the Paid Plan with budget alarms already firing on the first cent,
-the domain is registered, CDK is bootstrapped, and eight stacks synthesise. A monorepo
-with five workspaces builds, lints, type-checks and tests in one command. A single Lambda
-behind an HTTP API answers `GET /v1/health` on `https://api.dev.ordinarydays.app`. An Expo
-app renders on the iOS simulator and in a browser from the same source file, calls that
-endpoint through the shared typed client, and displays the returned build SHA. GitHub
-Actions deploys all of it on merge to `main` without a long-lived AWS key existing
-anywhere. None of this is user-facing; all of it is the thing every later phase stands on.
+At the end of this phase a developer can clone the repository, run one command, and have the
+API, the database and the app running on their laptop. The API answers
+`GET /v1/health` from Hono on the Node adapter at `http://localhost:3000`. DynamoDB Local
+holds a table whose key schema is generated from the same definition the CDK stack uses. The
+Expo app renders the health response on the iOS simulator, in a browser, and on a physical
+iPhone over the LAN through Expo Go — all from one source file. A five-workspace monorepo
+builds, lints, type-checks, tests and dependency-checks in one command, and CI runs the same
+set plus `cdk synth`.
+
+**Nothing is deployed to AWS.** The account exists, is hardened and is budgeted, because
+that takes minutes and is worth having in place before anyone is under pressure to deploy.
+Eight CDK stacks are written and synthesise cleanly in CI, so the infrastructure cannot rot
+while the product is built locally. The phase ends with a single throwaway `cdk deploy` of
+one trivial stack, immediately destroyed, purely to prove the deploy path works. The first
+lasting deployment is Phase 4.
 
 ## Prerequisites
 
 | # | Item | Notes |
 | --- | --- | --- |
-| 1 | A macOS machine with Xcode and the iOS simulator | Required for the simulator target. EAS Build removes the Mac requirement for *release* builds later, not for local simulator work. |
-| 2 | Node 22.x, `pnpm` 9.x, `git`, Docker Desktop | Node version pinned in `.nvmrc`; `corepack enable` for pnpm. |
-| 3 | A GitHub account and an empty repository `ordinarydays` | Private. Branch protection is configured in P0-28. |
-| 4 | A payment method for AWS and roughly $15 for the domain | The domain is the only spend in this phase. |
-| 5 | An email address you will control in five years | `aws@ordinarydays.app` behind a forwarding rule is ideal, but it does not exist until the domain is registered — use a permanent personal address for signup and change the alternate contacts after P0-04. |
-| 6 | A password manager and a TOTP app with a backed-up seed | Root MFA depends on it. |
-| 7 | The canonical docs read in full | [`../02-architecture/infrastructure.md`](../02-architecture/infrastructure.md), [`../02-architecture/tech-stack.md`](../02-architecture/tech-stack.md), [`../02-architecture/aws-services.md`](../02-architecture/aws-services.md). |
+| 1 | A macOS machine with Xcode and the iOS simulator | Required for the simulator target. |
+| 2 | Node 22.x, `pnpm` 9.x, `git`, Docker Desktop | Node version pinned in `.nvmrc`; `corepack enable` for pnpm. Docker is required — DynamoDB Local is not optional in this phase. |
+| 3 | A GitHub account and an empty repository `ordinarydays` | Private. Branch protection is configured in P0-30. |
+| 4 | A physical iPhone with Expo Go installed, on the same LAN as the laptop | Required by P0-22. The LAN target is the one that catches `localhost` assumptions. |
+| 5 | A payment method for AWS | Needed to open the account. This phase spends nothing beyond a temporary $1 authorisation hold. |
+| 6 | An email address you will control in five years | A permanent personal address. There is no domain yet, so there is no `aws@ordinarydays.app` to forward from; the domain arrives in Phase 5. |
+| 7 | A password manager and a TOTP app with a backed-up seed | Root MFA depends on it. |
+| 8 | The canonical docs read in full | [`../02-architecture/infrastructure.md`](../02-architecture/infrastructure.md), [`../02-architecture/tech-stack.md`](../02-architecture/tech-stack.md), [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md). |
 
-An Apple Developer Program membership is **not** required in Phase 0. It is a Phase 4
-prerequisite and a Phase 1 prerequisite for Sign in with Apple only.
+An Apple Developer Program membership is **not** required in Phase 0, and no longer in
+Phase 1 either. It is needed by Phase 4 (Sign in with Apple) and Phase 5 (TestFlight).
+Enrolment can take several days, so start it during Phase 1 at the latest.
 
 ## Deliverables
 
 - [ ] AWS account open, on the **Paid Plan**, root hardened, MFA on, no root access keys.
-- [ ] A `$1` bootstrap budget and a Cost Anomaly Detection monitor alerting by email,
-      created **before** any resource is deployed.
-- [ ] `ordinarydays.app` registered in Route 53 with auto-renew and privacy protection on,
-      and a public hosted zone.
-- [ ] CDK bootstrapped in `us-east-1` with the `odays` qualifier.
+- [ ] A `$1` budget and a Cost Anomaly Detection monitor alerting by email. These are the
+      only things that exist in the account at the end of the phase, besides IAM.
+- [ ] An administrative identity through IAM Identity Center, with no long-lived access key
+      on the laptop.
 - [ ] Monorepo at `apps/mobile`, `services/api`, `packages/shared`, `packages/ui`, `infra`
-      with `pnpm install && pnpm turbo run build lint typecheck test` green from a clean
-      clone.
-- [ ] `AccountStack`, `DnsStack`, `DataStack`, `ApiStack`, `WebStack`, `ObservabilityStack`
-      deployed to dev. (`AuthStack` and `SchedulerStack` are scaffolded but empty — Phases 1
-      and 4 fill them.)
-- [ ] `GET https://api.dev.ordinarydays.app/v1/health` returns `200` with the deployed git
-      SHA.
-- [ ] `https://dev.ordinarydays.app` serves the Expo web export over CloudFront with a
-      valid certificate.
-- [ ] The Expo app runs on the iOS simulator and on web from one `app/(app)/index.tsx`,
-      calls `/v1/health` through `@od/shared`, and shows the SHA.
-- [ ] `ci.yml`, `deploy-dev.yml`, `deploy-prod.yml`, `nightly.yml` in place; merge to `main`
-      deploys dev with no AWS secret in GitHub.
-- [ ] DynamoDB Local runs the same table schema as `DataStack`, verified by a test.
+      with `pnpm install && pnpm verify` green from a clean clone.
+- [ ] TypeScript project references and path aliases wired, so a change in
+      `packages/shared` type-checks through to both consumers without a build step.
+- [ ] Eight CDK stacks **written** and synthesising with no AWS credentials:
+      `AccountStack`, `DataStack`, `ApiStack`, `WebStack`, `ObservabilityStack`, and the
+      three shells `DnsStack`, `AuthStack`, `SchedulerStack`.
+- [ ] `docker compose up -d` plus one table-creation script gives a DynamoDB Local table
+      whose key schema provably matches the synthesised `DataStack` table.
+- [ ] `pnpm dev` starts DynamoDB Local, the API on `:3000` and Metro on `:8081`.
+- [ ] `GET http://localhost:3000/v1/health` returns `200` with `stage: "local"`.
+- [ ] The Expo app runs on the iOS simulator, in a browser, and on a physical iPhone over
+      the LAN from one `app/(app)/index.tsx`, calls `/v1/health` through `@od/shared`, and
+      shows the response.
+- [ ] Biome, lefthook, dependency-cruiser and Vitest configured and enforcing.
+- [ ] `ci.yml` running typecheck, lint, test, depcruise and `cdk synth` on every PR, with no
+      AWS credentials involved.
 - [ ] `docs/generated/openapi.json` generated and checked in; CI fails when stale.
+- [ ] One throwaway stack deployed to dev and destroyed, proving credentials, bootstrap and
+      the GitHub OIDC path end to end.
 
 ## Tasks
 
@@ -58,49 +69,46 @@ prerequisite and a Phase 1 prerequisite for Sign in with Apple only.
 | --- | --- | --- | --- | --- | --- |
 | P0-01 | Create the AWS account and select the Paid Plan | infra | — | no | S |
 | P0-02 | Harden the root account | infra | P0-01 | no | S |
-| P0-03 | Create the bootstrap budget and anomaly monitor | infra | P0-02 | no | S |
+| P0-03 | Create the zero-spend budget and anomaly monitor | infra | P0-02 | no | S |
 | P0-04 | Create an administrative identity (IAM Identity Center) | infra | P0-02 | no | M |
-| P0-05 | Register `ordinarydays.app` in Route 53 | infra | P0-04 | no | S |
-| P0-06 | Bootstrap CDK with the `odays` qualifier | infra | P0-04 | no | S |
-| P0-07 | Initialise the repository and pnpm workspaces | repo | — | yes | M |
-| P0-08 | Toolchain config: Biome, lefthook, syncpack, tsconfig base | ci | P0-07 | no | M |
-| P0-09 | Scaffold `packages/shared` with the exports map | shared | P0-08 | yes | M |
-| P0-10 | Scaffold `packages/ui` | shared | P0-08 | yes | S |
-| P0-11 | Scaffold the CDK app and `infra/lib/config.ts` | infra | P0-08 | yes | M |
-| P0-12 | `NodeLambda` construct | infra | P0-11 | no | S |
-| P0-13 | `AccountStack` | infra | P0-11, P0-06 | no | M |
-| P0-14 | `DnsStack` | infra | P0-11, P0-05 | no | S |
-| P0-15 | `DataStack` | infra | P0-11 | yes | M |
-| P0-16 | Scaffold `services/api`: Hono app and middleware chain | api | P0-09 | no | L |
-| P0-17 | `GET /v1/health` | api | P0-16 | no | S |
-| P0-18 | `ApiStack` | infra | P0-12, P0-14, P0-15, P0-17 | no | L |
-| P0-19 | `static-site` construct and `WebStack` | infra | P0-12, P0-14 | no | L |
-| P0-20 | `ObservabilityStack` | infra | P0-18, P0-19 | no | M |
-| P0-21 | Empty `AuthStack` and `SchedulerStack` shells | infra | P0-11 | yes | S |
-| P0-22 | Scaffold `apps/mobile` (Expo Router, Metro workspace config) | mobile | P0-09, P0-10 | no | L |
-| P0-23 | Shared HTTP client and the `health` endpoint function | shared | P0-09 | no | M |
-| P0-24 | Hello-world screen on iOS and web calling `/v1/health` | mobile | P0-22, P0-23, P0-18 | no | M |
-| P0-25 | Local development: DynamoDB Local, table script, local API server | api | P0-16, P0-15 | yes | M |
-| P0-26 | Vitest configuration and coverage gates | ci | P0-09, P0-16 | yes | M |
-| P0-27 | OpenAPI generation harness | shared | P0-09 | yes | M |
-| P0-28 | CDK assertion tests | infra | P0-15, P0-18, P0-19 | yes | M |
-| P0-29 | Bundle-size check script | ci | P0-16 | yes | S |
-| P0-30 | `ci.yml` — validate and synth | ci | P0-26, P0-27, P0-29, P0-13 | no | L |
-| P0-31 | `deploy-dev.yml` and `scripts/smoke.mjs` | ci | P0-30, P0-18, P0-19 | no | M |
-| P0-32 | `deploy-prod.yml` and the release tag flow | ci | P0-31 | no | M |
-| P0-33 | `nightly.yml` | ci | P0-30 | yes | S |
-| P0-34 | GitHub environments, branch protection, signed commits | ci | P0-30 | no | S |
-| P0-35 | First deploy, SNS confirmation, cost allocation tags | infra | P0-18, P0-19, P0-20 | no | S |
+| P0-05 | Initialise the repository and pnpm workspaces | repo | — | yes | M |
+| P0-06 | Toolchain: Biome, lefthook, syncpack, tsconfig base and project references | ci | P0-05 | no | M |
+| P0-07 | Scaffold `packages/shared` with the exports map and the table definition | shared | P0-06 | yes | M |
+| P0-08 | Scaffold `packages/ui` | shared | P0-06 | yes | S |
+| P0-09 | Scaffold the CDK app and `infra/lib/config.ts` | infra | P0-06 | yes | M |
+| P0-10 | `NodeLambda` construct | infra | P0-09 | no | S |
+| P0-11 | `AccountStack` | infra | P0-09 | yes | M |
+| P0-12 | `DataStack` | infra | P0-09, P0-07 | yes | M |
+| P0-13 | Scaffold `services/api`: Hono app and middleware chain | api | P0-07 | no | L |
+| P0-14 | `GET /v1/health` | api | P0-13 | no | S |
+| P0-15 | `ApiStack` | infra | P0-10, P0-12, P0-14 | no | L |
+| P0-16 | `static-site` construct and `WebStack` | infra | P0-10, P0-12 | no | L |
+| P0-17 | `ObservabilityStack` | infra | P0-15, P0-16 | no | M |
+| P0-18 | Empty `DnsStack`, `AuthStack` and `SchedulerStack` shells | infra | P0-09 | yes | S |
+| P0-19 | Scaffold `apps/mobile` (Expo Router, Metro workspace config) | mobile | P0-07, P0-08 | no | L |
+| P0-20 | Shared HTTP client and the `health` endpoint function | shared | P0-07 | no | M |
+| P0-21 | DynamoDB Local, the table script, and the local API server | api | P0-13, P0-12 | no | M |
+| P0-22 | Health screen on simulator, web and a physical iPhone | mobile | P0-19, P0-20, P0-21 | no | M |
+| P0-23 | `pnpm dev`: one command, and the clean-clone check | repo | P0-21, P0-22 | no | M |
+| P0-24 | Vitest configuration and coverage gates | ci | P0-07, P0-13 | yes | M |
+| P0-25 | OpenAPI generation harness | shared | P0-07 | yes | M |
+| P0-26 | CDK assertion tests | infra | P0-12, P0-15, P0-16 | yes | M |
+| P0-27 | dependency-cruiser rules and the three grep checks | ci | P0-13, P0-19 | yes | M |
+| P0-28 | Bundle-size check script | ci | P0-13 | yes | S |
+| P0-29 | `ci.yml` — typecheck, lint, test, depcruise, synth | ci | P0-24, P0-25, P0-26, P0-27, P0-28 | no | L |
+| P0-30 | GitHub environments, branch protection, signed commits | ci | P0-29 | no | S |
+| P0-31 | Deploy smoke test: bootstrap, one throwaway stack, destroy | infra | P0-04, P0-29 | no | M |
 
-Tasks P0-10, P0-21, P0-29 and P0-33 are mechanical and have no detail subsection: follow
-the referenced canonical doc verbatim.
+Tasks P0-08, P0-18 and P0-28 are mechanical and have no detail subsection: follow the
+referenced canonical doc verbatim.
 
 ---
 
 ### P0-01 — Create the AWS account and select the Paid Plan
 
-**What to build.** An AWS account that will still exist in six months. This is not a
-formality: the default choice at signup closes the account.
+**What to build.** An AWS account that will still exist in six months. Nothing is deployed
+into it during this phase, but it must be open and correct before Phase 4 needs it, and the
+signup default closes the account.
 
 **Files.** None. Record the account ID, the sign-in email and the account alias in your
 password manager. Nothing about this step goes in git.
@@ -130,12 +138,17 @@ password manager. Nothing about this step goes in git.
 **Why upgrading loses nothing.** The always-free allowances — Lambda 1M requests and
 400,000 GB-seconds, DynamoDB 25 GB, CloudFront 1 TB and 10M requests, Cognito 10,000 MAU —
 apply on both plans. The 12-month allowances (API Gateway 1M HTTP API calls, S3 5 GB, SES
-3,000 message charges) also apply on both. What the Free Plan adds is credits with an
-expiry attached to the account's life; what it costs is the account.
+3,000 message charges) also apply on both. What the Free Plan adds is credits with an expiry
+attached to the account's life; what it costs is the account.
+
+> **Decision:** open the account in Phase 0 even though nothing deploys until Phase 4. The
+> six-month Free Plan clock starts at signup either way, the work is under an hour, and the
+> alternative is opening an account, discovering an identity-verification or payment problem,
+> and resolving it with AWS Support on the day the first deploy is due.
 
 **Edge cases.** If signup is rejected for a payment reason, do not create a second account
-with a different email — resolve it with AWS Support on the first one. Two accounts means
-two free-tier clocks and a billing mess.
+with a different email — resolve it with AWS Support on the first one. Two accounts means two
+free-tier clocks and a billing mess.
 
 **Tests.** Manual verification only, recorded in the runbook notes: account ID captured,
 plan reads "Paid", alternate contacts set.
@@ -152,11 +165,11 @@ plan reads "Paid", alternate contacts set.
    TOTP app is acceptable if the seed is backed up somewhere you will still have in five
    years. Losing root MFA with no recovery path means an AWS Support identity-verification
    process measured in days.
-2. On the same page, confirm there are **no root access keys**. If one exists, delete it.
-   A root access key has no legitimate use in this project.
-3. Billing and Cost Management → **Account settings** → *IAM user and role access to
-   Billing Information* → **Activate**. Without this an administrative IAM identity cannot
-   read the bill, and every cost check requires signing in as root.
+2. On the same page, confirm there are **no root access keys**. If one exists, delete it. A
+   root access key has no legitimate use in this project.
+3. Billing and Cost Management → **Account settings** → *IAM user and role access to Billing
+   Information* → **Activate**. Without this an administrative IAM identity cannot read the
+   bill, and every cost check requires signing in as root.
 4. Set the alternate contacts (billing, operations, security) to an address you monitor.
 5. Write down the five legitimate uses of root and never exceed them: closing the account,
    changing the support plan, changing the account email, changing the payment method, and
@@ -166,11 +179,12 @@ plan reads "Paid", alternate contacts set.
 
 ---
 
-### P0-03 — Create the bootstrap budget and anomaly monitor
+### P0-03 — Create the zero-spend budget and anomaly monitor
 
 **What to build.** A tripwire that fires on the first cent, created before any resource
-exists. The permanent budgets arrive with `AccountStack` in P0-13; this one covers the
-window in between, which is exactly when a mis-typed CDK construct is most likely.
+exists. `AccountStack` (P0-11) carries the permanent budgets, but it is not deployed in this
+phase, so this console-created budget is the only live guard from now until Phase 4 — which
+is exactly the window in which the P0-31 smoke deploy runs.
 
 **Files.** None in git. Run from the console or, once P0-04 gives you CLI access, from a
 shell. The console path is fine and needs no credentials setup.
@@ -190,7 +204,7 @@ type **AWS services** → alert subscription, threshold **$5**, same email, freq
 **Edge cases.** Budget alerts are evaluated a few times a day, not in real time; they are a
 safety net, not a circuit breaker. The things that actually stop spend are Lambda reserved
 concurrency, API Gateway throttling and S3 lifecycle rules, all of which arrive with the
-stacks. Do not treat the budget as a control.
+stacks in Phase 4. Do not treat the budget as a control.
 
 **Tests.** Manual: the budget appears in the console and a test email arrives when you
 confirm the subscription.
@@ -199,8 +213,9 @@ confirm the subscription.
 
 ### P0-04 — Create an administrative identity
 
-**What to build.** Short-lived administrative credentials on your laptop, with no
-long-lived access key anywhere.
+**What to build.** Short-lived administrative credentials on your laptop, with no long-lived
+access key anywhere. Nothing in Phases 0 to 3 needs them except P0-31, but creating them now
+is what makes P0-31 a twenty-minute task instead of a day.
 
 **Approach.**
 
@@ -226,90 +241,20 @@ long-lived access key anywhere.
    aws sts get-caller-identity --profile od-admin
    ```
 
-6. `export AWS_PROFILE=od-admin` in your shell profile. Every command in this doc assumes
-   it.
+6. `export AWS_PROFILE=od-admin` in your shell profile.
 
-**Edge cases.** If Identity Center cannot be enabled (some account states block it),
-fall back to one IAM user `od-admin` with `AdministratorAccess`, MFA enforced, and **no**
-access key — use `aws sts get-session-token` with an MFA code to mint temporary
-credentials. Never create a long-lived access key on a laptop; it is the most common cause
-of a compromised AWS account.
+**Edge cases.** If Identity Center cannot be enabled (some account states block it), fall
+back to one IAM user `od-admin` with `AdministratorAccess`, MFA enforced, and **no** access
+key — use `aws sts get-session-token` with an MFA code to mint temporary credentials. Never
+create a long-lived access key on a laptop; it is the most common cause of a compromised AWS
+account.
 
 **Tests.** `aws sts get-caller-identity` returns an assumed-role ARN containing
 `AWSReservedSSO_AdministratorAccess`, not an IAM user ARN.
 
 ---
 
-### P0-05 — Register `ordinarydays.app` in Route 53
-
-**What to build.** The domain and its public hosted zone.
-
-**Approach.**
-
-```bash
-aws route53domains check-domain-availability --region us-east-1 \
-  --domain-name ordinarydays.app
-
-aws route53domains list-prices --region us-east-1 --tld app \
-  --query 'Prices[0].RegistrationPrice'
-```
-
-Register through the **console** (Route 53 → Registered domains → Register domains). The
-CLI path needs a fully-formed contact JSON and the console validates it. Enable **privacy
-protection** and **auto-renew**. Registration creates a public hosted zone automatically.
-
-```bash
-aws route53 list-hosted-zones-by-name --dns-name ordinarydays.app \
-  --query 'HostedZones[0].Id' --output text
-```
-
-Record the zone ID in the runbook notes. CDK looks the zone up by name with
-`HostedZone.fromLookup`, so the ID is not needed in config, but you will want it when
-debugging.
-
-Now change the AWS account's alternate contacts and the alert email in
-`infra/lib/config.ts` to `alerts@ordinarydays.app`, and set up forwarding for it at your
-mail provider.
-
-**Edge cases.** `.app` is on the HSTS preload list, so every hostname under it is
-HTTPS-only in browsers by construction. That is a small free security win and it means a
-plain-HTTP fallback will never work — plan for that when testing locally against a device.
-
-**Tests.** `dig NS ordinarydays.app` returns four AWS name servers.
-
----
-
-### P0-06 — Bootstrap CDK with the `odays` qualifier
-
-**Approach.**
-
-```bash
-cd infra
-pnpm install
-
-export CDK_DEFAULT_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-export CDK_DEFAULT_REGION=us-east-1
-
-pnpm exec cdk bootstrap "aws://${CDK_DEFAULT_ACCOUNT}/us-east-1" \
-  --qualifier odays \
-  --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
-```
-
-The qualifier must also appear in `infra/cdk.json` under
-`"@aws-cdk/core:bootstrapQualifier": "odays"`, exactly as in
-[`../02-architecture/infrastructure.md#36-bootstrap-cdk`](../02-architecture/infrastructure.md#36-bootstrap-cdk).
-A mismatch produces a synth-time error naming the missing SSM parameter, which is the
-clearest failure mode of the two, but it still costs a debugging session.
-
-**Edge cases.** Bootstrapping is idempotent, but re-bootstrapping with a *different*
-qualifier creates a second, unused set of roles and buckets. Get it right once.
-
-**Tests.** `aws ssm get-parameter --name /cdk-bootstrap/odays/version` returns a version
-number ≥ 20.
-
----
-
-### P0-07 — Initialise the repository and pnpm workspaces
+### P0-05 — Initialise the repository and pnpm workspaces
 
 **Files to create.**
 
@@ -324,9 +269,13 @@ infra/package.json
 ```
 
 **Approach.** `pnpm-workspace.yaml` and `turbo.json` are given verbatim in
-[`../02-architecture/tech-stack.md#1-repository-layout`](../02-architecture/tech-stack.md#1-repository-layout).
+[`../02-architecture/tech-stack.md#1-repository-layout`](../02-architecture/tech-stack.md#1-repository-layout)
+and expanded in
+[`../04-conventions/repo-structure.md#5-workspace-configuration`](../04-conventions/repo-structure.md#5-workspace-configuration).
 Package names are `@od/mobile`, `@od/api`, `@od/shared`, `@od/ui`, `@od/infra`. The root
-`package.json` carries **scripts only** and no runtime dependencies.
+`package.json` carries **scripts only** and no runtime dependencies; the script list is
+[`../04-conventions/repo-structure.md#9-root-packagejson-scripts`](../04-conventions/repo-structure.md#9-root-packagejson-scripts)
+verbatim, plus `seed:local` added by Phase 1.
 
 `.npmrc`:
 
@@ -336,8 +285,8 @@ strict-peer-dependencies=false
 node-linker=isolated
 ```
 
-`.nvmrc` contains `22`. Root `package.json#engines` pins `"node": ">=22 <23"`. The CDK
-Lambda runtime is `NODEJS_22_X`. A CI check asserts all three agree (P0-30).
+`.nvmrc` contains `22`. Root `package.json#engines` pins `"node": ">=22 <23"`. The CDK Lambda
+runtime is `NODEJS_22_X`. A CI check asserts all three agree (P0-29).
 
 `.gitignore` must cover `node_modules`, `dist`, `.expo`, `cdk.out`, `.turbo`,
 `.dynamodb-data`, `.env*` except `.env.example`, `*.p8`, `*.p12`, `*.mobileprovision`,
@@ -345,41 +294,49 @@ Lambda runtime is `NODEJS_22_X`. A CI check asserts all three agree (P0-30).
 
 **Edge cases.** `node-linker=isolated` is pnpm's default and is what catches phantom
 dependencies; do not switch to `hoisted` to fix a Metro resolution problem — fix the Metro
-config instead (P0-22).
+config instead (P0-19).
 
-**Tests.** `pnpm install` from a clean clone succeeds. `pnpm -r exec node -e "0"` runs in
-all five workspaces.
+**Tests.** `pnpm install` from a clean clone succeeds. `pnpm -r exec node -e "0"` runs in all
+five workspaces.
 
 ---
 
-### P0-08 — Toolchain config: Biome, lefthook, syncpack, tsconfig base
+### P0-06 — Toolchain: Biome, lefthook, syncpack, tsconfig base and project references
 
 **Files.** `biome.json`, `lefthook.yml`, `.syncpackrc`, `tsconfig.base.json`, and a
 `tsconfig.json` per workspace extending it.
 
-**Approach.** `tsconfig.base.json` sets `strict: true`,
-`noUncheckedIndexedAccess: true`, `exactOptionalPropertyTypes: true`,
-`moduleResolution: "bundler"`, `target: "ES2023"`, `verbatimModuleSyntax: true`,
-`skipLibCheck: true`. Workspaces extend it and set only `outDir`, `rootDir` and `types`.
+**Approach.** `tsconfig.base.json` sets `strict: true`, `noUncheckedIndexedAccess: true`,
+`exactOptionalPropertyTypes: true`, `moduleResolution: "bundler"`, `target: "ES2023"`,
+`verbatimModuleSyntax: true`, `skipLibCheck: true`, and `composite: true`.
+
+**Project references and path aliases** are set up here, not retrofitted, exactly as
+[`../04-conventions/repo-structure.md#53-typescript-project-references`](../04-conventions/repo-structure.md#53-typescript-project-references)
+and §5.4 specify. `services/api` and `apps/mobile` each reference `packages/shared`;
+`apps/mobile` also references `packages/ui`; `infra` references `packages/shared`. The
+aliases (`@od/shared/*`, `@od/ui`, and the in-package `~/*`) are declared once in
+`tsconfig.base.json` and mirrored in `metro.config.js` (P0-19) and in the Vitest configs
+(P0-24). Three copies of the same alias table drifting apart is the failure mode; a unit
+test that resolves one alias per consumer is the cheapest guard.
 
 `biome.json` at the root with per-workspace overrides. Enable `noUnusedVariables`,
 `useExhaustiveDependencies`, `noExplicitAny`, and import sorting (`organizeImports`).
-Formatter: 90-column line width, single quotes, trailing commas, 2-space indent — matching
-the docs' wrap.
+Formatter: 90-column line width, single quotes, trailing commas, 2-space indent.
 
 `lefthook.yml` runs `biome check --write --staged` and `gitleaks protect --staged` on
 pre-commit.
 
-`.syncpackrc` pins one version per dependency name across all workspaces. Divergent React
-or React Native versions between `apps/mobile` and `packages/ui` produce hook-dispatcher
-errors that cost a day to diagnose.
+`.syncpackrc` pins one version per dependency name across all workspaces. Divergent React or
+React Native versions between `apps/mobile` and `packages/ui` produce hook-dispatcher errors
+that cost a day to diagnose.
 
-**Tests.** `pnpm exec biome ci .` passes on the empty tree. `pnpm exec syncpack list-
-mismatches` reports none. A deliberate `any` in a scratch file fails `biome ci`.
+**Tests.** `pnpm exec biome ci .` passes on the empty tree. `pnpm exec syncpack
+list-mismatches` reports none. `pnpm turbo run typecheck` builds the reference graph in the
+right order. A deliberate `any` in a scratch file fails `biome ci`.
 
 ---
 
-### P0-09 — Scaffold `packages/shared` with the exports map
+### P0-07 — Scaffold `packages/shared` with the exports map and the table definition
 
 **Files.**
 
@@ -391,7 +348,8 @@ packages/shared/src/errors.ts
 packages/shared/src/constants.ts
 packages/shared/src/schemas/common.ts
 packages/shared/src/types/index.ts
-packages/shared/src/client/http.ts     (P0-23 fills this)
+packages/shared/src/table/definition.ts
+packages/shared/src/client/http.ts     (P0-20 fills this)
 ```
 
 **Approach.** `errors.ts` exports the closed `ErrorCode` union from
@@ -400,106 +358,163 @@ plus `not_implemented` and `upgrade_required` from
 [`../02-architecture/tech-stack.md#44-error-to-http-mapping`](../02-architecture/tech-stack.md#44-error-to-http-mapping),
 and the `AppErrorBody` type. `constants.ts` exports `MAX_PARTICIPANTS = 50`,
 `MAX_AGENDA_DAYS = 62`, `MAX_UPLOAD_BYTES = 10 * 1024 * 1024`, `MAX_LIST_ITEMS = 500`,
-`MAX_TITLE_LEN = 200`, `MAX_NOTES_LEN = 4000`, `MAX_REMINDERS_PER_ACTIVITY = 5`,
+`MAX_TITLE_LEN = 200`, `MAX_NOTES_LEN = 4000`, `MAX_REMINDERS_PER_USER_PER_ACTIVITY = 3`,
 `MAX_ACTIVE_SERIES = 200`, `OVERDUE_WINDOW_DAYS = 30`.
 
 `schemas/common.ts` exports `isoDate`, `hhmm`, `ianaTimezone`, `cents`, `ulidId(prefix)`,
 `cursor`. These are the primitives every other schema composes.
 
-Nothing in this package may import React, React Native, an AWS SDK client, or
-`process.env`. Add a lint rule or a unit test that asserts it — see
-[`../02-architecture/tech-stack.md#52-what-must-never-enter-shared`](../02-architecture/tech-stack.md#52-what-must-never-enter-shared).
+`table/definition.ts` is the single source of the table's key schema, as plain data with no
+`aws-cdk-lib` and no `@aws-sdk` type, per
+[`../04-conventions/repo-structure.md#3-dependency-direction`](../04-conventions/repo-structure.md#3-dependency-direction).
+`DataStack` (P0-12) maps it onto CDK constructs; the local table script (P0-21) maps it onto
+a `CreateTableCommand`; the integration harness maps it onto a per-file test table. Two
+consumers, one definition, and no way for them to drift.
 
-> **Decision:** resolve open question OQ-11 (`zod` v3 vs v4) in this task, not later.
-> Check whether the `zod-to-openapi` package in the lockfile supports v4. If it does not,
-> pin `zod@3` and record the pin with a one-line comment in `package.json`. Migrating
-> schemas after Phase 1 touches every file in `src/schemas/`.
+> **Decision:** the table definition lives at `packages/shared/src/table/definition.ts`, not
+> at `infra/lib/table-schema.ts`. `repo-structure.md` §3 and `testing.md` §3.1 both name the
+> shared path and the test harness already imports `@od/shared/table`; `infra` is allowed to
+> import `@od/shared`, but `services/api` is not allowed to import `infra`, so the infra path
+> cannot serve all three consumers. Correct the `projection: 'ALL'` in the illustrative
+> snippet in `repo-structure.md` §3 to `INCLUDE` in the same PR — `data-model.md` §3.5 and
+> `aws-services.md` §1.4 are the authority and they say `INCLUDE`.
+
+Nothing in this package may import React, React Native, an AWS SDK client, or `process.env`.
+The dependency-cruiser rules in P0-27 enforce it; add the unit test described in
+[`../02-architecture/tech-stack.md#52-what-must-never-enter-shared`](../02-architecture/tech-stack.md#52-what-must-never-enter-shared)
+as well, because it fails with a clearer message.
+
+> **Decision:** resolve open question OQ-11 (`zod` v3 vs v4) in this task, not later. Check
+> whether the `zod-to-openapi` package in the lockfile supports v4. If it does not, pin
+> `zod@3` and record the pin with a one-line comment in `package.json`. Migrating schemas
+> after Phase 1 touches every file in `src/schemas/`.
 
 **Tests.** A Vitest test importing every subpath export and asserting it resolves. A test
 that greps the built output for `react` and `@aws-sdk` and fails on a hit.
 
 ---
 
-### P0-11 — Scaffold the CDK app and `infra/lib/config.ts`
+### P0-09 — Scaffold the CDK app and `infra/lib/config.ts`
 
 **Files.** The tree in
 [`../02-architecture/infrastructure.md#1-cdk-app-layout`](../02-architecture/infrastructure.md#1-cdk-app-layout),
-with `bin/ordinarydays.ts`, `lib/config.ts`, `cdk.json`, and one empty stack file per
-stack.
+with `bin/ordinarydays.ts`, `lib/config.ts`, `cdk.json`, and one stack file per stack.
 
 **Approach.** `lib/config.ts` is the Zod-validated `EnvConfig` given verbatim in
 [`../02-architecture/infrastructure.md#22-context-driven-config`](../02-architecture/infrastructure.md#22-context-driven-config).
 Fill in the `prod` object that the doc elides: `logRetentionDays: ONE_MONTH`,
-`apiReservedConcurrency: 50`, `pointInTimeRecovery: true`,
-`removalPolicy: RETAIN`, `domain: 'ordinarydays.app'`, `apiDomain: 'api.ordinarydays.app'`,
-`mediaDomain: 'media.ordinarydays.app'`, `webOrigins: ['https://ordinarydays.app']`.
+`apiReservedConcurrency: 50`, `pointInTimeRecovery: true`, `removalPolicy: RETAIN`.
+
+**The domain fields are optional and unset in Phase 0.** `domain`, `apiDomain`, `mediaDomain`
+and `webOrigins` are typed `string | undefined` / `string[]`, and no stage sets them until
+Phase 5 registers the domain. Every stack that consumes them branches once, at construction:
+if `cfg.apiDomain` is undefined, `ApiStack` skips the custom domain, the certificate and the
+alias record and the API is reachable only on its execute-api URL. That branch is what lets
+the whole stack set synthesise before a domain exists.
 
 `bin/ordinarydays.ts` instantiates `AccountStack` once and the per-stage stacks in a loop,
-passing constructs as typed props — never `Fn::ImportValue` strings. Apply the five tags
-from
+passing constructs as typed props — never `Fn::ImportValue` strings. Apply the five tags from
 [`../02-architecture/infrastructure.md#24-tags`](../02-architecture/infrastructure.md#24-tags)
 at the app level.
 
-**Edge cases.** The stage is selected by stack name (`cdk deploy 'od-*-dev'`), not by a
-context flag. Do not add a `-c stage=` path; it is how dev config ends up in a prod stack.
+**Edge cases.**
 
-**Tests.** `pnpm exec cdk synth 'od-*-dev'` succeeds and emits eight templates. A Vitest
-test asserts `getConfig('prod').removalPolicy === RemovalPolicy.RETAIN`.
+- The stage is selected by stack name (`cdk deploy 'od-*-dev'`), not by a context flag. Do
+  not add a `-c stage=` path; it is how dev config ends up in a prod stack.
+- **Synth must not require credentials.** CI has no AWS role in this phase (P0-29), so no
+  stack may call `HostedZone.fromLookup`, `Vpc.fromLookup`, or any other context lookup, and
+  no stack may set `env: { account: process.env.CDK_DEFAULT_ACCOUNT }` in a way that makes
+  it undefined-at-synth. Use environment-agnostic stacks in Phase 0 and let Phase 4 pin the
+  environment when it first deploys. A lookup added carelessly turns a green CI job into one
+  that only passes on the founder's laptop.
+
+**Tests.** `pnpm exec cdk synth 'od-*-dev'` succeeds with `AWS_PROFILE` unset and emits eight
+templates. A Vitest test asserts `getConfig('prod').removalPolicy === RemovalPolicy.RETAIN`
+and that `getConfig('dev').apiDomain` is `undefined`.
 
 ---
 
-### P0-12 — `NodeLambda` construct
+### P0-10 — `NodeLambda` construct
 
 **Files.** `infra/lib/constructs/node-lambda.ts`.
 
 **Approach.** Exactly the construct in
 [`../02-architecture/infrastructure.md#13-the-shared-lambda-construct`](../02-architecture/infrastructure.md#13-the-shared-lambda-construct).
 Every Lambda in the project goes through it so runtime, architecture, bundling format, log
-retention and log level cannot drift. Keep the `banner` — an ESM bundle has no `require`
-in scope and some transitive dependencies still emit one.
+retention and log level cannot drift. Keep the `banner` — an ESM bundle has no `require` in
+scope and some transitive dependencies still emit one.
 
-**Edge cases.** `sourceMap` is on in dev and off in prod. Source maps cost boot time; the
-prod artifact ships them to the CDK asset bucket, not to the runtime.
+**Edge cases.** `NodejsFunction` bundles with esbuild at synth time, which means `cdk synth`
+in CI actually compiles the API. That is deliberate: it is the cheapest proof that the
+deployed artifact still builds, and it is most of the value of running synth in a phase that
+never deploys. `sourceMap` is on in dev and off in prod.
 
 **Tests.** A CDK assertion test: the synthesised function has `Runtime: nodejs22.x`,
 `Architectures: ["arm64"]`, `LoggingConfig.LogFormat: JSON`.
 
 ---
 
-### P0-15 — `DataStack`
+### P0-11 — `AccountStack`
 
-**Files.** `infra/lib/stacks/data-stack.ts`,
-`infra/lib/table-schema.ts` (shared with the local-table script).
+**Files.** `infra/lib/stacks/account-stack.ts`.
+
+**Approach.** The account-wide guards from
+[`../02-architecture/infrastructure.md#34-budgets-before-anything-else`](../02-architecture/infrastructure.md#34-budgets-before-anything-else):
+the $5 and $20 monthly cost budgets with email notifications, the Cost Anomaly Detection
+monitor, and the GitHub OIDC provider plus the `od-github-deploy-{stage}` roles from
+[`../02-architecture/infrastructure.md#38-github-oidc-role`](../02-architecture/infrastructure.md#38-github-oidc-role).
+
+This stack is **written and synthesised only** in Phase 0. It is not deployed. The console
+budget from P0-03 is the live guard until Phase 4, and P0-31 deploys the OIDC half of this
+stack temporarily and then decides what to keep — see that task.
+
+**Edge cases.** The OIDC role's trust policy must condition on
+`token.actions.githubusercontent.com:sub` matching `repo:<owner>/ordinarydays:*` and on the
+`aud` being `sts.amazonaws.com`. A trust policy with a wildcard `sub` lets any GitHub
+repository in the world assume the role. Write the condition now, while the role is only a
+synthesised template and getting it wrong costs nothing.
+
+**Tests.** CDK assertion tests: two budgets exist with notification subscribers; the OIDC
+role's trust policy contains a `StringLike` on `sub` scoped to this repository and a
+`StringEquals` on `aud`; no policy statement grants `*` on `*`.
+
+---
+
+### P0-12 — `DataStack`
+
+**Files.** `infra/lib/stacks/data-stack.ts`.
 
 **Approach.** Table `od-main-{stage}`, `PAY_PER_REQUEST`, `pk`/`sk` string keys, TTL
 attribute `ttl`, one GSI `GSI1` on `gsi1pk`/`gsi1sk` with projection type **`INCLUDE`**
 limited to the `AgendaItem` fields, per
 [`../02-architecture/aws-services.md#14-amazon-dynamodb`](../02-architecture/aws-services.md#14-amazon-dynamodb).
-Streams are **off** in Phase 0 (Phase 6 turns them on). PITR and deletion protection follow
+Streams are **off** in Phase 0 (Phase 7 turns them on). PITR and deletion protection follow
 `cfg`. Media bucket `od-media-{stage}-{account}` with all four Block Public Access settings
-on, SSE-S3, the three lifecycle rules, and CORS allowing `PUT` from `cfg.webOrigins`.
+on, SSE-S3, the three lifecycle rules, and CORS allowing `PUT` from `cfg.webOrigins` — which
+is empty in Phase 0, so the CORS rule is only added when the list is non-empty.
 
-The key schema lives in `infra/lib/table-schema.ts` and is imported by both this stack and
-`services/api/scripts/create-local-table.ts`, so the two cannot drift.
+Every key attribute, index name and projection is read from
+`packages/shared/src/table/definition.ts` (P0-07). The stack maps that plain data onto CDK
+constructs and adds nothing to it.
 
 **Edge cases.** The GSI projection is `INCLUDE`, not `ALL`. Getting this wrong is invisible
 until the agenda query's cost and latency are wrong at scale, and changing a GSI projection
 requires replacing the index.
 
-**Tests.** CDK assertion test on key schema, GSI projection type and non-key attributes,
-TTL attribute name, and bucket public-access-block settings. A separate test (P0-25)
-asserts the local table script produces the same key schema.
+**Tests.** CDK assertion test on key schema, GSI projection type and non-key attributes, TTL
+attribute name, and bucket public-access-block settings. A separate test (P0-21) asserts the
+local table script produces the same key schema from the same definition.
 
 ---
 
-### P0-16 — Scaffold `services/api`: Hono app and middleware chain
+### P0-13 — Scaffold `services/api`: Hono app and middleware chain
 
 **Files.**
 
 ```
 services/api/src/index.ts          handler = handle(app)
 services/api/src/local.ts          @hono/node-server, dev only
-services/api/src/app.ts            middleware chain + route mounting
+services/api/src/app.ts            createApp(): middleware chain + route mounting
 services/api/src/middleware/{requestId,logger,errorHandler,cors,securityHeaders,
                              bodyLimit,routeSplit}.ts
 services/api/src/lib/{ddb,logger,errors,config}.ts
@@ -509,159 +524,168 @@ services/api/package.json  tsconfig.json  vitest.config.ts
 
 **Approach.** Build the middleware chain in the exact order in
 [`../02-architecture/tech-stack.md#42-middleware-chain-in-order`](../02-architecture/tech-stack.md#42-middleware-chain-in-order).
-Phase 0 ships entries 1–7 and 12; `auth`, `rateLimit` and `idempotency` are stubbed as
-pass-throughs with a `// Phase 1` comment and a failing-by-default guard so they cannot be
-forgotten: `routeSplit` throws `not_found` for any `/v1/*` path other than `/v1/health`
-until Phase 1 mounts the private routes.
+Phase 0 ships entries 1–7 and 12. Entries 8–10 (`identity`, `rateLimit`, `idempotency`) are
+Phase 1; in Phase 0 they do not exist at all rather than existing as pass-throughs, and
+`routeSplit` throws `not_found` for any `/v1/*` path other than `/v1/health`. A stubbed
+pass-through that silently authorises everything is a worse artefact than a missing file.
+
+`app.ts` exports `createApp(overrides?)` rather than a module-scope `app` constant. Both
+`index.ts` and `local.ts` call it with no arguments. The override parameter is how Phase 1's
+tests inject a stub identity provider without a bypass header existing in shipped code.
 
 `lib/config.ts` parses `process.env` with Zod at module load and throws on a missing
 variable. `lib/logger.ts` is a module-scope pino instance with the redaction paths from
 [`../02-architecture/security-privacy.md`](../02-architecture/security-privacy.md) §4.
 `lib/ddb.ts` creates one `DynamoDBDocumentClient` at module scope with
-`removeUndefinedValues: true` and points at `DDB_ENDPOINT` when it is set — that is the
-only local/deployed branch permitted in runtime code.
+`removeUndefinedValues: true` and points at `DDB_ENDPOINT` when it is set — that is the only
+local/deployed branch permitted in runtime code.
 
 `lib/errors.ts` defines `AppError` and the `ErrorCode → HTTP status` table from
 [`../02-architecture/tech-stack.md#44-error-to-http-mapping`](../02-architecture/tech-stack.md#44-error-to-http-mapping).
-`errorHandler` translates `ZodError` to `validation_failed` with path-mapped `details[]`,
-and the DynamoDB exception mappings, and guarantees that a `500` body is always the literal
+`errorHandler` translates `ZodError` to `validation_failed` with path-mapped `details[]`, and
+the DynamoDB exception mappings, and guarantees that a `500` body is always the literal
 string `"An unexpected error occurred."`.
 
-**Edge cases.** CORS must answer `OPTIONS` before any auth decision. `bodyLimit` must run
-before body parsing so a 5 MB body is never buffered into a JS object.
+**Edge cases.** CORS must answer `OPTIONS` before any identity decision. `bodyLimit` must run
+before body parsing so a 5 MB body is never buffered into a JS object. The dev CORS origin
+list must include the LAN origin used by P0-22 as well as `http://localhost:8081`.
 
-**Tests.** Vitest against `app.fetch` directly, no AWS: an unknown path returns the `404`
-envelope; a thrown `AppError` maps to the right status and body; `X-Request-Id` is echoed;
-a 300 KB body returns `413`; `OPTIONS` from an allowed origin returns the CORS headers and
-from a disallowed origin does not.
+**Tests.** Vitest against `createApp().fetch` directly, no AWS: an unknown path returns the
+`404` envelope; a thrown `AppError` maps to the right status and body; `X-Request-Id` is
+echoed; a 300 KB body returns `413`; `OPTIONS` from an allowed origin returns the CORS
+headers and from a disallowed origin does not.
 
 ---
 
-### P0-17 — `GET /v1/health`
+### P0-14 — `GET /v1/health`
 
-**What to build.** The endpoint every smoke test and every alarm depends on.
+**What to build.** The endpoint every smoke test and every alarm depends on, and the first
+thing the app renders.
 
 **Files.** `services/api/src/routes/health.ts`.
 
-**Approach.** Unauthenticated, mounted before `routeSplit`'s auth requirement. Returns:
+**Approach.** Unauthenticated, mounted before `routeSplit`'s private-route rule. Returns:
 
 ```json
-{ "data": { "status": "ok", "sha": "…", "stage": "dev", "coldStart": true },
+{ "data": { "status": "ok", "sha": "…", "stage": "local", "coldStart": true },
   "meta": { "requestId": "req_…" } }
 ```
 
-`sha` comes from a `GIT_SHA` environment variable set by CDK at deploy time from
-`process.env.GITHUB_SHA ?? 'local'`. `coldStart` is a module-scope boolean flipped to
-`false` after the first invocation. The handler performs **no** I/O — no DynamoDB call —
-so it stays a pure liveness signal and cannot fail because the table is throttled.
+`sha` comes from a `GIT_SHA` environment variable, `process.env.GITHUB_SHA ?? 'local'`; CDK
+sets it at deploy time from Phase 4 onward. `coldStart` is a module-scope boolean flipped to
+`false` after the first invocation; under `local.ts` it is `true` only for the first request
+after a `tsx watch` restart, which is a useful signal that the server reloaded. The handler
+performs **no** I/O — no DynamoDB call — so it stays a pure liveness signal and cannot fail
+because the table is throttled.
 
-**Edge cases.** `Cache-Control: no-store` (the `securityHeaders` default) matters here:
-a cached health response makes a deploy look successful when it was not.
+**Edge cases.** `Cache-Control: no-store` (the `securityHeaders` default) matters here: a
+cached health response makes a reload look successful when it was not.
 
 **Tests.** Unit: returns `200`, the envelope shape, and the SHA from the environment.
-The smoke script in P0-31 asserts the returned SHA equals the deployed commit.
 
 ---
 
-### P0-18 — `ApiStack`
+### P0-15 — `ApiStack`
 
 **Files.** `infra/lib/stacks/api-stack.ts`.
 
 **Approach.** A `NodeLambda` for `od-api-{stage}` with `entry` pointing at
-`services/api/src/index.ts`, 1024 MB, 15 s timeout, reserved concurrency from `cfg`. Grant
-it read/write on the `DataStack` table and its index, and `s3:PutObject`/`GetObject` on the
+`services/api/src/index.ts`, 1024 MB, 15 s timeout, reserved concurrency from `cfg`. Grant it
+read/write on the `DataStack` table and its index, and `s3:PutObject`/`GetObject` on the
 media bucket prefix — nothing wider.
 
 Publish a version on every deploy and create the `live` alias, and point the
 `HttpLambdaIntegration` at the **alias**, not `$LATEST`, per
 [`../02-architecture/infrastructure.md#44-reverting-a-bad-lambda`](../02-architecture/infrastructure.md#44-reverting-a-bad-lambda).
-Doing this on day one is what makes a seconds-long rollback possible later; retrofitting it
-after an incident is not an option.
+Writing this now, in a stack that has never deployed, is free; retrofitting it after a bad
+deploy in Phase 4 or 5 is not.
 
-`HttpApi` (v2) with a single `$default` route, payload format 2.0, no authorizer. Custom
-domain `cfg.apiDomain` with the regional certificate from `DnsStack`, an API mapping, and
-an A-record alias in the hosted zone. Throttling: burst 100, rate 50 rps. Access logs to a
-CloudWatch log group with `cfg.logRetentionDays`, JSON format.
+`HttpApi` (v2) with a single `$default` route, payload format 2.0, no authorizer.
+Throttling: burst 100, rate 50 rps. Access logs to a CloudWatch log group with
+`cfg.logRetentionDays`, JSON format. The custom domain, its certificate and its alias record
+are added **only when `cfg.apiDomain` is set**, which no stage does until Phase 5.
 
 Environment variables: `TABLE_NAME`, `MEDIA_BUCKET`, `STAGE`, `LOG_LEVEL`, `GIT_SHA`,
-`WEB_ORIGINS`. Identifiers only — nothing secret.
+`WEB_ORIGINS`, and `AUTH_MODE` (Phase 1 introduces it; the stack sets it to `cognito` for
+every deployed stage and never to `local` — see P1-02). Identifiers only, nothing secret.
 
-**Edge cases.** The custom domain's A record and the certificate must both exist before the
-mapping; CDK orders this correctly only if the certificate is passed as a construct.
-Passing an ARN string produces a race on first deploy.
+**Edge cases.** When Phase 5 does add the custom domain, the A record and the certificate
+must both exist before the mapping, and CDK orders this correctly only if the certificate is
+passed as a construct. Passing an ARN string produces a race on first deploy. Write the
+conditional branch that way now.
 
 **Tests.** CDK assertion tests: exactly one route (`$default`), the integration URI
 references the alias, `PayloadFormatVersion: 2.0`, throttle settings present, log group
-retention matches `cfg`. Post-deploy: `curl https://api.dev.ordinarydays.app/v1/health`
-returns `200`.
+retention matches `cfg`, and — with `apiDomain` unset — no `AWS::ApiGatewayV2::DomainName`
+resource is emitted.
 
 ---
 
-### P0-19 — `static-site` construct and `WebStack`
+### P0-16 — `static-site` construct and `WebStack`
 
-**Files.** `infra/lib/constructs/static-site.ts`,
-`infra/lib/stacks/web-stack.ts`,
+**Files.** `infra/lib/constructs/static-site.ts`, `infra/lib/stacks/web-stack.ts`,
 `infra/lib/functions/uri-rewrite.js` (CloudFront Function source).
 
-**Approach.** Private S3 bucket `od-web-{stage}-{account}` with versioning on and all
-public access blocked; a CloudFront distribution with Origin Access Control (not OAI);
-`PRICE_CLASS_100`; HTTP/2 and HTTP/3; `REDIRECT_TO_HTTPS`; TLS 1.2 minimum; the edge
-certificate from `DnsStack`; default root object `index.html`.
+**Approach.** Private S3 bucket `od-web-{stage}-{account}` with versioning on and all public
+access blocked; a CloudFront distribution with Origin Access Control (not OAI);
+`PRICE_CLASS_100`; HTTP/2 and HTTP/3; `REDIRECT_TO_HTTPS`; TLS 1.2 minimum; default root
+object `index.html`. The edge certificate and the alternate domain name are added only when
+`cfg.domain` is set; until Phase 5 the distribution is reachable on its
+`*.cloudfront.net` name.
 
 Two cache policies: `/_expo/static/*` gets `max-age=31536000, immutable`; `*.html` gets
 `max-age=0, must-revalidate`.
 
-The viewer-request CloudFront Function rewrites extensionless paths to `path/index.html`
-so Expo Router's static export resolves, and rewrites unmatched dynamic segments
-(`/invite/<token>`) to the route's pre-rendered shell. CloudFront Functions, not
-Lambda@Edge — see
+The viewer-request CloudFront Function rewrites extensionless paths to `path/index.html` so
+Expo Router's static export resolves, and rewrites unmatched dynamic segments
+(`/invite/<token>`) to the route's pre-rendered shell. CloudFront Functions, not Lambda@Edge
+— see
 [`../02-architecture/aws-services.md#16-amazon-cloudfront`](../02-architecture/aws-services.md#16-amazon-cloudfront).
 
 A response-headers policy with HSTS, `X-Content-Type-Options`, `Referrer-Policy` and a
 `Permissions-Policy` denying camera, microphone and geolocation. The full Content Security
-Policy is Phase 4 (P4-02); ship a report-only CSP now so violations are visible early.
+Policy is Phase 5 (P5-06); write a report-only CSP now.
 
-Also create the **media** distribution here (`cfg.mediaDomain`) over the `DataStack` media
-bucket, so every distribution and cache policy lives in one file.
+Also create the **media** distribution here over the `DataStack` media bucket, so every
+distribution and cache policy lives in one file.
 
-`BucketDeployment` uploads `apps/mobile/dist` and invalidates `/index.html` and `/*.html`
-only — hashed assets are immutable by name and invalidating them wastes quota.
+**Edge cases.** `BucketDeployment` fails at synth if `apps/mobile/dist` does not exist, and
+in Phase 0 it usually does not. Guard it: skip the deployment construct when the directory is
+absent. That guard is what keeps `cdk synth` green in CI without building the web export
+first, and it must survive into Phase 4, where CI does build the export before deploying.
 
-**Edge cases.** `BucketDeployment` fails at synth if `apps/mobile/dist` does not exist.
-Guard it: skip the deployment construct when the directory is absent, so `cdk synth` works
-before the first web build. CI always builds the web export before deploying.
-
-**Tests.** CDK assertion tests on OAC presence, the absence of any public bucket policy,
-the two cache policies, and the function association. Post-deploy: `curl -I
-https://dev.ordinarydays.app` returns `200` with `strict-transport-security`, and
-`https://dev.ordinarydays.app/some/deep/route` returns the app shell, not `403`.
+**Tests.** CDK assertion tests on OAC presence, the absence of any public bucket policy, the
+two cache policies, the function association, and — with `cfg.domain` unset — that the
+distribution has no `Aliases` and no `ViewerCertificate` referencing ACM.
 
 ---
 
-### P0-20 — `ObservabilityStack`
+### P0-17 — `ObservabilityStack`
 
-**Files.** `infra/lib/stacks/observability-stack.ts`,
-`infra/lib/constructs/alarm.ts`, `infra/observability/queries/*.txt`.
+**Files.** `infra/lib/stacks/observability-stack.ts`, `infra/lib/constructs/alarm.ts`,
+`infra/observability/queries/*.txt`.
 
 **Approach.** One SNS topic `od-alerts-{stage}` with an email subscription to
-`cfg.alertEmail`. The eight alarms from
-[`../02-architecture/aws-services.md#112-amazon-cloudwatch-logs-metrics-alarms`](../02-architecture/aws-services.md#112-amazon-cloudwatch-logs-metrics-alarms),
-of which Phase 0 can wire five (`api-5xx`, `api-errors`, `api-throttles`,
-`api-invocations-spike`, `api-p95-latency`); `ddb-throttles` too. `ses-bounce-rate` and
-`reminder-errors` arrive with the resources they watch (Phases 1 and 4). One CloudWatch
+`cfg.alertEmail`. The alarms from
+[`../02-architecture/aws-services.md#112-amazon-cloudwatch-logs-metrics-alarms`](../02-architecture/aws-services.md#112-amazon-cloudwatch-logs-metrics-alarms)
+that watch resources this phase writes: `api-5xx`, `api-errors`, `api-throttles`,
+`api-invocations-spike`, `api-p95-latency` and `ddb-throttles`. `ses-bounce-rate` and
+`reminder-errors` arrive with the resources they watch (Phases 5 and 6). One CloudWatch
 dashboard. Check in the Log Insights queries for the common investigations.
 
 Publish **no custom metrics** — the always-free allowance is 10 and every one beyond is
 $0.30/month. Business counters come from structured logs via Log Insights.
 
 **Edge cases.** An unconfirmed SNS email subscription means every alarm goes nowhere,
-silently. P0-35 confirms it explicitly.
+silently. Nothing is deployed in this phase, so nothing can be confirmed; **Phase 4 owns
+confirming the subscription and firing one alarm deliberately as evidence.** Record that
+explicitly in the stack's header comment so it is not assumed to have happened.
 
 **Tests.** CDK assertion test counting alarms and asserting each has an SNS action.
 
 ---
 
-### P0-22 — Scaffold `apps/mobile`
+### P0-19 — Scaffold `apps/mobile`
 
 **Files.**
 
@@ -672,178 +696,285 @@ apps/mobile/app/(app)/index.tsx
 apps/mobile/app/+not-found.tsx
 apps/mobile/app.config.ts
 apps/mobile/metro.config.js
-apps/mobile/eas.json                  profiles only; EAS project linked in Phase 4
+apps/mobile/eas.json                  profiles only; EAS project linked in Phase 5
 apps/mobile/src/lib/queryClient.ts
 apps/mobile/src/lib/apiClient.ts
 apps/mobile/tsconfig.json  package.json
 ```
 
 **Approach.** `npx create-expo-app` with the SDK 54 blank-TypeScript template, then delete
-its scaffolding down to the tree above and wire Expo Router. `app.config.ts` is exactly the
+its scaffolding down to the tree above and wire Expo Router. `app.config.ts` is the
 profile-driven config in
 [`../02-architecture/infrastructure.md#64-pointing-the-client-at-local--dev--prod`](../02-architecture/infrastructure.md#64-pointing-the-client-at-local--dev--prod),
 including the distinct bundle identifiers and URL schemes per profile and
-`web.output: "static"`.
+`web.output: "static"`. In Phase 0 only the `local` profile resolves to a working
+`apiBaseUrl`; the `dev` and `prod` entries stay in the table pointing at the hostnames Phase 4
+and Phase 5 will create, so the shape does not change later.
+
+The `local` entry must resolve to the LAN IP, not `localhost`, when Metro is serving a
+physical device. Derive it from `Constants.expoConfig.hostUri` (the host Metro is already
+serving from) with a `localhost` fallback, rather than hard-coding an address that changes
+every time the laptop joins a different network.
 
 `metro.config.js` is the workspace-aware config in
 [`../02-architecture/tech-stack.md#33-consuming-the-shared-package`](../02-architecture/tech-stack.md#33-consuming-the-shared-package)
-verbatim. Without `watchFolders` and `disableHierarchicalLookup`, edits to
-`packages/shared` will not hot-reload and will occasionally resolve to a stale copy.
+verbatim. Without `watchFolders` and `disableHierarchicalLookup`, edits to `packages/shared`
+will not hot-reload and will occasionally resolve to a stale copy.
 
 `queryClient.ts` uses the defaults in the same doc §3.4 (60 s `staleTime`, 7-day `gcTime`,
-`networkMode: 'offlineFirst'`). Persistence is Phase 2 (P2-28); Phase 0 ships the plain
+`networkMode: 'offlineFirst'`). Persistence is Phase 2 (P2-33); Phase 0 ships the plain
 client.
 
-**Edge cases.** React 19 plus React Native Web 0.20 requires that `react`, `react-dom`,
-`react-native` and `react-native-web` versions match exactly across `apps/mobile` and
-`packages/ui`. `syncpack` enforces it; run `npx expo install --fix` after any change and
-`npx expo-doctor` before committing.
+**Edge cases.**
+
+- React 19 plus React Native Web 0.20 requires that `react`, `react-dom`, `react-native` and
+  `react-native-web` versions match exactly across `apps/mobile` and `packages/ui`. `syncpack`
+  enforces it; run `npx expo install --fix` after any change and `npx expo-doctor` before
+  committing.
+- Everything in Phase 0 runs inside **Expo Go**, which carries a fixed set of native modules.
+  The first dependency needing a config plugin or a custom native module — `expo-secure-store`
+  is fine, `expo-apple-authentication` is not — forces a development build. That happens in
+  Phase 4. Keep the `development` profile in `eas.json` now so the switch is a build command,
+  not a configuration project.
 
 **Tests.** `pnpm --filter @od/mobile exec expo export --platform web` produces `dist/`.
-`npx expo-doctor` passes. A Vitest render test on the root layout is not required at this
-stage; the E2E harness lands in Phase 1.
+`npx expo-doctor` passes.
 
 ---
 
-### P0-23 — Shared HTTP client and the `health` endpoint function
+### P0-20 — Shared HTTP client and the `health` endpoint function
 
 **Files.** `packages/shared/src/client/http.ts`,
-`packages/shared/src/client/endpoints/health.ts`,
-`packages/shared/src/client/index.ts`,
+`packages/shared/src/client/endpoints/health.ts`, `packages/shared/src/client/index.ts`,
 `packages/shared/src/schemas/health.ts`.
 
-**Approach.** `http.ts` is a `fetch` wrapper taking an injected `fetch` implementation, a
-base URL, and a token provider. It sets `X-Request-Id`, `X-Client-Timezone` and
-`X-Client-Version` on every request, injects `Authorization` when a token is available,
-parses the `{ data, meta }` / `{ error }` envelope, maps error bodies onto a typed
-`ApiError` carrying the `ErrorCode`, and retries idempotent `GET`s up to three times on
+**Approach.** `http.ts` is a `fetch` wrapper taking an injected `fetch` implementation, a base
+URL, and a token provider. It sets `X-Request-Id`, `X-Client-Timezone` and `X-Client-Version`
+on every request, parses the `{ data, meta }` / `{ error }` envelope, maps error bodies onto a
+typed `ApiError` carrying the `ErrorCode`, and retries idempotent `GET`s up to three times on
 network failure and `5xx` with jittered backoff. It never retries a `POST` without an
 `Idempotency-Key`.
+
+The token provider is an **interface parameter from the first commit**, not an optional
+extra. Phase 0 passes a provider that yields nothing and the client adds no `Authorization`
+header; Phase 1 names the interface `AuthTokenProvider` and ships `NullTokenProvider`
+(P1-19); Phase 4 swaps in the Cognito implementation. The header-injection code path is
+written once, here, and never edited again.
 
 Response validation: `safeParse` against the endpoint's Zod schema. In `dev` and `test`
 builds a parse failure throws; in production it logs a warning and returns the raw body — a
 server that added a field must not break a shipped app.
 
-**Edge cases.** No `process.env` reads in this package. Configuration arrives as
-constructor arguments from `apps/mobile/src/lib/apiClient.ts`, which is where Expo's
-`extra` is read.
+**Edge cases.** No `process.env` reads in this package. Configuration arrives as constructor
+arguments from `apps/mobile/src/lib/apiClient.ts`, which is where Expo's `extra` is read.
 
 **Tests.** Vitest with a stubbed `fetch`: envelope parsing, error mapping for each
 `ErrorCode`, retry counts and backoff on `500` and on a network throw, no retry on `400`,
-header injection, and the dev-throws / prod-warns response-validation split.
+header injection, a token provider yielding nothing produces **no** `Authorization` header at
+all (not an empty one), and the dev-throws / prod-warns response-validation split.
 
 ---
 
-### P0-24 — Hello-world screen on iOS and web
+### P0-21 — DynamoDB Local, the table script, and the local API server
 
-**What to build.** The proof that the whole loop closes.
+**Files.** `docker-compose.yml` (root), `services/api/scripts/create-local-table.ts`,
+`services/api/src/local.ts`, `services/api/.env.example`, `services/api/.env.local`
+(git-ignored).
 
-**Files.** `apps/mobile/app/(app)/index.tsx`,
-`apps/mobile/src/lib/apiClient.ts`,
-`apps/mobile/src/features/health/hooks/useHealth.ts`.
-
-**Approach.** One screen, one `useQuery` in a feature hook calling
-`api.getHealth()`. Render the stage, the SHA and the round-trip time. `apiClient.ts`
-constructs the shared client from `Constants.expoConfig.extra.apiBaseUrl`. Layering rule
-from
-[`../02-architecture/tech-stack.md#32-layering`](../02-architecture/tech-stack.md#32-layering)
-applies from the first screen: the route calls a feature hook, the hook is the only place
-`useQuery` appears, and the hook calls the shared client. A `fetch` call in a component is
-a review rejection even here.
-
-**Edge cases.** On the iOS simulator `http://localhost:3000` reaches the host machine
-directly. On a physical device use the LAN IP and add an ATS exception in the **dev** app
-config only. Never in prod.
-
-**Verification, both platforms:**
-
-```bash
-pnpm --filter @od/mobile ios       # simulator boots, screen shows the dev SHA
-pnpm --filter @od/mobile web       # localhost:8081 shows the same
-```
-
-**Tests.** A Playwright test against the exported web build asserting the SHA element is
-present and non-empty (wired in P0-30). A Maestro flow is deferred to Phase 1, when there
-is a screen worth driving.
-
----
-
-### P0-25 — Local development: DynamoDB Local, table script, local API server
-
-**Files.** `docker-compose.yml` (root),
-`services/api/scripts/create-local-table.ts`,
-`services/api/scripts/seed-dev.ts`,
-`services/api/src/local.ts`,
-`services/api/.env.example`.
-
-**Approach.** `docker-compose.yml` verbatim from
-[`../02-architecture/infrastructure.md#61-dynamodb-local`](../02-architecture/infrastructure.md#61-dynamodb-local).
-`create-local-table.ts` imports `infra/lib/table-schema.ts` so the local table and the CDK
-table share one definition.
+**Approach.** `docker-compose.yml` takes the two DynamoDB services from
+[`../02-architecture/infrastructure.md#61-dynamodb-local-and-minio`](../02-architecture/infrastructure.md#61-dynamodb-local-and-minio),
+including `dynamodb-admin` on `:8001` — being able to look at the rows is worth one container.
+The `minio` service in that block belongs to Phase 3 (P3-21) and is not added here.
+`create-local-table.ts` imports `@od/shared/table` and maps it onto a `CreateTableCommand`, so
+the local table and `DataStack` share one definition. It is idempotent: an existing table with
+a matching schema is a no-op, an existing table with a *different* schema is deleted and
+recreated with a printed warning, because a laptop table is disposable.
 
 ```bash
 docker compose up -d
 pnpm --filter @od/api ddb:create-table
-pnpm --filter @od/api ddb:seed
 pnpm --filter @od/api dev            # tsx watch src/local.ts, port 3000
 ```
 
-`.env.example` documents every variable with placeholder values and is the only `.env*`
-file in git.
+Local environment (`services/api/.env.local`), with the Cognito variables that
+`infrastructure.md` §6.2 lists **omitted** — there is no user pool until Phase 4:
 
-**Edge cases.** `AUTH_MODE=dev-bypass` must be guarded by an assertion that
-`STAGE === 'local'`, and a unit test must assert the guard, so it cannot exist in a
-deployed build. Write both now, before there is any auth to bypass — retrofitting the guard
-after the bypass exists is how it ships.
+```
+STAGE=local
+LOG_LEVEL=debug
+TABLE_NAME=od-main-local
+DDB_ENDPOINT=http://localhost:8000
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=local
+AWS_SECRET_ACCESS_KEY=localsecret
+MEDIA_BUCKET=od-media-local
+```
 
-**Tests.** An integration test that starts against DynamoDB Local, creates the table,
-round-trips an item, and asserts the local key schema equals the synthesised CDK table's
-key schema attribute for attribute.
+`.env.example` documents every variable with placeholder values and is the only `.env*` file
+in git. Phase 1 adds `AUTH_MODE=local` to both files.
+
+**Edge cases.**
+
+- DynamoDB Local requires credentials to be *present*, not valid. The literal strings above
+  are correct; omitting them produces a confusing `CredentialsProviderError` rather than a
+  connection error.
+- The `./.dynamodb-data` volume persists across `docker compose down`. That is wanted — the
+  seeded data from Phase 1 survives a restart — but it also means a stale table can outlive a
+  schema change. `pnpm --filter @od/api ddb:create-table` is the reset button and must stay
+  cheap enough to run without thinking.
+
+**Tests.** An integration test that creates the table against DynamoDB Local, round-trips an
+item, and asserts the local table's `KeySchema`, `AttributeDefinitions` and
+`GlobalSecondaryIndexes` equal the synthesised `DataStack` table's, attribute for attribute.
+This is the test that makes "the local database is the real schema" a fact rather than a
+hope, and it must run in CI (which has Docker) not only on the laptop.
 
 ---
 
-### P0-26 — Vitest configuration and coverage gates
+### P0-22 — Health screen on simulator, web and a physical iPhone
+
+**What to build.** The proof that the whole local loop closes on all three targets.
+
+**Files.** `apps/mobile/app/(app)/index.tsx`, `apps/mobile/src/lib/apiClient.ts`,
+`apps/mobile/src/features/health/hooks/useHealth.ts`.
+
+**Approach.** One screen, one `useQuery` in a feature hook calling `api.getHealth()`. Render
+the stage, the SHA, the resolved API base URL and the round-trip time. `apiClient.ts`
+constructs the shared client from `Constants.expoConfig.extra.apiBaseUrl`. The layering rule
+from
+[`../02-architecture/tech-stack.md#32-layering`](../02-architecture/tech-stack.md#32-layering)
+applies from the first screen: the route calls a feature hook, the hook is the only place
+`useQuery` appears, and the hook calls the shared client. A `fetch` call in a component is a
+review rejection even here.
+
+Rendering the resolved base URL on screen is not decoration. It is what turns "the device
+shows a spinner forever" into "the device is calling `http://localhost:3000`" in one glance.
+
+**Verification, all three targets:**
+
+```bash
+pnpm --filter @od/mobile ios          # simulator; localhost:3000 reaches the host directly
+pnpm --filter @od/mobile web          # localhost:8081 in a browser
+pnpm --filter @od/mobile start        # scan the QR code with Expo Go on the iPhone
+```
+
+**Edge cases.**
+
+- On a physical device `localhost` is the phone. The base URL must resolve to the laptop's
+  LAN IP, which P0-19 derives from `hostUri`.
+- iOS blocks cleartext HTTP by default. Add an ATS exception for the LAN address range in the
+  **dev/local** app config only, never in the production config. Expo Go applies the
+  exception from the manifest; a development build in Phase 4 needs it in `app.config.ts`
+  under `ios.infoPlist`.
+- The laptop firewall must allow inbound connections on 3000 and 8081. macOS prompts once;
+  denying that prompt is the single most common cause of "it works on the simulator and not
+  on the phone".
+- Corporate and guest Wi-Fi networks often isolate clients from each other. If the device
+  cannot reach the laptop at all, test on a phone hotspot before debugging the code.
+
+**Tests.** A Playwright test against the exported web build asserting the health element is
+present and non-empty (wired in P0-29). The physical-device leg is verified manually and
+recorded, with a screenshot, in the phase's completion notes — there is no way to automate it
+and no substitute for doing it.
+
+---
+
+### P0-23 — `pnpm dev`: one command, and the clean-clone check
+
+**What to build.** The goal of the phase, made into a single command.
+
+**Files.** Root `package.json` scripts, `scripts/dev-preflight.mjs`, `README.md` quickstart.
+
+**Approach.** `pnpm dev` runs `turbo run dev --parallel`, which starts the API and Metro. The
+missing piece is the database, and `docker compose up -d` is exactly the step a new developer
+forgets. Two acceptable shapes:
+
+```json
+{ "scripts": { "dev": "node scripts/dev-preflight.mjs && turbo run dev --parallel" } }
+```
+
+`dev-preflight.mjs` checks, in order, and fixes or fails with a one-line instruction:
+
+| Check | On failure |
+| --- | --- |
+| Node version matches `.nvmrc` | Fail, printing the expected and actual versions |
+| Docker daemon is reachable | Fail with `Start Docker Desktop and re-run` |
+| DynamoDB Local answers on `:8000` | Run `docker compose up -d` and wait for it |
+| The table `od-main-local` exists | Run the P0-21 create-table script |
+| `services/api/.env.local` exists | Copy `.env.example` and print what was copied |
+
+Every check is idempotent and the whole preflight is under two seconds when everything is
+already up.
+
+**Edge cases.** The preflight must never *silently* fix something a developer would want to
+know about. Printing one line per action taken is the difference between a helpful script and
+a magic one.
+
+**Tests.** The real test is the clean-clone check, and it is a phase acceptance criterion:
+from a fresh `git clone` on a machine with only Node, pnpm and Docker installed,
+`pnpm install && pnpm dev` reaches a working health screen with no other command and no
+manual editing of any file. Run it in a throwaway directory, timed, before calling the phase
+done. A second developer, or the same developer six weeks later, gets exactly this experience
+and nothing more.
+
+---
+
+### P0-24 — Vitest configuration and coverage gates
 
 **Files.** `vitest.workspace.ts` at the root, `vitest.config.ts` per workspace,
 `packages/shared/vitest.config.ts` carrying the coverage thresholds.
 
 **Approach.** `@vitest/coverage-v8`. Global thresholds: 70% statements repo-wide as a floor
-that rises with each phase. Path-scoped thresholds at **100% statements and branches** for
-`packages/shared/src/recurrence/**` and `packages/shared/src/money/**`, per the brief. Those
-directories do not exist yet; configure the thresholds now with an `allowExternal: false`
-and a placeholder file so the gate is live the moment the first line is written, rather
-than being added after the code and tuned down to fit it.
+that rises with each phase, per
+[`definition-of-done.md`](definition-of-done.md) §3. Path-scoped thresholds at **100%
+statements and branches** for `packages/shared/src/recurrence/**` and
+`packages/shared/src/money/**`. Those directories do not exist yet; configure the thresholds
+now against a placeholder file so the gate is live the moment the first line is written,
+rather than being added after the code and tuned down to fit it.
+
+Integration tests are a separate Vitest project (`test:int`) so that `pnpm test` runs with no
+Docker requirement and `pnpm test:int` requires it. CI runs both.
 
 **Tests.** Meta: a deliberately uncovered branch in the placeholder recurrence file fails
 `pnpm turbo run test -- --coverage`.
 
 ---
 
-### P0-27 — OpenAPI generation harness
+### P0-25 — OpenAPI generation harness
 
-**Files.** `packages/shared/src/openapi.ts`,
-root script `gen:openapi`, output `docs/generated/openapi.json`.
+**Files.** `packages/shared/src/openapi.ts`, root script `gen:openapi`, output
+`docs/generated/openapi.json`.
 
 **Approach.** Register each Zod schema with `zod-to-openapi` as it is written and emit the
 document to `docs/generated/openapi.json`, which is **checked in**. In Phase 0 only
-`/v1/health` is registered. CI regenerates and fails on a diff, so the spec cannot drift
-from the schemas. This is how a new agent discovers the API without reading every handler.
+`/v1/health` is registered. CI regenerates and fails on a diff, so the spec cannot drift from
+the schemas. This is how a new agent discovers the API without reading every handler.
 
-**Tests.** `pnpm run gen:openapi && git diff --exit-code docs/generated/openapi.json`
-passes; adding a field to a schema without regenerating fails it.
+**Edge cases.** The generated document has no `servers` block in Phase 0, because there is no
+deployed URL. Emit `servers: [{ url: "http://localhost:3000" }]` rather than omitting the key
+entirely, so Phase 4 adds an entry instead of introducing a field and producing a large diff.
+
+**Tests.** `pnpm run gen:openapi && git diff --exit-code docs/generated/openapi.json` passes;
+adding a field to a schema without regenerating fails it.
 
 ---
 
-### P0-28 — CDK assertion tests
+### P0-26 — CDK assertion tests
 
 **Files.** `infra/test/*.test.ts` using `aws-cdk-lib/assertions` under Vitest.
 
-**Approach.** One test file per stack. Assert the properties that would be expensive to get
-wrong and invisible if they were: table key schema and GSI projection type, bucket public
-access blocks, the API integration pointing at the alias, Lambda runtime and architecture,
-log retention values per stage, alarm count and SNS actions, `RemovalPolicy.RETAIN` on prod
-stateful resources, and the absence of any `AWS::EC2::NatGateway` anywhere in any
-synthesised template.
+**Approach.** One test file per stack. In a phase where nothing is deployed, these tests are
+the *only* thing standing between a written stack and a broken one, so they carry more weight
+here than they will later. Assert the properties that would be expensive to get wrong and
+invisible if they were: table key schema and GSI projection type, bucket public access blocks,
+the API integration pointing at the alias, Lambda runtime and architecture, log retention
+values per stage, alarm count and SNS actions, the OIDC trust policy condition,
+`RemovalPolicy.RETAIN` on prod stateful resources, and the absence of any
+`AWS::EC2::NatGateway` anywhere in any synthesised template.
+
+Add two assertions specific to the local-first shape: with the domain fields unset, no stack
+emits a `AWS::CertificateManager::Certificate`, an `AWS::Route53::RecordSet`, or an API
+Gateway domain name; and every stack synthesises with no environment configured.
 
 **Edge cases.** Snapshot tests over whole templates are brittle and get regenerated
 thoughtlessly. Assert named properties, not snapshots.
@@ -852,175 +983,235 @@ thoughtlessly. Assert named properties, not snapshots.
 
 ---
 
-### P0-30 — `ci.yml` — validate and synth
+### P0-27 — dependency-cruiser rules and the three grep checks
+
+**Files.** `.dependency-cruiser.cjs`, root script `depcruise`.
+
+**Approach.** The rule set in
+[`../04-conventions/repo-structure.md#4-how-the-rules-are-enforced`](../04-conventions/repo-structure.md#4-how-the-rules-are-enforced)
+verbatim, plus the three grep checks in the same section as separate CI steps so a failure
+names the rule that broke.
+
+Configure it in Phase 0, when most rules have nothing to catch. A dependency rule added after
+the violating import exists is a refactor; added before, it is a two-second CI step that has
+never once been argued with. `shared-is-a-leaf`, `no-react-in-shared`,
+`no-aws-sdk-in-shared-or-ui` and `no-server-code-in-client` all have real subjects from this
+phase; `ddb-only-in-repositories` and `layers-are-one-way` have none until Phase 1 and are
+configured anyway.
+
+**Edge cases.** `no-orphans` is `warn`, not `error`, and stays that way — config files and
+`.d.ts` shims trip it constantly and a warning that is always present is a rule nobody reads.
+If it becomes noise, tighten `pathNot` rather than deleting the rule.
+
+**Tests.** Meta: add a scratch file importing `@aws-sdk/client-dynamodb` from
+`packages/shared`, confirm `pnpm depcruise` fails naming `no-aws-sdk-in-shared-or-ui`, then
+delete it. Do the same for one layering rule. A rule that has never been seen to fail is not
+known to work.
+
+---
+
+### P0-29 — `ci.yml` — typecheck, lint, test, depcruise, synth
 
 **Files.** `.github/workflows/ci.yml`, `scripts/check-bundle-size.mjs`,
 `scripts/check-node-versions.mjs`.
 
 **Approach.** The workflow in
-[`../02-architecture/infrastructure.md#71-ciyml--validation-on-every-pr`](../02-architecture/infrastructure.md#71-ciyml--validation-on-every-pr)
-verbatim, plus a `check-node-versions.mjs` step asserting `.nvmrc`,
-`package.json#engines` and the CDK `Runtime.NODEJS_22_X` all agree, and an
-`npx expo-doctor` step.
+[`../02-architecture/infrastructure.md#71-ciyml--validation-on-every-pr`](../02-architecture/infrastructure.md#71-ciyml--validation-on-every-pr),
+with one deliberate change: **the `synth` job takes no AWS credentials.** It runs
+`pnpm --filter @od/infra exec cdk synth 'od-*-dev'` instead of `cdk diff`, and has no
+`id-token: write` permission and no `configure-aws-credentials` step. There is nothing
+deployed to diff against, and a job that needs credentials is a job that cannot run on a fork
+PR. Phase 4 adds the credentialled `cdk diff` step back and re-adds the permission.
 
-The `synth` job assumes `od-github-deploy-dev` through OIDC and posts `cdk diff` to the PR.
-A fork PR gets no `id-token: write` and therefore no credentials; the diff step must be
-conditional on `github.event.pull_request.head.repo.full_name == github.repository` rather
-than failing.
+Jobs:
+
+| Job | Steps |
+| --- | --- |
+| `validate` | install, `biome ci .`, `check-node-versions.mjs`, `turbo run typecheck`, `turbo run test -- --coverage`, `gen:openapi` + `git diff --exit-code`, build the API bundle + `check-bundle-size.mjs`, `expo-doctor`, gitleaks, upload coverage |
+| `depcruise` | install, `pnpm depcruise`, then the three grep checks as separate steps |
+| `integration` | `docker compose up -d`, wait for `:8000`, `pnpm test:int` |
+| `synth` | install, `cdk synth 'od-*-dev'`, no credentials |
 
 Caching: `actions/setup-node`'s pnpm store cache plus `actions/cache` on
 `node_modules/.cache/turbo`.
 
-**Tests.** A deliberately failing lint, a stale `openapi.json`, and an oversized bundle each
-fail the job in a scratch PR. Verify all three before merging the workflow.
+**Edge cases.** `cdk synth` bundles the API with esbuild (P0-10), so the `synth` job is also a
+build check and will fail on a type-level error that `tsc` allowed through — usually an import
+of something that does not exist at runtime. Do not "speed it up" by stubbing the bundling;
+that is most of the job's value in a phase with no deploy.
+
+**Tests.** A deliberately failing lint, a stale `openapi.json`, an oversized bundle, a
+forbidden import and a broken stack each fail the job in a scratch PR. Verify all five before
+merging the workflow.
 
 ---
 
-### P0-31 — `deploy-dev.yml` and `scripts/smoke.mjs`
+### P0-30 — GitHub environments, branch protection, signed commits
 
-**Files.** `.github/workflows/deploy-dev.yml`, `scripts/smoke.mjs`.
-
-**Approach.** The workflow in
-[`../02-architecture/infrastructure.md#72-deploy-devyml--on-merge-to-main`](../02-architecture/infrastructure.md#72-deploy-devyml--on-merge-to-main).
-Order matters: build the web export **before** `cdk deploy`, because `WebStack`'s
-`BucketDeployment` consumes `apps/mobile/dist` as a CDK asset.
-
-`scripts/smoke.mjs` hits `GET /v1/health`, asserts `200`, and asserts the returned `sha`
-equals `process.env.GITHUB_SHA`. The authenticated half of the smoke test lands in Phase 1
-when there is a user pool to mint a token from; leave a clearly marked `TODO(P1)` for it
-rather than a silently skipped assertion.
-
-`concurrency: { group: deploy-dev, cancel-in-progress: false }` is deliberate — cancelling
-a CloudFormation deploy mid-flight leaves a stack in `UPDATE_IN_PROGRESS`.
-
-**Tests.** Merge a no-op commit to `main` and watch a clean deploy plus a passing smoke run.
-
----
-
-### P0-32 — `deploy-prod.yml` and the release tag flow
-
-**Approach.** The workflow in
-[`../02-architecture/infrastructure.md#73-deploy-prodyml--on-tag`](../02-architecture/infrastructure.md#73-deploy-prodyml--on-tag).
-Deploy the prod stacks once in this phase so that the prod path is proven while it is
-cheap: a prod `HttpApi` serving `/v1/health` and an empty prod table cost nothing. A first
-prod deploy attempted for the first time in Phase 4, under time pressure, discovers every
-certificate and DNS problem at the worst moment.
-
-**Edge cases.** The `production` GitHub environment must exist with a required reviewer and
-a 5-minute wait timer before the first tag is pushed, or the job runs unapproved.
-
-**Tests.** Tag `v0.0.1`, approve, watch the prod deploy and prod smoke pass. Confirm
-`https://api.ordinarydays.app/v1/health` returns `200`.
-
----
-
-### P0-34 — GitHub environments, branch protection, signed commits
-
-**Approach.** Create the `development` and `production` GitHub environments. On
-`production`: required reviewer (yourself), 5-minute wait timer, and deployment branches
-restricted to tags matching `v*`. Set `vars.AWS_ACCOUNT_ID` at the repository level.
+**Approach.** Create the `development` and `production` GitHub environments now, even though
+nothing deploys to either until Phase 4. On `production`: required reviewer (yourself),
+5-minute wait timer, and deployment branches restricted to tags matching `v*`. Set
+`vars.AWS_ACCOUNT_ID` at the repository level.
 
 Branch protection on `main` exactly as
 [`../02-architecture/infrastructure.md#76-branch-protection-on-main`](../02-architecture/infrastructure.md#76-branch-protection-on-main):
 PR required, up-to-date branches, conversation resolution, linear history, no force pushes,
-signed commits, zero required approvals. The full required-check set is
-`validate`, `integration`, `synth`, `depcruise`; only `validate` and `synth` exist in
-Phase 0, so add the other two to the rule as their jobs land.
+signed commits, zero required approvals. The required-check set is the four jobs from P0-29:
+`validate`, `depcruise`, `integration`, `synth`. All four exist in Phase 0, so all four are
+required from the first PR.
 
-Set up commit signing locally (SSH signing is simplest) before enabling the rule, or you
-will not be able to push.
+Set up commit signing locally (SSH signing is simplest) before enabling the rule, or you will
+not be able to push.
 
 ---
 
-### P0-35 — First deploy, SNS confirmation, cost allocation tags
+### P0-31 — Deploy smoke test: bootstrap, one throwaway stack, destroy
+
+**What to build.** A single end-to-end proof that this repository can deploy to this AWS
+account through GitHub Actions, followed by deleting everything it made. This is a test of
+the pipeline, not the start of an environment.
+
+**Files.** `infra/lib/stacks/smoke-stack.ts`, `.github/workflows/deploy-smoke.yml`.
 
 **Approach.**
 
-```bash
-cd infra
-pnpm exec cdk deploy od-account
-pnpm exec cdk deploy 'od-*-dev' --require-approval never
-```
+1. Bootstrap CDK from the laptop:
 
-Then, in order:
+   ```bash
+   cd infra
+   export CDK_DEFAULT_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+   export CDK_DEFAULT_REGION=us-east-1
 
-1. Confirm the SNS subscription email that lands in the alert inbox. An unconfirmed
-   subscription means every alarm goes nowhere.
-2. Billing and Cost Management → **Cost allocation tags** → activate `Project`, `Stage` and
-   `Component`. They are **not retroactive** — they only appear in cost reports from the day
-   they are activated, so do it on day one.
-3. Confirm the bootstrap budget from P0-03 still exists alongside the `AccountStack`
-   budgets; delete the bootstrap one only after the permanent ones have fired a test alert.
+   pnpm exec cdk bootstrap "aws://${CDK_DEFAULT_ACCOUNT}/us-east-1" \
+     --qualifier odays \
+     --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
+   ```
 
-**Tests.** Trigger one alarm deliberately (set the `api-invocations-spike` threshold to 1,
-deploy, call the API, confirm the email arrives, revert). An alarm nobody has ever seen fire
-is an alarm you do not know works.
+   The qualifier must also appear in `infra/cdk.json` under
+   `"@aws-cdk/core:bootstrapQualifier": "odays"`, exactly as in
+   [`../02-architecture/infrastructure.md#36-bootstrap-cdk`](../02-architecture/infrastructure.md#36-bootstrap-cdk).
+
+2. Deploy only the OIDC provider and the `od-github-deploy-dev` role from `AccountStack`
+   (P0-11), scoped so this is the only part of that stack that lands.
+3. `SmokeStack` contains exactly one resource: an `AWS::SSM::Parameter` with a fixed name and
+   the value `ok`. It costs nothing, deploys in under a minute, and deletes cleanly.
+4. `deploy-smoke.yml` is `workflow_dispatch` only. It assumes `od-github-deploy-dev` through
+   OIDC, runs `cdk deploy od-smoke-dev --require-approval never`, reads the parameter back
+   with the CLI to prove the deploy actually took effect, then runs
+   `cdk destroy od-smoke-dev --force` and asserts the stack is gone.
+5. Run it. Then confirm in the console that `od-smoke-dev` no longer exists and the SSM
+   parameter is gone.
+
+**Why this belongs at the end of Phase 0.** Five things have to be simultaneously correct
+before any `cdk deploy` from CI works: the bootstrap stack exists with the right qualifier;
+the CDK execution policy is broad enough; the OIDC provider's thumbprint and audience are
+right; the role's trust policy `sub` condition matches this repository and ref; and the
+workflow requests `id-token: write`. Each failure mode produces a different and not
+especially clear error. Discovering all five for the first time in Phase 4 — in the same
+change that introduces a Cognito user pool, a real table, and a custom domain — means
+debugging two unrelated problems at once and not knowing which is which. Twenty minutes here
+buys that separation.
+
+> **Decision:** what survives Phase 0 inside AWS is exactly: the account, the console budget
+> and anomaly monitor, IAM Identity Center and its permission set, the CDK bootstrap stack
+> (`CDKToolkit`: an empty S3 bucket, an unused ECR repository, five roles), and the GitHub
+> OIDC provider with one deploy role. Every one of those is $0/month at rest and every one is
+> needed by Phase 4. `SmokeStack` and anything else is destroyed. The bootstrap is deliberately
+> left in place rather than being torn down and repeated: `cdk bootstrap` is idempotent and
+> re-bootstrapping with a *different* qualifier creates a second, unused set of roles and
+> buckets, which is the failure this task exists to prevent. **Phase 4 verifies the bootstrap
+> rather than repeating it**, and owns it outright if this task was skipped.
+
+**Edge cases.**
+
+- Do not deploy `DataStack` "since it is cheap". An empty on-demand table is nearly free, but
+  it is a stateful resource with a lifecycle, and once it exists somebody will point local
+  development at it. Local development uses DynamoDB Local for all of Phases 0 to 3, without
+  exception.
+- `cdk destroy` does not remove the bootstrap bucket's contents. It does not need to; the
+  assets are a few hundred kilobytes and the bucket has a lifecycle rule.
+- If the account is fewer than 24 hours old, some API calls are rate-limited or briefly
+  unavailable. A failure here that looks like a permissions problem may simply be a new
+  account; retry before rewriting the trust policy.
+
+**Tests.** The workflow run is the test, and its log is the evidence. Record the run URL in
+the phase completion notes. Additionally assert in the workflow, not by eye, that
+`aws cloudformation describe-stacks --stack-name od-smoke-dev` fails after the destroy step —
+a destroy that silently no-ops is exactly the failure this task must not miss.
 
 ## Acceptance criteria
 
-1. Billing and Cost Management shows the account plan as **Paid**, root has MFA enabled,
-   and root has zero access keys.
-2. A budget named `od-bootstrap-zero-spend` or its `AccountStack` successor exists, and a
-   test alarm email has been received and archived.
-3. `dig NS ordinarydays.app` returns AWS name servers, and the domain shows auto-renew on
-   in the Route 53 console.
-4. From a clean clone: `pnpm install && pnpm turbo run build lint typecheck test` exits 0
-   in under 5 minutes on a warm cache.
-5. `pnpm exec cdk synth 'od-*-dev'` emits templates for eight stacks with no errors.
-6. `curl -s https://api.dev.ordinarydays.app/v1/health` returns HTTP 200 and a body whose
-   `data.sha` equals the SHA of the commit currently on `main`.
-7. `curl -s https://api.ordinarydays.app/v1/health` returns HTTP 200 (prod path proven).
-8. `curl -I https://dev.ordinarydays.app` returns HTTP 200 with a `strict-transport-
-   security` header, and `https://dev.ordinarydays.app/any/deep/path` returns the app shell
-   rather than a 403.
-9. `pnpm --filter @od/mobile ios` boots the simulator and the first screen displays the dev
-   stage, the deployed SHA and a round-trip time.
-10. `pnpm --filter @od/mobile web` serves the identical screen at `localhost:8081` from the
-    same source file, with no platform-specific screen file.
-11. Merging a no-op PR to `main` runs `validate` and `synth`, then deploys dev and passes
-    `scripts/smoke.mjs`, with no AWS access key stored in GitHub (check: repository secrets
-    contain no `AWS_ACCESS_KEY_ID`).
-12. Pushing tag `v0.0.1` blocks on the `production` environment approval, then deploys prod
-    and passes prod smoke.
-13. `docker compose up -d && pnpm --filter @od/api ddb:create-table && pnpm --filter @od/api
-    dev` serves `http://localhost:3000/v1/health` with `stage: "local"`.
-14. `pnpm run gen:openapi && git diff --exit-code docs/generated/openapi.json` exits 0.
-15. A synthesised template search for `AWS::EC2::NatGateway` returns nothing.
-16. The AWS bill for the phase, excluding the domain registration, is under $1.
+1. Billing and Cost Management shows the account plan as **Paid**, root has MFA enabled, and
+   root has zero access keys.
+2. A budget named `od-bootstrap-zero-spend` exists and a test alert email has been received
+   and archived.
+3. `aws sts get-caller-identity` from the laptop returns an assumed-role ARN, and the account
+   contains no IAM user with an access key.
+4. From a clean clone on a machine with only Node, pnpm and Docker:
+   `pnpm install && pnpm dev` reaches a working health screen with no other command and no
+   manual file editing. Timed and recorded.
+5. `pnpm verify` (lint, typecheck, test, depcruise) exits 0 in under 5 minutes on a warm
+   cache.
+6. `pnpm exec cdk synth 'od-*-dev'` emits templates for eight stacks with `AWS_PROFILE` unset
+   and no network access.
+7. `curl -s http://localhost:3000/v1/health` returns HTTP 200 with `data.stage === "local"`.
+8. `pnpm --filter @od/mobile ios` boots the simulator and the first screen displays the
+   stage, the SHA, the resolved base URL and a round-trip time.
+9. `pnpm --filter @od/mobile web` serves the identical screen at `localhost:8081` from the
+   same source file, with no platform-specific screen file.
+10. The same screen loads on a physical iPhone through Expo Go over the LAN and shows the
+    laptop's LAN address as the resolved base URL. Verified with a screenshot.
+11. The integration test asserting the DynamoDB Local table's key schema equals the
+    synthesised `DataStack` table's passes in CI, not only locally.
+12. `pnpm run gen:openapi && git diff --exit-code docs/generated/openapi.json` exits 0.
+13. A scratch PR containing a forbidden import fails `depcruise` naming the specific rule.
+14. A synthesised template search for `AWS::EC2::NatGateway` returns nothing.
+15. The `deploy-smoke.yml` run succeeded and `od-smoke-dev` no longer exists. Run URL
+    recorded.
+16. Exactly two CloudFormation stacks exist: `CDKToolkit`, and the deliberately partial
+    `AccountStack` holding only the GitHub OIDC provider and the `od-github-deploy-dev`
+    role retained by P0-31. Outside CloudFormation, the console budget and anomaly monitor
+    from P0-03 remain. Nothing else belonging to this project exists — no `od-smoke-dev`,
+    and no DynamoDB table, Lambda function, API, S3 bucket or CloudFront distribution.
+17. The AWS bill for the phase is $0.00.
 
 ## Out of scope for this phase
 
 | Do not build | Owned by |
 | --- | --- |
-| Cognito user pool, sign-up, sign-in, any auth middleware beyond a stub | Phase 1 (P1-01…P1-05) |
+| `cdk bootstrap` as the entry to a standing environment; any lasting deployed resource; `deploy-dev.yml`; `nightly.yml`; the SNS subscription confirmation and the first deliberate alarm fire | Phase 4 |
+| Cognito user pool, sign-up, sign-in, any identity middleware beyond the seam Phase 1 defines | Phase 4 |
+| Domain registration, the Route 53 hosted zone, ACM certificates, the API and web custom domains, `deploy-prod.yml` | Phase 5 |
 | Any DynamoDB repository, entity, or key construction beyond the health check's absence of one | Phase 1 |
-| The Activity model, the Add screen, any creation form | Phase 1 |
+| The Activity model, the Add screen, any creation form, the seed script | Phase 1 |
 | The recurrence engine — including "just a little of it" in `packages/shared` | Phase 2 |
 | `GET /v1/agenda`, the Today screen, any of its four sections | Phase 2 |
 | Lists, list items, the lists tab beyond an empty placeholder | Phase 3 |
-| Attachments, presigned uploads, the media distribution's cache tuning | Phase 3 (P3-13…P3-15) |
-| Push notifications, EventBridge Scheduler, the reminder Lambda | Phase 4 |
-| EAS build credentials, App Store Connect, TestFlight | Phase 4 |
-| The full Content Security Policy (ship report-only now) | Phase 4 (P4-02) |
-| SES production access — dev stays in the sandbox | Phase 5 |
-| DynamoDB Streams, the maintenance Lambda | Phase 6 |
-| Any `/v1/capture/*` implementation; the `501` stubs themselves are Phase 1 | Phase 7 |
-| A design system beyond the primitives needed to render one screen | Phase 1 (P1-29) |
+| Attachments, presigned uploads, the media distribution's cache tuning | Phase 3 |
+| Push notifications, EventBridge Scheduler, the reminder Lambda | Phase 5 |
+| EAS build credentials, App Store Connect, TestFlight, a development build of the app | Phase 5 |
+| The full Content Security Policy (write report-only now) | Phase 5 |
+| SES domain identity and production access | Phase 5 (P5-03, identity mail — it needs the domain) / Phase 6 (production access, for guest invitations) |
+| DynamoDB Streams, the maintenance Lambda | Phase 7 |
+| Any `/v1/capture/*` implementation; the `501` stubs themselves are Phase 1 | Phase 8 |
+| A design system beyond the primitives needed to render one screen | Phase 1 |
 | Provisioned concurrency, X-Ray, WAF, a VPC | Not in v1 at all |
 
 ## Risks and gotchas
 
 | Risk | Signal | Mitigation |
 | --- | --- | --- |
-| The account is left on the Free Plan and closes at six months | Billing → Free tier shows plan "Free" | P0-01 step 9 is a hard gate. Re-verify at the end of the phase and again in Phase 2. |
-| A NAT gateway or an idle always-on resource appears | The zero-spend budget fires | No Lambda is ever put in a VPC. The CDK assertion test in P0-28 fails the build on `AWS::EC2::NatGateway`. |
-| The SNS alert subscription is never confirmed | Alarms exist, no email ever arrives | P0-35 deliberately fires one alarm and requires the email as evidence. |
+| The stacks are written but never deployed, and rot | Phase 4 discovers that half the CDK code has never run | `cdk synth` on every PR (P0-29), which also bundles the API with esbuild, plus per-stack assertion tests (P0-26). Synth catches construction errors, not deployment errors — which is why P0-31 exists. |
+| The deploy path is broken and nobody finds out until Phase 4 | Phase 4's first `cdk deploy` fails on bootstrap, OIDC trust, or the execution policy, tangled up with a Cognito change | P0-31 deploys and destroys one trivial stack through the real GitHub Actions OIDC path, at the end of Phase 0. |
+| Local development quietly acquires an AWS dependency | Somebody points `DDB_ENDPOINT` at a deployed table "just to test something" | No table is deployed until Phase 4 (P0-31 edge cases). The `.env.example` has no AWS endpoint. There is nothing to point at. |
+| A CDK context lookup makes `cdk synth` require credentials | CI's `synth` job passes on the laptop and fails on a fork PR | No `fromLookup` anywhere; environment-agnostic stacks in Phase 0; the acceptance criterion runs synth with `AWS_PROFILE` unset. |
+| The account is left on the Free Plan and closes at six months | Billing → Free tier shows plan "Free" | P0-01 step 9 is a hard gate. Re-verify at the end of the phase and again before Phase 4's first deploy. |
+| The health screen works on the simulator and not on a device | A spinner that never resolves, blamed on the API | P0-22 makes the physical device a gated target and renders the resolved base URL on screen so the failure is one glance rather than one afternoon. |
+| Expo Go's fixed native module set is mistaken for the app's | Phase 4 adds `expo-apple-authentication` and nothing works | Noted in P0-19: the first config plugin forces a development build, and that is Phase 4's job, not a surprise. |
 | Metro resolves a stale copy of `@od/shared` | Editing `shared` does not hot-reload; type errors that disappear on restart | `watchFolders` + `disableHierarchicalLookup` in `metro.config.js`, exactly as specified. Do not "fix" it by hoisting node_modules. |
 | React / React Native / RNW version drift between `apps/mobile` and `packages/ui` | Invalid-hook-call errors that look like a React bug | `syncpack` in CI, `npx expo install --fix` after any Expo-managed package change, `expo-doctor` in `ci.yml`. |
-| The GSI projection is set to `ALL` "for now" | Nothing, until the agenda's cost and latency are wrong | P0-15's assertion test pins `ProjectionType: INCLUDE` and the non-key attribute list. Changing it later requires replacing the index. |
-| The Lambda alias is skipped and the integration points at `$LATEST` | Nothing, until a bad prod deploy needs a 30-second rollback and there is none | P0-18 wires the alias on day one; the CDK assertion test asserts the integration URI references it. |
-| CDK bootstrap qualifier mismatch | `cdk deploy` fails naming a missing SSM parameter | Set it in both the bootstrap command and `cdk.json` in the same commit. |
-| The first prod deploy is deferred to Phase 4 | Certificate, DNS and approval-gate problems all surface at launch | P0-32 deploys prod in Phase 0, when the blast radius is a health endpoint. |
-| Coverage gates are added after the recurrence engine and tuned down to fit it | 100% is quietly 82% | P0-26 configures the 100% path thresholds against a placeholder file before Phase 2 starts. |
-</content>
-</invoke>
+| The GSI projection is set to `ALL` "for now" | Nothing, until the agenda's cost and latency are wrong | P0-12's assertion test pins `ProjectionType: INCLUDE` and the non-key attribute list. Changing it later requires replacing the index. |
+| The Lambda alias is skipped and the integration points at `$LATEST` | Nothing, until a bad prod deploy needs a 30-second rollback and there is none | P0-15 wires the alias in the written stack; the CDK assertion test asserts the integration URI references it. |
+| CDK bootstrap qualifier mismatch | `cdk deploy` fails naming a missing SSM parameter | Set it in both the bootstrap command and `cdk.json` in the same commit (P0-31). Bootstrap once, with one qualifier. |
+| Coverage gates are added after the recurrence engine and tuned down to fit it | 100% is quietly 82% | P0-24 configures the 100% path thresholds against a placeholder file before Phase 2 starts. |
+| Two copies of the path-alias table drift | Types resolve in the editor and fail in Metro, or the reverse | One declaration in `tsconfig.base.json`, mirrored deliberately in `metro.config.js` and the Vitest configs, with a resolution test per consumer (P0-06). |

@@ -156,28 +156,39 @@ cfnClient.refreshTokenRotation = {
 
 ### 1.7 App clients
 
-Two public clients, **neither with a client secret**. A secret embedded in a shipped
-mobile app or a browser bundle is not a secret; PKCE is the correct mechanism for a public
-client and needs none.
+Three clients: two public ones for real users, **neither with a client secret**, and one
+non-public client used only by CI. A secret embedded in a shipped mobile app or a browser
+bundle is not a secret; PKCE is the correct mechanism for a public client and needs none.
 
-| | `od-mobile-{env}` | `od-web-{env}` |
-| --- | --- | --- |
-| Client secret | None | None |
-| Auth flows | `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH` | `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH` |
-| `ALLOW_USER_PASSWORD_AUTH` | **Disabled** | **Disabled** |
-| OAuth flows | Authorization code + PKCE | Authorization code + PKCE |
-| OAuth scopes | `openid`, `email`, `profile` | `openid`, `email`, `profile` |
-| Identity providers | Cognito, Apple | Cognito, Apple |
-| Callback URLs | `ordinarydays://auth/callback`, `ordinarydays-dev://auth/callback`, `exp://…` (dev only) | `https://ordinarydays.app/auth/callback`, `http://localhost:8081/auth/callback` (dev only) |
-| Logout URLs | `ordinarydays://auth/signout` | `https://ordinarydays.app/` |
-| Refresh token validity | 90 days | 30 days |
-| Prevent user existence errors | Yes | Yes |
-| Read attributes | `email`, `email_verified`, `name`, `custom:app_user_id`, `custom:tz` | same |
-| Write attributes | `name`, `custom:tz` | same |
+| | `od-mobile-{env}` | `od-web-{env}` | `od-ci-{env}` |
+| --- | --- | --- | --- |
+| Purpose | The iOS app | The web build | Smoke tests only. Never shipped to a user. |
+| Client secret | None | None | None |
+| Auth flows | `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH` | `ALLOW_USER_SRP_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH` | `ALLOW_ADMIN_USER_PASSWORD_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH` |
+| `ALLOW_USER_PASSWORD_AUTH` | **Disabled** | **Disabled** | **Disabled** |
+| `ALLOW_ADMIN_USER_PASSWORD_AUTH` | **Disabled** | **Disabled** | Enabled — this is the whole reason it exists |
+| OAuth flows | Authorization code + PKCE | Authorization code + PKCE | **None** |
+| OAuth scopes | `openid`, `email`, `profile` | `openid`, `email`, `profile` | — |
+| Identity providers | Cognito, Apple | Cognito, Apple | Cognito only |
+| Callback URLs | `ordinarydays://auth/callback`, `ordinarydays-dev://auth/callback`, `exp://…` (dev only) | `https://ordinarydays.app/auth/callback`, `http://localhost:8081/auth/callback` (dev only) | **None** |
+| Logout URLs | `ordinarydays://auth/signout` | `https://ordinarydays.app/` | **None** |
+| Refresh token validity | 90 days | 30 days | 1 day |
+| Prevent user existence errors | Yes | Yes | Yes |
+| Read attributes | `email`, `email_verified`, `name`, `custom:app_user_id`, `custom:tz` | same | same |
+| Write attributes | `name`, `custom:tz` | same | same |
 
 `ALLOW_USER_PASSWORD_AUTH` is disabled on purpose: it sends the plaintext password to
 Cognito's API. SRP never transmits the password at all. The client SDK handles SRP; there
 is no reason to accept the weaker flow.
+
+`od-ci-{env}` exists because the authenticated smoke test (`scripts/smoke.mjs`, Phase 4
+P4-16) mints an ID token for a dedicated test user with `AdminInitiateAuth`, which requires
+`ALLOW_ADMIN_USER_PASSWORD_AUTH` — a flow that must not exist on either client a real user's
+app talks to. Isolating it on a third client keeps that flow off the shipped clients. The CI
+role's IAM policy grants `cognito-idp:AdminInitiateAuth` on this pool and this client only.
+A CDK assertion test asserts neither public client declares either password flow, and a live
+check asserts `AdminInitiateAuth` against `od-mobile-{env}` is rejected and against
+`od-ci-{env}` succeeds. See `03-implementation/phase-04-deploy-and-identity.md` P4-09.
 
 `preventUserExistenceErrors: true` makes Cognito return the same generic error for "wrong
 password" and "no such user", which stops the sign-in form being used to enumerate who has
@@ -227,7 +238,8 @@ Runs once, after the email is verified. It is the only place a user profile is c
 1. Generate `userId = 'usr_' + ulid()`.
 2. `TransactWriteItems`:
    - Put `USER#<userId> / PROFILE` with the defaults (timezone from `custom:tz` or
-     `America/New_York`, currency `USD`, `weekStartsOn: 0`, onboarding state `new`), with
+     `America/New_York`, currency `USD`, `weekStartsOn: 0`, reminder default absent/Off,
+     onboarding state `new`), with
      `attribute_not_exists(pk)` so a retry cannot create a second profile.
    - Put `EMAIL#<lowercased-email> / USER` pointing at `userId`, also with
      `attribute_not_exists(pk)`.
@@ -521,15 +533,31 @@ rejects in combination with credentials anyway.
 
 ### 5.1 The verifier
 
+This is the body of `CognitoIdentityProvider`, which implements the `IdentityProvider`
+interface declared in `services/api/src/middleware/identity.ts` and is selected there by
+`AUTH_MODE=cognito`
+(`phase-01-activity-core.md` P1-01, `phase-04-deploy-and-identity.md` P4-17). The verifier
+construction, the JWKS hydration and the claim checks below are unchanged by the seam; what
+the seam changes is that the resolved value reaches handlers as `c.get('userId')` and no
+handler, service or repository knows a token was involved.
+
 ```ts
-// services/api/src/middleware/auth.ts
+// services/api/src/middleware/cognito-identity.ts
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
+import type { Context } from 'hono';
+import type { UserId } from '@od/shared/types';
+import type { IdentityProvider } from './identity';
 
 // Module scope. Created once per execution environment, reused by every warm invocation.
 const verifier = CognitoJwtVerifier.create({
   userPoolId: config.COGNITO_USER_POOL_ID,
   tokenUse: 'id',
-  clientId: [config.COGNITO_MOBILE_CLIENT_ID, config.COGNITO_WEB_CLIENT_ID],
+  // Three entries, not two: the CI client's tokens must verify too (§1.7).
+  clientId: [
+    config.COGNITO_MOBILE_CLIENT_ID,
+    config.COGNITO_WEB_CLIENT_ID,
+    config.COGNITO_CI_CLIENT_ID,
+  ],
 });
 
 // Warm the JWKS cache during init, not on the first request.
@@ -537,36 +565,39 @@ const hydrated = verifier.hydrate().catch((e) => {
   logger.warn({ err: e }, 'jwks hydrate failed; will fetch on first verify');
 });
 
-export const auth = createMiddleware(async (c, next) => {
-  const header = c.req.header('Authorization');
-  if (!header?.startsWith('Bearer ')) {
-    throw new AppError('unauthenticated', 'Missing bearer token.');
-  }
-  await hydrated;
+export class CognitoIdentityProvider implements IdentityProvider {
+  async resolve(c: Context): Promise<UserId> {
+    const header = c.req.header('Authorization');
+    if (!header?.startsWith('Bearer ')) {
+      throw new AppError('unauthenticated', 'Missing bearer token.');
+    }
+    await hydrated;
 
-  let claims: CognitoIdTokenPayload;
-  try {
-    claims = await verifier.verify(header.slice(7));
-  } catch (err) {
-    logger.warn({ err: (err as Error).name }, 'jwt verification failed');
-    throw new AppError('unauthenticated', 'Invalid or expired token.');
-  }
+    let claims: CognitoIdTokenPayload;
+    try {
+      claims = await verifier.verify(header.slice(7));
+    } catch (err) {
+      logger.warn({ err: (err as Error).name }, 'jwt verification failed');
+      throw new AppError('unauthenticated', 'Invalid or expired token.');
+    }
 
-  const userId = claims['custom:app_user_id'];
-  if (typeof userId !== 'string' || !userId.startsWith('usr_')) {
-    // Confirmed in Cognito but the post-confirmation trigger did not complete.
-    throw new AppError('unauthenticated', 'Account setup incomplete.');
+    const userId = claims['custom:app_user_id'];
+    if (typeof userId !== 'string' || !userId.startsWith('usr_')) {
+      // Confirmed in Cognito but the post-confirmation trigger did not complete.
+      throw new AppError('unauthenticated', 'Account setup incomplete.');
+    }
+    return userId as UserId;
   }
+}
 
-  c.set('user', {
-    userId,
-    email: claims.email as string,
-    emailVerified: claims.email_verified === true,
-    cognitoSub: claims.sub,
-  });
-  await next();
-});
+// The middleware is the one in P1-01 and is not re-declared here:
+// c.set('userId', await identityProvider.resolve(c)).
 ```
+
+The provider returns the ID and nothing else. `email`, `email_verified` and `sub` are read
+from the verified claims at the two places that need them — guest-to-account linking and log
+correlation — rather than being carried on the context, so no handler acquires a dependency
+on a token having been present.
 
 ### 5.2 The caching pattern
 
@@ -682,8 +713,8 @@ way to enumerate anything.
 ## 7. Guest to account linking
 
 The product requirement is concept §24: a guest who later registers with the same verified
-identity should have their existing plans and expenses connected to the new account rather
-than duplicated.
+identity should have their existing Plans, pending shared Lists, People relationships and
+expenses connected to the new account rather than duplicated.
 
 ### 7.1 The security requirement
 
@@ -712,7 +743,7 @@ Additional constraints:
 sequenceDiagram
     autonumber
     participant G as Guest (no account)
-    participant OWN as Plan owner
+    participant OWN as Plan or List owner
     participant API as API
     participant DDB as DynamoDB
     participant COG as Cognito
@@ -734,20 +765,25 @@ sequenceDiagram
     COG->>POST: PostConfirmation
     POST->>DDB: create USER#/PROFILE + EMAIL#/USER
     POST->>POST: guard: email_verified === true, else stop
-    POST->>DDB: Query PERSON records whose email matches (via EMAIL# lookup + owner scan of PLINK)
+    POST->>DDB: Query GUESTEMAIL#verified-address for owner/person refs
     loop each matched Person, each of its activities
         POST->>DDB: set person.linkedUserId = newUserId
         POST->>DDB: set ACT#/PART#.userId = newUserId, isGuest = false
         POST->>DDB: put USER#newUserId/IDX#activityId (GSI1, so it appears on their Today)
         POST->>DDB: put USER#newUserId/PLINK#ownerPersonId
     end
-    POST-->>G: sign-up completes, plans are already there
+    loop each invited LLINK#personId# row
+        POST->>DDB: activate LIST#/MEMBER# and set reciprocalPersonId
+        POST->>DDB: put USER#newUserId/LIST# + reciprocal PERSON#
+        POST->>DDB: activate owner LLINK# + put member LLINK#
+    end
+    POST-->>G: sign-up completes; Plans, Lists and People are already there
 ```
 
 ### 7.3 Implementation notes
 
 - **Bounded work.** The trigger has a 5-second Cognito timeout. It links at most the first
-  50 matched activities inline; if there are more, it writes a
+  50 matched activities and first 20 invited List memberships inline; if there are more, it writes a
   `USER#<u> / LINKJOB#<ulid>` item and a follow-up runs asynchronously. A trigger that
   times out fails the user's sign-up, which is far worse than a delayed link.
 - **Discovery.** Guest `Person` records are stored under their *owner's* partition
@@ -756,6 +792,10 @@ sequenceDiagram
   time a guest with an email is added, listing `{ ownerId, personId }` pairs. It is
   recorded in `data-model.md` §3.4 with the sort key `OWNER#<ownerId>#PERSON#<personId>`,
   and as access pattern 14b. Without it, linking cannot be done without a table scan.
+- **List discovery.** Each `{ ownerId, personId }` pair then queries that owner's
+  `LLINK#<personId>#` prefix. Invited rows identify exact `ListMember` keys; activation writes
+  the recipient's List pointer, creates/reuses the reciprocal owner Person, activates the
+  owner link and writes the member link. `LLINK#` itself never grants List access.
 - **Balances.** Existing `Balance` and `Expense` rows reference `personId`, not `userId`,
   and stay as they are. The new user sees the balance through the linked `Person`. Nothing
   is recomputed, so no money can change during a link.
@@ -763,7 +803,7 @@ sequenceDiagram
   see the owner's other data, or to edit the plans they were added to beyond a
   participant's rights (`api-contract.md` §3).
 - **Audit.** Every link writes a structured log line with `userId`, `ownerId`, `personId`,
-  `activityId`, and the matched email **hashed**, never in plaintext
+  optional `activityId`/`listId`, and the matched email **hashed**, never in plaintext
   (`security-privacy.md` §4).
 
 ---
@@ -783,6 +823,12 @@ signing in within 30 days. Requires re-authentication (SRP, or an Apple re-autho
 immediately before the call — a session left open on an unlocked device must not be able to
 delete the account.
 
+The confirmation also names the financial consequence in plain language: `At final deletion,
+expenses and settlements on plans you shared stay visible to the people you shared them
+with, with your name shown as "Deleted user". Expenses on plans only you could see are
+deleted.` This is the retain-and-anonymise rule (Decision below); it is delayed until the
+irreversible purge, and restoration during the 30-day window changes nothing.
+
 **Immediately on request:**
 
 1. `USER#<u> / PROFILE` gets `deletedAt` and `purgeAfter` (now + 30 days), plus `ttl` set
@@ -792,37 +838,83 @@ delete the account.
 3. All the user's `DEVICE#` rows are deleted, so push stops immediately.
 4. All EventBridge schedules with the user's prefix are deleted, so no reminder fires for a
    deleted account.
-5. Every invite the user created is revoked.
+5. Invites the user created are **not** revoked. Soft-delete disables the owner, not their
+   plans: shared plans stay live for their participants, invite links keep resolving, and
+   guests can still RSVP.
 6. The auth middleware returns `401` for any token bearing a `custom:app_user_id` whose
    profile has `deletedAt` set — checked with the profile read the request needs anyway.
 
+> **Decision — soft-delete is invisible to everyone but the owner (2026-08-07).**
+> Participant-facing behaviour during the 30-day window is: **nothing changes.** No invite
+> is revoked, no plan is cancelled, no email goes out, nothing is anonymised. A soft-delete
+> that started tearing down shared state would make the 30-day restoration a lie — the
+> cancellations would already have been sent and could not be unsent. Everything loud or
+> destructive is deferred to the purge.
+
 **Restoration.** Signing in within 30 days (the Cognito user still exists, disabled) routes
 to a "restore your account?" screen. Confirming clears `deletedAt`, `purgeAfter`, and
-`ttl`, and re-enables the Cognito user. After 30 days, restoration is impossible and the
-UI says so.
+`ttl`, and re-enables the Cognito user. Because nothing shared was revoked, cancelled or
+rewritten during the window, restoration resumes everything unchanged — plans, invites,
+memberships and balances are exactly as they were. After 30 days, restoration is impossible
+and the UI says so.
 
 **At purge (30 days).** A DynamoDB TTL deletion on the profile triggers a Streams handler,
 or the daily maintenance Lambda sweeps `purgeAfter < now`. Either way:
 
+Before deleting anything, the resumable purge job splits the deleting user's financial
+footprint in two (Decision below). **Retained:** every Expense and Settlement audit row
+whose coverage touches a shared plan with surviving participants — owned by the deleted
+user or by someone else — is kept exactly as it stands, settled state intact, anonymised
+(`Deleted user`, `linkedUserId` cleared); nothing on these rows is unwound, and the
+balances they produce become read-only history. **Unwound-then-deleted:** Settlements whose
+coverage concerns nobody but the deleted account (solo plans, or shared plans with no
+surviving participant) get the ordinary exact whole-Settlement Undo — recorded
+debtor/reverse-map pairs conditionally removed, Expense roll-ups recomputed, locator
+deleted — before their Activities are removed, so a deleted row never leaves a dangling
+reverse reference. A Settlement spanning both halves is treated as retained; coverage is
+never silently shortened or its amount rewritten. Only after every checkpoint succeeds may
+the job delete Activities or the user partition. Before that partition disappears, the same
+checkpointed job walks its List pointers: it cascades each List the user owns and removes
+the user from each List owned by someone else. A retry resumes from the checkpoint, so
+there is never a retained Expense whose reverse map points at deleted Settlement history.
+
+> **Decision — the purge cancels loudly and keeps the money legible (2026-08-07).** Extends
+> the settlement ruling above (#37/M7). Two rules govern shared state at purge. (a) **Owned
+> shared plans are cancelled with notification before removal.** The purge runs the
+> ordinary cancellation for each — the `plan_cancelled` push to app users, the cancellation
+> email to guests — and only then deletes, exactly the rule that binds a live owner
+> deleting a shared plan (`01-product/sharing-and-people.md` §2.1: deleting a shared plan
+> is never silent). (b) **Financial records survive, anonymised.** Expenses and Settlement
+> audit rows on shared plans are retained for the surviving participants, with the deleted
+> owner's display name replaced by `Deleted user`; balances involving the deleted account
+> become read-only history — visible and drillable, never again settleable. Deleting an
+> account must not make other people's arithmetic stop reconciling, and it must not make
+> their history illegible either.
+
 | Data | Action |
 | --- | --- |
-| Activities owned by the user, and everything in their `ACT#` partitions | Deleted |
-| The user's `USER#` partition: index entries, lists, people, links, balances, settlements, devices | Deleted |
+| Activities owned by the user, and everything in their `ACT#` partitions | Solo and never-shared ones are deleted. A shared one with surviving participants is first cancelled with notification, then its partition is **retained**, anonymised, as read-only history for the survivors — Expense rows, settlement coverage and audit references intact, owner disabled — per the Decision above and `data-model.md` §7 |
+| Lists owned by the user | Deleted through the ordinary resumable List cascade: List partition, every member pointer, every invited/active owner/member `LLINK#`, and every viewer `LNK#`. Other users' owner-scoped `PERSON#` contacts remain. |
+| Memberships on Lists owned by other users | Remove the deleting user's `MEMBER#`, pointer and both reciprocal `LLINK#` rows, decrement `memberCount`, and delete that viewer's `LNK#` rows. Items remain. The other owner's `PERSON#` contact remains with `linkedUserId` cleared. |
+| The user's `USER#` partition: remaining index entries, people, links, balances, devices, and Settlement rows already unwound above | Deleted only after the cross-partition List cleanup checkpoints succeed |
 | `EMAIL#<email> / USER` | Deleted, so the address can be reused for a fresh sign-up |
 | S3 objects under `u/<userId>/` | Deleted (batch delete, then verified) |
 | The Cognito user | `AdminDeleteUser` |
 | **Participant rows on activities owned by other people** | **Retained**, converted to a guest-style record with the display name kept and `userId`, `email` removed. |
-| **Expenses the user was part of** | **Retained**, with the person reference kept. |
+| **Expenses the user was part of on other owners' Activities** | **Retained**, with the person reference kept and settled state intact. Only Settlements concerning nobody but the purged account are unwound (see above), so no retained reverse reference dangles and nobody's settled history reopens. |
 | CloudWatch logs mentioning the user | Expire naturally at 14/30 days; not searched and purged |
 
 The retention of other people's activities is deliberate and must be stated in the privacy
 policy: deleting your account cannot delete someone else's plan or silently rewrite a
 shared expense split so that the arithmetic stops reconciling. What is removed is the
 personal data — the email address and the link to an account. What remains is a name on a
-plan somebody else owns, which is that person's record of their own life.
+plan or a Person in somebody else's address book, which is that person's record of their own
+life. Membership itself is not retained: account deletion removes access to Lists owned by
+other people but leaves their items untouched.
 
 **Data export.** Offered alongside deletion (`security-privacy.md` §8): a JSON export of
-everything in the user's partitions, generated on request and delivered as a presigned
-download link valid for 24 hours. Not legally mandatory in every jurisdiction we serve, but
+everything in the user's partitions, generated on request; the export object remains
+available for 24 hours and each request returns a fresh short-lived download link
+(`api-contract.md` §2.1). Not legally mandatory in every jurisdiction we serve, but
 it is cheap to build on top of the same partition walk the purge already needs, and it
 removes the "I can't leave" objection.

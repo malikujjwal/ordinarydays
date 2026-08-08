@@ -1,5 +1,9 @@
 # Phase 4 — Ship v1 (private beta)
 
+> **Superseded phase number.** The canonical implementation plan is
+> [`phase-05-ship-v1.md`](phase-05-ship-v1.md). This copy remains for old links only; do not
+> schedule work from it.
+
 ## Goal
 
 At the end of this phase other people are using the app. The web build serves from
@@ -84,7 +88,7 @@ is genuinely broken. Performance and accessibility have been measured against th
 | P4-30 | Prod data protections: PITR, deletion protection, backup drill | infra | P0-15 | yes | S |
 | P4-31 | Prod alarms, dashboard, and the on-call runbook | infra | P0-20, P4-08 | no | M |
 | P4-32 | Rehearse a rollback | ops | P4-31 | no | S |
-| P4-33 | Prod smoke tests and the release checklist | ci | P0-32 | no | M |
+| P4-33 | Prod smoke tests and the release checklist | ci | P0-31 | no | M |
 | P4-34 | Beta onboarding and the feedback channel | ops | P4-27 | yes | S |
 
 P4-03, P4-20, P4-30 and P4-34 are mechanical; follow the referenced sections.
@@ -285,6 +289,21 @@ without the email or user link, and expenses the user was part of are retained w
 person reference. Deleting your account cannot delete someone else's plan or rewrite a
 shared expense split so the arithmetic stops reconciling.
 
+Before deleting any Activity or `USER#` partition, the checkpointed purge job collects every
+Settlement owned by the account plus every Settlement covering an Expense on one of its
+owned Activities, and runs exact whole-Settlement Undo. It conditionally clears every
+recorded debtor/reverse-map pair, recomputes Expense roll-ups, and deletes audit and locator
+rows. A cross-Activity Settlement is undone as one unit, never shortened. The account-delete
+confirmation says that retained obligations may appear outstanding again. No destructive
+partition delete runs until this cleanup succeeds, so a retained Expense cannot point to
+missing audit history.
+
+Compatibility with canonical Phases 5–6: the purge also cascades every owned List partition.
+After shared Lists land it removes the deleting user from other-owned Lists (`MEMBER#`,
+pointer, both reciprocal `LLINK#`, viewer `LNK#`, one `memberCount` decrement), while
+preserving their items and the other owner's `PERSON#`; all steps are checkpointed before
+the user's partition is deleted.
+
 **Edge cases.** The purge runs from the daily maintenance sweep on `purgeAfter < now` **or**
 from a TTL Streams handler. Streams are Phase 6, so in Phase 4 use a daily EventBridge rule
 invoking a maintenance Lambda. S3 objects under `u/<userId>/` are batch-deleted and then
@@ -295,7 +314,11 @@ gone, schedules are gone, and the Cognito user is disabled. Signing in within th
 routes to the restore screen and restores fully. A purge run against a profile with
 `purgeAfter` in the past removes every item in the user's partitions, every activity they
 own, and their `EMAIL#` row, and leaves participant rows on another user's activity in
-place with the email removed.
+place with the email removed. A fixture with Settlements on both owned and other-owned
+Activities proves the checkpointed unwind runs first, leaves no dangling reverse map or
+locator, and resumes idempotently after interruption. List fixtures assert no orphan owned
+partition, no dangling shared-list link, no double counter decrement, and retained items and
+other-user People records.
 
 ---
 
@@ -410,7 +433,7 @@ device class with real seeded data — not lorem ipsum, and not an empty state. 
 tell the story:
 
 1. Today with all four sections populated (the worked example day is ideal).
-2. The Add screen with the six type chips.
+2. Global Add showing the three explicit destinations: **Task**, **Plan**, and **List item**.
 3. A plan detail with prep tasks and a list.
 4. A list with a scheduled item showing its state line.
 5. The watchlist with progress.
@@ -441,7 +464,8 @@ a rejection under Guideline 2.3.3. Capture from the exact build being submitted.
   - That the app collects no location and shows no ATT prompt because it does not track.
   - That push notifications are reminders the user creates, and how to trigger one quickly
     (create a task two minutes out).
-  - That the app has no in-app purchases and no external payment.
+  - That the app has no in-app purchases, processes no payment, and records expense
+    obligations as settled status only.
 
 **Common rejection reasons for an app of this shape**, each with what prevents it:
 
@@ -497,7 +521,7 @@ The targets are in [`../01-product/overview.md`](../01-product/overview.md) §7 
 
 | Target | Measurement | Gate |
 | --- | --- | --- |
-| S1: capture to saved under 5 s | Maestro flow, timed, median of 10 runs on a physical iPhone 13 or newer | Yes |
+| S1: explicit destination choice to saved under 5 s | Maestro flow for **Task**, **Plan**, and **List item**, timed from the first destination tap; median of 10 runs on a physical iPhone 13 or newer | Yes |
 | S2: Today loads in one API call | Playwright network-count assertion | Yes |
 | S3: Today renders under 1.0 s cached, 2.0 s cold | Instrumented client timing, mount to first painted row | Yes |
 | Cold start init under 400 ms p95 | The CI cold-start job: force execution-environment recycling by updating an environment variable, invoke three times, read `initDuration` | Yes |
@@ -594,7 +618,9 @@ A rollback path nobody has ever executed is a rollback path that does not work.
     and settings.
 13. A purge run on a `purgeAfter`-elapsed profile deletes every item in that user's
     partitions and their S3 objects, and leaves their participant row on another user's
-    activity present with the display name and without the email.
+    activity present with the display name and without the email. It also cascades owned
+    Lists and removes other-owned memberships/reciprocal links while retaining those Lists'
+    items and People records.
 14. `GET /v1/me/export` (or the equivalent) returns a presigned link valid for 24 hours to a
     JSON file containing the user's activities, lists and settings.
 15. Setting `/od/prod/client/min-version` above the shipped version makes the app show the
@@ -607,7 +633,8 @@ A rollback path nobody has ever executed is a rollback path that does not work.
     lands on a populated Today.
 18. Beta App Review is passed and at least three external testers who are not the founder
     have installed the build and completed the create-a-task flow.
-19. Measured and recorded: S1 median under 5 s on a physical device over cellular; S3 under
+19. Measured and recorded: S1 median under 5 s for each explicitly chosen destination on a
+    physical device over cellular; S3 under
     1.0 s cached and 2.0 s cold; Lambda init p95 under 400 ms; cold `GET /v1/agenda` under
     700 ms; zipped bundle under 5 MB.
 20. Accessibility: axe-core reports zero serious or critical violations on every web route;

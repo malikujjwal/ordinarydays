@@ -95,7 +95,7 @@ export const type = {
 | Row subtitle, secondary content | `subhead` | Type-derived subtitles, participant summaries, empty-state guidance |
 | Metadata | `footnote` | Time column, date chips, relative times, balance lines, `+n more` |
 | Emphasised metadata | `footnoteStrong` | The time on the UP NEXT card, a balance figure |
-| Section header | `caption`, uppercase | `UP NEXT`, `SCHEDULE`, `ANYTIME`, `EARLIER TODAY` |
+| Section header | `caption`, uppercase | `UP NEXT`, `SCHEDULE`, `ANYTIME`, `EARLIER TODAY`, `NEEDS A DATE` |
 
 Rules: titles wrap to two lines before truncating and never truncate at one line at the
 default size. There are exactly nine text styles; a tenth is a decision, not a preference.
@@ -221,8 +221,10 @@ balance direction is always words.
 
 ### 5.2 Per-activity-type accent
 
-One accent per type, used for the row's type marker, the detail header's tint, and the type
-chip on the Add screen. It is never used as a row background.
+One accent per stored activity type, used for the row's type marker, the detail header's
+tint, and the explicit Plan-kind choice after the user taps **Plan**. The global Add sheet
+uses neutral **Task / Plan / List item** destinations; it does not present type inference as
+an accent choice. Type colour is never used as a row background.
 
 | `type` | Icon | Light | Dark | Contrast (light/dark) |
 | --- | --- | --- | --- | --- |
@@ -251,7 +253,8 @@ format per type, `·` as the separator. Omitted entirely when there is nothing t
 | `outing` | `<placeName>` if set, else `<locationLabel>` | `Zahav` |
 | `custom` | None | — |
 
-Any type with participants appends the avatar stack in the trailing slot, not the subtitle.
+Any Plan with explicitly selected participants appends the avatar stack in the trailing
+slot, not the subtitle. Tasks do not have direct participants.
 
 ### 5.4 Icons
 
@@ -342,7 +345,9 @@ regardless of its visual size, and none of them reads the API or the navigation 
  │                  state line: tapping it opens the linked Activity     │
  └───────────────────────────────────────────────────────────────────────┘
 
-  Non-checkable lists (meals, restaurants, places, watchlist) omit the checkbox.
+  The checkbox is driven by the list's `capabilities.checkable`, not by any list kind;
+  a list whose `checkable` is false omits it. `watch` lists never render one — they use
+  `watchStatus` groupings instead (data-model.md §4.6).
   The state line is a separate accessibility element (interaction-contract.md §3.2).
 ```
 
@@ -365,8 +370,19 @@ regardless of its visual size, and none of them reads the API or the navigation 
   Padding: space[5] all round. Gap between blocks: space[4].
   The whole card is one tap target → plan detail. The RSVP chip and the address
   line are separate targets (U1: the card body never mutates).
-  On Today, plan cards are not used — Today uses rows. Cards appear on Plans.
 ```
+
+> **Decision: the plan card is used on the plan detail screen's header and on the shared
+> invite page. It is not used on the Plans tab.** All three Plans stages — Needs a date,
+> Upcoming and Past — render **rows**, per
+> [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md#131-row-anatomy).
+> An earlier draft of this section said cards appear on Plans; the three-stage redesign
+> replaced that with rows, because a stage a user scans for "what's outstanding" needs
+> density, and because Upcoming reuses the identical `AgendaItem` row Today already renders
+> rather than maintaining a second presentation of the same data.
+>
+> The card survives because a plan's own screen and the public invite page both want the
+> opposite of density: one plan, given room.
 
 ---
 

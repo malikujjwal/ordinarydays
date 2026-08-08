@@ -50,6 +50,7 @@ Every one of these applies to every task, in every phase.
 | 15 | Accessibility conditions (§5) hold for any UI change | Automated + review |
 | 16 | Performance budgets (§6) are not regressed | CI gates + measurement |
 | 17 | The PR description uses the checklist in §14 | Review |
+| 18 | If the change touches creation, capture, new-list setup, list-item planning, or settlement, the explicit-intent contract gates in §3.1 pass | Named contract + integration tests |
 
 ---
 
@@ -86,6 +87,22 @@ Coverage percentages are a floor, not a goal. The condition that matters is the 
   bodies, notification copy — not for component trees.
 - **A test that has been skipped for more than one merge is deleted**, and the gap is recorded
   as an issue. A permanently skipped test is worse than no test: it looks like coverage.
+
+### 3.1 Explicit-intent, linkage, and settlement contract gates
+
+These apply whenever the named surface is touched. They are cross-layer behavior tests, not
+review reminders; a PR marks an unrelated row `n/a` and names why.
+
+| Surface | Required gates |
+| --- | --- |
+| Task / Plan / ListItem creation | The client supplies a `CreationTarget` before entry; Plan includes a user-selected `PlanType`, ListItem includes a selected `listId`, and omission or an incompatible combination is `400`. Run the same ambiguous title through at least two explicit targets and assert the selected target wins. No title, date, participant, list behavior, or server/model output chooses object kind, type, or destination. |
+| New list | The style catalogue starts with nothing selected. `POST /v1/lists` requires the exact user-selected `templateKey`; omission is `400` and writes nothing. A title change does not change the key. There is no title matcher, recommended template, or implicit simple-list fallback. The server copies behaviour, capabilities, slot, icon and empty-state copy from that exact record, rejects client overrides, and a catalogue mutation cannot change any of those stored values on an existing List. |
+| `Plan this item` | The request requires `{ objectKind: 'plan', type: PlanType }` plus exactly one audience, `just_me` or non-empty `selected_people`. A shared list never pre-selects its members. Test private Plans from the same item under two users and a selectively shared Plan: only explicit participants get Activity access, and only those who are also active list members get viewer pointers. |
+| Shared List → People relationship | Only a confirmed member selection creates the relationship; titles and item words never do. A registered add creates/reuses reciprocal owner-scoped People and two active `LLINK#` rows; an accountless invite creates only an owner invited link until verified signup. Active links power `sharedListCount`/`listsTogether` but never authorise a List or affect Plan counters/relevance. Removal and list deletion remove links but retain People; Person delete names invited/active List blockers; merge migrates and deduplicates membership and links. Test all paths, including two non-owner co-members receiving no implicit relationship. |
+| List / Activity linkage | `ListItem` has no `linkedActivityId`. Links are `LIST#<listId>` / `LNK#<viewerUserId>#<itemId>` rows; list detail removes other viewers' rows **before** Activity lookup and authorisation. Renaming either object never mirrors to the other. Deleting or replacing one viewer's pointer leaves the ListItem, every Activity, and other viewers' pointers intact. |
+| Settlement | The strict request is exactly `{ personId, coversExpenseIds }`, with 1–25 distinct ids. Tests reject duplicates, client-supplied `amountCents`, currency, direction, note, method, reference, remainder, and unknown keys. Each id resolves without a Scan; the server stores exact per-Expense debtor coverage, marks only those expense-person obligations, derives display metadata, and recomputes balances from Expenses only. Undo resolves by `settlementId`, preserves every other debtor, and deletes its locator. The Settlement row is immutable audit history, never a payment delta. Editing/deleting a covered Expense **or its parent Activity** is `409 settlement_conflict` until the user explicitly undoes every blocking Settlement, with zero hidden fix-up or tombstone writes; a permitted delete removes each Expense locator. |
+| Leaving with expenses | Removing or leaving deletes Plan access and Activity index entries. If retained Expenses need the relationship, its PersonLinks become `finance_only`: excluded from People activity history and forbidden from Plan reads, but accepted by exact expense drill-down, settlement, Undo, stream replay, and full balance rebuild. The last Expense deletion removes those links. |
+| Capture | Every endpoint requires and exactly echoes `creationTarget`, returns only fields compatible with it, and writes no target object. Closed model-output schemas contain no object kind, Plan type, list destination, participant, audience, sharing, reminder/notification, or save field. Paired-target fixtures prove there is no intent classifier; `with Alice` cannot add a person, and `remind me an hour before` cannot change the visible Reminder control. Only an explicit Reminder action or the user's saved default may supply one. |
 
 ---
 
@@ -140,6 +157,11 @@ rather than assumed.
 
 A change that regresses any of these does not merge. Where a budget has no automated gate, the
 measurement is recorded in the PR.
+
+The budgets whose gate is a deploy job or a nightly run against dev cannot be measured before
+**Phase 4**, because nothing is deployed until then. In Phases 0–3 they are targets that the
+design must not obviously violate, and they are measured for the first time on the first
+deployed dev environment (P4-13) — not waived.
 
 | Budget | Value | Gate |
 | --- | --- | --- |
@@ -293,6 +315,8 @@ writing.
 | `assertActivityAccess` or any authorisation decision |
 | Any route under `/public/v1/*` |
 | The public invite projection, or any field added to `Activity` |
+| Any handler that serialises the `ACT#<id>` partition — the caller-scoped `REM#` filter lives there, and a projection that returns what it read leaks one user's reminders to another (`../02-architecture/security-privacy.md` §1 row 15) |
+| Any list-detail projection or `LNK#<viewerUserId>#<itemId>` write — the shared partition contains opaque Activity ids belonging to other viewers, and filtering after lookup is already a leak (`../02-architecture/security-privacy.md` §1 row 15a) |
 | Any IAM policy, role, or CDK `grant*` call |
 | Presigned URL generation, or the media bucket's configuration |
 | The `.ics` builder or the Google Calendar redirect (output encoding, open redirect) |
@@ -312,7 +336,11 @@ writing.
 - [ ] No server-derived field (`ownerId`, `status`, counters, timestamps) is accepted from the
       client.
 - [ ] No new response field exposes an email address, an internal identifier, or another user's
-      data.
+      data — including another user's **reminder**, which lives in a partition every
+      participant may read and is scoped only by the projection's filter.
+- [ ] If list links are touched: list detail keeps only the authenticated caller's `LNK#`
+      rows before any Activity lookup, every retained Activity passes ordinary authorisation,
+      and no response contains another viewer's Activity id or state.
 - [ ] If the public projection is touched: the allow-list snapshot test was updated
       deliberately and the deny list in
       [`../01-product/sharing-and-people.md`](../01-product/sharing-and-people.md) §4.3 still
@@ -351,7 +379,7 @@ A phase is done when all of these hold, not when its last task merges.
 | 5 | Every open question the phase was supposed to close is closed, and its ADR is written. |
 | 6 | The full test suite passes on `main`, with no skipped tests introduced by the phase. |
 | 7 | Coverage thresholds hold, including 100% on the recurrence and money modules. |
-| 8 | The dev environment is deployed from `main` and its smoke tests and E2E suites are green. |
+| 8 | **From Phase 4 on:** the dev environment is deployed from `main` and its smoke tests and E2E suites are green. In Phases 0–3 nothing is deployed, so the equivalent gate is that `cdk synth` and the CDK assertion tests pass in CI and the E2E suites are green against the local stack. |
 | 9 | Every performance budget in §6 is measured — not assumed — and met. |
 | 10 | Every new alarm has fired at least once in a rehearsal, or has been verified by a synthetic trigger. |
 | 11 | The runbook covers every new operational procedure and alarm the phase introduced. |
@@ -383,6 +411,9 @@ a line does not apply.
 - [ ] `pnpm run gen:openapi` produces no diff
 - [ ] `api-contract.md` / `data-model.md` updated if endpoints, entities or keys changed
 - [ ] Product docs updated if user-visible behaviour changed
+- [ ] If creation, new-list, `Plan this item`, settlement or capture changed: the applicable
+      explicit-intent contract gates in §3.1 pass; no type, destination, template, audience,
+      participant, reminder/notification action or external payment detail is inferred
 - [ ] New access pattern added to `data-model.md` §5 **before** the query was written
 - [ ] New limit or constant added to `packages/shared/src/constants.ts`, imported by both sides
 - [ ] ADR written if an alternative was rejected; OQ table updated if a question was answered

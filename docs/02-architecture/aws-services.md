@@ -22,8 +22,9 @@ configuration is in `auth.md`; this section covers only the AWS-service view.
 
 **How it is configured.** One user pool per environment (`od-users-dev`, `od-users-prod`).
 Email as the sign-in alias, email verification required, Apple as a federated identity
-provider. Two app clients: mobile (public client, PKCE, no secret) and web (public client,
-PKCE). Two Lambda triggers: pre-sign-up and post-confirmation. Advanced security features
+provider. Three app clients: mobile and web (public clients, PKCE, no secret) and
+`od-ci-{env}`, a non-public client with `ADMIN_USER_PASSWORD_AUTH` used only by the smoke
+test — see `auth.md` §1.7. Two Lambda triggers: pre-sign-up and post-confirmation. Advanced security features
 are **off** — they are billed per MAU on top of the free tier and are aimed at credential-
 stuffing detection we do not yet need.
 
@@ -73,7 +74,7 @@ TLS, maps a custom domain, and forwards every request to the single API Lambda.
 charge. Rejected because it does not support custom domains without putting CloudFront in
 front of it, has weaker throttling controls, and its request/response format differs from
 the API Gateway v2 payload the Hono adapter is built around. The $1/M is worth the
-straightforward custom domain and throttle configuration. **Revisit at Phase 6** if API
+straightforward custom domain and throttle configuration. **Revisit at Phase 7** if API
 Gateway ever becomes a meaningful line item — the migration is a CDK change plus a DNS
 cutover, and Hono's adapter supports both.
 
@@ -90,9 +91,9 @@ cutover, and Hono's adapter supports both.
 | `od-cognito-presignup-{env}` | Cognito pre-sign-up | Normalises email, blocks duplicates. |
 | `od-cognito-postconfirm-{env}` | Cognito post-confirmation | Creates the user profile, links guest records. |
 
-A fifth, `od-maintenance-{env}` (EventBridge daily rule), arrives in **Phase 4** (task
-P4-17) for the 30-day account-deletion purge, and picks up the archival sweep described in
-`data-model.md` §3.5 in Phase 8 (P8-33).
+A fifth, `od-maintenance-{env}` (EventBridge daily rule), arrives in **Phase 5** (task
+P5-22) for the 30-day account-deletion purge, and picks up the archival sweep described in
+`data-model.md` §3.5 in Phase 9 (P9-33).
 
 **How it is configured.**
 
@@ -144,7 +145,7 @@ under 400 ms (`tech-stack.md` §4.5).
 - TTL attribute `ttl`, enabled. Used by invite tokens, idempotency records, and rate-limit
   counters.
 - Point-in-time recovery: **on in prod**, off in dev.
-- Streams: `NEW_AND_OLD_IMAGES`, enabled from Phase 6 for balance recalculation and
+- Streams: `NEW_AND_OLD_IMAGES`, enabled from Phase 7 for balance recalculation and
   notification fan-out.
 - Deletion protection: on in prod. `RemovalPolicy.RETAIN` in prod,
   `RemovalPolicy.DESTROY` in dev.
@@ -249,7 +250,7 @@ activity read carry image bytes. S3 + CloudFront is the boring correct answer.
   - Long cache TTL (objects are immutable — the key contains a ULID).
   - No signed URLs in v1. Object keys contain a ULID under a per-user prefix, so they are
     unguessable, and the API only ever returns keys for images the caller may see. Signed
-    URLs (or signed cookies) are the Phase 6 hardening step if media ever becomes
+    URLs (or signed cookies) are the Phase 7 hardening step if media ever becomes
     sensitive enough to warrant the key management. Recorded as an open question in
     `decisions.md`.
 
@@ -344,11 +345,11 @@ with a payload of `{ activityId, userId, reminderId, occurrenceDate? }`.
 - Target: the reminder Lambda, with a dedicated IAM role that may invoke only that
   function.
 - Rescheduling an activity deletes and recreates its schedules. Deleting an activity
-  deletes them. The schedule name is deterministic — `rem_<activityId>_<reminderId>` —
+  deletes them. The schedule name is deterministic — `rem_<activityId>_<userId>_<reminderId>_<occurrenceDate>` —
   so the delete never has to search.
 - A separate recurring rule, `od-maintenance-{env}` (`cron(0 7 * * ? *)`), is created in
-  Phase 4 for the account-deletion purge and additionally triggers the daily archival sweep
-  from Phase 8.
+  Phase 5 for the account-deletion purge and additionally triggers the daily archival sweep
+  from Phase 9.
 
 **Free-tier bucket.** **[verify]** — EventBridge Scheduler is not in the brief's verified
 list. It is billed per million invocations with a monthly free allowance; check
@@ -370,8 +371,11 @@ EventBridge Scheduler is purpose-built for exactly this and needs no polling.
 
 ### 1.10 Amazon SES
 
-**What it does here.** Outbound transactional email only: guest invitations, RSVP notices
-to plan owners, and account-related mail Cognito does not send itself. Cognito's own
+**What it does here.** Outbound transactional email only, and exactly four messages: a guest
+plan invitation, a plan-changed notice, a plan-cancelled notice, and a shared-list invitation
+to an address with no account
+([`../01-product/notifications.md`](../01-product/notifications.md) §6.3). Plus
+account-related mail Cognito does not send itself. Cognito's own
 verification and password-reset emails are also routed through SES rather than Cognito's
 default sender, so they come from `no-reply@ordinarydays.app` and are not subject to
 Cognito's 50-email/day default cap.
@@ -385,7 +389,7 @@ Cognito's 50-email/day default cap.
   CloudWatch, plus an alarm on the bounce and complaint rates.
 - Dev stays in the **sandbox** (verified recipients only) — that is fine, the only
   recipient is the founder.
-- Production access is requested in Phase 5, before the first real invite goes out. The
+- Production access is requested in Phase 6, before the first real invite goes out. The
   request needs a description of the sending use case and the bounce-handling process.
   Budget several days for approval; do not discover this the week of launch.
 - Suppression list: account-level, on.
@@ -407,7 +411,7 @@ hence the DKIM/SPF/DMARC configuration above being non-optional.
 
 ### 1.11 Secrets: Secrets Manager vs. SSM Parameter Store
 
-> **Decision: SSM Parameter Store (SecureString) for everything except the Phase 7
+> **Decision: SSM Parameter Store (SecureString) for everything except the Phase 8
 > Anthropic API key, which goes in Secrets Manager.**
 
 Reasoning:
@@ -424,7 +428,7 @@ At the scale in `cost-model.md` we hold perhaps five secret values. Paying $2/mo
 Secrets Manager to hold them contradicts the cost target for a feature (automatic
 rotation) we do not use on any of them.
 
-The exception is the Anthropic API key in Phase 7. That key is the one credential whose
+The exception is the Anthropic API key in Phase 8. That key is the one credential whose
 leak has an immediate dollar cost, it is the one we most want an audited rotation story
 for, and it is read at most once per Lambda cold start. One secret at $0.40/month is worth
 the rotation tooling and the CloudTrail-visible access record.
@@ -436,7 +440,7 @@ the rotation tooling and the CloudTrail-visible access record.
 | Apple Sign in key ID, team ID, private key (`.p8`) | Parameter Store SecureString | `/od/{env}/auth/apple/*` |
 | Expo Push access token (if enhanced security is enabled) | Parameter Store SecureString | `/od/{env}/push/expo-token` |
 | SES configuration set name, sender address | Parameter Store String (not secret) | `/od/{env}/email/*` |
-| Anthropic API key (Phase 7) | Secrets Manager | `od/{env}/anthropic-api-key` |
+| Anthropic API key (Phase 8) | Secrets Manager | `od/{env}/anthropic-api-key` |
 | Table names, bucket names, user pool IDs, client IDs | Lambda environment variables | — these are identifiers, not secrets |
 
 **How the Lambda reads them.** Not at every invocation. Values are fetched once at module
@@ -462,10 +466,10 @@ queries for the common investigations are checked into `infra/observability/quer
 
 **Metrics.** AWS-published metrics only in v1 (Lambda invocations/errors/duration/throttles,
 API Gateway 4xx/5xx/latency, DynamoDB throttles and consumed capacity, CloudFront error
-rate, SES bounce/complaint rate). We publish **no custom metrics** in Phase 1–5: the
+rate, SES bounce/complaint rate). We publish **no custom metrics** before Phase 8: the
 always-free allowance is only 10 custom metrics and each one beyond costs $0.30/month.
-Business counters are derived from structured logs with Log Insights instead. Phase 6 may
-add a handful of Embedded Metric Format counters if a real question needs them.
+Business counters are derived from structured logs with Log Insights instead. Phase 8 adds
+the first handful of Embedded Metric Format counters, for capture (P8-29).
 
 **Alarms.** A deliberately small set, all wired to one SNS topic → the founder's email.
 
@@ -563,7 +567,7 @@ a credential valid for the length of one job.
 
 ### 1.15 AWS X-Ray
 
-**Status: off.** Not enabled on any Lambda in Phase 1–6.
+**Status: off.** Not enabled on any Lambda, in any phase of v1.
 
 **Why not.** Our request path is one hop deep: API Gateway → Lambda → DynamoDB. A
 structured log line carrying `requestId`, `route`, `durationMs`, and per-repository timing
@@ -574,7 +578,7 @@ appears when a request fans out across services and you cannot tell which hop is
 that it is per-million-traces plus per-million-traces-retrieved. It is cheap, not free,
 and it adds ~10–20 ms of init time for the SDK instrumentation.
 
-**When to turn it on.** If Phase 6's DynamoDB Streams work or Phase 7's model calls
+**When to turn it on.** If Phase 7's DynamoDB Streams work or Phase 8's model calls
 introduce a genuine multi-hop path where latency attribution is unclear. It is a one-line
 CDK change (`tracing: lambda.Tracing.ACTIVE`) plus an IAM policy, so deferring costs
 nothing.
@@ -591,10 +595,10 @@ nothing.
 | **ECS / Fargate / App Runner** | Continuous billing for a service that will be idle most of the day. The entire cost model depends on paying only per request. |
 | **EKS** | $73/month for the control plane alone, before any node. For one Lambda's worth of code. Not a serious candidate; listed because someone will ask. |
 | **ElastiCache (Redis/Memcached)** | Bills per node-hour continuously. Our caching needs are (a) JWKS, handled in Lambda module scope, (b) agenda responses, handled client-side with ETags, (c) rate-limit counters, handled with a DynamoDB item and a TTL. None of them justify a always-on cache cluster. Revisit only if a genuinely hot shared read appears. |
-| **AWS Step Functions** | The only multi-step workflows in v1 are "create these five DynamoDB items atomically" (that is `TransactWriteItems`) and "fire a reminder at a time" (that is EventBridge Scheduler). Step Functions bills per state transition and would add a second place where business logic lives. Reconsider if Phase 7's capture pipeline grows into a multi-stage flow with retries and human review states. |
+| **AWS Step Functions** | The only multi-step workflows in v1 are "create these five DynamoDB items atomically" (that is `TransactWriteItems`) and "fire a reminder at a time" (that is EventBridge Scheduler). Step Functions bills per state transition and would add a second place where business logic lives. Reconsider if Phase 8's capture pipeline grows into a multi-stage flow with retries and human review states. |
 | **SNS for push notifications** | SNS mobile push means managing an APNs certificate or key, a platform application, per-device endpoint ARNs, and endpoint-disabled cleanup. Expo Push does all of that for free and is already integrated with `expo-notifications` and EAS Build's credential management. SNS *is* used, but only as an alarm-notification topic. ADR-009. |
-| **Rekognition / Textract** | Phase 7's image-to-event extraction needs to read a poster and produce a structured event with confidence per field. Textract does forms and tables, not semantic extraction from a concert flyer. Rekognition's text detection would just hand us unordered strings we would then have to interpret with a model anyway. One multimodal model call replaces both. |
-| **Amazon Bedrock** | Deferred, not rejected. Phase 7 calls the Anthropic API directly with a key in Secrets Manager, because that is the shortest path to the model we want and it works identically from a laptop and from Lambda. Bedrock becomes attractive if we want the request to stay inside AWS's network and billing, or if we need provisioned throughput. The Phase 7 code must therefore put the model call behind a `CaptureProvider` interface so switching is a one-file change. ADR-008. |
+| **Rekognition / Textract** | Phase 8's image-to-event extraction needs to read a poster and produce a structured event with confidence per field. Textract does forms and tables, not semantic extraction from a concert flyer. Rekognition's text detection would just hand us unordered strings we would then have to interpret with a model anyway. One multimodal model call replaces both. |
+| **Amazon Bedrock** | Deferred, not rejected. Phase 8 calls the Anthropic API directly with a key in Secrets Manager, because that is the shortest path to the model we want and it works identically from a laptop and from Lambda. Bedrock becomes attractive if we want the request to stay inside AWS's network and billing, or if we need provisioned throughput. The Phase 8 code must therefore put the model call behind a `CaptureProvider` interface so switching is a one-file change. ADR-008. |
 | **AWS WAF** | Not in v1. It is $5/month for a web ACL plus per-rule and per-request charges — more than the rest of the infrastructure combined. Rate limiting is done in Lambda and at the API Gateway throttle. Add WAF the first time the public invite surface is actually abused, not before. |
 | **VPC, NAT gateway, PrivateLink** | No Lambda is in a VPC, so none of these are needed. A NAT gateway is the single most common source of an unexpected several-hundred-dollar AWS bill; the guardrail is simply never creating one. `cost-model.md` §5. |
 

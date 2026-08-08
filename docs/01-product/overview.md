@@ -23,12 +23,16 @@ is actually organised.
 Every feature in the product exists to serve one of six steps. If a proposed feature does
 not sit on this line, it is out of scope.
 
+This is the lifecycle of an **intention**. It is not the lifecycle of a list. A list can
+feed it, can be produced by it, or can sit entirely outside it and still be doing its job
+(§3.1).
+
 | Step | What happens | Primary surfaces |
 | --- | --- | --- |
-| **Capture** | An intention enters the app with the least possible friction: typed text, a photo, a screenshot, a pasted link, or a chosen type. | Add button, [`ai-capture.md`](ai-capture.md) |
-| **Organise** | It lands somewhere sensible with the right fields exposed: a List if there is no date, an Activity if there is. | [`activities.md`](activities.md), [`plans-and-lists.md`](plans-and-lists.md) |
-| **Schedule** | It gets a date, and optionally a time. That is what makes it a Plan. | Activity detail, list-item scheduling |
-| **Share** | People are added. App users get an in-app invitation; everyone else gets a link. | [`sharing-and-people.md`](sharing-and-people.md) |
+| **Capture** | The user first names the object they are creating — **Task**, **Plan**, or **List item** — then enters its details by text, photo, screenshot, or link. | Add button, [`ai-capture.md`](ai-capture.md) |
+| **Organise** | The chosen object opens with the right fields. A Plan additionally requires an explicit kind: **General**, **Meal**, **Watch**, **Event**, or **Outing**. Words and automatic capture never make either choice. | [`activities.md`](activities.md), [`plans-and-lists.md`](plans-and-lists.md) |
+| **Schedule** | It gets a date, and optionally a time. Until then a plan waits in Plans → Needs a date; only a dated plan can reach Today. | Activity detail, list-item scheduling |
+| **Share** | People are added — to a plan, or to a list. App users get it in their app; someone invited to a plan without an account gets a link. | [`sharing-and-people.md`](sharing-and-people.md) |
 | **Do** | It shows up on Today at the right moment with the right affordance. | [`today-and-tasks.md`](today-and-tasks.md) |
 | **Follow up** | Completion offers the contextual next step: episode progress, expense review, the next occurrence, the next episode. Suggestions only. | [`plans-and-lists.md`](plans-and-lists.md), [`expenses.md`](expenses.md) |
 
@@ -43,8 +47,8 @@ The user-facing vocabulary is exactly three words.
 | Noun | User's question | What it actually is |
 | --- | --- | --- |
 | **Today** | What do I need to know or do today? | A query over Activities for one date. Owns no data. |
-| **Plans** | What have I committed to, and when? | Activities that have a `schedule.date`. |
-| **Lists** | What do I want to remember without committing to a date? | `List` + `ListItem`, a separate and deliberately simple entity. |
+| **Plans** | What am I intending, and when? | Activities that are intentions rather than possibilities — three stages: Needs a date, Upcoming, Past. |
+| **Lists** | What do I want to keep together? | `List` + `ListItem`, a separate entity with its own reason to exist. Shareable, like a plan. |
 
 ### Why it must stay three
 
@@ -52,9 +56,11 @@ The user-facing vocabulary is exactly three words.
    People, Expenses, Inbox) makes the product a bundle of mini-apps, which is precisely
    the failure mode the single-entity data model exists to prevent — see
    [`../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity`](../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity).
-2. **The nouns are orthogonal, not overlapping.** Lists are the un-dated bucket, Plans the
-   dated one, Today the slice of Plans that is relevant right now. Nothing is in two of
-   them, so nothing needs to be kept in sync between them.
+2. **The nouns answer different questions, and each stands on its own.** Lists answer "what
+   do I keep together?", Plans "what have I committed to?", Today "what now?". A thing can
+   be in a list *and* be an activity, and when it is, the two rows are linked rather than
+   copied ([`plans-and-lists.md`](plans-and-lists.md) §6.1) — one title, one source of
+   truth, no sync problem.
 3. **Everything else is an attribute, not a place.** Meals, watching, expenses and people
    are properties of Activities, reached from the Activity, not destinations of their own.
    People is a *view*, reached from Profile or Search, never primary navigation
@@ -65,21 +71,136 @@ The user-facing vocabulary is exactly three words.
 > Notification inbox and Settings all live under Profile. This is a navigation decision the
 > concept implied but did not state.
 
+### 3.1 Four concepts, connected where it is useful
+
+The three nouns are what the user sees. Underneath them are **four concepts**, and the
+relationships between them are optional edges, not pipeline stages. There is no
+`Lists → Plans → Today` pipeline. Anything that treats one as the definition of the others
+is wrong.
+
+The distinction between a task, a plan, and a list item is chosen **before** details are
+entered. It is not inferred from the title, a date, a person, a source image, or a model:
+
+> **The entry point, or an explicit Task / Plan / List item choice, determines what is
+> created. A date changes scheduling state, not identity.**
+>
+> A **Task** is stored as an Activity with `objectKind: 'task'`, `type: 'task'`. A **Plan**
+> is stored as an Activity with `objectKind: 'plan'`; its explicitly chosen kind maps to
+> `custom`, `meal`, `watch`, `event`, or `outing`. A **List item** is stored as a `ListItem`
+> in a destination the user chose.
+
+This is the rule for the whole document set, stated here once and canonical in
+[`../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity`](../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity).
+Every other product document points at it rather than restating it. No document may say that
+a date creates a plan, that scheduling turns an Activity into one, or that clearing a date
+un-plans it: an undated plan is a plan waiting for a day.
+
+| Concept | What it is | What it needs from the others |
+| --- | --- | --- |
+| **Lists** | Things the user wants to keep together. Groceries, restaurants they love, books, a packing list. Shareable. | Nothing. A list that never produces an activity is complete and finished. |
+| **Activities** | Tasks and Plans. The one schedulable entity. Created only after the user chose Task or Plan, or explicitly chose `Plan this item` on a list item. | Nothing. Most activities never touch a list. |
+| **Plans** | An Activity created as a Plan, with an explicit kind: General, Meal, Watch, Event, or Outing. A date is not required. | An Activity. That is all a plan is. |
+| **Today** | What matters now. A query, never storage. | Activities for one date. |
+
+```
+           Global +                         Labelled contextual action
+              │                         Add task / prep task / list item
+              ▼                                      │
+     required unselected choice                      │
+       Task / Plan / List item                       │
+              └──────────────────┬───────────────────┘
+                                 ▼
+                       explicit, fixed target
+                    ┌────────────────┼────────────────┐
+                    ▼                ▼                ▼
+                  Task             Plan           List item
+             objectKind: task objectKind: plan   choose a list
+                    │                │                │
+                    └────────┬───────┘                │
+                             ▼                        ▼
+                       Activities                  Lists
+                             │                        │
+                             │◀ ─ ─ (a) ─ ─ ─ ─ ─ ─ ┤
+                             ├─ ─ ─ (b) ─ ─ ─ ─ ─ ─▶│
+                             │
+                    ┌────────┴────────┐
+                    ▼                 ▼
+             Needs a date          Upcoming
+                                      │ that date is today
+                                      ▼
+                                    Today
+
+            (c) share ── one People layer, reaching Lists and Plans alike
+
+   (a) Plan this item     (b) generate a list   ─ ─ optional, in both directions
+```
+
+An Activity created with a date goes straight to Upcoming; the Needs-a-date stage is a place
+to sit, not a gate to pass through.
+
+Three optional edges, and that is all of them:
+
+- **Plan this item.** A viewer creates one Plan Activity plus a viewer-local `LNK#` pointer;
+  the shared ListItem stays byte-identical. Compatible values copy into the draft once and
+  then diverge safely ([`plans-and-lists.md`](plans-and-lists.md) §6.1).
+- **Generate a list.** A plan can produce a supporting list, on confirmation only, and the
+  list outlives the plan ([`plans-and-lists.md`](plans-and-lists.md) §4).
+- **Share.** Plans and Lists are both shareable, through **one** People layer — one contact
+  model, one picker, one `Share` affordance. What differs is the meaning: a plan asks "are
+  you coming?" and stores an RSVP; a list asks nothing and membership is binary
+  ([`sharing-and-people.md`](sharing-and-people.md) §1). A shared plan **suggests** sharing
+  the lists it generates and never does so automatically.
+
+An undated plan and an undated list item are not the same thing waiting at different stages.
+The words `Try Zahav` can title either one: choosing **Plan → Outing** creates an undated
+plan; choosing **List item → Restaurants to try** creates a list item. Adding Alice later is
+an explicit sharing action; her name in typed text never makes the choice. Neither object
+promotes into the other ([`plans-and-lists.md`](plans-and-lists.md) §1.2).
+
 ## 4. Core principles
 
 Each principle is written as a rule a reviewer or a test can check. A pull request that
 violates one of these is rejected regardless of how good the feature is.
 
+### 4.0 Intent is explicit before assistance
+
+The global `+` opens exactly three choices: **Task**, **Plan**, and **List item**. A
+contextual action fixes that same choice in its label — `+ Add a task`, `+ Add an item`, or
+`+ Add a prep task`. Plan then requires an explicit **General**, **Meal**, **Watch**,
+**Event**, or **Outing** choice. Nothing is pre-selected, including General.
+
+General `New list` likewise requires an explicit style choice from the full catalogue before
+its editable title appears. A typed destination the user already chose may show only eligible
+styles—for Watch, the three Watch styles—but still begins unselected. List names never
+select, suggest, rank, or change a template.
+
+Only after those choices may automatic capture suggest compatible field values. It never
+suggests or changes object kind, Plan kind, people, sharing, list destination,
+reminder/notification state, or whether to save. Reminder remains a separate visible control
+or the user's explicitly saved default. Final buttons name the write: `Save task`, `Save
+plan`, or `Add to <list name>`.
+
+- **Testable:** the same text entered after each global choice writes the selected object;
+  capture responses contain no actionable object-kind, Plan-kind, participant, sharing,
+  destination, or reminder suggestion; with schedule fields held equal, adding `remind me`
+  wording leaves the Reminder control byte-identical (only the user's saved-default rule may
+  populate it); and every creation request follows a user action whose accessible label names
+  its object and destination.
+
 ### 4.1 Types guide, never restrict
 
-Activity `type` changes which fields the creation form shows and which verb the completion
-button uses. It never blocks an action, never prevents scheduling, never hides an Activity
-from Today, and can always be changed after creation.
+Within `objectKind: 'plan'`, Activity `type` changes which fields the form shows and which
+completion verb it uses. It never blocks a Plan action, prevents scheduling, or hides a Plan
+from Today, and the user may explicitly change it among General, Meal, Watch, Event, and
+Outing. `objectKind` does carry a real boundary: Tasks have checkboxes and never gain their
+own participants or expenses; coordinated work is an explicit Plan, usually General. A prep
+Task may inherit access from its parent Plan, but that parent relationship is explicit and
+does not turn the Task into a directly shared object.
 
-- **Testable:** for every `ActivityType`, `POST /v1/activities/:id/schedule` succeeds;
-  `PATCH /v1/activities/:id` with a new `type` succeeds; the Activity appears in
-  `GET /v1/agenda` for its date. No handler branches on `type` to decide *whether* an
-  operation is allowed.
+- **Testable:** every Task and Plan kind can be scheduled and appears in `GET /v1/agenda`
+  for its date; a Plan-kind-only change leaves `objectKind` unchanged; Task ↔ Plan changes
+  occur only through the explicit conversion flow; Task creation rejects participants and
+  expenses; and no AI or field edit changes either choice.
 
 ### 4.2 Today owns no data
 
@@ -104,13 +225,20 @@ overflow item, or a button on the detail screen.
 ### 4.4 Suggest, never auto-create
 
 The app may propose creating an Activity, a List, a list item, or a next occurrence. It
-never writes one without an explicit user confirmation in the same interaction.
+never writes one without an explicit user confirmation in the same interaction. The rule
+extends to **changing** something the user did not touch: completing an activity never
+alters its source list item, and no operation on one object silently writes another. The
+full statement, with the list of every place it applies, is
+[`interaction-contract.md`](interaction-contract.md#1a-product-wide-invariants) §1a.2, and
+it is stated once there rather than re-derived per feature.
 
-- **Testable:** no server endpoint creates an Activity as a side effect of another
-  operation. `POST /v1/capture/*` returns a draft and never persists — see
-  [`../02-architecture/api-contract.md#211-capture--phase-7-stubbed-earlier`](../02-architecture/api-contract.md#211-capture--phase-7-stubbed-earlier).
-  Marking a watch session complete does not create the next session. Completing a meal does
-  not add groceries. Creating a trip plan does not create a packing list.
+- **Testable:** no server endpoint creates or mutates a second entity as a side effect of
+  another operation. `POST /v1/capture/*` returns a draft and never persists — see
+  [`../02-architecture/api-contract.md#211-capture--phase-8-stubbed-earlier`](../02-architecture/api-contract.md#211-capture--phase-8-stubbed-earlier).
+  Marking a watch session complete does not create the next session and does not move the
+  watchlist item's progress. Completing a meal does not add groceries. Completing an outing
+  does not check the list item it came from. Creating a trip plan does not create a packing
+  list, and creating a list from a shared plan does not share it with that plan's people.
 
 ### 4.5 No unexplained numbers
 
@@ -125,10 +253,28 @@ tappable, and the tap must reach the individual records that produced it.
 
 `ActivityType` is a closed enum of six values. There is no UI to create, rename, delete,
 reorder, colour, or nest a type. `custom` is the escape hatch and is deliberately generic.
-The same holds for `ListKind`: eight kinds, closed, of which `general` is one.
 
-- **Testable:** no endpoint accepts a user-defined type or kind string. No settings screen
-  contains a type editor. Search the client for a "manage categories" route: there is none.
+List **behaviour** is the same shape: a closed enum of three — `collection`, `watch`,
+`meals` — and there is no UI to add a fourth. List **templates** are unbounded, but they are
+shipped configuration, not a category system: the user picks one at creation and can change
+the resulting list's capabilities afterwards, but cannot define, name, or manage a template.
+See [`plans-and-lists.md`](plans-and-lists.md) §5.2 and §5.3.
+
+- **Testable:** no endpoint accepts a user-defined type or behaviour string, and
+  `POST /v1/lists` accepts `templateKey` only from the shipped catalogue. No settings screen
+  contains a type editor or a template editor. Search the client for a "manage categories"
+  route: there is none.
+
+### 4.7 Lists are destinations, not staging areas
+
+A list is a complete thing in itself. A list that never produces an activity has not failed
+at anything, and the product never implies otherwise.
+
+- **Testable:** no list-level progress indicator, completion percentage, unscheduled-item
+  count, or "ready to plan these?" prompt exists in the client. No copy anywhere describes a
+  list as holding things *until* something else happens, and no scheduled job archives,
+  hides or nudges a list for being inactive. `Schedule` is never a list's empty-state
+  action. See [`plans-and-lists.md`](plans-and-lists.md) §5.1 and §5.9.
 
 ## 5. Target user and jobs to be done
 
@@ -142,7 +288,7 @@ The three jobs:
 
 | # | Job | Success looks like |
 | --- | --- | --- |
-| 1 | **"I keep losing the things I said I'd do."** Capture an intention in seconds, from anywhere, without deciding where it goes. | The item exists, is findable, and resurfaces at the right time without the user maintaining anything. |
+| 1 | **"I keep losing the things I said I'd do."** Capture an intention in seconds, from anywhere, after one plain-language choice: Task, Plan, or List item. | The chosen object exists, is findable, and resurfaces at the right time without hidden routing or naming rules. |
 | 2 | **"I want to actually do the things I saved."** Turn a saved intention into a dated commitment, and see the small number of things that matter today. | Today answers "what now?" in one screen and one glance, with no triage. |
 | 3 | **"Doing things with people is the hard part."** Invite people without requiring them to install anything, keep everyone on one source of truth, and settle up afterwards. | A guest RSVPs from a link in under 30 seconds; nobody has to reconstruct who paid for what. |
 
@@ -157,8 +303,8 @@ tempting.
 | **Notion / a wiki** | No nested pages, databases, templates, formulas, or custom fields. The schema is fixed on purpose. |
 | **A nutrition tracker** | Meals carry a title, a slot, people and ingredients. No calories, macros, weights, portions, or recipe steps and scaling. |
 | **Trakt / TV Time** | No catalogue, no metadata provider, no ratings, no reviews, no discovery feed. Watch entries are free text. The differentiator is *what → when → with whom*, not tracking depth. |
-| **A social network** | No followers, feeds, likes, comments-on-strangers, public profiles, friend requests, or relationship scores. People are derived from shared plans only. |
-| **A payments app** | No bank links, no card processing, no Venmo/PayPal integration, no budgets, no financial analytics, no multi-currency conversion. The app records that something is settled; it does not move money. |
+| **A social network** | No followers, feeds, likes, comments-on-strangers, public profiles, friend requests, or relationship scores. People arise from explicitly shared Plans or Lists, plus contacts the user adds manually; there is no social graph. |
+| **A payments app** | No bank links, no card processing, no Venmo/PayPal integration, no budgets, no financial analytics, no multi-currency conversion. The app records which selected expense-person obligations the user marked settled; it does not move money. |
 | **A calendar client** | The app exports `.ics` and calendar links. It does not two-way sync, does not read the user's existing calendar, and does not attempt to be their primary calendar in v1. |
 
 See also
@@ -172,7 +318,7 @@ warm Lambda over a 4G connection with an iPhone 13 or newer.
 
 | # | Criterion | How it is measured |
 | --- | --- | --- |
-| S1 | **Capture to saved in under 5 seconds.** From tapping Add on Today to a saved Activity, for a typed title with no other fields. | Maestro flow timed end to end, median of 10 runs on device. |
+| S1 | **Capture to saved in under 5 seconds.** From tapping Today's `+ Add a task`, or global `+` then `Task`, to a saved Task for a typed title with no other fields. | Maestro flow timed end to end, median of 10 runs on device. The request includes `objectKind: 'task'`, `type: 'task'`; the client never relies on a server default. |
 | S2 | **Today loads in one API call.** A cold open of Today issues exactly one `GET /v1/agenda?...&include=anytime_unscheduled` and no other data request. | Playwright network assertion on web; a request-count assertion in the API client's test harness. |
 | S3 | **Today renders in under 1.0 s from cache and under 2.0 s cold.** | Instrumented client timing from mount to first painted row. |
 | S4 | **A guest can RSVP with no account in under 30 seconds and three taps** from opening the invite link. | Playwright flow against `/public/v1/invites/:token`, timed. |
@@ -193,9 +339,9 @@ warm Lambda over a 4G connection with an iPhone 13 or newer.
 | --- | --- |
 | [`activities.md`](activities.md) | The Activity concept, the Add experience, per-type creation forms, lifecycle and completion verbs. |
 | [`today-and-tasks.md`](today-and-tasks.md) | The Today screen, tasks, recurrence, passed plans, overdue handling. |
-| [`plans-and-lists.md`](plans-and-lists.md) | Plan detail anatomy, the eight list kinds, the Lists ↔ Plans bridge, meals and watching. |
-| [`sharing-and-people.md`](sharing-and-people.md) | Participants, invitations, guests, the public invite page, the People layer. |
+| [`plans-and-lists.md`](plans-and-lists.md) | The Plans tab's three stages, plan detail anatomy, what lists are for, the three list behaviours and the template catalogue, default destinations, shared lists, the optional list ↔ activity bridge, meals and watching. |
+| [`sharing-and-people.md`](sharing-and-people.md) | Participants, invitations, guests, the public invite page, list members, the People layer. |
 | [`expenses.md`](expenses.md) | Expenses on shared plans, splits, balances, settlement. |
-| [`ai-capture.md`](ai-capture.md) | Natural-language capture, image-to-event, link parsing. Phase 7. |
+| [`ai-capture.md`](ai-capture.md) | Natural-language capture, image-to-event, link parsing. Phase 8. |
 | [`notifications.md`](notifications.md) | Categories, defaults, timing, quiet hours, the inbox, copy. |
 | [`interaction-contract.md`](interaction-contract.md) | Gestures, states, undo, accessibility, web equivalents. |

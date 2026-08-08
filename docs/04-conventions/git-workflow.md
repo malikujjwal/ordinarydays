@@ -11,8 +11,10 @@ not restated here.
 ## 1. Branching model
 
 **Trunk-based on `main`, with short-lived branches.** There is no `develop`, no `release/*`,
-no long-lived feature branch. `main` is always deployable and is deployed to dev on every
-merge.
+no long-lived feature branch. `main` is always deployable, and **from Phase 4 on** it is
+deployed to dev on every merge. In Phases 0–3 nothing is deployed at all, so "deployable"
+means `cdk synth` and the CDK assertion tests are green — `deploy-dev.yml` does not exist
+until P4-14.
 
 | Property | Value |
 | --- | --- |
@@ -36,9 +38,9 @@ merge.
 | `<slug>` | 2–5 words, lowercase, hyphenated, describing the change not the file | `recurrence-engine` |
 
 ```
-feat/P2-07-recurrence-engine
+feat/P2-01-recurrence-engine
 fix/P3-12-agenda-dst-boundary
-refactor/P4-03-extract-authz-helper
+refactor/P5-03-extract-authz-helper
 chore/P1-04-biome-config
 docs/P0-02-conventions
 ```
@@ -139,7 +141,7 @@ disabling the setting.
 | Target diff | Under 400 changed lines, excluding lockfiles, generated files, and tests | Reviewer judgement |
 | Hard ceiling | 800 changed lines, same exclusions | A CI job labels the PR `oversized` and comments; it does not block, because a genuine mechanical rename can exceed it |
 | Files touched | Under 20, excluding generated | Reviewer judgement |
-| Commits | Any number — they are squashed |
+| Commits | Any number — they are squashed | — |
 
 A PR over the ceiling must open with one sentence explaining why it could not be split. "It
 is all one feature" is not that sentence; a vertical slice through six files is normal, a
