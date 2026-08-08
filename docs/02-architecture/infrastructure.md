@@ -110,22 +110,36 @@ the table with it.
 ```ts
 // infra/bin/ordinarydays.ts
 const app = new cdk.App();
-const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-east-1' };
 
-new AccountStack(app, 'od-account', { env });
+applyAppTags(app);                                 // Project, ManagedBy, Owner — see §2.4
 
-for (const stage of ['dev', 'prod'] as const) {
+new AccountStack(app, 'od-account');
+
+for (const stage of STAGES) {
   const cfg = getConfig(stage);                    // lib/config.ts, Zod-validated
-  const dns  = new DnsStack(app, `od-dns-${stage}`, { env, cfg });
-  const auth = new AuthStack(app, `od-auth-${stage}`, { env, cfg });
-  const data = new DataStack(app, `od-data-${stage}`, { env, cfg });
-  const api  = new ApiStack(app, `od-api-${stage}`, { env, cfg, dns, auth, data });
-  const web  = new WebStack(app, `od-web-${stage}`, { env, cfg, dns, data });
-  const sch  = new SchedulerStack(app, `od-scheduler-${stage}`, { env, cfg, data, api });
-  new ObservabilityStack(app, `od-observability-${stage}`, { env, cfg, api, sch });
-  cdk.Tags.of(app).add('Project', 'ordinarydays');
+  const dns  = new DnsStack(app, `od-dns-${stage}`, { cfg });
+  const auth = new AuthStack(app, `od-auth-${stage}`, { cfg, dns });
+  const data = new DataStack(app, `od-data-${stage}`, { cfg });
+  const api  = new ApiStack(app, `od-api-${stage}`, { cfg, dns, auth, data });
+  new WebStack(app, `od-web-${stage}`, { cfg, dns, data });
+  const sch  = new SchedulerStack(app, `od-scheduler-${stage}`, { cfg, data, api });
+  new ObservabilityStack(app, `od-observability-${stage}`, { cfg, api, scheduler: sch });
 }
 ```
+
+> **Amended in P0-09, two things.**
+>
+> **Stacks are environment-agnostic until Phase 4 — there is no `env` prop.** This snippet
+> previously set `env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: 'us-east-1' }`,
+> which contradicts P0-09's own edge case: CI has no AWS role in Phase 0, so an `env` whose
+> account is `undefined` at synth produces a synth that succeeds only on a machine with
+> credentials configured. Phase 4 pins the environment when it first deploys. For the same
+> reason no stack may call `HostedZone.fromLookup`, `Vpc.fromLookup` or any other context
+> lookup.
+>
+> **`Tags.of(app)` was inside the stage loop**, where it ran once per stage and read as if
+> it were per-stage. App-level tags are applied once, before the loop. Which tags are
+> app-scoped and which are stack-scoped is now stated in §2.4.
 
 ### 1.3 The shared Lambda construct
 
@@ -228,14 +242,14 @@ const envConfig = z.object({
   domain: z.string(),                 // dev.ordinarydays.app | ordinarydays.app
   apiDomain: z.string(),
   mediaDomain: z.string(),
-  hostedZoneName: z.string(),         // always ordinarydays.app
-  logRetentionDays: z.nativeEnum(logs.RetentionDays),
+  hostedZoneName: z.string(),         // always ordinarydays.app — a string, never a lookup
+  logRetentionDays: z.enum(logs.RetentionDays),
   apiReservedConcurrency: z.number().int().positive(),
   pointInTimeRecovery: z.boolean(),
-  removalPolicy: z.nativeEnum(cdk.RemovalPolicy),
-  alertEmail: z.string().email(),
-  sesSender: z.string().email(),
-  webOrigins: z.array(z.string().url()),
+  removalPolicy: z.enum(cdk.RemovalPolicy),
+  alertEmail: z.email(),
+  sesSender: z.email(),
+  webOrigins: z.array(z.url()).default([]),
 });
 
 export type EnvConfig = z.infer<typeof envConfig>;
@@ -243,9 +257,8 @@ export type EnvConfig = z.infer<typeof envConfig>;
 const CONFIG: Record<Stage, EnvConfig> = {
   dev: envConfig.parse({
     stage: 'dev',
-    domain: 'dev.ordinarydays.app',
-    apiDomain: 'api.dev.ordinarydays.app',
-    mediaDomain: 'media.dev.ordinarydays.app',
+    // domain / apiDomain / mediaDomain / webOrigins are UNSET until Phase 5 registers the
+    // domain. The values below are what Phase 5 will fill in, shown for shape only.
     hostedZoneName: 'ordinarydays.app',
     logRetentionDays: logs.RetentionDays.TWO_WEEKS,
     apiReservedConcurrency: 20,
@@ -253,13 +266,28 @@ const CONFIG: Record<Stage, EnvConfig> = {
     removalPolicy: cdk.RemovalPolicy.DESTROY,
     alertEmail: 'alerts@ordinarydays.app',
     sesSender: 'no-reply@dev.ordinarydays.app',
-    webOrigins: ['https://dev.ordinarydays.app', 'http://localhost:8081'],
+    // Phase 5 adds: webOrigins: ['https://dev.ordinarydays.app', 'http://localhost:8081'],
   }),
-  prod: envConfig.parse({ /* … TWO_MONTHS? no: ONE_MONTH, 50, true, RETAIN … */ }),
+  prod: envConfig.parse({ /* … ONE_MONTH, 50, true, RETAIN … */ }),
 };
 
 export const getConfig = (stage: Stage): EnvConfig => CONFIG[stage];
 ```
+
+> **Amended in P0-09, two things.**
+>
+> **Zod 4, not Zod 3.** This snippet was written against Zod 3 and P0-09 is told to follow it
+> verbatim, but P0-07 closed OQ-11 on Zod 4, where the v3 spellings do not exist:
+> `z.nativeEnum(X)` is `z.enum(X)`, and `z.string().email()` / `z.string().url()` are the
+> top-level `z.email()` / `z.url()`. Following the old text literally would not compile.
+> Every field, value and constraint is otherwise unchanged.
+>
+> **The four domain fields are optional and unset until Phase 5.** `domain`, `apiDomain`,
+> `mediaDomain` and `webOrigins` carry no value in Phase 0 — there is no registered domain
+> to name. Every stack that consumes one branches once at construction and skips the
+> certificate, the custom domain and the alias record. That branch is what lets all eight
+> stacks synthesise before a domain exists. `hostedZoneName`, `alertEmail` and `sesSender`
+> stay required: they are plain strings that drive no lookup.
 
 Secrets are never in this file. It contains only names, sizes, and policies — the things
 that are safe in git and that a reviewer needs to see side by side.
@@ -286,17 +314,24 @@ of AWS and `od-media-prod` will already be taken.
 
 ### 2.4 Tags
 
-Applied at the app level in `bin/ordinarydays.ts`, so every taggable resource inherits
-them. Cost Explorer is then grouped by `Stage` and `Component` to answer "what is actually
-costing money".
+Cost Explorer is grouped by `Stage` and `Component` to answer "what is actually costing
+money". Three of the five are app-scoped and applied once in `bin/ordinarydays.ts`; the
+other two vary per stack and are applied by each stack's constructor, which is the whole
+reason they are useful for grouping.
 
-| Tag | Value |
-| --- | --- |
-| `Project` | `ordinarydays` |
-| `Stage` | `dev` \| `prod` |
-| `Component` | `dns` \| `auth` \| `data` \| `api` \| `web` \| `scheduler` \| `observability` |
-| `ManagedBy` | `cdk` |
-| `Owner` | `ujjwal` |
+| Tag | Scope | Value |
+| --- | --- | --- |
+| `Project` | app | `ordinarydays` |
+| `ManagedBy` | app | `cdk` |
+| `Owner` | app | `ujjwal` |
+| `Stage` | stack | `dev` \| `prod` — absent on `od-account`, which has no stage |
+| `Component` | stack | `account` \| `dns` \| `auth` \| `data` \| `api` \| `web` \| `scheduler` \| `observability` |
+
+> **Amended in P0-09.** This section said all five were applied at the app level. `Stage`
+> and `Component` cannot be: they differ per stack. The helpers are `applyAppTags(app)` and
+> `applyStackTags(stack, component, stage?)` in `infra/lib/tags.ts`. `account` was added to
+> the `Component` values — the original list covered only the seven per-stage stacks, and
+> `AccountStack` still needs to be attributable in a cost report.
 
 Activate `Stage`, `Component`, and `Project` as **cost allocation tags** in the Billing
 console after the first deploy — they only start appearing in cost reports from the day
