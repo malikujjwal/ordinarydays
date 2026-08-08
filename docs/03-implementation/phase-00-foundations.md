@@ -460,9 +460,17 @@ at the app level.
   environment when it first deploys. A lookup added carelessly turns a green CI job into one
   that only passes on the founder's laptop.
 
-**Tests.** `pnpm exec cdk synth 'od-*-dev'` succeeds with `AWS_PROFILE` unset and emits eight
-templates. A Vitest test asserts `getConfig('prod').removalPolicy === RemovalPolicy.RETAIN`
-and that `getConfig('dev').apiDomain` is `undefined`.
+**Tests.** `pnpm exec cdk synth 'od-*-dev'` succeeds with `AWS_PROFILE` unset. A Vitest test
+asserts `getConfig('prod').removalPolicy === RemovalPolicy.RETAIN` and that
+`getConfig('dev').apiDomain` is `undefined`.
+
+> **Corrected in P0-09: the template count.** This read "emits eight templates", which
+> conflates three different numbers. There are **eight stack classes** (§1.1). `cdk.out`
+> receives **fifteen** templates, because CDK synthesises the whole app — `od-account` plus
+> seven stacks each for `dev` and `prod` — and a stack selector only chooses which to
+> *display*. The selector `'od-*-dev'` matches **seven**; it does not match `od-account`,
+> which is account-scoped and carries no stage. Assert the eight stack *names*, or the
+> fifteen files, but not "eight templates".
 
 ---
 

@@ -117,7 +117,7 @@ pnpm test                   # Vitest, all packages
 pnpm test:integration       # requires DynamoDB Local: docker compose up -d
 pnpm e2e:web                # Playwright
 pnpm gen:openapi            # regenerate docs/generated/openapi.json — must be committed
-pnpm --filter @od/infra cdk diff --context env=dev
+pnpm --filter @od/infra cdk diff 'od-*-dev'   # stage comes from the stack name, never -c
 ```
 
 ## Working alongside other agents

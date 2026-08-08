@@ -2,7 +2,21 @@
   "name": "@od/infra",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "typecheck": "tsc -b"
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "cdk": "cdk",
+    "synth": "cdk synth"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.263.0",
+    "constructs": "10.8.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "aws-cdk": "2.1135.1",
+    "vitest": "3.2.7"
   }
 }
