@@ -20,6 +20,9 @@ importers:
       '@types/node':
         specifier: 22.20.1
         version: 22.20.1
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       lefthook:
         specifier: 1.13.6
         version: 1.13.6

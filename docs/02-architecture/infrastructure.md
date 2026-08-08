@@ -165,7 +165,7 @@ export class NodeLambda extends Construct {
       applicationLogLevelV2: props.cfg.stage === 'prod'
         ? lambda.ApplicationLogLevel.INFO
         : lambda.ApplicationLogLevel.DEBUG,
-      logRetention: props.cfg.logRetentionDays,
+      logGroup: this.logGroup,     // see the amendment below — NOT `logRetention`
       environment: { STAGE: props.cfg.stage, ...props.environment },
       bundling: {
         format: OutputFormat.ESM,
@@ -183,6 +183,32 @@ export class NodeLambda extends Construct {
 
 The `banner` is required: some transitive dependencies still emit CommonJS `require`
 calls, and an ESM bundle has no `require` in scope without it.
+
+> **Amended in P0-10: an explicit `logGroup`, not `logRetention`.** The `logRetention` prop
+> is `@deprecated use logGroup instead` in `aws-cdk-lib` 2.263, and the reason matters more
+> than the deprecation. Synthesising the same function both ways:
+>
+> | | `logGroup` | `logRetention` |
+> | --- | --- | --- |
+> | `AWS::Lambda::Function` | 1 | **2** |
+> | `AWS::IAM::Role` | 1 | **2** |
+> | `AWS::IAM::Policy` | 0 | 1 |
+> | `Custom::LogRetention` | 0 | 1 |
+> | `AWS::Logs::LogGroup` | 1 | **0** |
+>
+> `logRetention` provisions a custom resource backed by a **second Lambda function and its
+> own role**, which calls `PutRetentionPolicy` at deploy time — a Lambda that did not go
+> through this construct, in a construct whose entire purpose is that every Lambda goes
+> through it. And note the last row: there is no managed log group at all. Lambda creates it
+> implicitly on first invocation, so it carries none of the stack's tags and survives
+> `cdk destroy`.
+>
+> The log group is left unnamed. Naming it `/aws/lambda/od-<name>-<stage>` explicitly would
+> collide on any destroy-then-recreate in prod, where `removalPolicy` is `RETAIN` and the
+> orphaned group would still hold the name.
+>
+> Retention behaviour is unchanged: it still comes from `cfg.logRetentionDays`, and
+> `infra/test/node-lambda.test.ts` asserts 14 days in dev and 30 in prod.
 
 ---
 
