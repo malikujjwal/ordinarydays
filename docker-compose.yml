@@ -1,0 +1,17 @@
+# Local backing services. See docs/02-architecture/infrastructure.md §6.1.
+# The `minio` service joins the stack in Phase 3 (P3-21), the first consumer of
+# object storage. Do not add it before then.
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "./data"]
+    ports: ["8000:8000"]
+    volumes: ["./.dynamodb-data:/home/dynamodblocal/data"]
+    working_dir: /home/dynamodblocal
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin
+    ports: ["8001:8001"]
+    environment:
+      DYNAMO_ENDPOINT: http://dynamodb:8000
+      AWS_REGION: us-east-1
+    depends_on: [dynamodb]

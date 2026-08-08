@@ -45,6 +45,7 @@ playwright-report/
 
 # Local DynamoDB
 .dynamodb/
+.dynamodb-data/
 shared-local-instance.db
 
 # Editor and OS

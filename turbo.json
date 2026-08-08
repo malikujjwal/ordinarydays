@@ -1,0 +1,20 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["tsconfig.base.json", ".nvmrc", "biome.json"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".expo/**", "cdk.out/**"]
+    },
+    "typecheck": { "dependsOn": ["^build"], "outputs": [] },
+    "test": { "dependsOn": ["^build"], "outputs": ["coverage/**"] },
+    "test:int": { "dependsOn": ["^build"], "cache": false },
+    "lint": { "outputs": [] },
+    "gen:openapi": {
+      "dependsOn": ["^build"],
+      "outputs": ["../../docs/generated/openapi.json"]
+    },
+    "dev": { "cache": false, "persistent": true },
+    "e2e": { "dependsOn": ["build"], "cache": false }
+  }
+}

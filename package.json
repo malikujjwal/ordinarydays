@@ -1,0 +1,25 @@
+{
+  "name": "ordinarydays",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:int": "docker compose up -d && turbo run test:int",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "depcruise": "depcruise --config .dependency-cruiser.cjs apps packages services infra",
+    "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
+    "e2e:web": "playwright test",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm depcruise"
+  },
+  "devDependencies": {
+    "turbo": "2.10.9"
+  }
+}

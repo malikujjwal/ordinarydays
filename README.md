@@ -12,8 +12,8 @@ The user-facing mental model is three words: **Today · Plans · Lists**. Meals,
 outings, expenses and people are not separate mini-apps — they all move through the same
 lifecycle.
 
-**Status:** planning complete, implementation not started. There is no code in this repo
-yet. Phase 0 begins at
+**Status:** Phase 0 in progress. The five-workspace skeleton exists and installs; there is
+no application code yet. The plan is
 [`docs/03-implementation/phase-00-foundations.md`](docs/03-implementation/phase-00-foundations.md).
 
 ---
@@ -79,12 +79,18 @@ The four sets:
 
 ## Getting started
 
-Nothing to install yet. When Phase 0 lands:
+Node 22 (`.nvmrc`) and pnpm 9 via `corepack enable`. Docker Desktop for the local database.
 
 ```bash
 pnpm install
-docker compose up -d       # DynamoDB Local
-pnpm dev                   # local API + Expo dev server
+```
+
+That is the whole of it today — the workspaces are empty scaffolding. The rest of the
+quickstart arrives with the tasks that make it true:
+
+```bash
+docker compose up -d       # DynamoDB Local + dynamodb-admin (P0-21)
+pnpm dev                   # local API + Expo dev server (P0-23)
 ```
 
 Before touching AWS, read
