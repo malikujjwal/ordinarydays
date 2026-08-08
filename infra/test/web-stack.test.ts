@@ -7,12 +7,25 @@ import { DataStack } from '../lib/stacks/data-stack.js';
 import { DnsStack } from '../lib/stacks/dns-stack.js';
 import { WebStack } from '../lib/stacks/web-stack.js';
 
-function build(stage: 'dev' | 'prod') {
+/**
+ * A directory that cannot exist, so every assertion below describes the **unbuilt** stack
+ * whether or not somebody has run `expo export` locally.
+ *
+ * Before P0-19 the real path, `apps/mobile/dist`, was never built and this was true by
+ * accident. Now that the export works, leaving it implicit would make the whole file pass
+ * or fail on untracked local state.
+ */
+const NOT_BUILT = 'apps/mobile/dist-absent-in-tests';
+
+/** A directory that always exists, for the other half of the guard. */
+const BUILT = 'infra/test/fixtures';
+
+function build(stage: 'dev' | 'prod', webSourcePath = NOT_BUILT) {
   const app = new cdk.App();
   const cfg = getConfig(stage);
   const dns = new DnsStack(app, `od-dns-${stage}`, { cfg });
   const data = new DataStack(app, `od-data-${stage}`, { cfg });
-  const web = new WebStack(app, `od-web-${stage}`, { cfg, dns, data });
+  const web = new WebStack(app, `od-web-${stage}`, { cfg, dns, data, webSourcePath });
   return { web: Template.fromStack(web), data: Template.fromStack(data) };
 }
 
@@ -275,6 +288,21 @@ describe('the BucketDeployment guard', () => {
    */
   it('emits no deployment while the web export has not been built', () => {
     prod.web.resourceCountIs('Custom::CDKBucketDeployment', 0);
+  });
+
+  /**
+   * The other half, which went untested until P0-19 because there was no export to build.
+   * Phase 4 CI builds it before deploying, so this branch is the one that actually runs in
+   * an environment — and a guard that silently skipped for a bad reason would look exactly
+   * like the passing case above.
+   */
+  it('emits exactly one deployment once the export exists', () => {
+    const built = build('prod', BUILT);
+    built.web.resourceCountIs('Custom::CDKBucketDeployment', 1);
+    built.web.hasResourceProperties('Custom::CDKBucketDeployment', {
+      DistributionPaths: ['/*'],
+      Prune: true,
+    });
   });
 });
 

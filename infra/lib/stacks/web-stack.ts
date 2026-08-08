@@ -31,6 +31,17 @@ export interface WebStackProps extends cdk.StackProps {
   cfg: EnvConfig;
   dns: DnsStack;
   data: DataStack;
+  /**
+   * The web export to upload, relative to the workspace root. Defaults to where
+   * `expo export --platform web` writes.
+   *
+   * Made explicit in P0-19, when that export became something that can actually exist. The
+   * `BucketDeployment` guard has two behaviours — skip when the directory is absent, deploy
+   * when it is present — and while the path was a hidden constant, which one the tests
+   * exercised depended on whether anyone had run a build. That is a test that changes its
+   * mind based on untracked local state.
+   */
+  webSourcePath?: string;
 }
 
 const URI_REWRITE = readFileSync(
@@ -51,7 +62,7 @@ export class WebStack extends cdk.Stack {
     this.site = new StaticSite(this, 'Web', {
       cfg,
       name: 'web',
-      sourcePath: 'apps/mobile/dist',
+      sourcePath: props.webSourcePath ?? 'apps/mobile/dist',
       uriRewriteCode: URI_REWRITE,
       // Both undefined until Phase 5 registers the domain, so the distribution is reachable
       // on its *.cloudfront.net name and carries no ACM certificate.

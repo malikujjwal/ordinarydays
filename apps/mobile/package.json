@@ -2,7 +2,34 @@
   "name": "@od/mobile",
   "version": "0.0.0",
   "private": true,
+  "main": "expo-router/entry",
   "scripts": {
+    "dev": "expo start",
+    "build": "expo export --platform web",
     "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "6.1.2",
+    "@od/shared": "workspace:*",
+    "@od/ui": "workspace:*",
+    "@tanstack/react-query": "5.101.4",
+    "expo": "54.0.36",
+    "expo-constants": "18.0.13",
+    "expo-linking": "8.0.12",
+    "expo-router": "6.0.24",
+    "expo-status-bar": "3.0.9",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "2.28.0",
+    "react-native-safe-area-context": "5.6.2",
+    "react-native-screens": "4.16.0",
+    "react-native-web": "0.21.2"
+  },
+  "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@types/react": "19.1.17",
+    "@types/react-dom": "19.1.11",
+    "typescript": "5.9.3"
   }
 }

@@ -99,6 +99,29 @@ version bumps as PRs (see `security-privacy.md` §7).
 > not expose in full. The fallback is pinning 5.9.x, and it is a one-line change while the
 > only consumers are `tsc -b` invocations.
 
+> **That clause fired in P0-19, and the fix is scoped rather than repo-wide.** The Expo CLI
+> reads `tsconfig.json` to discover `paths`, and it does so through the JavaScript compiler
+> API — `@expo/cli`'s `evaluateTsConfig` calls `ts.sys.getCurrentDirectory`,
+> `ts.readConfigFile` and `ts.parseJsonConfigFileContent`. Under 7.0.2 `ts.sys` is
+> `undefined`, so **every** `expo start` and `expo export` dies with
+> `Cannot read properties of undefined (reading 'getCurrentDirectory')` before bundling
+> begins. It is not avoidable by dropping the `@/*` alias: the crash happens while
+> *discovering* whether paths exist.
+>
+> `apps/mobile` therefore carries `typescript@5.9.3` as a dev dependency. Expo resolves
+> TypeScript with `resolve-from(projectRoot)` and skips the whole path gracefully when it
+> finds none, so the nearest copy wins and the other four workspaces keep 7.0.2 — the P0-06
+> decision above stands everywhere it was actually taken for.
+>
+> **The cost, stated plainly:** `pnpm --filter @od/mobile typecheck` now runs 5.9.3, because
+> `tsc` resolves from the project's own `node_modules/.bin` first. The app is typechecked by
+> a different compiler from the rest of the repository. Both enforce the §1.1 non-negotiables
+> — that was verified for 7.0.2 in P0-06 and 5.9.x is where those checks came from — but two
+> compilers is two behaviours, and a type error that only one of them reports is a real
+> possibility. The alternative was pinning the whole repository back to 5.9.x, which
+> discards P0-06's reasoning for four workspaces to satisfy one CLI. **This is the founder's
+> call to confirm or reverse**, and it is still a one-line change in either direction.
+
 ### 2.2 Client
 
 | Package | Min major | What it is for | Why it beat the alternative |
@@ -291,6 +314,33 @@ config.resolver.nodeModulesPaths = [
 config.resolver.disableHierarchicalLookup = true;
 module.exports = config;
 ```
+
+> **Amended in P0-19: none of those three overrides survives contact with SDK 54, and one of
+> them breaks the build.** `metro.config.js` is now `module.exports = getDefaultConfig(__dirname)`
+> and nothing else. Each line was checked against the real default rather than reasoned about:
+>
+> | Override | What `getDefaultConfig` already returns |
+> | --- | --- |
+> | `watchFolders = [workspaceRoot]` | The root `node_modules` **plus every workspace package**, `packages/shared` included. The override replaces six precise entries with one broad one and drops the `node_modules` entry that symlinked packages resolve through — and `expo-doctor` fails the project for it. |
+> | `nodeModulesPaths` | Exactly `[<project>/node_modules, <workspace root>/node_modules]`. Identical; the override is a no-op. |
+> | `disableHierarchicalLookup = true` | `false`, and it has to stay `false`. |
+>
+> The third is the one that matters. `disableHierarchicalLookup` comes from the Yarn/npm
+> hoisted-monorepo playbook, where every dependency is flat in one of the two
+> `nodeModulesPaths`. This repository sets **`node-linker=isolated`** in `.npmrc`, so a
+> package's own dependencies live in `node_modules/.pnpm/<pkg>@<ver>/node_modules/` and are
+> reachable **only** by walking up from the importing file. Switching hierarchical lookup off
+> therefore makes every transitive dependency unresolvable: `expo-router` importing
+> `@react-navigation/native` — a plain dependency of it, not a peer — is simply the first to
+> fail, and the list behind it is unbounded.
+>
+> The stale-copy risk the override was written to prevent is already handled here by the
+> thing that causes the incompatibility: pnpm's content-addressed store gives one physical
+> copy per version, which is §2.1's stated reason for choosing pnpm in the first place. Where
+> the two collide, the package manager wins and the bundler config yields.
+>
+> `@expo/metro-runtime` is a direct dependency of `apps/mobile` for the same family of
+> reasons: it is an `expo-router` **peer**, and peers are the consumer's job to install.
 
 `packages/shared` exports through explicit subpath entries so the client never
 accidentally imports server-only code:

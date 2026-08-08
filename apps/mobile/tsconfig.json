@@ -1,6 +1,23 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "paths": { "@/*": ["./src/*"] } },
-  "files": [],
+  "compilerOptions": {
+    "paths": { "@/*": ["./src/*"] },
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "moduleResolution": "Bundler"
+  },
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "app.config.ts",
+    "expo-env.d.ts",
+    ".expo/types/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", ".expo/web"],
   "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/ui" }]
 }
