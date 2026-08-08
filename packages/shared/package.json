@@ -2,7 +2,25 @@
   "name": "@od/shared",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schemas": "./src/schemas/index.ts",
+    "./types": "./src/types/index.ts",
+    "./table": "./src/table/index.ts",
+    "./client": "./src/client/index.ts",
+    "./constants": "./src/constants.ts",
+    "./errors": "./src/errors.ts"
+  },
   "scripts": {
-    "typecheck": "tsc -b"
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "vitest": "3.2.7"
   }
 }

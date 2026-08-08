@@ -414,6 +414,12 @@ as well, because it fails with a clearer message.
 > whether the `zod-to-openapi` package in the lockfile supports v4. If it does not, pin
 > `zod@3` and record the pin with a one-line comment in `package.json`. Migrating schemas
 > after Phase 1 touches every file in `src/schemas/`.
+>
+> **Closed in P0-07: v4, no pin needed.** The question's premise had expired.
+> `@asteasolutions/zod-to-openapi@9` declares a peer dependency of `zod@^4.0.0`, so v3 is
+> now the version that would need pinning, and `@hono/zod-validator@0.9` accepts either.
+> `packages/shared` pins `zod@4.4.3`. Recorded in `decisions.md` OQ-11 and `tech-stack.md`
+> §2.2.
 
 **Tests.** A Vitest test importing every subpath export and asserting it resolves. A test
 that greps the built output for `react` and `@aws-sdk` and fails on a hit.

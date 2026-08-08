@@ -111,7 +111,7 @@ version bumps as PRs (see `security-privacy.md` §7).
 | `@react-navigation/native` + `@react-navigation/bottom-tabs` | 7.x | The navigation engine Expo Router is built on | Not a choice — Expo Router delegates to it. We depend on it directly only for typed navigation helpers and tab-bar customisation. |
 | `@tanstack/react-query` | 5.x | **Server state**: fetching, caching, retries, optimistic updates, offline mutation queue | Redux Toolkit Query is coupled to Redux. SWR has no mutation queue or persisted cache. Hand-rolled `useEffect` fetching produces exactly the bugs Query already solved. |
 | `zustand` | 5.x | **Client state**: UI-only state — composer draft, filter selections, sheet visibility, onboarding step | Redux for this volume of state is ceremony. Context re-renders the whole subtree. Jotai is fine but Zustand's single-store-per-domain model is easier for an agent to follow. |
-| `zod` | 3.x (or 4.x once the ecosystem's `zod-to-openapi` follows) | Runtime validation + type inference, defined once in `packages/shared` | Yup has weaker inference. `io-ts` is unreadable. Valibot is smaller but lacks the OpenAPI generator we rely on. |
+| `zod` | 4.x | Runtime validation + type inference, defined once in `packages/shared` | Yup has weaker inference. `io-ts` is unreadable. Valibot is smaller but lacks the OpenAPI generator we rely on. **OQ-11 closed in P0-07:** the ecosystem has followed — `@asteasolutions/zod-to-openapi@9` now requires `zod ^4.0.0`, making v3 the version that would need a pin. |
 | `react-native-reanimated` | 4.x | Gesture-driven and layout animations on the UI thread — swipe actions, sheet transitions, checkbox spring | The `Animated` API drops frames on the JS thread during list scrolling, which is exactly when Today's swipe actions fire. |
 | `react-native-gesture-handler` | 2.x | Native-thread gestures backing swipe rows | Peer requirement of Reanimated gestures; RN's `PanResponder` is JS-thread bound. |
 | `expo-image` | 3.x | Attachment and poster rendering, with disk + memory caching and blurhash placeholders | RN's `Image` has no persistent disk cache and no placeholder story; posters are the heaviest content in the app. |
@@ -300,13 +300,23 @@ accidentally imports server-only code:
     ".":            "./src/index.ts",
     "./schemas":    "./src/schemas/index.ts",
     "./types":      "./src/types/index.ts",
+    "./table":      "./src/table/index.ts",
     "./recurrence": "./src/recurrence/index.ts",
     "./money":      "./src/money/index.ts",
     "./client":     "./src/client/index.ts",
+    "./constants":  "./src/constants.ts",
     "./errors":     "./src/errors.ts"
   }
 }
 ```
+
+`./table` and `./constants` were missing from this list until P0-07 and are not optional:
+`repo-structure.md` §2.5 permits `infra` to import `@od/shared` **only** through those two
+subpaths, and `create-local-table.ts` (P0-21) imports `@od/shared/table`. An entry is added
+here as its directory is created, because an `exports` entry pointing at a file that does
+not exist typechecks fine and then fails at import time in Metro — so `./recurrence` and
+`./money` join the map with the phase tasks that write them (Phases 1–2), not before.
+`packages/shared/src/index.test.ts` asserts that every declared subpath resolves.
 
 For `services/api` and `infra`, `shared` is compiled by `tsc` to `dist/` as part of
 `turbo build`. For the Expo app, Metro consumes the TypeScript source directly.
