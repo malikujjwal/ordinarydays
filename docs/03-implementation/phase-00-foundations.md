@@ -1185,6 +1185,33 @@ the phase completion notes. Additionally assert in the workflow, not by eye, tha
 `aws cloudformation describe-stacks --stack-name od-smoke-dev` fails after the destroy step —
 a destroy that silently no-ops is exactly the failure this task must not miss.
 
+## Status, as of 2026-08-08
+
+> **Phase 0 is complete except its AWS half, which is deferred by decision 50 in
+> [`../00-open-decisions.md`](../00-open-decisions.md).** Do not read the unticked items
+> below as work that was missed.
+>
+> **Done: 25 of 31 tasks** — P0-05 through P0-29. `pnpm verify` exits 0 in 6.9 s on a warm
+> cache, `cdk synth 'od-*-dev'` emits its templates with no credentials, and `ci.yml` runs
+> four jobs without an AWS role of any kind.
+>
+> **Outstanding, all of it deliberate:**
+>
+> | Task | Why it is open |
+> | --- | --- |
+> | P0-01 – P0-04 | No AWS account exists yet. Being created before Phase 4. |
+> | P0-30 | GitHub environments, branch protection and signed commits. Deferred until there is a second contributor; `AWS_ACCOUNT_ID` is still needed before P0-31. |
+> | P0-31 | Blocked on the account. This is the one with a real cost — see decision 50. |
+>
+> **Acceptance criteria 1, 2, 3, 15 and 16** depend on the account and are open with it.
+> Criterion 8 (`pnpm --filter @od/mobile ios`) needs macOS and cannot be run on the
+> founder's Windows machine; criterion 10's physical-device check is the founder's to
+> confirm. Criterion 13 has been verified locally — `depcruise` fails naming the rule — but
+> not yet as a pull request in CI.
+>
+> **Phase 1 is not blocked by any of this.** It is local repository and Activity work
+> against DynamoDB Local, with no AWS surface at all.
+
 ## Acceptance criteria
 
 1. Billing and Cost Management shows the account plan as **Paid**, root has MFA enabled, and
