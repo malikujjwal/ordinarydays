@@ -257,7 +257,7 @@ Also:
 | `POST` | `/v1/activities` | Create a **Task or Plan chosen by the client**. Body = `CreateActivityInput`; both `objectKind` and `type` are required. Requires `Idempotency-Key`. |
 | `GET` | `/v1/activities/:id` | Full detail: activity + participants + expenses + updates + attachments + children + **the caller's own reminders** + date suggestions. One DynamoDB Query; the `REM#` rows are filtered to the caller in the projection before responding. Stored `listId` / `listItemId` are included only when the caller also passes `assertListAccess`; a Plan participant outside the list receives no reverse link. |
 | `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
-| `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7 and deletes every child Expense locator with its row. |
+| `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7 and deletes every child Expense locator with its row. **The settlement guard and the Expense-locator half of the cascade arrive in Phase 7 (P7-08), not Phase 1 (P1-14)** — see the note below. |
 | `POST` | `/v1/activities/:id/schedule` | `{ date, time?, endTime?, timezone }`. Also used to *unschedule* with `{ date: null }`. **Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies** (declined rows are neither reset nor notified — decision 2026-08-07) — see [`data-model.md` §7.1](data-model.md#71-rsvp-consent-does-not-survive-a-date-change). A time-only change does not. The response includes `rsvpReset: true` so the client can say so rather than letting people discover it. |
 | `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. With `occurrenceDate` → writes an Occurrence, never touches the series. **Owner only** — completion is global, see [`data-model.md` §4.5](data-model.md#45-occurrence). |
 | `POST` | `/v1/activities/:id/uncomplete` | Reverses the above. Owner only. |
@@ -265,6 +265,20 @@ Also:
 | `POST` | `/v1/activities/:id/snooze` | `{ occurrenceDate, until }` — `until` is `HH:mm` (same day) or an ISO instant. Owner only. |
 | `POST` | `/v1/activities/:id/duplicate` | |
 | `GET` | `/v1/activities/:id/ics` | Single-event `.ics`. Authenticated variant of the public one. |
+
+> **Amended 2026-08-08 — when `settlement_conflict` becomes real.** §1 above enumerates the
+> closed `ErrorCode` union and **`settlement_conflict` is not in it**, while this section and
+> `data-model.md` §7 both require it. That contradiction predates Phase 1 and is resolved in
+> favour of the behaviour: the code is legitimate and is added to
+> `packages/shared/src/errors.ts` — and to §1's enumeration — by **P7-08**, the task that
+> also writes the first `EXP#` row, the `settlementIdByPersonId` map and the guard on this
+> route.
+>
+> **Phase 1's `DELETE` (P1-14) ships the partition cascade with no settlement guard**, because
+> there is no Expense schema, no `EXP#` key builder and no row it could block. Nothing between
+> P1-14 and P7-08 writes an Expense, so the window is closed by absence rather than by a check.
+> Do not add the code to the union early: a member of a closed union that no handler can return
+> is an error clients must handle and will never see.
 
 `CreationTarget` is the contract shared by Global Add, contextual entry points, and capture:
 

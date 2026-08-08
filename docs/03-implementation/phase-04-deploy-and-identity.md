@@ -91,7 +91,7 @@ DNS. Everything that needs a registered domain is Phase 5.
 | P4-19 | Authorisation middleware and the cross-tenant `404` suite | api | P4-17 | no | M |
 | P4-20 | The `min-token-issued-at` kill switch | api | P4-17 | yes | S |
 | P4-21 | Token storage: `storage.ios.ts` and `storage.web.ts` | mobile | — | yes | M |
-| P4-22 | The real `AuthTokenProvider` replacing `NullTokenProvider` | shared | P4-21 | no | M |
+| P4-22 | The real `AuthTokenProvider` replacing `nullTokenProvider` | shared | P4-21 | no | M |
 | P4-23 | Refresh with single-flight and one retry on `401` | shared | P4-22, P4-18 | no | M |
 | P4-24 | Sign-up, confirm and sign-in screens | mobile | P4-22 | no | L |
 | P4-25 | Forgot password and reset | mobile | P4-24 | no | M |
@@ -896,7 +896,7 @@ Web holds the ID token in memory only and never sees the refresh token — that 
 [`../02-architecture/tech-stack.md`](../02-architecture/tech-stack.md) §3.5. Nothing else in
 this group gets a platform file.
 
-P4-22 replaces `NullTokenProvider` with a real `AuthTokenProvider` implementing the same
+P4-22 replaces `nullTokenProvider` with a real `AuthTokenProvider` implementing the same
 interface `packages/shared/src/api-client` already consumes. The API client itself does not
 change: it asks for a token and sets `Authorization`. If the client needs modification beyond
 swapping the provider instance, the Phase 1 seam is being violated.
@@ -1036,7 +1036,7 @@ pnpm --filter @od/api ddb:seed                 # seeds USER#usr_local_dev, uncha
 
 **Local development continues to work exactly as it did.** `AUTH_MODE=local` in
 `services/api/.env.local`, `LocalIdentityProvider` returning `usr_local_dev`,
-`NullTokenProvider` on the client, no network, no Cognito, no AWS credentials. That is the
+`nullTokenProvider` on the client, no network, no Cognito, no AWS credentials. That is the
 default development loop after this phase as much as before it, and a change that breaks it is
 a regression. The startup guard — throw when `AUTH_MODE === 'local'` and `STAGE !== 'local'` —
 is what makes keeping it safe.

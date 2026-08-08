@@ -63,7 +63,9 @@ There is no authentication. There is instead the **identity seam**: every item i
 `USER#<userId>` exactly as
 [`../02-architecture/data-model.md`](../02-architecture/data-model.md) §3.2 specifies, and
 the user ID comes from an `IdentityProvider` that returns a constant in this phase.
-Deferring identity is not deferring `ownerId`. **29 tasks.**
+Deferring identity is not deferring `ownerId`. **30 tasks** — 29, plus P1-30 and P1-31
+appended by the pre-scheduling phase-gate audit on 2026-08-08, less P1-19, which that audit
+found had already shipped in P0-20.
 
 ### 1.3 Phase 2 — Today and tasks
 
@@ -236,7 +238,7 @@ and can be started against the contract alone.
 ```mermaid
 graph TD
     P0["Phase 0 · Foundations<br/>local · 31 tasks · 63 AWU"]
-    P1["Phase 1 · Activity core<br/>local · 29 tasks · 69 AWU"]
+    P1["Phase 1 · Activity core<br/>local · 30 tasks · 72 AWU"]
     P2["Phase 2 · Today and tasks<br/>local · 37 tasks · 87 AWU"]
     P3["Phase 3 · Plans and lists<br/>local · 43 tasks · 110 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
@@ -336,7 +338,7 @@ Three reasons, in descending weight.
    **$0**.
 3. **The data model was designed so the swap is small.** Every item is keyed `USER#<userId>`
    from the first line of repository code. Phase 4 replaces `LocalIdentityProvider` with
-   `CognitoIdentityProvider` and swaps `NullTokenProvider` for a real one — two files behind
+   `CognitoIdentityProvider` and swaps `nullTokenProvider` for a real one — two files behind
    two interfaces. Deferring identity is not the same as deferring `ownerId`, and the
    multi-tenant key structure is never retrofitted.
 
@@ -393,18 +395,24 @@ sizings did not support; those are corrected here.
 | Phase | Tasks | S / M / L | AWU | Elapsed (see assumption) |
 | --- | --- | --- | --- | --- |
 | 0 — Foundations | 31 | 9 / 17 / 5 | **63** | ~3 weeks |
-| 1 — Activity core | 29 | 5 / 16 / 8 | **69** | ~3.5 weeks |
+| 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
 | 2 — Today and tasks | 37 | 5 / 23 / 9 | **87** | ~4.5 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **140** | **23 / 81 / 36** | **329** | **~16.5 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **141** | **22 / 83 / 36** | **332** | **~16.5 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **210** | **35 / 126 / 49** | **483** | **~24 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **211** | **34 / 128 / 49** | **486** | **~24 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9** | **359** | **48 / 217 / 94** | **858** | **~43 weeks (~10 months)** |
+| **Total 0–9** | **360** | **47 / 219 / 94** | **861** | **~43 weeks (~10 months)** |
+
+Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
+**−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
+and struck rather than deleted). Net **+1 task, +3 AWU**. The S/M/L column counts live rows
+only, so P1-19 is absent from it; Phase 1 therefore holds 30 live tasks across IDs
+P1-01…P1-18 and P1-20…P1-31.
 
 ### 4.3 The headline changed
 
@@ -432,8 +440,17 @@ A re-sum on 2026-08-07 found Phase 3's own task table totalled 112 AWU (4 S / 26
 not the 111 carried above, and the same day's cut of P3-11 (an M) took Phase 3 to 110 AWU —
 net −1 against the +176 correction, giving 359 tasks and 858 AWU.
 
-Use **858 AWU and ~43 weeks** (858 / 20 ≈ 42.9) as the plan of record. Note that the first four sevenths of
-that — everything through Phase 5, 483 AWU and ~24 weeks — is the shipped product; the
+A fourteenth correction landed on **2026-08-08**, from the phase-gate audit run against the
+repository before any Phase 1 task was scheduled. Phase 1 gained **P1-30** (`routeSplit`
+per-route registry, M) and **P1-31** (the React Native test environment, M) — work ten and
+three tasks respectively already assumed, which no task owned — and lost **P1-19** (S), whose
+seam had shipped in P0-20. Net **+1 task and +3 AWU**, giving **360 tasks and 861 AWU**. It
+is worth noting what this correction is: not scope growth, but two unowned dependencies and
+one duplicate, found by reading the plan against the code for an hour. That is the cheapest
+kind of correction available and the argument for running the phase gate before every phase.
+
+Use **861 AWU and ~43 weeks** (861 / 20 ≈ 43.1) as the plan of record. Note that the first four sevenths of
+that — everything through Phase 5, 486 AWU and ~24 weeks — is the shipped product; the
 remaining ~19 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
 participant can act on.
@@ -488,7 +505,7 @@ tells you where a third agent earns its keep.
 | Phase | Parallel-safe | Comment |
 | --- | --- | --- |
 | 0 | 12 of 31 | Stacks, toolchain and scaffolds fan out well. |
-| 1 | 11 of 29 | Pure `shared` work and independent route files. |
+| 1 | 11 of 30 | Pure `shared` work and independent route files. P1-30 is the opposite — it is the one task the ten route tasks all queue behind, so it is worth doing first and alone. |
 | 2 | 15 of 37 | The highest count, but the engine itself (P2-01, P2-02) is strictly one agent. |
 | 3 | 10 of 44 | The link lifecycle is one model of one problem; the template catalogue and the two read-only endpoints fan out. |
 | **4** | **4 of 33** | **The least parallel phase in the plan.** Bootstrap → account → data → pool → API → token is one chain, and every link is a deploy. Do not staff it for throughput; staff it for one person's undivided attention. |
@@ -534,6 +551,13 @@ in Phase 6, which is a support case with a wait attached.
 
 - Anything that edits **`services/api/src/app.ts`** or the middleware chain. It is one file
   that everything mounts into. Sequence these; they are small.
+- Anything that edits **`services/api/src/middleware/routeSplit.ts`**, for the same reason
+  and from Phase 1 onward. Its route registry (P1-30) is the one place a route states whether
+  it needs identity, so **every** task that adds an endpoint appends to it — ten of them in
+  Phase 1 alone. The conversion itself (P1-30) is strictly one agent, done before the first
+  route lands; after that each task adds its own line, which conflicts the way `constants.ts`
+  does and resolves as easily, *provided* the file keeps one entry per line grouped by
+  resource. Reformatting it in a feature PR is what turns that into a real conflict.
 - Anything that edits **`services/api/src/repositories/keys.ts`**. One file, deliberately.
 - Anything that changes a **shared Zod schema an in-flight task is consuming**. Land the
   schema first, then the consumers.
@@ -565,7 +589,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-140 tasks, 329 AWU, ~16.5 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+141 tasks, 332 AWU, ~16.5 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -577,7 +601,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-210 tasks, 483 AWU, ~24 weeks. External testers who are not the founder are using it on
+211 tasks, 486 AWU, ~24 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -589,7 +613,7 @@ after the first TestFlight build, migrations are mandatory in both environments.
 
 ### 6.3 End of Phase 7 — the full multi-player product, before any AI spend
 
-294 tasks, 686 AWU, ~34.5 weeks. Sharing, guests, invites, shared lists, date suggestions,
+295 tasks, 689 AWU, ~34.5 weeks. Sharing, guests, invites, shared lists, date suggestions,
 expenses, balances and settlement all work. Every marginal cost in the system is still a fraction of a cent per
 request, and every AWS line item is either free-tier or the domain.
 
@@ -670,7 +694,7 @@ isolation, and it only holds if the isolation is real.
 **Phases 0 through 3, surfacing in Phase 4. New with the local-first ordering, and the price
 paid for it.**
 
-Nothing runs on AWS for 140 tasks. Every divergence between DynamoDB Local and DynamoDB,
+Nothing runs on AWS for 141 tasks. Every divergence between DynamoDB Local and DynamoDB,
 between the Hono Node adapter and an API Gateway v2 payload, and between a warm laptop
 process and a cold Lambda accumulates silently and is discovered in one phase — tangled up
 with a Cognito user pool, a first deploy and a new IAM surface, so that when something fails

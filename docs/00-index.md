@@ -66,7 +66,7 @@ How it is built. Mechanics are decided here.
 
 ## 03 — Implementation
 
-The plan. Ten phases, 359 tasks. Phases 0–3 are local-first: nothing is deployed to AWS
+The plan. Ten phases, 360 tasks. Phases 0–3 are local-first: nothing is deployed to AWS
 until Phase 4.
 
 | Document | Read it when |

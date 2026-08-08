@@ -24,6 +24,32 @@ interface and adds the screens in front of it.
 What is still missing is any sense of *when*: there is no agenda, no Today, no recurrence.
 Things go in and can be found again; they do not yet come back to you.
 
+## Amendment — 2026-08-08
+
+> **Amended before any Phase 1 task was scheduled**, from the phase-gate audit of this
+> document against the repository as built through Phase 0. Nothing below is a change of
+> intent; each item is a place where the plan described code that does not exist, or
+> described code that exists in a different shape. Recorded here rather than edited in
+> silently, so that a reader who remembers the original text can see what moved.
+>
+> | # | Change | Where |
+> | --- | --- | --- |
+> | 1 | **P1-30 added** — `routeSplit` converts from a hard-coded set of implemented paths to a per-route registry. Ten tasks assumed the per-route layout; none of them owned building it. It is now a dependency of P1-01, P1-07, P1-08, P1-11 through P1-16 and P1-18. | New task; task table; P1-01's edge cases |
+> | 2 | **P1-31 added** — the React Native test environment for `packages/ui` and `apps/mobile`, split out of P1-22. `packages/ui` declares no `react` or `react-native` dependency and both workspaces run Vitest under `environment: 'node'` with a `.test.ts`-only include, so no `.tsx` render test could run. P1-22 was carrying that as unstated scope on top of twelve primitives. | New task; task table; P1-22 |
+> | 3 | **P1-14 no longer ships the settlement guard.** `settlement_conflict` is not in the closed `ErrorCode` union, and Phase 1 has no Expense schema, no `EXP#` key builder and no rows to guard. The guard and the error code both belong to **P7-08**, which already claims the parent-delete case. | P1-14; out-of-scope table; `api-contract.md` §2.3 |
+> | 4 | **P1-19's seam shape corrected to the code that shipped in P0-20.** The interface is `getToken(): Promise<string \| undefined>` in `client/http.ts`, exported as `nullTokenProvider`. This document was the only place carrying `string \| null`, `client/auth.ts` and `NullTokenProvider`; no architecture doc disagreed with the code, so the phase file was the wrong one. | P1-19; deliverables; criterion 18; Prepared for Phase 4 |
+>
+> Phase 1 is therefore **30 live tasks and 72 AWU** — 29, plus two M, less P1-19's S —
+> re-summed in [`roadmap.md`](roadmap.md) §4.2. The two new tasks run **out of numeric
+> order** — see the
+> sequencing note in [`../04-conventions/kickoff-prompts.md`](../04-conventions/kickoff-prompts.md).
+>
+> Three instructions in the original text told an agent to amend a document that had
+> already been amended: `infrastructure.md` §6.2 and `testing.md` §4.3 already say there is
+> no `dev-bypass` mode and no `X-Dev-User` header, and `testing.md` §8.2 already names
+> `seed-local.ts`. Those instructions are struck below rather than left to produce an empty
+> diff.
+
 ## Prerequisites
 
 | # | Item | Notes |
@@ -37,6 +63,8 @@ No AWS access is required to complete this phase. No AWS resource is created by 
 
 ## Deliverables
 
+- [ ] `routeSplit` converted from Phase 0's implemented-paths set to a per-route registry
+      that matches parameterised paths and states, per route, whether identity is required.
 - [ ] `IdentityProvider` interface with a `LocalIdentityProvider` implementation, selected by
       `AUTH_MODE`, resolved once at module scope.
 - [ ] A startup-time hard guard: the process refuses to start when `AUTH_MODE=local` and the
@@ -53,7 +81,8 @@ No AWS access is required to complete this phase. No AWS resource is created by 
 - [ ] `rateLimit` and `idempotency` middleware live, keyed off `c.get('userId')`.
 - [ ] Zod schemas for every shape above, defined once in `packages/shared` and imported by
       both sides; `docs/generated/openapi.json` regenerated.
-- [ ] An `AuthTokenProvider` seam in the shared client, with `NullTokenProvider` shipped.
+- [ ] The `AuthTokenProvider` seam in the shared client, with `nullTokenProvider` supplied by
+      `apps/mobile`. **Delivered by P0-20; verified, not rebuilt, in this phase.**
 - [ ] `pnpm seed:local` populating DynamoDB Local with the dev profile and realistic
       activities, idempotently.
 - [ ] The explicit global Add chooser (`Task`, `Plan`, `List item`), the five Plan-kind
@@ -65,6 +94,9 @@ No AWS access is required to complete this phase. No AWS resource is created by 
 - [ ] `/v1/capture/parse|extract|link` returning `501 not_implemented` with the stable error
       envelope; the client's capture paths degrade exactly as
       [`../01-product/ai-capture.md`](../01-product/ai-capture.md) §6 specifies.
+- [ ] A React Native test environment — jsdom, the RN transform and React Native Testing
+      Library — under which `packages/ui` and `apps/mobile` can both run `.tsx` render tests,
+      with `apps/mobile`'s deferred coverage floor armed.
 - [ ] `packages/ui` primitives sufficient for every screen in this phase.
 - [ ] Playwright and Maestro harnesses running one real flow each against the local stack.
 
@@ -72,35 +104,47 @@ No AWS access is required to complete this phase. No AWS resource is created by 
 
 | ID | Title | Area | Depends on | Parallel-safe | Size |
 | --- | --- | --- | --- | --- | --- |
-| P1-01 | `IdentityProvider` seam and `LocalIdentityProvider` | api | P0-13 | no | M |
+| P1-01 | `IdentityProvider` seam and `LocalIdentityProvider` | api | P1-30 | no | M |
 | P1-02 | The `AUTH_MODE` startup guard | api | P1-01 | no | S |
 | P1-03 | `rateLimit` middleware | api | P1-01 | yes | M |
 | P1-04 | `idempotency` middleware | api | P1-01 | yes | M |
 | P1-05 | Repository base: keys, cursors, transactions, upgrade-on-read | api | P0-13 | no | L |
 | P1-06 | Shared types and schemas for `User`, `Activity` and `Reminder` | shared | P0-07 | no | L |
-| P1-07 | `UserRepository` and `GET`/`PATCH /v1/me` | api | P1-05, P1-06, P1-01 | no | M |
-| P1-08 | Device registration endpoints | api | P1-07 | yes | S |
+| P1-07 | `UserRepository` and `GET`/`PATCH /v1/me` | api | P1-05, P1-06, P1-01, P1-30 | no | M |
+| P1-08 | Device registration endpoints | api | P1-07, P1-30 | yes | S |
 | P1-09 | `ActivityRepository` | api | P1-05, P1-06 | no | L |
 | P1-10 | Activity service: status derivation, authz, transactions | api | P1-09 | no | L |
-| P1-11 | `POST /v1/activities` | api | P1-10, P1-04 | no | M |
-| P1-12 | `GET /v1/activities/:id` | api | P1-10 | yes | M |
-| P1-13 | `PATCH /v1/activities/:id` with `If-Match` | api | P1-10 | no | M |
-| P1-14 | `DELETE /v1/activities/:id` and its cascade | api | P1-10 | no | M |
-| P1-15 | `POST /v1/activities/:id/duplicate` | api | P1-11 | yes | S |
-| P1-16 | `GET /v1/activities?filter=` with cursors | api | P1-09 | yes | M |
+| P1-11 | `POST /v1/activities` | api | P1-10, P1-04, P1-30 | no | M |
+| P1-12 | `GET /v1/activities/:id` | api | P1-10, P1-30 | yes | M |
+| P1-13 | `PATCH /v1/activities/:id` with `If-Match` | api | P1-10, P1-30 | no | M |
+| P1-14 | `DELETE /v1/activities/:id` and its cascade | api | P1-10, P1-30 | no | M |
+| P1-15 | `POST /v1/activities/:id/duplicate` | api | P1-11, P1-30 | yes | S |
+| P1-16 | `GET /v1/activities?filter=` with cursors | api | P1-09, P1-30 | yes | M |
 | P1-17 | Object/Plan-kind change mapping (pure, in `shared`) | shared | P1-06 | yes | M |
-| P1-18 | `/v1/capture/*` `501` stubs | api | P0-13 | yes | S |
-| P1-19 | `AuthTokenProvider` seam and `NullTokenProvider` | shared | P0-20 | yes | S |
-| P1-20 | Shared API client: `me`, `activities`, `capture` | shared | P1-06, P1-19 | no | M |
+| P1-18 | `/v1/capture/*` `501` stubs | api | P1-30 | yes | S |
+| ~~P1-19~~ | ~~`AuthTokenProvider` seam and `NullTokenProvider`~~ — delivered by P0-20; see the amended subsection | shared | — | — | — |
+| P1-20 | Shared API client: `me`, `activities`, `capture` | shared | P1-06 | no | M |
 | P1-21 | `seed-local.ts`: the dev profile and sample activities | api | P1-07, P1-09 | no | M |
-| P1-22 | `packages/ui` primitives | shared | P0-08 | yes | L |
-| P1-23 | App shell: three tabs, header, FAB, placeholders | mobile | P0-19, P1-22 | no | M |
+| P1-22 | `packages/ui` theme, primitives and token gallery | shared | P0-08, P1-31 | yes | L |
+| P1-23 | App shell: three tabs, header, FAB, placeholders | mobile | P0-19, P1-22, P1-31 | no | M |
 | P1-24 | The explicit Add chooser and target routing | mobile | P1-23, P1-20 | no | L |
-| P1-25 | Task and five Plan-kind creation forms | mobile | P1-24, P1-22 | no | L |
+| P1-25 | Task and five Plan-kind creation forms | mobile | P1-24, P1-22, P1-31 | no | L |
 | P1-26 | Activity detail screen: read and inline edit | mobile | P1-25, P1-12 | no | L |
 | P1-27 | Change object/Plan kind, duplicate, delete in the UI | mobile | P1-26, P1-17 | no | M |
 | P1-28 | Repository integration-test harness on DynamoDB Local | ci | P1-09, P0-21 | yes | M |
 | P1-29 | Playwright and Maestro harnesses with one flow each | ci | P1-25, P1-21 | no | M |
+| **P1-30** | **`routeSplit`: the per-route registry and the identity split** | api | P0-13 | no | M |
+| **P1-31** | **The React Native test environment for `ui` and `mobile`** | ci | P0-08, P0-19, P0-24 | yes | M |
+
+**P1-30 and P1-31 were appended on 2026-08-08 and therefore break the "ascending ID order is
+a valid dependency order" property this phase's IDs previously had.** P1-30 runs *first* of
+all the API tasks and P1-31 *before* P1-22. Both are called out in
+[`../04-conventions/kickoff-prompts.md`](../04-conventions/kickoff-prompts.md); do not
+schedule Phase 1 from the ID column alone.
+
+P1-19 is struck: the seam it describes shipped in P0-20 and this phase verifies it rather
+than building it. Its subsection is kept, and amended, because the shape is load-bearing for
+Phase 4 and deleting it would lose the reasoning.
 
 P1-08, P1-12, P1-15, P1-16 and P1-27 have no detail subsection. They follow
 [`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §2 and the
@@ -206,13 +250,22 @@ with an injected provider, using the `createApp(overrides)` parameter from P0-13
 const app = createApp({ identityProvider: stubIdentity('usr_other_test_user') });
 ```
 
-> **Decision:** there is no `X-Dev-User` header and no `dev-bypass` mode. `infrastructure.md`
-> §6.2 and `testing.md` §4.3 describe an `AUTH_MODE=dev-bypass` that trusts a request header
-> to name the user; amend both in this task's PR. A header-driven bypass is shipped code that
-> reads attacker-controlled input to decide who you are, guarded only by an environment
-> check. Injecting a stub through `createApp` gives tests the same capability with nothing in
-> the production bundle to guard. `testing.md` §4.3's `authedHeaders()` helper drops its
-> `x-dev-user` entry and keeps the rest.
+> **Decision:** there is no `X-Dev-User` header and no `dev-bypass` mode. A header-driven
+> bypass is shipped code that reads attacker-controlled input to decide who you are, guarded
+> only by an environment check. Injecting a stub through `createApp` gives tests the same
+> capability with nothing in the production bundle to guard.
+>
+> ~~`infrastructure.md` §6.2 and `testing.md` §4.3 describe an `AUTH_MODE=dev-bypass`;
+> amend both in this task's PR, and drop `authedHeaders()`'s `x-dev-user` entry.~~
+> **Already done — do not re-do it.** `infrastructure.md` §6.2 (line 1071) and `testing.md`
+> §4.3 both already state that there is no `dev-bypass` mode and no `X-Dev-User` header, and
+> `authedHeaders()` already carries no such entry. Verified 2026-08-08.
+>
+> One thing this task *does* still have to build: `createApp` currently takes
+> `AppOverrides { _reserved?: never }` and ignores the argument
+> ([`services/api/src/app.ts`](../../services/api/src/app.ts)). It is a reserved placeholder,
+> not a working injection point, and the whole no-bypass-header decision rests on it. Make it
+> real here.
 
 > **Decision:** `usr_local_dev` is deliberately not a ULID. It is instantly recognisable in a
 > table browser, greps cleanly, and can never collide with a real generated ID. The
@@ -231,8 +284,12 @@ const app = createApp({ identityProvider: stubIdentity('usr_other_test_user') })
 - The provider is constructed at module scope, not per request. In Phase 4 that is what
   keeps the JWKS fetch out of the request path; in Phase 1 it costs nothing and establishes
   the shape.
-- `routeSplit` still decides which paths need identity at all. `/v1/health` and, later,
-  `/public/v1/*` never reach this middleware.
+- `routeSplit` decides which paths need identity at all. `/v1/health` and, later,
+  `/public/v1/*` never reach this middleware. **Amended 2026-08-08:** Phase 0 shipped
+  `routeSplit` with that decision unimplemented — it exports
+  `UNAUTHENTICATED_PRIVATE_PATHS` and never reads it, and gates on an exact-match
+  `IMPLEMENTED_PATHS` set instead. P1-30 makes the export load-bearing before this task
+  mounts anything, which is why P1-01 now depends on it.
 
 **Tests.** Unit: `LocalIdentityProvider.resolve()` returns `usr_local_dev` for a request with
 no headers, with a bogus `Authorization` header, and with a hostile `X-Dev-User` header — the
@@ -761,12 +818,40 @@ line. The same request with one participant returns `409` byte-identically. A pa
 
 ### P1-14 — `DELETE /v1/activities/:id` and its cascade
 
-**Approach.** Owner only. Query the whole `ACT#<id>` partition first. If any future `EXP#`
-row has a non-empty `settlementIdByPersonId`, return `409 settlement_conflict` with every
-distinct blocking id and write nothing; Phase 7 supplies those rows and the Undo UI, but the
-delete contract is guarded from its first implementation. Otherwise delete every partition
-item, the owner's `IDX#` entry and every participant's, and clear pointers on anything that
-points back:
+**Approach.** Owner only. Query the whole `ACT#<id>` partition first, then delete every
+partition item, the owner's `IDX#` entry and every participant's, and clear pointers on
+anything that points back:
+
+> **Decision, 2026-08-08: Phase 1 ships no settlement guard, and `settlement_conflict` is
+> not added to the `ErrorCode` union in this phase.**
+>
+> The original text had this task return `409 settlement_conflict` when a child `EXP#` row
+> carried a non-empty `settlementIdByPersonId`, on the reasoning that the delete contract
+> should be guarded from its first implementation. Three things make that unbuildable here.
+> `settlement_conflict` is **not a member of the closed union** in
+> [`packages/shared/src/errors.ts`](../../packages/shared/src/errors.ts), and
+> [`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §1's own
+> enumeration omits it while §2.3 requires it — a pre-existing contradiction between two
+> architecture sections that Phase 1 is simply the first task to walk into. There is no
+> `Expense` type, no `EXP#` key builder in P1-05's list, and no `settlementIdByPersonId`
+> field defined anywhere in this phase. And the guard's test — "a fixture settled Expense
+> returns the exact blocking ids" — would require inventing an Expense row shape in Phase 1
+> that Phase 7 then has to match, which is the retrofit risk running backwards.
+>
+> A guard over rows that no schema defines is the same artefact this repository has twice
+> refused elsewhere: the pass-through `identity` middleware Phase 0 declined to stub, and the
+> `AUTH_MODE` environment variable `ApiStack` declines to set. It reads as an implemented
+> control and is none.
+>
+> **Owner: P7-08**, which already claims this exact case — its edge cases say "the parent
+> Activity delete route uses the same aggregate guard across every child Expense" and its
+> tests already cover "deleting the parent returns the union of blocking ids". P7-08 adds the
+> code to the union (a one-line insert, per
+> [`../04-conventions/git-workflow.md`](../04-conventions/git-workflow.md) §6.2), adds the
+> guard to this route, and amends `api-contract.md` §1's enumeration in the same PR.
+>
+> Until then the cascade below is the whole contract, and there is nothing it can fail to
+> block: no task before P7-08 writes an `EXP#` row.
 
 | Pointer | Action |
 | --- | --- |
@@ -782,11 +867,13 @@ the operation is not atomic — a partially deleted activity is recoverable by r
 delete, whereas a transaction that can never succeed is not. Make the handler idempotent so a
 retry completes it.
 
-**Tests.** Integration: every item under `ACT#<id>` and every fixture Expense locator is gone;
-a fixture settled Expense returns the exact blocking ids and leaves all rows byte-identical;
-a child activity survives with
+**Tests.** Integration: every item under `ACT#<id>` is gone; a child activity survives with
 `parentActivityId` absent; a second `DELETE` returns `404` and does not throw; a stubbed
 non-owner gets `404`.
+
+The two settlement cases — a fixture settled Expense returning the exact blocking ids and
+leaving every row byte-identical, and the locator cascade — move to **P7-08** with the guard
+and the Expense schema they need. Do not write a placeholder for them here.
 
 ---
 
@@ -851,52 +938,62 @@ the `501` stub unchanged.
 
 ---
 
-### P1-19 — `AuthTokenProvider` seam and `NullTokenProvider`
+### ~~P1-19~~ — the `AuthTokenProvider` seam · **delivered by P0-20**
 
-**What to build.** The client-side half of the identity seam. It is smaller than the server
-half and does the same job: the code that calls endpoints is written once and never changes.
+> **Amended 2026-08-08. There is no work in this task; do not open a branch for it.** The
+> client-side half of the identity seam shipped with the HTTP client in P0-20, and it shipped
+> in a different shape from the one this section originally specified. The section is kept,
+> corrected, because Phase 4 builds directly against it.
 
-**Files.** `packages/shared/src/client/auth.ts`, `packages/shared/src/client/http.ts`
-(consuming it), `apps/mobile/src/lib/apiClient.ts` (supplying it).
-
-**Approach.**
+**What exists, and where.** The interface and the null implementation live in
+[`packages/shared/src/client/http.ts`](../../packages/shared/src/client/http.ts) — the file
+that consumes them — not in a separate `client/auth.ts`. Both are re-exported from
+`@od/shared/client`.
 
 ```ts
-// packages/shared/src/client/auth.ts
+// packages/shared/src/client/http.ts — as shipped
 export interface AuthTokenProvider {
-  /** The bearer token to send, or null for an unauthenticated request. */
-  getToken(): Promise<string | null>;
+  getToken(): Promise<string | undefined>;
 }
 
-export const NullTokenProvider: AuthTokenProvider = {
-  getToken: async () => null,
+export const nullTokenProvider: AuthTokenProvider = {
+  getToken: () => Promise.resolve(undefined),
 };
 ```
 
-`http.ts` calls `getToken()` once per request and sets `Authorization: Bearer <token>` **only
-when the result is non-null**. A null result adds no header at all — not an empty one, not
-`Bearer null`, not `Bearer undefined`. That distinction is the whole task: a header that is
-present but empty produces a `401` in Phase 4 that looks like a token problem and is actually
-a plumbing problem.
+**Three differences from the original text, and why the code is right.**
 
-`apps/mobile/src/lib/apiClient.ts` constructs the client with `NullTokenProvider`. That is
-the only line Phase 4 changes on the client side, other than adding the screens.
+| This document said | The code says | Which wins |
+| --- | --- | --- |
+| `Promise<string \| null>` | `Promise<string \| undefined>` | **The code.** `exactOptionalPropertyTypes` is on repository-wide; `undefined` is the absence value the rest of the codebase uses, and a `null`/`undefined` split at this seam is exactly the kind of two-spellings problem `schemas/common.ts` exists to prevent. |
+| `NullTokenProvider` | `nullTokenProvider` | **The code.** It is a value, not a type. |
+| `packages/shared/src/client/auth.ts` | `client/http.ts` | **The code.** One consumer, one file; a two-line module imported by exactly one sibling is a file to keep in sync, not a seam. |
 
-**Edge cases.**
+No architecture document specifies the signature — `tech-stack.md` §5.2 does not, `auth.md`
+does not, and `phase-00-foundations.md` names only the identifiers. Under `CLAUDE.md`'s rule
+hierarchy this phase file is the lowest-ranked of the documents involved and is the one that
+was wrong, so it is the one amended.
 
-- `getToken` is `async` for the same reason `IdentityProvider.resolve` is: Phase 4's
-  implementation awaits a refresh, and a synchronous signature would force every call site to
-  change.
-- The single-flight refresh lock and the one-retry-on-`401` rule belong to Phase 4's
-  implementation of this interface, not to `http.ts`. Do not add a retry-on-401 hook now: an
-  unauthenticated client that retries a `401` retries forever.
-- No `process.env` and no storage API in `packages/shared`. The provider is constructed by
-  the app and handed in.
+**The behaviour the original text was protecting is intact and tested.** `http.ts` calls
+`getToken()` once per request and sets `Authorization: Bearer <token>` **only when the result
+is neither `undefined` nor the empty string** — no header key at all otherwise, not an empty
+one, not `Bearer undefined`. That is the whole point of the seam: a header that is present
+but empty produces a `401` in Phase 4 that looks like a token problem and is actually a
+plumbing problem. [`apps/mobile/src/lib/apiClient.ts`](../../apps/mobile/src/lib/apiClient.ts)
+already supplies `nullTokenProvider`, and that construction site is the only line Phase 4
+changes on the client side beyond adding screens.
 
-**Tests.** Unit with a stubbed `fetch`: `NullTokenProvider` produces a request with **no**
-`Authorization` header key present; a stub provider returning `'abc'` produces
-`Authorization: Bearer abc`; `getToken` is called exactly once per request, including on a
-retried `GET`.
+**What this phase still owes.** Verification, in whichever task next touches the client
+(P1-20): confirm acceptance criterion 18 still passes, and that `getToken` is called exactly
+once per request including on a retried `GET`. The existing unit suite in
+`packages/shared/src/client/http.test.ts` covers this; if it does not, add the case there
+rather than opening P1-19.
+
+**Still true, and still Phase 4's:** the single-flight refresh lock and the
+one-retry-on-`401` rule belong to Phase 4's *implementation* of this interface, not to
+`http.ts`. Do not add a retry-on-401 hook now — an unauthenticated client that retries a
+`401` retries forever. And no `process.env` and no storage API in `packages/shared`; the
+provider is constructed by the app and handed in.
 
 ---
 
@@ -939,9 +1036,11 @@ minutes of typing.
 > `schemaVersion` — and it keeps the "no `pk`/`sk` construction outside the repository layer"
 > rule intact. `infra` may import `@od/shared` only, so a seed script there could not use the
 > repositories and would have to rebuild key construction, which is exactly the duplication
-> that rule exists to prevent. `testing.md` §8.2 already names `services/api/scripts/` for the
-> local seed; amend its filename to `seed-local.ts` in this PR. The root script is
-> `pnpm seed:local`, so the command is stable regardless of where the file lives.
+> that rule exists to prevent. ~~`testing.md` §8.2 already names `services/api/scripts/` for
+> the local seed; amend its filename to `seed-local.ts` in this PR.~~ **Already done — do not
+> re-do it.** `testing.md` §8.2 names `services/api/scripts/seed-local.ts` in full. Verified
+> 2026-08-08. The root script is `pnpm seed:local`, so the command is stable regardless of
+> where the file lives.
 
 **Approach.**
 
@@ -988,7 +1087,15 @@ as soon as it happens.
 
 ---
 
-### P1-22 — `packages/ui` primitives
+### P1-22 — `packages/ui` theme, primitives and token gallery
+
+> **Scope narrowed 2026-08-08.** The test environment these primitives are asserted in — the
+> `react`/`react-native` dependencies on `packages/ui`, the jsdom environment, the `.tsx`
+> include globs and `apps/mobile`'s deferred coverage floor — is **P1-31**, and this task
+> depends on it. None of it existed when this section was written, and carrying it here made
+> an already-L task quietly own the client test setup for two workspaces. **Do not configure
+> a test environment in this task.** If `Button.test.tsx` does not run when you start,
+> P1-31 has not landed and this task is not ready.
 
 **Files.** `packages/ui/src/primitives/{Text,Stack,Button,Row,Checkbox,Sheet,TextField,
 Select,Chip,Toast,Skeleton,Divider}.tsx`,
@@ -1248,6 +1355,163 @@ retry-until-green.
 
 ---
 
+### P1-30 — `routeSplit`: the per-route registry and the identity split
+
+> **Added 2026-08-08.** Ten tasks in this phase mount a route under `/v1/` and every one of
+> them assumed this work was already done. It was not, and no task owned it.
+
+**What to build.** The conversion of `routeSplit` from Phase 0's "one route exists" shape
+into the registry every later route registers itself in. This is a refactor of one file plus
+its test, done once, before the first Phase 1 route is written — not a line each of ten
+tasks adds to a growing `Set` while stepping on each other.
+
+**Files.** `services/api/src/middleware/routeSplit.ts`, `services/api/src/app.ts` (mounting
+order only), `services/api/src/middleware/routeSplit.test.ts`.
+
+**What is there now, and why it blocks.** Phase 0 shipped
+[`routeSplit`](../../services/api/src/middleware/routeSplit.ts) with three properties that
+were correct for a one-endpoint service and are wrong for this phase:
+
+1. **`IMPLEMENTED_PATHS` is an exact-match `Set` containing only `/v1/health`.** Everything
+   else under `/v1/` throws `not_implemented`. Every route P1-07 through P1-18 adds returns
+   `501` until this set knows about it.
+2. **Exact string matching cannot express a parameterised path.**
+   `/v1/activities/act_01J8XK…` is not a literal and can never be a member of a `Set`, so
+   P1-12, P1-13, P1-14 and P1-15 are unreachable by construction, not merely unregistered.
+3. **`UNAUTHENTICATED_PRIVATE_PATHS` is exported and never read.** The middleware body does
+   not consult it. P1-01's edge case — "`routeSplit` decides which paths need identity at
+   all" — describes behaviour that was never implemented, so as things stand the `identity`
+   middleware would have to re-derive the public/private decision that this file exists to
+   make in one place.
+
+**Approach.** One registry, declared in this file, that each route entry states its own
+authentication requirement in:
+
+```ts
+type RouteAuth = 'public' | 'authenticated' | 'unauthenticated-private';
+
+interface RouteEntry {
+  readonly method: string;      // or a set, for a path served by several verbs
+  readonly pattern: string;     // '/v1/activities/:id' — the Hono path, verbatim
+  readonly auth: RouteAuth;
+}
+```
+
+Match on the **route pattern Hono resolved**, not on the raw path. Hono has already done the
+parameter matching by the time middleware runs; re-implementing it here with a regex is a
+second router that will disagree with the first one on a trailing slash at the worst
+possible moment. Reading the matched pattern off the context keeps one matcher in the
+process.
+
+`routeSplit` then does exactly what it does today, with the decisions read from the registry
+instead of hard-coded: `/public/v1/*` skips identity; an `unauthenticated-private` entry
+(`/v1/health`, and only ever a short list) skips it; an `authenticated` entry sets a flag the
+`identity` middleware at position 8 reads; anything matching no entry is `not_found`, and a
+known prefix with no handler stays `not_implemented`. **Keep the "unrecognised path is `404`,
+not `401`" rule** — it is the reason an unauthenticated caller cannot enumerate the API.
+
+**Registering a route is part of adding one.** Each later task adds one line to the registry
+in the same PR as its route file, exactly as `agent-playbook.md` §7 already requires for the
+OpenAPI registration. A route that is mounted but unregistered must fail loudly rather than
+silently 501 — see the tests.
+
+**Edge cases.**
+
+- The registry is one file that ten tasks append to, which makes it the third serial choke
+  point in this phase alongside `app.ts` and `keys.ts`. It is listed as such in
+  [`roadmap.md`](roadmap.md) §5.4 and
+  [`../04-conventions/git-workflow.md`](../04-conventions/git-workflow.md) §6.2. **One entry
+  per line, grouped by resource, in the order `api-contract.md` §2 lists them** — so two
+  agents adding two routes conflict on adjacent lines, which Git resolves, rather than on a
+  reformatted block, which it does not.
+- Do not let the registry become a second router. It answers one question per route — does
+  this need identity — and never dispatches, never rewrites, never reorders.
+- `/v1/health` stays `unauthenticated-private` and stays the only member of that category in
+  this phase. Adding a second is a decision, not a convenience.
+
+**Tests.** Unit, against the real app: `/v1/health` answers without identity;
+`/v1/activities/act_01J8XKQ2M4N5P6R7S8T9V0W1X2` reaches its handler and its `:id` is bound
+(the case an exact-match set cannot express); an unknown prefix is `404` and not `401`; a
+path under `/v1/` with no registry entry is `not_implemented`. Plus the one that keeps the
+registry honest: **a test that walks Hono's own route table and fails naming any mounted
+route with no registry entry** — so a later task cannot add a route, forget the line, and
+discover it as a `501` in a Playwright run three tasks later.
+
+---
+
+### P1-31 — The React Native test environment for `ui` and `mobile`
+
+> **Added 2026-08-08**, split out of P1-22. Every `.tsx` render test P1-22, P1-23 and P1-25
+> are specified to write is currently unrunnable, in ways that are configuration rather than
+> component work.
+
+**What to build.** The environment in which a React Native component test runs at all, in
+both client workspaces. Nothing in this task renders a product screen or ships a primitive.
+
+**Files.** `packages/ui/package.json`, `packages/ui/vitest.config.ts`,
+`packages/ui/tsconfig.json`, `apps/mobile/vitest.config.ts`, and a shared test setup file per
+workspace. Plus the `tech-stack.md` §2.5 lines the new dependencies require.
+
+**What is there now, and why nothing runs.** Five separate blockers, none of which a P1-22
+agent would expect to be holding:
+
+| # | Blocker | Where |
+| --- | --- | --- |
+| 1 | `packages/ui` declares **no `react` and no `react-native` dependency**. Under pnpm's isolated linker the first `import … from 'react-native'` is *unresolvable*, which trips dependency-cruiser's `not-to-unresolvable` — the rule P0-27's notes call the one that makes every other module ban work. | `packages/ui/package.json` |
+| 2 | `packages/ui`'s Vitest include is `src/**/*.test.ts` and its environment is `node`. No `.tsx` test is collected, and none could render if it were. | `packages/ui/vitest.config.ts` |
+| 3 | `packages/ui`'s tsconfig excludes `src/**/*.test.ts` only, so `Button.test.tsx` compiles into `dist/`. | `packages/ui/tsconfig.json` |
+| 4 | `apps/mobile` runs `environment: 'node'` with no RN transform, and its own config says in a comment that **P1-22** brings the setup — an expectation this task now discharges. | `apps/mobile/vitest.config.ts` |
+| 5 | `apps/mobile`'s overall coverage floor (60/50/60/60 in `testing.md` §9) is written but commented out, deliberately, until that environment exists. | same file |
+
+**Approach.** React Native Testing Library under Vitest with the jsdom environment, per
+[`../04-conventions/testing.md`](../04-conventions/testing.md) §5, wired identically in both
+workspaces so a primitive and the screen that consumes it are asserted the same way.
+
+Add `react` and `react-native` to `packages/ui` at **exactly** the versions `apps/mobile`
+already pins — `react@19.1.0`, `react-native@0.81.5`. Version drift between the two produces
+invalid-hook-call errors that cost a day to diagnose, which is the failure roadmap §8 R4
+names. Two related things follow from that and belong here:
+
+- Declare them the way the package's role requires. `packages/ui` is consumed only by
+  `apps/mobile`, which supplies the runtime; a peer dependency plus a dev dependency is the
+  shape that expresses "I render into your React, not my own".
+- **Wire `syncpack` into `ci.yml`.** It is already a devDependency with a configured
+  `.syncpackrc` and is currently run by nothing — no script, no CI step — while roadmap §8
+  R4 claims it runs from Phase 0. This task creates the second copy of the React version it
+  is meant to police, so it is the right moment. One `pnpm exec syncpack list-mismatches`
+  step in the `validate` job.
+
+Then: `environment: 'jsdom'` and a `src/**/*.test.tsx` include in both Vitest configs; the
+`.test.tsx` exclusion in `packages/ui/tsconfig.json`; and **uncomment `apps/mobile`'s
+coverage floor**, which is the deliverable that proves the environment is real rather than
+merely configured.
+
+**Edge cases.**
+
+- `react-native` ships untranspiled Flow-typed ESM that Vitest will not parse without help.
+  Expect to need a transform or an alias to `react-native-web`, and prefer the alias:
+  `apps/mobile` already depends on `react-native-web@0.21.2`, the web build is a first-class
+  target rather than a shim (ADR-001), and Playwright asserts the same components in a real
+  browser. A test environment that resolves `react-native` differently from the web build is
+  a third platform to keep in sync.
+- Arm the floor **last**, after one real render test exists to clear it. Arming it against an
+  empty suite fails `pnpm test` on day one and the only ways to make it pass are to exclude
+  the files it measures or to assert against a mocked module graph — both produce a green
+  number that means nothing. That reasoning is already written out in
+  `apps/mobile/vitest.config.ts` and it is still correct.
+- Do not add `@testing-library/jest-dom`. Its matchers are DOM-shaped and this is a React
+  Native tree; RNTL's own queries and `toBeOnTheScreen` are the vocabulary the assertions in
+  P1-22 and P1-25 are written in.
+
+**Tests.** The environment is the deliverable, so prove it with the smallest real subject
+rather than a fixture: one `.tsx` render test against an existing component — `apps/mobile`'s
+health screen will do — asserting a rendered string and an `accessibilityRole`. It must pass
+in both workspaces' configs, and `pnpm test` must stay green with `apps/mobile`'s floor
+armed. Also assert the negative: `pnpm typecheck` emits no `.test.tsx` output into
+`packages/ui/dist/`.
+
+---
+
 ## Prepared for Phase 4
 
 Everything Phase 4 has to change in the code this phase writes. If this list ever grows past
@@ -1257,7 +1521,7 @@ a page, the seam is in the wrong place.
 | --- | --- | --- |
 | 1 | Add `CognitoIdentityProvider` implementing `IdentityProvider` | `services/api/src/middleware/identity.ts` |
 | 2 | Set `AUTH_MODE=cognito` and the pool/client IDs on the deployed function | `infra/lib/stacks/api-stack.ts`, `lib/config.ts` env schema |
-| 3 | Replace `NullTokenProvider` with the Cognito token provider at one construction site | `apps/mobile/src/lib/apiClient.ts` |
+| 3 | Replace `nullTokenProvider` with the Cognito token provider at one construction site | `apps/mobile/src/lib/apiClient.ts` |
 | 4 | Add the `(auth)` route group and a guard in the app layout | `apps/mobile/app/(app)/_layout.tsx` |
 | 5 | Populate `email`, `cognitoSub` and `onboardingState` on the profile, from the post-confirmation trigger | `services/api/src/triggers/post-confirm.ts` (new), writing through the existing `UserRepository` |
 | 6 | Prepend a sign-in step to the Playwright and Maestro flows | `e2e/`, `apps/mobile/e2e/` |
@@ -1319,8 +1583,8 @@ in with Apple, token storage on iOS and web, the refresh flow with its single-fl
     change the visible Reminder control; only its ordinary saved-default rule can populate it.
 17. Sending 121 requests in one minute returns `429` with a `Retry-After` header, and no raw
     IP address appears in the rate-limit item or in any log line.
-18. A request made through the shared client with `NullTokenProvider` carries no
-    `Authorization` header key at all.
+18. A request made through the shared client with `nullTokenProvider` carries no
+    `Authorization` header key at all. (Shipped in P0-20; re-checked here, not rebuilt.)
 19. `pnpm verify` passes with `packages/shared` coverage at or above its threshold, and
     `docs/generated/openapi.json` regenerates with no diff.
 20. One Playwright flow and one Maestro flow pass against the local stack, twice
@@ -1368,6 +1632,7 @@ in with Apple, token storage on iOS and web, the refresh flow with its single-fl
 | Account deletion | Phase 5 |
 | Participants, invitations, the public invite page, guest linking | Phase 6 |
 | Expenses, balances, settlement | Phase 7 |
+| The `settlement_conflict` guard on `DELETE /v1/activities/:id`, and the `settlement_conflict` member of the `ErrorCode` union — Phase 1 has no Expense schema and writes no `EXP#` row, so there is nothing to guard (see P1-14's decision) | Phase 7 (P7-08) |
 | Any real capture implementation | Phase 8 |
 
 ## Risks and gotchas

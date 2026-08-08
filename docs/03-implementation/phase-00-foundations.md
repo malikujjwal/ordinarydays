@@ -803,9 +803,10 @@ network failure and `5xx` with jittered backoff. It never retries a `POST` witho
 
 The token provider is an **interface parameter from the first commit**, not an optional
 extra. Phase 0 passes a provider that yields nothing and the client adds no `Authorization`
-header; Phase 1 names the interface `AuthTokenProvider` and ships `NullTokenProvider`
-(P1-19); Phase 4 swaps in the Cognito implementation. The header-injection code path is
-written once, here, and never edited again.
+header. **P0-20 shipped both** — the interface `AuthTokenProvider` and the
+`nullTokenProvider` that yields nothing — which is why Phase 1's P1-19 was struck on
+2026-08-08 as already delivered. Phase 4 swaps in the Cognito implementation. The
+header-injection code path is written once, here, and never edited again.
 
 Response validation: `safeParse` against the endpoint's Zod schema. In `dev` and `test`
 builds a parse failure throws; in production it logs a warning and returns the raw body — a

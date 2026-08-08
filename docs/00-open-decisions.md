@@ -139,6 +139,8 @@ These are contradictions the planning pass could not resolve. Each needs a call.
    match the summed per-task sizings.~~ **Resolved:** `03-implementation/roadmap.md` §4.2
    and §4.3 recompute the plan from the sizings — **360 tasks, 859 AWU, ~43 weeks** (re-summed 2026-08-07 after the Phase 3 sizing correction and the P3-11 cut: **359 tasks, 858 AWU, ~43 weeks**) — and
    itemise the thirteen corrections that produced the change. That is the plan of record.
+   A fourteenth correction on 2026-08-08 (Phase 1's pre-scheduling phase gate: +P1-30,
+   +P1-31, −P1-19) took it to **360 tasks, 861 AWU, ~43 weeks**.
    Re-baseline after Phase 0, when you have one real phase of data.
 2. ~~**30 tasks in Phases 2, 3 and 5 have a table row but no detail subsection**, and are not
    on the "these are mechanical" lists.~~ **Resolved 2026-08-07:** the actual shortfall was
@@ -167,6 +169,26 @@ These are contradictions the planning pass could not resolve. Each needs a call.
    `plan_date_set` and `plan_date_changed` are now rows in `01-product/notifications.md` §7,
    in the `plan_changes` category, with their triggers and copy. They replace `plan_changed`
    for that change; exactly one of the three is ever sent.
+8. ~~**`settlement_conflict` is required by two architecture sections and absent from the
+   closed `ErrorCode` union.**~~ `02-architecture/api-contract.md` §2.3 and
+   `02-architecture/data-model.md` §7 both require `DELETE /v1/activities/:id` to return it;
+   §1's own enumeration of the union omits it, and so does
+   `packages/shared/src/errors.ts`. **Resolved 2026-08-08:** the behaviour wins — the product
+   doc (`01-product/expenses.md` §90) is unambiguous and outranks both. The code is added to
+   the union, and the guard to the route, by **P7-08**, the task that writes the first `EXP#`
+   row and the `settlementIdByPersonId` map it reads. **Phase 1's P1-14 ships the cascade
+   with no guard**: it has no Expense schema and nothing before P7-08 writes an Expense, so
+   the window is closed by absence. A union member no handler can return is an error every
+   client must handle and none will ever see.
+9. ~~**The `AuthTokenProvider` seam is specified in two shapes.**~~
+   `03-implementation/phase-01-activity-core.md` P1-19 specified
+   `getToken(): Promise<string | null>` in `client/auth.ts`, exported as `NullTokenProvider`;
+   P0-20 shipped `Promise<string | undefined>` in `client/http.ts` as `nullTokenProvider`.
+   **Resolved 2026-08-08 in favour of the code.** No architecture document specifies the
+   signature, so the phase file was the lowest-ranked document involved and the one amended;
+   `undefined` is also the correct absence value under the repository-wide
+   `exactOptionalPropertyTypes`. P1-19 is struck as delivered by P0-20 and its subsection
+   corrected, because Phase 4 builds against it.
 
 ---
 
