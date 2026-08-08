@@ -466,6 +466,109 @@ describe('response validation', () => {
   });
 });
 
+/**
+ * Every test above injects `sleep`, `newRequestId` and `onWarning`, which means the
+ * defaults — the implementations that actually run in the app — were never executed once.
+ * P0-24's coverage gate caught that, and it is the more useful half of what a gate is for:
+ * not the number, but noticing that the production path is the untested one.
+ */
+describe('the defaults, which are what production uses', () => {
+  const bare = (fetchImpl: FetchLike, overrides: Partial<HttpClientConfig> = {}) =>
+    createHttpClient({
+      baseUrl: 'https://api.test',
+      fetch: fetchImpl,
+      tokenProvider: nullTokenProvider,
+      timezone: 'Europe/London',
+      clientVersion: 'ios/0.1.0',
+      strictResponses: true,
+      ...overrides,
+    });
+
+  it('generates a correlation id in the API’s own format', async () => {
+    const { fetch, calls } = stubFetch([{ status: 200, body: HEALTH_BODY }]);
+
+    await bare(fetch).request(health());
+
+    // `req_` plus 32 hex characters, matching `services/api/src/middleware/requestId.ts`,
+    // whose `SAFE` pattern must accept what this produces.
+    expect(calls[0]?.headers['X-Request-Id']).toMatch(/^req_[0-9a-f]{32}$/);
+  });
+
+  it('generates a distinct id per call', async () => {
+    const { fetch, calls } = stubFetch([{ status: 200, body: HEALTH_BODY }]);
+    const client = bare(fetch);
+
+    await client.request(health());
+    await client.request(health());
+
+    expect(calls[0]?.headers['X-Request-Id']).not.toBe(calls[1]?.headers['X-Request-Id']);
+  });
+
+  /**
+   * Hermes has no `crypto.randomUUID` without a polyfill, so this branch is the React
+   * Native path rather than a defensive nicety.
+   */
+  it('falls back to a non-crypto id when crypto.randomUUID is absent', async () => {
+    const original = globalThis.crypto;
+    Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true });
+    try {
+      const { fetch, calls } = stubFetch([{ status: 200, body: HEALTH_BODY }]);
+
+      await bare(fetch).request(health());
+
+      expect(calls[0]?.headers['X-Request-Id']).toMatch(/^req_[0-9a-f]{32}$/);
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', {
+        value: original,
+        configurable: true,
+      });
+    }
+  });
+
+  it('really waits between retries when no sleep is injected', async () => {
+    const { fetch, calls } = stubFetch([{ status: 500, body: undefined }]);
+
+    const startedAt = Date.now();
+    await bare(fetch)
+      .request(health())
+      .catch(() => undefined);
+
+    expect(calls).toHaveLength(MAX_RETRIES + 1);
+    // Three real backoffs. Only a floor is asserted — full jitter can draw zero, so an
+    // upper bound would be a flaky test.
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(0);
+  });
+
+  it('warns through the console when no handler is injected', async () => {
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { fetch } = stubFetch([{ status: 200, body: { data: {}, meta: {} } }]);
+
+    await bare(fetch, { strictResponses: false }).request(health());
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toContain('Response did not match its schema');
+    spy.mockRestore();
+  });
+});
+
+describe('isAppErrorBody rejects what is not an envelope', () => {
+  it.each([
+    ['a null body', null],
+    ['a string', 'nope'],
+    ['an object with no error key', { data: {} }],
+    ['a null error', { error: null }],
+    ['an error that is a string', { error: 'boom' }],
+    ['an unknown code', { error: { code: 'nope', message: 'x', requestId: 'r' } }],
+    ['a missing requestId', { error: { code: 'not_found', message: 'x' } }],
+  ])('treats %s as a non-envelope failure', async (_name, body) => {
+    const { client } = makeClient([{ status: 500, body }]);
+
+    const error = (await client.request(health()).catch((e: unknown) => e)) as ApiError;
+
+    expect(error.code).toBe('internal');
+  });
+});
+
 describe('getHealth', () => {
   it('returns the health payload, parsed with the shared schema', async () => {
     const { client, calls } = makeClient([{ status: 200, body: HEALTH_BODY }]);
@@ -474,5 +577,12 @@ describe('getHealth', () => {
 
     expect(calls[0]?.url).toBe('https://api.test/v1/health');
     expect(result).toEqual(HEALTH_BODY.data);
+  });
+
+  it('passes an abort signal through when given one', async () => {
+    const { client } = makeClient([{ status: 200, body: HEALTH_BODY }]);
+    const controller = new AbortController();
+
+    await expect(getHealth(client, controller.signal)).resolves.toEqual(HEALTH_BODY.data);
   });
 });

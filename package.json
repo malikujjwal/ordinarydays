@@ -12,19 +12,21 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:coverage": "turbo run test -- --coverage",
     "test:int": "docker compose up -d && turbo run test:int",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "depcruise": "depcruise --config .dependency-cruiser.cjs apps packages services infra",
     "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
     "e2e:web": "playwright test",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm depcruise"
+    "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm depcruise"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",
     "@commitlint/cli": "21.2.1",
     "@commitlint/config-conventional": "21.2.0",
     "@types/node": "22.20.1",
+    "@vitest/coverage-v8": "3.2.7",
     "esbuild": "0.28.1",
     "lefthook": "1.13.6",
     "syncpack": "13.0.4",
