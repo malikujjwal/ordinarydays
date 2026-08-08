@@ -44,6 +44,23 @@ const config: ExpoConfig = {
     bundleIdentifier:
       PROFILE === 'prod' ? 'app.ordinarydays.ios' : `app.ordinarydays.ios.${PROFILE}`,
     supportsTablet: true,
+    /**
+     * iOS blocks cleartext HTTP by default, and the local API is `http://<lan-ip>:3000`. So
+     * a physical device would fail every request with a transport error that never reaches
+     * JavaScript — no status, no body, nothing to read on screen (P0-22).
+     *
+     * `NSAllowsLocalNetworking`, **not** `NSAllowsArbitraryLoads`. It permits cleartext to
+     * local-network hosts only, so an accidental `http://` to the public internet still
+     * fails, which is the behaviour we want to keep. And it is inside a
+     * `PROFILE !== 'prod'` guard, so no relaxation of transport security can reach a
+     * production build even by accident.
+     *
+     * Expo Go reads this from the manifest. A development build (Phase 4) bakes it in from
+     * here, which is why it lives in the config rather than in a one-off Xcode change.
+     */
+    ...(PROFILE === 'prod'
+      ? {}
+      : { infoPlist: { NSAppTransportSecurity: { NSAllowsLocalNetworking: true } } }),
   },
   web: {
     bundler: 'metro',

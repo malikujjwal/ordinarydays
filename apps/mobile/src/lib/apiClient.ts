@@ -72,7 +72,19 @@ export const apiBaseUrl = resolveApiBaseUrl();
  */
 export const httpClientConfig: HttpClientConfig = {
   baseUrl: apiBaseUrl,
-  fetch: globalThis.fetch,
+  /**
+   * Wrapped, not passed by reference.
+   *
+   * `fetch: globalThis.fetch` detaches the function from its receiver, and the browser
+   * rejects that: `TypeError: Failed to execute 'fetch' on 'Window': Illegal invocation`.
+   * Every request fails before a socket is opened, which then presents as a network error
+   * rather than as the programming mistake it is.
+   *
+   * Found in P0-22 by running the app, and it could not have been found any other way —
+   * the client's 48 unit tests all inject a stub `fetch`, so the one line that supplies the
+   * real one is the one line no test covers.
+   */
+  fetch: (input, init) => globalThis.fetch(input, init),
   tokenProvider: nullTokenProvider,
   // The device's zone, resolved per call site rather than stored: a user who flies
   // somewhere should not have to reinstall to see the right day.
