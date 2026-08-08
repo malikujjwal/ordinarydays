@@ -32,13 +32,25 @@ const profile = typeof extra.profile === 'string' ? extra.profile : 'local';
  * it means re-editing a committed file every time the laptop joins a different network.
  * `hostUri` is the address the device already reached Metro on, so if the bundle loaded,
  * this host is reachable.
+ *
+ * **Every loopback form is rejected, not just the word `localhost`.** Metro does not always
+ * advertise a LAN address: on a Windows machine with Hyper-V and WSL adapters it fell back
+ * to `127.0.0.1:8081` while preparing the P0-22 device check. The original version of this
+ * function compared against the literal string `'localhost'`, so it accepted `127.0.0.1`,
+ * built `http://127.0.0.1:3000`, and produced a base URL that points the phone at itself —
+ * which is the exact failure this function exists to prevent, wearing a different spelling.
+ * Falling back to the configured URL is no better on a device, but it is at least the
+ * failure the screen already explains.
  */
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
+
 function metroLanHost(): string | undefined {
   const hostUri = Constants.expoConfig?.hostUri;
   if (typeof hostUri !== 'string' || hostUri === '') return undefined;
 
-  const host = hostUri.split(':')[0];
-  if (host === undefined || host === '' || host === 'localhost') return undefined;
+  // IPv6 hosts arrive bracketed (`[::1]:8081`); strip the brackets before comparing.
+  const host = hostUri.split(':')[0]?.replace(/^\[|\]$/g, '');
+  if (host === undefined || host === '' || LOOPBACK.has(host)) return undefined;
   return host;
 }
 
