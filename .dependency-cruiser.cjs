@@ -206,13 +206,6 @@ module.exports = {
           // their own tests; these two entries are deleted with the files, in P2-01 and
           // Phase 7 respectively.
           '^packages/shared/src/(recurrence|money)/placeholder\\.ts$',
-          /**
-           * Collateral from the `.tsx` exclusion below, not a real orphan: these are
-           * imported by `app/_layout.tsx` and `app/(app)/index.tsx`, which the cruise
-           * cannot parse. Delete this entry when `.tsx` can be cruised again — it is the
-           * clearest measure of what that exclusion costs.
-           */
-          '^apps/mobile/src/lib/(apiClient|queryClient)\\.ts$',
         ],
       },
       to: {},
@@ -221,25 +214,23 @@ module.exports = {
 
   options: {
     /**
-     * **swc, not the TypeScript compiler.**
+     * `tsPreCompilationDeps` makes **`import type` edges visible**, which several rules
+     * above depend on: a type-only import of a repository from a handler is still a
+     * layering violation, and without this it is invisible.
      *
-     * dependency-cruiser prefers `tsc` and falls back to swc, and with TypeScript 7 the
-     * `tsc` path is simply unavailable: v7 is the native (Go) compiler and does not expose
-     * the JavaScript API this tool needs. Left on the default it reports
-     * `missing-typescript-transpiler`, then **exits 0 having cruised 3 modules and 0
-     * dependencies** — a green check that has inspected nothing, which is the worst
-     * possible outcome for a file whose entire job is to fail loudly.
+     * It also selects the `tsc` parser, and that is load-bearing. dependency-cruiser needs
+     * the TypeScript compiler's JavaScript API; the 7.x native compiler does not have one,
+     * and on it this tool reports `missing-typescript-transpiler` and then **exits 0 having
+     * cruised 3 modules and 0 dependencies** — a green check that inspected nothing, which
+     * is the worst possible outcome for a file whose whole job is to fail loudly. P0-27
+     * worked around that with `@swc/core`, whose parser cannot read `.tsx` at all and so
+     * blinded the two client rules to every component file.
      *
-     * `@swc/core` parses TypeScript natively, needs no `typescript` package, and sees
-     * `import type` edges — which several rules above depend on, because a type-only import
-     * of a repository from a handler is still a layering violation.
-     *
-     * This is the third tool to collide with the TypeScript 7 decision (`tech-stack.md`
-     * §2.1's "revisit if" clause), after the Expo CLI in P0-19. Unlike that one it has no
-     * scoped fix: dependency-cruiser declares no `typescript` peer, so it resolves whatever
-     * the root hoists and a pnpm override cannot reach it.
+     * `tech-stack.md` §2.1 pins the repository to `typescript@5.9.3` instead, substantially
+     * because of this file. **If that pin is ever lifted, re-check this line and the module
+     * count** — the failure is silent.
      */
-    parser: 'swc',
+    tsPreCompilationDeps: true,
     tsConfig: { fileName: 'tsconfig.depcruise.json' },
     doNotFollow: { path: 'node_modules' },
 
@@ -266,24 +257,17 @@ module.exports = {
         '\\.test\\.tsx?$',
         '(^|/)(dist|cdk\\.out|coverage|\\.expo|\\.turbo)/',
         /**
-         * **`.tsx` cannot be cruised, and this is a real hole rather than a preference.**
+         * Ambient declarations only. `apps/mobile/types/expo.d.ts` references `expo/types`,
+         * a types-only subpath with no runtime entry, so it cannot be resolved and would
+         * trip `not-to-unresolvable` on every run.
          *
-         * dependency-cruiser 18.1.1's swc parser hard-codes `syntax: "typescript"` with no
-         * `tsx` flag — its own source carries the comment `// TODO: {tj}sx ?` — so every
-         * `.tsx` file is a parse error, not a skipped file. The `tsc` parser would handle
-         * them, and it is unavailable under TypeScript 7.
-         *
-         * What that costs today is small and grows: the only `.tsx` files are the four
-         * thin Expo Router route files, whose logic lives in hooks and feature components
-         * that *are* cruised. It stops being small in Phase 1, when
-         * `no-cross-feature-imports` starts mattering and feature components are `.tsx`.
-         *
-         * `scripts/check-forbidden.mjs` covers the two client rules textually in the
-         * meantime, so the gap is narrowed rather than merely noted. The real fix is
-         * `tech-stack.md` §2.1's own fallback, and it is one line — see the P0-27 pull
-         * request.
+         * **`.tsx` is deliberately absent from this list.** P0-27 had to exclude it, because
+         * the swc parser it was forced onto cannot read TSX at all; that blinded the two
+         * client rules to every component file. The compiler pin in `tech-stack.md` §2.1
+         * removed the need, and `no-cross-feature-imports` was verified to fire on a `.tsx`
+         * violation — including the relative-path form that the textual fallback misses.
          */
-        '\\.tsx$',
+        '\\.d\\.ts$',
       ],
     },
     reporterOptions: {

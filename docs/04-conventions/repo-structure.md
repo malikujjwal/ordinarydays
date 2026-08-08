@@ -356,17 +356,19 @@ module.exports = {
 > **Amended in P0-27, in four places. Each was found by watching a rule fail to fire, and
 > none of them should be "corrected" back to the snippet above.**
 >
-> **1. The parser is `swc`, not `tsc`.** dependency-cruiser prefers the TypeScript compiler
-> and TypeScript 7 does not expose the JavaScript API it needs. Left on the default it prints
-> `missing-typescript-transpiler` and then **exits 0 having cruised 3 modules and 0
-> dependencies** — a green check that inspected nothing. `@swc/core` parses TypeScript
-> natively. The cost is that dependency-cruiser 18's swc path hard-codes
-> `syntax: "typescript"` with no `tsx` flag (its own source says `// TODO: {tj}sx ?`), so
-> **`.tsx` files cannot be cruised at all** and are excluded. `no-cross-feature-imports` and
-> `no-server-code-in-client` are therefore blind to exactly the files they will most need to
-> see from Phase 1 onward; `scripts/check-forbidden.mjs` covers those two textually in the
-> meantime. This is the third tool to collide with the TypeScript 7 decision (§2.1 of
-> `tech-stack.md`, and the Expo CLI in P0-19), and the first with no scoped workaround.
+> **1. It parses through `tsc`, and that is why the compiler pin exists.** dependency-cruiser
+> needs the TypeScript compiler's JavaScript API. Under the 7.x native compiler it has none:
+> it prints `missing-typescript-transpiler` and then **exits 0 having cruised 3 modules and 0
+> dependencies** — a green check that inspected nothing. P0-27 worked around that with
+> `@swc/core`, whose parser cannot read `.tsx` at all, which blinded
+> `no-cross-feature-imports` and `no-server-code-in-client` to every component file. That
+> workaround is gone: `tech-stack.md` §2.1 pins the repository to `typescript@5.9.3`, largely
+> on the strength of this rule set, and `.tsx` is cruised normally again.
+>
+> `scripts/check-forbidden.mjs`'s `client-layer-rules` is kept even so, as a second net. It
+> is strictly weaker — it matched an aliased cross-feature import but **missed the same
+> violation written as a relative path**, which is what a resolved module graph is for — but
+> it costs nothing and it runs where the graph does not, on files excluded from the cruise.
 >
 > **2. `not-to-unresolvable` is added, and it is the rule that makes the module bans work.**
 > Under pnpm's strict linking a forbidden dependency is usually *unresolvable* rather than

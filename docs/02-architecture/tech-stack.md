@@ -72,7 +72,7 @@ version bumps as PRs (see `security-privacy.md` §7).
 
 | Package | Min major | What it is for | Why it beat the alternative |
 | --- | --- | --- | --- |
-| `typescript` | 7.x | Types everywhere, `strict: true`, `noUncheckedIndexedAccess: true` | JS with JSDoc types is unusable for a shared schema package. Flow is dead. **7.x is the native (Go) compiler**, shipped as prebuilt per-platform binaries the way `esbuild` is — see the decision below. |
+| `typescript` | 5.9.x | Types everywhere, `strict: true`, `noUncheckedIndexedAccess: true` | JS with JSDoc types is unusable for a shared schema package. Flow is dead. **Pinned to 5.9.x, not the 7.x native compiler** — see the decision below and the reversal that follows it. |
 | `pnpm` | 9.x | Package manager, workspaces | Content-addressed store means the monorepo installs once; strict node_modules catches phantom dependencies that npm/yarn-classic hide. Yarn Berry PnP breaks React Native's Metro resolver. |
 | `turbo` | 2.x | Task graph + local cache | Nx is a heavier framework with generators and plugins we do not want. `pnpm -r run` alone has no dependency-aware ordering or caching. |
 | `node` | 22.x | Runtime for Lambda, CI, and tooling | Matches the Lambda `nodejs22.x` runtime exactly, so local behaviour equals deployed behaviour. Pinned in `.nvmrc` and in the CI setup step. |
@@ -99,28 +99,44 @@ version bumps as PRs (see `security-privacy.md` §7).
 > not expose in full. The fallback is pinning 5.9.x, and it is a one-line change while the
 > only consumers are `tsc -b` invocations.
 
-> **That clause fired in P0-19, and the fix is scoped rather than repo-wide.** The Expo CLI
-> reads `tsconfig.json` to discover `paths`, and it does so through the JavaScript compiler
-> API — `@expo/cli`'s `evaluateTsConfig` calls `ts.sys.getCurrentDirectory`,
-> `ts.readConfigFile` and `ts.parseJsonConfigFileContent`. Under 7.0.2 `ts.sys` is
-> `undefined`, so **every** `expo start` and `expo export` dies with
-> `Cannot read properties of undefined (reading 'getCurrentDirectory')` before bundling
-> begins. It is not avoidable by dropping the `@/*` alias: the crash happens while
-> *discovering* whether paths exist.
+> **Reversed. The repository is pinned to `typescript@5.9.3`, everywhere.** The clause above
+> fired three times in Phase 0, and the third had no workaround left.
 >
-> `apps/mobile` therefore carries `typescript@5.9.3` as a dev dependency. Expo resolves
-> TypeScript with `resolve-from(projectRoot)` and skips the whole path gracefully when it
-> finds none, so the nearest copy wins and the other four workspaces keep 7.0.2 — the P0-06
-> decision above stands everywhere it was actually taken for.
+> | Where | What broke under 7.0.2 |
+> | --- | --- |
+> | **P0-19**, Expo CLI | `@expo/cli`'s `evaluateTsConfig` calls `ts.sys.getCurrentDirectory`, `ts.readConfigFile` and `ts.parseJsonConfigFileContent` to discover `paths`. `ts.sys` is `undefined` on the native compiler, so **every** `expo start` and `expo export` died before bundling. Not avoidable by dropping the `@/*` alias — the crash happens while *discovering* whether paths exist. Worked around by pinning `typescript@5.9.3` in `apps/mobile` alone, which left the repository with two compilers. |
+> | **P0-27**, dependency-cruiser | Needs the same API. Left on its default it printed `missing-typescript-transpiler` and then **exited 0 having cruised 3 modules and 0 dependencies** — a green check that had inspected nothing. Worked around with `@swc/core`, whose parser cannot read `.tsx` at all (dependency-cruiser 18 hard-codes `syntax: "typescript"` with no `tsx` flag), so `no-cross-feature-imports` and `no-server-code-in-client` went blind to every component file. |
+> | **No scoped fix existed** | dependency-cruiser declares no `typescript` peer, so it resolves whatever the root hoists. A `pnpm.overrides` entry cannot reach it, and both compiler versions cannot occupy one resolution path. |
 >
-> **The cost, stated plainly:** `pnpm --filter @od/mobile typecheck` now runs 5.9.3, because
-> `tsc` resolves from the project's own `node_modules/.bin` first. The app is typechecked by
-> a different compiler from the rest of the repository. Both enforce the §1.1 non-negotiables
-> — that was verified for 7.0.2 in P0-06 and 5.9.x is where those checks came from — but two
-> compilers is two behaviours, and a type error that only one of them reports is a real
-> possibility. The alternative was pinning the whole repository back to 5.9.x, which
-> discards P0-06's reasoning for four workspaces to satisfy one CLI. **This is the founder's
-> call to confirm or reverse**, and it is still a one-line change in either direction.
+> **P0-06's own argument is what settled it, pointing the other way.** It took 7.x because
+> "the migration cost is the one thing here that only grows" — true when the repository held
+> no TypeScript. Four phases in, the thing growing was the cost of *staying*: three
+> workarounds, one of them a permanent hole in the layer that mechanically enforces
+> `CLAUDE.md`'s non-negotiables, and `.tsx` files about to arrive in bulk in Phase 1. The
+> benefit was never collected either — `turbo run typecheck` finishes in about three seconds
+> warm across seven tasks, and nothing here waits on the compiler.
+>
+> **Measured on a spike before the decision, not predicted.** With 5.9.3 repo-wide:
+> dependency-cruiser cruises 74 modules including `.tsx` with no transpiler warning;
+> `no-cross-feature-imports` correctly fails a `.tsx` violation written both as an alias
+> import *and* as a relative one — the textual fallback in `scripts/check-forbidden.mjs`
+> catches only the first, so the relative form was passing CI entirely; typecheck, the full
+> test suite with coverage gates, lint and the OpenAPI staleness check all pass; and
+> `expo export` plus `expo-doctor` (18/18) succeed with no workspace-local TypeScript.
+>
+> **The one real risk was losing a check, and it was closed empirically.** Every flag
+> `coding-standards.md` §1.1 calls non-negotiable still produces its error under 5.9.3, with
+> the codes P0-06 recorded: `TS2322` (`noUncheckedIndexedAccess`), `TS2375`
+> (`exactOptionalPropertyTypes`), `TS4114` (`noImplicitOverride`), `TS7029`
+> (`noFallthroughCasesInSwitch`).
+>
+> The change was a net deletion: the `apps/mobile` pin and its two-compiler split, `@swc/core`,
+> the `.tsx` exclusion and the orphan exemption that existed only because those files'
+> importers were unparseable.
+>
+> **Revisit when** dependency-cruiser and the Expo CLI support TypeScript 7 — going back is
+> the same one-line change in the other direction, and P0-06's verification of the
+> non-negotiable flags under 7.0.2 still stands for whoever does it.
 
 ### 2.2 Client
 
@@ -204,8 +220,7 @@ version bumps as PRs (see `security-privacy.md` §7).
 | `openapi3-ts` | 4.x | The OpenAPI 3.1 document types, for the return annotation on `buildOpenApiDocument` | A dependency of `zod-to-openapi` that it does not re-export, so inferring the return type produces TS2883 ("cannot be named without a reference … not portable"). Declared directly rather than reached through another package's `node_modules`, which is the phantom dependency pnpm's strict linking exists to prevent. Types only; nothing imports it at runtime. |
 | `@types/node` | 22.x | Node's type definitions, for the `types: ["node"]` in the `services/api` and `infra` compiler configs (`04-conventions/repo-structure.md` §5.3) | Not optional and not a choice: it is the type half of the `node` 22.x runtime in §2.1, pinned to the same major so the types cannot describe APIs the Lambda runtime does not have. |
 | `gitleaks` | 8.x (CLI, not an npm dep) | Secret scanning, pre-commit via `lefthook` and on every PR via `gitleaks/gitleaks-action` (`security-privacy.md` §6, `infrastructure.md` §7) | A Go binary rather than an npm package, so it is a prerequisite alongside Node and pnpm, and the hook **fails closed** if it is missing — a skip-if-absent guard was tried in P0-06 and removed, because lefthook evaluated it in a shell that could not resolve `command -v` and silently skipped the scan with gitleaks installed. `trufflehog` is slower on a full-history scan and its detector set is tuned for live-credential verification, which is not what a pre-commit hook should be doing. |
-| `dependency-cruiser` | 18.x | Enforces the seven import rules in `04-conventions/repo-structure.md` §3 as a **required CI check** (P0-27) | The rules are architectural, not stylistic, so a lint rule cannot express them. `dependency-cruiser` validates the real module graph, detects cycles at file granularity, and fails `ci.yml` with the offending edge named. Pinned at 18 rather than the 16 this row first named: 16 predates the swc parser this repository has to use. |
-| `@swc/core` | 1.x | The parser `dependency-cruiser` uses, in place of the TypeScript compiler | Not a choice so much as the only option. dependency-cruiser needs a TypeScript parser and v7 of `typescript` — the native Go compiler this repository pins in §2.1 — does not expose the JavaScript API it calls. Without swc the cruise reports `missing-typescript-transpiler` and **exits 0 having inspected 3 modules**, which is worse than not running it. swc parses TypeScript natively and needs no `typescript` package at all. It cannot parse `.tsx`, which is a real hole recorded in `repo-structure.md` §4. |
+| `dependency-cruiser` | 18.x | Enforces the seven import rules in `04-conventions/repo-structure.md` §3 as a **required CI check** (P0-27) | The rules are architectural, not stylistic, so a lint rule cannot express them. `dependency-cruiser` validates the real module graph, detects cycles at file granularity, and fails `ci.yml` with the offending edge named. It parses through `typescript` itself, which is why §2.1's compiler pin is load-bearing rather than a preference: on the native compiler it silently cruises nothing. |
 
 > **Decision:** Biome over ESLint + Prettier. One binary, one config file, no plugin
 > resolution graph, and roughly an order of magnitude faster on a monorepo — lint+format
