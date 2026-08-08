@@ -341,8 +341,16 @@ apart is the failure mode; a resolution test per consumer is the cheapest guard.
 `useExhaustiveDependencies`, `noExplicitAny`, and import sorting (`organizeImports`).
 Formatter: 90-column line width, single quotes, trailing commas, 2-space indent.
 
-`lefthook.yml` runs `biome check --write --staged` and `gitleaks protect --staged` on
-pre-commit.
+`lefthook.yml` runs `biome check --write --staged` and `gitleaks git --staged` on
+pre-commit, plus the commit-message lint on `commit-msg`.
+
+> **Corrected in P0-06:** this read `gitleaks protect --staged`. `protect` is deprecated in
+> gitleaks 8.x and no longer appears under `Available Commands`; `gitleaks git --staged` is
+> the current spelling. The gitleaks job also runs unconditionally and fails the commit when
+> the binary is absent. A skip-if-absent guard was written first and removed after testing:
+> lefthook evaluated the condition in a shell that could not resolve `command -v`, so it
+> reported "absent" with gitleaks installed and skipped the scan silently. A secret scanner
+> that quietly does nothing is a worse artefact than one that is not installed.
 
 `.syncpackrc` pins one version per dependency name across all workspaces. Divergent React or
 React Native versions between `apps/mobile` and `packages/ui` produce hook-dispatcher errors

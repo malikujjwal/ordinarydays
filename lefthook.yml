@@ -7,14 +7,19 @@ pre-commit:
       run: pnpm exec biome check --write --staged --no-errors-on-unmatched
       stage_fixed: true
 
-    # gitleaks is a Go binary, not an npm dependency, so a fresh clone may not
-    # have it yet. Skipping loudly beats blocking the commit or passing in
-    # silence - CI runs gitleaks unconditionally (infrastructure.md section 7).
+    # Runs unconditionally, and a missing binary fails the commit. A
+    # skip-if-absent guard was tried and rejected: lefthook evaluates the
+    # condition in a shell that could not resolve `command -v`, so the guard
+    # returned "absent" even with gitleaks installed and skipped the scan in
+    # silence. A secret scanner that quietly does nothing is worse than one
+    # that is not installed, so this one fails closed. gitleaks is a
+    # prerequisite, same as pnpm - see README and security-privacy.md section 6.
+    # `gitleaks git --staged`, not the `gitleaks protect` in phase-00 P0-06:
+    # `protect` is deprecated in 8.x and no longer listed under Available
+    # Commands, so it will stop working at some point without warning.
     - name: gitleaks
-      run: gitleaks protect --staged --redact
-      skip:
-        - run: test -z "$(command -v gitleaks)"
-      fail_text: gitleaks found a secret in the staged changes. Rotate it, do not just unstage it.
+      run: gitleaks git --staged --redact
+      fail_text: "gitleaks found a secret in the staged changes, or is not installed. If it found one: rotate it, do not just unstage it (security-privacy.md section 9.2). If it is missing: winget install gitleaks"
 
 commit-msg:
   jobs:
