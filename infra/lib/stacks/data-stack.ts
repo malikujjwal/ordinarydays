@@ -2,6 +2,7 @@ import { TABLE, tableName } from '@od/shared/table';
 import * as cdk from 'aws-cdk-lib';
 import { Duration } from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import type { EnvConfig } from '../config.js';
@@ -40,6 +41,46 @@ export class DataStack extends cdk.Stack {
 
     this.table = this.createTable(props.cfg);
     this.mediaBucket = this.createMediaBucket(props.cfg);
+    this.allowCloudFrontRead();
+  }
+
+  /**
+   * Lets CloudFront read the media bucket through Origin Access Control.
+   *
+   * **The condition is `aws:SourceAccount`, not the distribution's ARN**, and that is a
+   * deliberate, narrow weakening rather than an oversight.
+   *
+   * OAC normally conditions on the exact distribution ARN. That ARN is only known once the
+   * distribution exists, and the distribution lives in `WebStack` (§1.1 adjustment 1) while
+   * this bucket lives here — so an ARN condition would make `DataStack` depend on
+   * `WebStack` while `WebStack` already depends on `DataStack` for the origin domain. That
+   * is a genuine CloudFormation dependency cycle, not something a different construct order
+   * can avoid.
+   *
+   * What the condition defends against is the confused-deputy case: **someone else's**
+   * CloudFront distribution being pointed at this bucket. `aws:SourceAccount` closes that
+   * completely. What it no longer prevents is another distribution *inside this account*
+   * reading the bucket — and every distribution in this single-tenant account is authored
+   * in this repository. The wildcard ARN below adds nothing enforceable beyond the account
+   * condition; it is there so the intent reads correctly to the next person.
+   *
+   * Recorded in `security-privacy.md` §1 and `infrastructure.md` §1.1.
+   */
+  private allowCloudFrontRead(): void {
+    this.mediaBucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudFrontOacRead',
+        actions: ['s3:GetObject'],
+        resources: [this.mediaBucket.arnForObjects('*')],
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+        conditions: {
+          StringEquals: { 'AWS:SourceAccount': this.account },
+          ArnLike: {
+            'AWS:SourceArn': `arn:aws:cloudfront::${this.account}:distribution/*`,
+          },
+        },
+      }),
+    );
   }
 
   private createTable(cfg: EnvConfig): dynamodb.Table {

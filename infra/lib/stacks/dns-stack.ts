@@ -35,6 +35,16 @@ export class DnsStack extends cdk.Stack {
    */
   readonly apiCertificate?: acm.ICertificate;
 
+  /**
+   * The edge certificate for `*.{domain}`, used by both CloudFront distributions.
+   *
+   * CloudFront requires its certificate in **`us-east-1`** regardless of where the
+   * distribution's other resources live, which is one of the reasons this stack owns it
+   * rather than each consumer minting its own. `undefined` until Phase 5, for the same
+   * reason as `apiCertificate`, and passed as a construct for the same ordering reason.
+   */
+  readonly edgeCertificate?: acm.ICertificate;
+
   constructor(scope: Construct, id: string, props: DnsStackProps) {
     super(scope, id, props);
     applyStackTags(this, 'dns', props.cfg.stage);

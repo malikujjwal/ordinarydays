@@ -61,6 +61,26 @@ The suggested split from the brief is adopted with two adjustments, marked below
 | `ObservabilityStack` | `od-observability-{env}` | The `od-alerts-{env}` SNS topic + email subscription, all CloudWatch alarms, the CloudWatch dashboard. |
 | `AccountStack` | `od-account` | Account-scoped, environment-independent (see adjustment 2): AWS Budgets, Cost Anomaly Detection monitor, the GitHub OIDC provider and the two deploy roles. |
 
+> **Consequence of adjustment 1, found in P0-16.** Putting the media *distribution* in
+> `WebStack` while its *bucket* stays in `DataStack` makes the standard Origin Access
+> Control policy impossible: OAC conditions the bucket policy on the **distribution's ARN**,
+> so `DataStack` would reference `WebStack` while `WebStack` already references `DataStack`
+> for the origin domain. CloudFormation rejects that as a dependency cycle, and no ordering
+> of constructs avoids it.
+>
+> The layout is kept and the **condition** is weakened instead, for the media bucket only:
+> `DataStack.allowCloudFrontRead()` grants `cloudfront.amazonaws.com` read on
+> `od-media-{stage}` conditioned on `aws:SourceAccount` plus a wildcard distribution ARN,
+> and `WebStack` references the bucket as an *imported* bucket so CDK does not re-add a
+> policy. What the ARN condition defends against is the confused deputy — **someone else's**
+> CloudFront distribution reading our bucket — and `aws:SourceAccount` closes that
+> completely. What it gives up is the distinction between distributions inside this
+> single-tenant account, all of which are authored in this repository.
+>
+> **The web bucket is unaffected**: it and its distribution are both in `WebStack`, so its
+> OAC policy keeps the exact-ARN condition. `infra/test/web-stack.test.ts` asserts both,
+> so the asymmetry is deliberate and visible rather than an accident.
+
 > **Decision (adjustment 1):** `NetworkStack` is renamed `DnsStack`. There is no VPC, no
 > subnet, no security group and no network in this architecture; calling the stack
 > `NetworkStack` invites someone to add one. It holds DNS and certificates, so it is named
