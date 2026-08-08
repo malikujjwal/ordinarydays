@@ -170,6 +170,8 @@ export class NodeLambda extends Construct {
       bundling: {
         format: OutputFormat.ESM,
         minify: true,
+        bundleAwsSDK: true,          // §2.3's decision — see the note below
+
         sourceMap: props.cfg.stage !== 'prod',
         target: 'node22',
         mainFields: ['module', 'main'],
@@ -209,6 +211,18 @@ calls, and an ESM bundle has no `require` in scope without it.
 >
 > Retention behaviour is unchanged: it still comes from `cfg.logRetentionDays`, and
 > `infra/test/node-lambda.test.ts` asserts 14 days in dev and 30 in prod.
+
+> **Added in P0-15: `bundleAwsSDK: true`.** `tech-stack.md` §2.3 decides we bundle the AWS
+> SDK v3 clients rather than rely on the Lambda runtime's copy, because the runtime's
+> version drifts and is only partially present. `NodejsFunction` defaults this to `false`,
+> and the snippet above never mentioned it — so the construct was quietly doing the opposite
+> of a written decision from P0-10 until P0-15 shipped the first Lambda that could import
+> the SDK.
+>
+> Note that the flag has **no observable effect yet**: nothing imports `services/api/src/lib/
+> ddb.ts` until the repository layer lands in Phase 1, so esbuild never reaches the SDK. The
+> Phase 0 artifact is 409 KB unzipped / 94 KB zipped in prod. The real measurement against
+> P0-28's 5 MB ceiling is the first Phase 1 task that adds a repository.
 
 ---
 

@@ -16,7 +16,8 @@ it is not in this document.
 ### 1.1 Strictness
 
 `tsconfig.base.json` is the only place these are set (`repo-structure.md` §5.3). All of
-them are on, and none may be relaxed in a package config:
+them are on, and none may be relaxed in a package config — with **one scoped exception,
+recorded below**:
 
 | Option | Value | Why it is not negotiable |
 | --- | --- | --- |
@@ -27,6 +28,25 @@ them are on, and none may be relaxed in a package config:
 | `noFallthroughCasesInSwitch` | `true` | Pairs with the exhaustive-switch rule in §1.5. |
 | `verbatimModuleSyntax` | `true` | `import type` is explicit, so esbuild never bundles a type-only module. |
 | `isolatedModules` | `true` | Required by esbuild and Metro; catches re-exports they cannot handle. |
+
+> **The one exception, added in P0-15: `exactOptionalPropertyTypes` is `false` in
+> `infra/tsconfig.json`.**
+>
+> `aws-cdk-lib` is not `exactOptionalPropertyTypes`-clean. Its construct classes resolve
+> `role` to `IRole | undefined` while its own interfaces declare `role?: IRole`, so passing
+> an `Alias` where CDK asks for an `IFunction` does not typecheck. It is not a TypeScript 7
+> problem — the failure reproduces identically on 5.9.3 — and it recurs in every stack that
+> hands a construct to a CDK API.
+>
+> The flag stays on everywhere else, because the reason this table gives for it is about
+> **domain data**: DynamoDB's `removeUndefinedValues` makes "explicitly `undefined`" and
+> "absent" indistinguishable at rest, so the type system has to keep them apart in code.
+> `infra` models CloudFormation templates, not domain data, and stores nothing — so the
+> flag protects nothing there.
+>
+> The alternative was casting at every call site. One visible line in one config is easier
+> to review than a dozen scattered `as` expressions, and unlike a cast it cannot hide a
+> genuine type error. `packages/shared`, `services/api` and `apps/mobile` are unchanged.
 
 `// @ts-expect-error` is permitted with a same-line reason comment and only where an
 upstream type is genuinely wrong. `// @ts-ignore` is never permitted — it does not fail when

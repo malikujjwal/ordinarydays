@@ -649,6 +649,12 @@ Environment variables: `TABLE_NAME`, `MEDIA_BUCKET`, `STAGE`, `LOG_LEVEL`, `GIT_
 `WEB_ORIGINS`, and `AUTH_MODE` (Phase 1 introduces it; the stack sets it to `cognito` for
 every deployed stage and never to `local` — see P1-02). Identifiers only, nothing secret.
 
+> **Adjusted in P0-15: `AUTH_MODE` is not set here.** It arrives in P1-02 alongside the
+> `lib/config.ts` field and the identity middleware that read it. Setting a variable nothing
+> consumes reads as an implemented control that is not one — the same reason P0-13 left
+> `identity` absent rather than stubbed. `infra/test/api-stack.test.ts` asserts the exact
+> environment key set, so P1-02 adding it is a deliberate change to that assertion.
+
 **Edge cases.** When Phase 5 does add the custom domain, the A record and the certificate
 must both exist before the mapping, and CDK orders this correctly only if the certificate is
 passed as a construct. Passing an ARN string produces a race on first deploy. Write the

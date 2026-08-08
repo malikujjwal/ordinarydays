@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib';
+import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import type { Construct } from 'constructs';
 import type { EnvConfig } from '../config.js';
 import { applyStackTags } from '../tags.js';
@@ -22,6 +23,18 @@ export interface DnsStackProps extends cdk.StackProps {
 }
 
 export class DnsStack extends cdk.Stack {
+  /**
+   * The ACM certificate for the API's custom domain, in the API's own region.
+   *
+   * `undefined` until Phase 5 registers the domain and fills this stack. It is declared now
+   * so that `ApiStack` can gate its custom-domain branch on the **construct** rather than on
+   * an ARN string: passing an ARN produces a race on first deploy, because CloudFormation
+   * has no dependency edge to order the certificate before the domain mapping
+   * (`infrastructure.md` §1.2, P0-15). Typing it here makes that rule structural instead of
+   * a comment a future task has to remember.
+   */
+  readonly apiCertificate?: acm.ICertificate;
+
   constructor(scope: Construct, id: string, props: DnsStackProps) {
     super(scope, id, props);
     applyStackTags(this, 'dns', props.cfg.stage);

@@ -72,6 +72,13 @@ export class NodeLambda extends Construct {
       bundling: {
         format: OutputFormat.ESM,
         minify: true,
+        // `tech-stack.md` §2.3 decides we bundle the AWS SDK v3 clients rather than rely on
+        // the Lambda runtime's copy: the runtime's version drifts and is only partially
+        // present, so a self-contained bundle makes local, CI and deployed behaviour
+        // identical. `NodejsFunction` defaults this to `false`, and §1.3's snippet never
+        // mentioned it, so the construct was silently doing the opposite of the decision
+        // until P0-15 shipped the first Lambda that imports the SDK.
+        bundleAwsSDK: true,
         // Source maps cost boot time, so prod ships without them; the artifact store keeps
         // them instead (`infrastructure.md` §4.5).
         sourceMap: props.cfg.stage !== 'prod',

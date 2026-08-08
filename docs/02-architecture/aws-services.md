@@ -62,7 +62,10 @@ TLS, maps a custom domain, and forwards every request to the single API Lambda.
 - Throttling: default route burst 100, rate 50 rps — a hard ceiling well above expected
   traffic and well below anything that could produce a bill. Per-user limits are enforced
   in Lambda (`api-contract.md` §4).
-- Access logging to a CloudWatch log group in JSON, 14-day retention.
+- Access logging to a CloudWatch log group in JSON, retention from `cfg.logRetentionDays`
+  — 14 days in dev, 30 in prod. *(Amended in P0-15: this read a flat "14-day retention",
+  which matched dev but silently gave prod less than every other log group in the project.
+  Every retention in the project is cfg-driven; this is no longer the exception.)*
 - CORS is handled in Hono, not in API Gateway, so there is one CORS configuration.
 
 **Free-tier bucket.** **12 months only** — 1M HTTP API calls/month.
