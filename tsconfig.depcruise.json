@@ -1,0 +1,27 @@
+{
+  "//": [
+    "Resolution only — nothing compiles with this. dependency-cruiser takes ONE tsconfig",
+    "for the whole cruise and reads `paths` from it through tsconfig-paths-webpack-plugin.",
+    "The real root tsconfig.json is a solution file: project references and no `paths`, so",
+    "`@/lib/apiClient` came out unresolvable and tripped `not-to-unresolvable`. Pointing the",
+    "cruise at apps/mobile's own config instead would resolve that alias and break the other",
+    "four workspaces.",
+    "",
+    "So this restates every workspace alias in one place. Adding an alias to a workspace",
+    "means adding it here too — which is a real duplication, and cheaper than the",
+    "alternatives: one config per workspace would mean five cruises and no cross-package",
+    "rules, which is most of what this tool is for."
+  ],
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["apps/mobile/src/*"]
+    }
+  },
+  "include": ["apps/**/*", "packages/**/*", "services/**/*", "infra/**/*"],
+  "exclude": ["**/node_modules", "**/dist", "**/cdk.out", "**/.expo"]
+}

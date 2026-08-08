@@ -353,8 +353,53 @@ module.exports = {
 };
 ```
 
+> **Amended in P0-27, in four places. Each was found by watching a rule fail to fire, and
+> none of them should be "corrected" back to the snippet above.**
+>
+> **1. The parser is `swc`, not `tsc`.** dependency-cruiser prefers the TypeScript compiler
+> and TypeScript 7 does not expose the JavaScript API it needs. Left on the default it prints
+> `missing-typescript-transpiler` and then **exits 0 having cruised 3 modules and 0
+> dependencies** — a green check that inspected nothing. `@swc/core` parses TypeScript
+> natively. The cost is that dependency-cruiser 18's swc path hard-codes
+> `syntax: "typescript"` with no `tsx` flag (its own source says `// TODO: {tj}sx ?`), so
+> **`.tsx` files cannot be cruised at all** and are excluded. `no-cross-feature-imports` and
+> `no-server-code-in-client` are therefore blind to exactly the files they will most need to
+> see from Phase 1 onward; `scripts/check-forbidden.mjs` covers those two textually in the
+> meantime. This is the third tool to collide with the TypeScript 7 decision (§2.1 of
+> `tech-stack.md`, and the Expo CLI in P0-19), and the first with no scoped workaround.
+>
+> **2. `not-to-unresolvable` is added, and it is the rule that makes the module bans work.**
+> Under pnpm's strict linking a forbidden dependency is usually *unresolvable* rather than
+> resolved-to-a-banned-path: `packages/shared` importing `@aws-sdk/client-dynamodb` cannot
+> resolve it, because `shared` does not declare it. dependency-cruiser then reports nothing,
+> and `no-aws-sdk-in-shared-or-ui` never matches, because there is no resolved path to match.
+> Verified by writing that exact file and watching the suite pass. The `to.path` patterns
+> also gained a `(^|node_modules/)` prefix so they match the bare specifier too.
+>
+> **3. `ddb-only-in-repositories` takes `from: { pathNot: '…/repositories/' }`**, not a list
+> of the four calling directories. The snippet's version catches only a *direct* import, so a
+> handler that imports a `lib/` module that imports `ddb.ts` passes — verified. `reachable:
+> true` cannot fix it either, because the legitimate architecture *is* routes → handlers →
+> services → repositories → `ddb.ts`, and reachability would flag every correct route;
+> `via`/`viaOnly` apply to circular rules only. Naming everything outside the repository layer
+> as `from` closes the laundering path at its own edge. `no-sdk-outside-repositories-and-lib`
+> is inverted the same way.
+>
+> **4. Resolution needs `enhancedResolveOptions` and its own tsconfig.** Without
+> `exportsFields`/`conditionNames`, every subpath export — `hono/factory`, `@od/shared/schemas`
+> — is reported unresolvable. And `tsconfig.depcruise.json` exists because dependency-cruiser
+> takes one tsconfig for the whole cruise while the root one is a solution file with no
+> `paths`, so `@/lib/apiClient` came out unresolvable too.
+
 Alongside it, four cheap checks in `ci.yml`. The first three land with the dependency-cruiser
-config in Phase 0 (P0-27); the fourth arrives with the identity seam in Phase 1 (P1-01):
+config in Phase 0 (P0-27); the fourth arrives with the identity seam in Phase 1 (P1-01).
+
+> **Amended in P0-27: they are `scripts/check-forbidden.mjs <rule>`, not `grep` pipelines.**
+> This repository is developed on Windows, where `grep` is not on the path outside Git Bash,
+> so the commands below fail locally and pass in CI — the worst possible split. A `! grep …`
+> negation also reports only that *something* matched, while the script prints the file, the
+> line number and the line. The patterns and the intent are unchanged, and the fourth check
+> still arrives in P1-01.
 
 | Check | Command | Catches |
 | --- | --- | --- |

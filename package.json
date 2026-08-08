@@ -17,17 +17,20 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "depcruise": "depcruise --config .dependency-cruiser.cjs apps packages services infra",
+    "check:forbidden": "node scripts/check-forbidden.mjs --all",
     "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
     "gen:openapi:check": "pnpm gen:openapi && git diff --exit-code docs/generated/openapi.json",
     "e2e:web": "playwright test",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm depcruise"
+    "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm depcruise && pnpm check:forbidden"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",
     "@commitlint/cli": "21.2.1",
     "@commitlint/config-conventional": "21.2.0",
+    "@swc/core": "1.13.5",
     "@types/node": "22.20.1",
     "@vitest/coverage-v8": "3.2.7",
+    "dependency-cruiser": "18.1.1",
     "esbuild": "0.28.1",
     "lefthook": "1.13.6",
     "syncpack": "13.0.4",
