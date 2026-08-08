@@ -1,0 +1,16 @@
+# What API Gateway itself returned. Run this when an alarm fired but the Lambda log group
+# shows nothing: a request throttled at the gateway, rejected before the integration, or
+# lost to an integration timeout never reaches the application logger at all.
+#
+# Log group: the API Gateway access log group in `od-api-{stage}` (`AccessLogs...`).
+#
+# These lines are the access log format set in `api-stack.ts`, written flat — there is no
+# `message.` prefix here, unlike the Lambda queries. `integrationLatency` is empty for a
+# response the gateway produced by itself, which is the tell that the Lambda was never
+# invoked.
+
+fields status, routeKey, integrationLatency
+| filter status >= 400
+| stats count(*) as responses, avg(integrationLatency) as avgIntegrationMs by status, routeKey
+| sort responses desc
+| limit 50

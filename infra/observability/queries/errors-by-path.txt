@@ -1,0 +1,14 @@
+# Which paths are failing, and with what status. The first query to run when api-5xx or
+# api-errors fires.
+#
+# Log group: the API Lambda's (`/aws/lambda/od-api-{stage}`'s CDK-named group).
+#
+# The application writes one pino line per request. Lambda's JSON log format wraps each
+# stdout line, so the application's own fields are addressed as `message.<field>`. If a
+# query here returns nothing at all, that nesting is the first thing to check.
+
+fields message.method as method, message.path as path, message.status as status
+| filter status >= 400
+| stats count(*) as failures by status, method, path
+| sort failures desc
+| limit 50

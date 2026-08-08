@@ -1,0 +1,15 @@
+# Where the time goes, by path. Run this when api-p95-latency fires — the alarm says the
+# API is slow, this says which part of it is.
+#
+# Log group: the API Lambda's. Fields are nested under `message` (see errors-by-path.txt).
+#
+# `durationMs` is measured by the request logger around the whole middleware chain, so it
+# includes work done after an error was handled. A path whose p95 is far above its average
+# is usually cold starts rather than a slow handler; compare against the Lambda duration
+# widget on the `od-{stage}` dashboard, which measures the invocation instead.
+
+fields message.path as path, message.durationMs as durationMs
+| filter ispresent(durationMs)
+| stats count(*) as requests, avg(durationMs) as avgMs, pct(durationMs, 95) as p95Ms, max(durationMs) as maxMs by path
+| sort p95Ms desc
+| limit 20

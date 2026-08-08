@@ -461,11 +461,17 @@ free trial per secret, then per-secret monthly charge.
 **What it does here.** The entire observability story. There is no third-party APM.
 
 **Logs.** One log group per Lambda plus one for API Gateway access logs. Structured JSON
-from `pino`, one line per request with `requestId`, `userId`, `route`, `status`,
-`durationMs`, and `coldStart`. Retention is **14 days in dev, 30 days in prod** — set
+from `pino`, one line per request with `requestId`, `userId`, `method`, `path`, `status`
+and `durationMs`. Retention is **14 days in dev, 30 days in prod** — set
 explicitly on every log group in CDK, because the default is "never expire" and that is
 the most common way a hobby AWS account accumulates a surprise storage bill. Log Insights
 queries for the common investigations are checked into `infra/observability/queries/`.
+
+> **Amended in P0-17, from what P0-13 actually built.** The line carries `method` and `path`
+> rather than a single `route`, and there is no `coldStart` field on it — `coldStart` is a
+> field of the `/v1/health` **response**, not of the request log. The checked-in queries are
+> written against the real fields; a query written against `route` returns an empty result
+> rather than an error, which reads as "nothing is wrong".
 
 **Metrics.** AWS-published metrics only in v1 (Lambda invocations/errors/duration/throttles,
 API Gateway 4xx/5xx/latency, DynamoDB throttles and consumed capacity, CloudFront error
@@ -483,7 +489,7 @@ the first handful of Embedded Metric Format counters, for capture (P8-29).
 | `api-throttles` | Lambda `Throttles` ≥ 1 in 5 min | Reserved concurrency hit — either an attack or a real spike |
 | `api-invocations-spike` | Lambda `Invocations` > 10,000 in 1 hour | Cost guardrail. Nothing legitimate produces this at our scale. |
 | `api-p95-latency` | Lambda `Duration` p95 > 3,000 ms for 15 min | Performance regression |
-| `ddb-throttles` | `ThrottledRequests` ≥ 1 | Should be impossible on-demand; means a hot partition |
+| `ddb-throttles` | `ReadThrottleEvents` + `WriteThrottleEvents` ≥ 1 | Should be impossible on-demand; means a hot partition |
 | `ses-bounce-rate` | > 5% over 15 min | Protects sending reputation |
 | `reminder-errors` | Reminder Lambda `Errors` ≥ 3 in 15 min | Silent reminder failure is invisible to users |
 
@@ -491,6 +497,22 @@ CloudWatch alarms are $0.10/alarm/month beyond the 10 free **[verify]**; the set
 sized to stay at or near that boundary. Alarm actions publish to an SNS topic
 (`od-alerts-{env}`) with an email subscription; SNS's always-free 1M publishes covers this
 comfortably.
+
+> **Amended in P0-17, two things, both about what CloudWatch will actually bill.**
+>
+> **`ddb-throttles` sums the two throttle-event metrics rather than reading
+> `ThrottledRequests`.** DynamoDB publishes `ThrottledRequests` only with an `Operation`
+> dimension — CDK deprecated `Table.metricThrottledRequests()` as "an invalid metric" for
+> exactly that reason — so the table-level figure this row wanted does not exist. The
+> per-operation alternative is a math expression over nine metrics, and CloudWatch bills a
+> math alarm **per referenced metric**: nine of the ten always-free alarm metrics, for one
+> alarm. `ReadThrottleEvents + WriteThrottleEvents` is the same signal at two.
+>
+> **The free allowance is per account, not per environment.** The eight rows above are one
+> environment's worth. `ObservabilityStack` is 7 alarm metrics per stage, so the dev-only
+> deploy in Phase 4 is inside the free 10 and Phase 5's second stage takes the account to 14
+> — about $0.40/month. The number to watch when adding a row here is therefore **twice**
+> what the table suggests.
 
 **Free-tier bucket.** Always free — 10 custom metrics, 10 alarms, 5 GB of log ingestion
 and 5 GB of log storage per month, 1M API requests.

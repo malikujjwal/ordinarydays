@@ -1,0 +1,14 @@
+# Every line written while handling one request. Replace the id below with the value from
+# the `X-Request-Id` response header, or from the `meta.requestId` in an error envelope a
+# user sent you.
+#
+# Log group: the API Lambda's. Fields are nested under `message` (see errors-by-path.txt).
+#
+# This is the application's request id, bound to the child logger by the requestId
+# middleware — not Lambda's own `@requestId`, which identifies the invocation. They differ
+# whenever one invocation serves a retry.
+
+fields @timestamp, @message
+| filter message.requestId = 'req_REPLACE_ME'
+| sort @timestamp asc
+| limit 200

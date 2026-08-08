@@ -278,6 +278,16 @@ metrics** before Phase 8 (the free allowance is only 10, and each extra is $0.30
 default is "never expire", and a forgotten log group is the most common way a hobby AWS
 account accrues storage charges quietly for years.
 
+> **Amended in P0-17: the alarm column is per environment, the allowance is per account.**
+> CloudWatch bills per **alarm metric**, and an alarm on a math expression is charged for
+> every metric the expression references, not once. `ObservabilityStack` as written is 7
+> alarm metrics per stage — six alarms, of which `ddb-throttles` reads two metrics. So the
+> table's `$0.00` holds for the dev-only environment Phase 4 deploys, and Phase 5's second
+> stage takes the account to 14 alarm metrics: four beyond the free 10, about **$0.40/month**
+> at ~$0.10 each. That is a Phase 5 line to carry, not a Phase 0 one — nothing in
+> `ObservabilityStack` is deployed before Phase 4. Dashboards are separately free to three
+> per account; this is one per stage, so two.
+
 ### 2.13 AWS Budgets
 
 The first **two** budgets are free; beyond that ~$0.02 per budget per day **[verify]**
@@ -627,6 +637,16 @@ cost:
 
 All three publish to the `od-alerts-{env}` SNS topic → email. SNS's always-free 1M
 publishes covers this many times over.
+
+> **Raised in P0-17, not resolved: only `api-invocations-spike` is owned by a task.** It is
+> in `aws-services.md` §1.12's alarm table and is built by P0-17. `ddb-write-spike` and
+> `cf-egress-spike` appear **only here** — they are in no alarm table, no phase task builds
+> them, and `ObservabilityStack` is not given the CloudFront distributions a
+> `cf-egress-spike` would need. P0-17 built the six alarms its phase task names and did not
+> invent two more, because each would cost an alarm metric against an allowance §2.12 shows
+> is already tight at two stages. The founder decides which way this closes: add both to
+> `aws-services.md` §1.12 with a phase task that owns them (Phase 4 for the table, Phase 5
+> for CloudFront, since that is when the resources exist), or delete them from this section.
 
 ---
 

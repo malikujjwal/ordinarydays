@@ -1,0 +1,16 @@
+# Who is generating the traffic. Run this when api-invocations-spike or api-throttles
+# fires, before deciding whether to raise a limit: one client in a retry loop and a real
+# increase in use look identical on the invocations graph and need opposite responses.
+#
+# Log group: the API Lambda's. Fields are nested under `message` (see errors-by-path.txt).
+#
+# `userId` is an opaque ULID and is the only identifier in the log line — names, emails,
+# titles, locations and bodies are all in the pino redaction list (`coding-standards.md`
+# §7.3). Lines with no `userId` are unauthenticated requests: health checks, the public
+# invite surface, and anything rejected before identity ran.
+
+fields message.userId as userId
+| filter ispresent(userId)
+| stats count(*) as requests, count_distinct(message.path) as paths by userId
+| sort requests desc
+| limit 20

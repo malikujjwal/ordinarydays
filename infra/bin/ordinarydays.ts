@@ -51,5 +51,7 @@ for (const stage of STAGES) {
   const api = new ApiStack(app, `od-api-${stage}`, { cfg, dns, auth, data });
   new WebStack(app, `od-web-${stage}`, { cfg, dns, data });
   const scheduler = new SchedulerStack(app, `od-scheduler-${stage}`, { cfg, data, api });
-  new ObservabilityStack(app, `od-observability-${stage}`, { cfg, api, scheduler });
+  // `data` was added to these props in P0-17: `ddb-throttles` watches the table, and a
+  // stateful resource is never referenced across stacks by name-string (§1.2).
+  new ObservabilityStack(app, `od-observability-${stage}`, { cfg, api, data, scheduler });
 }

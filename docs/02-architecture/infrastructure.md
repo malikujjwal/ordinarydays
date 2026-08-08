@@ -38,6 +38,8 @@ infra/
 │     ├─ node-lambda.ts      Opinionated NodejsFunction wrapper (arm64, bundling, logs)
 │     ├─ static-site.ts      S3 + OAC + CloudFront + cache policies + URI-rewrite function
 │     └─ alarm.ts            Alarm + SNS action, one signature
+├─ observability/
+│  └─ queries/               Log Insights queries, one .txt per investigation (P0-17)
 ├─ scripts/
 │  ├─ migrations/            One-off, idempotent, reviewed data scripts
 │  └─ seed-dev.ts
@@ -143,9 +145,15 @@ for (const stage of STAGES) {
   const api  = new ApiStack(app, `od-api-${stage}`, { cfg, dns, auth, data });
   new WebStack(app, `od-web-${stage}`, { cfg, dns, data });
   const sch  = new SchedulerStack(app, `od-scheduler-${stage}`, { cfg, data, api });
-  new ObservabilityStack(app, `od-observability-${stage}`, { cfg, api, scheduler: sch });
+  new ObservabilityStack(app, `od-observability-${stage}`, { cfg, api, data, scheduler: sch });
 }
 ```
+
+> **Amended in P0-17: `ObservabilityStack` takes `data`.** Its `ddb-throttles` alarm watches
+> the table, and this section's own rule is that a stateful resource is never referenced
+> across stacks by name-string — so the table arrives as a typed construct prop like every
+> other cross-stack reference, rather than as a `TableName` dimension assembled from a
+> string.
 
 > **Amended in P0-09, two things.**
 >

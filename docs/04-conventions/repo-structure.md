@@ -97,6 +97,7 @@ ordinarydays/
 ├─ infra/                        @od/infra — AWS CDK v2 app. See infrastructure.md §1.
 │  ├─ bin/ordinarydays.ts
 │  ├─ lib/config.ts  lib/stacks/*.ts  lib/constructs/*.ts
+│  ├─ observability/queries/*.txt   Log Insights queries, one per investigation (P0-17)
 │  ├─ scripts/migrations/NNNN-description.ts     One-off, idempotent, reviewed
 │  ├─ scripts/seed-dev.ts
 │  ├─ test/                      CDK assertion tests
