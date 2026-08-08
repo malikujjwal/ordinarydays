@@ -170,7 +170,7 @@ deployed dev environment (P4-13) — not waived.
 | Warm `GET /v1/agenda`, server-side p95 | ≤ **60 ms** | Nightly load test against dev |
 | DynamoDB round trips per agenda request | ≤ **4** | Test asserting the call count |
 | DynamoDB round trips, any other endpoint | ≤ **3** without a written justification in the PR | Review |
-| Lambda artifact, zipped | ≤ **5 MB** | `scripts/check-bundle-size.mjs` in CI |
+| Lambda artifact, zipped | ≤ **5 MB** | `pnpm run check:bundle-size` in CI (P0-28) |
 | App launch to first painted row, warm cache | ≤ **1.0 s** | Maestro timing, median of 10 |
 | App launch to first painted row, cold | ≤ **2.0 s** | Maestro timing, median of 10 |
 | Add screen open to keyboard-ready | ≤ **300 ms** | Maestro timing |

@@ -18,6 +18,7 @@
     "lint:fix": "biome check --write .",
     "depcruise": "depcruise --config .dependency-cruiser.cjs apps packages services infra",
     "check:forbidden": "node scripts/check-forbidden.mjs --all",
+    "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
     "gen:openapi:check": "pnpm gen:openapi && git diff --exit-code docs/generated/openapi.json",
     "e2e:web": "playwright test",

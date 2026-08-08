@@ -1205,7 +1205,7 @@ jobs:
       - run: pnpm turbo run typecheck
       - run: pnpm turbo run test -- --coverage
       - run: pnpm run gen:openapi && git diff --exit-code docs/generated/openapi.json
-      - run: pnpm --filter @od/api build && node scripts/check-bundle-size.mjs
+      - run: pnpm run check:bundle-size # was: pnpm --filter @od/api build && node scripts/... — see P0-28
       - uses: gitleaks/gitleaks-action@v2
       - uses: actions/upload-artifact@v4
         with: { name: coverage, path: '**/coverage/**' }
