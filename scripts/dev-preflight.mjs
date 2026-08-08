@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, readFileSync } from 'node:fs';
+import { createSocket } from 'node:dgram';
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -128,6 +129,72 @@ async function ensureDynamo() {
   );
 }
 
+// ── Metro's advertised address ──────────────────────────────────────────────────────────
+/**
+ * The address this machine would use to reach the internet — which is the address a phone
+ * on the same Wi-Fi can reach it on.
+ *
+ * A UDP socket is `connect`ed to a public address and its local address read back. No
+ * packet is ever sent; the value comes from the OS routing table, which is the only thing
+ * that actually knows which of a developer machine's adapters is the real one. Enumerating
+ * `os.networkInterfaces()` and guessing does not work here: this machine offers Wi-Fi,
+ * Ethernet, Bluetooth, two Hyper-V switches and four APIPA addresses, and the right answer
+ * is not the first non-internal one.
+ */
+function detectLanAddress() {
+  return new Promise((resolve) => {
+    const socket = createSocket('udp4');
+    const done = (value) => {
+      try {
+        socket.close();
+      } catch {
+        /* already closed */
+      }
+      resolve(value);
+    };
+    socket.on('error', () => done(undefined));
+    try {
+      socket.connect(53, '1.1.1.1', () => done(socket.address().address));
+    } catch {
+      done(undefined);
+    }
+  });
+}
+
+/**
+ * Writes that address into `apps/mobile/.env.local` as `REACT_NATIVE_PACKAGER_HOSTNAME`.
+ *
+ * **Expo does not reliably find it on its own.** On a machine with Hyper-V and WSL
+ * adapters, `expo start` advertises `hostUri: 127.0.0.1:8081` — with `--host lan`, and with
+ * the Wi-Fi profile set to Private. A phone told to fetch from `127.0.0.1` fetches from
+ * itself, and the symptom is a bundle that never loads with no error worth reading. Found
+ * while preparing P0-22's physical-device check.
+ *
+ * The file is git-ignored and machine-local, so the address is re-detected on every run and
+ * follows the laptop onto a different network. Other keys in the file are preserved — this
+ * rewrites one line, not the file.
+ */
+async function ensureMetroHostname() {
+  const address = await detectLanAddress();
+  if (address === undefined || address.startsWith('127.') || address === '0.0.0.0')
+    return;
+
+  const path = join(root, 'apps', 'mobile', '.env.local');
+  const key = 'REACT_NATIVE_PACKAGER_HOSTNAME';
+  const existing = existsSync(path) ? readFileSync(path, 'utf8') : '';
+
+  const lines = existing.split(/\r?\n/).filter((line) => line.trim() !== '');
+  const current = lines.find((line) => line.startsWith(`${key}=`));
+  if (current === `${key}=${address}`) return;
+
+  const next = [
+    ...lines.filter((line) => !line.startsWith(`${key}=`)),
+    `${key}=${address}`,
+  ];
+  writeFileSync(path, `${next.join('\n')}\n`, 'utf8');
+  act(`pointed Metro at ${address} for physical devices (apps/mobile/.env.local)`);
+}
+
 // ── The shared package ──────────────────────────────────────────────────────────────────
 /**
  * `packages/shared` has to be **compiled** before anything reaches it through Node.
@@ -223,6 +290,7 @@ function ensureEnv() {
 // ── Run ─────────────────────────────────────────────────────────────────────────────────
 checkNode();
 ensureEnv();
+await ensureMetroHostname();
 ensureSharedBuilt();
 await ensureDynamo();
 await ensureTable();

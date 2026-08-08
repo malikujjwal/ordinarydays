@@ -113,30 +113,33 @@ pnpm dev:preflight         # the checks alone, without starting anything
 docker compose down        # stop the database when you are done
 ```
 
-### Running on a physical iPhone from Windows
+### Running on a physical iPhone
 
-No Mac is needed — Expo Go downloads the bundle over your LAN. Three things have to be true,
-and on a developer machine none of them is automatic:
+No Mac is needed — Expo Go downloads the bundle over your LAN. `pnpm dev` handles the part
+that usually goes wrong: it detects this machine's LAN address and writes it to
+`apps/mobile/.env.local`, so Metro advertises an address the phone can actually reach.
 
-1. **Metro must advertise your LAN address, not a loopback one.** With Hyper-V, WSL or Docker
-   installed, Metro can pick the wrong adapter and serve `127.0.0.1`, which on a phone means
-   the phone. Check what it chose, and override it if it guessed wrong:
+That is not cosmetic. Left alone, `expo start` on a machine with Hyper-V, WSL or Docker
+adapters advertises `127.0.0.1` — even with `--host lan` — and a phone told to fetch from
+`127.0.0.1` fetches from itself. The bundle never loads and nothing says why.
 
-   ```bash
-   REACT_NATIVE_PACKAGER_HOSTNAME=10.0.0.197 pnpm dev
-   ```
+Two things `pnpm dev` cannot do for you, both on Windows:
 
-   Substitute your own Wi-Fi address (`ipconfig`, the adapter your Wi-Fi is on).
+- **Set the Wi-Fi network profile to Private.** On Public, the firewall drops the phone's
+  inbound connections to Metro (8081) and the API (3000), and the symptom is a spinner with
+  no error.
+- **Allow Node through the firewall** on both ports when prompted, for Private networks.
 
-2. **The Wi-Fi network profile must be Private.** On a Public profile Windows Firewall drops
-   the phone's inbound connections to Metro (8081) and the API (3000), and the symptom is a
-   spinner with no error.
+Then scan the QR code, or open `exp://<your-lan-ip>:8081` in Expo Go.
 
-3. **Allow Node through the firewall on both ports** when Windows prompts, for Private
-   networks.
+The health screen prints the resolved API base URL for exactly this diagnosis. If it reads
+`localhost` or `127.0.0.1` on the phone, the address is wrong — not the network. To override
+the detected address:
 
-The health screen prints the resolved API base URL for exactly this reason. If it shows
-`localhost` or `127.0.0.1` on the phone, stop — that is item 1, not a network fault.
+```powershell
+# PowerShell — there is no inline VAR=value prefix
+$env:REACT_NATIVE_PACKAGER_HOSTNAME = '10.0.0.197'; pnpm dev
+```
 
 Before touching AWS, read
 [`docs/03-implementation/phase-00-foundations.md`](docs/03-implementation/phase-00-foundations.md)
