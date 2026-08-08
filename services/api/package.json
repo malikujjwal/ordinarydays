@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.scripts.json",
     "test": "vitest run",
-    "dev": "tsx watch src/local.ts"
+    "test:int": "vitest run --config vitest.int.config.ts",
+    "dev": "tsx watch --env-file-if-exists=.env.local src/local.ts",
+    "ddb:create-table": "tsx --env-file-if-exists=.env.local scripts/create-local-table.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1106.0",
