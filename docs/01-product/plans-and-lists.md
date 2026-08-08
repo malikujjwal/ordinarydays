@@ -121,6 +121,13 @@ a rolled-forward task on its own date in Plans.
 
 #### 1.3.1 Row anatomy
 
+> **Presentation note (2026-08-08).** The Plans tab now renders these as **event cards**,
+> per the founder's design reference — see
+> [`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.3, which
+> reverses the earlier rows-for-density decision. Everything below about *content* —
+> which lines exist, in which stage, in which order, with which vocabulary — is unchanged
+> and remains canonical; "row" here names the unit of content, and the card is its frame.
+
 **Needs a date.** Two lines, no time column, no checkbox. A third line appears only when
 somebody has suggested a date (§2.3).
 
