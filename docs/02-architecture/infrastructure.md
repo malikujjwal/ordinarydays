@@ -1231,6 +1231,32 @@ The `synth` job assumes the **dev** role only. A PR from a fork gets no credenti
 (`pull_request` from a fork cannot access `id-token: write`), so the diff step is skipped
 there. That is correct — an untrusted PR should not be able to read the account.
 
+> **Amended in P0-29: the workflow as shipped has four jobs and no AWS credentials at all.**
+> The snippet above is the Phase 4 shape and is kept because that is what it returns to.
+>
+> | Job | What it runs |
+> | --- | --- |
+> | `validate` | `check-node-versions.mjs`, `biome ci .`, `turbo run typecheck`, `turbo run test -- --coverage`, `gen:openapi:check`, `check:bundle-size`, `expo-doctor`, gitleaks, coverage upload |
+> | `depcruise` | `pnpm depcruise`, then each of the four forbidden-pattern checks as its own step |
+> | `integration` | `scripts/dev-preflight.mjs`, then `pnpm --filter @od/api test:int` |
+> | `synth` | `cdk synth 'od-*-dev' --quiet`, **no credentials, no `id-token: write`** |
+>
+> Four jobs rather than one because a failure should name itself: a forbidden import reports
+> as `depcruise`, not as step nine of `validate`. They share only the pnpm store cache.
+>
+> `synth` drops the role and runs `cdk synth` instead of `cdk diff` because there is nothing
+> deployed to diff against before Phase 4, and a job needing credentials cannot run on a fork
+> PR. It is still a build check: `NodeLambda` runs esbuild at synth time, so a runtime-invalid
+> import that `tsc` accepted fails here.
+>
+> `integration` reuses P0-23's `dev-preflight.mjs` rather than restating
+> `docker compose up -d` plus a wait loop. One home for the wait-for-ready logic, and CI
+> exercises the same path a new developer takes.
+>
+> Two details that cost time to find rather than to fix: `expo-doctor` is not on the
+> workspace PATH and must be run through `npx` from `apps/mobile` (P0-22), and the checkout
+> needs `fetch-depth: 0` or gitleaks scans a single commit.
+
 Caching: `actions/setup-node`'s pnpm cache for the store, plus `actions/cache` on
 `node_modules/.cache/turbo` keyed by `${{ runner.os }}-turbo-${{ github.sha }}` with a
 `${{ runner.os }}-turbo-` restore key. Turbo's local cache is what makes the second and

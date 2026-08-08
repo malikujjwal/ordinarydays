@@ -1,0 +1,166 @@
+# Validation on every pull request and every push to `main`
+# (`infrastructure.md` §7.1, `phase-00-foundations.md` P0-29).
+#
+# Four jobs, deliberately parallel. They share nothing but the pnpm store cache, so a slow
+# integration run does not delay the answer on a lint error, and a failure names the job it
+# came from rather than being one red X on a twelve-step script.
+#
+# **No AWS credentials anywhere in this workflow.** §7.1's snippet gives `synth` an OIDC role
+# and runs `cdk diff`; P0-29 changes that on purpose. There is nothing deployed to diff
+# against until Phase 4, and a job that needs credentials is a job that cannot run on a fork
+# PR. Phase 4 adds the credentialled `cdk diff` step and its `id-token: write` permission
+# back.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref. Safe here because nothing in this workflow
+# deploys; `deploy-dev.yml` deliberately does the opposite from Phase 4 (§7.2), because a
+# cancelled CloudFormation update leaves a stack in UPDATE_IN_PROGRESS.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, and a shallow clone gives it one commit to look at.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Cache turbo
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/turbo
+          key: ${{ runner.os }}-turbo-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-turbo-
+
+      - run: pnpm install --frozen-lockfile
+
+      # Before anything expensive: if the runner's Node disagrees with what the repository
+      # declares, every result after this point describes the wrong runtime.
+      - name: Node versions agree
+        run: node scripts/check-node-versions.mjs
+
+      # `biome ci`, not `biome check` — it never writes, and it annotates the diff.
+      - name: Lint and format
+        run: pnpm exec biome ci .
+
+      - name: Typecheck
+        run: pnpm turbo run typecheck
+
+      # Coverage thresholds live in each package's vitest config and are gates, not
+      # reports (`testing.md` §9). `--coverage` is what arms them.
+      - name: Unit tests with coverage gates
+        run: pnpm turbo run test -- --coverage
+
+      # Regenerates the spec and fails on a diff, so it cannot drift from the schemas.
+      - name: OpenAPI document is current
+        run: pnpm run gen:openapi:check
+
+      # Synthesises and measures the real Lambda artifact against the 5 MB budget.
+      - name: Lambda bundle size
+        run: pnpm run check:bundle-size
+
+      # `expo-doctor` is not on the workspace PATH — it is published as its own package and
+      # run through npx. Found the hard way in P0-22.
+      - name: Expo project health
+        run: npx --yes expo-doctor@latest
+        working-directory: apps/mobile
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: '**/coverage/**'
+          if-no-files-found: ignore
+
+  # The architectural rules from `repo-structure.md` §3 and §4. Its own job so that a
+  # forbidden import is reported as a forbidden import, not as "validate failed".
+  depcruise:
+    name: depcruise
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Import rules
+        run: pnpm depcruise
+
+      # One step per rule, so the failure names the rule that broke rather than reporting
+      # that something, somewhere, matched (`repo-structure.md` §4).
+      - name: No Scan in application code
+        run: node scripts/check-forbidden.mjs no-scan
+      - name: No raw key literals outside the repository layer
+        run: node scripts/check-forbidden.mjs no-key-literals
+      - name: No dangerouslySetInnerHTML
+        run: node scripts/check-forbidden.mjs no-dangerous-html
+      - name: Client layer rules
+        run: node scripts/check-forbidden.mjs client-layer-rules
+
+  # DynamoDB Local. Separate from `validate` so that `pnpm test` stays runnable with nothing
+  # but Node, and a Docker problem cannot be mistaken for a failing unit test.
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # The same preflight `pnpm dev` runs (P0-23): starts the containers, waits for :8000,
+      # builds `@od/shared`, creates the table from the shared definition and copies
+      # `.env.example`. Reusing it means CI exercises the path a new developer takes, and
+      # the wait-for-ready logic has one home.
+      - name: Start DynamoDB Local and create the table
+        run: node scripts/dev-preflight.mjs
+
+      - name: Integration tests
+        run: pnpm --filter @od/api test:int
+
+  # Eight stacks synthesised with no AWS credentials. This is also a build check: the
+  # NodeLambda construct runs esbuild at synth time, so a runtime-invalid import that `tsc`
+  # allowed through fails here. Do not "speed it up" by stubbing the bundling — in a phase
+  # with no deploy that is most of the job's value.
+  synth:
+    name: synth
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: cdk synth (no credentials)
+        run: pnpm --filter @od/infra exec cdk synth 'od-*-dev' --quiet
