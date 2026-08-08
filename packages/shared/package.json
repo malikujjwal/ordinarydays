@@ -4,18 +4,46 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./schemas": "./src/schemas/index.ts",
-    "./types": "./src/types/index.ts",
-    "./table": "./src/table/index.ts",
-    "./client": "./src/client/index.ts",
-    "./constants": "./src/constants.ts",
-    "./errors": "./src/errors.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "react-native": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./schemas": {
+      "types": "./dist/schemas/index.d.ts",
+      "react-native": "./src/schemas/index.ts",
+      "default": "./dist/schemas/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "react-native": "./src/types/index.ts",
+      "default": "./dist/types/index.js"
+    },
+    "./table": {
+      "types": "./dist/table/index.d.ts",
+      "react-native": "./src/table/index.ts",
+      "default": "./dist/table/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "react-native": "./src/client/index.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./constants": {
+      "types": "./dist/constants.d.ts",
+      "react-native": "./src/constants.ts",
+      "default": "./dist/constants.js"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "react-native": "./src/errors.ts",
+      "default": "./dist/errors.js"
+    }
   },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b",
-    "test": "vitest run"
+    "test": "tsc -b && vitest run"
   },
   "dependencies": {
     "zod": "4.4.3"

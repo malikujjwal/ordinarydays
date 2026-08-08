@@ -310,6 +310,30 @@ accidentally imports server-only code:
 }
 ```
 
+> **Amended in P0-12: the entries are conditional.** As written above, every subpath
+> resolves to `./src/*.ts` for every consumer. That is correct for Metro and correct for
+> `tsc`, which follows project references to `dist/*.d.ts` — and wrong for **Node**, which
+> follows the `exports` map literally and cannot execute TypeScript. `infra` is a Node
+> program (`cdk synth` runs `node dist/bin/ordinarydays.js`), so the first import of
+> `@od/shared/table` failed with `ERR_MODULE_NOT_FOUND` on `src/table/definition.js`.
+>
+> The prose two paragraphs down already stated the intent — "for `services/api` and `infra`,
+> `shared` is compiled by `tsc` to `dist/`; for the Expo app, Metro consumes the TypeScript
+> source directly" — the map just had no way to express it. Each subpath is now:
+>
+> ```json
+> "./table": {
+>   "types":        "./dist/table/index.d.ts",
+>   "react-native": "./src/table/index.ts",
+>   "default":      "./dist/table/index.js"
+> }
+> ```
+>
+> Metro resolves the `react-native` condition and keeps consuming source, so hot reload is
+> unaffected. Everything else gets `dist`. `packages/shared`'s own `test` script gained a
+> `tsc -b` for the same reason: its exports-map test now resolves through `dist`, which is
+> what the API and `infra` actually consume, so it is a stricter test than before.
+
 `./table` and `./constants` were missing from this list until P0-07 and are not optional:
 `repo-structure.md` §2.5 permits `infra` to import `@od/shared` **only** through those two
 subpaths, and `create-local-table.ts` (P0-21) imports `@od/shared/table`. An entry is added
