@@ -589,9 +589,10 @@ part that must be exactly right:
 
 ```ts
 // infra/lib/stacks/account-stack.ts
-const provider = new iam.OpenIdConnectProvider(this, 'GithubOidc', {
+// CfnOIDCProvider (native CFN), not the OpenIdConnectProvider L2 — see the amendment below.
+const provider = new iam.CfnOIDCProvider(this, 'GithubOidc', {
   url: 'https://token.actions.githubusercontent.com',
-  clientIds: ['sts.amazonaws.com'],
+  clientIdList: ['sts.amazonaws.com'],
 });
 
 const devRole = new iam.Role(this, 'GithubDeployDev', {
@@ -651,6 +652,31 @@ role may assume, and the bootstrap roles themselves are account-wide, add the st
 condition on the CDK role assumption as well once CDK supports per-stack deploy roles.
 Until then, the GitHub **environment** gate is the real control on prod. Recorded as an
 open question in `decisions.md`.
+
+> **Amended in P0-11, two things.**
+>
+> **The repository is `malikujjwal/ordinarydays`.** The snippet above said
+> `ujjwal/ordinarydays`. This is not cosmetic: the `sub` condition is the control that
+> decides which repositories on GitHub can assume a role in this account. It lives in
+> `infra/lib/config.ts` as `GITHUB_REPO`, so the trust policy and its tests cannot disagree.
+>
+> **`iam.CfnOIDCProvider`, not the `OpenIdConnectProvider` L2.** The L2 predates
+> CloudFormation support for OIDC providers and still provisions a
+> `Custom::AWSCDKOpenIdConnectProvider` backed by its own Lambda and a third IAM role.
+> Synthesising `od-account` both ways:
+>
+> | | `CfnOIDCProvider` | `OpenIdConnectProvider` L2 |
+> | --- | --- | --- |
+> | `AWS::IAM::OIDCProvider` | 1 | 0 |
+> | `Custom::AWSCDKOpenIdConnectProvider` | 0 | 1 |
+> | `AWS::Lambda::Function` | 0 | **1** |
+> | `AWS::IAM::Role` | 2 | **3** |
+>
+> A standing Lambda holding `iam:CreateOpenIDConnectProvider` is not something to carry by
+> accident, and it is a runtime-deprecation liability in a stack that is deployed once and
+> then rarely touched. `thumbprintList` is omitted deliberately: AWS manages thumbprints for
+> well-known IdPs including GitHub, and a hard-coded thumbprint breaks deploys when it
+> rotates.
 
 ### 3.9 First deploy
 

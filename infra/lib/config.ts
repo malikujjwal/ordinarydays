@@ -49,6 +49,26 @@ export type Stage = EnvConfig['stage'];
 
 export const STAGES = ['dev', 'prod'] as const satisfies readonly Stage[];
 
+/**
+ * The GitHub repository allowed to assume the deploy roles, as `owner/repo`.
+ *
+ * Account-scoped, so it sits outside `EnvConfig`, which is per stage. This value is a
+ * **security control**, not a label: it is the `sub` claim condition on the OIDC trust
+ * policy, and a wrong or over-broad value decides which repositories on GitHub can assume a
+ * role in this account. `infrastructure.md` §3.8 wrote `ujjwal/ordinarydays`; the actual
+ * remote is `malikujjwal/ordinarydays`, which is what the trust policy must say.
+ */
+export const GITHUB_REPO = 'malikujjwal/ordinarydays';
+
+/**
+ * The two permanent cost budgets, in whole USD. The first two budgets in an account are
+ * free (`cost-model.md` §2.13).
+ */
+export const BUDGET_USD = { warn: 5, stop: 20 } as const;
+
+/** Dollar impact at which a cost anomaly is worth an email. */
+export const ANOMALY_THRESHOLD_USD = 5;
+
 const CONFIG: Record<Stage, EnvConfig> = {
   dev: envConfig.parse({
     stage: 'dev',

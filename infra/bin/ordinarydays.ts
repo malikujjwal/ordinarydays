@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { getConfig, STAGES } from '../lib/config.js';
+import { GITHUB_REPO, getConfig, STAGES } from '../lib/config.js';
 import { AccountStack } from '../lib/stacks/account-stack.js';
 import { ApiStack } from '../lib/stacks/api-stack.js';
 import { AuthStack } from '../lib/stacks/auth-stack.js';
@@ -31,7 +31,12 @@ const app = new cdk.App();
 
 applyAppTags(app);
 
-new AccountStack(app, 'od-account');
+// Account-scoped, so it takes no stage. `alertEmail` is read from the prod config only
+// because both stages carry the same address and account-wide alerts belong to neither.
+new AccountStack(app, 'od-account', {
+  alertEmail: getConfig('prod').alertEmail,
+  githubRepo: GITHUB_REPO,
+});
 
 for (const stage of STAGES) {
   const cfg = getConfig(stage);
