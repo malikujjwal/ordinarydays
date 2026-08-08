@@ -7,7 +7,8 @@
     "node": ">=22 <23"
   },
   "scripts": {
-    "dev": "turbo run dev --parallel",
+    "dev": "node scripts/dev-preflight.mjs && turbo run dev --parallel",
+    "dev:preflight": "node scripts/dev-preflight.mjs",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",

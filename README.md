@@ -79,18 +79,38 @@ The four sets:
 
 ## Getting started
 
-Node 22 (`.nvmrc`) and pnpm 9 via `corepack enable`. Docker Desktop for the local database.
+You need three things installed: **Node 22** (`.nvmrc`), **pnpm 9** (`corepack enable`), and
+**Docker Desktop**, running.
 
 ```bash
+git clone https://github.com/malikujjwal/ordinarydays.git
+cd ordinarydays
 pnpm install
+pnpm dev
 ```
 
-That is the whole of it today — the workspaces are empty scaffolding. The rest of the
-quickstart arrives with the tasks that make it true:
+That is the whole quickstart. There is no file to edit, no container to start by hand and no
+database to create — `pnpm dev` runs a preflight first that starts DynamoDB Local, creates
+the `od-main-local` table from the shared definition, and copies `services/api/.env.example`
+to `.env.local` if it is missing. It prints a line for each thing it does, and does nothing
+at all when everything is already in place.
+
+What you get:
+
+| Where | What |
+| --- | --- |
+| `http://localhost:3000/v1/health` | The API, on the Hono Node adapter |
+| `http://localhost:8081` | The app in a browser, showing the health screen |
+| `http://localhost:8001` | `dynamodb-admin`, for looking at the rows |
+| Expo Go on an iPhone | Scan the QR code Metro prints; the app resolves your LAN address automatically |
+
+If it cannot start, it says which of Node, Docker, the database, the table or the env file is
+the problem, and what to run. Two things it deliberately will not do for you: install Node,
+or start Docker Desktop.
 
 ```bash
-docker compose up -d       # DynamoDB Local + dynamodb-admin (P0-21)
-pnpm dev                   # local API + Expo dev server (P0-23)
+pnpm dev:preflight         # the checks alone, without starting anything
+docker compose down        # stop the database when you are done
 ```
 
 Before touching AWS, read
