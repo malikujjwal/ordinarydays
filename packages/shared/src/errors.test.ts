@@ -13,6 +13,7 @@ describe('ERROR_CODES', () => {
         'not_found',
         'not_implemented',
         'participant_limit_exceeded',
+        'payload_too_large',
         'rate_limited',
         'series_limit_exceeded',
         'unauthenticated',

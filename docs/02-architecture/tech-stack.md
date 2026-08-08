@@ -136,6 +136,7 @@ version bumps as PRs (see `security-privacy.md` §7).
 | --- | --- | --- | --- |
 | `hono` | 4.x | HTTP router, middleware chain, request/response primitives inside one Lambda | Express pulls in a large dependency tree and its Lambda adapters are slow to boot. Fastify is Node-server-shaped, not edge/handler-shaped. Hono has a first-party `aws-lambda` adapter, zero dependencies, and boots in single-digit milliseconds. |
 | `@hono/zod-validator` | 0.4+ | Wires the shared Zod schemas into route validation | Hand-written `schema.parse(await c.req.json())` in every handler is the same thing with more places to forget it. |
+| `@hono/node-server` | 1.x | Runs the same Hono app under Node for local development (`services/api/src/local.ts`) | Added in P0-13, which is the first task with a local server to run. A **devDependency**, so it cannot reach the deployed artifact: `NodeLambda` bundles from `index.ts`, which uses the `hono/aws-lambda` adapter instead. The alternative — a second Express or `node:http` server for local dev — is a second request pipeline that would drift from the deployed one, which is the exact failure mode `local.ts` exists to avoid. |
 | `aws-jwt-verify` | 5.x | Verifies Cognito ID tokens: signature, `iss`, `aud`, `token_use`, expiry, with cached JWKS | AWS-maintained, understands Cognito's claim conventions. `jose` + hand-rolled JWKS caching is the same code with our bugs in it. |
 | `@aws-sdk/client-dynamodb` + `@aws-sdk/lib-dynamodb` | 3.x | DynamoDB access; `lib-dynamodb`'s `DynamoDBDocumentClient` marshals plain JS objects | Raw `AttributeValue` maps (`{"S": "..."}`) everywhere is unreadable and error-prone. ElectroDB/OneTable add an entity abstraction over a key design we have already specified by hand in `data-model.md`; a second source of truth for keys is a liability. |
 | `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` | 3.x | Presigned `PUT` URLs for attachment upload | Uploading through Lambda burns duration and hits the 6 MB payload limit. |
@@ -555,6 +556,7 @@ export class AppError extends Error {
 | `forbidden` | 403 | Authenticated, identified as a participant, attempting an owner-only action | Only used where existence is already known to the caller |
 | `not_found` | 404 | Resource absent **or** caller has no relationship to it | Never 403 for strangers — `api-contract.md` §3 |
 | `validation_failed` | 400 | Zod failure, 62-day window exceeded, unparseable cursor | `details[]` from `ZodError.issues`, path-mapped |
+| `payload_too_large` | 413 | Request body over 256 KB, rejected by `bodyLimit` before parsing | Added in P0-13 — see the note below |
 | `conflict` | 409 | `If-Match` mismatch, deleting a person still on an active activity | Includes current `updatedAt` |
 | `participant_limit_exceeded` | 422 | > 50 participants | — |
 | `series_limit_exceeded` | 200 | > 200 active series — returned as a `warnings[]` entry, not an error | Response still succeeds |
@@ -564,6 +566,13 @@ export class AppError extends Error {
 | `not_implemented` | 501 | `/v1/capture/*` before Phase 8 | Stable stub |
 | `upgrade_required` | 426 | Kill-switched client version | `updateUrl` in details |
 | `internal` | 500 | Anything uncaught | Message is always the literal string `"An unexpected error occurred."` — never the exception text |
+
+> **Added in P0-13: `payload_too_large`.** §4.2 requires `bodyLimit` to reject an oversized
+> body with **413**, and no code in the closed union mapped to 413. Without one, that
+> rejection either leaves through a status the contract does not describe, or through an
+> envelope whose `code` says something untrue — `validation_failed` is a 400, and a body
+> that was never parsed did not fail validation. Added to
+> `packages/shared/src/errors.ts` and to `api-contract.md` §1 in the same PR.
 
 `errorHandler` also translates `ZodError` → `validation_failed` and known DynamoDB errors:
 `ConditionalCheckFailedException` → `conflict`, `TransactionCanceledException` with a

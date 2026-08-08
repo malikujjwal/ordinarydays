@@ -60,9 +60,14 @@ Error (`4xx`/`5xx`):
 ```
 
 Error codes are a closed enum in `packages/shared/src/errors.ts`:
-`unauthenticated`, `forbidden`, `not_found`, `validation_failed`, `conflict`,
-`rate_limited`, `series_limit_exceeded`, `participant_limit_exceeded`,
-`invite_expired`, `invite_revoked`, `internal`.
+`unauthenticated`, `forbidden`, `not_found`, `validation_failed`, `payload_too_large`,
+`conflict`, `rate_limited`, `series_limit_exceeded`, `participant_limit_exceeded`,
+`invite_expired`, `invite_revoked`, `not_implemented`, `upgrade_required`, `internal`.
+
+> **Amended in P0-13.** `payload_too_large` (413) was added because `tech-stack.md` §4.2
+> requires `bodyLimit` to reject an oversized body with 413 and no code mapped to it.
+> `not_implemented` (501) and `upgrade_required` (426) were already in `tech-stack.md` §4.4
+> but missing from this sentence.
 
 ### Pagination
 

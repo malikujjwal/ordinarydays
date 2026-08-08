@@ -2,7 +2,13 @@
  * The closed set of error codes the API may return.
  *
  * Canonical list: `docs/02-architecture/api-contract.md` §1, plus `not_implemented`
- * and `upgrade_required` from `docs/02-architecture/tech-stack.md` §4.4.
+ * and `upgrade_required` from `docs/02-architecture/tech-stack.md` §4.4, plus
+ * `payload_too_large` added in P0-13.
+ *
+ * `payload_too_large` closes a gap rather than adding a behaviour: `tech-stack.md` §4.2
+ * requires `bodyLimit` to reject an oversized body with **413**, and no code in the closed
+ * union mapped to 413. Without one, that rejection either leaves through a status the
+ * contract does not describe or through an envelope whose code says something untrue.
  *
  * The code → HTTP status table deliberately lives in `services/api/src/lib/errors.ts`,
  * not here: HTTP is a transport concern and `packages/shared` is imported by the client,
@@ -13,6 +19,7 @@ export const ERROR_CODES = [
   'forbidden',
   'not_found',
   'validation_failed',
+  'payload_too_large',
   'conflict',
   'rate_limited',
   'series_limit_exceeded',

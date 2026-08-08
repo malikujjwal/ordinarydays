@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src", "types": ["node"] },
-  "files": [],
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts"],
   "references": [{ "path": "../../packages/shared" }]
 }

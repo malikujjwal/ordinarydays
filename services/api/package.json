@@ -2,7 +2,23 @@
   "name": "@od/api",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "typecheck": "tsc -b"
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "dev": "tsx watch src/local.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.1106.0",
+    "@aws-sdk/lib-dynamodb": "3.1106.0",
+    "@od/shared": "workspace:*",
+    "hono": "4.13.1",
+    "pino": "9.14.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@hono/node-server": "1.19.17",
+    "vitest": "3.2.7"
   }
 }
