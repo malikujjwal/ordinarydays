@@ -6,7 +6,7 @@ import { corsMiddleware } from './middleware/cors.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { requestLogger } from './middleware/logger.js';
 import { requestId } from './middleware/requestId.js';
-import { routeSplit } from './middleware/routeSplit.js';
+import { assertRegistryMatchesRoutes, routeSplit } from './middleware/routeSplit.js';
 import { securityHeaders } from './middleware/securityHeaders.js';
 import { health } from './routes/health.js';
 
@@ -30,9 +30,11 @@ import { health } from './routes/health.js';
  * 6. `bodyLimit`      — before parsing, so a large body is never buffered
  * 7. `routeSplit`     — the one place public/private is decided
  *
- * **8–10 (`identity`, `rateLimit`, `idempotency`) do not exist in Phase 0.** They are
- * Phase 1, and they are absent rather than stubbed: a pass-through `identity` that sets no
- * user and blocks nothing looks like an implemented control while being none.
+ * **8–10 (`identity`, `rateLimit`, `idempotency`) do not exist yet.** They are P1-01, P1-03
+ * and P1-04, and they are absent rather than stubbed: a pass-through `identity` that sets no
+ * user and blocks nothing looks like an implemented control while being none. `routeSplit`
+ * already sets the `routeAuth` each of them will read, so mounting them is an insertion at
+ * position 8 and nothing here changes shape.
  */
 export interface AppOverrides {
   /** Reserved for P1-01's identity provider injection. Unused in Phase 0. */
@@ -57,6 +59,12 @@ export function createApp(_overrides: AppOverrides = {}): Hono<AppEnv> {
   // prefixes; this covers a known prefix with no handler. It goes through `errorHandler`
   // like everything else, so there is exactly one place that builds an error envelope.
   app.notFound((c) => errorHandler(new AppError('not_found', 'Not found.'), c));
+
+  // Every mounted route must have declared whether it needs an identity, and the registry
+  // must not claim routes that are gone. Asserted here, at construction, so a missing line
+  // fails the first test that builds an app rather than surfacing as a 501 — or worse, as an
+  // unauthenticated endpoint — long after the pull request that caused it (P1-30).
+  assertRegistryMatchesRoutes(app);
 
   return app;
 }

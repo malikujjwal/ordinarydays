@@ -1365,8 +1365,18 @@ into the registry every later route registers itself in. This is a refactor of o
 its test, done once, before the first Phase 1 route is written — not a line each of ten
 tasks adds to a growing `Set` while stepping on each other.
 
-**Files.** `services/api/src/middleware/routeSplit.ts`, `services/api/src/app.ts` (mounting
-order only), `services/api/src/middleware/routeSplit.test.ts`.
+**Files.** `services/api/src/middleware/routeRegistry.ts` (new — the registry),
+`services/api/src/middleware/routeSplit.ts` (the middleware), `services/api/src/app-env.ts`
+(the `routeAuth` context variable), `services/api/src/app.ts` (mounting plus the
+construction-time assertion), `services/api/src/middleware/routeSplit.test.ts`.
+
+> **Amended during implementation.** This section originally said "one registry, declared in
+> this file" and listed three files. The registry is a **separate module** because
+> `routeSplit.ts` imports `AppEnv` and `app-env.ts` imports `RouteAuth`: declaring the type
+> in either makes the two mutually dependent, and `dependency-cruiser`'s `no-circular` rule
+> rejects that — type-only imports included, deliberately. A leaf module both can import is
+> the fix, and it matches how `Logger` is already handled. `routeRegistry.ts` imports
+> nothing, which is the right shape for the file every later task appends to.
 
 **What is there now, and why it blocks.** Phase 0 shipped
 [`routeSplit`](../../services/api/src/middleware/routeSplit.ts) with three properties that
@@ -1384,8 +1394,8 @@ were correct for a one-endpoint service and are wrong for this phase:
    middleware would have to re-derive the public/private decision that this file exists to
    make in one place.
 
-**Approach.** One registry, declared in this file, that each route entry states its own
-authentication requirement in:
+**Approach.** One registry — in `routeRegistry.ts`, holding data and types and importing
+nothing — in which each route states its own authentication requirement:
 
 ```ts
 type RouteAuth = 'public' | 'authenticated' | 'unauthenticated-private';
@@ -1417,13 +1427,15 @@ silently 501 — see the tests.
 
 **Edge cases.**
 
-- The registry is one file that ten tasks append to, which makes it the third serial choke
-  point in this phase alongside `app.ts` and `keys.ts`. It is listed as such in
+- `routeRegistry.ts` is one file that ten tasks append to, which makes it the third serial
+  choke point in this phase alongside `app.ts` and `keys.ts`. It is listed as such in
   [`roadmap.md`](roadmap.md) §5.4 and
   [`../04-conventions/git-workflow.md`](../04-conventions/git-workflow.md) §6.2. **One entry
   per line, grouped by resource, in the order `api-contract.md` §2 lists them** — so two
   agents adding two routes conflict on adjacent lines, which Git resolves, rather than on a
-  reformatted block, which it does not.
+  reformatted block, which it does not. Note that this is an argument about *line proximity
+  and reviewability*, not about file size: Git does not care that the registry is small.
+  `routeSplit.ts` itself is stable — adding a route never edits it.
 - Do not let the registry become a second router. It answers one question per route — does
   this need identity — and never dispatches, never rewrites, never reorders.
 - `/v1/health` stays `unauthenticated-private` and stays the only member of that category in

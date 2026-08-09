@@ -49,6 +49,9 @@ ordinarydays/
 │     │  ├─ app.ts               Hono instance, middleware chain, route mounting.
 │     │  ├─ middleware/          requestId, logger, errorHandler, cors, securityHeaders,
 │     │  │                       bodyLimit, routeSplit, identity, rateLimit, idempotency
+│     │  │  └─ routeRegistry.ts  Every route + whether it needs an identity. Data and
+│     │  │                       types only, imports nothing. Adding a route adds a
+│     │  │                       line here, in the same PR (P1-30).
 │     │  ├─ routes/              One file per resource. Mirrors api-contract.md §2.
 │     │  │  ├─ me.ts  agenda.ts  activities.ts  participants.ts  attachments.ts
 │     │  │  ├─ lists.ts  people.ts  expenses.ts  notifications.ts  capture.ts

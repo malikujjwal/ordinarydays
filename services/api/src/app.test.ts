@@ -130,8 +130,17 @@ describe('bodyLimit', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ok: true }),
     });
-    // 404: the body was fine, there is simply no POST handler on /v1/health.
-    expect(res.status).toBe(404);
+    // What is under test is that the body was **not** rejected — anything but 413 proves
+    // bodyLimit passed it on to routing.
+    //
+    // The status is 501, and was 404 before P1-30. `POST /v1/health` matches no route, and
+    // Hono reports a method mismatch identically to a path that was never mounted: in both
+    // cases `matchedRoutes` contains only middleware. `routeSplit` therefore cannot tell
+    // "this path exists under another verb" from "this path does not exist", and applies the
+    // known-prefix rule — a path under `/v1/` that nothing handled is `not_implemented`.
+    // Distinguishing the two would need a second matcher over the route table, which is the
+    // one thing this middleware must not grow (P1-30).
+    expect(res.status).toBe(501);
   });
 });
 
