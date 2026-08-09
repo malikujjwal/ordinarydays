@@ -1,0 +1,47 @@
+import { zValidator } from '@hono/zod-validator';
+import { createActivityInput } from '@od/shared/schemas';
+import { Hono } from 'hono';
+import type { AppEnv } from '../app-env.js';
+import { createActivityHandler } from '../handlers/createActivity.js';
+
+/**
+ * `/v1/activities` (`api-contract.md` §2.3).
+ *
+ * One route in this phase. `GET`, `PATCH` and `DELETE /v1/activities/:id` are P1-12 to P1-14,
+ * `:id/duplicate` is P1-15 and the list query is P1-16; the scheduling, completion and
+ * occurrence routes are Phase 2. Each is absent rather than stubbed, so `routeSplit`'s
+ * `not_implemented` answers for it — the honest response for a path that is in the contract
+ * but not in this build.
+ *
+ * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise (P1-30).
+ * This one `creates`, so it takes an `Idempotency-Key`.
+ */
+
+/**
+ * `zValidator` with an explicit failure hook that **throws**, for the reason `me.ts` records:
+ * its default is to answer with its own body, which is not the contract envelope and never
+ * reaches `errorHandler`, so a client would get a `400` with no `error.code` and no
+ * `requestId`.
+ *
+ * **This is the line that enforces explicit intent on the wire.** `createActivityInput` is a
+ * discriminated union on `objectKind` with `strictObject` arms, so three different mistakes
+ * all become a `400` naming the field rather than a save that quietly did something else:
+ * a body with no target at all, a body with half a target, and a Task carrying participants.
+ * Nothing downstream has to defend against any of them (`CLAUDE.md` rule 2).
+ *
+ * It is also what refuses `listId`, `listItemId` and `fromListItem` on this endpoint: they
+ * are not in the schema, and only `POST /v1/lists/:id/items/:itemId/schedule` may establish
+ * that relationship, after list access has been checked (`api-contract.md` §2.3).
+ */
+const validateCreate = zValidator('json', createActivityInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+export const activities = new Hono<AppEnv>().post('/', validateCreate, (c) =>
+  /**
+   * `new Date()` at the edge. `coding-standards.md` §4.3 bans implicit-now inside pure logic
+   * and anything that has to be testable; the route is the boundary, so this is where the
+   * real clock is read and handed down as a value.
+   */
+  createActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+);

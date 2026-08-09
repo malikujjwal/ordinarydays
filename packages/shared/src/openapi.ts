@@ -1,6 +1,7 @@
 import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import type { OpenAPIObject } from 'openapi3-ts/oas31';
 import { z } from 'zod';
+import { activity, createActivityInput } from './schemas/activity.js';
 import {
   deletedDevice,
   device,
@@ -17,6 +18,8 @@ const userResponse = envelope(user);
 
 const deviceResponse = envelope(device);
 const deletedDeviceResponse = envelope(deletedDevice);
+
+const activityResponse = envelope(activity);
 
 /**
  * The OpenAPI document, generated from the **same Zod schemas both sides import**
@@ -184,6 +187,54 @@ registry.registerPath({
         'This user has no such device — whether the id was never theirs or the row is ' +
         'already gone. A retried sign-out `DELETE` lands here, and for that caller `404` ' +
         'means "already gone".',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * `/v1/activities` (P1-11). The registration that brings `Activity` and
+ * `CreateActivityInput` into `components/schemas`.
+ *
+ * `CreateActivityInput` renders as a `oneOf` on `objectKind`, which is the contract's
+ * explicit-intent rule made machine-readable: a generated client cannot construct a request
+ * body without a complete, valid target pair.
+ */
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities',
+  summary: 'Create a Task or a Plan',
+  description:
+    'Creates the object kind and type **the client chose** — both are required and neither ' +
+    'has a server default. Omitting either, sending an incompatible pair, or putting ' +
+    'participants on a Task is `400 validation_failed` naming the field; the same title ' +
+    'sent under two different targets produces two different objects, and nothing about ' +
+    'the words selects one. `status`, `visibility`, the counters, `scheduledAtUtc` and the ' +
+    'timestamps are all server-derived. Reminders belong to the creator alone. ' +
+    '`listId` and `listItemId` are not accepted here: only the list-scoped scheduling ' +
+    'endpoint may establish that relationship, after list access has been checked. ' +
+    'Creating, so an `Idempotency-Key` is required.',
+  tags: ['activities'],
+  request: {
+    body: {
+      content: { 'application/json': { schema: createActivityInput } },
+    },
+  },
+  responses: {
+    201: {
+      description: 'The created activity, echoing the target that was stored.',
+      content: { 'application/json': { schema: activityResponse } },
+    },
+    400: {
+      description:
+        'No target, half a target, an incompatible `details.kind`, a Task carrying ' +
+        'participants, more than three reminders, or a missing `Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description:
+        'A `parentActivityId` this caller has no relationship to — `404`, never `403`, so ' +
+        'guessing an id cannot confirm that it exists.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

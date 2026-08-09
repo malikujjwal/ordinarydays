@@ -34,13 +34,14 @@ describe('the generated document', () => {
   it('describes every endpoint registered so far', () => {
     // This assertion is what makes adding a route without registering it visible: the count
     // moves, and the person adding it has to say so. Saying so: **P1-07 added `/v1/me`**,
-    // whose `GET` and `PATCH` share one path entry, and **P1-08 added the two device
-    // paths** — the `POST` collection and the `DELETE` on one id, which are separate paths
-    // because only one of them is templated.
+    // whose `GET` and `PATCH` share one path entry; **P1-08 added the two device paths** —
+    // the `POST` collection and the `DELETE` on one id, separate because only one of them is
+    // templated; and **P1-11 added `/v1/activities`**.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
       '/v1/me/devices/{deviceId}',
+      '/v1/activities',
       '/v1/health',
     ]);
   });
@@ -61,20 +62,54 @@ describe('the generated document', () => {
   });
 
   /**
-   * `User` and `PatchUserInput` arrive with P1-07's paths and the three `Device` shapes with
-   * P1-08's, not before — a shape reaches `components/schemas` only when a registered path
-   * references it, which is the mechanism `openapi.ts` explains at length.
+   * `User` and `PatchUserInput` arrive with P1-07's paths, the three `Device` shapes with
+   * P1-08's, and `Activity`, `CreateActivityInput` and the two shapes they nest with P1-11's
+   * — a shape reaches `components/schemas` only when a registered path references it, which
+   * is the mechanism `openapi.ts` explains at length.
    */
   it('names its schemas as components instead of inlining them', () => {
     expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual([
+      'Activity',
+      'CreateActivityInput',
       'DeletedDevice',
       'Device',
       'ErrorResponse',
       'HealthResponse',
       'PatchUserInput',
+      'Recurrence',
       'RegisterDeviceInput',
+      'ReminderInput',
       'User',
     ]);
+  });
+
+  /**
+   * **The explicit-intent contract, made machine-readable.** `CreateActivityInput` is a
+   * discriminated union on `objectKind`, so a generated client cannot construct a body
+   * without a complete target pair — there is no arm with `objectKind` and no `type`, and
+   * none pairing `task` with a Plan kind (`CLAUDE.md` rule 2, `api-contract.md` §2.3).
+   *
+   * Asserted here rather than trusted, because the property survives only as long as the
+   * schema stays a union: flattening it to an object with optional fields, which is the shape
+   * a form store reaches for, would silently discard exactly this.
+   */
+  it('publishes the create body as a union on objectKind, not a flat object', () => {
+    const input = asSchema(
+      document.components?.schemas?.CreateActivityInput,
+      'CreateActivityInput',
+    );
+
+    expect(input.oneOf ?? input.anyOf).toHaveLength(2);
+
+    const arms = (input.oneOf ?? input.anyOf ?? []).map((arm) =>
+      asSchema(arm, 'CreateActivityInput arm'),
+    );
+
+    for (const arm of arms) {
+      expect(arm.required).toEqual(
+        expect.arrayContaining(['objectKind', 'type', 'title']),
+      );
+    }
   });
 
   it('references those components from the responses', () => {
