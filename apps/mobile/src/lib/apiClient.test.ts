@@ -13,6 +13,18 @@ async function load(expoConfig: Record<string, unknown> | undefined) {
   return import('@/lib/apiClient');
 }
 
+/**
+ * Longer than the 5-second default, because every case here re-imports a module graph.
+ *
+ * `vi.resetModules()` discards the transformed graph, so the next `import()` re-resolves
+ * `@/lib/apiClient` and everything under `@od/shared/client` from source. That is a few
+ * hundred milliseconds on an idle machine and several seconds in a loaded worker pool — the
+ * first case pays the cold cost, and it started timing out when this workspace's suite grew
+ * past 300 tests (P1-25). Nothing under test got slower; the budget was never realistic for
+ * what this file does between assertions.
+ */
+vi.setConfig({ testTimeout: 30_000 });
+
 const localConfig = (hostUri?: string) => ({
   version: '0.0.0',
   extra: { profile: 'local' },
