@@ -357,9 +357,21 @@ a status-code assertion and fails this one. The four completion routes (`complet
 
 ## 5. Component tests
 
-React Native Testing Library, run under Vitest with the jsdom environment and
-`react-native-web` aliased in for RN primitives. Test what a user perceives and what a
-screen reader announces — never internal state.
+`@testing-library/react`, run under Vitest with the jsdom environment and `react-native`
+aliased to `react-native-web`. Test what a user perceives and what a screen reader
+announces — never internal state.
+
+> **Corrected in P1-31.** This section previously said "React Native Testing Library … with
+> the jsdom environment and `react-native-web` aliased in", which is a hybrid of two
+> mutually exclusive setups. RNTL renders through `react-test-renderer` to a JavaScript
+> object tree: it uses neither jsdom nor `react-native-web`, its `fireEvent.press` has no
+> DOM equivalent, and it would still need `react-native`'s Flow-typed source transformed by
+> `@react-native/babel-preset`. The alias is the setup this repository uses — React Native
+> Web is a shipping target rather than a shim (ADR-001), so these tests exercise what the
+> web build actually serves, and it keeps one transform pipeline instead of two. The cost is
+> that component tests do not exercise the iOS host components; Maestro (P1-29) and the
+> physical-device criterion cover that, and a genuinely platform-divergent component belongs
+> in a `.ios.tsx`/`.web.tsx` pair from `tech-stack.md` §3.5.
 
 ```tsx
 it('completes the task from the checkbox without navigating', async () => {
@@ -367,12 +379,17 @@ it('completes the task from the checkbox without navigating', async () => {
   render(<AgendaRow item={aTaskItem({ title: 'Gym' })} onOpen={onOpen} />);
 
   const checkbox = screen.getByRole('checkbox', { name: 'Gym, not completed' });
-  fireEvent.press(checkbox);
+  fireEvent.click(checkbox);
 
   expect(completeMutation).toHaveBeenCalledWith(expect.objectContaining({ title: 'Gym' }));
   expect(onOpen).not.toHaveBeenCalled();      // interaction-contract.md U1: taps don't mutate
 });
 ```
+
+React Native's `onPress` arrives as a DOM `click` through `react-native-web`, so
+`fireEvent.click` — or `.click()` on the element — is what fires a press. The queries are
+unchanged: `accessibilityRole` and `accessibilityLabel` survive the translation into `role`
+and the accessible name, which is what keeps the rule below workable.
 
 Required coverage:
 

@@ -18,11 +18,12 @@
     "lint:fix": "biome check --write .",
     "depcruise": "depcruise --config .dependency-cruiser.cjs apps packages services infra",
     "check:forbidden": "node scripts/check-forbidden.mjs --all",
+    "check:versions": "syncpack list-mismatches",
     "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
     "gen:openapi:check": "pnpm gen:openapi && git diff --exit-code docs/generated/openapi.json",
     "e2e:web": "playwright test",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm depcruise && pnpm check:forbidden"
+    "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm depcruise && pnpm check:forbidden && pnpm check:versions"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",

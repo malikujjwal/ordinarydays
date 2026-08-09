@@ -1,6 +1,13 @@
 {
+  "//": [
+    "`.test.tsx` is excluded alongside `.test.ts`. This package emits — outDir, composite,",
+    "declaration — so a component test left in `include` compiles into `dist/` and ships",
+    "test code plus its type declarations to every consumer. The `.ts` half was already",
+    "excluded; P1-31 added the `.tsx` half before the first component test existed to be",
+    "caught by it."
+  ],
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist", "rootDir": "src" },
   "include": ["src/**/*"],
-  "exclude": ["src/**/*.test.ts"]
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

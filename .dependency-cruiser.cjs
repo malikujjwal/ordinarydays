@@ -191,6 +191,11 @@ module.exports = {
         orphan: true,
         pathNot: [
           '\\.(d\\.ts|config\\.(ts|js|cjs|mjs))$',
+          // Vitest setup files (P1-31). Referenced by string from `setupFiles` in a vitest
+          // config, so nothing *imports* them and the module graph cannot see the edge.
+          // Tightening `pathNot` is what this rule's own note prescribes over tolerating a
+          // permanent warning.
+          '(^|/)vitest\\.setup\\.ts$',
           // Entry points, which are orphans by definition: nothing in the repo imports the
           // Lambda handler, the dev server, the CDK app or a generation script.
           '^apps/mobile/app/',

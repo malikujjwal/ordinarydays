@@ -57,6 +57,15 @@ jobs:
       - name: Node versions agree
         run: node scripts/check-node-versions.mjs
 
+      # Dependency versions agree across workspaces. `syncpack` was installed in P0-06 and
+      # ran nowhere until P1-31 — the roadmap's R4 mitigation claimed it ran from Phase 0,
+      # and it did not. It is wired up here because P1-31 creates the second copy of React
+      # it exists to police: `packages/ui` now declares `react` and `react-native` alongside
+      # `apps/mobile`, and a drift between them produces invalid-hook-call errors that cost
+      # a day to diagnose (`tech-stack.md` §2.5).
+      - name: Dependency versions agree
+        run: pnpm run check:versions
+
       # `biome ci`, not `biome check` — it never writes, and it annotates the diff.
       - name: Lint and format
         run: pnpm exec biome ci .
