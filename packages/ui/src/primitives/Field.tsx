@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { TextInput, View } from 'react-native';
 import { useTheme } from '../theme/index';
+import type { TypeVariant } from '../theme/tokens';
 import { Text } from './Text';
 
 /**
@@ -26,6 +27,24 @@ export interface FieldProps {
   maxLength?: number;
   disabled?: boolean;
   onBlur?: () => void;
+  /**
+   * Keeps `label` as the accessible name but does not draw it.
+   *
+   * For a field that already sits under a `SectionHeader` saying the same word — the detail
+   * screen's `NOTES` section — where drawing it renders "NOTES" above "Notes". The label is
+   * never simply dropped: an input with no accessible name is invisible to a screen reader,
+   * so this hides the pixels and keeps the name.
+   */
+  hideLabel?: boolean;
+  /**
+   * `boxed` is the form control: a `surfaceRaised` fill and a radius. `bare` has neither, for
+   * text that is **content rather than input** — an inline-editable screen title, which
+   * `plans-and-lists.md` §2.1 renders as the header and not as a labelled form row. It still
+   * focuses, still commits on blur, and still shows its focus ring.
+   */
+  appearance?: 'boxed' | 'bare';
+  /** The type variant for the value. `body` unless the field *is* the screen's title. */
+  textVariant?: TypeVariant;
   testID?: string;
 }
 
@@ -42,16 +61,22 @@ export function Field({
   maxLength,
   disabled = false,
   onBlur,
+  hideLabel = false,
+  appearance = 'boxed',
+  textVariant = 'body',
   testID,
 }: FieldProps) {
   const theme = useTheme();
   const [focused, setFocused] = useState(false);
+  const bare = appearance === 'bare';
 
   return (
     <View style={{ gap: theme.space[2] }}>
-      <Text variant="footnoteStrong" color="textSecondary">
-        {required ? `${label} *` : label}
-      </Text>
+      {hideLabel ? null : (
+        <Text variant="footnoteStrong" color="textSecondary">
+          {required ? `${label} *` : label}
+        </Text>
+      )}
 
       <TextInput
         accessibilityLabel={label}
@@ -86,13 +111,17 @@ export function Field({
         }}
         testID={testID}
         style={[
-          theme.font('body'),
+          theme.font(textVariant),
           {
-            color: disabled ? theme.colors.textDisabled : theme.colors.textPrimary,
-            backgroundColor: theme.colors.surfaceRaised,
-            borderRadius: theme.radius.lg,
-            paddingHorizontal: theme.space[5],
-            paddingVertical: theme.space[4],
+            color: disabled
+              ? theme.colors.textDisabled
+              : bare
+                ? theme.colors.textDisplay
+                : theme.colors.textPrimary,
+            backgroundColor: bare ? 'transparent' : theme.colors.surfaceRaised,
+            borderRadius: bare ? theme.radius.none : theme.radius.lg,
+            paddingHorizontal: bare ? theme.space[0] : theme.space[5],
+            paddingVertical: bare ? theme.space[2] : theme.space[4],
             minHeight: multiline ? 96 : theme.layout.hitTarget,
             textAlignVertical: multiline ? 'top' : 'center',
             borderWidth: 1,

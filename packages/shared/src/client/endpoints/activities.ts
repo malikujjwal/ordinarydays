@@ -1,6 +1,12 @@
-import { activity, type CreateActivityInput } from '../../schemas/activity.js';
+import {
+  activity,
+  activityDetail,
+  type CreateActivityInput,
+  type PatchActivityInput,
+} from '../../schemas/activity.js';
 import { envelope } from '../../schemas/envelope.js';
 import type { Activity } from '../../types/activity.js';
+import type { ActivityDetail } from '../../types/activityDetail.js';
 import type { HttpClient } from '../http.js';
 
 /**
@@ -19,6 +25,7 @@ import type { HttpClient } from '../http.js';
  */
 
 export const activityResponse = envelope(activity);
+export const activityDetailResponse = envelope(activityDetail);
 
 /**
  * `POST /v1/activities`.
@@ -42,6 +49,61 @@ export function createActivity(
       schema: activityResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data as Activity);
+}
+
+/**
+ * `GET /v1/activities/:id`.
+ *
+ * One request, which is one DynamoDB Query over the `ACT#<id>` partition — the detail screen
+ * never fans out. `reminders` comes back already filtered to the caller by the server's
+ * projection; the client does not filter and must not be written as though it might need to.
+ */
+export function getActivity(
+  client: HttpClient,
+  activityId: string,
+  signal?: AbortSignal,
+): Promise<ActivityDetail> {
+  return client
+    .request({
+      method: 'GET',
+      path: `/v1/activities/${activityId}`,
+      schema: activityDetailResponse,
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data as ActivityDetail);
+}
+
+/**
+ * `PATCH /v1/activities/:id`.
+ *
+ * `ifMatch` is **required**, not optional, and it carries the activity's `updatedAt`.
+ *
+ * That is the whole optimistic-concurrency story and it only works if every caller sends it.
+ * An optional parameter would mean a `PATCH` that silently wins every race — the last writer
+ * overwriting an edit it never saw — and the failure is invisible: both writes return 200 and
+ * one person's change is simply gone. Making it a required positional argument means a caller
+ * that has not got a version cannot construct the call at all.
+ *
+ * A mismatch is `409 conflict`, which the caller handles per `activities.md` §6.1: refetch,
+ * re-apply non-overlapping fields, name the ones that were dropped.
+ */
+export function patchActivity(
+  client: HttpClient,
+  activityId: string,
+  input: PatchActivityInput,
+  ifMatch: string,
+  signal?: AbortSignal,
+): Promise<Activity> {
+  return client
+    .request({
+      method: 'PATCH',
+      path: `/v1/activities/${activityId}`,
+      schema: activityResponse,
+      body: input,
+      headers: { 'If-Match': ifMatch },
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as Activity);

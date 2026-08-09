@@ -1374,6 +1374,19 @@ condition. Playwright: fill and save one of each type on web.
 
 ### P1-26 — Activity detail screen: read and inline edit
 
+> **Built 2026-08-09. Four deviations, recorded rather than edited into the plan.**
+>
+> | # | What happened | Why |
+> | --- | --- | --- |
+> | 1 | **Expenses and Updates are absent, not disabled.** This section lists Expenses among the sections that render a disabled `Add …` affordance. | [`plans-and-lists.md`](../01-product/plans-and-lists.md) §2.2 hides Expenses below two participants and zero expenses, and hides Updates on a private plan with no entries — which in Phase 1 is every plan. Two canonical sources disagreed; resolved in favour of the product doc per [`agent-playbook.md`](../04-conventions/agent-playbook.md) §2, which ranks `01-product/*` above an implementation plan. People, Prep, Lists and Attachments *do* render disabled, as written. |
+> | 2 | **`ActivityDetail` is defined by this task**, in `packages/shared/src/types/activity.ts`, as `{ activity, reminders }`. It belongs to **P1-12**, which has not landed. | `api-contract.md` §2.3 described the response in prose and no schema existed. Six of the eight named collections have no schema, no key builder and no row anywhere yet; defining them would be inventing shapes against no implementation. The envelope is an object of named collections so each is **added** rather than redefined. P1-12 extends it. |
+> | 3 | **No two-pane layout at `expanded`.** [`design-system.md`](../04-conventions/design-system.md) §8 puts a left rail and a master/detail split at ≥ 1200 px. | Both are shell concerns — the rail replaces the tab bar and a list pane owns selection — and P1-23 built neither. The screen instead uses §8's stated `medium` fallback at every width above `compact`: a centred column at the mock's measure, pushing as a route. "Nothing is lost, only rearranged." |
+> | 4 | **`date-fns` added to `apps/mobile`**, and wall-date helpers live in `src/features/activity/model/dates.ts`. | Pre-justified in [`tech-stack.md`](../02-architecture/tech-stack.md) §2.2 but not installed; `coding-standards.md` §4.4 bans hand-rolled month arrays. `packages/shared/src/time/` and its injected `Clock` do not exist and no task owns them yet, so the helpers are local, pure, and take `today` as a parameter — they move to that module when it lands. |
+>
+> `GET`/`PATCH /v1/activities/:id` (P1-12, P1-13) are still unbuilt, so against the local API
+> the screen renders its §5.3 failure state. Every behaviour above is asserted against the
+> real shared schemas with a stubbed transport.
+
 **Files.** `apps/mobile/app/(app)/activity/[id].tsx`,
 `apps/mobile/src/features/activity/**`.
 

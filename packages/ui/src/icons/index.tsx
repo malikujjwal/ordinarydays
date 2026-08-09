@@ -169,6 +169,15 @@ export const Repeat = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+/** The `⋯` overflow control (`interaction-contract.md` U6). Three dots, never a chevron. */
+export const MoreHorizontal = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Circle cx={5} cy={12} r={1.4} stroke={color} {...stroke} />
+    <Circle cx={12} cy={12} r={1.4} stroke={color} {...stroke} />
+    <Circle cx={19} cy={12} r={1.4} stroke={color} {...stroke} />
+  </Frame>
+);
+
 /**
  * The Today tab. A sun rather than another calendar: Plans is already a calendar, and two
  * calendars side by side in a three-tab bar is two tabs a user cannot tell apart at a glance.

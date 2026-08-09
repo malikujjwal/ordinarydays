@@ -10,7 +10,7 @@ import {
 } from '../constants.js';
 import { cents, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
 import { recurrence } from './recurrence.js';
-import { reminderInput } from './reminder.js';
+import { reminder, reminderInput } from './reminder.js';
 
 /**
  * The Activity, its `details` union, and the create/patch inputs
@@ -290,6 +290,44 @@ export const createActivityInput = z
 export type CreateActivityInput = z.infer<typeof createActivityInput>;
 
 /**
+ * `GET /v1/activities/:id` (`api-contract.md` §2.3).
+ *
+ * ## This is Phase 1's subset, and it is additive by construction
+ *
+ * The contract describes the full response as "activity + participants + expenses + updates
+ * + attachments + children + **the caller's own reminders** + date suggestions". Six of those
+ * eight have no schema, no key builder and no row anywhere in the repository yet — they are
+ * Phase 3, 6 and 7. Defining them now would be inventing six shapes against no
+ * implementation, and the first task that wrote one would change them.
+ *
+ * So this names the two that exist, and every absent collection arrives as an **optional
+ * array added to this object** rather than as a redefinition. A client written against this
+ * keeps working when P6-xx adds `participants`; that is the whole reason the envelope is an
+ * object with named collections rather than a bare `Activity`.
+ *
+ * > **Owned by P1-12, defined here by P1-26.** P1-12 is the task that builds the endpoint and
+ * > it had not landed when the detail screen was written. Extending this is expected; changing
+ * > the two fields below is a contract break and needs the client changed with it.
+ *
+ * ## `reminders` is the caller's own, always
+ *
+ * The `REM#` rows for **every** participant live in the `ACT#<id>` partition that the single
+ * Query reads, so the handler must filter to `c.get('userId')` in the projection before
+ * serialising (`security-privacy.md` §1 row 15, ADR-047). That filter is a server obligation
+ * this schema cannot enforce — but naming the field `reminders` rather than something that
+ * sounds collective is the smallest thing that keeps a reader from assuming otherwise. A
+ * shared plan has one schedule and many reminder sets; nobody sees anybody else's, not even
+ * that they have any.
+ */
+export const activityDetail = z
+  .object({
+    activity,
+    /** The caller's own. Never anybody else's — see above. */
+    reminders: z.array(reminder),
+  })
+  .meta({ id: 'ActivityDetail' });
+
+/**
  * `PATCH /v1/activities/:id` (`api-contract.md` §2.3).
  *
  * Two things are load-bearing:
@@ -368,3 +406,11 @@ export const patchActivityInput = z
     }
   })
   .meta({ id: 'PatchActivityInput' });
+
+/**
+ * Inferred, like `CreateActivityInput`, and for a related reason: every field is optional
+ * here, but `objectKind` and `type` are optional **together** — the `superRefine` above
+ * rejects one without the other. A hand-written interface would express "both optional" and
+ * lose the pairing, which is the one thing this input exists to guarantee.
+ */
+export type PatchActivityInput = z.infer<typeof patchActivityInput>;

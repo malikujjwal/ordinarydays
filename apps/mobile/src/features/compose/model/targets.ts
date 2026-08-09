@@ -1,6 +1,7 @@
 import type { CreationTarget } from '@od/shared/client';
 import type { CreateActivityInput } from '@od/shared/schemas';
 import type { PlanType } from '@od/shared/types';
+import { planKindChoices, planKindLabel } from '@/lib/planKinds';
 
 /**
  * The chooser's vocabulary, and the mapping from a chosen target onto a request body
@@ -40,25 +41,13 @@ export const objectChoices: readonly Choice<ObjectChoice>[] = Object.freeze([
 ]);
 
 /**
- * `General`, `Meal`, `Watch`, `Event`, `Outing` — and **General is a real, visible choice**,
- * not the value used when nothing was selected. `custom` is its stored type.
+ * `General`, `Meal`, `Watch`, `Event`, `Outing`, in order.
+ *
+ * Re-exported from `@/lib/planKinds` rather than defined here: the detail screen renders the
+ * same labels, and a second feature importing this module is exactly what
+ * `no-cross-feature-imports` forbids. The reasoning for the move is written out there.
  */
-export const planKindChoices: readonly Choice<PlanType>[] = Object.freeze([
-  { value: 'custom', label: 'General' },
-  { value: 'meal', label: 'Meal' },
-  { value: 'watch', label: 'Watch' },
-  { value: 'event', label: 'Event' },
-  { value: 'outing', label: 'Outing' },
-]);
-
-const planKindLabels = new Map(planKindChoices.map((c) => [c.value, c.label]));
-
-/** The Plan kind's user-facing word. `custom` reads `General` everywhere, never `Custom`. */
-export function planKindLabel(type: PlanType): string {
-  const label = planKindLabels.get(type);
-  if (label === undefined) throw new Error(`Unknown plan kind: ${type as string}`);
-  return label;
-}
+export { planKindChoices, planKindLabel };
 
 /**
  * The header that stays visible on the form: `Task`, or `Plan · Watch`.

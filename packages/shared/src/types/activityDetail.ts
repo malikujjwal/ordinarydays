@@ -1,0 +1,40 @@
+import type { Activity } from './activity.js';
+import type { Reminder } from './reminder.js';
+
+/**
+ * What `GET /v1/activities/:id` returns (`api-contract.md` §2.3). Schema in
+ * `../schemas/activity.ts`; `activity.test.ts` pins the two together.
+ *
+ * ## Why this is its own file
+ *
+ * `reminder.test.ts` asserts that the word `reminders` **appears nowhere in
+ * `types/activity.ts`** — ADR-047's guard, written in the phase where there is nothing yet to
+ * leak, because that is the only time it is cheap to enforce. `Activity` has no `reminders[]`
+ * and must never grow one: reminders are per-user items in the Activity's partition, and
+ * merging them into the entity is how one user's reminders reach everybody on a shared plan
+ * in Phase 6.
+ *
+ * A *detail response* legitimately carries the caller's own, so the two live apart. Putting
+ * this next to `Activity` would have meant loosening a guard that is doing its job — the
+ * wrong trade, and the reason this file exists rather than an exception in that test.
+ *
+ * ## Additive by construction
+ *
+ * Phase 1 defines `{ activity, reminders }` because those are the only two that exist.
+ * `api-contract.md` §2.3 also names participants, expenses, updates, attachments, children
+ * and date suggestions; each arrives as an **optional field added here** rather than as a
+ * redefinition, so a client written against this keeps working when P6 adds `participants`.
+ * That is the whole reason the response is an object of named collections rather than a bare
+ * `Activity`.
+ *
+ * > **Owned by P1-12, defined by P1-26**, which needed it before the endpoint existed.
+ */
+export interface ActivityDetail {
+  /**
+   * The caller's own, filtered server-side in the projection before serialising
+   * (`security-privacy.md` §1 row 15). A shared plan has one schedule and many reminder
+   * sets; nobody sees anybody else's, not even that they have any.
+   */
+  reminders: Reminder[];
+  activity: Activity;
+}
