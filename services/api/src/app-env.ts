@@ -4,9 +4,11 @@ import type { RouteAuth } from './middleware/routeRegistry.js';
 /**
  * The typed context every middleware and handler shares.
  *
- * `userId` is declared here but is **not set by anything yet** — the `identity` middleware
- * is P1-01. It is typed as optional so that a handler reading it before that middleware
- * exists is a type error rather than an `undefined` that silently becomes a key.
+ * `userId` is set by the `identity` middleware at position 8 (P1-01), and **only on routes
+ * whose `routeAuth` is `authenticated`**. It stays optional for that reason: a `public` or
+ * `unauthenticated-private` route genuinely has no user, so a handler that reads it directly
+ * is a type error rather than an `undefined` that silently becomes a key. Handlers that need
+ * it call `requireUserId(c)` from `middleware/identity.ts`, which throws instead.
  */
 export interface AppEnv {
   Variables: {

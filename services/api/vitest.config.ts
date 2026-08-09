@@ -23,6 +23,14 @@ export default defineConfig({
      */
     env: {
       STAGE: 'local',
+      /**
+       * P1-01. No default in the schema, so the suite states it like any other environment.
+       * `local` is the only mode with an implementation; a test that needs the other one
+       * stubs the provider through `createApp({ identityProvider })` rather than switching
+       * modes, because the mode selects a provider and the provider is what behaviour hangs
+       * off.
+       */
+      AUTH_MODE: 'local',
       TABLE_NAME: 'od-main-local',
       MEDIA_BUCKET: 'od-media-local',
       WEB_ORIGINS: 'http://localhost:8081',
