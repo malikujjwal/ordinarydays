@@ -811,6 +811,151 @@ describe('deleting an activity', () => {
   });
 });
 
+/**
+ * `POST /v1/activities/:id/duplicate` (P1-15), against the real table.
+ *
+ * The unit suite proves the copy carries the right fields. What only a table proves is that
+ * the copy is a **second row with its own index entry**, that the original is untouched, and
+ * that the reminders on the original stay on the original.
+ */
+describe('duplicating an activity', () => {
+  const copy = (id: string, userId?: string) =>
+    asUser(userId).fetch(
+      new Request(`http://localhost/v1/activities/${id}/duplicate`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': crypto.randomUUID() },
+      }),
+    );
+
+  const watchPlan = async () =>
+    (
+      await (
+        await post({
+          objectKind: 'plan',
+          type: 'watch',
+          title: 'Severance',
+          notes: 'Start from the beginning',
+          location: { label: 'Living room' },
+          schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
+          reminders: [{ offsetMinutes: -15 }],
+          details: { kind: 'watch', mediaTitle: 'Severance', season: 2, episode: 4 },
+        })
+      ).json()
+    ).data;
+
+  it('creates a second activity, leaving the original exactly as it was', async () => {
+    const original = await watchPlan();
+
+    const res = await copy(original.activityId);
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.activityId).not.toBe(original.activityId);
+    expect(await repo.getActivityMeta(original.activityId)).toMatchObject({
+      title: 'Severance',
+      status: 'scheduled',
+    });
+  });
+
+  it('carries the content and drops the schedule', async () => {
+    const original = await watchPlan();
+
+    const body = await (await copy(original.activityId)).json();
+
+    expect(body.data).toMatchObject({
+      objectKind: 'plan',
+      type: 'watch',
+      title: 'Severance (copy)',
+      notes: 'Start from the beginning',
+      location: { label: 'Living room' },
+      details: { kind: 'watch', mediaTitle: 'Severance', season: 2, episode: 4 },
+      status: 'saved',
+    });
+    expect(body.data).not.toHaveProperty('schedule');
+  });
+
+  /**
+   * A reminder is an offset from a schedule the copy does not have. The original keeps its
+   * own — the two partitions are entirely separate.
+   */
+  it('writes no reminder on the copy and leaves the original’s alone', async () => {
+    const original = await watchPlan();
+
+    const body = await (await copy(original.activityId)).json();
+
+    const copied = await repo.getActivityPartition(body.data.activityId);
+    expect(copied.filter((row) => row.entity === 'Reminder')).toHaveLength(0);
+    expect(copied).toHaveLength(1);
+
+    const source = await repo.getActivityPartition(original.activityId);
+    expect(source.filter((row) => row.entity === 'Reminder')).toHaveLength(1);
+  });
+
+  /** Undated, so the copy lands in Needs a date while the original stays in Scheduled. */
+  it('gives the copy its own index entry, in the bucket its lack of a date implies', async () => {
+    const original = await watchPlan();
+
+    const body = await (await copy(original.activityId)).json();
+
+    const rows = await indexRows(DEV);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.activityId === original.activityId)?.gsi1pk).toBe(
+      `U#${DEV}#S`,
+    );
+    expect(rows.find((row) => row.activityId === body.data.activityId)?.gsi1pk).toBe(
+      `U#${DEV}#P`,
+    );
+  });
+
+  /** A prep task's copy is not a second prep task — structure is not content. */
+  it('does not attach the copy to the original’s parent plan', async () => {
+    const parent = (
+      await (await post({ objectKind: 'plan', type: 'custom', title: 'Trip' })).json()
+    ).data;
+    const child = (
+      await (
+        await post({ ...TASK, title: 'Book hotel', parentActivityId: parent.activityId })
+      ).json()
+    ).data;
+
+    const body = await (await copy(child.activityId)).json();
+
+    expect(body.data).not.toHaveProperty('parentActivityId');
+    expect(await repo.listChildPointers(parent.activityId)).toHaveLength(1);
+  });
+
+  it('404s another user’s activity, and writes nothing', async () => {
+    const theirs = (await (await post(TASK, { userId: OTHER })).json()).data;
+
+    const res = await copy(theirs.activityId, DEV);
+
+    expect(res.status).toBe(404);
+    expect(await indexRows(DEV)).toHaveLength(0);
+  });
+
+  /** A retried duplicate is the case the header exists for: one copy, not two. */
+  it('returns the first copy on a retry with the same key', async () => {
+    const original = await watchPlan();
+    const key = crypto.randomUUID();
+
+    const send = () =>
+      asUser().fetch(
+        new Request(`http://localhost/v1/activities/${original.activityId}/duplicate`, {
+          method: 'POST',
+          headers: { 'Idempotency-Key': key },
+        }),
+      );
+
+    const first = await (await send()).json();
+    const retry = await send();
+
+    expect(retry.status).toBe(200);
+    expect((await retry.json()).data.activityId).toBe(first.data.activityId);
+    // The original plus exactly one copy.
+    expect(await indexRows(DEV)).toHaveLength(2);
+  });
+});
+
 /** Two users' activities are invisible to each other, before Phase 4 makes it matter. */
 describe('tenant isolation', () => {
   it('gives each user their own index partition', async () => {

@@ -367,6 +367,38 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/duplicate',
+  summary: 'Copy an activity',
+  description:
+    'Copies `objectKind`, title, type, `details`, `location` and `notes` — and nothing ' +
+    'else. Schedule, reminders, participants, expenses, attachments, prep children, lists ' +
+    'and completion state are all left behind, each deliberately: re-inviting people is an ' +
+    'act the user must take, and a reminder is an offset from a schedule the copy does not ' +
+    'have. The copy belongs to the **caller**, is private, and carries no relationship to ' +
+    'the original. Its title is suffixed ` (copy)`. Takes no body. Creating, so an ' +
+    '`Idempotency-Key` is required.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+  },
+  responses: {
+    201: {
+      description: 'The copy, owned by the caller.',
+      content: { 'application/json': { schema: activityResponse } },
+    },
+    400: {
+      description: 'A missing `Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or none this caller has any relationship to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
   method: 'get',
   path: '/v1/health',
   summary: 'Liveness and build identity',

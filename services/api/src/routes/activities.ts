@@ -7,14 +7,18 @@ import {
   DELETE_ACTIVITY_PATH,
   deleteActivityHandler,
 } from '../handlers/deleteActivity.js';
+import {
+  DUPLICATE_ACTIVITY_PATH,
+  duplicateActivityHandler,
+} from '../handlers/duplicateActivity.js';
 import { GET_ACTIVITY_PATH, getActivityHandler } from '../handlers/getActivity.js';
 import { PATCH_ACTIVITY_PATH, patchActivityHandler } from '../handlers/patchActivity.js';
 
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Four routes in this phase: the create (P1-11), the detail read (P1-12), the partial update
- * (P1-13) and the delete (P1-14). `:id/duplicate` is P1-15 and the list
+ * Five routes in this phase: the create (P1-11), the detail read (P1-12), the partial update
+ * (P1-13), the delete (P1-14) and the duplicate (P1-15). The list
  * query is P1-16; the scheduling, completion and occurrence routes are Phase 2. Each is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
@@ -80,4 +84,10 @@ export const activities = new Hono<AppEnv>()
    * delete that half-succeeded fail on a row that is already gone, which is the opposite of
    * the idempotence P1-14 asks for.
    */
-  .delete(DELETE_ACTIVITY_PATH, deleteActivityHandler);
+  .delete(DELETE_ACTIVITY_PATH, deleteActivityHandler)
+  /**
+   * Mounted after `/:id`, and the order does not matter to Hono — `/:id/duplicate` has more
+   * segments, so it cannot be shadowed by the bare `/:id` routes above. Kept last to match
+   * the order `api-contract.md` §2.3 lists them in.
+   */
+  .post(DUPLICATE_ACTIVITY_PATH, duplicateActivityHandler);

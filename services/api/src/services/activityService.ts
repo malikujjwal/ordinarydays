@@ -4,6 +4,7 @@ import {
   type ChangeTarget,
   changeActivityKind,
 } from '@od/shared';
+import { MAX_TITLE_LEN } from '@od/shared/constants';
 import type { CreateActivityInput, PatchActivityInput } from '@od/shared/schemas';
 import type {
   Activity,
@@ -538,6 +539,89 @@ function nullable<K extends keyof PatchActivityInput>(
   ...fields: K[]
 ): Record<string, unknown> {
   return pick(patch, ...fields);
+}
+
+/** The suffix `activities.md` §7.1 specifies, so the copy is distinguishable at a glance. */
+const COPY_SUFFIX = ' (copy)';
+
+/**
+ * `<title> (copy)`, trimmed to fit.
+ *
+ * A 200-character title plus the suffix is 207 and the schema's bound is 200, so the copy of
+ * a maximum-length activity would be unsaveable. The base is truncated rather than the suffix
+ * dropped: the suffix is what tells the user which one is the copy, and losing the tail of a
+ * long title is the smaller loss. No doc covers this; it is called out here and in the commit
+ * because it is a choice rather than a transcription.
+ */
+function copyTitle(title: string): string {
+  const room = MAX_TITLE_LEN - COPY_SUFFIX.length;
+  return `${title.length <= room ? title : title.slice(0, room).trimEnd()}${COPY_SUFFIX}`;
+}
+
+/**
+ * Copies an activity, behind `POST /v1/activities/:id/duplicate` (P1-15).
+ *
+ * ## What is copied, and what deliberately is not
+ *
+ * `activities.md` §7.1 is exhaustive: `objectKind`, `title`, `type`, `details`, `location` and
+ * `notes`. Everything else is left behind, and the two decisions there say why it is a
+ * decision rather than an omission.
+ *
+ * **Participants are dropped** because re-inviting people is a deliberate act, and silently
+ * re-inviting on duplicate would send unexpected notifications to people who were never asked.
+ *
+ * **Reminders, prep children and lists are dropped** (decision 2026-08-07). A reminder is an
+ * offset from a schedule and the copy has no schedule, so copying them would produce a
+ * reminder in a dateless state the UI itself forbids. Prep children and lists "are structure,
+ * not content, and copying them would quietly multiply real to-dos and list rows, which is
+ * auto-creation by another name" — the principle in `overview.md` §4.4, applied to a feature
+ * that looks harmless.
+ *
+ * `recurrence`, `sourceUrl`, `parentActivityId` and the list pointers are not on the copy list
+ * either, so they do not survive. A recurrence with no schedule would be a series with no
+ * anchor; a `parentActivityId` would make the copy a second prep task on somebody's plan,
+ * which is the prep-children rule arriving from the other direction.
+ *
+ * ## Who may duplicate
+ *
+ * `read`. The copy belongs to the **caller**, carries no participants and has no relationship
+ * to the original, so copying something you can see costs its owner nothing. `api-contract.md`
+ * §2.3 leaves this row's notes empty — unlike `DELETE`, which it marks owner-only — so this is
+ * the reading rather than a transcription, and it is flagged in the pull request.
+ */
+export async function duplicateActivity(
+  userId: string,
+  activityId: string,
+  now: string,
+): Promise<Activity> {
+  const { activity: source } = await assertActivityAccess(userId, activityId, 'read');
+
+  const copy: Activity = {
+    activityId: newActivityId(),
+    /** The **caller** owns the copy, not whoever owned the original. */
+    ownerId: userId,
+    /** No schedule, so `saved` — and completion state is not copied, so never terminal. */
+    status: 'saved',
+    objectKind: source.objectKind,
+    type: source.type,
+    title: copyTitle(source.title),
+    ...(source.notes === undefined ? {} : { notes: source.notes }),
+    ...(source.location === undefined ? {} : { location: source.location }),
+    details: source.details,
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: now,
+    updatedAt: now,
+    schemaVersion: 1,
+  } as Activity;
+
+  // No `reminders` option: the copy has no schedule to offset one from.
+  await putActivity(userId, copy);
+
+  return copy;
 }
 
 /**

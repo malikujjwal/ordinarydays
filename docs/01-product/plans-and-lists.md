@@ -51,7 +51,7 @@ that choice.
 | From a pasted link | Choose Task or Plan and, for Plan, its kind → Link | Compatible reviewed fields + `sourceUrl` |
 | **From a list item** | List item → `Plan this item` → explicit Plan kind and audience | Title plus Activity `listId` / `listItemId` provenance, established only by the list-scoped endpoint (§6). The list's name, template, behaviour, and item words never select or pre-select kind. |
 | From a person | Person view → `Plan something with Alice` | Alice as a participant |
-| Duplicate | Plan overflow → Duplicate | Everything except schedule, participants, expenses, attachments ([`activities.md`](activities.md#71-quick-add-behaviours)) |
+| Duplicate | Plan overflow → Duplicate | `objectKind`, title, type, `details`, `location` and `notes` — and nothing else ([`activities.md`](activities.md#71-quick-add-behaviours) §7.1, which is authoritative). **Amended in P1-15:** this row read "everything except schedule, participants, expenses, attachments", which predates the 2026-08-07 decision adding reminders, prep children and lists to the drop list — so read alone it implied reminders survived. Stated as what *is* copied rather than what is not, since that list is short and closed and cannot go stale the same way. |
 | From an invitation | Accepting an in-app invite | Nothing is created; an `ActivityIndex` entry is added for the invitee |
 
 ### 1.2 Where an explicitly chosen object with no date appears

@@ -43,6 +43,7 @@ describe('the generated document', () => {
       '/v1/me/devices/{deviceId}',
       '/v1/activities',
       '/v1/activities/{id}',
+      '/v1/activities/{id}/duplicate',
       '/v1/health',
     ]);
   });
