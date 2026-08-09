@@ -1,6 +1,15 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+/**
+ * Imported statically, not with `await import()`.
+ *
+ * The barrel pulls in every primitive and, under coverage instrumentation, that dynamic
+ * import took over five seconds and timed out — a slow import reported as a broken one. A
+ * static import proves the same thing (the whole graph resolves and the surface is there)
+ * and is paid once at collection.
+ */
+import * as barrel from './index';
 
 /**
  * `packages/ui` has the strictest "never" column in the repository (`repo-structure.md`
@@ -37,8 +46,21 @@ function code(source: string): string {
 }
 
 describe('the ui package barrel', () => {
-  it('resolves', async () => {
-    await expect(import('@od/ui')).resolves.toBeDefined();
+  /**
+   * Imported by relative path rather than by package name.
+   *
+   * `@od/ui`'s exports map points at `./src/index.ts`, and resolving the package by name from
+   * inside itself makes Vite treat it as an external dependency and hand the raw TypeScript
+   * to Node — which parsed fine while the barrel was `export {}` and stopped the moment it
+   * had types in it. The relative path goes through the transform, which is what actually
+   * exercises the barrel.
+   */
+  it('resolves, and exports the theme and the primitives', () => {
+    expect(barrel.ThemeProvider).toBeDefined();
+    expect(barrel.Button).toBeDefined();
+    expect(barrel.Text).toBeDefined();
+    expect(barrel.space).toBeDefined();
+    expect(barrel.ratioOf).toBeDefined();
   });
 });
 
@@ -76,10 +98,60 @@ describe('what must never enter ui (repo-structure.md §2.2)', () => {
     ['navigation — a primitive never navigates', /from\s+['"]expo-router['"]/],
     ['an AWS SDK client', /from\s+['"]@aws-sdk\//],
     ['fetch', /\bfetch\s*\(/],
-    // design-system.md §9: colour, spacing, radius and font size come from tokens only.
-    ['a hard-coded colour', /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/],
   ])('contains no reference to %s', (_label, pattern) => {
     const offenders = files.filter((f) => pattern.test(code(readFileSync(f, 'utf8'))));
+    expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The token rule (`design-system.md` §10), stated the way the design system actually states
+ * it.
+ *
+ * The original assertion was "no hex anywhere in `packages/ui`", which was true while the
+ * package was an empty barrel and became wrong the moment it had a theme: §10's own
+ * enforcement table says *"the theme is the only export path for values; **ramps are
+ * module-private in `theme/colors.ts`**"* — so hexes live there by design, and the rule is
+ * that **nothing outside `theme/` may contain one**.
+ *
+ * Corrected in P1-22 to say that, which is both true and stronger: it now catches a
+ * component reaching for a raw colour, which is the failure the rule is about, rather than
+ * catching the theme for doing its job.
+ */
+describe('the token rule (design-system.md §10)', () => {
+  const files = sourceFiles(join(import.meta.dirname, '.'));
+  const colour = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/;
+  const isTheme = (path: string) => path.replaceAll('\\', '/').includes('/src/theme/');
+
+  it('confines every raw colour to theme/', () => {
+    const offenders = files
+      .filter((f) => !isTheme(f))
+      .filter((f) => colour.test(code(readFileSync(f, 'utf8'))))
+      .map((f) => f.replaceAll('\\', '/').split('/src/')[1]);
+
+    expect(offenders).toEqual([]);
+  });
+
+  /** Guards the guard: the check is worthless if `theme/` turned out to hold no colours. */
+  it('and theme/ is where they actually are', () => {
+    const withColour = files
+      .filter(isTheme)
+      .filter((f) => colour.test(code(readFileSync(f, 'utf8'))));
+
+    expect(withColour.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The other half of §10: no inline numeric spacing, radius or font size outside the theme.
+   * A component that wrote `padding: 14` would be inventing a value the scale does not have.
+   */
+  it('confines inline spacing, radius and font sizes to theme/', () => {
+    const magic = /\b(padding|margin|fontSize|borderRadius)\s*:\s*\d+/;
+    const offenders = files
+      .filter((f) => !isTheme(f))
+      .filter((f) => magic.test(code(readFileSync(f, 'utf8'))))
+      .map((f) => f.replaceAll('\\', '/').split('/src/')[1]);
+
     expect(offenders).toEqual([]);
   });
 });

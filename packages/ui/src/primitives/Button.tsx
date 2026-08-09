@@ -1,0 +1,126 @@
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, View } from 'react-native';
+import type { IconProps } from '../icons/index';
+import { accentGlow } from '../theme/elevation';
+import { useTheme } from '../theme/index';
+import { Text } from './Text';
+import { Touchable } from './Touchable';
+
+/**
+ * `design-system.md` §6.
+ *
+ * `primary` is the accent pill carrying the mock's `eAccent` glow — the one surface in the
+ * product that gets it, which is what makes the single primary action on a screen read as the
+ * single primary action.
+ */
+
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+
+export interface ButtonProps {
+  label: string;
+  onPress?: () => void;
+  variant?: ButtonVariant;
+  size?: 'md' | 'lg';
+  icon?: (props: IconProps) => React.ReactElement;
+  loading?: boolean;
+  disabled?: boolean;
+  fullWidth?: boolean;
+  testID?: string;
+}
+
+export function Button({
+  label,
+  onPress,
+  variant = 'primary',
+  size = 'md',
+  icon: Icon,
+  loading = false,
+  disabled = false,
+  fullWidth = false,
+  testID,
+}: ButtonProps) {
+  const theme = useTheme();
+
+  /**
+   * The spinner appears only after 400 ms. A button that flashes a spinner for one frame on
+   * a fast response reads as a glitch, not as progress.
+   */
+  const [showSpinner, setShowSpinner] = useState(false);
+  useEffect(() => {
+    if (!loading) {
+      setShowSpinner(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowSpinner(true), 400);
+    return () => clearTimeout(timer);
+  }, [loading]);
+
+  const inactive = disabled || loading;
+
+  const palette = {
+    primary: { bg: theme.colors.accent, fg: 'inverse' as const, border: 'transparent' },
+    secondary: {
+      bg: theme.colors.surfaceRaised,
+      fg: 'textPrimary' as const,
+      border: theme.colors.border,
+    },
+    ghost: { bg: 'transparent', fg: 'accent' as const, border: 'transparent' },
+    danger: { bg: theme.colors.danger, fg: 'inverse' as const, border: 'transparent' },
+  }[variant];
+
+  return (
+    <Touchable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: inactive, busy: loading }}
+      disabled={inactive}
+      onPress={onPress}
+      testID={testID}
+      style={[
+        {
+          height: size === 'lg' ? 52 : theme.layout.hitTarget,
+          paddingHorizontal: theme.space[6],
+          borderRadius: theme.radius.pill,
+          backgroundColor: palette.bg,
+          borderWidth: variant === 'secondary' ? 1 : 0,
+          borderColor: palette.border,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: theme.space[3],
+          alignSelf: fullWidth ? 'stretch' : 'flex-start',
+        },
+        // The accent glow, defined once and used nowhere else.
+        variant === 'primary' && !inactive ? ({ boxShadow: accentGlow } as object) : null,
+        inactive ? { opacity: 0.45 } : null,
+      ]}
+    >
+      {showSpinner ? (
+        <ActivityIndicator
+          size="small"
+          color={
+            palette.fg === 'inverse' ? theme.colors.textInverse : theme.colors.accent
+          }
+        />
+      ) : (
+        <>
+          {Icon === undefined ? null : (
+            <Icon
+              size={20}
+              color={
+                palette.fg === 'inverse'
+                  ? theme.colors.textInverse
+                  : theme.colors[palette.fg === 'accent' ? 'accent' : 'textPrimary']
+              }
+            />
+          )}
+          <View>
+            <Text variant="bodyStrong" color={palette.fg}>
+              {label}
+            </Text>
+          </View>
+        </>
+      )}
+    </Touchable>
+  );
+}

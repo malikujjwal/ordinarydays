@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 /**
@@ -28,14 +29,51 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   resolve: {
-    // Anchored, so `react-native-web` is not itself rewritten to `react-native-web-web`.
-    // `apps/mobile` uses the same form and the same reasoning.
-    alias: [{ find: /^react-native$/, replacement: 'react-native-web' }],
+    alias: [
+      // Anchored, so `react-native-web` is not itself rewritten to `react-native-web-web`.
+      // `apps/mobile` uses the same form and the same reasoning.
+      { find: /^react-native$/, replacement: 'react-native-web' },
+      /**
+       * `react-native-svg` is stubbed under test, not resolved.
+       *
+       * It declares `"react-native": "src/index.ts"`, so under the condition this config
+       * puts us on it resolves to **untranspiled TypeScript** and Node fails to parse it;
+       * its published `lib/module` build then fails differently. Either way the error
+       * surfaces as a barrel that will not import, several files from the cause, saying
+       * nothing about SVG.
+       *
+       * A stub is the right answer rather than a workaround: **nothing in this suite asserts
+       * SVG rendering.** The icon tests assert that a control has the right role and
+       * accessible name, that a tile is hidden from assistive tech, and that a disabled
+       * button does not fire — none of which depends on a real `<path>`. The shapes
+       * themselves are reviewed in the token gallery, in a browser, where the real library
+       * loads through Metro.
+       */
+      {
+        find: /^react-native-svg$/,
+        replacement: fileURLToPath(new URL('./test/svg-stub.tsx', import.meta.url)),
+      },
+    ],
   },
   test: {
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
+    server: {
+      deps: {
+        /**
+         * `react-native-svg` publishes untranspiled source under the `react-native`
+         * condition, and the alias in `resolve` puts us on that condition. Left external,
+         * Node parses its TypeScript and fails with `Unexpected token 'typeof'` — which
+         * presents as a barrel that will not import, several files away from the cause.
+         *
+         * Inlining hands it to Vite's transform instead. Added in P1-22, the first task to
+         * import an icon: the packages already here (`react-native-web`) ship compiled
+         * JavaScript and needed nothing.
+         */
+        inline: ['react-native-svg'],
+      },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'html', 'lcov'],
