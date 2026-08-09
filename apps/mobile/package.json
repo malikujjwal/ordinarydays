@@ -14,6 +14,7 @@
     "@expo/metro-runtime": "6.1.2",
     "@od/shared": "workspace:*",
     "@od/ui": "workspace:*",
+    "@react-native-community/datetimepicker": "8.4.4",
     "@tanstack/react-query": "5.101.4",
     "date-fns": "4.1.0",
     "expo": "54.0.36",

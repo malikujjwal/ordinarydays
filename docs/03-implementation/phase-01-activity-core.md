@@ -1198,6 +1198,19 @@ as soon as it happens.
 > a test environment in this task.** If `Button.test.tsx` does not run when you start,
 > P1-31 has not landed and this task is not ready.
 
+> **Completed 2026-08-09. Four deviations, recorded rather than edited into the plan.**
+>
+> | # | What happened | Why |
+> | --- | --- | --- |
+> | 1 | **The inventory built is `design-system.md` §6's, not the file list below.** No `Stack`, `Select` or `Divider`; `TextField` shipped as `Field`, and `Toast`/`Skeleton` live in `Feedback.tsx` beside `SectionHeader` and `EmptyState`. `Avatar`, `AvatarStack`, `Card`, `IconButton`, `IconTile`, `ProgressBar`, `SegmentedControl`, `Touchable`, `DatePicker` and `TimePicker` are here and are not below. | The list below predates the 2026-08-08 visual refresh. [`design-system.md`](../04-conventions/design-system.md) §6 declares itself canonical for primitives and outranks an implementation plan ([`agent-playbook.md`](../04-conventions/agent-playbook.md) §2), so it is what was built. `Stack` and `Divider` have no §6 row and no screen has asked for one — a `View` with a `gap` token is the stack, and the timeline's connector is a `Row` concern. Raised with the founder before anything was written rather than resolved inside the diff. |
+> | 2 | **The date chips are `activities.md` §3.4's five**, not `design-system.md` §6's three. | Two canonical docs disagreed. The product doc owns behaviour and wins; §6's row was amended in the same pull request so it no longer names a subset. |
+> | 3 | **Breakpoints live in `theme/tokens.ts`, not `theme/breakpoints.ts`**, and there is no `theme/typography.ts` — the nine type roles are `tokens.ts`'s `type`. | `tech-stack.md` §3.5 and `repo-structure.md` §1 both name `breakpoints.ts`. Left as built: the values are three lines, `useBreakpoint()` is exported from the theme barrel exactly as those docs describe, and moving a file four merged branches already import through the barrel is churn with nothing visible at the other end. Recorded so the next agent does not go looking for the file. |
+> | 4 | **`Chip` gained `aria-pressed`.** | Found when `DatePicker`'s chips needed to say *which* date was chosen: React Native Web drops `accessibilityState.selected` on `role="button"`, so a selected filter chip announced nothing and its selection rested on the accent fill alone — which `design-system.md` §5.1 forbids. One attribute, one test. |
+>
+> The token gallery is `apps/mobile/app/(app)/gallery.tsx`, `__DEV__`-gated: every primitive
+> in every state, both schemes side by side. That is the surface §5.1 asks to be eyeballed
+> before screens are built on the derived dark values.
+
 **Files.** `packages/ui/src/primitives/{Text,Stack,Button,Row,Checkbox,Sheet,TextField,
 Select,Chip,Toast,Skeleton,Divider}.tsx`,
 `packages/ui/src/theme/{tokens,breakpoints,typography}.ts`.

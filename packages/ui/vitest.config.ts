@@ -53,6 +53,45 @@ export default defineConfig({
         find: /^react-native-svg$/,
         replacement: fileURLToPath(new URL('./test/svg-stub.tsx', import.meta.url)),
       },
+      /**
+       * `@react-native-community/datetimepicker` is stubbed for a different reason from
+       * `react-native-svg`: it is a **native module**. On iOS it renders a real
+       * `UIDatePicker`, so there is nothing for jsdom to render even in principle. The wheel
+       * is asserted by Maestro on the simulator (P1-29).
+       *
+       * Only the fork-parity test reaches it — everything else resolves
+       * `pickerSurface.web.tsx` through `extensions` below. Added in P1-22.
+       */
+      {
+        find: /^@react-native-community\/datetimepicker$/,
+        replacement: fileURLToPath(
+          new URL('./test/datetimepicker-stub.tsx', import.meta.url),
+        ),
+      },
+    ],
+    /**
+     * **`.web.tsx` resolves first, exactly as the web bundler does** (`tech-stack.md` §3.5).
+     *
+     * Without this, an extensionless `./pickerSurface` would resolve to the native fork and
+     * the suite would be asserting the one build no browser ever loads — while Playwright,
+     * the token gallery and the deployed web app all run the other one. The alias to
+     * `react-native-web` at the top of this file already committed this workspace to testing
+     * the web target; this makes platform-forked files follow the same rule instead of
+     * quietly diverging from it.
+     *
+     * The remaining entries are Vite's defaults, restated because supplying `extensions` at
+     * all replaces them.
+     */
+    extensions: [
+      '.web.tsx',
+      '.web.ts',
+      '.mjs',
+      '.js',
+      '.mts',
+      '.ts',
+      '.jsx',
+      '.tsx',
+      '.json',
     ],
   },
   test: {

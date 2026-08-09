@@ -339,8 +339,8 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
 | `Sheet` | `open`, `onClose`, `title?`, `detents` (`['medium','large']`), `dismissible` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. |
 | `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `maxLength` | default, focused, filled, error, disabled. `surfaceRaised` fill, `radius.lg`, no visible border until focus. |
-| `DatePicker` | `value` (`WallDate \| null`), `onChange`, `min?`, `max?`, `quickOptions` (`Today`, `Tomorrow`, `This weekend`) | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
-| `TimePicker` | `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear` | default, open, cleared (meaning "anytime that day") |
+| `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
+| `TimePicker` | `label`, `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear`, `openAt?`, `disabled` | default, open, cleared (meaning "anytime that day") |
 | `Checkbox` | `checked`, `onChange`, `label` (accessible name), `disabled` | unchecked (borderStrong ring), checked (olive fill, white check, spring), disabled, focus-visible. 44 × 44 target, 24 × 24 visual. |
 | `Avatar` | `displayName`, `imageUrl?`, `size` (`sm` 24 \| `md` 28 \| `lg` 48) | image, **tinted-initials fallback** (two letters, `footnoteStrong`, disc filled with a stable per-person tint drawn from the `*Surface` family), loading |
 | `AvatarStack` | `people`, `max` (4), `size` | Renders up to `max` overlapped by 6 pt plus a `+n` disc. Non-interactive on rows. |
@@ -352,6 +352,18 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 
 Two rules for all of them: every interactive primitive has a minimum 44 × 44 hit target
 regardless of its visual size, and none of them reads the API or the navigation stack.
+
+> **Amended 2026-08-09 (P1-22), two rows.** `DatePicker`'s `quickOptions` listed three chips
+> where [`../01-product/activities.md`](../01-product/activities.md) §3.4 lists five —
+> `Today`, `Tomorrow`, `This weekend`, `Next week`, `Pick a date`. The product doc owns
+> behaviour and wins ([`agent-playbook.md`](agent-playbook.md) §2), so the component ships
+> all five and this table no longer names a subset.
+>
+> Both pickers also take a **`today`** / **`openAt`** value rather than reading a clock.
+> `packages/ui` has no time source by design: a primitive that called `new Date()` would
+> resolve `This weekend` differently under test than on a device, which is the failure
+> [`coding-standards.md`](coding-standards.md) §11 smell 6 names. The screen supplies the
+> user's own wall date in their own zone, because it is the only layer that knows it.
 
 ---
 

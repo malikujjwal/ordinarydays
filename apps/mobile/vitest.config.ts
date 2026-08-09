@@ -52,6 +52,26 @@ export default defineConfig({
         replacement: fileURLToPath(new URL('./src/', import.meta.url)),
       },
     ],
+    /**
+     * `.web.tsx` resolves first, as it does in the web bundler and in `packages/ui`'s config
+     * — where the full reasoning is written out. Needed here from P1-22 on: `@od/ui`'s barrel
+     * reaches a platform-forked file (`pickerSurface`), and a screen test that resolved the
+     * native fork would be loading a native module jsdom cannot render.
+     *
+     * The remaining entries are Vite's defaults, restated because supplying `extensions` at
+     * all replaces them.
+     */
+    extensions: [
+      '.web.tsx',
+      '.web.ts',
+      '.mjs',
+      '.js',
+      '.mts',
+      '.ts',
+      '.jsx',
+      '.tsx',
+      '.json',
+    ],
   },
   define: {
     /**

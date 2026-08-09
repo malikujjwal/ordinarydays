@@ -82,6 +82,16 @@ export function Chip({
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected, disabled }}
+      /**
+       * The web half of the same statement. React Native Web drops
+       * `accessibilityState.selected` on `role="button"` — it maps it only for roles where
+       * `aria-selected` is legal — so a selected filter chip announced nothing and its
+       * selection was carried by the accent fill alone. Colour is never the only carrier of
+       * meaning (`design-system.md` §5.1), and `aria-pressed` is the attribute ARIA gives a
+       * toggle button. Found in P1-22 when `DatePicker`'s chips had no way to say which date
+       * was chosen.
+       */
+      aria-pressed={selected}
       disabled={disabled}
       onPress={onPress}
       testID={testID}

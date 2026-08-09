@@ -257,6 +257,18 @@ describe('accessibility details that are easy to get wrong', () => {
     expect(screen.getByText('A title is required')).toBeDefined();
   });
 
+  /**
+   * A selected filter chip has to say so, not just look so (`design-system.md` §5.1). React
+   * Native Web drops `accessibilityState.selected` on `role="button"`, so `Chip` states it as
+   * `aria-pressed` — the attribute ARIA gives a toggle button — as well.
+   */
+  it('a selected Chip announces its state, not only its accent fill', () => {
+    wrap(<Chip label="Personal" selected onPress={() => {}} />);
+    expect(
+      screen.getByRole('button', { name: 'Personal' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
   it('AvatarStack names everyone once, rather than four focus stops', () => {
     wrap(
       <AvatarStack

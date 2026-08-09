@@ -13,6 +13,7 @@ import {
   Clock,
   type ColorScheme,
   colors,
+  DatePicker,
   Diamond,
   EmptyState,
   Field,
@@ -33,11 +34,15 @@ import {
   Text,
   ThemeProvider,
   Ticket,
+  TimePicker,
   Toast,
   type,
   typeAccents,
   useTheme,
+  type WallDate,
+  type WallTime,
 } from '@od/ui';
+import { format } from 'date-fns';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 
@@ -100,11 +105,21 @@ function Swatch({ name, value, on }: { name: string; value: string; on: string }
   );
 }
 
+/**
+ * The gallery's "today". Read once at module load rather than per render, because a value
+ * that changed mid-session would make the date chips disagree with themselves — and because
+ * this is the one place in the repository allowed to ask what day it is on the client's
+ * behalf: `DatePicker` takes `today` as a prop precisely so it never has to.
+ */
+const TODAY: WallDate = format(new Date(), 'yyyy-MM-dd');
+
 function Gallery({ scheme }: { scheme: ColorScheme }) {
   const theme = useTheme();
   const [checked, setChecked] = useState(true);
   const [segment, setSegment] = useState(0);
   const [text, setText] = useState('Dinner at Zahav');
+  const [date, setDate] = useState<WallDate | null>(null);
+  const [time, setTime] = useState<WallTime | null>('19:00');
 
   return (
     <View
@@ -310,6 +325,14 @@ function Gallery({ scheme }: { scheme: ColorScheme }) {
           error="A title is required"
         />
         <Field label="Location" value="Zahav" onChangeText={() => {}} disabled />
+      </Section>
+
+      <Section title="DatePicker and TimePicker">
+        <DatePicker label="Date" value={date} onChange={setDate} today={TODAY} />
+        <TimePicker label="Time" value={time} onChange={setTime} />
+        {/* Time is disabled until a date is set, which is the form's rule, not the
+            picker's (`activities.md` §3.4) — shown here so the state is reviewable. */}
+        <TimePicker label="End time" value={null} onChange={() => {}} disabled />
       </Section>
 
       <Section title="Avatars">
