@@ -1,22 +1,16 @@
-import { navIcons, useTheme } from '@od/ui';
-import { Tabs, useRouter } from 'expo-router';
-import { View } from 'react-native';
+import { navIcons, useBreakpoint, useTheme } from '@od/ui';
+import { Tabs, useRouter, useSegments } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AddButton } from '@/features/shell/components/AddButton';
+import { ShellFrame } from '@/features/shell/components/ShellFrame';
 import { tabs } from '@/features/shell/model/tabs';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
  * The three-tab shell: Today · Plans · Lists (P1-23).
  *
- * ## The FAB is wired once, here
- *
- * P1-23's edge case, restated because it is the whole reason this file owns the button:
- * *"The FAB opens the same global chooser modally from every tab. Wire it once in the layout,
- * not three times; a tab must never replace it with a title-first or inferred route."* Three
- * copies is three places for one of them to acquire a preselected target, and the third copy
- * is always the one nobody reads. It sits as a sibling of the navigator, so it is the same
- * control in the same place regardless of which tab is showing.
+ * The chrome — the rail, the tab bar and the one global Add button — is `ShellFrame`, so this
+ * file stays what a route file should be: it resolves router state, and renders one component
+ * (`tech-stack.md` §3.2).
  *
  * `draft.open()` before navigating resets the flow to the object step with nothing selected,
  * so a chooser can never inherit the previous session's target.
@@ -28,10 +22,30 @@ export default function TabsLayout() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const segments = useSegments();
   const openDraft = useComposeDraft((s) => s.open);
 
+  /**
+   * The active tab, read off the segments rather than tracked in state.
+   *
+   * Inside `(tabs)` the last segment is the route name, except at the group's index where
+   * there is no trailing segment at all — which is Today.
+   */
+  const last = segments[segments.length - 1];
+  const activeName = last === undefined || last === '(tabs)' ? 'index' : (last as string);
+
+  /** From `medium` up the rail replaces the bar, so the navigator's own bar is hidden. */
+  const rail = useBreakpoint() !== 'compact';
+
   return (
-    <View style={{ flex: 1 }}>
+    <ShellFrame
+      activeName={activeName}
+      onSelect={(tab) => router.navigate(tab.path)}
+      onAdd={() => {
+        openDraft();
+        router.push('/compose');
+      }}
+    >
       <Tabs
         screenOptions={{
           headerShown: false,
@@ -50,13 +64,15 @@ export default function TabsLayout() {
            * spare at larger dynamic-type sizes. The bottom inset is added on top so the bar
            * clears the home indicator rather than sitting under it.
            */
-          tabBarStyle: {
-            backgroundColor: theme.colors.surfaceRaised,
-            borderTopColor: theme.colors.border,
-            height: theme.space[11] + insets.bottom,
-            paddingTop: theme.space[2],
-            paddingBottom: insets.bottom + theme.space[2],
-          },
+          tabBarStyle: rail
+            ? { display: 'none' }
+            : {
+                backgroundColor: theme.colors.surfaceRaised,
+                borderTopColor: theme.colors.border,
+                height: theme.space[11] + insets.bottom,
+                paddingTop: theme.space[2],
+                paddingBottom: insets.bottom + theme.space[2],
+              },
           tabBarLabelStyle: theme.font('footnote'),
         }}
       >
@@ -77,24 +93,6 @@ export default function TabsLayout() {
           );
         })}
       </Tabs>
-
-      <View
-        style={{
-          // In `style`, not as a prop: `props.pointerEvents` is deprecated in RN 0.81.
-          pointerEvents: 'box-none',
-          position: 'absolute',
-          right: theme.space[5],
-          // Above the tab bar, itself above the home indicator.
-          bottom: insets.bottom + theme.space[11] + theme.space[5],
-        }}
-      >
-        <AddButton
-          onPress={() => {
-            openDraft();
-            router.push('/compose');
-          }}
-        />
-      </View>
-    </View>
+    </ShellFrame>
   );
 }

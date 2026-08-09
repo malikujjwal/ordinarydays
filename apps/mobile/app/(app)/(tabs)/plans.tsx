@@ -1,20 +1,23 @@
-import { TabScreen } from '@/features/shell/components/TabScreen';
+import { useRouter } from 'expo-router';
+import { PlansScreen } from '@/features/plans/components/PlansScreen';
+import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
- * Plans.
+ * Plans — the flat activity list from P1-16, the one real screen in this phase's shell.
  *
- * P1-23 has this tab render the flat activity list from **P1-16**
- * (`GET /v1/activities?filter=`), which has not landed — `services/api/src/routes/` is health
- * only. It is a placeholder until then rather than a list wired to an endpoint that returns
- * 404, and the three-stage Plans tab proper is Phase 3 (P3-14).
+ * Thin by rule (`tech-stack.md` §3.2): it resolves navigation and renders one component.
  */
 export default function PlansTab() {
+  const router = useRouter();
+  const openDraft = useComposeDraft((s) => s.open);
+
   return (
-    <TabScreen
-      title="Plans"
-      emptyHeading="No plans"
-      emptyBody="The plans list arrives with the activity list endpoint (P1-16)."
-      testID="plans-screen"
+    <PlansScreen
+      onOpen={(activityId) => router.push(`/activity/${activityId}`)}
+      onAdd={() => {
+        openDraft();
+        router.push('/compose');
+      }}
     />
   );
 }

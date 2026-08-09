@@ -1242,6 +1242,25 @@ contract.
 
 ### P1-23 — App shell: three tabs, header, FAB, placeholders
 
+> **Completed 2026-08-09. Five deviations, recorded rather than edited into the plan.**
+>
+> | # | What happened | Why |
+> | --- | --- | --- |
+> | 1 | **The tabs, header, FAB and placeholders shipped inside P1-24's branch**, before this task was picked up. This task completed the parts that were left: the Plans list, the `medium`+ rail, and the render test below. | Already recorded in P1-24's own deviation table — neither of its declared dependencies had landed, so it built the shell it needed. |
+> | 2 | **The task table omits P1-16 from this task's `Depends on` column** (`P0-19, P1-22, P1-31`) while the Approach requires it for the one real screen. | An internal inconsistency in this document, not a doc-vs-doc conflict. Raised rather than silently reconciled; the column is left as-is because P1-16 landed first in the event, and rewriting a dependency after the fact would hide that this was luck rather than sequencing. |
+> | 3 | **The `medium`+ left rail was built here.** [`design-system.md`](../04-conventions/design-system.md) §8 puts a left rail in place of the bottom tab bar from 768 px up; this section names only the three tabs. | P1-26's deviation #3 recorded the rail as a shell concern "which P1-23 has not built either", leaving it owned by nothing. The shell is the only layer that can own navigation chrome. Two things §8 lists are still absent because their subjects do not exist: a `People` entry (Phase 7) and the signed-in name at the rail's foot (no session until Phase 4). The `expanded` two-pane split is also still unbuilt — it needs a list pane that owns selection. |
+> | 4 | **`listActivities` was added to the shared client**, which belongs to **P1-20**. | The same slicing P1-24 recorded: P1-20 is delivered by whichever task first needs one of its functions, rather than as one commit nothing consumes. One function, its four tests, and no change to the three already there. |
+> | 5 | **The render test asserts `ShellFrame`, not `(tabs)/_layout.tsx`.** | `testing.md` §9 excludes route files from coverage on the grounds that their logic belongs in the components they compose. The chrome moved into `ShellFrame` so that "one Add button, whichever tab is showing" is a test rather than a promise; booting an Expo Router navigator under jsdom would assert the navigator instead. |
+>
+> **The Playwright half of the Tests line is not here.** Playwright is not a dependency of this
+> repository yet — no config, no specs, only the `e2e:web` script — and the harness is
+> **P1-29**, which owns "one flow each" against the local stack. Writing the first spec here
+> would mean building that harness inside a task that does not own it.
+>
+> One observation for **P3-14**, which owns the Plans tab proper: `ActivityListItem` carries
+> `time` but no `date` (P1-16), so an `upcoming` row can say when in the day but not which day.
+> The flat list is honest about that; the dated, grouped presentation is `GET /v1/plans`.
+
 **Files.** `apps/mobile/app/(app)/_layout.tsx`, `apps/mobile/app/(app)/(tabs)/**`.
 
 **Approach.** The three-tab shell — Today, Plans, Lists — with the header and the FAB, per

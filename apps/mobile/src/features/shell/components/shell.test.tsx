@@ -1,11 +1,13 @@
 import { ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useToast } from '@/stores/toast';
 import { AddButton } from './AddButton';
-import { TabScreen } from './TabScreen';
+import { NavRail } from './NavRail';
+import { ShellFrame } from './ShellFrame';
 import { ToastHost } from './ToastHost';
 
 /**
@@ -22,6 +24,30 @@ const wrap = (ui: ReactNode) =>
       <ThemeProvider scheme="light">{ui}</ThemeProvider>
     </SafeAreaProvider>,
   );
+
+/**
+ * Sets the viewport `useBreakpoint()` reads.
+ *
+ * jsdom performs no layout, so `documentElement.clientWidth` — which is what React Native
+ * Web's `Dimensions` measures, having no `visualViewport` to prefer — is `0` and every
+ * breakpoint assertion would otherwise be `compact` by accident rather than by width. Stating
+ * it and firing the `resize` that `Dimensions` subscribes to is what makes the two cases
+ * genuinely different.
+ */
+function resizeTo(width: number) {
+  Object.defineProperty(document.documentElement, 'clientWidth', {
+    value: width,
+    configurable: true,
+  });
+  Object.defineProperty(document.documentElement, 'clientHeight', {
+    value: 900,
+    configurable: true,
+  });
+  window.dispatchEvent(new Event('resize'));
+}
+
+/** The viewport is global, so it is put back — otherwise a later test inherits a width. */
+afterEach(() => resizeTo(390));
 
 describe('AddButton', () => {
   it('is a button whose accessible name is Add', () => {
@@ -49,20 +75,88 @@ describe('AddButton', () => {
   });
 });
 
-describe('TabScreen', () => {
-  it('renders the screen title as a heading and its placeholder body', () => {
+/**
+ * The render test P1-23 asks for: *"three tabs with the exact labels and that the FAB is
+ * present on each."*
+ *
+ * Asserted against `ShellFrame` rather than against `(tabs)/_layout.tsx`, because the layout
+ * is a route file — `testing.md` §9 excludes those on the grounds that their logic belongs in
+ * the components they compose, and booting an Expo Router navigator under jsdom would test the
+ * navigator rather than this repository. The frame is what actually holds both claims: the
+ * three destinations come from one frozen module, and the Add button is a sibling of
+ * `children`, so it cannot vary by tab.
+ */
+describe('ShellFrame', () => {
+  const frameFor = (activeName: string) =>
     wrap(
-      <TabScreen
-        title="Today"
-        emptyHeading="Nothing planned today"
-        emptyBody="The day's agenda arrives in Phase 2."
-        testID="today-screen"
-      />,
+      <ShellFrame activeName={activeName} onSelect={() => {}} onAdd={() => {}}>
+        <View testID={`${activeName}-body`} />
+      </ShellFrame>,
     );
 
-    expect(screen.getByRole('heading', { name: 'Today' })).toBeDefined();
-    expect(screen.getByText('Nothing planned today')).toBeDefined();
-    expect(screen.getByText("The day's agenda arrives in Phase 2.")).toBeDefined();
+  it.each(['index', 'plans', 'lists'])('keeps the one Add button on %s', (name) => {
+    const { unmount } = frameFor(name);
+    expect(screen.getAllByRole('button', { name: 'Add' })).toHaveLength(1);
+    expect(screen.getByTestId(`${name}-body`)).toBeDefined();
+    unmount();
+  });
+
+  /**
+   * At `compact` the navigator supplies the bottom bar, so the frame must **not** also draw a
+   * rail — two navigations for three destinations.
+   */
+  it('draws no rail at compact width', () => {
+    resizeTo(390);
+    frameFor('index');
+    expect(screen.queryByTestId('nav-rail')).toBeNull();
+  });
+
+  /** `design-system.md` §8: from 768 up the rail replaces the bar. */
+  it('draws the rail from medium up', () => {
+    resizeTo(1024);
+    frameFor('plans');
+    expect(screen.getByTestId('nav-rail')).toBeDefined();
+    // Still exactly one Add button — the rail does not bring a second.
+    expect(screen.getAllByRole('button', { name: 'Add' })).toHaveLength(1);
+  });
+});
+
+describe('NavRail', () => {
+  it('offers exactly Today, Plans, Lists, in that order', () => {
+    wrap(<NavRail activeName="index" onSelect={() => {}} />);
+    expect(screen.getAllByRole('link').map((element) => element.textContent)).toEqual([
+      'Today',
+      'Plans',
+      'Lists',
+    ]);
+  });
+
+  it('carries the wordmark', () => {
+    wrap(<NavRail activeName="index" onSelect={() => {}} />);
+    expect(screen.getByText('Ordinary Days')).toBeDefined();
+  });
+
+  /** The active entry says so, not only by its `surfaceSunken` pill. */
+  it('marks the active entry as the current page', () => {
+    wrap(<NavRail activeName="plans" onSelect={() => {}} />);
+    expect(screen.getByRole('link', { name: 'Plans' }).getAttribute('aria-current')).toBe(
+      'page',
+    );
+    expect(
+      screen.getByRole('link', { name: 'Today' }).getAttribute('aria-current'),
+    ).toBeNull();
+  });
+
+  it('reports which destination was chosen', () => {
+    const onSelect = vi.fn();
+    wrap(<NavRail activeName="index" onSelect={onSelect} />);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Lists' }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith({
+      name: 'lists',
+      label: 'Lists',
+      path: '/lists',
+    });
   });
 });
 
