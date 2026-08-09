@@ -1,6 +1,6 @@
 import type { PatchUserInput, User } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
-import { getItem, updateItem } from './base.js';
+import { getItem, putItem, updateItem } from './base.js';
 import { userProfile } from './keys.js';
 
 /**
@@ -36,6 +36,50 @@ const nextUlid = monotonicFactory();
 
 export function newUserId(): string {
   return `usr_${nextUlid()}`;
+}
+
+/**
+ * Writes a profile outright, creating or replacing it.
+ *
+ * **The only unconditional profile write, and it has exactly two callers ever.** P1-21's seed
+ * script writes the one local dev row, and Phase 4's post-confirmation trigger creates a real
+ * one. Everything else patches, conditionally — see {@link patchProfile} for why a create
+ * that conjures a tenant record with three fields on it is the thing being avoided.
+ *
+ * Added in P1-21, which is the first caller: this repository shipped read-and-patch in P1-07
+ * because nothing created a profile yet, and P1-07 said in as many words that the seed would
+ * be the one to.
+ *
+ * Field by field rather than a spread, like every other write here: a spread would carry
+ * whatever the caller happened to have on the object, including storage attributes if it read
+ * the row first.
+ */
+export async function putProfile(user: User): Promise<void> {
+  await putItem({
+    ...userProfile(user.userId),
+    entity: 'User',
+    userId: user.userId,
+    displayName: user.displayName,
+    timezone: user.timezone,
+    currency: user.currency,
+    weekStartsOn: user.weekStartsOn,
+    ...(user.defaultReminderOffset == null
+      ? {}
+      : { defaultReminderOffset: user.defaultReminderOffset }),
+    ...(user.allDayReminderHour === undefined
+      ? {}
+      : { allDayReminderHour: user.allDayReminderHour }),
+    ...(user.quietHours === undefined ? {} : { quietHours: user.quietHours }),
+    ...(user.defaultLists === undefined ? {} : { defaultLists: user.defaultLists }),
+    ...(user.email === undefined ? {} : { email: user.email }),
+    ...(user.cognitoSub === undefined ? {} : { cognitoSub: user.cognitoSub }),
+    ...(user.onboardingState === undefined
+      ? {}
+      : { onboardingState: user.onboardingState }),
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    schemaVersion: user.schemaVersion,
+  });
 }
 
 /** The profile, or `undefined` when the table has no row for this user. */

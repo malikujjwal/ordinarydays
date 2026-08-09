@@ -9,7 +9,8 @@
     "test": "tsc -p tsconfig.test.json && vitest run",
     "test:int": "vitest run --config vitest.int.config.ts",
     "dev": "tsx watch --env-file-if-exists=.env.local src/local.ts",
-    "ddb:create-table": "tsx --env-file-if-exists=.env.local scripts/create-local-table.ts"
+    "ddb:create-table": "tsx --env-file-if-exists=.env.local scripts/create-local-table.ts",
+    "seed:local": "tsx --env-file-if-exists=.env.local scripts/seed-local.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1106.0",

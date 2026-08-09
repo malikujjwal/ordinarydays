@@ -152,6 +152,29 @@ async function create(client: DynamoDBClient, name: string): Promise<void> {
   );
 }
 
+/**
+ * Drops the table and builds it again — an empty table with the right schema.
+ *
+ * Added in P1-21 for `pnpm seed:local --reset`. Truncating by reading every key and deleting
+ * it would need a `Scan`, which is banned in this codebase outside one-off migrations; and it
+ * would be slower and less certain than dropping a container's table. Recreating also
+ * guarantees the schema is current, which a truncate would not.
+ *
+ * It carries no guard of its own. The only caller is a script that has already refused to run
+ * outside `local` with an explicit `DDB_ENDPOINT`, and duplicating that check here would put
+ * the safety in two places where it can drift rather than one where it cannot.
+ */
+export async function resetLocalTable(
+  client: DynamoDBClient,
+  name: string,
+): Promise<void> {
+  if ((await describe(client, name)) !== undefined) {
+    await client.send(new DeleteTableCommand({ TableName: name }));
+    await waitUntilTableNotExists({ client, maxWaitTime: 30 }, { TableName: name });
+  }
+  await create(client, name);
+}
+
 export async function createLocalTable(
   client: DynamoDBClient,
   name: string,
