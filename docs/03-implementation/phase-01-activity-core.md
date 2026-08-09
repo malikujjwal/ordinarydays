@@ -708,16 +708,52 @@ bucket it lands in is derived on every write:
 
 `localDateTime` is `YYYY-MM-DDTHH:mm` in the user's local wall clock, with `00:00` when there
 is no time. This is not the UTC instant; `scheduledAtUtc` is stored separately on the `META`
-item for reminders and `.ics`.
+item for reminders and `.ics`. **No timezone arithmetic is involved** — `schedule.date` and
+`schedule.time` are already stored as user-local wall clock (`data-model.md` §4.1), so this is
+string composition. Deriving `scheduledAtUtc` with `date-fns-tz` is P1-10's.
+
+> **Amended in P1-09**, on the two points the original text left open:
+>
+> - **The index projection is written in full.** All of `GSI1_PROJECTED_ATTRIBUTES` lands on
+>   the entry from the first write, so nothing needs backfilling when Phase 2's agenda starts
+>   reading it. One field cannot be derived here: `today-and-tasks.md` §4 makes a **task's**
+>   `subtitle` its *parent plan's title*, which this layer does not have — so the repository
+>   takes it as an argument. P1-10 already loads the parent to enforce the nesting cap, so
+>   the title is in hand and no extra read enters the write path.
+> - **`SUB#` child pointers are written here, in Phase 1.** §3.1 says they are written when
+>   an activity is given a `parentActivityId`; §7's create row listed only `META` and `IDX#`.
+>   Resolved in favour of §3.1 — the same argument this task already makes for `REM#` rows,
+>   that the key shape is exercised from the first write rather than retrofitted onto stored
+>   data — and §7's row is amended to match.
+>
+> `lastActivityAt` does not exist until P2-06, which initialises it to `createdAt`. The `#P`
+> sort key therefore uses `createdAt` in Phase 1, and P2-06 replaces that line rather than
+> adding to it.
 
 Every method takes `userId` as its first parameter. Every query is scoped by it. The
 repository has no concept of a "current user" and no access to the Hono context.
 
 **Edge cases.**
 
-- A write that changes which bucket an activity belongs to must **delete and re-put** the
-  index entry, not update it — GSI keys change and a stale entry in the old bucket produces a
-  ghost row on Today. Do it in the same transaction.
+- A write that changes which bucket an activity belongs to must ~~**delete and re-put**~~
+  **rewrite the whole** index entry, not update it — GSI keys change and a stale entry in the
+  old bucket produces a ghost row on Today. Do it in the same transaction.
+
+  > **Corrected in P1-09.** "Delete and re-put" cannot be implemented: the index entry's
+  > primary key is `USER#<u>` / `IDX#<activityId>` in **every** bucket — only the `gsi1pk`
+  > and `gsi1sk` attributes move — and DynamoDB rejects two operations on one item in a
+  > transaction with *"Transaction request cannot include multiple operations on one item"*.
+  > Found by the integration suite, not by reading.
+  >
+  > The half that matters is unchanged and is what the code does: a **whole-item `Put`**,
+  > never an `UpdateItem`. DynamoDB maintains a GSI from the item's current attributes, so
+  > replacing the item atomically moves the projection; an update that set only some
+  > attributes would leave the old `gsi1pk`/`gsi1sk` in place and strand the row in its old
+  > bucket for ever. Rebuilding every attribute is also what lets a cleared field — or the
+  > GSI keys themselves, for §3.5's archival sweep — actually disappear.
+  >
+  > A real `Delete` of an index entry still exists: when a **participant is removed** in
+  > Phase 6, their own entry goes. That is a different item in a different partition.
 - Untimed items sort before timed ones on the same date because `00:00` sorts first. That is
   the intended order and the agenda partition logic in Phase 2 depends on it.
 - The `META` item must never be larger than 400 KB. `notes` at 4000 characters plus 60

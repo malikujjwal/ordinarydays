@@ -1,0 +1,500 @@
+import { TABLE } from '@od/shared/table';
+import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
+import { deleteAll, getItem, type Page, query, queryAll } from './base.js';
+import {
+  activityIndex,
+  activityMeta,
+  activityPartition,
+  childPointer,
+  childPointerPrefix,
+  gsi1Anytime,
+  gsi1Bucket as gsi1BucketKey,
+  gsi1NeedsDate,
+  gsi1Recurring,
+  gsi1Scheduled,
+  occurrenceRange,
+  reminder as reminderKey,
+} from './keys.js';
+import type { StoredItem } from './migrate.js';
+import { type TransactItem, transactWrite } from './tx.js';
+
+/**
+ * The only place an Activity is read from or written to DynamoDB.
+ *
+ * Implements access patterns 1, 2, 3, 4, 4b, 5 and 16 (`data-model.md` §5) and the *Create
+ * activity* write path (§7).
+ *
+ * ## What this layer is not
+ *
+ * It **stores** rather than decides. Status derivation, `scheduledAtUtc`, the nesting cap and
+ * every authorisation rule are P1-10's, one layer up; this file would be the wrong place for
+ * them because a rule enforced here is a rule the service cannot test without a database.
+ *
+ * It is also **deterministic**: no clock, no id generation. It receives a fully-formed
+ * `Activity` whose `activityId`, `createdAt` and `updatedAt` are already set, which is what
+ * makes the conditional-update-on-`updatedAt` path testable without freezing time.
+ *
+ * ## The rule that runs through all of it
+ *
+ * **Every method takes `userId` first and every query is scoped by it.** There is no concept
+ * of a current user here and no access to the Hono context — the tenancy is in the key, and
+ * `keys.ts` is where it is built.
+ */
+
+/** The `entity` discriminator every item carries (`data-model.md` §3). */
+const ENTITY = {
+  activity: 'Activity',
+  index: 'ActivityIndex',
+  reminder: 'Reminder',
+  childPointer: 'ChildPointer',
+} as const;
+
+const SCHEMA_VERSION = 1;
+
+/**
+ * Which GSI1 feed an activity belongs in (`data-model.md` §3.5).
+ *
+ * **Transcribed, not derived, and the order is load-bearing — do not reorder it.** A
+ * recurring series is `R` even when it has a date; a dated activity is `S` whatever its
+ * object kind; and only then does Task-versus-Plan decide between `N` and `P`.
+ *
+ * `#P` and `#N` are separate buckets and there is no single "unscheduled" one. Both hold
+ * undated activities and they mean opposite things: `#N` is *today, whenever* — a solo
+ * errand — and `#P` is *someday, undecided* — a group plan with no date yet. Collapsing them
+ * is the model's largest recorded product error, because it sent an undecided group plan to
+ * Today's Anytime list.
+ *
+ * **`objectKind` is the test, not `type` or the participant count.** The user already said
+ * whether this is a Task or a Plan; re-deriving that from anything else erases their answer.
+ *
+ * > **This function is replaced, not extended, in P2-05.** `data-model.md` §3.5 puts the
+ * > canonical `deriveGsi1Bucket` in `packages/shared/src/activities/bucket.ts` with its own
+ * > 25-case matrix, and `phase-02-today-and-tasks.md`'s prerequisites say Phase 1's inline
+ * > logic is replaced by it. When that lands, delete this and import that — do not keep both.
+ */
+export function deriveBucket(
+  activity: Pick<Activity, 'recurrence' | 'schedule' | 'objectKind'>,
+): Gsi1Bucket {
+  if (activity.recurrence) return 'R';
+  if (activity.schedule?.date) return 'S';
+  if (activity.objectKind === 'plan') return 'P';
+  return 'N';
+}
+
+/**
+ * The `#S` sort key's date-time, as the user's local wall clock: `YYYY-MM-DDTHH:mm`.
+ *
+ * **No timezone arithmetic happens here, and none is needed.** `schedule.date` and
+ * `schedule.time` are already stored as user-local wall clock (`data-model.md` §4.1), so this
+ * is string composition. The absolute instant lives separately on `META` as `scheduledAtUtc`,
+ * derived by the service with `date-fns-tz` for reminders and `.ics`.
+ *
+ * An untimed item gets `00:00`, so it **sorts before** every timed item on the same date.
+ * That is the intended order and Phase 2's agenda partitioning depends on it.
+ */
+export function localDateTime(schedule: Pick<ActivitySchedule, 'date' | 'time'>): string {
+  return `${schedule.date}T${schedule.time ?? '00:00'}`;
+}
+
+/** The GSI1 key pair for an activity, given the bucket it belongs in. */
+function gsi1KeysFor(
+  userId: string,
+  activity: Activity,
+): { gsi1pk: string; gsi1sk: string } {
+  const bucket = deriveBucket(activity);
+  const id = activity.activityId;
+
+  switch (bucket) {
+    case 'R': {
+      /**
+       * The **first** segment's `effectiveFrom`, not the active one. It is immutable, so
+       * appending a segment — which is what every "all future occurrences" edit does — never
+       * rewrites this index key.
+       */
+      const seriesStart =
+        activity.recurrence?.segments[0]?.effectiveFrom ?? activity.createdAt;
+      return gsi1Recurring(userId, seriesStart, id);
+    }
+    case 'S':
+      /**
+       * `schedule` is defined whenever the bucket is `S` — its `date` is what put it there —
+       * but the compiler cannot see that through {@link deriveBucket}, so the fallback is a
+       * narrowing rather than an assertion. It is unreachable, and being unreachable is
+       * cheaper to read than a non-null assertion that claims something the reader has to
+       * verify for themselves.
+       */
+      return activity.schedule === undefined
+        ? gsi1Anytime(userId, activity.createdAt, id)
+        : gsi1Scheduled(userId, localDateTime(activity.schedule), id);
+    case 'P':
+      /**
+       * Sorted by `lastActivityAt` descending, so the plan people are actually discussing
+       * floats up rather than the oldest one. **That field does not exist until P2-06**,
+       * which initialises it to `createdAt` — so `createdAt` is the correct Phase 1 value
+       * and P2-06 replaces this line rather than adding to it.
+       */
+      return gsi1NeedsDate(userId, activity.createdAt, id);
+    case 'N':
+      return gsi1Anytime(userId, activity.createdAt, id);
+  }
+}
+
+/**
+ * The `AgendaItem` fields projected onto the index entry
+ * (`GSI1_PROJECTED_ATTRIBUTES`, `api-contract.md` §2.2).
+ *
+ * `INCLUDE`, never `ALL`: the agenda query is the hottest read in the product, so the
+ * projection is only what a row renders. The fields deliberately absent are the ones computed
+ * at read time — `hasCheckbox` is `type === 'task'`, `isPast` and `overdueFromDate` depend on
+ * the caller's today, and `occurrenceDate`/`isSnoozed` come from expanding a series.
+ */
+export interface IndexProjection {
+  type: Activity['type'];
+  title: string;
+  status: Activity['status'];
+  time?: string;
+  endTime?: string;
+  isRecurring: boolean;
+  participantAvatars: { personId: string; displayName: string; avatarUrl?: string }[];
+  participantCount: number;
+  locationLabel?: string;
+  subtitle?: string;
+}
+
+/**
+ * A type-derived subtitle, per `today-and-tasks.md` §4.
+ *
+ * **A `task`'s subtitle is its parent plan's title**, which this layer does not have — so the
+ * caller supplies it. P1-10 already loads the parent to enforce the nesting cap, so the title
+ * is in hand there and no extra read enters the write path.
+ */
+function deriveSubtitle(activity: Activity, taskSubtitle?: string): string | undefined {
+  switch (activity.details.kind) {
+    case 'task':
+      return taskSubtitle;
+    case 'meal':
+      return activity.details.mealSlot === undefined
+        ? 'Meal'
+        : `Meal · ${capitalise(activity.details.mealSlot)}`;
+    case 'watch': {
+      const { season, episode, mediaKind } = activity.details;
+      if (season !== undefined && episode !== undefined) {
+        return `Watch · S${season} E${episode}`;
+      }
+      return mediaKind === undefined ? 'Watch' : `Watch · ${capitalise(mediaKind)}`;
+    }
+    case 'event':
+      return activity.location?.label ?? activity.details.organiser;
+    case 'outing':
+      return activity.location?.label ?? activity.details.placeName;
+    case 'custom':
+      return undefined;
+  }
+}
+
+const capitalise = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+
+/** Builds the full `ActivityIndex` item for one user. */
+function indexItem(
+  userId: string,
+  activity: Activity,
+  taskSubtitle?: string,
+): StoredItem {
+  const subtitle = deriveSubtitle(activity, taskSubtitle);
+
+  return stamp(ENTITY.index, activity, {
+    ...activityIndex(userId, activity.activityId),
+    ...gsi1KeysFor(userId, activity),
+    activityId: activity.activityId,
+    type: activity.type,
+    title: activity.title,
+    status: activity.status,
+    ...(activity.schedule?.time === undefined ? {} : { time: activity.schedule.time }),
+    ...(activity.schedule?.endTime === undefined
+      ? {}
+      : { endTime: activity.schedule.endTime }),
+    isRecurring: activity.recurrence !== undefined,
+    // Phase 6 fills these; the shape is here so the projection is complete from the first
+    // write and no row needs backfilling when sharing arrives.
+    participantAvatars: [],
+    participantCount: activity.participantCount,
+    ...(activity.location?.label === undefined
+      ? {}
+      : { locationLabel: activity.location.label }),
+    ...(subtitle === undefined ? {} : { subtitle }),
+  });
+}
+
+/**
+ * Stamps the four attributes every item carries (`data-model.md` §3).
+ *
+ * Centralised so no write path can forget one — a row without `schemaVersion` is a row
+ * `migrate.ts` has to guess about, and a row without `entity` is one nothing can identify
+ * from a table scan of the partition it lives in.
+ */
+function stamp(
+  entity: string,
+  from: Pick<Activity, 'createdAt' | 'updatedAt'>,
+  item: Record<string, unknown>,
+): StoredItem {
+  return {
+    ...item,
+    entity,
+    createdAt: from.createdAt,
+    updatedAt: from.updatedAt,
+    schemaVersion: SCHEMA_VERSION,
+  };
+}
+
+export interface CreateOptions {
+  /**
+   * Reminders to write for the **creator alone**. There is no path by which one user's
+   * create writes a reminder for another, in this phase or any later one — a joiner's
+   * reminder comes from their own saved default at join time (P6-13). ADR-047.
+   */
+  readonly reminders?: readonly { reminderId: string; offsetMinutes: number }[];
+  /** A task's subtitle: its parent plan's title. See {@link deriveSubtitle}. */
+  readonly taskSubtitle?: string;
+  /** Title and status for the `SUB#` pointer, when this activity has a parent. */
+  readonly childPointerRank?: string;
+}
+
+/**
+ * Creates an activity and everything that must exist with it, in **one transaction**
+ * (`data-model.md` §7).
+ *
+ * Items written: `ACT#/META`, the owner's `USER#/IDX#`, one `ACT#/REM#<userId>#<id>` per
+ * supplied reminder, and — when `parentActivityId` is set — the parent's `ACT#/SUB#<child>`
+ * pointer, so plan detail renders its prep tasks from the same single `Query` as everything
+ * else (§3.1).
+ */
+export async function createActivity(
+  userId: string,
+  activity: Activity,
+  options: CreateOptions = {},
+): Promise<void> {
+  const items: TransactItem[] = [
+    {
+      Put: {
+        Item: stamp(ENTITY.activity, activity, {
+          ...activityMeta(activity.activityId),
+          ...activity,
+        }),
+      },
+    },
+    { Put: { Item: indexItem(userId, activity, options.taskSubtitle) } },
+  ];
+
+  for (const entry of options.reminders ?? []) {
+    const row: Reminder = {
+      reminderId: entry.reminderId,
+      activityId: activity.activityId,
+      userId,
+      offsetMinutes: entry.offsetMinutes,
+      channel: 'push',
+    };
+    items.push({
+      Put: {
+        Item: stamp(ENTITY.reminder, activity, {
+          ...reminderKey(activity.activityId, userId, entry.reminderId),
+          ...row,
+        }),
+      },
+    });
+  }
+
+  if (activity.parentActivityId !== undefined) {
+    items.push({
+      Put: {
+        Item: stamp(ENTITY.childPointer, activity, {
+          ...childPointer(activity.parentActivityId, activity.activityId),
+          childActivityId: activity.activityId,
+          title: activity.title,
+          status: activity.status,
+          rank: options.childPointerRank ?? activity.createdAt,
+        }),
+      },
+    });
+  }
+
+  await transactWrite(items, { operation: 'createActivity' });
+}
+
+/**
+ * Every item under `ACT#<id>` — `REM#` rows included, **unfiltered** (patterns 4 and 4b).
+ *
+ * The two consumers want different subsets and this serves both by serving neither specially:
+ * the plan-detail projection drops every `REM#` row that is not the caller's (P1-10 rule 6),
+ * and the Phase 5 reminder scheduler keeps all of them and fans out per user. A repository
+ * that filtered here would make the scheduler impossible to express without a second read of
+ * a partition it had just loaded.
+ */
+export async function getActivityPartition(activityId: string): Promise<StoredItem[]> {
+  return queryAll<StoredItem>(activityPartition(activityId));
+}
+
+/** The `META` row alone, for the paths that do not need the whole partition. */
+export async function getActivityMeta(activityId: string): Promise<Activity | undefined> {
+  return getItem<Activity & StoredItem>(activityMeta(activityId));
+}
+
+export interface PatchOptions extends CreateOptions {
+  /**
+   * The index entry as it is **now**, so a bucket change can delete the old row in the same
+   * transaction that writes the new one. Supply the activity as it was read.
+   */
+  readonly previous: Activity;
+  /** Owner plus every participating app user. Phase 6 supplies more than one. */
+  readonly indexedUserIds?: readonly string[];
+}
+
+/**
+ * Updates `ACT#/META` conditionally on `updatedAt`, and rewrites the index entries.
+ *
+ * **Optimistic concurrency**: the write is conditional on the `updatedAt` the caller read, so
+ * two overlapping edits cannot silently overwrite each other. A mismatch cancels the
+ * transaction and surfaces as `409 conflict` (P1-13).
+ *
+ * **The index entry is written as a whole item, never patched.** This is the corrected form
+ * of P1-09's "delete and re-put" instruction, which cannot be implemented literally — see
+ * below.
+ */
+export async function patchActivity(
+  userId: string,
+  next: Activity,
+  expectedUpdatedAt: string,
+  options: PatchOptions,
+): Promise<void> {
+  const userIds = options.indexedUserIds ?? [userId];
+
+  const items: TransactItem[] = [
+    {
+      Put: {
+        Item: stamp(ENTITY.activity, next, { ...activityMeta(next.activityId), ...next }),
+        ConditionExpression: '#updatedAt = :expected',
+        ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
+        ExpressionAttributeValues: { ':expected': expectedUpdatedAt },
+      },
+    },
+  ];
+
+  /**
+   * **A whole-item `Put`, and never a `Delete` beside it.**
+   *
+   * P1-09 says a bucket-changing write must "delete and re-put the index entry, not update
+   * it". The second half is right and load-bearing; the first half cannot be done, and
+   * trying it fails against a real table with *"Transaction request cannot include multiple
+   * operations on one item"* — found in P1-09's integration suite, not by reading.
+   *
+   * The reason is that **the index entry's primary key does not change when its bucket
+   * does.** It is `USER#<u>` / `IDX#<activityId>` in every bucket; only the `gsi1pk` and
+   * `gsi1sk` *attributes* move. DynamoDB maintains a GSI from the item's current attributes,
+   * so replacing the whole item atomically removes the old projection and writes the new
+   * one. There is no window and no ghost.
+   *
+   * What the instruction was protecting against is real and is still avoided: an
+   * `UpdateItem` that set some attributes would leave the previous `gsi1pk`/`gsi1sk` in
+   * place, and the row would sit in the old bucket for ever. `indexItem` rebuilds every
+   * attribute from the activity, so a field dropped from the activity is dropped from the
+   * projection too — including the GSI keys themselves, which is how §3.5's archival sweep
+   * removes a row from its bucket entirely.
+   *
+   * A genuine `Delete` of an index entry does exist — when a **participant is removed** and
+   * their entry must go (Phase 6). That is a different item in a different partition, not
+   * this one.
+   */
+  for (const indexedUserId of userIds) {
+    items.push({ Put: { Item: indexItem(indexedUserId, next, options.taskSubtitle) } });
+  }
+
+  await transactWrite(items, { operation: 'patchActivity' });
+}
+
+/**
+ * Deletes the whole `ACT#<id>` partition and every index entry pointing at it.
+ *
+ * **Batched, not transactional, and deliberately.** A partition with many participants and
+ * many updates exceeds a transaction's 100 items, and a transaction that can never succeed
+ * leaves the user unable to delete anything at all. A partially deleted activity is
+ * recoverable by re-running the delete, which is why P1-14's handler is idempotent.
+ *
+ * Clearing pointers on things that point *back* — a child's `parentActivityId`, list links,
+ * expense locators — is P1-14's cascade, not this method's: those live in other partitions
+ * and each has its own rule about whether it survives.
+ */
+export async function deleteActivity(
+  userId: string,
+  activityId: string,
+  indexedUserIds: readonly string[] = [],
+): Promise<void> {
+  const partition = await getActivityPartition(activityId);
+
+  const keys = partition.map((item) => ({
+    pk: item.pk as string,
+    sk: item.sk as string,
+  }));
+
+  for (const indexedUserId of new Set([userId, ...indexedUserIds])) {
+    keys.push(activityIndex(indexedUserId, activityId));
+  }
+
+  await deleteAll(keys);
+}
+
+export interface ListOptions {
+  /** Inclusive `gsi1sk` bounds. Pattern 1's date window uses `<from>T00:00`/`<to>T23:59`. */
+  readonly between?: readonly [string, string];
+  readonly cursor?: string;
+  readonly limit?: number;
+  /** `false` reads newest-first — what Needs a date and Plans → Past want. */
+  readonly ascending?: boolean;
+}
+
+/**
+ * One GSI1 bucket for one user (patterns 1, 2 and 3).
+ *
+ * Bucket-shaped rather than filter-shaped on purpose. `api-contract.md` names
+ * `?filter=inbox|upcoming|past|saved` on `GET /v1/activities` but never defines what those
+ * map to; inventing the mapping here would bury a product decision in the storage layer.
+ * P1-16 owns it, and composes it from these.
+ */
+export async function listByBucket(
+  userId: string,
+  bucket: Gsi1Bucket,
+  options: ListOptions = {},
+): Promise<Page<StoredItem>> {
+  return query<StoredItem>(gsi1BucketKey(userId, bucket), {
+    indexName: TABLE.indexes[0].name,
+    ...(options.between === undefined ? {} : { skBetween: options.between }),
+    ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+    ...(options.limit === undefined ? {} : { limit: options.limit }),
+    ...(options.ascending === undefined ? {} : { ascending: options.ascending }),
+    keyAttributes: ['pk', 'sk', 'gsi1pk', 'gsi1sk'],
+  });
+}
+
+/**
+ * Occurrence overrides for a series in a date window (pattern 5).
+ *
+ * **Reads overrides; never materialises the series.** One Activity row holds the whole
+ * recurrence and the agenda expands it at read time, merging these rows over the top
+ * (`CLAUDE.md` rule 3). Nothing in this repository writes a future occurrence, and nothing
+ * ever should.
+ */
+export async function listOccurrences(
+  activityId: string,
+  from: string,
+  to: string,
+): Promise<StoredItem[]> {
+  const range = occurrenceRange(activityId, from, to);
+  return queryAll<StoredItem>(
+    { pk: range.pk },
+    { skBetween: [range.fromSk, range.toSk] },
+  );
+}
+
+/** A plan's prep-task pointers (pattern 16). */
+export async function listChildPointers(activityId: string): Promise<StoredItem[]> {
+  const prefix = childPointerPrefix(activityId);
+  return queryAll<StoredItem>({ pk: prefix.pk }, { skPrefix: prefix.skPrefix });
+}

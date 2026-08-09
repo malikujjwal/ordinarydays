@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b && tsc -p tsconfig.scripts.json",
-    "test": "vitest run",
+    "typecheck": "tsc -b && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.test.json && vitest run",
     "test:int": "vitest run --config vitest.int.config.ts",
     "dev": "tsx watch --env-file-if-exists=.env.local src/local.ts",
     "ddb:create-table": "tsx --env-file-if-exists=.env.local scripts/create-local-table.ts"

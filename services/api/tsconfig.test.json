@@ -1,0 +1,28 @@
+{
+  "//": [
+    "Typechecks the test files, which the build config deliberately excludes.",
+    "",
+    "`tsconfig.json` sets rootDir/outDir, so a test left in its `include` compiles into",
+    "`dist/` and ships test code with the Lambda. Excluding them is right — but it meant no",
+    "test in this package was ever typechecked, and that hid a real defect: `tx.ts` typed its",
+    "`TransactItem` input as the SDK's own type, which marks `TableName` required, while",
+    "`transactWrite` exists precisely to stamp it. Every P1-05 test passed the corrected",
+    "shape and none of them complained. P1-09 was the first production caller and the first",
+    "thing to fail.",
+    "",
+    "Same file, same reasoning and same shape as `packages/shared/tsconfig.test.json`, which",
+    "P1-06 added after finding the identical hole there. It emits nothing; it exists to fail.",
+    "",
+    "`test/**` is included as well as `src/**`, so the integration suite is typechecked too."
+  ],
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true
+  },
+  "include": ["src/**/*", "test/**/*"],
+  "references": [{ "path": "../../packages/shared" }]
+}

@@ -27,10 +27,27 @@ import { AppError } from '../lib/errors.js';
  */
 export const MAX_TRANSACT_ITEMS = 100;
 
-/** One item in a transaction, in the document-client shape. */
-export type TransactItem = NonNullable<
+/** One item in a transaction, as the SDK wants it. */
+type SdkTransactItem = NonNullable<
   ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']
 >[number];
+
+/**
+ * One item in a transaction, **without `TableName`** — {@link transactWrite} stamps it.
+ *
+ * Omitting it from the input type is the whole point: a call site that had to supply the
+ * table name is a call site that can name the wrong one. The SDK's own type marks it
+ * required, so accepting that type unchanged would have forced every repository to pass a
+ * value this module immediately overwrites.
+ *
+ * Corrected in P1-09, which was the first production caller and the first thing to fail on
+ * it. It went unnoticed in P1-05 because `services/api` excluded test files from `tsc`, so
+ * the tests that pass this exact shape were never typechecked — `tsconfig.test.json` now
+ * closes that, the same way P1-06 closed it for `packages/shared`.
+ */
+export type TransactItem = {
+  [Verb in keyof SdkTransactItem]?: Omit<NonNullable<SdkTransactItem[Verb]>, 'TableName'>;
+};
 
 interface WriteOptions {
   /**
@@ -97,9 +114,9 @@ export function assertWithinLimit(count: number, operation: string): void {
   }
 }
 
-function withTableName(item: TransactItem): TransactItem {
+function withTableName(item: TransactItem): SdkTransactItem {
   const [verb, body] = Object.entries(item)[0] as [string, Record<string, unknown>];
-  return { [verb]: { ...body, TableName: TABLE_NAME } } as TransactItem;
+  return { [verb]: { ...body, TableName: TABLE_NAME } } as SdkTransactItem;
 }
 
 /**
