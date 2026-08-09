@@ -2162,6 +2162,349 @@
           "channel"
         ]
       },
+      "PatchActivityInput": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "schedule": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "time": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "endTime": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "timezone": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64,
+                "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
+              }
+            },
+            "required": [
+              "date",
+              "timezone"
+            ]
+          },
+          "recurrence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Recurrence"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            ]
+          },
+          "location": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "lat": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              },
+              "lng": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              },
+              "mapUrl": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "required": [
+              "label"
+            ]
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "task"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "meal"
+                    ]
+                  },
+                  "mealSlot": {
+                    "type": "string",
+                    "enum": [
+                      "breakfast",
+                      "lunch",
+                      "dinner",
+                      "snack"
+                    ]
+                  },
+                  "ingredients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "quantity": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "addedToListId": {
+                          "type": "string",
+                          "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ]
+                    },
+                    "maxItems": 60
+                  },
+                  "recipeUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "watch"
+                    ]
+                  },
+                  "mediaTitle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "mediaKind": {
+                    "type": "string",
+                    "enum": [
+                      "movie",
+                      "show"
+                    ]
+                  },
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "episodeTitle": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "service": {
+                    "type": "string",
+                    "maxLength": 120
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mediaTitle"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "event"
+                    ]
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "priceCents": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "currency": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 3
+                  },
+                  "ticketUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "organiser": {
+                    "type": "string",
+                    "maxLength": 120
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "outing"
+                    ]
+                  },
+                  "placeName": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "reservation": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      "time": {
+                        "type": "string",
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                      },
+                      "partySize": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 100
+                      },
+                      "reference": {
+                        "type": "string",
+                        "maxLength": 120
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "custom"
+                    ]
+                  },
+                  "shortcutId": {
+                    "type": "string",
+                    "pattern": "^sct_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ]
+          },
+          "sourceUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "parentActivityId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "cancelled"
+            ]
+          },
+          "objectKind": {
+            "type": "string",
+            "enum": [
+              "task",
+              "plan"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "task",
+              "meal",
+              "watch",
+              "event",
+              "outing",
+              "custom"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "HealthResponse": {
         "type": "object",
         "properties": {
@@ -2629,6 +2972,112 @@
           },
           "404": {
             "description": "No such activity, or none this caller has any relationship to. The two are deliberately indistinguishable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update an activity, with optimistic concurrency",
+        "description": "Partial update. **`If-Match` is required** and carries the `updatedAt` the client read; omitting it is `400`, and a stale value is `409` with the current `updatedAt` in `error.details`, so the client can refetch and re-apply. A cross-object change must send a complete valid target pair — `objectKind` alone never lets the server choose a type — and Plan → Task is `409` while the plan has participants, expenses or prep tasks, naming each. Changing kind never changes `status`, `completedAt` or `outcome`. `status` is accepted only as `cancelled`; every other value is derived.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchActivityInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated activity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Activity"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing `If-Match`, half a target pair, or a field outside the schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A participant reaching for a field only the owner may change — title, schedule, place, or the object or Plan kind.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or none this caller has any relationship to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A stale `If-Match`, or a Plan → Task conversion the plan’s own participants, expenses or prep tasks block.",
             "content": {
               "application/json": {
                 "schema": {

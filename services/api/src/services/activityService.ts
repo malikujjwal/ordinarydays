@@ -1,4 +1,10 @@
-import type { CreateActivityInput } from '@od/shared/schemas';
+import {
+  blockerMessage,
+  type ChangeResult,
+  type ChangeTarget,
+  changeActivityKind,
+} from '@od/shared';
+import type { CreateActivityInput, PatchActivityInput } from '@od/shared/schemas';
 import type {
   Activity,
   ActivityDetail,
@@ -8,14 +14,17 @@ import type {
 } from '@od/shared/types';
 import { fromZonedTime } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
+import type { Logger } from '../lib/logger.js';
 import {
+  getActivityMeta,
   getActivityPartition,
   newActivityId,
   newReminderId,
   createActivity as putActivity,
+  patchActivity as putPatch,
 } from '../repositories/activityRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
-import { assertActivityAccess } from './authz.js';
+import { assertActivityAccess, assertPatchableFields } from './authz.js';
 
 /**
  * The activity rules that must not live in a handler or a repository (P1-10).
@@ -259,6 +268,275 @@ export async function createActivity(
   });
 
   return { activity, reminders };
+}
+
+/** The stale-edit answer, and the one place its copy lives. */
+const STALE = 'This changed while you were editing it. Review the update.';
+
+/**
+ * The `409` a stale `If-Match` produces, **carrying the current `updatedAt`**.
+ *
+ * P1-13 requires the current value in the body so the client can refetch and re-apply rather
+ * than guess. It travels in `details[]` — the envelope's only structured slot — as the field
+ * name and its value, which keeps the closed error shape intact rather than adding a key to
+ * it that every other error would then lack.
+ */
+function staleEdit(currentUpdatedAt: string): AppError {
+  return new AppError('conflict', STALE, [
+    { path: 'updatedAt', message: currentUpdatedAt },
+  ]);
+}
+
+/**
+ * Applies a kind change, or returns the activity's current target unchanged.
+ *
+ * The mapping itself is `changeActivityKind` in `packages/shared` (P1-17) — the same function
+ * the client runs to render the "this will remove" confirmation **before** calling, which is
+ * the whole reason it is not implemented here. Two implementations would mean a user
+ * confirming the loss of one set of fields and losing another.
+ *
+ * A blocked conversion is `409` naming what must go first, and **nothing is written**: the
+ * conversion "never deletes coordinated data as a side effect" (`activities.md` §6.3 point 3).
+ *
+ * The dropped payload is logged at `info` with the activity id, the old target and the old
+ * `details`, so a support request can recover it from the logs inside the retention window.
+ * It is not restorable through the UI (§6.3 point 7).
+ */
+function applyKindChange(
+  current: Activity,
+  patch: PatchActivityInput,
+  log: Logger | undefined,
+): ChangeResult | undefined {
+  if (patch.objectKind === undefined || patch.type === undefined) return undefined;
+
+  const change = changeActivityKind(current, {
+    objectKind: patch.objectKind,
+    type: patch.type,
+  } as ChangeTarget);
+
+  if (change.blockers.length > 0) {
+    throw new AppError(
+      'conflict',
+      blockerMessage(change.blockers) ?? STALE,
+      change.blockers.map((blocker) => ({
+        path: blocker.section,
+        message: blocker.label,
+      })),
+    );
+  }
+
+  if (change.dropped.length > 0) {
+    /**
+     * The **old `details` object itself**, not a summary of it. A support request asking
+     * "what was the episode number" can only be answered from the payload, and this is the
+     * only place it survives. `details` is type-specific user content and is redacted from
+     * ordinary request logging; this line is the deliberate exception §6.3 point 7 asks for,
+     * and it is why the event code is greppable.
+     */
+    log?.info(
+      {
+        event: KIND_CHANGED,
+        activityId: current.activityId,
+        from: { objectKind: current.objectKind, type: current.type },
+        to: { objectKind: change.objectKind, type: change.type },
+        droppedDetails: current.details,
+        dropped: change.dropped.map((field) => field.key),
+      },
+      'activity kind changed; the dropped details payload is in this line and nowhere else',
+    );
+  }
+
+  return change;
+}
+
+/** A stable event code a Log Insights query can filter on (`definition-of-done.md` §8 rule 2). */
+const KIND_CHANGED = 'activity_kind_changed';
+
+/**
+ * Applies a validated patch, behind `PATCH /v1/activities/:id` (P1-13).
+ *
+ * ## `If-Match` is checked twice, and both are load-bearing
+ *
+ * The **first** check compares the header against the row `assertActivityAccess` just read,
+ * so an ordinary stale edit answers `409` before anything is composed. The **second** is the
+ * repository's conditional write, which is what makes the guarantee real: between this
+ * service reading and writing, another request can land, and only the condition on the item
+ * itself closes that window. A read-then-write with no condition would pass the first check
+ * and silently overwrite — which is exactly the failure P1-13 says not to build.
+ *
+ * When the conditional write is the one that fails, the value read here is by definition no
+ * longer current, so the row is re-read to report a value that actually is. One extra
+ * `GetItem`, on a path that is a genuine race rather than an ordinary stale tab.
+ *
+ * ## What a patch may not touch
+ *
+ * `status`, `completedAt` and `outcome` survive a kind change untouched (§6.3 point 8) — an
+ * `event` that was attended and becomes an `outing` stays completed with
+ * `outcome: 'attended'`. They are carried from the current row rather than recomputed,
+ * except that clearing the schedule returns a non-terminal activity to `saved`.
+ *
+ * `ownerId`, `activityId`, the counters and `createdAt` are not in the input schema at all,
+ * so there is nothing here to defend against.
+ */
+export async function patchActivity(
+  userId: string,
+  activityId: string,
+  patch: PatchActivityInput,
+  ifMatch: string,
+  now: string,
+  log?: Logger,
+): Promise<Activity> {
+  const access = await assertActivityAccess(userId, activityId, 'write');
+  assertPatchableFields(access, patch);
+
+  const current = access.activity;
+  if (current.updatedAt !== ifMatch) throw staleEdit(String(current.updatedAt));
+
+  const change = applyKindChange(current, patch, log);
+  const next = merge(current, patch, change, now);
+
+  try {
+    await putPatch(userId, next, ifMatch, { previous: current });
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'conflict') {
+      const fresh = await getActivityMeta(activityId);
+      throw staleEdit(String(fresh?.updatedAt ?? current.updatedAt));
+    }
+    throw error;
+  }
+
+  /**
+   * **Projected on the way out, not on the way in.**
+   *
+   * `current` is the row the repository read, so it carries `pk`, `sk`, `entity` and every
+   * storage attribute — and `merge` spreads it, so `next` carries them too. That is right for
+   * the *write*: those attributes must survive a patch, including fields this projection
+   * deliberately withholds from clients (`listId`, `listItemId` — see {@link toActivity}).
+   * Writing the projection instead would quietly delete them.
+   *
+   * It is wrong for the *response*, which is why the same allow-list `GET` uses runs here.
+   * Caught by a route test asserting the body has no `pk`, which the first version failed.
+   */
+  return toActivity(next as unknown as StoredItem);
+}
+
+/**
+ * The patched activity, built field by field.
+ *
+ * ## Why the explicit patch wins over the kind change
+ *
+ * A conversion can produce `notes`, `location` and `details` of its own — an event's
+ * description appended to notes, an outing's place name moved into the location label. If the
+ * same request also names one of those fields, **the request wins outright**. The client has
+ * already run the same mapping to render the confirmation, so the value it sends is the
+ * post-change value the user just saw and approved; applying the append on top of it would
+ * duplicate the text the user is looking at.
+ *
+ * ## `null` clears, absent leaves alone
+ *
+ * The distinction `exactOptionalPropertyTypes` exists to keep. `schedule: null` is the
+ * unschedule path and returns the activity to `saved`; `schedule` absent means "leave it".
+ */
+function merge(
+  current: Activity,
+  patch: PatchActivityInput,
+  change: ChangeResult | undefined,
+  now: string,
+): Activity {
+  const base = change === undefined ? current : { ...current, ...targetOf(change) };
+
+  /**
+   * Three states, and each means something different.
+   *
+   * Absent leaves the schedule alone. `null` unschedules entirely and returns the activity to
+   * `saved`. An object replaces it — and **inside** it, `time: null` clears the time while
+   * keeping the date, which is how a timed activity becomes all-day. `toSchedule` derives the
+   * instants from whatever survives, so an all-day result correctly has none.
+   */
+  const schedule =
+    patch.schedule === undefined
+      ? base.schedule
+      : patch.schedule === null
+        ? undefined
+        : toSchedule({
+            date: patch.schedule.date,
+            timezone: patch.schedule.timezone,
+            ...(patch.schedule.time == null ? {} : { time: patch.schedule.time }),
+            ...(patch.schedule.endTime == null
+              ? {}
+              : { endTime: patch.schedule.endTime }),
+          });
+
+  const next: Record<string, unknown> = {
+    ...base,
+    ...pick(patch, 'title', 'notes', 'details'),
+    ...(schedule === undefined ? {} : { schedule }),
+    ...nullable(patch, 'recurrence', 'location', 'sourceUrl', 'parentActivityId'),
+    /**
+     * Re-derived rather than carried, because clearing a date is a scheduling-state change:
+     * an activity with no date is `saved`. `cancelled` from the client and the two terminal
+     * statuses survive, which is what `deriveStatus` already encodes.
+     */
+    status: terminal(base.status)
+      ? base.status
+      : deriveStatus(schedule, patch.status ?? undefined),
+    updatedAt: now,
+  };
+
+  if (schedule === undefined) delete next.schedule;
+  for (const field of [
+    'recurrence',
+    'location',
+    'sourceUrl',
+    'parentActivityId',
+  ] as const) {
+    if (patch[field] === null) delete next[field];
+  }
+
+  /**
+   * The one cast in this function. `Activity` is a discriminated union on `objectKind`, and a
+   * record built by spreading cannot be narrowed back into it structurally — but every field
+   * came from an `Activity` or from a schema-validated patch, and the `objectKind`/`type`
+   * pair came from `changeActivityKind`, which only produces valid pairs.
+   */
+  return next as unknown as Activity;
+}
+
+/** `completed` and `skipped` are Phase 2's to set and nothing here may move them. */
+function terminal(status: Activity['status']): boolean {
+  return status === 'completed' || status === 'skipped';
+}
+
+/** The three fields a kind change replaces. Everything else on the activity survives it. */
+function targetOf(change: ChangeResult) {
+  return {
+    objectKind: change.objectKind,
+    type: change.type,
+    details: change.details,
+    ...(change.notes === undefined ? {} : { notes: change.notes }),
+    ...(change.location === undefined ? {} : { location: change.location }),
+  };
+}
+
+/** Present, non-null keys only — so an absent optional never lands as an explicit undefined. */
+function pick<K extends keyof PatchActivityInput>(
+  patch: PatchActivityInput,
+  ...fields: K[]
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = patch[field];
+    if (value !== undefined && value !== null) out[field] = value;
+  }
+  return out;
+}
+
+/** The same, for fields whose `null` means "clear it" — the delete happens in {@link merge}. */
+function nullable<K extends keyof PatchActivityInput>(
+  patch: PatchActivityInput,
+  ...fields: K[]
+): Record<string, unknown> {
+  return pick(patch, ...fields);
 }
 
 /**

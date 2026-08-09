@@ -6,6 +6,7 @@ import {
   createActivity,
   deriveScheduleInstants,
   deriveStatus,
+  patchActivity,
   projectDetail,
   toSchedule,
 } from './activityService.js';
@@ -19,6 +20,7 @@ import {
  */
 vi.mock('../repositories/activityRepository.js', () => ({
   createActivity: vi.fn(() => Promise.resolve()),
+  patchActivity: vi.fn(() => Promise.resolve()),
   newActivityId: vi.fn(() => 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2'),
   newReminderId: vi.fn(() => 'rem_01J8XKQ2M4N5P6R7S8T9V0W1X2'),
   getActivityMeta: vi.fn(),
@@ -672,5 +674,168 @@ describe('toSchedule', () => {
         timezone: 'UTC',
       }),
     ).toEqual({ date: '2026-08-09', timezone: 'UTC' });
+  });
+});
+
+/**
+ * `patchActivity` (P1-13). The repository is mocked, so what these assert is the service's
+ * own decisions: which value wins when a conversion and an explicit field collide, and the
+ * log line that is the only surviving copy of a dropped payload.
+ */
+describe('patchActivity', () => {
+  const VERSION = '2026-08-09T00:00:00.000Z';
+  const LATER = '2026-08-09T12:00:00.000Z';
+
+  const stored = (overrides: Record<string, unknown> = {}): StoredItem => ({
+    pk: `ACT#${PLAN}`,
+    sk: 'META',
+    entity: 'Activity',
+    activityId: PLAN,
+    ownerId: USER,
+    status: 'saved',
+    objectKind: 'plan',
+    type: 'event',
+    title: 'The Barbican',
+    details: { kind: 'event', description: 'Doors at seven', organiser: 'The Barbican' },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: VERSION,
+    schemaVersion: 1,
+    ...overrides,
+  });
+
+  /**
+   * `mockClear` as well as `mockResolvedValue`: the outer `beforeEach` clears the *create*
+   * mock and not this one, so without it `mock.calls[0]` is the first call recorded anywhere
+   * in this block — an earlier test's — and an assertion about "the call this test made"
+   * quietly inspects somebody else's.
+   */
+  const seed = (row: StoredItem = stored()) => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(row as never);
+    vi.mocked(repository.listParticipants).mockResolvedValue([]);
+    vi.mocked(repository.patchActivity).mockClear();
+    vi.mocked(repository.patchActivity).mockResolvedValue(undefined);
+  };
+
+  /**
+   * §6.3 point 7: the dropped payload is logged so a support request can recover it from the
+   * logs inside the retention window. It is not restorable through the UI, so this line is
+   * the only copy — and it carries the **`details` object itself**, not a summary.
+   */
+  it('logs the dropped details payload under a greppable event code', async () => {
+    seed();
+    const info = vi.fn();
+
+    await patchActivity(
+      USER,
+      PLAN,
+      { objectKind: 'task', type: 'task' },
+      VERSION,
+      LATER,
+      // biome-ignore lint/suspicious/noExplicitAny: a logger stub with one method.
+      { info } as any,
+    );
+
+    expect(info.mock.calls[0]?.[0]).toMatchObject({
+      event: 'activity_kind_changed',
+      activityId: PLAN,
+      from: { objectKind: 'plan', type: 'event' },
+      to: { objectKind: 'task', type: 'task' },
+      droppedDetails: { kind: 'event', organiser: 'The Barbican' },
+    });
+  });
+
+  /** Nothing was lost, so there is nothing to recover and no line to write. */
+  it('logs nothing when the change drops no field', async () => {
+    seed(stored({ type: 'custom', details: { kind: 'custom' } }));
+    const info = vi.fn();
+
+    await patchActivity(
+      USER,
+      PLAN,
+      { objectKind: 'task', type: 'task' },
+      VERSION,
+      LATER,
+      // biome-ignore lint/suspicious/noExplicitAny: a logger stub with one method.
+      { info } as any,
+    );
+
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A conversion can produce notes of its own — an event's description appended. When the
+   * request also names `notes`, the request wins: the client has already run the same mapping
+   * to render the confirmation, so its value is the post-change text the user approved, and
+   * appending again would duplicate what they are looking at.
+   */
+  it('lets an explicit notes value beat the conversion’s appended one', async () => {
+    seed();
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      { objectKind: 'plan', type: 'outing', notes: 'Doors at seven' },
+      VERSION,
+      LATER,
+    );
+
+    expect(result.notes).toBe('Doors at seven');
+  });
+
+  it('uses the conversion’s notes when the request names none', async () => {
+    seed();
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      { objectKind: 'plan', type: 'outing' },
+      VERSION,
+      LATER,
+    );
+
+    expect(result.notes).toBe('Doors at seven');
+  });
+
+  it('writes conditionally on the version the caller sent', async () => {
+    seed();
+
+    await patchActivity(USER, PLAN, { title: 'Renamed' }, VERSION, LATER);
+
+    expect(vi.mocked(repository.patchActivity).mock.calls[0]?.[2]).toBe(VERSION);
+  });
+
+  it('hands the repository the row it read, so a bucket move can rewrite the index', async () => {
+    const row = stored();
+    seed(row);
+
+    await patchActivity(USER, PLAN, { title: 'Renamed' }, VERSION, LATER);
+
+    expect(vi.mocked(repository.patchActivity).mock.calls[0]?.[3]?.previous).toBe(row);
+  });
+
+  /** The response is projected; the write is not. See the note in `patchActivity`. */
+  it('returns no storage attributes but writes them through', async () => {
+    seed();
+
+    const result = await patchActivity(USER, PLAN, { title: 'Renamed' }, VERSION, LATER);
+
+    expect(result).not.toHaveProperty('pk');
+    expect(result).not.toHaveProperty('entity');
+    expect(vi.mocked(repository.patchActivity).mock.calls[0]?.[1]).toHaveProperty('pk');
+  });
+
+  it('409s a stale version before composing anything, and writes nothing', async () => {
+    seed();
+
+    await expect(
+      patchActivity(USER, PLAN, { title: 'Renamed' }, 'stale', LATER),
+    ).rejects.toMatchObject({ code: 'conflict' });
+
+    expect(repository.patchActivity).not.toHaveBeenCalled();
   });
 });

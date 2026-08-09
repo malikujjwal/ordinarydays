@@ -133,6 +133,64 @@ export async function assertActivityAccess(
 }
 
 /**
+ * The fields a **participant** may not patch on a plan they are on (P1-13).
+ *
+ * `api-contract.md` §3 puts it in words — a participant "cannot reschedule, rename, delete,
+ * or remove others" — and P1-13 names the five. What is left for them is their own RSVP,
+ * their own reminders, date suggestions, updates and expenses, each of which is its own
+ * endpoint rather than a field on this one.
+ *
+ * **`status` is deliberately not on this list**, because P1-13 does not put it there. A
+ * participant cancelling somebody else's plan looks like it should be refused the same way,
+ * and completion already is (ADR-048, owner-only). Nothing can exercise the difference until
+ * participants exist in Phase 6; it is called out here rather than quietly added, because
+ * adding a restriction the contract does not name is the same class of decision as dropping
+ * one it does.
+ */
+const PARTICIPANT_MAY_NOT_PATCH = [
+  'title',
+  'schedule',
+  'location',
+  'objectKind',
+  'type',
+] as const;
+
+const PARTICIPANT_REFUSED =
+  'Only the person who created this plan can change its title, date or place.';
+
+/**
+ * Refuses the fields a participant may not touch — **in `authz.ts`, not in the handler**,
+ * which is P1-13's instruction and the same rule as everything else here: one place decides
+ * who may do what, so the next endpoint cannot re-derive it slightly differently.
+ *
+ * Three callers reach this and only one is refused:
+ *
+ * - the **owner** patches anything;
+ * - a participant acting on a **prep task** patches anything, because a prep task is an item
+ *   on a shared checklist and "may complete, uncomplete and **edit** it, whoever created it"
+ *   (`api-contract.md` §3, ADR-051) — that is what `viaParent` records;
+ * - a participant patching the **plan itself** is refused these five.
+ *
+ * `403`, not `404`: the caller can see this plan, so naming the limit answers their question
+ * rather than disclosing anything.
+ */
+export function assertPatchableFields(
+  access: ActivityAccess,
+  patch: Readonly<Record<string, unknown>>,
+): void {
+  if (access.isOwner || access.viaParent) return;
+
+  const refused = PARTICIPANT_MAY_NOT_PATCH.filter((field) => field in patch);
+  if (refused.length === 0) return;
+
+  throw new AppError(
+    'forbidden',
+    PARTICIPANT_REFUSED,
+    refused.map((field) => ({ path: field, message: PARTICIPANT_REFUSED })),
+  );
+}
+
+/**
  * The participant verdict, shared by the three ways of becoming one.
  *
  * `read` and `write` are granted; `owner` is `403` rather than `404`, because a participant

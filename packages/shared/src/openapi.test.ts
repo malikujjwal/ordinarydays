@@ -77,6 +77,7 @@ describe('the generated document', () => {
       'Device',
       'ErrorResponse',
       'HealthResponse',
+      'PatchActivityInput',
       'PatchUserInput',
       'Recurrence',
       'RegisterDeviceInput',

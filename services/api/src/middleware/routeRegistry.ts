@@ -75,6 +75,7 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
   // §2.3 Activities
   { method: 'POST', pattern: '/v1/activities', auth: 'authenticated', creates: true },
   { method: 'GET', pattern: '/v1/activities/:id', auth: 'authenticated' },
+  { method: 'PATCH', pattern: '/v1/activities/:id', auth: 'authenticated' },
 
   // §2.1a Health
   { method: 'GET', pattern: '/v1/health', auth: 'unauthenticated-private' },

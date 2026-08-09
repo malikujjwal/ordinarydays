@@ -451,6 +451,260 @@ describe('reading one activity back', () => {
   });
 });
 
+/**
+ * `PATCH /v1/activities/:id` (P1-13), against the real table.
+ *
+ * The unit suite proves the right transaction is composed. What only a table proves is that
+ * the condition on `updatedAt` actually cancels a stale write, that a bucket-changing patch
+ * leaves **one** index entry rather than two, and that a kind change leaves the reminder rows
+ * in the partition alone.
+ */
+describe('patching an activity', () => {
+  const patch = (
+    id: string,
+    body: unknown,
+    options: { ifMatch?: string; userId?: string } = {},
+  ) =>
+    asUser(options.userId).fetch(
+      new Request(`http://localhost/v1/activities/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(options.ifMatch === undefined ? {} : { 'If-Match': options.ifMatch }),
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  const created = async (body: unknown = TASK) => (await (await post(body)).json()).data;
+
+  it('applies the change and bumps updatedAt', async () => {
+    const activity = await created();
+
+    const res = await patch(
+      activity.activityId,
+      { title: 'Buy oat milk' },
+      { ifMatch: activity.updatedAt },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.title).toBe('Buy oat milk');
+    expect(body.data.updatedAt).not.toBe(activity.updatedAt);
+  });
+
+  it('persists, so the next read sees it', async () => {
+    const activity = await created();
+    await patch(
+      activity.activityId,
+      { title: 'Buy oat milk' },
+      { ifMatch: activity.updatedAt },
+    );
+
+    expect(await repo.getActivityMeta(activity.activityId)).toMatchObject({
+      title: 'Buy oat milk',
+    });
+  });
+
+  /** The condition on the item is what makes the guarantee real against a live table. */
+  it('409s a stale If-Match, names the current value, and changes nothing', async () => {
+    const activity = await created();
+    await patch(activity.activityId, { title: 'First' }, { ifMatch: activity.updatedAt });
+
+    const res = await patch(
+      activity.activityId,
+      { title: 'Second' },
+      { ifMatch: activity.updatedAt },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.details?.[0]?.path).toBe('updatedAt');
+    expect(await repo.getActivityMeta(activity.activityId)).toMatchObject({
+      title: 'First',
+    });
+  });
+
+  it('400s a missing If-Match and changes nothing', async () => {
+    const activity = await created();
+
+    const res = await patch(activity.activityId, { title: 'Buy oat milk' });
+
+    expect(res.status).toBe(400);
+    expect(await repo.getActivityMeta(activity.activityId)).toMatchObject({
+      title: 'Buy milk',
+    });
+  });
+
+  it('404s a patch from a different user, and changes nothing', async () => {
+    const activity = await created();
+
+    const res = await patch(
+      activity.activityId,
+      { title: 'Theirs now' },
+      { ifMatch: activity.updatedAt, userId: OTHER },
+    );
+
+    expect(res.status).toBe(404);
+    expect(await repo.getActivityMeta(activity.activityId)).toMatchObject({
+      title: 'Buy milk',
+    });
+  });
+
+  /** One index entry after the move, not two — the whole-item re-put from P1-09. */
+  it('moves a task to #N when the date is cleared, and leaves one index entry', async () => {
+    const activity = await created({
+      ...TASK,
+      schedule: { date: '2026-08-15', timezone: 'America/New_York' },
+    });
+    expect(activity.status).toBe('scheduled');
+
+    const body = await (
+      await patch(
+        activity.activityId,
+        { schedule: null },
+        { ifMatch: activity.updatedAt },
+      )
+    ).json();
+
+    expect(body.data.status).toBe('saved');
+
+    const rows = await indexRows(DEV);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.gsi1pk).toBe(`U#${DEV}#N`);
+  });
+
+  it('moves an undated task to #S when a date is added', async () => {
+    const activity = await created();
+
+    await patch(
+      activity.activityId,
+      { schedule: { date: '2026-08-15', timezone: 'UTC' } },
+      { ifMatch: activity.updatedAt },
+    );
+
+    const rows = await indexRows(DEV);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.gsi1pk).toBe(`U#${DEV}#S`);
+  });
+});
+
+/**
+ * The conversion case P1-13 names, end to end: a Watch with a full payload becomes a Task,
+ * the type-specific fields go, the common fields stay, and **every reminder row survives**.
+ */
+describe('converting a plan to a task', () => {
+  const watchPlan = async () =>
+    (
+      await (
+        await post({
+          objectKind: 'plan',
+          type: 'watch',
+          title: 'Severance',
+          notes: 'Start from the beginning',
+          schedule: { date: '2026-08-15', timezone: 'UTC' },
+          reminders: [{ offsetMinutes: -15 }],
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Severance',
+            season: 2,
+            episode: 4,
+            service: 'Apple TV+',
+          },
+        })
+      ).json()
+    ).data;
+
+  const convert = (id: string, ifMatch: string, body: unknown) =>
+    asUser().fetch(
+      new Request(`http://localhost/v1/activities/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'If-Match': ifMatch },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it('drops the watch payload and keeps title, notes and schedule', async () => {
+    const plan = await watchPlan();
+
+    const body = await (
+      await convert(plan.activityId, plan.updatedAt, {
+        objectKind: 'task',
+        type: 'task',
+      })
+    ).json();
+
+    expect(body.data).toMatchObject({
+      objectKind: 'task',
+      type: 'task',
+      title: 'Severance',
+      notes: 'Start from the beginning',
+      details: { kind: 'task' },
+    });
+    expect(body.data.schedule.date).toBe('2026-08-15');
+  });
+
+  /**
+   * **The reminders are separate items and the conversion must not touch them.** A reminder
+   * belongs to its user and says nothing about what kind of thing the activity is.
+   */
+  it('leaves every reminder row in the partition untouched', async () => {
+    const plan = await watchPlan();
+    const before = (await repo.getActivityPartition(plan.activityId)).filter(
+      (row) => row.entity === 'Reminder',
+    );
+    expect(before).toHaveLength(1);
+
+    await convert(plan.activityId, plan.updatedAt, { objectKind: 'task', type: 'task' });
+
+    const after = (await repo.getActivityPartition(plan.activityId)).filter(
+      (row) => row.entity === 'Reminder',
+    );
+    expect(after).toEqual(before);
+  });
+
+  it('stores the dropped payload nowhere on the row', async () => {
+    const plan = await watchPlan();
+
+    await convert(plan.activityId, plan.updatedAt, { objectKind: 'task', type: 'task' });
+
+    const stored = await repo.getActivityMeta(plan.activityId);
+    expect(stored?.details).toEqual({ kind: 'task' });
+    expect(JSON.stringify(stored)).not.toContain('Apple TV+');
+  });
+
+  /**
+   * The same request with one participant is refused — and refused **before anything is
+   * written**, which is what "never deletes coordinated data as a side effect" means in
+   * practice.
+   */
+  it('409s once the plan has a participant, and changes nothing', async () => {
+    const plan = await watchPlan();
+
+    // Phase 1 has no endpoint that adds a participant, so the count is set directly — the
+    // conversion reads it from the stored row exactly as it would in Phase 6.
+    await base.putItem({
+      ...keys.activityMeta(plan.activityId),
+      ...(await repo.getActivityMeta(plan.activityId)),
+      participantCount: 1,
+    });
+    const withParticipant = await repo.getActivityMeta(plan.activityId);
+
+    const res = await convert(plan.activityId, String(withParticipant?.updatedAt), {
+      objectKind: 'task',
+      type: 'task',
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.message).toBe('Remove 1 person before changing this to a Task.');
+    expect(await repo.getActivityMeta(plan.activityId)).toMatchObject({
+      objectKind: 'plan',
+      type: 'watch',
+    });
+  });
+});
+
 /** Two users' activities are invisible to each other, before Phase 4 makes it matter. */
 describe('tenant isolation', () => {
   it('gives each user their own index partition', async () => {

@@ -1,7 +1,12 @@
 import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import type { OpenAPIObject } from 'openapi3-ts/oas31';
 import { z } from 'zod';
-import { activity, activityDetail, createActivityInput } from './schemas/activity.js';
+import {
+  activity,
+  activityDetail,
+  createActivityInput,
+  patchActivityInput,
+} from './schemas/activity.js';
 import { ulidId } from './schemas/common.js';
 import {
   deletedDevice,
@@ -272,6 +277,54 @@ registry.registerPath({
       description:
         'No such activity, or none this caller has any relationship to. The two are ' +
         'deliberately indistinguishable.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'patch',
+  path: '/v1/activities/{id}',
+  summary: 'Update an activity, with optimistic concurrency',
+  description:
+    'Partial update. **`If-Match` is required** and carries the `updatedAt` the client ' +
+    'read; omitting it is `400`, and a stale value is `409` with the current `updatedAt` in ' +
+    '`error.details`, so the client can refetch and re-apply. A cross-object change must ' +
+    'send a complete valid target pair — `objectKind` alone never lets the server choose a ' +
+    'type — and Plan → Task is `409` while the plan has participants, expenses or prep ' +
+    'tasks, naming each. Changing kind never changes `status`, `completedAt` or `outcome`. ' +
+    '`status` is accepted only as `cancelled`; every other value is derived.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: {
+      content: { 'application/json': { schema: patchActivityInput } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The updated activity.',
+      content: { 'application/json': { schema: activityResponse } },
+    },
+    400: {
+      description:
+        'A missing `If-Match`, half a target pair, or a field outside the schema.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description:
+        'A participant reaching for a field only the owner may change — title, schedule, ' +
+        'place, or the object or Plan kind.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or none this caller has any relationship to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description:
+        'A stale `If-Match`, or a Plan → Task conversion the plan’s own participants, ' +
+        'expenses or prep tasks block.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },
