@@ -16,6 +16,7 @@ import { requestId } from './middleware/requestId.js';
 import { assertRegistryMatchesRoutes, routeSplit } from './middleware/routeSplit.js';
 import { securityHeaders } from './middleware/securityHeaders.js';
 import { activities } from './routes/activities.js';
+import { capture } from './routes/capture.js';
 import { health } from './routes/health.js';
 import { me } from './routes/me.js';
 
@@ -89,6 +90,7 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
 
   app.route('/v1/me', me);
   app.route('/v1/activities', activities);
+  app.route('/v1/capture', capture);
   app.route('/v1/health', health);
 
   // Anything reaching here matched no route. `routeSplit` has already rejected unknown

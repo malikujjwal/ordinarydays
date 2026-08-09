@@ -10,6 +10,11 @@ import {
   deletedActivity,
   patchActivityInput,
 } from './schemas/activity.js';
+import {
+  captureExtractInput,
+  captureLinkInput,
+  captureParseInput,
+} from './schemas/capture.js';
 import { ulidId } from './schemas/common.js';
 import {
   deletedDevice,
@@ -438,6 +443,70 @@ registry.registerPath({
     },
   },
 });
+
+/**
+ * `/v1/capture/*` (P1-18). **Stubs until Phase 8**, and published anyway.
+ *
+ * The whole reason they ship early is that the client integration is written once against a
+ * settled contract, so the shapes belong in the spec from the first commit — a generated
+ * client should be able to build a correct request seven phases before one succeeds.
+ */
+for (const route of [
+  {
+    path: '/v1/capture/parse',
+    schema: captureParseInput,
+    summary: 'Parse text into draft fields',
+    what: 'text',
+  },
+  {
+    path: '/v1/capture/extract',
+    schema: captureExtractInput,
+    summary: 'Extract draft fields from an attachment',
+    what: 'an uploaded photo or screenshot',
+  },
+  {
+    path: '/v1/capture/link',
+    schema: captureLinkInput,
+    summary: 'Extract draft fields from a link',
+    what: 'a pasted URL',
+  },
+] as const) {
+  registry.registerPath({
+    method: 'post',
+    path: route.path,
+    summary: `${route.summary} (not available until Phase 8)`,
+    description:
+      `Turns ${route.what} into **draft fields for review**. Returns ` +
+      '`501 not_implemented` in this build — the body is still validated against the real ' +
+      'schema first, so a client can be written and exercised against the settled shape ' +
+      'now rather than discovering seven phases later that it was sending the wrong thing.' +
+      '\n\n' +
+      '`creationTarget` is **required and has no default**: capture fills fields inside a ' +
+      'destination the user already chose and never chooses one. `objectKind` and `type` ' +
+      'outside the target, `listId`, participants, audience, visibility and ' +
+      '`reminder`/`reminders`/`offsetMinutes` are rejected by name — they are never model ' +
+      'output. Text such as "remind me an hour before" stays source text and cannot move ' +
+      'the Reminder control.',
+    tags: ['capture'],
+    request: {
+      body: {
+        content: { 'application/json': { schema: route.schema } },
+      },
+    },
+    responses: {
+      400: {
+        description:
+          'A missing or invalid `creationTarget`, or any field outside the schema — ' +
+          'returned **before** the `501`, which is what proves validation runs first.',
+        content: { 'application/json': { schema: errorResponse } },
+      },
+      501: {
+        description: 'A well-formed request. Capture arrives in Phase 8.',
+        content: { 'application/json': { schema: errorResponse } },
+      },
+    },
+  });
+}
 
 registry.registerPath({
   method: 'get',

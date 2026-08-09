@@ -44,6 +44,9 @@ describe('the generated document', () => {
       '/v1/activities',
       '/v1/activities/{id}',
       '/v1/activities/{id}/duplicate',
+      '/v1/capture/parse',
+      '/v1/capture/extract',
+      '/v1/capture/link',
       '/v1/health',
     ]);
   });
@@ -74,6 +77,9 @@ describe('the generated document', () => {
       'Activity',
       'ActivityDetail',
       'ActivityListItem',
+      'CaptureExtractInput',
+      'CaptureLinkInput',
+      'CaptureParseInput',
       'CreateActivityInput',
       'DeletedActivity',
       'DeletedDevice',

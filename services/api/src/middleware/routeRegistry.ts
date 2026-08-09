@@ -85,6 +85,15 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     creates: true,
   },
 
+  /**
+   * §2.11 Capture — stubs until Phase 8. **None of them `creates`**: capture returns a draft
+   * for the user to confirm and writes nothing, so there is no duplicate for an
+   * `Idempotency-Key` to prevent (`agent-playbook.md` §6.12).
+   */
+  { method: 'POST', pattern: '/v1/capture/parse', auth: 'authenticated' },
+  { method: 'POST', pattern: '/v1/capture/extract', auth: 'authenticated' },
+  { method: 'POST', pattern: '/v1/capture/link', auth: 'authenticated' },
+
   // §2.1a Health
   { method: 'GET', pattern: '/v1/health', auth: 'unauthenticated-private' },
 ];

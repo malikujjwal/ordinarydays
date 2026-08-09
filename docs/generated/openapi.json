@@ -2583,6 +2583,272 @@
           "activityId"
         ]
       },
+      "CaptureParseInput": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "tz": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 64,
+            "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
+          },
+          "creationTarget": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "task"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "task"
+                    ]
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "plan"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "meal",
+                      "watch",
+                      "event",
+                      "outing",
+                      "custom"
+                    ]
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "listItem"
+                    ]
+                  },
+                  "listId": {
+                    "type": "string",
+                    "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "listId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "tz",
+          "creationTarget"
+        ],
+        "additionalProperties": false
+      },
+      "CaptureExtractInput": {
+        "type": "object",
+        "properties": {
+          "attachmentId": {
+            "type": "string",
+            "pattern": "^att_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "creationTarget": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "task"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "task"
+                    ]
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "plan"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "meal",
+                      "watch",
+                      "event",
+                      "outing",
+                      "custom"
+                    ]
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "listItem"
+                    ]
+                  },
+                  "listId": {
+                    "type": "string",
+                    "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "listId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "attachmentId",
+          "creationTarget"
+        ],
+        "additionalProperties": false
+      },
+      "CaptureLinkInput": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "creationTarget": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "task"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "task"
+                    ]
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "plan"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "meal",
+                      "watch",
+                      "event",
+                      "outing",
+                      "custom"
+                    ]
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "objectKind": {
+                    "type": "string",
+                    "enum": [
+                      "listItem"
+                    ]
+                  },
+                  "listId": {
+                    "type": "string",
+                    "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                  }
+                },
+                "required": [
+                  "objectKind",
+                  "listId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "url",
+          "creationTarget"
+        ],
+        "additionalProperties": false
+      },
       "HealthResponse": {
         "type": "object",
         "properties": {
@@ -3424,6 +3690,126 @@
           },
           "404": {
             "description": "No such activity, or none this caller has any relationship to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/capture/parse": {
+      "post": {
+        "summary": "Parse text into draft fields (not available until Phase 8)",
+        "description": "Turns text into **draft fields for review**. Returns `501 not_implemented` in this build — the body is still validated against the real schema first, so a client can be written and exercised against the settled shape now rather than discovering seven phases later that it was sending the wrong thing.\n\n`creationTarget` is **required and has no default**: capture fills fields inside a destination the user already chose and never chooses one. `objectKind` and `type` outside the target, `listId`, participants, audience, visibility and `reminder`/`reminders`/`offsetMinutes` are rejected by name — they are never model output. Text such as \"remind me an hour before\" stays source text and cannot move the Reminder control.",
+        "tags": [
+          "capture"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureParseInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "A missing or invalid `creationTarget`, or any field outside the schema — returned **before** the `501`, which is what proves validation runs first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "A well-formed request. Capture arrives in Phase 8.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/capture/extract": {
+      "post": {
+        "summary": "Extract draft fields from an attachment (not available until Phase 8)",
+        "description": "Turns an uploaded photo or screenshot into **draft fields for review**. Returns `501 not_implemented` in this build — the body is still validated against the real schema first, so a client can be written and exercised against the settled shape now rather than discovering seven phases later that it was sending the wrong thing.\n\n`creationTarget` is **required and has no default**: capture fills fields inside a destination the user already chose and never chooses one. `objectKind` and `type` outside the target, `listId`, participants, audience, visibility and `reminder`/`reminders`/`offsetMinutes` are rejected by name — they are never model output. Text such as \"remind me an hour before\" stays source text and cannot move the Reminder control.",
+        "tags": [
+          "capture"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureExtractInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "A missing or invalid `creationTarget`, or any field outside the schema — returned **before** the `501`, which is what proves validation runs first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "A well-formed request. Capture arrives in Phase 8.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/capture/link": {
+      "post": {
+        "summary": "Extract draft fields from a link (not available until Phase 8)",
+        "description": "Turns a pasted URL into **draft fields for review**. Returns `501 not_implemented` in this build — the body is still validated against the real schema first, so a client can be written and exercised against the settled shape now rather than discovering seven phases later that it was sending the wrong thing.\n\n`creationTarget` is **required and has no default**: capture fills fields inside a destination the user already chose and never chooses one. `objectKind` and `type` outside the target, `listId`, participants, audience, visibility and `reminder`/`reminders`/`offsetMinutes` are rejected by name — they are never model output. Text such as \"remind me an hour before\" stays source text and cannot move the Reminder control.",
+        "tags": [
+          "capture"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureLinkInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "description": "A missing or invalid `creationTarget`, or any field outside the schema — returned **before** the `501`, which is what proves validation runs first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "A well-formed request. Capture arrives in Phase 8.",
             "content": {
               "application/json": {
                 "schema": {
