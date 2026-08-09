@@ -1,5 +1,5 @@
 import { navIcons, useBreakpoint, useTheme } from '@od/ui';
-import { Tabs, useRouter, useSegments } from 'expo-router';
+import { type Href, Tabs, useRouter, useSegments } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ShellFrame } from '@/features/shell/components/ShellFrame';
 import { tabs } from '@/features/shell/model/tabs';
@@ -40,7 +40,15 @@ export default function TabsLayout() {
   return (
     <ShellFrame
       activeName={activeName}
-      onSelect={(tab) => router.navigate(tab.path)}
+      /**
+       * `tab.path` is a `string`, and Expo Router's typed routes want one of its generated
+       * literals. The cast is here, in the route file, rather than by giving
+       * `model/tabs.ts` an `Href` type: that module is pure data about the three nouns and
+       * importing a router type into it would make the one place the tab list is asserted
+       * depend on generated output. Navigation belongs to this layer; so does knowing that
+       * these three paths are real routes — `tabs.test.ts` pins them.
+       */
+      onSelect={(tab) => router.navigate(tab.path as Href)}
       onAdd={() => {
         openDraft();
         router.push('/compose');
