@@ -262,6 +262,67 @@ separately in `scheduledAtUtc` for reminders and `.ics` export.
 TypeScript definitions live in `packages/shared/src/types/`. These are the authoritative
 shapes; the table above only describes where they are stored.
 
+### 4.0 User
+
+> **Added in P1-06.** This section did not exist: `User` was the only entity in the model
+> with no shape written down, despite being the tenant record every other item is keyed by.
+> Its fields were spread across `api-contract.md` §2.1 (what `PATCH /v1/me` accepts),
+> `auth.md` (the defaults the post-confirmation trigger writes), `notifications.md`
+> (`defaultReminderOffset`, quiet hours), §4.6 below (`defaultLists`), and two phase-task
+> prose tables. Consolidated here so the schema has one source, the way every sibling entity
+> already did.
+
+```ts
+type WeekStart = 0 | 1;                    // 0 = Sunday
+type OnboardingState = 'new' | 'done';
+
+interface User {
+  userId: string;              // "usr_01J..." — but see the note below
+  displayName: string;
+  timezone: string;            // IANA, e.g. "America/New_York"
+  currency: string;            // ISO 4217
+  weekStartsOn: WeekStart;
+
+  defaultReminderOffset?: number | null;   // minutes, [-10080, 0]. See below.
+  allDayReminderHour?: number;             // 0–23, local
+
+  quietHours?: { enabled: boolean; start: string; end: string };   // Phase 5 (P5-11)
+  notificationPrefs?: Record<string, boolean>;                     // Phase 5 (P5-11)
+
+  defaultLists?: Partial<Record<DefaultSlot, string>>;             // §4.6. Phase 3.
+
+  // Phase 4. Written by the post-confirmation trigger, the only thing that creates a
+  // profile. Absent on the seeded local dev row, which has no account behind it.
+  email?: string;
+  cognitoSub?: string;
+  onboardingState?: OnboardingState;
+
+  createdAt: string;
+  updatedAt: string;
+  schemaVersion: 1;
+}
+```
+
+**Rules**
+
+- **`defaultReminderOffset` has three states and they are not interchangeable.** A negative
+  number is "that many minutes before"; `0` is a real *At the time* reminder; `null` or
+  absent is **Off** and creates no `REM#` row at all. A new account ships Off. A schema that
+  collapsed `0` into absent would silently turn "at the time" into "no reminder" for every
+  joiner (ADR-047).
+- **`userId` is not asserted as a ULID.** `LocalIdentityProvider` runs as the constant
+  `usr_local_dev` for the whole of Phases 1–3, so the shared check is a prefixed-string one
+  (`usr_`, 5–40 characters) and the strict ULID assertion lives at the point of generation —
+  `newUserId()` in P1-07. A validator that rejects the id the system is currently running as
+  is a validator that gets deleted under pressure (P1-01).
+- **The whole shape exists from Phase 1**, including the fields Phases 3, 4 and 5 populate.
+  They are optional and unset until then. Adding a field to a stored shape later is a
+  migration; declaring it optional now is a line.
+- `PATCH /v1/me` accepts a strict subset — `displayName`, `timezone`, `currency`,
+  `weekStartsOn`, `defaultReminderOffset`, `defaultLists` — and rejects anything else by
+  name rather than ignoring it. `email`, `cognitoSub` and `onboardingState` belong to the
+  auth flow, not to the user.
+
 ### 4.1 Activity
 
 ```ts
@@ -703,7 +764,7 @@ both `collection`, behaviour alone cannot say which one "add these ingredients" 
 target.
 
 ```ts
-// on User
+// on User — declared with the rest of the profile in §4.0
 defaultLists: Partial<Record<DefaultSlot, string>>;   // slot → listId
 ```
 
@@ -1102,7 +1163,12 @@ storing it would force a data migration every time somebody picks a date.
 ## 8. IDs
 
 - Prefixed ULIDs: `act_`, `usr_`, `lst_`, `itm_`, `psn_`, `exp_`, `stl_`, `dev_`, `att_`,
-  `upd_`. Generated with `ulid` — sortable by creation time, no coordination needed.
+  `upd_`, `rem_` (Reminder, §4.3), `sct_` (Shortcut, §3.2 — Phase 9). Generated with `ulid` —
+  sortable by creation time, no coordination needed. `rem_` and `sct_` were added in P1-06,
+  which needed a prefix for the two shapes that referenced ids this list had never named.
+- `usr_` is the one exception to the ULID rule in practice: see §4.0: the local development
+  identity is the constant `usr_local_dev`, so the shared validator checks the prefix and the
+  ULID assertion lives at the generator.
 - Invite tokens are **not** ULIDs (they'd leak creation order and be guessable). Use
   `crypto.randomBytes(16)` base62-encoded.
 - Never expose raw DynamoDB `pk`/`sk` over the API. The API speaks in IDs.

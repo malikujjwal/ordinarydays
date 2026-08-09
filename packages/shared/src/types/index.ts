@@ -1,45 +1,49 @@
 /**
- * Domain literal unions, canonical in `docs/02-architecture/data-model.md` §4.1 and §3.5.
+ * The `@od/shared/types` public surface.
  *
- * Entity interfaces (Activity, List, Person, Expense, …) arrive with the phase tasks that
- * build them. What is here is the vocabulary those interfaces are written in, and it is
- * the vocabulary the schemas in `../schemas/` infer their types from — never a
- * hand-written twin of a schema (`tech-stack.md` §5.1).
+ * A barrel and nothing else: the literal unions live in `vocabulary.ts` and the entity
+ * interfaces in a file each, so that an entity can import the vocabulary without importing
+ * the barrel that re-exports it. That cycle is what `no-circular` catches.
+ *
+ * `data-model.md` §4 calls these the authoritative shapes; the Zod schemas in `../schemas/`
+ * are the runtime check, and a both-ways `expectTypeOf` in each schema's test pins them
+ * together — really pins them, since P1-06's `tsconfig.test.json` typechecks the assertions.
  */
-
-/** What the user explicitly chose to create. Never inferred from words (`CLAUDE.md` rule 2). */
-export type ActivityObjectKind = 'task' | 'plan';
-
-/** The six stored types. A required field, not six tables (`data-model.md` §1). */
-export type ActivityType = 'task' | 'meal' | 'watch' | 'event' | 'outing' | 'custom';
-
-/** The five kinds a Plan may present as. "General" maps to `custom`. */
-export type PlanType = Exclude<ActivityType, 'task'>;
-
-export type ActivityStatus =
-  | 'saved'
-  | 'scheduled'
-  | 'completed'
-  | 'skipped'
-  | 'cancelled';
-
-export type ActivityVisibility = 'private' | 'shared';
-
-export type ActivityOutcome =
-  | 'done'
-  | 'attended'
-  | 'watched'
-  | 'had_it'
-  | 'didnt_happen'
-  | 'didnt_go';
-
-/**
- * Which GSI1 feed an ActivityIndex row sits in (`data-model.md` §3.5).
- *
- * `S` scheduled · `P` needs a date · `N` anytime · `R` recurring series.
- *
- * `P` and `N` are separate on purpose: both are undated, but `N` means "today, whenever"
- * and `P` means "someday, undecided". Collapsing them sends an undecided group plan to
- * Today's Anytime list next to a solo errand.
- */
-export type Gsi1Bucket = 'S' | 'P' | 'N' | 'R';
+export type {
+  Activity,
+  ActivityBase,
+  ActivityDetails,
+  ActivityLocation,
+  ActivitySchedule,
+  MealIngredient,
+  OutingReservation,
+  PlanActivity,
+  TaskActivity,
+} from './activity.js';
+export type { Occurrence, OccurrenceStatus } from './occurrence.js';
+export type {
+  MonthNumber,
+  Recurrence,
+  RecurrenceFreq,
+  RecurrenceMode,
+  RecurrenceSegment,
+  Weekday,
+} from './recurrence.js';
+export type { Reminder } from './reminder.js';
+export type {
+  DefaultSlot,
+  OnboardingState,
+  PatchUserInput,
+  QuietHours,
+  User,
+  WeekStart,
+} from './user.js';
+export type {
+  ActivityObjectKind,
+  ActivityOutcome,
+  ActivityStatus,
+  ActivityType,
+  ActivityVisibility,
+  Gsi1Bucket,
+  PlanType,
+} from './vocabulary.js';

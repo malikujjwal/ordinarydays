@@ -497,14 +497,45 @@ Migration registry applying v1 → v1 as identity and a synthetic v1 → v2 corr
 **Files.**
 
 ```
-packages/shared/src/types/user.ts  activity.ts  reminder.ts  index.ts
-packages/shared/src/schemas/user.ts  activity.ts  reminder.ts  capture.ts
+packages/shared/src/types/user.ts  activity.ts  recurrence.ts  reminder.ts
+                                   occurrence.ts  index.ts
+packages/shared/src/schemas/user.ts  activity.ts  recurrence.ts  reminder.ts
+                                     occurrence.ts  capture.ts  index.ts
+packages/shared/tsconfig.test.json   new — see the note below
 ```
 
+> **Amended during implementation, 2026-08-08.** Four corrections, each found by doing the
+> work rather than by re-reading:
+>
+> 1. **`data-model.md` §4 had no `User` shape.** The Approach below said to transcribe §4.1
+>    and §4.4 — Activity and type-specific details; neither is User, and the profile's fields
+>    were spread across five documents. P1-06 writes **§4.0 User** into `data-model.md` and
+>    transcribes from there.
+> 2. **`recurrence.ts` and `occurrence.ts` were unlisted.** `Activity.recurrence` is part of
+>    §4.1, so the segmented shape cannot be deferred; `Occurrence` ships as a **type only**
+>    (no engine, no rows — those stay Phase 2) so P2-01 inherits the shape rather than
+>    inventing it.
+> 3. **`capture.ts` was in the file list but described nowhere.** It owns `CreationTarget`,
+>    which has a third arm the activity inputs do not — `{ objectKind: 'listItem', listId }`
+>    — plus the three request shapes P1-18 validates against.
+> 4. **`expectTypeOf` was asserting nothing.** Test files are excluded from every `tsc`
+>    invocation, and `expectTypeOf` is erased at runtime, so the type-level assertions this
+>    task depends on — and the one already in `schemas/error.test.ts` — passed
+>    unconditionally. `tsconfig.test.json` typechecks them; it emits nothing and exists to
+>    fail. It immediately surfaced two long-standing type errors in `openapi.test.ts`.
+
 **Approach.** Transcribe
-[`../02-architecture/data-model.md#41-activity`](../02-architecture/data-model.md#41-activity)
-and §4.4 into TypeScript, then write the Zod schemas that produce those types by inference —
-never hand-write a type beside a schema.
+[`../02-architecture/data-model.md#40-user`](../02-architecture/data-model.md#40-user),
+[§4.1](../02-architecture/data-model.md#41-activity), §4.2, §4.3, §4.4 and §4.5 into
+TypeScript, then write the Zod schemas beside them. The interface in `types/` is the
+authoritative shape and the schema is the runtime check; neither restates the other, and a
+both-ways `expectTypeOf` in each schema's test is what stops them drifting.
+
+Two shapes cannot be spelled the way the canonical docs write them, and the tests say so:
+`Activity` is **two interfaces extending `ActivityBase`** rather than
+`ActivityBase & (… | …)`, because the compiler treats an intersection as distinct from the
+flat object Zod infers; and the create inputs are **strict**, because a plain object strips
+unknown keys and would silently accept — then drop — participants on a Task.
 
 `createActivityInput` is the shape in
 [`../02-architecture/api-contract.md#23-activities`](../02-architecture/api-contract.md#23-activities),

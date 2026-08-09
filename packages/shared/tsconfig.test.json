@@ -1,0 +1,28 @@
+{
+  "//": [
+    "Typechecks the test files, which the build config deliberately excludes.",
+    "",
+    "`tsconfig.json` sets rootDir/outDir and emits declarations, so a test left in its",
+    "`include` compiles into `dist/`. Excluding them is right — but it meant `expectTypeOf`",
+    "assertions were never checked by anything: `expectTypeOf` is erased at runtime, so a",
+    "type-level assertion in an untypechecked file passes unconditionally. P1-06 found this",
+    "by writing `z.infer` with no `z` in scope and watching `tsc -b` succeed.",
+    "",
+    "That matters here more than anywhere: this package's whole contract is that the Zod",
+    "schemas and the hand-written interfaces in `types/` describe the same shape, and the",
+    "only thing asserting it is `expectTypeOf`. This config is what makes that assertion",
+    "real. It emits nothing; it exists to fail.",
+    "",
+    "Same shape and same purpose as `tsconfig.scripts.json`, and chained after it in the",
+    "package's `typecheck` script."
+  ],
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"],
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true
+  },
+  "include": ["src/**/*.test.ts", "src/**/*.ts"]
+}

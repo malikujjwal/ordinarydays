@@ -26,6 +26,24 @@ import { healthResponse } from './schemas/health.js';
  */
 export const registry = new OpenAPIRegistry();
 
+/**
+ * **P1-06's schemas are not registered here, and cannot be.** Tried and reverted; the note
+ * is what stops the next agent spending the same twenty minutes.
+ *
+ * `registry.register(id, schema)` is the API for adding a component without a path, and it
+ * calls `zodSchema.openapi(refId)` internally — a method that exists only after
+ * `extendZodWithOpenApi(z)` has patched Zod. This package deliberately does not call that
+ * (see the note above): the patch reaches only schemas constructed *after* it runs, every
+ * schema here is built at module load, and whether registration worked would then depend on
+ * import order. Calling `register` without it throws `zodSchema.openapi is not a function`.
+ *
+ * So a shape reaches `components/schemas` when a **registered path references it**, and its
+ * `.meta({ id })` supplies the name. `User`, `Activity`, `CreateActivityInput` and the rest
+ * therefore appear as P1-07, P1-11 and their siblings mount routes — which is what
+ * `agent-playbook.md` §7 step 15 already requires of every endpoint, so nothing is lost
+ * except the illusion that this task could front-run it.
+ */
+
 registry.registerPath({
   method: 'get',
   path: '/v1/health',

@@ -1,3 +1,4 @@
+import type { SchemaObject } from 'openapi3-ts/oas31';
 import { describe, expect, it } from 'vitest';
 import { buildOpenApiDocument } from './openapi.js';
 
@@ -7,6 +8,27 @@ import { buildOpenApiDocument } from './openapi.js';
  * endpoint could quietly break.
  */
 const document = buildOpenApiDocument();
+
+/**
+ * Narrows the generator's `SchemaObject | ReferenceObject` to the inline form.
+ *
+ * Every component this document defines is inline; a `$ref` here would mean the generator
+ * emitted a reference where the test expected a definition, which is worth failing on
+ * loudly rather than reading as "the property is missing".
+ *
+ * Added in P1-06, when `tsconfig.test.json` started typechecking this file and surfaced two
+ * long-standing errors — `.properties` does not exist on `ReferenceObject`. The assertions
+ * were always correct at runtime; nothing had ever checked their types.
+ */
+function asSchema(value: unknown, what: string): SchemaObject {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error(`Expected ${what} to be a schema object, got ${String(value)}`);
+  }
+  if ('$ref' in value) {
+    throw new Error(`Expected ${what} to be inline, got a $ref`);
+  }
+  return value as SchemaObject;
+}
 
 describe('the generated document', () => {
   it('describes every endpoint registered so far', () => {
@@ -54,19 +76,18 @@ describe('the generated document', () => {
    * a stage there without regenerating, the checked-in file goes stale and CI says so.
    */
   it('takes the health payload from the shared schema', () => {
-    const health = document.components?.schemas?.HealthResponse;
+    const health = asSchema(
+      document.components?.schemas?.HealthResponse,
+      'HealthResponse',
+    );
+    const data = asSchema(health.properties?.data, 'HealthResponse.data');
 
-    expect(health?.properties?.data?.properties?.stage?.enum).toEqual([
+    expect(asSchema(data.properties?.stage, 'HealthResponse.data.stage').enum).toEqual([
       'local',
       'dev',
       'prod',
     ]);
-    expect(health?.properties?.data?.required).toEqual([
-      'status',
-      'sha',
-      'stage',
-      'coldStart',
-    ]);
+    expect(data.required).toEqual(['status', 'sha', 'stage', 'coldStart']);
   });
 
   it('emits 3.1.0, which is what the $ref-in-content form above assumes', () => {

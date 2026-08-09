@@ -60,6 +60,24 @@ export function ulidId<P extends string>(prefix: P) {
 }
 
 /**
+ * A user id: `usr_` followed by a ULID in production, but **not** asserted as one here.
+ *
+ * `LocalIdentityProvider` runs as the constant `usr_local_dev` for the whole of Phases 1–3
+ * (P1-01), and a validator that rejects the id the system is currently running as is a
+ * validator that gets deleted under pressure. So this is a prefixed-string check, and the
+ * strict ULID assertion lives at the point where an id is **generated** — `newUserId()` in
+ * P1-07 — which is the only place it can be enforced without lying about stored data.
+ *
+ * The bounds are wide enough for `usr_local_dev` (13) and a `usr_` ULID (30), and tight
+ * enough that a key fragment cannot be smuggled through a user id.
+ */
+export const userId = z
+  .string()
+  .min(5)
+  .max(40)
+  .regex(/^usr_[A-Za-z0-9_-]+$/, 'Expected a usr_ id');
+
+/**
  * An opaque pagination cursor: base64url of a DynamoDB `LastEvaluatedKey`.
  *
  * Opaque to the client by contract — it is decoded only by the cursor helper in the API.
@@ -75,4 +93,5 @@ export type IsoDate = z.infer<typeof isoDate>;
 export type Hhmm = z.infer<typeof hhmm>;
 export type IanaTimezone = z.infer<typeof ianaTimezone>;
 export type Cents = z.infer<typeof cents>;
+export type UserId = z.infer<typeof userId>;
 export type Cursor = z.infer<typeof cursor>;

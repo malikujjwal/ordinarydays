@@ -31,3 +31,29 @@ export const MAX_ACTIVE_SERIES = 200;
 
 /** How far back `include=overdue` rolls incomplete tasks forward. */
 export const OVERDUE_WINDOW_DAYS = 30;
+
+/**
+ * Characters in a free-text sub-field: `service`, `placeName`, `organiser`, ingredient
+ * `name`, reservation `name`/`reference` (`activities.md` §3 rule 6).
+ */
+export const MAX_FREE_TEXT_LEN = 120;
+
+/** Characters in `location.address`. The label uses {@link MAX_FREE_TEXT_LEN}. */
+export const MAX_ADDRESS_LEN = 300;
+
+/** Ingredient rows on one meal (`activities.md` §4.2). */
+export const MAX_INGREDIENTS = 60;
+
+/**
+ * Rule segments in one recurring series (`data-model.md` §4.2).
+ *
+ * Segments are append-only — every "all future occurrences" edit adds one — so this is the
+ * number of times a series' rule may be changed before the user must start a new series.
+ */
+export const MAX_RECURRENCE_SEGMENTS = 20;
+
+/**
+ * Date suggestions on one undated plan (`data-model.md` §4.3a). A nudge toward a date, not
+ * a scheduling poll.
+ */
+export const MAX_DATE_SUGGESTIONS = 5;
