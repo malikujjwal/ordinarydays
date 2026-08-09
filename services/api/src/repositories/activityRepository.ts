@@ -1,5 +1,6 @@
 import { TABLE } from '@od/shared/table';
 import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
+import { monotonicFactory } from 'ulid';
 import { deleteAll, getItem, type Page, query, queryAll } from './base.js';
 import {
   activityIndex,
@@ -13,6 +14,7 @@ import {
   gsi1Recurring,
   gsi1Scheduled,
   occurrenceRange,
+  participantPrefix,
   reminder as reminderKey,
 } from './keys.js';
 import type { StoredItem } from './migrate.js';
@@ -30,9 +32,13 @@ import { type TransactItem, transactWrite } from './tx.js';
  * every authorisation rule are P1-10's, one layer up; this file would be the wrong place for
  * them because a rule enforced here is a rule the service cannot test without a database.
  *
- * It is also **deterministic**: no clock, no id generation. It receives a fully-formed
- * `Activity` whose `activityId`, `createdAt` and `updatedAt` are already set, which is what
- * makes the conditional-update-on-`updatedAt` path testable without freezing time.
+ * Its write functions are **deterministic**: no clock, no id generation. They receive a
+ * fully-formed `Activity` whose `activityId`, `createdAt` and `updatedAt` are already set,
+ * which is what makes the conditional-update-on-`updatedAt` path testable without freezing
+ * time. The two id **generators** below are exports beside them, not calls inside them, so
+ * that property is unchanged — the same arrangement `newUserId` has in `userRepository.ts`
+ * and `newDeviceId` in `deviceRepository.ts`, and the reason a service can mint an id and
+ * still hand this layer a value it did not invent.
  *
  * ## The rule that runs through all of it
  *
@@ -40,6 +46,26 @@ import { type TransactItem, transactWrite } from './tx.js';
  * of a current user here and no access to the Hono context — the tenancy is in the key, and
  * `keys.ts` is where it is built.
  */
+
+/**
+ * The `act_` and `rem_` id generators (`data-model.md` §8), added in P1-10.
+ *
+ * `monotonicFactory`, not the bare `ulid()`, for the reason `newUserId` records: plain ULIDs
+ * minted inside one millisecond break the tie with random bits and sort arbitrarily, which is
+ * exactly the time-ordering guarantee §8 says the choice was made for. One factory per
+ * sequence, so an activity id and a reminder id minted in the same request do not have to
+ * share a counter to be individually ordered.
+ */
+const nextActivityUlid = monotonicFactory();
+const nextReminderUlid = monotonicFactory();
+
+export function newActivityId(): string {
+  return `act_${nextActivityUlid()}`;
+}
+
+export function newReminderId(): string {
+  return `rem_${nextReminderUlid()}`;
+}
 
 /** The `entity` discriminator every item carries (`data-model.md` §3). */
 const ENTITY = {
@@ -336,6 +362,24 @@ export async function getActivityPartition(activityId: string): Promise<StoredIt
 /** The `META` row alone, for the paths that do not need the whole partition. */
 export async function getActivityMeta(activityId: string): Promise<Activity | undefined> {
   return getItem<Activity & StoredItem>(activityMeta(activityId));
+}
+
+/**
+ * The `PART#` rows alone — the participant half of `assertActivityAccess` (P1-10).
+ *
+ * Added in P1-10 rather than Phase 6, because the authorisation rule needs it before the
+ * first participant exists: `authz.ts` reads it only when the caller is **not** the owner, so
+ * the Phase 1 path — every activity belongs to the one user there is — never issues this
+ * query at all. Bounded by `MAX_PARTICIPANTS`, which is why `queryAll` is safe here and is
+ * not safe for anything a user can grow without limit.
+ *
+ * Returns rows rather than a `Participant[]`: there is no `Participant` type in
+ * `packages/shared` until Phase 6 defines it, and inventing one here to satisfy a read would
+ * be inventing a shape against no implementation.
+ */
+export async function listParticipants(activityId: string): Promise<StoredItem[]> {
+  const prefix = participantPrefix(activityId);
+  return queryAll<StoredItem>({ pk: prefix.pk }, { skPrefix: prefix.skPrefix });
 }
 
 export interface PatchOptions extends CreateOptions {

@@ -53,6 +53,20 @@ export const participant = (activityId: string, personId: string) => ({
   sk: `PART#${personId}`,
 });
 
+/**
+ * Every participant on one activity.
+ *
+ * Added in P1-10, which needs it before Phase 6 writes the first `PART#` row: the
+ * authorisation rule "a participant may read, and a participant of the parent may act on a
+ * child" is a rule about keys, not about whether any participant exists yet, and it is
+ * enforced from the first activity endpoint rather than added to eleven call sites later.
+ * Bounded by `MAX_PARTICIPANTS`, so its reader may `queryAll`.
+ */
+export const participantPrefix = (activityId: string) => ({
+  pk: activityPk(activityId),
+  skPrefix: 'PART#',
+});
+
 /** Phase 7. */
 export const expense = (activityId: string, expenseId: string) => ({
   pk: activityPk(activityId),

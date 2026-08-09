@@ -42,9 +42,32 @@ const admin = new DynamoDBClient({
 const ALICE = 'usr_int_repo_alice';
 const BEN = 'usr_int_repo_ben';
 
+/**
+ * A fresh activity id, **unique to this run** (`data-model.md` §8's Crockford alphabet, which
+ * excludes I, L, O and U).
+ *
+ * ## Why the run tag is here
+ *
+ * `beforeEach` empties the two `USER#` partitions, but an `ACT#<id>` partition cannot be
+ * enumerated without a `Scan` and so is never cleaned. With a counter alone the ids restart
+ * at the same values every run, so each test inherits whatever the *previous* run left in the
+ * partition at its sequence position — and inserting a test anywhere in the file shifts every
+ * id after it onto somebody else's leftovers.
+ *
+ * That is not hypothetical: adding one case in P1-10 moved
+ * `writes exactly two items for a weekly series` onto a partition an earlier run had left
+ * three `OCC#` rows in, and it failed for a reason that had nothing to do with recurrence.
+ * The run tag makes every partition this run touches its own, so a count is a fact about this
+ * run rather than about the history of the container.
+ */
+const RUN = Array.from(
+  { length: 4 },
+  () => '0123456789ABCDEFGHJKMNPQRSTVWXYZ'[Math.floor(Math.random() * 32)],
+).join('');
+
 let seq = 0;
-const nextId = () =>
-  `act_01J8XKQ2M4N5P6R7S8T9V${String(seq++).padStart(4, '0')}`.slice(0, 30);
+/** `act_` + 26: 18 fixed characters, the 4-character run tag, and a 4-digit counter. */
+const nextId = () => `act_01J8XKQ2M4N5P6R7S8${RUN}${String(seq++).padStart(4, '0')}`;
 
 const anActivity = (overrides: Partial<Activity> = {}): Activity =>
   ({
@@ -163,6 +186,25 @@ describe('create and read back', () => {
       title: 'Book hotel',
       status: 'saved',
     });
+  });
+
+  /**
+   * `listParticipants`, added in P1-10 for `assertActivityAccess` (access pattern 4's
+   * partition, read by prefix).
+   *
+   * **Phase 1 writes no `PART#` row**, so the case worth proving against a real table is that
+   * the prefix query returns an empty list rather than the `META` and `REM#` rows that share
+   * the partition — a `begins_with` on the wrong prefix would happily return them, and the
+   * authorisation check would then admit anybody whose partition had any row in it at all.
+   */
+  it('reads no participants from a partition that has other rows in it', async () => {
+    const subject = anActivity({ title: 'Dinner' });
+    await repo.createActivity(ALICE, subject, {
+      reminders: [{ reminderId: 'rem_01J8XKQ2M4N5P6R7S8T9V0W1AA', offsetMinutes: -15 }],
+    });
+
+    expect(await repo.getActivityPartition(subject.activityId)).not.toHaveLength(0);
+    expect(await repo.listParticipants(subject.activityId)).toEqual([]);
   });
 });
 

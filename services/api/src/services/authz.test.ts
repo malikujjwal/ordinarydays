@@ -1,0 +1,260 @@
+import type { Activity } from '@od/shared/types';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { assertActivityAccess } from './authz.js';
+
+/**
+ * `assertActivityAccess` (P1-10 rule 2), with the repository mocked.
+ *
+ * **Every one of these runs against invented user ids**, and that is the point: in Phase 1
+ * every activity belongs to the only user there is, so the participant and stranger branches
+ * are unreachable through the API. They are still rules about keys, and writing the tests now
+ * is what stops the checks being bolted onto eleven shipped call sites in Phase 6.
+ */
+vi.mock('../repositories/activityRepository.js', () => ({
+  getActivityMeta: vi.fn(),
+  listParticipants: vi.fn(() => Promise.resolve([])),
+}));
+
+const repository = await import('../repositories/activityRepository.js');
+
+const OWNER = 'usr_owner';
+const PARTICIPANT = 'usr_participant';
+const STRANGER = 'usr_stranger';
+
+const PLAN = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+const PREP = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+
+/**
+ * `Record<string, unknown>` rather than `Partial<Activity>`: `Activity` is a discriminated
+ * union on `objectKind`, so a partial of it pins `type` to whichever arm the base fixture
+ * picked and a `task` override stops compiling against a `plan` base. The cast below is what
+ * the union is enforced by; the overrides are test data on the way in.
+ */
+const activity = (overrides: Record<string, unknown> = {}): Activity =>
+  ({
+    activityId: PLAN,
+    ownerId: OWNER,
+    status: 'saved',
+    objectKind: 'plan',
+    type: 'outing',
+    title: 'Dinner',
+    details: { kind: 'outing' },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: '2026-08-09T00:00:00.000Z',
+    updatedAt: '2026-08-09T00:00:00.000Z',
+    schemaVersion: 1,
+    ...overrides,
+  }) as Activity;
+
+/** A stored `PART#` row. `userId` is what the check matches on (`data-model.md` §4.7). */
+const participantRow = (userId: string) => ({
+  entity: 'Participant',
+  activityId: PLAN,
+  personId: 'psn_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+  userId,
+  displayName: 'Someone',
+  rsvp: 'going',
+  role: 'participant',
+  isGuest: false,
+});
+
+beforeEach(() => {
+  vi.mocked(repository.getActivityMeta).mockReset();
+  vi.mocked(repository.listParticipants).mockReset();
+  vi.mocked(repository.listParticipants).mockResolvedValue([]);
+});
+
+describe('the owner', () => {
+  it.each(['read', 'write', 'owner'] as const)('may %s', async (level) => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
+
+    const access = await assertActivityAccess(OWNER, PLAN, level);
+
+    expect(access.isOwner).toBe(true);
+    expect(access.activity.activityId).toBe(PLAN);
+  });
+
+  /**
+   * The row it loaded comes back, so a service method does not `GetItem` the same key twice
+   * for one request — the round-trip budget is 3 for an ordinary endpoint
+   * (`definition-of-done.md` §6).
+   */
+  it('never reads the participant list, so the ordinary path is one round trip', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
+
+    await assertActivityAccess(OWNER, PLAN, 'owner');
+
+    expect(repository.listParticipants).not.toHaveBeenCalled();
+  });
+});
+
+describe('a stranger', () => {
+  /**
+   * `404`, never `403`. A `403` confirms the activity exists, and that is a fact a stranger
+   * is not entitled to (`definition-of-done.md` §7 rule 5).
+   */
+  it.each(['read', 'write', 'owner'] as const)(
+    'gets not_found rather than forbidden for %s',
+    async (level) => {
+      vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
+
+      await expect(assertActivityAccess(STRANGER, PLAN, level)).rejects.toMatchObject({
+        code: 'not_found',
+      });
+    },
+  );
+
+  /**
+   * The same answer, from the same line, for an id that does not exist — so the two cannot
+   * drift into a message or a timing difference a prober could measure.
+   */
+  it('gets the identical answer for an activity that does not exist', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(undefined);
+
+    await expect(assertActivityAccess(STRANGER, PLAN, 'read')).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'Activity not found.',
+    });
+  });
+
+  it('is not admitted by a participant row belonging to somebody else', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
+    vi.mocked(repository.listParticipants).mockResolvedValue([
+      participantRow(PARTICIPANT),
+    ]);
+
+    await expect(assertActivityAccess(STRANGER, PLAN, 'read')).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+
+  /** A guest has no `userId` at all; an absent one must never match an absent caller. */
+  it('is not admitted by a guest row with no userId', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
+    vi.mocked(repository.listParticipants).mockResolvedValue([
+      { entity: 'Participant', personId: 'psn_x', isGuest: true },
+    ]);
+
+    await expect(assertActivityAccess(STRANGER, PLAN, 'read')).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+});
+
+describe('a participant', () => {
+  beforeEach(() => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
+    vi.mocked(repository.listParticipants).mockResolvedValue([
+      participantRow(PARTICIPANT),
+    ]);
+  });
+
+  it.each(['read', 'write'] as const)('may %s', async (level) => {
+    const access = await assertActivityAccess(PARTICIPANT, PLAN, level);
+
+    expect(access.isOwner).toBe(false);
+    expect(access.viaParent).toBe(false);
+  });
+
+  /**
+   * `403` here and nowhere else. The participant can already see this plan, so naming the
+   * limit is the answer to their question rather than a disclosure — and completing a plan
+   * asserts a shared fact about an event, which is the owner's to assert (ADR-048).
+   */
+  it('gets forbidden, not not_found, for an owner-only action', async () => {
+    await expect(assertActivityAccess(PARTICIPANT, PLAN, 'owner')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+  });
+
+  it('is told what the limit is, since they can already see the activity', async () => {
+    await expect(assertActivityAccess(PARTICIPANT, PLAN, 'owner')).rejects.toMatchObject({
+      message: 'Only the person who created this can change it.',
+    });
+  });
+});
+
+/**
+ * A prep task is an item on a shared checklist, not a statement about the plan's outcome. If
+ * Alice books the hotel for a trip we are planning together, she must be able to tick
+ * `Book hotel` whether or not she typed it (`api-contract.md` §3, ADR-051).
+ */
+describe('a participant of the parent, acting on a prep task', () => {
+  const parentedBy = (rows: Record<string, unknown>[]) => {
+    vi.mocked(repository.getActivityMeta).mockImplementation((id: string) =>
+      Promise.resolve(id === PREP ? prep() : activity()),
+    );
+    vi.mocked(repository.listParticipants).mockImplementation((id: string) =>
+      Promise.resolve(id === PLAN ? rows : []),
+    );
+  };
+
+  it.each(['read', 'write'] as const)('may %s the child', async (level) => {
+    parentedBy([participantRow(PARTICIPANT)]);
+
+    const access = await assertActivityAccess(PARTICIPANT, PREP, level);
+
+    expect(access.viaParent).toBe(true);
+    expect(access.activity.activityId).toBe(PREP);
+  });
+
+  /**
+   * The inheritance stops at `write`. Deleting a prep task is not a checklist tick, so it
+   * stays with the child's owner.
+   */
+  it('may not take an owner-only action on the child', async () => {
+    parentedBy([participantRow(PARTICIPANT)]);
+
+    await expect(assertActivityAccess(PARTICIPANT, PREP, 'owner')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+  });
+
+  it('admits the parent’s owner, who is not on their own participant list', async () => {
+    vi.mocked(repository.getActivityMeta).mockImplementation((id: string) =>
+      Promise.resolve(
+        id === PREP
+          ? prep({ ownerId: 'usr_someone_else' })
+          : activity({ ownerId: OWNER }),
+      ),
+    );
+
+    const access = await assertActivityAccess(OWNER, PREP, 'write');
+
+    expect(access.viaParent).toBe(true);
+  });
+
+  it('still refuses a stranger to the parent', async () => {
+    parentedBy([participantRow(PARTICIPANT)]);
+
+    await expect(assertActivityAccess(STRANGER, PREP, 'read')).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+
+  /** A dangling parent pointer is not an admission ticket. */
+  it('refuses when the parent has been deleted', async () => {
+    vi.mocked(repository.getActivityMeta).mockImplementation((id: string) =>
+      Promise.resolve(id === PREP ? prep() : undefined),
+    );
+
+    await expect(assertActivityAccess(PARTICIPANT, PREP, 'read')).rejects.toMatchObject({
+      code: 'not_found',
+    });
+  });
+});
+
+/** The child fixture, hoisted so the block above can vary it without restating the shape. */
+function prep(overrides: Record<string, unknown> = {}): Activity {
+  return activity({
+    activityId: PREP,
+    objectKind: 'task',
+    type: 'task',
+    parentActivityId: PLAN,
+    ...overrides,
+  });
+}

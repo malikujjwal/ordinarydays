@@ -6,6 +6,8 @@ import {
   createActivity,
   deriveBucket,
   localDateTime,
+  newActivityId,
+  newReminderId,
   patchActivity,
 } from './activityRepository.js';
 
@@ -71,6 +73,46 @@ const sentItems = () =>
     []) as Array<Record<string, { Item?: Record<string, unknown>; Key?: unknown }>>;
 
 const verbs = () => sentItems().map((entry) => Object.keys(entry)[0]);
+
+/**
+ * The `act_` and `rem_` generators (P1-10), which the service calls before handing this layer
+ * a fully-formed row. Same properties `newUserId` and `newDeviceId` are held to.
+ */
+describe('id generation', () => {
+  it.each([
+    ['newActivityId', newActivityId, /^act_[0-9A-HJKMNP-TV-Z]{26}$/],
+    ['newReminderId', newReminderId, /^rem_[0-9A-HJKMNP-TV-Z]{26}$/],
+  ])('%s is its prefix plus a 26-character ULID', (_name, mint, shape) => {
+    expect(mint()).toMatch(shape);
+  });
+
+  it.each([
+    ['newActivityId', newActivityId],
+    ['newReminderId', newReminderId],
+  ])('%s is unique across calls', (_name, mint) => {
+    expect(new Set(Array.from({ length: 50 }, mint)).size).toBe(50);
+  });
+
+  /**
+   * A create mints an activity id and up to three reminder ids in one tick. Plain `ulid()`
+   * would break the tie with random bits and sort them arbitrarily, which is the
+   * time-ordering guarantee `data-model.md` §8 says the prefix-ULID choice was made for.
+   */
+  it.each([
+    ['newActivityId', newActivityId],
+    ['newReminderId', newReminderId],
+  ])('%s sorts by creation time even within one millisecond', (_name, mint) => {
+    const ids = Array.from({ length: 20 }, mint);
+    expect([...ids].sort()).toEqual(ids);
+  });
+
+  it('passes the shared schemas', async () => {
+    const { ulidId } = await import('@od/shared/schemas');
+
+    expect(ulidId('act').safeParse(newActivityId()).success).toBe(true);
+    expect(ulidId('rem').safeParse(newReminderId()).success).toBe(true);
+  });
+});
 
 /**
  * `data-model.md` §3.5, transcribed. **Order matters** — each case here is a pair that would
