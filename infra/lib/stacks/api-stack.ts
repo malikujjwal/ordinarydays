@@ -64,11 +64,23 @@ export class ApiStack extends cdk.Stack {
         LOG_LEVEL: cfg.stage === 'prod' ? 'info' : 'debug',
         GIT_SHA: process.env.GITHUB_SHA ?? 'local',
         WEB_ORIGINS: cfg.webOrigins.join(','),
+        /**
+         * **A literal, never a parameter** (P1-02, mechanism 2 of three).
+         *
+         * `AUTH_MODE=local` makes the API run `LocalIdentityProvider`, which returns the
+         * constant `usr_local_dev` for every caller — one shared account holding everybody's
+         * data, silently. Deployed functions must never be able to reach that mode, so this
+         * is hard-coded here rather than read from `cfg`, `process.env` or a context value:
+         * there is no input to this stack that can change it, which is what makes the
+         * failure impossible at **synth** rather than merely unlikely at runtime.
+         *
+         * `cognito` names a provider Phase 4 (P4-05) implements. Until then a deployed
+         * function refuses to start, which is the correct behaviour for a stage that has no
+         * working identity — and is safe because nothing is deployed before Phase 4.
+         */
+        AUTH_MODE: 'cognito',
       },
       // STAGE is set by NodeLambda for every function.
-      // AUTH_MODE is deliberately absent: it arrives in P1-02 together with the config
-      // field and the identity middleware that read it. An environment variable nothing
-      // consumes reads as an implemented control that is not one.
     });
     this.fn = api.fn;
 

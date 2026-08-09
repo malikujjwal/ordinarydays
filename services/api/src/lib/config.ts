@@ -64,3 +64,56 @@ export function parseConfig(env: NodeJS.ProcessEnv): Config {
 }
 
 export const config: Config = parseConfig(process.env);
+
+/**
+ * **`AUTH_MODE=local` is only permitted when `STAGE=local`.** A throw, at module load,
+ * before any request is served (P1-02).
+ *
+ * ## What this stands between
+ *
+ * `LocalIdentityProvider` returns the constant `usr_local_dev` for every caller. Running it
+ * in a deployed environment means a single shared account holding everybody's data, and an
+ * API that returns `200` to the entire internet. That failure is **completely silent**: no
+ * error, no alarm, no unusual latency, nothing in a log that looks wrong. It would be found
+ * by someone noticing their data was not theirs.
+ *
+ * So it is a throw and not a warning. A warning is one line in a log nobody reads; a throw
+ * during init fails every invocation immediately, trips `ObservabilityStack`'s `api-errors`
+ * alarm on the first request, and presents as a failed deploy rather than as a breach found
+ * later.
+ *
+ * ## Why here, and why at module scope
+ *
+ * `lib/config.ts` is imported by `app.ts`, which is imported by both `index.ts` and
+ * `local.ts` — so this runs during Lambda **init** and during `tsx watch` startup. It cannot
+ * be skipped, deferred or reached around, and it does not wait for a request. Keeping it in
+ * this module rather than in `middleware/identity.ts` also guarantees it runs **before**
+ * `identityProvider` is constructed, regardless of import order.
+ *
+ * ## One-directional, deliberately
+ *
+ * `AUTH_MODE=cognito` with `STAGE=local` is **allowed**, and is exactly how Phase 4 lets a
+ * developer sign in against the deployed dev user pool from a laptop. Do not make the check
+ * symmetric.
+ *
+ * It reads `STAGE` and not `NODE_ENV`: `NODE_ENV` is `production` inside a bundled Lambda
+ * *and* commonly in a local production-mode build, so it does not name the environment.
+ * `STAGE` does.
+ *
+ * ## Two more mechanisms, in other files
+ *
+ * This is one of three (P1-02's defence-in-depth table), because it is the one place in the
+ * project where a single missed check has an unbounded consequence:
+ *
+ * 1. this throw — fails at runtime, during init;
+ * 2. `ApiStack` hard-codes `AUTH_MODE: 'cognito'` and never accepts it as a parameter —
+ *    fails at synth;
+ * 3. a CDK sweep asserting no synthesised function carries `AUTH_MODE: 'local'` — fails in
+ *    CI (`infra/test/all-stacks.test.ts`).
+ */
+if (config.AUTH_MODE === 'local' && config.STAGE !== 'local') {
+  throw new Error(
+    `AUTH_MODE=local is only permitted when STAGE=local. ` +
+      `STAGE=${config.STAGE}. Refusing to start.`,
+  );
+}

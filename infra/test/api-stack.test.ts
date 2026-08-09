@@ -50,13 +50,14 @@ describe('the API Lambda', () => {
    *
    * `infra` may not import `services/api` (`repo-structure.md` §3), so this is an exact-set
    * assertion rather than a shared constant. `STAGE` comes from `NodeLambda`; `AUTH_MODE`
-   * is deliberately absent until P1-02 ships the config field and middleware that read it.
+   * is set here as a literal (P1-02).
    */
   it('passes exactly the environment the API parses', () => {
     const fn = Object.values(prod.findResources('AWS::Lambda::Function'))[0] as {
       Properties: { Environment: { Variables: Record<string, unknown> } };
     };
     expect(Object.keys(fn.Properties.Environment.Variables).sort()).toEqual([
+      'AUTH_MODE',
       'GIT_SHA',
       'LOG_LEVEL',
       'MEDIA_BUCKET',
@@ -64,6 +65,23 @@ describe('the API Lambda', () => {
       'TABLE_NAME',
       'WEB_ORIGINS',
     ]);
+  });
+
+  /**
+   * Mechanism 2 of P1-02's three, asserted per stage.
+   *
+   * The value is a literal in `api-stack.ts` with no input that can change it. This asserts
+   * the *value*, not merely the key's presence: a stack that read the mode from `cfg` or
+   * from `process.env` would still pass the exact-set assertion above while being exactly
+   * the thing the guard exists to prevent.
+   */
+  it.each([
+    ['dev', dev],
+    ['prod', prod],
+  ] as const)('runs the %s API in cognito mode, never local', (_stage, template) => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: { AUTH_MODE: 'cognito' } },
+    });
   });
 
   it('holds no secret in its environment', () => {

@@ -306,6 +306,62 @@ describe('with the web export built', () => {
   });
 });
 
+/**
+ * Mechanism 3 of P1-02's three, and the reason it lives in the sweep rather than beside the
+ * API's own assertions: it must hold for **every function in the app**, including ones no
+ * Phase 1 task has written. A scheduler Lambda in Phase 2 or an SES handler in Phase 6
+ * inherits this on the day it is created, without anyone remembering to opt it in.
+ *
+ * `AUTH_MODE=local` runs `LocalIdentityProvider`, which answers as the constant
+ * `usr_local_dev` for every caller. On a deployed function that is one shared account
+ * holding everybody's data, failing silently. The runtime guard in
+ * `services/api/src/lib/config.ts` catches it during init; this catches it in CI, before
+ * a template that carries it can ever be deployed.
+ */
+describe('no deployed function can run the local identity provider', () => {
+  const functions = resourcesOfType('AWS::Lambda::Function');
+
+  it('has functions to sweep', () => {
+    expect(functions.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('sets AUTH_MODE to local nowhere in the app', () => {
+    const offenders = functions
+      .filter(({ resource }) => {
+        const env = (
+          resource.Properties as
+            | { Environment?: { Variables?: Record<string, unknown> } }
+            | undefined
+        )?.Environment?.Variables;
+        return env?.AUTH_MODE === 'local';
+      })
+      .map(({ name, logicalId }) => `${name}/${logicalId}`);
+
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * The API function is the only one that resolves an identity today, so it is the only one
+   * that must *state* a mode — asserted here as well as in `api-stack.test.ts` because that
+   * file proves the stack sets it and this one proves the swept app still contains it.
+   */
+  it('states cognito on every function that sets AUTH_MODE at all', () => {
+    const modes = functions
+      .map(
+        ({ resource }) =>
+          (
+            resource.Properties as
+              | { Environment?: { Variables?: Record<string, unknown> } }
+              | undefined
+          )?.Environment?.Variables?.AUTH_MODE,
+      )
+      .filter((mode): mode is string => mode !== undefined);
+
+    expect(modes.length).toBeGreaterThanOrEqual(2);
+    expect([...new Set(modes)]).toEqual(['cognito']);
+  });
+});
+
 describe('no IAM policy grants everything on everything', () => {
   it('has no statement with both Action * and Resource *', () => {
     const offenders: string[] = [];
