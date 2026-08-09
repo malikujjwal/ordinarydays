@@ -8,4 +8,5 @@
 export * from './endpoints/activities.js';
 export * from './endpoints/capture.js';
 export * from './endpoints/health.js';
+export * from './endpoints/me.js';
 export * from './http.js';

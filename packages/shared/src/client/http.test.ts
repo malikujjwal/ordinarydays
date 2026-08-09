@@ -140,6 +140,49 @@ describe('headers', () => {
     expect(calls[0]?.headers).not.toHaveProperty('Authorization');
   });
 
+  /**
+   * **The verification P1-19 owed and P1-20 pays.** The struck-through P1-19 subsection asks
+   * whichever task next touches the client to confirm that `getToken` is called *exactly once
+   * per request, including on a retried `GET`* — and says to add the case here rather than
+   * opening a branch for it. It was not covered; it is now.
+   *
+   * It was **not** holding: `getToken` ran inside the per-attempt function, so a retried GET
+   * called it twice. Fixed in `http.ts` rather than recorded, on the founder's call.
+   *
+   * Once per **request** is the property worth having because it makes the number of provider
+   * calls independent of transport luck. Re-reading per attempt bought nothing: `isRetryable`
+   * only retries `5xx` and network failures, so a `401` is never retried and a fresh token
+   * between attempts could not have recovered an expired one.
+   */
+  it('calls getToken exactly once per request', async () => {
+    const getToken = vi.fn(() => Promise.resolve('tok_123'));
+    const { client } = makeClient([{ status: 200, body: HEALTH_BODY }], {
+      tokenProvider: { getToken },
+    });
+
+    await client.request(health());
+
+    expect(getToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls getToken exactly once across a retried GET, not once per attempt', async () => {
+    const getToken = vi.fn(() => Promise.resolve('tok_123'));
+    const { client, calls } = makeClient(
+      [
+        { status: 500, body: undefined },
+        { status: 200, body: HEALTH_BODY },
+      ],
+      { tokenProvider: { getToken } },
+    );
+
+    await client.request(health());
+
+    // The retry really happened — otherwise the assertion below is about nothing.
+    expect(calls).toHaveLength(2);
+    expect(getToken).toHaveBeenCalledTimes(1);
+    expect(calls[1]?.headers.Authorization).toBe('Bearer tok_123');
+  });
+
   it('sets Content-Type only when there is a body', async () => {
     const { client, calls } = makeClient([{ status: 200, body: HEALTH_BODY }]);
 

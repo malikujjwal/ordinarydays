@@ -260,9 +260,8 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
   async function send<S extends z.ZodType>(
     options: RequestOptions<S>,
     requestId: string,
+    token: string | undefined,
   ): Promise<z.infer<S>> {
-    const token = await config.tokenProvider.getToken();
-
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'X-Request-Id': requestId,
@@ -345,10 +344,27 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
       const requestId = newRequestId();
       const retryable = isRetryableRequest(options.method, options.headers ?? {});
 
+      /**
+       * **One token decision per request, whatever the transport does underneath.**
+       *
+       * Read here rather than inside `send`, so a retried request reuses the token it
+       * started with instead of asking again on every attempt. Corrected in P1-20: the
+       * struck-through P1-19 subsection specifies "`getToken` is called exactly once per
+       * request including on a retried `GET`", and it was being called once per attempt.
+       *
+       * Re-reading per attempt bought nothing and cost predictability. `isRetryable` only
+       * retries `5xx` and network failures — a `401` is never retried — so a fresh token
+       * between attempts could not have recovered an expired one anyway; that is the
+       * one-retry-on-`401` rule, which is Phase 4's and deliberately absent here. What it
+       * did do is make the number of provider calls depend on transport luck, which is the
+       * last thing a seam with a single-flight refresh behind it should expose.
+       */
+      const token = await config.tokenProvider.getToken();
+
       let attempt = 0;
       for (;;) {
         try {
-          return await send(options, requestId);
+          return await send(options, requestId, token);
         } catch (error) {
           if (!retryable || attempt >= MAX_RETRIES || !isRetryable(error)) throw error;
           await sleep(backoffDelayMs(attempt));
