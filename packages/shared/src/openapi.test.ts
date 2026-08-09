@@ -34,8 +34,15 @@ describe('the generated document', () => {
   it('describes every endpoint registered so far', () => {
     // This assertion is what makes adding a route without registering it visible: the count
     // moves, and the person adding it has to say so. Saying so: **P1-07 added `/v1/me`**,
-    // whose `GET` and `PATCH` share one path entry.
-    expect(Object.keys(document.paths ?? {})).toEqual(['/v1/me', '/v1/health']);
+    // whose `GET` and `PATCH` share one path entry, and **P1-08 added the two device
+    // paths** — the `POST` collection and the `DELETE` on one id, which are separate paths
+    // because only one of them is templated.
+    expect(Object.keys(document.paths ?? {})).toEqual([
+      '/v1/me',
+      '/v1/me/devices',
+      '/v1/me/devices/{deviceId}',
+      '/v1/health',
+    ]);
   });
 
   it('carries a servers block with the local URL', () => {
@@ -54,15 +61,18 @@ describe('the generated document', () => {
   });
 
   /**
-   * `User` and `PatchUserInput` arrive with P1-07's paths, not before — a shape reaches
-   * `components/schemas` only when a registered path references it, which is the mechanism
-   * `openapi.ts` explains at length.
+   * `User` and `PatchUserInput` arrive with P1-07's paths and the three `Device` shapes with
+   * P1-08's, not before — a shape reaches `components/schemas` only when a registered path
+   * references it, which is the mechanism `openapi.ts` explains at length.
    */
   it('names its schemas as components instead of inlining them', () => {
     expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual([
+      'DeletedDevice',
+      'Device',
       'ErrorResponse',
       'HealthResponse',
       'PatchUserInput',
+      'RegisterDeviceInput',
       'User',
     ]);
   });

@@ -98,8 +98,40 @@ export async function putItem(
   );
 }
 
-export async function deleteItem(key: PageKey): Promise<void> {
-  await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: key }));
+/**
+ * `DeleteItem`.
+ *
+ * `condition` mirrors {@link putItem}'s and exists for the same reason: a delete that must
+ * distinguish "removed it" from "there was nothing there" expresses that as
+ * `attribute_exists(pk)` and reads the resulting `ConditionalCheckFailedException`, rather
+ * than paying for a read before every delete. Absent, the delete is unconditional — which is
+ * what a cascade wants, since a cascade has already read the partition it is clearing.
+ */
+export async function deleteItem(
+  key: PageKey,
+  condition?: {
+    expression: string;
+    names?: Record<string, string>;
+    values?: Record<string, unknown>;
+  },
+): Promise<void> {
+  await ddb.send(
+    new DeleteCommand({
+      TableName: TABLE_NAME,
+      Key: key,
+      ...(condition === undefined
+        ? {}
+        : {
+            ConditionExpression: condition.expression,
+            ...(condition.names === undefined
+              ? {}
+              : { ExpressionAttributeNames: condition.names }),
+            ...(condition.values === undefined
+              ? {}
+              : { ExpressionAttributeValues: condition.values }),
+          }),
+    }),
+  );
 }
 
 /** `UpdateItem`. Returns the updated item, upgraded on read. */

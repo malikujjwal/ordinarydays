@@ -8,6 +8,7 @@
 export * from './activity.js';
 export * from './capture.js';
 export * from './common.js';
+export * from './device.js';
 export * from './envelope.js';
 export * from './error.js';
 export * from './health.js';

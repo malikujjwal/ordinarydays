@@ -232,6 +232,49 @@ describe('get, put, update and delete', () => {
       Key: { pk: `USER#${ALICE}`, sk: 'PROFILE' },
     });
   });
+
+  /**
+   * Unconditional by default, which is what a cascade wants — it has already read the
+   * partition it is clearing and a condition would only add a way for it to fail halfway.
+   */
+  it('sends no condition when none is given', async () => {
+    ddbMock.on(DeleteCommand).resolves({});
+    await deleteItem(userProfile(ALICE));
+
+    expect(
+      ddbMock.commandCalls(DeleteCommand)[0]?.args[0]?.input.ConditionExpression,
+    ).toBeUndefined();
+  });
+
+  /**
+   * Added in P1-08, mirroring `putItem`'s: a delete that must distinguish "removed it" from
+   * "there was nothing there" says so as a condition and reads the resulting
+   * `ConditionalCheckFailedException`, rather than paying for a read before every delete.
+   */
+  it('passes a condition through with its names and values', async () => {
+    ddbMock.on(DeleteCommand).resolves({});
+    await deleteItem(userProfile(ALICE), {
+      expression: 'attribute_exists(pk) AND #owner = :owner',
+      names: { '#owner': 'ownerId' },
+      values: { ':owner': ALICE },
+    });
+
+    expect(ddbMock.commandCalls(DeleteCommand)[0]?.args[0]?.input).toMatchObject({
+      ConditionExpression: 'attribute_exists(pk) AND #owner = :owner',
+      ExpressionAttributeNames: { '#owner': 'ownerId' },
+      ExpressionAttributeValues: { ':owner': ALICE },
+    });
+  });
+
+  it('omits the name and value maps when the condition needs neither', async () => {
+    ddbMock.on(DeleteCommand).resolves({});
+    await deleteItem(userProfile(ALICE), { expression: 'attribute_exists(pk)' });
+
+    const input = ddbMock.commandCalls(DeleteCommand)[0]?.args[0]?.input;
+    expect(input?.ConditionExpression).toBe('attribute_exists(pk)');
+    expect(input).not.toHaveProperty('ExpressionAttributeNames');
+    expect(input).not.toHaveProperty('ExpressionAttributeValues');
+  });
 });
 
 describe('deleteAll', () => {

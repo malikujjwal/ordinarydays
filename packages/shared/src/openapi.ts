@@ -1,5 +1,12 @@
 import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import type { OpenAPIObject } from 'openapi3-ts/oas31';
+import { z } from 'zod';
+import {
+  deletedDevice,
+  device,
+  deviceId,
+  registerDeviceInput,
+} from './schemas/device.js';
 import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
@@ -7,6 +14,9 @@ import { patchUserInput, user } from './schemas/user.js';
 
 /** `GET`/`PATCH /v1/me` both answer with the profile inside the standard envelope. */
 const userResponse = envelope(user);
+
+const deviceResponse = envelope(device);
+const deletedDeviceResponse = envelope(deletedDevice);
 
 /**
  * The OpenAPI document, generated from the **same Zod schemas both sides import**
@@ -105,6 +115,75 @@ registry.registerPath({
     },
     404: {
       description: 'No profile for this user.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * `/v1/me/devices` (P1-08). The push-token rows the Phase 5 reminder Lambda fans out over
+ * (access pattern 15, ADR-009).
+ */
+registry.registerPath({
+  method: 'post',
+  path: '/v1/me/devices',
+  summary: 'Register an Expo push token',
+  description:
+    'Registers one install and returns the `deviceId` the server minted. The body carries ' +
+    'no id: token rotation is delete-then-create rather than an upsert, so the client ' +
+    'stores the returned id and `DELETE`s it when the token changes or the user signs out. ' +
+    'Creating, so an `Idempotency-Key` is required — a timed-out retry that actually ' +
+    'succeeded would otherwise leave a device row whose id the client never learned.',
+  tags: ['me'],
+  request: {
+    body: {
+      content: { 'application/json': { schema: registerDeviceInput } },
+    },
+  },
+  responses: {
+    201: {
+      description: 'The registered device, including its server-minted id.',
+      content: { 'application/json': { schema: deviceResponse } },
+    },
+    400: {
+      description:
+        'A malformed Expo push token, an unsupported platform, or a field outside the ' +
+        'accepted set — the body schema is strict.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/v1/me/devices/{deviceId}',
+  summary: 'Unregister a push token',
+  description:
+    'Removes one device from the caller’s own partition, so push stops immediately. ' +
+    'Called on sign-out **before** tokens are cleared, and on token rotation. Answers ' +
+    '`200` with the envelope rather than `204`, because every response carries ' +
+    '`{ data, meta }` and a `204` has no body to carry one in.',
+  tags: ['me'],
+  /**
+   * Declared, because OpenAPI requires every variable in a templated path to be — a
+   * `{deviceId}` with no matching parameter is an incomplete document that generators
+   * silently produce clients for. The handler itself deliberately does **not** validate the
+   * id against this shape: a malformed one addresses no row and already answers `404`, and
+   * checking it first would turn "no such device" into two statuses for one fact.
+   */
+  request: {
+    params: z.object({ deviceId }),
+  },
+  responses: {
+    200: {
+      description: 'The device is gone. `data` names the id that was removed.',
+      content: { 'application/json': { schema: deletedDeviceResponse } },
+    },
+    404: {
+      description:
+        'This user has no such device — whether the id was never theirs or the row is ' +
+        'already gone. A retried sign-out `DELETE` lands here, and for that caller `404` ' +
+        'means "already gone".',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

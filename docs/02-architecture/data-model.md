@@ -323,6 +323,50 @@ interface User {
   name rather than ignoring it. `email`, `cognitoSub` and `onboardingState` belong to the
   auth flow, not to the user.
 
+### 4.0a Device
+
+> **Added in P1-08.** The same gap §4.0 closed for `User`: `Device` had a key row in §3.2 and
+> an access pattern at §5 row 15, but no shape anywhere — its fields existed only as a body
+> in `api-contract.md` §2.1 and a retention row in `security-privacy.md` §3. Written down
+> here so the two endpoints that produce it have one source.
+
+```ts
+type DevicePlatform = 'ios';
+
+interface Device {
+  deviceId: string;            // "dev_01J..."
+  expoPushToken: string;       // "ExponentPushToken[...]"
+  platform: DevicePlatform;
+  deviceName?: string;         // "Ada's iPhone" — operator debugging only
+
+  createdAt: string;
+  updatedAt: string;
+  schemaVersion: 1;
+}
+```
+
+**Rules**
+
+- **One row per install, never per token.** Token rotation is delete-then-create rather than
+  an upsert: the registration body carries no `deviceId`, the server mints one and returns
+  it, and the client stores that id and `DELETE`s it when the token changes or the user signs
+  out (P5-16). Keying the row on the token instead would make the id unnecessary and the
+  delete unaddressable.
+- **`updatedAt` never moves.** A device row is created and deleted, not edited. The field
+  exists because every item carries it (§3), not because anything bumps it.
+- **`platform` has one member in v1.** iOS is the only platform that registers: the web build
+  has no push at all and there is no Android build. ADR-009 records that Android will work
+  through the same API, and this is the change it needs — one more member. A union of two
+  today would store a value nothing produces and nothing reads.
+- **Nothing renders a device.** There is no device-list screen in v1 and P5-16 says not to
+  build one. The rows exist so the reminder Lambda can fan out over access pattern 15, and
+  they are removed by four paths and no others: the `DELETE` endpoint, a
+  `DeviceNotRegistered` push receipt (P5-13), account deletion (`auth.md`), and nothing else.
+- **The Expo push token is a device identifier** in the privacy classification
+  (`security-privacy.md` §3), retained until sign-out, device removal or account deletion —
+  which is why the sign-out sequence deletes the row *before* clearing tokens rather than
+  after (`auth.md` §3.4 step 2).
+
 ### 4.1 Activity
 
 ```ts

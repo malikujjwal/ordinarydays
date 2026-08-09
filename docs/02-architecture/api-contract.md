@@ -59,6 +59,13 @@ Error (`4xx`/`5xx`):
 }
 ```
 
+> **`DELETE` answers `200` with the envelope, never `204`** (recorded in P1-08, the first
+> `DELETE` built). A `204` has no body, so it cannot carry the `{ data, meta }` this section
+> requires of every endpoint, and a client that must read `meta.requestId` off a failed
+> deletion would have to special-case the one status that never provides it. `data` names
+> what was removed — `{ deviceId }`, `{ activityId }` — which makes the response
+> self-describing in a log rather than an empty success that could have been about anything.
+
 Error codes are a closed enum in `packages/shared/src/errors.ts`:
 `unauthenticated`, `forbidden`, `not_found`, `validation_failed`, `payload_too_large`,
 `conflict`, `rate_limited`, `series_limit_exceeded`, `participant_limit_exceeded`,
@@ -113,8 +120,8 @@ Rate limits: 10 req/min per IP on all three, and additionally 60/hour per IP on
 | --- | --- | --- |
 | `GET` | `/v1/me` | Profile, preferences, timezone, currency, onboarding state |
 | `PATCH` | `/v1/me` | `displayName`, `timezone`, `currency`, `weekStartsOn`, `defaultReminderOffset` (integer `[-10080, 0]`, including `0` for At the time; `null` clears to Off), `defaultLists` (a `slot → listId` map — see [`data-model.md`](data-model.md#default-slots)) |
-| `POST` | `/v1/me/devices` | Register an Expo push token. Body: `{ expoPushToken, platform, deviceName }` |
-| `DELETE` | `/v1/me/devices/:deviceId` | |
+| `POST` | `/v1/me/devices` | Register an Expo push token. Body: `{ expoPushToken, platform, deviceName }` — `deviceName` optional; a simulator reports none. Returns `201` with the stored `Device` **including the server-minted `deviceId`**, which is the only way the client learns the id it must later delete. The body carries no id: rotation is delete-then-create, not an upsert (P5-16), so a `deviceId` in the request is `400`. Creating, so an `Idempotency-Key` is required. `platform` is `ios` in v1 ([`data-model.md`](data-model.md#40a-device) §4.0a) |
+| `DELETE` | `/v1/me/devices/:deviceId` | Unregister one device, so push stops immediately. Called on sign-out **before** tokens are cleared, and on token rotation ([`auth.md`](auth.md) §3.4 step 2). Returns `200` with `{ deviceId }`. `404` when this user has no such device — whether the id was never theirs or the row is already gone; a retried sign-out `DELETE` lands there, and for that caller `404` means "already gone" |
 | `DELETE` | `/v1/me` | Account deletion. Soft-deletes, purges after 30 days. The confirmation discloses that shared-plan financial history survives the purge: Expenses and Settlement audit rows on shared plans with surviving participants are retained with the display name replaced by `Deleted user`, balances involving the account become read-only history, and owned shared plans are cancelled with notification first (`data-model.md` §7, decision 2026-08-07). Whole-Settlement Undo applies only to financial rows nothing retains; the purge checkpoints this cleanup so no retained Expense points to missing Settlement history. Required by App Store. |
 | `GET` | `/v1/me/export` | Data export. The export object remains available for 24 hours; each request returns a fresh short-lived presigned link to a JSON file of the user's activities, lists and settings. A literally 24-hour link is unachievable with Lambda role credentials — see phase-05 P5-24. Phase 5. |
 | `GET` | `/v1/me/suggestions?kind=meal` | Derived suggestions — the FAVOURITES group on the Add screen. Computed from completed activities, cached one hour. Never a stored flag. Phase 9. |

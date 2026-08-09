@@ -60,7 +60,12 @@ describe('the registry covers the route table', () => {
     const empty = new Hono<AppEnv>();
 
     expect(() => assertRegistryMatchesRoutes(empty)).toThrowError(
-      /in ROUTE_REGISTRY but not mounted: GET \/v1\/health/,
+      // `.*` between the label and the route, deliberately. The behaviour is that a stale
+      // entry is *named*; that `GET /v1/health` happened to sort first was incidental, and
+      // pinning it made this test fail the moment P1-08 registered a route that sorts ahead
+      // of it — which is every route task, eventually, for a reason unrelated to what this
+      // asserts.
+      /in ROUTE_REGISTRY but not mounted:.*GET \/v1\/health/,
     );
   });
 
