@@ -1,6 +1,5 @@
 import type { CreationTarget } from '@od/shared/client';
 import type { CreateActivityInput } from '@od/shared/schemas';
-import type { PlanType } from '@od/shared/types';
 import { planKindChoices, planKindLabel } from '@/lib/planKinds';
 
 /**
