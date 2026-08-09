@@ -4,6 +4,11 @@ import { AppError } from './lib/errors.js';
 import { bodyLimitMiddleware } from './middleware/bodyLimit.js';
 import { corsMiddleware } from './middleware/cors.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import {
+  createIdentity,
+  type IdentityProvider,
+  identity,
+} from './middleware/identity.js';
 import { requestLogger } from './middleware/logger.js';
 import { requestId } from './middleware/requestId.js';
 import { assertRegistryMatchesRoutes, routeSplit } from './middleware/routeSplit.js';
@@ -30,18 +35,30 @@ import { health } from './routes/health.js';
  * 6. `bodyLimit`      — before parsing, so a large body is never buffered
  * 7. `routeSplit`     — the one place public/private is decided
  *
- * **8–10 (`identity`, `rateLimit`, `idempotency`) do not exist yet.** They are P1-01, P1-03
- * and P1-04, and they are absent rather than stubbed: a pass-through `identity` that sets no
- * user and blocks nothing looks like an implemented control while being none. `routeSplit`
- * already sets the `routeAuth` each of them will read, so mounting them is an insertion at
- * position 8 and nothing here changes shape.
+ * 8. `identity`       — resolves the user for `authenticated` routes, and only those
+ *
+ * **9–10 (`rateLimit`, `idempotency`) do not exist yet.** They are P1-03 and P1-04, and they
+ * are absent rather than stubbed: a pass-through that blocks nothing looks like an
+ * implemented control while being none. `routeSplit` already sets the `routeAuth` they read,
+ * so mounting them is an insertion and nothing here changes shape.
  */
 export interface AppOverrides {
-  /** Reserved for P1-01's identity provider injection. Unused in Phase 0. */
-  readonly _reserved?: never;
+  /**
+   * The identity provider this app runs (P1-01).
+   *
+   * **This is why there is no `X-Dev-User` header.** A route test that needs a second user
+   * constructs an app with a stub — `createApp({ identityProvider: stubIdentity('usr_other') })`
+   * — which gives tests the same capability with nothing in the production bundle to guard.
+   * A header-driven bypass is shipped code that reads attacker-controlled input to decide who
+   * you are, protected only by an environment check that one misconfiguration removes.
+   *
+   * Absent means the module-scope provider selected by `AUTH_MODE`, which is what both
+   * `index.ts` and `local.ts` get by calling this with no arguments.
+   */
+  readonly identityProvider?: IdentityProvider;
 }
 
-export function createApp(_overrides: AppOverrides = {}): Hono<AppEnv> {
+export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.onError(errorHandler);
@@ -52,6 +69,14 @@ export function createApp(_overrides: AppOverrides = {}): Hono<AppEnv> {
   app.use('*', securityHeaders);
   app.use('*', bodyLimitMiddleware);
   app.use('*', routeSplit);
+  // Position 8. After `routeSplit`, because it asks that middleware whether this route needs
+  // an identity rather than deciding for itself; before anything that reads user data.
+  app.use(
+    '*',
+    overrides.identityProvider === undefined
+      ? identity
+      : createIdentity(overrides.identityProvider),
+  );
 
   app.route('/v1/health', health);
 

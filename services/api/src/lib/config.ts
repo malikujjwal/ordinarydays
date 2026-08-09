@@ -10,6 +10,19 @@ import { z } from 'zod';
  */
 const envSchema = z.object({
   STAGE: z.enum(['local', 'dev', 'prod']),
+  /**
+   * Which `IdentityProvider` the API runs (`middleware/identity.ts`, P1-01).
+   *
+   * **No default, deliberately.** An unset value throws at startup. A default of `local` is
+   * dangerous — a deployed API treating every caller in the world as `usr_local_dev` — and a
+   * default of `cognito` is merely inconvenient, so neither is worth the ambiguity: every
+   * environment states which mode it is in.
+   *
+   * This and `middleware/identity.ts` are the **only two files** permitted to mention
+   * `AUTH_MODE`; everything else reads `c.get('userId')` and knows nothing about how it got
+   * there. `node scripts/check-forbidden.mjs auth-mode-containment` enforces it.
+   */
+  AUTH_MODE: z.enum(['local', 'cognito']),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   TABLE_NAME: z.string().min(1),
   MEDIA_BUCKET: z.string().min(1),

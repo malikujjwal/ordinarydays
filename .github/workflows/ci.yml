@@ -124,6 +124,8 @@ jobs:
       # that something, somewhere, matched (`repo-structure.md` §4).
       - name: No Scan in application code
         run: node scripts/check-forbidden.mjs no-scan
+      - name: AUTH_MODE stays in config.ts and identity.ts
+        run: node scripts/check-forbidden.mjs auth-mode-containment
       - name: No raw key literals outside the repository layer
         run: node scripts/check-forbidden.mjs no-key-literals
       - name: No dangerouslySetInnerHTML

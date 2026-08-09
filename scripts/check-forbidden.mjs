@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
  * One rule per invocation, so a CI step names the rule that broke:
  *
  *   node scripts/check-forbidden.mjs no-scan
+ *   node scripts/check-forbidden.mjs auth-mode-containment
  *   node scripts/check-forbidden.mjs no-key-literals
  *   node scripts/check-forbidden.mjs no-dangerous-html
  *   node scripts/check-forbidden.mjs client-layer-rules
@@ -39,7 +40,7 @@ const SKIP_DIRS = new Set([
   '.git',
 ]);
 
-/** @type {Record<string, { description: string; doc: string; roots: string[]; extensions: string[]; pattern: RegExp; excludePath?: RegExp }>} */
+/** @type {Record<string, { description: string; doc: string; roots: string[]; extensions: string[]; pattern: RegExp; excludePath?: RegExp; codeOnly?: boolean }>} */
 const RULES = {
   'no-scan': {
     description: 'No DynamoDB Scan in application code',
@@ -59,6 +60,32 @@ const RULES = {
     extensions: ['.ts'],
     pattern: /['"`](ACT|USER|LIST|INVITE|EMAIL|IDEM|OCC|REM|SUGG|PLINK|LLINK|LNK)#/,
     excludePath: /services[\\/]api[\\/]src[\\/]repositories[\\/]/,
+  },
+
+  /**
+   * `AUTH_MODE` may appear in exactly two files: `lib/config.ts`, which parses it, and
+   * `middleware/identity.ts`, which selects a provider from it (`phase-01-activity-core.md`
+   * P1-01).
+   *
+   * This is the check that keeps the Phase 4 change small. Every handler, service and
+   * repository reads `c.get('userId')` and knows nothing about where it came from; the moment
+   * one of them branches on the mode, swapping `LocalIdentityProvider` for the Cognito one
+   * stops being a one-file change and becomes a search-and-replace across the API. The phase
+   * doc specifies this as a `! grep -rn` line in `ci.yml`; it lives here instead for the
+   * reasons in this file's header — `grep` is not on the path on Windows, and a shell
+   * negation reports that *something* matched without saying what.
+   */
+  'auth-mode-containment': {
+    description: 'AUTH_MODE is read in lib/config.ts and middleware/identity.ts only',
+    doc: 'phase-01-activity-core.md P1-01 — nothing downstream of the identity middleware knows which provider ran',
+    roots: ['services/api/src', 'apps', 'packages'],
+    extensions: ['.ts', '.tsx'],
+    pattern: /\bAUTH_MODE\b/,
+    excludePath:
+      /services[\\/]api[\\/]src[\\/](lib[\\/]config\.ts|middleware[\\/]identity\.ts)$/,
+    // Prose may name the rule it is describing; code may not branch on it. See
+    // `withoutComments` for why this rule takes that exemption and `no-scan` does not.
+    codeOnly: true,
   },
 
   'no-dangerous-html': {
@@ -84,6 +111,49 @@ const RULES = {
     pattern: /from\s+['"](?:@od\/(?:api|infra)|(?:\.\.\/)+(?:services|infra)\/)/,
   },
 };
+
+/**
+ * Blanks comment content, keeping one entry per source line so reported line numbers stay
+ * true.
+ *
+ * Only rules that set `codeOnly` use it, and only one does: `auth-mode-containment`. A rule
+ * about **what the code branches on** must not fire on prose that names the thing — otherwise
+ * documenting the containment rule violates it, and the first person to hit that will reword
+ * the doc comment or, worse, delete the check. `no-scan` deliberately does *not* use this: a
+ * commented-out `ScanCommand` is a call somebody is about to uncomment.
+ *
+ * Deliberately simple: line comments, and block comments tracked across lines. It does not
+ * understand a `/*` inside a string literal, which would make it skip real code. That is the
+ * safe direction to be wrong in only because the alternative — a full tokeniser in a check
+ * script — is more machinery than the rule is worth; if it ever matters, the rule fires
+ * spuriously rather than silently passing.
+ */
+function withoutComments(lines) {
+  let inBlock = false;
+  return lines.map((line) => {
+    let out = '';
+    let index = 0;
+    while (index < line.length) {
+      if (inBlock) {
+        const end = line.indexOf('*/', index);
+        if (end === -1) return out;
+        inBlock = false;
+        index = end + 2;
+        continue;
+      }
+      const block = line.indexOf('/*', index);
+      const lineComment = line.indexOf('//', index);
+      if (lineComment !== -1 && (block === -1 || lineComment < block)) {
+        return out + line.slice(index, lineComment);
+      }
+      if (block === -1) return out + line.slice(index);
+      out += line.slice(index, block);
+      inBlock = true;
+      index = block + 2;
+    }
+    return out;
+  });
+}
 
 function walk(dir, extensions, acc = []) {
   let entries;
@@ -143,10 +213,11 @@ function run(ruleName) {
     if (relativePath.startsWith('scripts/')) continue;
 
     const lines = readFileSync(file, 'utf8').split(/\r?\n/);
+    const code = rule.codeOnly === true ? withoutComments(lines) : lines;
 
-    lines.forEach((line, index) => {
+    code.forEach((line, index) => {
       if (rule.pattern.test(line)) {
-        violations.push(`${relativePath}:${index + 1}  ${line.trim()}`);
+        violations.push(`${relativePath}:${index + 1}  ${lines[index]?.trim() ?? line}`);
       }
     });
 
