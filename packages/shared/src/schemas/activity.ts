@@ -414,3 +414,16 @@ export const patchActivityInput = z
  * lose the pairing, which is the one thing this input exists to guarantee.
  */
 export type PatchActivityInput = z.infer<typeof patchActivityInput>;
+
+/**
+ * What a `DELETE` acknowledges: the id that is now gone.
+ *
+ * A body rather than a `204`, per the convention `api-contract.md` §1 records — every
+ * endpoint returns the envelope, and a `204` has no body to carry one in. Named `data` rather
+ * than left empty so the response is self-describing in a log or a replayed request. The same
+ * shape `DeletedDevice` uses, deliberately: two delete endpoints should not answer in two
+ * different ways.
+ */
+export const deletedActivity = z
+  .object({ activityId: ulidId('act') })
+  .meta({ id: 'DeletedActivity' });

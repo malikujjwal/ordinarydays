@@ -466,12 +466,27 @@ export async function patchActivity(
  * expense locators — is P1-14's cascade, not this method's: those live in other partitions
  * and each has its own rule about whether it survives.
  */
+export interface DeleteOptions {
+  /** Owner plus every participating app user. Phase 6 supplies more than one. */
+  readonly indexedUserIds?: readonly string[];
+  /**
+   * The partition as the caller already read it.
+   *
+   * Added in P1-14, whose cascade has to read it anyway — the `SUB#` pointers are how it
+   * finds the prep tasks whose `parentActivityId` it must clear. Without this the delete
+   * costs three round trips against a budget of three (`definition-of-done.md` §6): the
+   * access check, the cascade's read, and this one re-reading the same rows.
+   */
+  readonly partition?: readonly StoredItem[];
+}
+
 export async function deleteActivity(
   userId: string,
   activityId: string,
-  indexedUserIds: readonly string[] = [],
+  options: DeleteOptions = {},
 ): Promise<void> {
-  const partition = await getActivityPartition(activityId);
+  const indexedUserIds = options.indexedUserIds ?? [];
+  const partition = options.partition ?? (await getActivityPartition(activityId));
 
   const keys = partition.map((item) => ({
     pk: item.pk as string,

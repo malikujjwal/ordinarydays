@@ -705,6 +705,112 @@ describe('converting a plan to a task', () => {
   });
 });
 
+/**
+ * `DELETE /v1/activities/:id` and its cascade (P1-14), against the real table.
+ *
+ * The unit suite proves the right keys are handed to a batch delete. What only a table proves
+ * is that the partition is genuinely empty afterwards, that the prep task is genuinely still
+ * there, and that a second delete finds nothing rather than half a row.
+ */
+describe('deleting an activity', () => {
+  const remove = (id: string, userId?: string) =>
+    asUser(userId).fetch(
+      new Request(`http://localhost/v1/activities/${id}`, { method: 'DELETE' }),
+    );
+
+  const plan = async () =>
+    (
+      await (
+        await post({ objectKind: 'plan', type: 'custom', title: 'Paris weekend' })
+      ).json()
+    ).data;
+
+  it('removes every item under the activity', async () => {
+    const subject = (
+      await (
+        await post({
+          ...TASK,
+          reminders: [{ offsetMinutes: -15 }, { offsetMinutes: -60 }],
+        })
+      ).json()
+    ).data;
+    expect(await repo.getActivityPartition(subject.activityId)).toHaveLength(3);
+
+    const res = await remove(subject.activityId);
+
+    expect(res.status).toBe(200);
+    expect(await repo.getActivityPartition(subject.activityId)).toHaveLength(0);
+  });
+
+  it('removes the index entry, so it leaves no feed', async () => {
+    const subject = await plan();
+
+    await remove(subject.activityId);
+
+    expect(await indexRows(DEV)).toHaveLength(0);
+  });
+
+  /**
+   * **The rule this cascade exists to get right.** A user who cancels a trip may still need
+   * to return the rental car (`today-and-tasks.md` §5.5).
+   */
+  it('leaves the prep task behind, as an ordinary task', async () => {
+    const parent = await plan();
+    const child = (
+      await (
+        await post({ ...TASK, title: 'Book hotel', parentActivityId: parent.activityId })
+      ).json()
+    ).data;
+
+    await remove(parent.activityId);
+
+    const survivor = await repo.getActivityMeta(child.activityId);
+    expect(survivor).toMatchObject({ activityId: child.activityId, title: 'Book hotel' });
+    expect(survivor).not.toHaveProperty('parentActivityId');
+  });
+
+  it('leaves the prep task on its own feed, with the parent title gone from it', async () => {
+    const parent = await plan();
+    const child = (
+      await (
+        await post({ ...TASK, title: 'Book hotel', parentActivityId: parent.activityId })
+      ).json()
+    ).data;
+
+    await remove(parent.activityId);
+
+    const rows = await indexRows(DEV);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.activityId).toBe(child.activityId);
+    expect(rows[0]).not.toHaveProperty('subtitle');
+  });
+
+  /** Batched rather than transactional, so a retry finishes it — and finds nothing left. */
+  it('404s a second delete, and does not throw', async () => {
+    const subject = await plan();
+
+    expect((await remove(subject.activityId)).status).toBe(200);
+
+    const second = await remove(subject.activityId);
+    expect(second.status).toBe(404);
+    expect((await second.json()).error.code).toBe('not_found');
+  });
+
+  it('404s another user’s activity, and leaves it entirely alone', async () => {
+    const theirs = (await (await post(TASK, { userId: OTHER })).json()).data;
+
+    const res = await remove(theirs.activityId, DEV);
+
+    expect(res.status).toBe(404);
+    expect(await repo.getActivityMeta(theirs.activityId)).toBeDefined();
+    expect(await indexRows(OTHER)).toHaveLength(1);
+  });
+
+  it('404s an activity that never existed', async () => {
+    expect((await remove('act_01J8XKQ2M4N5P6R7S8T9V0W1ZZ')).status).toBe(404);
+  });
+});
+
 /** Two users' activities are invisible to each other, before Phase 4 makes it matter. */
 describe('tenant isolation', () => {
   it('gives each user their own index partition', async () => {

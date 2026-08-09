@@ -16,6 +16,7 @@ import { fromZonedTime } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
 import type { Logger } from '../lib/logger.js';
 import {
+  deleteActivity as deleteActivityRows,
   getActivityMeta,
   getActivityPartition,
   newActivityId,
@@ -537,6 +538,102 @@ function nullable<K extends keyof PatchActivityInput>(
   ...fields: K[]
 ): Record<string, unknown> {
   return pick(patch, ...fields);
+}
+
+/**
+ * Deletes an activity and everything that belongs to it, behind
+ * `DELETE /v1/activities/:id` (P1-14).
+ *
+ * ## Owner only, and a stranger cannot tell the difference
+ *
+ * `owner`, so a participant reaching for it gets `403` — they can see the plan and are being
+ * told they may not delete it — and anyone else gets `404`, which is also the answer for an
+ * activity that never existed.
+ *
+ * ## What survives, and why the order matters
+ *
+ * **Prep tasks are not deleted.** Their `parentActivityId` is cleared and they become
+ * ordinary tasks (`today-and-tasks.md` §5.5): "a user who cancels a trip may still need to
+ * return the rental car", and cascade-deleting somebody's real to-dos because the container
+ * went away is the data loss that ends trust in a planner.
+ *
+ * The children are cleared **before** the parent is removed. If a clear fails, the parent is
+ * still there and the whole operation can be retried from a consistent state; the other order
+ * would leave a prep task pointing at an activity that no longer exists, which nothing would
+ * ever fix. Each clear is conditional on the child's own `updatedAt`, so a prep task being
+ * edited at the same moment fails the delete rather than silently losing that edit — the
+ * caller retries.
+ *
+ * ## Not atomic, and deliberately
+ *
+ * A partition with many participants and many updates exceeds a transaction's 100 items, so
+ * the removal batches instead. A partially deleted activity is recoverable by re-running the
+ * delete; a transaction that can never succeed is not (P1-14). That is why this is safe to
+ * call twice — the second call finds nothing and answers `404`.
+ *
+ * ## What this phase cannot cascade yet
+ *
+ * List links (Phase 3), Expense locators (Phase 7) and EventBridge schedules (Phase 5) have
+ * no rows to delete, because nothing writes them yet. **There is no settlement guard here**
+ * and `settlement_conflict` is deliberately not in the error union: a guard over rows no
+ * schema defines reads as an implemented control and is none. P7-08 owns it, and nothing
+ * before P7-08 writes an Expense (P1-14's decision note).
+ */
+export async function removeActivity(
+  userId: string,
+  activityId: string,
+  now: string,
+): Promise<string> {
+  await assertActivityAccess(userId, activityId, 'owner');
+
+  const partition = await getActivityPartition(activityId);
+
+  await releaseChildren(childIdsOf(partition), now);
+  await deleteActivityRows(userId, activityId, { partition });
+
+  return activityId;
+}
+
+/**
+ * The prep tasks hanging off this plan, from the pointers already in the partition.
+ *
+ * Read from `SUB#` rows rather than by querying for activities with this parent, because the
+ * pointers exist precisely so a plan's children come from the same single `Query` as
+ * everything else (`data-model.md` §3.1) — and because there is no index that answers "every
+ * activity whose `parentActivityId` is X" without a `Scan`.
+ */
+function childIdsOf(partition: readonly StoredItem[]): string[] {
+  return partition
+    .filter((row) => row.entity === 'ChildPointer')
+    .map((row) => String(row.childActivityId));
+}
+
+/**
+ * Clears `parentActivityId` on each prep task, so it survives as an ordinary task.
+ *
+ * A child that has already gone, or that has been re-parented since the pointer was written,
+ * is skipped rather than treated as a failure: the pointer is a denormalised copy and this
+ * runs on a retry path, so finding it stale is expected rather than exceptional.
+ *
+ * Rewriting the child through `patchActivity` also rebuilds its index entry, which is what
+ * drops the **subtitle** — a prep task renders with its parent's title under it on Today, and
+ * that title is about to stop existing.
+ */
+async function releaseChildren(childIds: readonly string[], now: string): Promise<void> {
+  for (const childId of childIds) {
+    const child = await getActivityMeta(childId);
+    if (child === undefined || child.parentActivityId === undefined) continue;
+
+    const { parentActivityId: _dropped, ...released } = child as Activity &
+      Record<string, unknown>;
+
+    await putPatch(
+      child.ownerId,
+      { ...released, updatedAt: now } as unknown as Activity,
+      String(child.updatedAt),
+      { previous: child },
+    );
+  }
 }
 
 /**

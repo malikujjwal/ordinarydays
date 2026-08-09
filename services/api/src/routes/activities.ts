@@ -3,14 +3,18 @@ import { createActivityInput, patchActivityInput } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { createActivityHandler } from '../handlers/createActivity.js';
+import {
+  DELETE_ACTIVITY_PATH,
+  deleteActivityHandler,
+} from '../handlers/deleteActivity.js';
 import { GET_ACTIVITY_PATH, getActivityHandler } from '../handlers/getActivity.js';
 import { PATCH_ACTIVITY_PATH, patchActivityHandler } from '../handlers/patchActivity.js';
 
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Three routes in this phase: the create (P1-11), the detail read (P1-12) and the partial
- * update (P1-13). `DELETE /v1/activities/:id` is P1-14, `:id/duplicate` is P1-15 and the list
+ * Four routes in this phase: the create (P1-11), the detail read (P1-12), the partial update
+ * (P1-13) and the delete (P1-14). `:id/duplicate` is P1-15 and the list
  * query is P1-16; the scheduling, completion and occurrence routes are Phase 2. Each is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
@@ -69,4 +73,11 @@ export const activities = new Hono<AppEnv>()
   .get(GET_ACTIVITY_PATH, getActivityHandler)
   .patch(PATCH_ACTIVITY_PATH, validatePatch, (c) =>
     patchActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
-  );
+  )
+  /**
+   * No `If-Match`. A delete is not an edit racing another edit: the thing either exists and
+   * goes, or it does not and the answer is `404`. Requiring a version would make a retry of a
+   * delete that half-succeeded fail on a row that is already gone, which is the opposite of
+   * the idempotence P1-14 asks for.
+   */
+  .delete(DELETE_ACTIVITY_PATH, deleteActivityHandler);

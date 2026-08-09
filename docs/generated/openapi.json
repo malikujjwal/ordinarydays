@@ -2505,6 +2505,18 @@
         },
         "additionalProperties": false
       },
+      "DeletedActivity": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          }
+        },
+        "required": [
+          "activityId"
+        ]
+      },
       "HealthResponse": {
         "type": "object",
         "properties": {
@@ -3078,6 +3090,83 @@
           },
           "409": {
             "description": "A stale `If-Match`, or a Plan → Task conversion the plan’s own participants, expenses or prep tasks block.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an activity",
+        "description": "Owner only — a participant gets `403`, anyone else `404`. Removes the activity and everything in its partition, plus every index entry pointing at it. **Prep tasks survive**: their `parentActivityId` is cleared and they become ordinary tasks, because somebody who cancels a trip may still need to return the rental car. The removal batches rather than transacting, so it is safe to call again after a partial failure; the second call finds nothing and answers `404`. Answers `200` with the envelope rather than `204`.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The activity is gone. `data` names the id that was removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DeletedActivity"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A participant. They can see the plan; deleting it is the owner’s.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or none this caller has any relationship to — and the answer a repeated delete gets once the first has succeeded.",
             "content": {
               "application/json": {
                 "schema": {

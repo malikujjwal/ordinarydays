@@ -5,6 +5,7 @@ import {
   activity,
   activityDetail,
   createActivityInput,
+  deletedActivity,
   patchActivityInput,
 } from './schemas/activity.js';
 import { ulidId } from './schemas/common.js';
@@ -27,6 +28,7 @@ const deletedDeviceResponse = envelope(deletedDevice);
 
 const activityResponse = envelope(activity);
 const activityDetailResponse = envelope(activityDetail);
+const deletedActivityResponse = envelope(deletedActivity);
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
@@ -325,6 +327,40 @@ registry.registerPath({
       description:
         'A stale `If-Match`, or a Plan → Task conversion the plan’s own participants, ' +
         'expenses or prep tasks block.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/v1/activities/{id}',
+  summary: 'Delete an activity',
+  description:
+    'Owner only — a participant gets `403`, anyone else `404`. Removes the activity and ' +
+    'everything in its partition, plus every index entry pointing at it. **Prep tasks ' +
+    'survive**: their `parentActivityId` is cleared and they become ordinary tasks, because ' +
+    'somebody who cancels a trip may still need to return the rental car. The removal ' +
+    'batches rather than transacting, so it is safe to call again after a partial failure; ' +
+    'the second call finds nothing and answers `404`. Answers `200` with the envelope ' +
+    'rather than `204`.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+  },
+  responses: {
+    200: {
+      description: 'The activity is gone. `data` names the id that was removed.',
+      content: { 'application/json': { schema: deletedActivityResponse } },
+    },
+    403: {
+      description: 'A participant. They can see the plan; deleting it is the owner’s.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description:
+        'No such activity, or none this caller has any relationship to — and the answer a ' +
+        'repeated delete gets once the first has succeeded.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

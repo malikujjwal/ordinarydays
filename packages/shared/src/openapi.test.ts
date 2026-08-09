@@ -73,6 +73,7 @@ describe('the generated document', () => {
       'Activity',
       'ActivityDetail',
       'CreateActivityInput',
+      'DeletedActivity',
       'DeletedDevice',
       'Device',
       'ErrorResponse',
