@@ -10,6 +10,7 @@ import {
   identity,
 } from './middleware/identity.js';
 import { requestLogger } from './middleware/logger.js';
+import { rateLimit } from './middleware/rateLimit.js';
 import { requestId } from './middleware/requestId.js';
 import { assertRegistryMatchesRoutes, routeSplit } from './middleware/routeSplit.js';
 import { securityHeaders } from './middleware/securityHeaders.js';
@@ -36,11 +37,12 @@ import { health } from './routes/health.js';
  * 7. `routeSplit`     — the one place public/private is decided
  *
  * 8. `identity`       — resolves the user for `authenticated` routes, and only those
+ * 9. `rateLimit`      — the per-user fixed-window counter, on `authenticated` routes
  *
- * **9–10 (`rateLimit`, `idempotency`) do not exist yet.** They are P1-03 and P1-04, and they
- * are absent rather than stubbed: a pass-through that blocks nothing looks like an
- * implemented control while being none. `routeSplit` already sets the `routeAuth` they read,
- * so mounting them is an insertion and nothing here changes shape.
+ * **10 (`idempotency`) does not exist yet.** It is P1-04, and it is absent rather than
+ * stubbed: a pass-through that blocks nothing looks like an implemented control while being
+ * none. It mounts directly after `rateLimit`, so a retry storm cannot write idempotency
+ * records for free.
  */
 export interface AppOverrides {
   /**
@@ -77,6 +79,10 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
       ? identity
       : createIdentity(overrides.identityProvider),
   );
+  // Position 9. After `identity`, because an authenticated route's counter is keyed on the
+  // user it just resolved. It limits `authenticated` routes only, so `/v1/health` — which
+  // every smoke test and alarm calls — reaches its handler without touching DynamoDB.
+  app.use('*', rateLimit);
 
   app.route('/v1/health', health);
 
