@@ -572,6 +572,14 @@ The user-facing contract:
    | any Plan kind → Task | All common Activity fields | The source `details` payload beyond mappings above |
    | any Plan kind → `custom` (General) | — | The whole source `details` payload beyond the mappings above |
 
+   > **A kind changed to itself is a no-op** (recorded in P1-17). The `→ any` rows above are
+   > shorthand for the cross-kind cases: read literally, `watch → any` would include
+   > `watch → watch` and report the season and episode as dropped, which is data loss from a
+   > request that changed nothing. The rule at the head of this section already answers it —
+   > every field on a Watch "still applies" to a Watch. This matters because
+   > `PATCH /v1/activities/:id` takes `objectKind` and `type` as a pair, so a form re-sending
+   > the current values alongside a title edit reaches the mapping.
+
 6. **Before** a lossy kind change or allowed Plan → Task conversion is applied, the client
    shows the confirmation required by the
    product-wide additive/destructive rule

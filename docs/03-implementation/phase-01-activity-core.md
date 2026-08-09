@@ -38,6 +38,8 @@ Things go in and can be found again; they do not yet come back to you.
 > | 2 | **P1-31 added** — the React Native test environment for `packages/ui` and `apps/mobile`, split out of P1-22. `packages/ui` declares no `react` or `react-native` dependency and both workspaces run Vitest under `environment: 'node'` with a `.test.ts`-only include, so no `.tsx` render test could run. P1-22 was carrying that as unstated scope on top of twelve primitives. | New task; task table; P1-22 |
 > | 3 | **P1-14 no longer ships the settlement guard.** `settlement_conflict` is not in the closed `ErrorCode` union, and Phase 1 has no Expense schema, no `EXP#` key builder and no rows to guard. The guard and the error code both belong to **P7-08**, which already claims the parent-delete case. | P1-14; out-of-scope table; `api-contract.md` §2.3 |
 > | 4 | **P1-19's seam shape corrected to the code that shipped in P0-20.** The interface is `getToken(): Promise<string \| undefined>` in `client/http.ts`, exported as `nullTokenProvider`. This document was the only place carrying `string \| null`, `client/auth.ts` and `NullTokenProvider`; no architecture doc disagreed with the code, so the phase file was the wrong one. | P1-19; deliverables; criterion 18; Prepared for Phase 4 |
+> | 5 | **P1-13 depends on P1-17, and the table did not say so.** P1-13's `Depends on` column read `P1-10, P1-30`, while its own Approach says the conversion "runs P1-17 server-side" and its Tests require the `watch → task` drop behaviour and the Plan → Task blockers — both of which *are* `changeActivityKind`. Nothing in P1-13 can produce them without it. The column now names P1-17; nothing else about either task changes. Found when P1-13 was picked up and the dependency turned out not to exist. | P1-13's task-table row |
+> | 6 | **An identity kind change is a no-op**, which the §6.3 mapping table does not state. Read literally its `watch → any` row includes `watch → watch`, which would report the season and episode as dropped and return an emptied `details` — data loss from a request that changed nothing, reachable because `PATCH` takes `objectKind` and `type` as a pair and a form may re-send the current values. §6.3's own rule already gives the right answer ("keeps `details` fields that still apply and drops the rest"), so the `→ any` rows are read as shorthand for the cross-kind cases. Recorded rather than assumed. | P1-17; `activities.md` §6.3 point 5 |
 >
 > Phase 1 is therefore **30 live tasks and 72 AWU** — 29, plus two M, less P1-19's S —
 > re-summed in [`roadmap.md`](roadmap.md) §4.2. The two new tasks run **out of numeric
@@ -116,7 +118,7 @@ No AWS access is required to complete this phase. No AWS resource is created by 
 | P1-10 | Activity service: status derivation, authz, transactions | api | P1-09 | no | L |
 | P1-11 | `POST /v1/activities` | api | P1-10, P1-04, P1-30 | no | M |
 | P1-12 | `GET /v1/activities/:id` | api | P1-10, P1-30 | yes | M |
-| P1-13 | `PATCH /v1/activities/:id` with `If-Match` | api | P1-10, P1-30 | no | M |
+| P1-13 | `PATCH /v1/activities/:id` with `If-Match` | api | P1-10, P1-17, P1-30 | no | M |
 | P1-14 | `DELETE /v1/activities/:id` and its cascade | api | P1-10, P1-30 | no | M |
 | P1-15 | `POST /v1/activities/:id/duplicate` | api | P1-11, P1-30 | yes | S |
 | P1-16 | `GET /v1/activities?filter=` with cursors | api | P1-09, P1-30 | yes | M |
