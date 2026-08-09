@@ -255,7 +255,34 @@ Also:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/v1/activities?filter=inbox\|upcoming\|past\|saved&type=&cursor=` | Flat, paginated lists. Not for Today. |
+| `GET` | `/v1/activities?filter=upcoming\|past\|saved\|needs_date&type=&cursor=&limit=` | Flat, paginated lists. Not for Today. Each filter reads **one** GSI1 bucket, so a page is one Query and one cursor. Nothing is expanded: a recurring series is one row carrying `isRecurring`, never one row per occurrence. `filter` is required and has no default. `type` narrows the page **after** the Query, so a page may be shorter than `limit` — even empty — while `nextCursor` is still set; clients page until the cursor is absent, not until a page is short. `upcoming` and `past` split at the caller's current date, taken from `X-Client-Timezone` and falling back to UTC. |
+
+| Filter | Bucket | Order | Serves |
+| --- | --- | --- | --- |
+| `upcoming` | `#S`, today forward | date ascending | Plans → Upcoming |
+| `past` | `#S`, before today | date descending | Plans → Past |
+| `needs_date` | `#P` | `lastActivityAt` descending | Plans → Needs a date |
+| `saved` | `#N` | newest first | Today's ANYTIME `See all` |
+
+> **Amended in P1-16 — `inbox` removed, `saved` split from `needs_date`.** The enum read
+> `inbox|upcoming|past|saved`, and two of those could not be built as written.
+>
+> **`inbox` had no definition anywhere.** No product surface, no GSI1 bucket, no access
+> pattern in [`data-model.md`](data-model.md#5-access-patterns) §5 — and
+> [`../01-product/overview.md`](../01-product/overview.md) §"Why it must stay three" names
+> Inbox among the fourth nouns the product deliberately does not have. A member of a closed
+> enum that no handler can implement is a value every client must handle and will never see.
+>
+> **`saved` was aimed at two buckets by two product docs.**
+> [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §2.3 points the
+> ANYTIME `See all` footer at it (`#N`, undated **tasks**), while
+> [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §5 routes an undated
+> Meal Plan to it (`#P`, undated **plans**). Those are separate partitions: one filter cannot
+> page across both without a composite cursor no document defines, and merging them would put
+> undecided plans on the ANYTIME screen — which `today-and-tasks.md` calls "the model's
+> largest product error" two paragraphs above the line citing the filter. `saved` keeps the
+> `#N` meaning; `needs_date` names the stage that already had its own name, access pattern
+> (2b) and empty-state copy. §2.2a's stage table is unchanged and now matches this one.
 
 ### 2.3 Activities
 

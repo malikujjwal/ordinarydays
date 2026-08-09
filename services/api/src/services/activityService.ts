@@ -5,12 +5,19 @@ import {
   changeActivityKind,
 } from '@od/shared';
 import { MAX_TITLE_LEN } from '@od/shared/constants';
-import type { CreateActivityInput, PatchActivityInput } from '@od/shared/schemas';
+import type {
+  ActivityListQuery,
+  CreateActivityInput,
+  PatchActivityInput,
+} from '@od/shared/schemas';
 import type {
   Activity,
   ActivityDetail,
+  ActivityFilter,
+  ActivityListItem,
   ActivitySchedule,
   ActivityStatus,
+  Gsi1Bucket,
   Reminder,
 } from '@od/shared/types';
 import { fromZonedTime } from 'date-fns-tz';
@@ -20,6 +27,7 @@ import {
   deleteActivity as deleteActivityRows,
   getActivityMeta,
   getActivityPartition,
+  listByBucket as listBucket,
   newActivityId,
   newReminderId,
   createActivity as putActivity,
@@ -539,6 +547,128 @@ function nullable<K extends keyof PatchActivityInput>(
   ...fields: K[]
 ): Record<string, unknown> {
   return pick(patch, ...fields);
+}
+
+/**
+ * Which bucket each stage reads, and in which direction (`api-contract.md` §2.2a).
+ *
+ * Transcribed from the stage table rather than derived, and **one bucket per filter** —
+ * that is what lets a page be one Query with one cursor. A filter spanning two partitions
+ * would need a composite cursor no document defines.
+ *
+ * `fromToday` splits the `#S` bucket: `after` takes today and everything later, `before`
+ * takes everything earlier. The pivot is the plain date string, which sorts **before** every
+ * key on that date — a `gsi1sk` is `<date>T<time>#<id>`, so `2026-08-09` precedes
+ * `2026-08-09T00:00#…`. That is what makes "before today" exclude today without any date
+ * arithmetic, and "from today forward" include it.
+ */
+const STAGES = {
+  upcoming: { bucket: 'S', ascending: true, window: 'after' },
+  past: { bucket: 'S', ascending: false, window: 'before' },
+  /** Access pattern 2b: the plan being discussed floats up, not the oldest. */
+  needs_date: { bucket: 'P', ascending: false, window: 'none' },
+  /**
+   * Newest first. §2.2a gives an order for the other three and none for this one; the
+   * sibling undated bucket is newest-first, and a backlog whose oldest entries surface first
+   * is the "queue to be drained" posture `decisions.md` rejects. Called out because it is a
+   * choice rather than a transcription.
+   */
+  saved: { bucket: 'N', ascending: false, window: 'none' },
+} as const satisfies Record<
+  ActivityFilter,
+  { bucket: Gsi1Bucket; ascending: boolean; window: 'after' | 'before' | 'none' }
+>;
+
+/** The widest bounds a `gsi1sk` can take, so a one-sided window is still a `BETWEEN`. */
+const FIRST_KEY = '0000-01-01';
+const LAST_KEY = '9999-12-31';
+
+export interface ActivityPage {
+  readonly items: readonly ActivityListItem[];
+  readonly nextCursor?: string;
+}
+
+/**
+ * A flat, paginated stage of activities, behind `GET /v1/activities?filter=` (P1-16).
+ *
+ * ## It reads the index, and returns what the index holds
+ *
+ * Every row comes from one index entry in the user's own partition, which exists precisely so
+ * a feed does not have to load an activity per row. The response is that projection — see
+ * {@link ActivityListItem} for why it is deliberately not `AgendaItem`.
+ *
+ * **Nothing is expanded here.** A recurring series is one row carrying `isRecurring`, not one
+ * row per occurrence: expansion is the agenda's job and this endpoint is "not for Today" in
+ * the contract's own words (`CLAUDE.md` rule 3).
+ *
+ * ## `type` narrows the page, not the query
+ *
+ * DynamoDB cannot filter a GSI on a non-key attribute without reading the page first, so
+ * `type` is applied to the rows the Query returned. A page can therefore come back **shorter
+ * than `limit`, or empty, while `nextCursor` is still set** — which is normal for a cursor
+ * API and is why the client must page until the cursor is absent rather than until a page is
+ * short. Stated here because it is the one surprising thing about this endpoint.
+ *
+ * `today` is a parameter, not a clock read: which activities are "upcoming" depends on the
+ * caller's date, and a service that read the clock could not be tested across a boundary
+ * (`coding-standards.md` §4.3).
+ */
+export async function listActivities(
+  userId: string,
+  query: ActivityListQuery,
+  today: string,
+): Promise<ActivityPage> {
+  const stage = STAGES[query.filter];
+
+  const page = await listBucket(userId, stage.bucket, {
+    ascending: stage.ascending,
+    ...(stage.window === 'none'
+      ? {}
+      : {
+          between:
+            stage.window === 'after'
+              ? ([today, LAST_KEY] as const)
+              : ([FIRST_KEY, today] as const),
+        }),
+    ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+    limit: query.limit ?? DEFAULT_PAGE_SIZE,
+  });
+
+  const items = page.items
+    .filter((row) => query.type === undefined || row.type === query.type)
+    .map(toListItem);
+
+  return {
+    items,
+    ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+  };
+}
+
+/** `api-contract.md` §1: default 50, max 200. The max is enforced by the query schema. */
+const DEFAULT_PAGE_SIZE = 50;
+
+/**
+ * One index row, field by field — the same rule as every other projection here. An index
+ * entry carries `pk`, `sk`, `entity` and its two GSI attributes alongside the display fields,
+ * and none of those belong in a response (`agent-playbook.md` §6.11).
+ */
+function toListItem(row: StoredItem): ActivityListItem {
+  const stored = row as ActivityListItem & StoredItem;
+
+  return {
+    activityId: stored.activityId,
+    type: stored.type,
+    title: stored.title,
+    status: stored.status,
+    ...(stored.time === undefined ? {} : { time: stored.time }),
+    ...(stored.endTime === undefined ? {} : { endTime: stored.endTime }),
+    isRecurring: stored.isRecurring === true,
+    participantCount: stored.participantCount ?? 0,
+    ...(stored.locationLabel === undefined
+      ? {}
+      : { locationLabel: stored.locationLabel }),
+    ...(stored.subtitle === undefined ? {} : { subtitle: stored.subtitle }),
+  };
 }
 
 /** The suffix `activities.md` §7.1 specifies, so the copy is distinguishable at a glance. */

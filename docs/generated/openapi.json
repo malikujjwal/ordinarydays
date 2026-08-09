@@ -357,6 +357,72 @@
           "deviceId"
         ]
       },
+      "ActivityListItem": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "task",
+              "meal",
+              "watch",
+              "event",
+              "outing",
+              "custom"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "saved",
+              "scheduled",
+              "completed",
+              "skipped",
+              "cancelled"
+            ]
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "endTime": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "isRecurring": {
+            "type": "boolean"
+          },
+          "participantCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "locationLabel": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "subtitle": {
+            "type": "string",
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "activityId",
+          "type",
+          "title",
+          "status",
+          "isRecurring",
+          "participantCount"
+        ]
+      },
       "Activity": {
         "oneOf": [
           {
@@ -2850,6 +2916,118 @@
       }
     },
     "/v1/activities": {
+      "get": {
+        "summary": "A flat, paginated stage of activities",
+        "description": "Four stages, each reading one GSI1 bucket so a page is one query and one cursor: `upcoming` (dated, today forward, ascending), `past` (dated, before today, descending), `needs_date` (undated plans, most recently discussed first) and `saved` (undated tasks, newest first). **Not for Today** — nothing is expanded here, so a recurring series is one row carrying `isRecurring` rather than one row per occurrence. `filter` is required and has no default. `type` narrows the page **after** the query, so a page can be shorter than `limit` — even empty — while `nextCursor` is still set; page until the cursor is absent, not until a page is short. `upcoming` and `past` split at the caller’s current date, taken from `X-Client-Timezone` and falling back to UTC.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "upcoming",
+                "past",
+                "saved",
+                "needs_date"
+              ]
+            },
+            "required": true,
+            "name": "filter",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "task",
+                "meal",
+                "watch",
+                "event",
+                "outing",
+                "custom"
+              ]
+            },
+            "required": false,
+            "name": "type",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the stage, newest or earliest first per the filter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ActivityListItem"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing or unknown `filter`, an unknown `type`, a malformed cursor, or a `limit` outside 1–200.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "summary": "Create a Task or a Plan",
         "description": "Creates the object kind and type **the client chose** — both are required and neither has a server default. Omitting either, sending an incompatible pair, or putting participants on a Task is `400 validation_failed` naming the field; the same title sent under two different targets produces two different objects, and nothing about the words selects one. `status`, `visibility`, the counters, `scheduledAtUtc` and the timestamps are all server-derived. Reminders belong to the creator alone. `listId` and `listItemId` are not accepted here: only the list-scoped scheduling endpoint may establish that relationship, after list access has been checked. Creating, so an `Idempotency-Key` is required.",

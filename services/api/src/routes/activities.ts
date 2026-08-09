@@ -1,5 +1,9 @@
 import { zValidator } from '@hono/zod-validator';
-import { createActivityInput, patchActivityInput } from '@od/shared/schemas';
+import {
+  activityListQuery,
+  createActivityInput,
+  patchActivityInput,
+} from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { createActivityHandler } from '../handlers/createActivity.js';
@@ -12,14 +16,19 @@ import {
   duplicateActivityHandler,
 } from '../handlers/duplicateActivity.js';
 import { GET_ACTIVITY_PATH, getActivityHandler } from '../handlers/getActivity.js';
+import {
+  LIST_ACTIVITIES_PATH,
+  listActivitiesHandler,
+} from '../handlers/listActivities.js';
 import { PATCH_ACTIVITY_PATH, patchActivityHandler } from '../handlers/patchActivity.js';
 
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Five routes in this phase: the create (P1-11), the detail read (P1-12), the partial update
- * (P1-13), the delete (P1-14) and the duplicate (P1-15). The list
- * query is P1-16; the scheduling, completion and occurrence routes are Phase 2. Each is
+ * Six routes, and with P1-16's list the whole Phase 1 activity surface: the flat list
+ * (P1-16), the create (P1-11), the detail read (P1-12), the partial update (P1-13), the
+ * delete (P1-14) and the duplicate (P1-15). The scheduling, completion and occurrence routes
+ * are Phase 2, and the agenda that powers Today is its own endpoint. Each is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
  *
@@ -59,7 +68,21 @@ const validatePatch = zValidator('json', patchActivityInput, (result) => {
   if (!result.success) throw result.error;
 });
 
+/**
+ * Same hook, on the **query string** rather than the body.
+ *
+ * Strict, so a misspelled `filter` is a `400` naming it rather than a silent fallback to
+ * whichever stage the server would have picked — and `filter` is required, because "every
+ * activity, flat" is not one of the stages the product has.
+ */
+const validateListQuery = zValidator('query', activityListQuery, (result) => {
+  if (!result.success) throw result.error;
+});
+
 export const activities = new Hono<AppEnv>()
+  .get(LIST_ACTIVITIES_PATH, validateListQuery, (c) =>
+    listActivitiesHandler(c, c.req.valid('query'), new Date()),
+  )
   .post('/', validateCreate, (c) =>
     /**
      * `new Date()` at the edge. `coding-standards.md` §4.3 bans implicit-now inside pure

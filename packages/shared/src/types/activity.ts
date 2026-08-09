@@ -171,3 +171,36 @@ export interface PlanActivity extends ActivityBase {
 export type Activity = TaskActivity | PlanActivity;
 
 export type { ActivityObjectKind, ActivityType, PlanType };
+
+/**
+ * The stages `GET /v1/activities?filter=` serves (`api-contract.md` §2.2).
+ *
+ * Each maps to exactly one GSI1 bucket, which is what lets a page be one Query with one
+ * cursor. See the schema of the same name for the P1-16 amendment that removed `inbox` and
+ * split `saved` from `needs_date`, and why.
+ */
+export type ActivityFilter = 'upcoming' | 'past' | 'saved' | 'needs_date';
+
+/**
+ * One row of a flat list — the projection of a `USER#<u>` / `IDX#<a>` entry.
+ *
+ * **Not `AgendaItem`.** That shape carries `occurrenceDate`, `isSnoozed`, `isPast` and
+ * `overdueFromDate`, all of which exist only after recurrence expansion — the agenda's work,
+ * and Phase 2's to define. This endpoint expands nothing and answers with what the index row
+ * holds.
+ */
+export interface ActivityListItem {
+  activityId: string;
+  type: ActivityType;
+  title: string;
+  status: ActivityStatus;
+  /** `HH:mm`, when the activity has a clock time. */
+  time?: string;
+  endTime?: string;
+  /** One row per series, never one per occurrence (`CLAUDE.md` rule 3). */
+  isRecurring: boolean;
+  participantCount: number;
+  locationLabel?: string;
+  /** `Meal · Dinner`, `Watch · S2 E4`, a place name, or a prep task's parent plan title. */
+  subtitle?: string;
+}

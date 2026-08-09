@@ -70,6 +70,21 @@ beforeEach(async () => {
       pk: keys.userProfile(userId).pk,
     });
     await base.deleteAll(rows.map((row) => ({ pk: row.pk, sk: row.sk })));
+
+    /**
+     * **And the rate-limit counter, which lives in its own partition.**
+     *
+     * `rateLimit` allows 120 requests per user per minute and its rows are keyed
+     * `RATE#<scope>#<subject>`, not `USER#<u>` — so the cleanup above never touched them and
+     * the count carried across every test in the file. This suite passed 120 as it grew and
+     * started answering `429`, which surfaced as four unrelated-looking failures: a page with
+     * no `data`, a cursor that was `undefined`, and an assertion expecting `400` getting
+     * `429`. Clearing it per test makes each one start with its own budget, which is right
+     * anyway — the limiter is not what any of these assert.
+     */
+    const counter = keys.rateLimit('general', userId, '');
+    const windows = await base.queryAll<{ pk: string; sk: string }>({ pk: counter.pk });
+    await base.deleteAll(windows.map((row) => ({ pk: row.pk, sk: row.sk })));
   }
 });
 
@@ -953,6 +968,179 @@ describe('duplicating an activity', () => {
     expect((await retry.json()).data.activityId).toBe(first.data.activityId);
     // The original plus exactly one copy.
     expect(await indexRows(DEV)).toHaveLength(2);
+  });
+});
+
+/**
+ * `GET /v1/activities?filter=` (P1-16), against the real index.
+ *
+ * The unit suite proves the right query is composed. What only a table proves is that the
+ * four stages genuinely partition a user's activities — that nothing appears in two of them
+ * and nothing falls through all four — and that a cursor really resumes where it stopped.
+ */
+describe('the flat lists', () => {
+  const list = (query: string, userId?: string) =>
+    asUser(userId).fetch(
+      new Request(`http://localhost/v1/activities?${query}`, {
+        headers: { 'X-Client-Timezone': 'UTC' },
+      }),
+    );
+
+  const ids = async (query: string, userId?: string) =>
+    ((await (await list(query, userId)).json()).data as { activityId: string }[]).map(
+      (row) => row.activityId,
+    );
+
+  /** One of each stage, so every assertion below is about partitioning rather than presence. */
+  const fourStages = async () => {
+    const past = (
+      await (
+        await post({
+          ...TASK,
+          title: 'Last week',
+          schedule: { date: '2020-01-01', timezone: 'UTC' },
+        })
+      ).json()
+    ).data;
+    const upcoming = (
+      await (
+        await post({
+          ...TASK,
+          title: 'Next year',
+          schedule: { date: '2099-01-01', timezone: 'UTC' },
+        })
+      ).json()
+    ).data;
+    const saved = (await (await post({ ...TASK, title: 'Whenever' })).json()).data;
+    const needsDate = (
+      await (await post({ objectKind: 'plan', type: 'custom', title: 'Someday' })).json()
+    ).data;
+
+    return { past, upcoming, saved, needsDate };
+  };
+
+  it('puts each activity in exactly one stage', async () => {
+    const { past, upcoming, saved, needsDate } = await fourStages();
+
+    expect(await ids('filter=past')).toEqual([past.activityId]);
+    expect(await ids('filter=upcoming')).toEqual([upcoming.activityId]);
+    expect(await ids('filter=saved')).toEqual([saved.activityId]);
+    expect(await ids('filter=needs_date')).toEqual([needsDate.activityId]);
+  });
+
+  it('accounts for every activity across the four stages', async () => {
+    const created = await fourStages();
+
+    const seen = [
+      ...(await ids('filter=past')),
+      ...(await ids('filter=upcoming')),
+      ...(await ids('filter=saved')),
+      ...(await ids('filter=needs_date')),
+    ];
+
+    expect(seen.sort()).toEqual(
+      Object.values(created)
+        .map((row) => row.activityId)
+        .sort(),
+    );
+  });
+
+  it('returns rows the shared schema accepts', async () => {
+    const { activityListItem } = await import('@od/shared/schemas');
+    await fourStages();
+
+    const body = await (await list('filter=upcoming')).json();
+
+    expect(activityListItem.safeParse(body.data[0]).success).toBe(true);
+  });
+
+  it('orders upcoming earliest first and past latest first', async () => {
+    const early = (
+      await (
+        await post({ ...TASK, schedule: { date: '2099-01-01', timezone: 'UTC' } })
+      ).json()
+    ).data;
+    const late = (
+      await (
+        await post({ ...TASK, schedule: { date: '2099-06-01', timezone: 'UTC' } })
+      ).json()
+    ).data;
+    const older = (
+      await (
+        await post({ ...TASK, schedule: { date: '2020-01-01', timezone: 'UTC' } })
+      ).json()
+    ).data;
+    const newer = (
+      await (
+        await post({ ...TASK, schedule: { date: '2021-01-01', timezone: 'UTC' } })
+      ).json()
+    ).data;
+
+    expect(await ids('filter=upcoming')).toEqual([early.activityId, late.activityId]);
+    expect(await ids('filter=past')).toEqual([newer.activityId, older.activityId]);
+  });
+
+  /** A series is one row carrying `isRecurring`, never one row per occurrence. */
+  it('returns a recurring series as a single row', async () => {
+    await post({
+      ...TASK,
+      title: 'Gym',
+      schedule: { date: '2099-01-01', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'weekly', effectiveFrom: '2099-01-01' }],
+      },
+    });
+
+    // `#R` is the recurring bucket; none of the four stages read it, so a series appears in
+    // none of them. That is the agenda's job, not this endpoint's.
+    for (const filter of ['upcoming', 'past', 'saved', 'needs_date']) {
+      expect(await ids(`filter=${filter}`)).toEqual([]);
+    }
+  });
+
+  it('narrows by type', async () => {
+    await post({ ...TASK, title: 'Whenever' });
+    const meal = (
+      await (await post({ objectKind: 'plan', type: 'meal', title: 'Tacos' })).json()
+    ).data;
+
+    expect(await ids('filter=needs_date&type=meal')).toEqual([meal.activityId]);
+    expect(await ids('filter=needs_date&type=outing')).toEqual([]);
+  });
+
+  /** A cursor resumes where the previous page stopped, with no row seen twice or skipped. */
+  it('pages through a stage with a cursor', async () => {
+    for (const day of ['2099-01-01', '2099-02-01', '2099-03-01']) {
+      await post({ ...TASK, schedule: { date: day, timezone: 'UTC' } });
+    }
+
+    const first = await (await list('filter=upcoming&limit=2')).json();
+    expect(first.data).toHaveLength(2);
+    expect(first.meta.nextCursor).toBeDefined();
+
+    const second = await (
+      await list(
+        `filter=upcoming&limit=2&cursor=${encodeURIComponent(first.meta.nextCursor)}`,
+      )
+    ).json();
+
+    const seen = [...first.data, ...second.data].map(
+      (row: { activityId: string }) => row.activityId,
+    );
+    expect(new Set(seen).size).toBe(3);
+  });
+
+  it('lists only the caller’s own activities', async () => {
+    await post({ ...TASK, title: 'Mine' });
+    await post({ ...TASK, title: 'Theirs' }, { userId: OTHER });
+
+    expect(await ids('filter=saved')).toHaveLength(1);
+    expect(await ids('filter=saved', OTHER)).toHaveLength(1);
+  });
+
+  it('400s a filter the enum no longer carries', async () => {
+    expect((await list('filter=inbox')).status).toBe(400);
   });
 });
 

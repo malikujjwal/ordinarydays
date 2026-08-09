@@ -4,6 +4,8 @@ import { z } from 'zod';
 import {
   activity,
   activityDetail,
+  activityListItem,
+  activityListQuery,
   createActivityInput,
   deletedActivity,
   patchActivityInput,
@@ -29,6 +31,12 @@ const deletedDeviceResponse = envelope(deletedDevice);
 const activityResponse = envelope(activity);
 const activityDetailResponse = envelope(activityDetail);
 const deletedActivityResponse = envelope(deletedActivity);
+
+/**
+ * The list envelope. `data` is an array and `meta.nextCursor` is present only when there is
+ * another page — the shape `api-contract.md` §1 gives for every list response.
+ */
+const activityListResponse = envelope(z.array(activityListItem));
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
@@ -212,6 +220,39 @@ registry.registerPath({
  * explicit-intent rule made machine-readable: a generated client cannot construct a request
  * body without a complete, valid target pair.
  */
+registry.registerPath({
+  method: 'get',
+  path: '/v1/activities',
+  summary: 'A flat, paginated stage of activities',
+  description:
+    'Four stages, each reading one GSI1 bucket so a page is one query and one cursor: ' +
+    '`upcoming` (dated, today forward, ascending), `past` (dated, before today, ' +
+    'descending), `needs_date` (undated plans, most recently discussed first) and `saved` ' +
+    '(undated tasks, newest first). **Not for Today** — nothing is expanded here, so a ' +
+    'recurring series is one row carrying `isRecurring` rather than one row per ' +
+    'occurrence. `filter` is required and has no default. `type` narrows the page **after** ' +
+    'the query, so a page can be shorter than `limit` — even empty — while `nextCursor` is ' +
+    'still set; page until the cursor is absent, not until a page is short. `upcoming` and ' +
+    '`past` split at the caller’s current date, taken from `X-Client-Timezone` and falling ' +
+    'back to UTC.',
+  tags: ['activities'],
+  request: {
+    query: activityListQuery,
+  },
+  responses: {
+    200: {
+      description: 'One page of the stage, newest or earliest first per the filter.',
+      content: { 'application/json': { schema: activityListResponse } },
+    },
+    400: {
+      description:
+        'A missing or unknown `filter`, an unknown `type`, a malformed cursor, or a ' +
+        '`limit` outside 1–200.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
 registry.registerPath({
   method: 'post',
   path: '/v1/activities',

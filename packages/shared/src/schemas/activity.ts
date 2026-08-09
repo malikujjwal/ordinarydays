@@ -8,7 +8,7 @@ import {
   MAX_REMINDERS_PER_USER_PER_ACTIVITY,
   MAX_TITLE_LEN,
 } from '../constants.js';
-import { cents, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
+import { cents, cursor, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
 import { recurrence } from './recurrence.js';
 import { reminder, reminderInput } from './reminder.js';
 
@@ -179,6 +179,19 @@ const activityBaseShape = {
 
 /** The five Plan kinds. `custom` is the visible **General**. */
 export const planType = z.enum(['meal', 'watch', 'event', 'outing', 'custom']);
+
+/**
+ * Every activity type, Task included. Named once here rather than spelled out at each use —
+ * `patchActivityInput` and `activityListQuery` both need the full six.
+ */
+export const activityType = z.enum([
+  'task',
+  'meal',
+  'watch',
+  'event',
+  'outing',
+  'custom',
+]);
 
 /**
  * The stored Activity.
@@ -427,3 +440,84 @@ export type PatchActivityInput = z.infer<typeof patchActivityInput>;
 export const deletedActivity = z
   .object({ activityId: ulidId('act') })
   .meta({ id: 'DeletedActivity' });
+
+/**
+ * The stages `GET /v1/activities?filter=` serves (`api-contract.md` §2.2).
+ *
+ * Each maps to exactly **one** GSI1 bucket, which is what lets one Query and one cursor
+ * answer a page — the orders come from §2.2a's stage table:
+ *
+ * | Filter | Bucket | Order |
+ * | --- | --- | --- |
+ * | `upcoming` | `#S`, from today forward | date ascending |
+ * | `past` | `#S`, before today | date descending |
+ * | `needs_date` | `#P` | `lastActivityAt` descending |
+ * | `saved` | `#N` | newest first |
+ *
+ * > **Amended in P1-16.** The contract's enum read `inbox|upcoming|past|saved`, and two of
+ * > those could not be built as written.
+ * >
+ * > **`inbox` is gone.** Nothing defined it: no product surface, no GSI1 bucket, no access
+ * > pattern — and `overview.md` §"Why it must stay three" names Inbox among the fourth nouns
+ * > the product deliberately does not have. A member of a closed enum that no handler can
+ * > implement is a value every client must handle and will never see.
+ * >
+ * > **`saved` was aimed at two buckets by two product docs** — `today-and-tasks.md` §2.3 at
+ * > `#N` (the ANYTIME See-all) and `plans-and-lists.md` §5 at `#P` (Needs a date). They are
+ * > separate partitions, so one filter cannot page across both without a composite cursor no
+ * > document defines; and merging them would put undecided plans on the ANYTIME screen, which
+ * > `today-and-tasks.md` calls "the model's largest product error" two paragraphs above the
+ * > line that cites the filter. `saved` keeps the `#N` meaning and `needs_date` names the
+ * > stage that already had its own name, access pattern (2b) and empty-state copy.
+ */
+export const activityFilter = z.enum(['upcoming', 'past', 'saved', 'needs_date']);
+
+/**
+ * `GET /v1/activities` query parameters.
+ *
+ * **Strict**, so a misspelled filter is a `400` naming it rather than a silent fallback to
+ * whichever stage the server would have picked — there is no default: `filter` is required,
+ * because a flat list of everything is not one of the stages the product has.
+ */
+export const activityListQuery = z
+  .strictObject({
+    filter: activityFilter,
+    /** Narrows to one activity type. Applied after the Query — see the endpoint's note. */
+    type: activityType.optional(),
+    cursor: cursor.optional(),
+    /** `api-contract.md` §1: default 50, max 200. */
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+  })
+  .meta({ id: 'ActivityListQuery' });
+
+export type ActivityListQuery = z.infer<typeof activityListQuery>;
+
+/**
+ * One row of a flat list — the **index entry's** projection, not the full Activity.
+ *
+ * ## Deliberately not `AgendaItem`
+ *
+ * `api-contract.md` §2.2 defines `AgendaItem` with `occurrenceDate`, `isSnoozed`, `isPast`
+ * and `overdueFromDate`, every one of which only exists after recurrence expansion and
+ * occurrence merging. That is the agenda endpoint's work and Phase 2 owns both it and
+ * `types/agenda.ts`. This endpoint is "**Not for Today**" in the contract's own words and
+ * expands nothing, so it answers with what the index row actually holds rather than with a
+ * richer shape whose extra fields it would have to invent.
+ *
+ * The two shapes overlap because they are projections of the same row. When Phase 2 defines
+ * `AgendaItem`, this stays as it is: a list stage and a day view are different reads.
+ */
+export const activityListItem = z
+  .object({
+    activityId: ulidId('act'),
+    type: activityType,
+    title,
+    status: z.enum(['saved', 'scheduled', 'completed', 'skipped', 'cancelled']),
+    time: hhmm.optional(),
+    endTime: hhmm.optional(),
+    isRecurring: z.boolean(),
+    participantCount: z.number().int().nonnegative(),
+    locationLabel: freeText.optional(),
+    subtitle: freeText.optional(),
+  })
+  .meta({ id: 'ActivityListItem' });

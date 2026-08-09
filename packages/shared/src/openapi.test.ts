@@ -73,6 +73,7 @@ describe('the generated document', () => {
     expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual([
       'Activity',
       'ActivityDetail',
+      'ActivityListItem',
       'CreateActivityInput',
       'DeletedActivity',
       'DeletedDevice',

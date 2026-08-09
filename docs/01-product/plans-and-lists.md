@@ -1282,8 +1282,11 @@ the explicit creation action:
 
 - **Global `+` → Plan → Meal → no date** creates an Activity with `status: 'saved'`. Because its type is
   not `task`, it routes to **Plans → Needs a date** (§1.2) and to
-  `GET /v1/activities?filter=saved`. It does **not** appear on Today: an undecided meal is
-  not something to do today.
+  `GET /v1/activities?filter=needs_date`. It does **not** appear on Today: an undecided meal
+  is not something to do today. (**Corrected in P1-16**: this said `filter=saved`, which
+  `today-and-tasks.md` §2.3 uses for the ANYTIME `See all` — a different bucket. `saved` is
+  undated *tasks*; `needs_date` is undated *plans*. See
+  [`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §2.2.)
 - **Meals list → `+ Add an item`** creates a `ListItem`. Nothing is scheduled and no Activity
   exists yet.
 

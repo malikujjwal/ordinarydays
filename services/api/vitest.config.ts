@@ -10,6 +10,22 @@ export default defineConfig({
     include: ['src/**/*.test.ts'],
     environment: 'node',
     /**
+     * Vitest's default is 10 s, and `pnpm test:coverage` started exceeding it in P1-16.
+     *
+     * Every route test's `beforeEach` does `vi.resetModules()` and re-imports `app.ts`, which
+     * is the pattern that lets each test construct a fresh app with its own identity provider
+     * — worth its cost, and the cost is the whole module graph re-instrumented per test. That
+     * is fine alone: the suite passes at 30 files in well under the limit. It is not fine when
+     * `turbo` runs five packages' coverage concurrently on the same cores, and the hook that
+     * usually takes well under a second crosses ten.
+     *
+     * Raised rather than worked around. The alternatives are worse: dropping the module reset
+     * would make tests share app state, and serialising Turbo would slow every run to fix a
+     * problem that only appears under coverage. A hook timeout exists to catch a hang, and
+     * thirty seconds still catches one.
+     */
+    hookTimeout: 30_000,
+    /**
      * The environment `lib/config.ts` parses at module load.
      *
      * Set here rather than at the top of each test file, which is what `testing.md` §4.3

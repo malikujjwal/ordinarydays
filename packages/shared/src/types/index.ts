@@ -13,6 +13,8 @@ export type {
   Activity,
   ActivityBase,
   ActivityDetails,
+  ActivityFilter,
+  ActivityListItem,
   ActivityLocation,
   ActivitySchedule,
   MealIngredient,
