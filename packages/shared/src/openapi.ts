@@ -1,7 +1,8 @@
 import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import type { OpenAPIObject } from 'openapi3-ts/oas31';
 import { z } from 'zod';
-import { activity, createActivityInput } from './schemas/activity.js';
+import { activity, activityDetail, createActivityInput } from './schemas/activity.js';
+import { ulidId } from './schemas/common.js';
 import {
   deletedDevice,
   device,
@@ -20,6 +21,10 @@ const deviceResponse = envelope(device);
 const deletedDeviceResponse = envelope(deletedDevice);
 
 const activityResponse = envelope(activity);
+const activityDetailResponse = envelope(activityDetail);
+
+/** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
+const activityId = ulidId('act');
 
 /**
  * The OpenAPI document, generated from the **same Zod schemas both sides import**
@@ -235,6 +240,38 @@ registry.registerPath({
       description:
         'A `parentActivityId` this caller has no relationship to — `404`, never `403`, so ' +
         'guessing an id cannot confirm that it exists.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/v1/activities/{id}',
+  summary: 'One activity, with the caller’s own reminders',
+  description:
+    'Returns `{ activity, reminders }` — an object of named collections, so participants, ' +
+    'expenses, updates, attachments, children and date suggestions are **added** as their ' +
+    'phases land rather than changing the envelope. `reminders` is the caller’s own and ' +
+    'nobody else’s: every participant’s rows live in the partition this reads, and the ' +
+    'projection filters to the caller before responding — a shared plan has one schedule ' +
+    'and many reminder sets, and nobody sees that anybody else has any. `listId` and ' +
+    '`listItemId` are not returned: the contract gates them on a list-access check that ' +
+    'arrives with lists in Phase 3. A caller with no relationship to the activity gets ' +
+    '`404`, never `403`.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+  },
+  responses: {
+    200: {
+      description: 'The activity and the caller’s reminders on it.',
+      content: { 'application/json': { schema: activityDetailResponse } },
+    },
+    404: {
+      description:
+        'No such activity, or none this caller has any relationship to. The two are ' +
+        'deliberately indistinguishable.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

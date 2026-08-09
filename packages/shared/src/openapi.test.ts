@@ -36,12 +36,13 @@ describe('the generated document', () => {
     // moves, and the person adding it has to say so. Saying so: **P1-07 added `/v1/me`**,
     // whose `GET` and `PATCH` share one path entry; **P1-08 added the two device paths** —
     // the `POST` collection and the `DELETE` on one id, separate because only one of them is
-    // templated; and **P1-11 added `/v1/activities`**.
+    // templated; **P1-11 added `/v1/activities`**; and **P1-12 added the detail path**.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
       '/v1/me/devices/{deviceId}',
       '/v1/activities',
+      '/v1/activities/{id}',
       '/v1/health',
     ]);
   });
@@ -70,6 +71,7 @@ describe('the generated document', () => {
   it('names its schemas as components instead of inlining them', () => {
     expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual([
       'Activity',
+      'ActivityDetail',
       'CreateActivityInput',
       'DeletedDevice',
       'Device',
@@ -78,9 +80,29 @@ describe('the generated document', () => {
       'PatchUserInput',
       'Recurrence',
       'RegisterDeviceInput',
+      'Reminder',
       'ReminderInput',
       'User',
     ]);
+  });
+
+  /**
+   * **The detail response is an object of named collections, not a bare `Activity`.** That is
+   * what lets Phase 6 add `participants` without changing the envelope a Phase 1 client was
+   * written against, and it is worth pinning: publishing the activity directly would be an
+   * easy simplification to make and a breaking change to undo (`api-contract.md` §2.3).
+   */
+  it('publishes the detail response as named collections, so later phases can add to it', () => {
+    const detail = asSchema(
+      document.components?.schemas?.ActivityDetail,
+      'ActivityDetail',
+    );
+
+    expect(Object.keys(detail.properties ?? {}).sort()).toEqual([
+      'activity',
+      'reminders',
+    ]);
+    expect(detail.required).toEqual(expect.arrayContaining(['activity', 'reminders']));
   });
 
   /**

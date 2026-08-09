@@ -579,8 +579,6 @@ describe('projectDetail', () => {
       notes: 'Semi-skimmed',
       location: { label: 'Home' },
       parentActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB',
-      listItemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1XC',
-      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1XD',
       sourceUrl: 'https://example.com',
       primaryAttachmentId: 'att_01J8XKQ2M4N5P6R7S8T9V0W1XE',
       completedAt: '2026-08-10T00:00:00.000Z',
@@ -588,6 +586,35 @@ describe('projectDetail', () => {
     });
     expect(activity.schedule?.scheduledAtUtc).toBe('2026-08-09T23:30:00.000Z');
     expect(activity.recurrence?.mode).toBe('fixed');
+  });
+
+  /**
+   * **The two exceptions to "project every field", and the reason is the contract.**
+   *
+   * `api-contract.md` §2.3 includes `listId` and `listItemId` "only when the caller also
+   * passes `assertListAccess`; a Plan participant outside the list receives no reverse link."
+   * That check arrives with lists in Phase 3, so the condition cannot currently be met — and
+   * a field whose gate is unimplemented is omitted rather than emitted.
+   *
+   * Nothing is lost today: no Phase 1 activity can carry either field. **Amended in P1-12**,
+   * which is the task that ships the endpoint the projection serves; the fixture above
+   * carried both and this asserts they do not come out. Phase 3 adds them back *with* the
+   * check, and this test is what stops them being added back without it.
+   */
+  it('omits listId and listItemId, whose access check does not exist yet', () => {
+    const withLinks: StoredItem = {
+      ...meta,
+      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1XD',
+      listItemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1XC',
+    };
+
+    const detail = projectDetail([withLinks], 'usr_a');
+
+    expect(detail.activity).not.toHaveProperty('listId');
+    expect(detail.activity).not.toHaveProperty('listItemId');
+    // Serialised too, so a field added under another name is caught as well.
+    expect(JSON.stringify(detail)).not.toContain('lst_');
+    expect(JSON.stringify(detail)).not.toContain('itm_');
   });
 
   /** …and omits each of them when the stored row has none, rather than emitting undefined. */

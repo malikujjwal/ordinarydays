@@ -9,6 +9,7 @@ import type {
 import { fromZonedTime } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
 import {
+  getActivityPartition,
   newActivityId,
   newReminderId,
   createActivity as putActivity,
@@ -261,6 +262,32 @@ export async function createActivity(
 }
 
 /**
+ * One activity and the caller's own reminders, behind `GET /v1/activities/:id` (P1-12).
+ *
+ * ## Two reads, deliberately
+ *
+ * `assertActivityAccess` does its own `GetItem` and the partition `Query` that follows
+ * returns the canonical row again. One read could serve both — the `Query` already carries
+ * the row the owner check needs and the participant rows the fallback needs — but taking it
+ * would mean a **second implementation of the authorisation rules**, in the one place where
+ * the projection is most tempting to hand-roll. P1-10 rule 2 says the check is called at the
+ * top of every activity-scoped service method, and one extra `GetItem` is the price of that
+ * being literally true. Two round trips, against a budget of three
+ * (`definition-of-done.md` §6).
+ *
+ * `read`, so a participant may see a plan they are on and a participant of a parent may see
+ * its prep task. A caller with no relationship gets `not_found`, never `403`.
+ */
+export async function getActivityDetail(
+  userId: string,
+  activityId: string,
+): Promise<ActivityDetail> {
+  await assertActivityAccess(userId, activityId, 'read');
+
+  return projectDetail(await getActivityPartition(activityId), userId);
+}
+
+/**
  * The client-facing projection of one activity's partition — **and the caller-scoped reminder
  * filter** (rule 6).
  *
@@ -314,6 +341,20 @@ function isReminderRow(row: StoredItem): boolean {
  * Both projections are built **field by field, never by spreading** — the same rule as
  * `toUser` and `toDevice`. A stored row carries `pk`, `sk` and `entity`, and every future
  * storage attribute arrives on it too (`agent-playbook.md` §6.11, `data-model.md` §8).
+ *
+ * ## `listId` and `listItemId` are deliberately absent
+ *
+ * `api-contract.md` §2.3 gates them: they are "included only when the caller also passes
+ * `assertListAccess`; a Plan participant outside the list receives no reverse link." That
+ * check is Phase 3 and does not exist, so the condition for including them cannot currently
+ * be met — and a field whose gate is unimplemented is omitted, not emitted.
+ *
+ * Nothing is lost today: no Phase 1 activity can carry either field. `POST /v1/activities`
+ * rejects both, and the only endpoint permitted to set them —
+ * `POST /v1/lists/:id/items/:itemId/schedule` — arrives with lists in Phase 3. Adding the
+ * lines now would mean Phase 3 inherits two fields already leaving the building unchecked,
+ * which is the wrong direction for a default to point. **Phase 3 adds them back with the
+ * access check, not before**, and the test below fails if they are added without it.
  */
 function toActivity(row: StoredItem): Activity {
   const stored = row as Activity & StoredItem;
@@ -332,8 +373,7 @@ function toActivity(row: StoredItem): Activity {
     ...(stored.parentActivityId === undefined
       ? {}
       : { parentActivityId: stored.parentActivityId }),
-    ...(stored.listItemId === undefined ? {} : { listItemId: stored.listItemId }),
-    ...(stored.listId === undefined ? {} : { listId: stored.listId }),
+    // `listId` and `listItemId` are not projected — see the note above. Phase 3.
     ...(stored.sourceUrl === undefined ? {} : { sourceUrl: stored.sourceUrl }),
     ...(stored.primaryAttachmentId === undefined
       ? {}

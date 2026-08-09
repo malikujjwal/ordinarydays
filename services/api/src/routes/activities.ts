@@ -3,18 +3,19 @@ import { createActivityInput } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { createActivityHandler } from '../handlers/createActivity.js';
+import { GET_ACTIVITY_PATH, getActivityHandler } from '../handlers/getActivity.js';
 
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * One route in this phase. `GET`, `PATCH` and `DELETE /v1/activities/:id` are P1-12 to P1-14,
- * `:id/duplicate` is P1-15 and the list query is P1-16; the scheduling, completion and
- * occurrence routes are Phase 2. Each is absent rather than stubbed, so `routeSplit`'s
- * `not_implemented` answers for it — the honest response for a path that is in the contract
- * but not in this build.
+ * Two routes in this phase: the create (P1-11) and the detail read (P1-12). `PATCH` and
+ * `DELETE /v1/activities/:id` are P1-13 and P1-14, `:id/duplicate` is P1-15 and the list
+ * query is P1-16; the scheduling, completion and occurrence routes are Phase 2. Each is
+ * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
+ * response for a path that is in the contract but not in this build.
  *
  * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise (P1-30).
- * This one `creates`, so it takes an `Idempotency-Key`.
+ * Only the `POST` `creates`, so only it takes an `Idempotency-Key`.
  */
 
 /**
@@ -37,11 +38,19 @@ const validateCreate = zValidator('json', createActivityInput, (result) => {
   if (!result.success) throw result.error;
 });
 
-export const activities = new Hono<AppEnv>().post('/', validateCreate, (c) =>
+export const activities = new Hono<AppEnv>()
+  .post('/', validateCreate, (c) =>
+    /**
+     * `new Date()` at the edge. `coding-standards.md` §4.3 bans implicit-now inside pure
+     * logic and anything that has to be testable; the route is the boundary, so this is
+     * where the real clock is read and handed down as a value.
+     */
+    createActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
   /**
-   * `new Date()` at the edge. `coding-standards.md` §4.3 bans implicit-now inside pure logic
-   * and anything that has to be testable; the route is the boundary, so this is where the
-   * real clock is read and handed down as a value.
+   * The path parameter is not validated against the `act_` ULID schema, for the reason
+   * `deleteDevice` records: a malformed id resolves to no activity and already answers
+   * `404`, and checking it first would turn one user-visible fact — "there is no such
+   * activity for you" — into two different statuses.
    */
-  createActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
-);
+  .get(GET_ACTIVITY_PATH, getActivityHandler);

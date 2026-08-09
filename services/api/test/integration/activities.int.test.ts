@@ -332,6 +332,125 @@ describe('a prep task', () => {
   });
 });
 
+/**
+ * `GET /v1/activities/:id` (P1-12), against the real partition.
+ *
+ * The unit suite proves the projection filters. What only a table proves is that the single
+ * `Query` behind it really returns everybody's rows in the first place — which is why the
+ * filter has to exist, and what a mocked partition can only assert by construction.
+ */
+describe('reading one activity back', () => {
+  const read = (id: string, userId?: string) =>
+    asUser(userId).fetch(new Request(`http://localhost/v1/activities/${id}`));
+
+  it('returns what was written, in named collections', async () => {
+    const { data } = await (await post(TASK)).json();
+
+    const res = await read(data.activityId);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(Object.keys(body.data).sort()).toEqual(['activity', 'reminders']);
+    expect(body.data.activity).toMatchObject({
+      activityId: data.activityId,
+      title: 'Buy milk',
+      objectKind: 'task',
+      type: 'task',
+      ownerId: DEV,
+    });
+  });
+
+  it('returns a body the shared detail schema accepts', async () => {
+    const { activityDetail } = await import('@od/shared/schemas');
+    const { data } = await (
+      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }] })
+    ).json();
+
+    const body = await (await read(data.activityId)).json();
+
+    expect(activityDetail.safeParse(body.data).success).toBe(true);
+  });
+
+  it('returns the caller’s reminders on it', async () => {
+    const { data } = await (
+      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }, { offsetMinutes: -60 }] })
+    ).json();
+
+    const body = await (await read(data.activityId)).json();
+
+    expect(body.data.reminders).toHaveLength(2);
+    expect(body.data.reminders.every((r: { userId: string }) => r.userId === DEV)).toBe(
+      true,
+    );
+  });
+
+  it('leaks no storage attribute from the real stored rows', async () => {
+    const { data } = await (
+      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }] })
+    ).json();
+
+    const body = await (await read(data.activityId)).json();
+
+    for (const shape of [body.data.activity, body.data.reminders[0]]) {
+      expect(shape).not.toHaveProperty('pk');
+      expect(shape).not.toHaveProperty('sk');
+      expect(shape).not.toHaveProperty('entity');
+    }
+  });
+
+  /**
+   * **The filter, proved against the partition that makes it necessary.** Two users' reminder
+   * rows are written into one activity's partition by hand — Phase 1 has no way to do it
+   * through the API, since only the creator can add one — and each reader sees exactly their
+   * own (`security-privacy.md` §1 row 15).
+   */
+  it('returns only the caller’s reminders from a partition holding two users’', async () => {
+    const { data } = await (
+      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }] })
+    ).json();
+
+    const theirReminder = 'rem_01J8XKQ2M4N5P6R7S8T9V0W1BB';
+    await base.putItem({
+      ...keys.reminder(data.activityId, OTHER, theirReminder),
+      entity: 'Reminder',
+      reminderId: theirReminder,
+      activityId: data.activityId,
+      userId: OTHER,
+      offsetMinutes: -90,
+      channel: 'push',
+      schemaVersion: 1,
+    });
+
+    // The partition really does hold both — otherwise the assertion below proves nothing.
+    const partition = await repo.getActivityPartition(data.activityId);
+    expect(partition.filter((row) => row.entity === 'Reminder')).toHaveLength(2);
+
+    const raw = await (await read(data.activityId)).text();
+    const body = JSON.parse(raw);
+
+    expect(body.data.reminders).toHaveLength(1);
+    expect(body.data.reminders[0].userId).toBe(DEV);
+    expect(raw).not.toContain(OTHER);
+    expect(raw).not.toContain(theirReminder);
+    expect(raw).not.toContain('-90');
+  });
+
+  it('404s another user’s activity rather than 403ing it', async () => {
+    const theirs = await (await post(TASK, { userId: OTHER })).json();
+
+    const res = await read(theirs.data.activityId);
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.message).toBe('Activity not found.');
+  });
+
+  it('404s an activity that does not exist', async () => {
+    const res = await read('act_01J8XKQ2M4N5P6R7S8T9V0W1ZZ');
+
+    expect(res.status).toBe(404);
+  });
+});
+
 /** Two users' activities are invisible to each other, before Phase 4 makes it matter. */
 describe('tenant isolation', () => {
   it('gives each user their own index partition', async () => {
