@@ -466,6 +466,17 @@ string. Export one function per item type from
 `#P` and `#N` are separate buckets and there is no single "unscheduled" one. A `pk:` template
 literal anywhere else is a review rejection.
 
+> **Amended in P1-05: `keys.ts` transcribes all of §3, not only the fourteen builders named
+> above.** The named list omits item types Phase 1 itself needs — `REM#` for P1-09's reminder
+> rows and `RATE#` for P1-03's counters — and both are forbidden outside this file, so
+> deferring them would have meant P1-03 and P1-09 each editing the one file the product's
+> tenant isolation depends on. Having found that, the cheaper and safer answer was the whole
+> table at once: thirty later tasks appending a line each to a serial choke point, each
+> re-deriving a key format from a table they may not have read, is worse than one
+> transcription reviewed in one sitting. The keys are pure string construction with no
+> behaviour, they cost a line and an assertion each, and builders for item types that do not
+> exist yet carry the phase that writes them.
+
 Every builder that identifies user-owned data takes a `userId` parameter. None of them has a
 default, and none of them reads a constant. `userProfile()` with no argument returning the
 dev user would be a shortcut that costs a day in Phase 4 and a tenancy bug later.
@@ -482,9 +493,29 @@ maps `TransactionCanceledException` reasons to the right `AppError`.
 a registry of `schemaVersion → upgrade function`, applied on read, persisted on next write.
 Version 1 is the identity function; the registry exists so version 2 is a one-file change.
 
-**Edge cases.** No `Scan` in application code, ever. Add a unit test that greps the built
-`services/api` bundle for `ScanCommand` and fails on a hit outside
-`infra/scripts/migrations/`.
+**Edge cases.** No `Scan` in application code, ever.
+
+> ~~Add a unit test that greps the built `services/api` bundle for `ScanCommand` and fails
+> on a hit outside `infra/scripts/migrations/`.~~ **Not viable — do not add it.** Measured in
+> P1-05 rather than reasoned about: the built bundle is **minified** (88 lines, mangled
+> identifiers) and the AWS SDK is marked **external**, because Lambda provides it at runtime.
+> `DynamoDB` appears zero times in the artifact and so does `QueryCommand` — which `base.ts`
+> demonstrably uses. A grep for `ScanCommand` therefore cannot fail, in any circumstance, and
+> a check that always passes is the "green check that inspected nothing" the
+> `.dependency-cruiser.cjs` notes call the worst possible outcome for a rule whose job is to
+> fail loudly.
+>
+> The control is at **source** level, where the identifier still exists, and it already
+> works — verified in P1-05 by planting a `ScanCommand` in `base.ts` and watching both fire,
+> each naming the file and line:
+>
+> - `scripts/check-forbidden.mjs no-scan`, a required CI step over `services/api/src`,
+>   `apps` and `packages`, excluding `infra/scripts/migrations/`.
+> - `src/lib/layering.test.ts`'s "contains no Scan", which runs on every `pnpm test`.
+>
+> The deeper control is that there is nothing to reach for: `base.ts` exposes `getItem`,
+> `putItem`, `updateItem`, `deleteItem`, `query`, `queryAll` and `deleteAll`, and no way to
+> express "read everything" — `query` has no parameter that omits the partition key.
 
 **Tests.** Unit for every key builder against the literal strings in the data model. Cursor
 round-trip and a tampered-cursor rejection. `tx.ts` rejecting a 101-item transaction.

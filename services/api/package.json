@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@hono/node-server": "1.19.17",
+    "aws-sdk-client-mock": "4.1.0",
     "tsx": "4.23.11",
     "vitest": "3.2.7"
   }

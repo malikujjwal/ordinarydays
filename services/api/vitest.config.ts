@@ -9,6 +9,25 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
     environment: 'node',
+    /**
+     * The environment `lib/config.ts` parses at module load.
+     *
+     * Set here rather than at the top of each test file, which is what `testing.md` §4.3
+     * already describes and what P1-05 made true: any test that imports something reaching
+     * `lib/ddb.ts` — which is now every repository test — otherwise fails on a missing
+     * `TABLE_NAME` before a single assertion runs, and the fix per file is five lines of
+     * boilerplate that must stay in step across all of them.
+     *
+     * A test that needs different values overrides them with `vi.stubEnv` plus
+     * `vi.resetModules()`, which is what P1-02's startup-guard tests will do.
+     */
+    env: {
+      STAGE: 'local',
+      TABLE_NAME: 'od-main-local',
+      MEDIA_BUCKET: 'od-media-local',
+      WEB_ORIGINS: 'http://localhost:8081',
+      LOG_LEVEL: 'fatal',
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'html', 'lcov'],

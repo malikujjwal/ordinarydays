@@ -1,0 +1,132 @@
+import {
+  type CancellationReason,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
+import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { ddb, TABLE_NAME } from '../lib/ddb.js';
+import { AppError } from '../lib/errors.js';
+
+/**
+ * `TransactWriteItems` composition (`data-model.md` §7).
+ *
+ * Transactions are used for the write paths in §7 and nowhere else. They are not a default:
+ * a transaction costs twice the write units of the same puts and fails the whole batch on
+ * one condition, so it is right exactly where "all of these or none" is a correctness
+ * requirement — creating an activity with its index entry, moving an index entry between
+ * GSI1 buckets — and wrong where it is merely tidy.
+ */
+
+/**
+ * DynamoDB's hard limit. Exceeding it is a `ValidationException` from the service, which
+ * surfaces as a `500` and tells the caller nothing useful — so it is caught here, where the
+ * message can name the operation that got too big.
+ *
+ * The participant cap of 50 does **not** keep every write under this on its own: the
+ * RSVP-reset reschedule is 103 items at the cap, which is why P6-15 runs it in two phases
+ * rather than one transaction (`data-model.md` §7).
+ */
+export const MAX_TRANSACT_ITEMS = 100;
+
+/** One item in a transaction, in the document-client shape. */
+export type TransactItem = NonNullable<
+  ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']
+>[number];
+
+interface WriteOptions {
+  /**
+   * Names the operation in the error when the transaction is cancelled, so a `409` says
+   * which write lost rather than "a condition failed".
+   */
+  readonly operation: string;
+  /**
+   * Maps a cancelled item back to a caller-facing error. The index is the item's position
+   * in `items`, so a repository can say "the index entry already existed" rather than
+   * leaving the handler to guess which of five items tripped.
+   */
+  readonly onConditionFailed?: (index: number) => AppError | undefined;
+}
+
+/**
+ * Runs a transaction, or throws an `AppError` that means something.
+ *
+ * Every item is stamped with the table name here rather than at each call site: a repository
+ * that had to remember `TableName` on every item is a repository where one item eventually
+ * goes to the wrong table in a way no type catches.
+ */
+export async function transactWrite(
+  items: readonly TransactItem[],
+  options: WriteOptions,
+): Promise<void> {
+  if (items.length === 0) return;
+
+  assertWithinLimit(items.length, options.operation);
+
+  try {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: items.map((item) => withTableName(item)),
+      }),
+    );
+  } catch (error) {
+    throw toAppError(error, options);
+  }
+}
+
+/**
+ * Rejects an oversized transaction **before** it reaches DynamoDB.
+ *
+ * Exported so a repository composing a fan-out can check as it builds and switch to a
+ * batched path — which is what P1-14's delete does for a partition with more than 100 items,
+ * and what P6-15 does for the RSVP reset. Failing late, at send time, would mean discovering
+ * the limit only for the users who hit it.
+ */
+export function assertWithinLimit(count: number, operation: string): void {
+  if (count > MAX_TRANSACT_ITEMS) {
+    throw new AppError(
+      'internal',
+      // Deliberately the generic message: the caller cannot act on this, and it is a
+      // programming error rather than something the user did. The detail is in the log.
+      'An unexpected error occurred.',
+      [
+        {
+          path: operation,
+          message: `A transaction may hold at most ${MAX_TRANSACT_ITEMS} items; ${operation} built ${count}. Split it into batches.`,
+        },
+      ],
+    );
+  }
+}
+
+function withTableName(item: TransactItem): TransactItem {
+  const [verb, body] = Object.entries(item)[0] as [string, Record<string, unknown>];
+  return { [verb]: { ...body, TableName: TABLE_NAME } } as TransactItem;
+}
+
+/**
+ * Maps `TransactionCanceledException` to the right `AppError`.
+ *
+ * The SDK reports one reason per item, in order, with `None` for the items that would have
+ * succeeded. That positional mapping is the only way to know *which* condition failed, and
+ * losing it is why "the transaction was cancelled" is such an unhelpful error in practice.
+ */
+function toAppError(error: unknown, options: WriteOptions): unknown {
+  if (!(error instanceof TransactionCanceledException)) return error;
+
+  const reasons: CancellationReason[] = error.CancellationReasons ?? [];
+  const failedIndex = reasons.findIndex(
+    (reason) => reason.Code === 'ConditionalCheckFailed',
+  );
+
+  if (failedIndex >= 0) {
+    const mapped = options.onConditionFailed?.(failedIndex);
+    if (mapped !== undefined) return mapped;
+    return new AppError(
+      'conflict',
+      'This changed while you were editing it. Review the update.',
+    );
+  }
+
+  // Throughput or a genuine service failure. Not the caller's fault and not retryable by
+  // them, so it stays a 500 with the safe message.
+  return error;
+}
