@@ -1,7 +1,19 @@
+import { changeActivityKind } from '@od/shared';
 import type { CreationTarget } from '@od/shared/client';
 import type { PlanType } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { create } from 'zustand';
+import {
+  type DraftDetails,
+  type DraftLocation,
+  type DraftSchedule,
+  EMPTY_DETAILS,
+  EMPTY_LOCATION,
+  EMPTY_SCHEDULE,
+  fromActivityDetails,
+  toActivityDetails,
+} from '@/features/compose/model/draft';
+import { reconcileReminder } from '@/features/compose/model/reminders';
 import type { ObjectChoice } from '@/features/compose/model/targets';
 
 /**
@@ -53,6 +65,13 @@ export interface ComposeDraftState {
    */
   idempotencyKey: string | undefined;
 
+  /** `activities.md` §4's Date / Time / End time, for every type that has them. */
+  schedule: DraftSchedule;
+  location: DraftLocation;
+  /** `undefined` is `Off`. Only Task, Event and General show the control at all. */
+  reminderOffset: number | undefined;
+  details: DraftDetails;
+
   open: () => void;
   chooseObject: (choice: ObjectChoice) => void;
   choosePlanKind: (type: PlanType) => void;
@@ -62,6 +81,12 @@ export interface ComposeDraftState {
   setSourceUrl: (url: string) => void;
   attachImage: (uri: string) => void;
   clearAttachment: () => void;
+  setDate: (date: string | undefined) => void;
+  setTime: (time: string | undefined) => void;
+  setEndTime: (endTime: string | undefined) => void;
+  setLocation: (patch: Partial<DraftLocation>) => void;
+  setReminderOffset: (offsetMinutes: number | undefined) => void;
+  setDetails: (patch: Partial<DraftDetails>) => void;
   /** Returns the key for this attempt, generating one if the draft has changed since the last. */
   takeIdempotencyKey: () => string;
   reset: () => void;
@@ -75,6 +100,10 @@ const EMPTY = {
   sourceUrl: undefined,
   attachmentUri: undefined,
   idempotencyKey: undefined,
+  schedule: EMPTY_SCHEDULE,
+  location: EMPTY_LOCATION,
+  reminderOffset: undefined,
+  details: EMPTY_DETAILS,
 } satisfies Omit<
   ComposeDraftState,
   | 'open'
@@ -86,6 +115,12 @@ const EMPTY = {
   | 'setSourceUrl'
   | 'attachImage'
   | 'clearAttachment'
+  | 'setDate'
+  | 'setTime'
+  | 'setEndTime'
+  | 'setLocation'
+  | 'setReminderOffset'
+  | 'setDetails'
   | 'takeIdempotencyKey'
   | 'reset'
 >;
@@ -129,16 +164,52 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
   },
 
   /**
-   * The one place `target` can become a Plan.
+   * The one place `target` can become a Plan, and where re-choosing a kind runs **P1-17's
+   * mapping in memory, before any write**.
    *
-   * Re-choosing a kind from the form keeps title, notes and the source URL: they are common
-   * to every type in `activities.md` §4, so nothing is dropped and no confirmation is owed
-   * (`interaction-contract.md` §1a.1, "Changing a Plan's kind, nothing dropped" → additive).
-   * When P1-25 adds type-specific fields, P1-17's mapping is applied here and the destructive
-   * branch of that table becomes reachable.
+   * Title, notes and the source URL are common to every type in `activities.md` §4, so they
+   * always survive and no confirmation is owed for them (`interaction-contract.md` §1a.1,
+   * "Changing a Plan's kind, nothing dropped" → additive).
+   *
+   * `changeActivityKind` is the same pure function the server runs for a real conversion, so
+   * a draft and a stored Activity cannot disagree about which fields survive a Watch becoming
+   * an Outing. The counts it reads are all zero here by construction — a draft has no
+   * participants, expenses or prep children — so it can never return a blocker, and the
+   * `dropped` list it returns is the *reason* the Season field vanishes from the form rather
+   * than lurking in the store.
    */
-  choosePlanKind: (type) =>
-    set(edited({ step: 'form', target: { objectKind: 'plan', type } })),
+  choosePlanKind: (type) => {
+    const { target, title, details } = get();
+    const previousType = target?.objectKind === 'plan' ? target.type : 'task';
+
+    if (previousType === type) {
+      set(edited({ step: 'form', target: { objectKind: 'plan', type } }));
+      return;
+    }
+
+    const mapped = changeActivityKind(
+      {
+        title,
+        // `listItem` never reaches here — the store leaves `target` undefined for it — and
+        // the mapping's source is Task or Plan by type, so the fallback is Task.
+        objectKind: target?.objectKind === 'plan' ? 'plan' : 'task',
+        type: previousType,
+        details: toActivityDetails(previousType, details, title),
+        participantCount: 0,
+        expenseTotalCents: 0,
+        childCount: 0,
+      },
+      { objectKind: 'plan', type },
+    );
+
+    set(
+      edited({
+        step: 'form',
+        target: { objectKind: 'plan', type },
+        details: fromActivityDetails(mapped.details),
+      }),
+    );
+  },
 
   /**
    * Back never writes and never clears compatible fields.
@@ -167,6 +238,47 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
   attachImage: (attachmentUri) => set(edited({ attachmentUri })),
   clearAttachment: () => set(edited({ attachmentUri: undefined })),
 
+  /**
+   * Clearing the date clears the time with it, and the reminder after that.
+   *
+   * `activities.md` §3.4: a time "requires a date", and a reminder "requires a date". Leaving
+   * a 19:30 behind on a cleared date would be a value the form cannot show and the schema
+   * would reject — the kind of state that surfaces as a `400` naming a field the user cannot
+   * see.
+   */
+  setDate: (date) =>
+    set((state) =>
+      edited({
+        schedule: date === undefined ? EMPTY_SCHEDULE : { ...state.schedule, date },
+        ...(date === undefined ? { reminderOffset: undefined } : {}),
+      }),
+    ),
+
+  setTime: (time) =>
+    set((state) =>
+      edited({
+        schedule: {
+          ...state.schedule,
+          time,
+          // An end time needs a start time (§3 rule 4).
+          ...(time === undefined ? { endTime: undefined } : {}),
+        },
+        // The two pickers offer different lists; keep only an offset the new one shows.
+        reminderOffset: reconcileReminder(state.reminderOffset, time !== undefined),
+      }),
+    ),
+
+  setEndTime: (endTime) =>
+    set((state) => edited({ schedule: { ...state.schedule, endTime } })),
+
+  setLocation: (patch) =>
+    set((state) => edited({ location: { ...state.location, ...patch } })),
+
+  setReminderOffset: (reminderOffset) => set(edited({ reminderOffset })),
+
+  setDetails: (patch) =>
+    set((state) => edited({ details: { ...state.details, ...patch } })),
+
   takeIdempotencyKey: () => {
     const existing = get().idempotencyKey;
     if (existing !== undefined) return existing;
@@ -188,12 +300,51 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
  * form is the kind of friction that teaches people to dismiss dialogs without reading them.
  */
 export function hasContent(
-  state: Pick<ComposeDraftState, 'title' | 'notes' | 'sourceUrl' | 'attachmentUri'>,
+  state: Pick<
+    ComposeDraftState,
+    | 'title'
+    | 'notes'
+    | 'sourceUrl'
+    | 'attachmentUri'
+    | 'schedule'
+    | 'location'
+    | 'details'
+  >,
 ): boolean {
   return (
     state.title.trim() !== '' ||
     state.notes.trim() !== '' ||
     (state.sourceUrl ?? '') !== '' ||
-    state.attachmentUri !== undefined
+    state.attachmentUri !== undefined ||
+    // A chosen date is content. Backing out of a form after picking Saturday and losing it
+    // without being asked is the discard this prompt exists to prevent.
+    state.schedule.date !== undefined ||
+    state.location.label.trim() !== '' ||
+    state.location.address.trim() !== '' ||
+    hasDetailContent(state.details)
+  );
+}
+
+/** Whether any type-specific field carries something the user typed or chose. */
+function hasDetailContent(details: ComposeDraftState['details']): boolean {
+  return (
+    details.mealSlot !== undefined ||
+    details.mediaKind !== undefined ||
+    details.ingredients.some((row) => row.name.trim() !== '') ||
+    [
+      details.recipeUrl,
+      details.season,
+      details.episode,
+      details.episodeTitle,
+      details.service,
+      details.description,
+      details.price,
+      details.ticketUrl,
+      details.organiser,
+      details.reservation.name,
+      details.reservation.time,
+      details.reservation.partySize,
+      details.reservation.reference,
+    ].some((value) => value.trim() !== '')
   );
 }

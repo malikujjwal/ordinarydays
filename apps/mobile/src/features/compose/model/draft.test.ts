@@ -1,0 +1,176 @@
+import { describe, expect, it } from 'vitest';
+import {
+  centsToDraft,
+  draftCents,
+  draftInteger,
+  EMPTY_DETAILS,
+  fromActivityDetails,
+  toActivityDetails,
+} from './draft';
+
+/**
+ * The draft ↔ `ActivityDetails` conversions (P1-25).
+ *
+ * The draft holds strings because that is what a field being typed into is; this is the one
+ * boundary where they become the model's own types, so it is the one place a `'12.'` or a
+ * `'2 people'` can turn into something the schema would reject.
+ */
+describe('draftInteger', () => {
+  it.each([
+    ['4', 4],
+    ['04', 4],
+    ['0', 0],
+  ])('%s → %s', (value, expected) => {
+    expect(draftInteger(value)).toBe(expected);
+  });
+
+  it.each(['', '   ', 'two', '1.5', '-3', '4a'])('%s is not a number yet', (value) => {
+    expect(draftInteger(value)).toBeUndefined();
+  });
+});
+
+/**
+ * **Integer minor units, never a float** (`coding-standards.md` §3, §11 smell 5). The whole
+ * and fractional parts are parsed separately and combined with integer arithmetic, so no
+ * value in this path is ever the result of a division.
+ */
+describe('draftCents', () => {
+  it.each([
+    ['12', 1200],
+    ['12.5', 1250],
+    ['12.50', 1250],
+    ['0.07', 7],
+    ['0', 0],
+    ['$18.00', 1800],
+  ])('%s → %s cents', (value, expected) => {
+    expect(draftCents(value)).toBe(expected);
+  });
+
+  /** Three decimals is not a price. Rounding it would drop a digit the user typed. */
+  it.each(['', '12.567', '1,200', 'free', '-5'])('%s is not a price', (value) => {
+    expect(draftCents(value)).toBeUndefined();
+  });
+
+  it('round-trips through the field without arithmetic', () => {
+    expect(centsToDraft(1250)).toBe('12.50');
+    expect(centsToDraft(7)).toBe('0.07');
+    expect(centsToDraft(0)).toBe('0.00');
+    expect(draftCents(centsToDraft(1234))).toBe(1234);
+  });
+});
+
+describe('toActivityDetails', () => {
+  it('gives a Task and a General details with nothing in them', () => {
+    expect(toActivityDetails('task', EMPTY_DETAILS, 'x')).toEqual({ kind: 'task' });
+    expect(toActivityDetails('custom', EMPTY_DETAILS, 'x')).toEqual({ kind: 'custom' });
+  });
+
+  /** §4.3 and §4.5: the two types that mirror the title into their own details. */
+  it('mirrors the title into mediaTitle and placeName', () => {
+    expect(toActivityDetails('watch', EMPTY_DETAILS, 'Severance')).toEqual({
+      kind: 'watch',
+      mediaTitle: 'Severance',
+    });
+    expect(toActivityDetails('outing', EMPTY_DETAILS, 'Zahav')).toEqual({
+      kind: 'outing',
+      placeName: 'Zahav',
+    });
+  });
+
+  it('drops ingredient rows with no name, and trims the rest', () => {
+    const details = {
+      ...EMPTY_DETAILS,
+      ingredients: [
+        { id: 'a', name: '  Chicken ', quantity: ' 1 kg ', selected: true },
+        { id: 'b', name: '   ', quantity: '2', selected: false },
+        { id: 'c', name: 'Salt', quantity: '', selected: false },
+      ],
+    };
+
+    expect(toActivityDetails('meal', details, 'Tacos')).toEqual({
+      kind: 'meal',
+      ingredients: [{ name: 'Chicken', quantity: '1 kg' }, { name: 'Salt' }],
+    });
+  });
+
+  it('sends numeric Watch fields as numbers, and omits the ones still empty', () => {
+    const details = { ...EMPTY_DETAILS, season: '2', episode: '', service: 'Apple TV' };
+
+    expect(toActivityDetails('watch', details, 'Severance')).toEqual({
+      kind: 'watch',
+      mediaTitle: 'Severance',
+      season: 2,
+      service: 'Apple TV',
+    });
+  });
+
+  it('sends a price as integer cents', () => {
+    const details = { ...EMPTY_DETAILS, price: '18.50', organiser: 'Dr Patel' };
+
+    expect(toActivityDetails('event', details, 'Gig')).toEqual({
+      kind: 'event',
+      priceCents: 1850,
+      organiser: 'Dr Patel',
+    });
+  });
+
+  it('omits an untouched reservation rather than sending an empty one', () => {
+    expect(toActivityDetails('outing', EMPTY_DETAILS, 'Zahav')).not.toHaveProperty(
+      'reservation',
+    );
+  });
+
+  it('sends the reservation fields that were filled', () => {
+    const details = {
+      ...EMPTY_DETAILS,
+      reservation: { name: 'Ujjwal', time: '19:30', partySize: '4', reference: '' },
+    };
+
+    expect(toActivityDetails('outing', details, 'Zahav')).toEqual({
+      kind: 'outing',
+      placeName: 'Zahav',
+      reservation: { name: 'Ujjwal', time: '19:30', partySize: 4 },
+    });
+  });
+
+  /**
+   * The union is the filter. A Watch draft that carried an organiser cannot leak it into an
+   * Outing's body, because the Outing arm never reads that key.
+   */
+  it('reads only the keys the chosen type has', () => {
+    const messy = { ...EMPTY_DETAILS, organiser: 'Dr Patel', service: 'Netflix' };
+
+    expect(toActivityDetails('outing', messy, 'Zahav')).toEqual({
+      kind: 'outing',
+      placeName: 'Zahav',
+    });
+  });
+});
+
+describe('fromActivityDetails', () => {
+  it('brings a mapped Watch back onto the draft as strings', () => {
+    expect(
+      fromActivityDetails({
+        kind: 'watch',
+        mediaTitle: 'Severance',
+        season: 2,
+        episode: 4,
+        service: 'Apple TV',
+      }),
+    ).toMatchObject({ season: '2', episode: '4', service: 'Apple TV' });
+  });
+
+  /** Whatever the mapping did not keep comes back empty — which is what makes it visible. */
+  it('empties everything the mapping dropped', () => {
+    const back = fromActivityDetails({ kind: 'custom' });
+
+    expect(back.season).toBe('');
+    expect(back.service).toBe('');
+    expect(back.organiser).toBe('');
+    expect(back.ingredients).toEqual([]);
+  });
+
+  it('brings a price back as the digits the field shows', () => {
+    expect(fromActivityDetails({ kind: 'event', priceCents: 1850 }).price).toBe('18.50');
+  });
+});

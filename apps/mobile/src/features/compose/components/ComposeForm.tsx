@@ -1,11 +1,10 @@
 import type { CreationTarget } from '@od/shared/client';
-import { MAX_NOTES_LEN, MAX_TITLE_LEN } from '@od/shared/constants';
+import { MAX_TITLE_LEN } from '@od/shared/constants';
 import { Button, Field, Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import {
   type CommonDraftFields,
-  canSave,
   saveLabel,
   targetHeading,
 } from '@/features/compose/model/targets';
@@ -30,9 +29,12 @@ import {
 export interface ComposeFormProps {
   target: CreationTarget;
   fields: CommonDraftFields;
+  /** `activities.md` §4's table for this target, rendered in order (P1-25). */
+  typedFields: React.ReactNode;
+  /** Whether the named write is available. `title` alone in Phase 1; see `canSave`. */
+  saveEnabled: boolean;
   attachmentUri: string | undefined;
   onTitleChange: (title: string) => void;
-  onNotesChange: (notes: string) => void;
   onSourceUrlChange: (url: string) => void;
   onAttach: (uri: string) => void;
   onClearAttachment: () => void;
@@ -54,9 +56,10 @@ const SAVE_BLOCKED_BY_PHOTO = 'Remove the photo to save this.';
 export function ComposeForm({
   target,
   fields,
+  typedFields,
+  saveEnabled,
   attachmentUri,
   onTitleChange,
-  onNotesChange,
   onSourceUrlChange,
   onAttach,
   onClearAttachment,
@@ -106,17 +109,13 @@ export function ComposeForm({
         {...(fieldErrors.title === undefined ? {} : { error: fieldErrors.title })}
       />
 
-      {/* P1-25 inserts the type-specific fields from `activities.md` §4 here, in order. */}
-
-      <Field
-        label="Notes"
-        value={fields.notes}
-        onChangeText={onNotesChange}
-        multiline
-        maxLength={MAX_NOTES_LEN}
-        testID="compose-notes"
-        {...(fieldErrors.notes === undefined ? {} : { error: fieldErrors.notes })}
-      />
+      {/**
+       * P1-25's type-specific fields, in `activities.md` §4's order — **including `Notes`**,
+       * which is the last row of all six tables and so belongs to the table rather than to
+       * this frame. A slot, so the ordering lives in one renderer over the six tables
+       * (`forms/TypedFields.tsx`) instead of being restated here and drifting.
+       */}
+      {typedFields}
 
       <CaptureRow
         sourceUrl={fields.sourceUrl}
@@ -161,7 +160,7 @@ export function ComposeForm({
           fullWidth
           onPress={onSave}
           loading={isSaving}
-          disabled={!canSave(fields) || blockedByPhoto}
+          disabled={!saveEnabled || blockedByPhoto}
           testID="compose-save"
         />
         {blockedByPhoto ? (

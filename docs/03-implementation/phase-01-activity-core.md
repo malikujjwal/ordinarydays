@@ -1358,6 +1358,21 @@ an explicit Plan-kind change applies P1-17's mapping in memory before any write.
 
 ### P1-25 — Task and five Plan-kind creation forms
 
+> **Completed 2026-08-09. Seven deviations, recorded rather than edited into the plan.**
+>
+> | # | What happened | Why |
+> | --- | --- | --- |
+> | 1 | **One renderer over six tables**, `forms/TypedFields.tsx`, instead of six `{Task,…}Form.tsx` files. | The tables live as data in `model/fields.ts` and the form renders *from* them, so "exactly the fields in §4, in the given order" is structural: there is nowhere for a seventh field to be added to Meal without adding a row to the table. Six components would restate the tables in JSX, and a restatement is a thing that can disagree — the exact failure the required test exists to catch. |
+> | 2 | **Event's `Source image / link` is the shared capture row**, in the form's trailer, not a twelfth inline control. | It *is* the Camera / Photos / Link row [`activities.md`](../01-product/activities.md) §2.4 puts on every form once the target is fixed, and P1-24 built it there. Two placements of one control would be worse than one out-of-order row; the field-order test names it frame-owned rather than skipping it silently. |
+> | 3 | **Reminder is chips, not a `Select`.** | [`design-system.md`](../04-conventions/design-system.md) §6 has no `Select` primitive, and adding one is a design-system decision rather than a form's — the conclusion P1-22 reached when its own file list named one. The lists are short enough: nine timed offsets, four untimed. |
+> | 4 | **`Custom…` is not offered** among the reminder offsets [`notifications.md`](../01-product/notifications.md) §3 lists. | It needs a numeric-offset entry surface no document specifies. The eight fixed offsets and `Off` are there; a `Custom…` chip that opened nothing would be worse than its absence. Flagged for P2-16, which owns the reminder row on plan detail. |
+> | 5 | **`People`, `Repeat` and `Related plan` render disabled with copy naming their phase** — the treatment this section already prescribes for the two list toggles. | Same reasoning, extended: hiding them means the layout changes when Phases 6, 2 and 3 land, and a user who cannot see that a Plan can have people has been told the product is smaller than it is. It matches P1-26's disabled sections. |
+> | 6 | **An address with no label is not sent**, and the form marks the label required as soon as an address is typed. | `activityLocation` makes `label` required. The alternatives were a body the server rejects naming a field the user never saw, or a silently dropped address; asking for the missing half at the moment it starts mattering is the honest one. |
+> | 7 | **`today` and `timezone` are injected at the route**, and `successToast` now implements all seven rows of §2.5's table. | The seam P1-26 used: `coding-standards.md` §4.3 bans implicit-now anywhere testable, so the route reads the clock and the screen does not. P1-24 left the dated toast rows for "the control that can produce them" — `DatePicker` is that control and this is that task. |
+>
+> The Playwright half of the Tests line — "fill and save one of each type on web" — is
+> **P1-29**, which owns the harness. Playwright is still not a dependency of this repository.
+
 **Files.** `apps/mobile/src/features/compose/forms/{Task,Meal,Watch,Event,Outing,Custom}
 Form.tsx`, plus shared controls in `apps/mobile/src/features/compose/controls/`.
 

@@ -1,5 +1,12 @@
 import type { CreationTarget } from '@od/shared/client';
 import type { CreateActivityInput } from '@od/shared/schemas';
+import { format, parseISO } from 'date-fns';
+import {
+  type DraftDetails,
+  type DraftLocation,
+  type DraftSchedule,
+  toActivityDetails,
+} from '@/features/compose/model/draft';
 import { planKindChoices, planKindLabel } from '@/lib/planKinds';
 
 /**
@@ -20,6 +27,15 @@ import { planKindChoices, planKindLabel } from '@/lib/planKinds';
 
 /** The three rows of the global chooser, in their fixed order. Never reordered by history. */
 export type ObjectChoice = 'task' | 'plan' | 'listItem';
+
+/**
+ * `Fri, 8 Aug` — the toast table's format in `activities.md` §2.5.
+ *
+ * Deliberately **not** `@od/ui`'s `formatWallDate`, which renders `Sat, Aug 8` for
+ * `design-system.md` §7.3's plan card. Two surfaces, two stated formats; borrowing one for the
+ * other would be quietly rewriting whichever doc lost.
+ */
+const formatWallDate = (date: string): string => format(parseISO(date), 'EEE, d MMM');
 
 export interface Choice<T> {
   value: T;
@@ -88,6 +104,21 @@ export interface CommonDraftFields {
 }
 
 /**
+ * The whole draft: the common fields plus everything `activities.md` §4 adds per type (P1-25).
+ *
+ * `CommonDraftFields` stays as its own interface because it is what survives a target change
+ * — the seam P1-24 carved for exactly this moment. Everything below it is type-specific and is
+ * mapped by P1-17 when the kind changes, not carried across blindly.
+ */
+export interface DraftFields extends CommonDraftFields {
+  schedule: DraftSchedule;
+  location: DraftLocation;
+  /** `undefined` is `Off`: no `REM#` row is written (`notifications.md` §2.1). */
+  reminderOffset: number | undefined;
+  details: DraftDetails;
+}
+
+/**
  * Builds the create request from a fixed target plus the common fields.
  *
  * `target` is a required parameter of a union type, so there is no reachable call that omits
@@ -97,10 +128,52 @@ export interface CommonDraftFields {
  */
 export function toCreateActivityInput(
   target: CreationTarget,
-  fields: CommonDraftFields,
+  fields: DraftFields,
+  timezone: string,
 ): CreateActivityInput | undefined {
   const title = fields.title.trim();
   const notes = fields.notes.trim();
+  const { date, time, endTime } = fields.schedule;
+
+  /**
+   * `time` requires `date` and `endTime` requires `time` — the schema refuses either on its
+   * own (`activities.md` §3 rule 4). The form already disables the controls in that order, so
+   * this is belt and braces rather than the only guard, but a draft can reach here with a
+   * cleared date and a time the user set before clearing it.
+   */
+  const schedule =
+    date === undefined || date === ''
+      ? undefined
+      : {
+          date,
+          ...(time === undefined || time === '' ? {} : { time }),
+          ...(time === undefined || time === '' || endTime === undefined || endTime === ''
+            ? {}
+            : { endTime }),
+          timezone,
+        };
+
+  /**
+   * **A location needs a label.** `activityLocation` makes `label` required and `address`
+   * optional, which is the model saying an address on its own does not identify a place.
+   *
+   * So an address typed with no label sends no location at all rather than a body the server
+   * would reject with a field name the user never saw. The form is what stops that being a
+   * silent loss: `LocationControl` marks the label required as soon as an address is typed.
+   */
+  const label = fields.location.label.trim();
+  const address = fields.location.address.trim();
+  const location =
+    label === '' ? undefined : { label, ...(address === '' ? {} : { address }) };
+
+  /**
+   * A reminder needs a date to be an offset from, and it is written as the creator's own
+   * `REM#` row — never a field on the Activity (ADR-047). `channel` is `'push'` in v1.
+   */
+  const reminders =
+    fields.reminderOffset === undefined || schedule === undefined
+      ? undefined
+      : [{ offsetMinutes: fields.reminderOffset }];
 
   const common = {
     title,
@@ -108,10 +181,18 @@ export function toCreateActivityInput(
     ...(fields.sourceUrl === undefined || fields.sourceUrl === ''
       ? {}
       : { sourceUrl: fields.sourceUrl }),
+    ...(schedule === undefined ? {} : { schedule }),
+    ...(location === undefined ? {} : { location }),
+    ...(reminders === undefined ? {} : { reminders }),
   };
 
   if (target.objectKind === 'task') {
-    return { ...common, objectKind: 'task', type: 'task', details: { kind: 'task' } };
+    return {
+      ...common,
+      objectKind: 'task',
+      type: 'task',
+      details: toActivityDetails('task', fields.details, title),
+    };
   }
 
   if (target.objectKind === 'plan') {
@@ -121,15 +202,10 @@ export function toCreateActivityInput(
       type: target.type,
       /**
        * `details` mirrors the chosen type so the server's `details.kind === type` check has
-       * something to agree with. Watch is the one arm with a required sub-field — its
-       * `mediaTitle` starts equal to the title, per `activities.md` §4.3.
+       * something to agree with. Watch and Outing are the two arms that mirror the title —
+       * `mediaTitle` and `placeName` — per `activities.md` §4.3 and §4.5.
        */
-      details:
-        target.type === 'watch'
-          ? { kind: 'watch', mediaTitle: title }
-          : target.type === 'outing'
-            ? { kind: 'outing', placeName: title }
-            : { kind: target.type },
+      details: toActivityDetails(target.type, fields.details, title),
     };
   }
 
@@ -148,16 +224,38 @@ export function canSave(fields: CommonDraftFields): boolean {
 }
 
 /**
- * The success toast (`activities.md` §2.5).
+ * The success toast (`activities.md` §2.5), all seven rows.
  *
- * Phase 1 creates nothing dated — the date picker is P1-25 — so only the undated rows of that
- * table are reachable and only they are implemented. The dated rows arrive with the control
- * that can produce them; writing them now would mean untestable copy.
+ * P1-24 implemented the two undated rows and said the rest would arrive "with the control that
+ * can produce them". That control is `DatePicker`, and this is that task.
+ *
+ * The past-date row is not an error path: creating with a past date is the **retro-log**
+ * path, deliberate and supported, and the copy says `logged for` rather than `planned for`
+ * precisely so the user can tell which one happened.
  */
-export function successToast(target: CreationTarget): string {
-  if (target.objectKind === 'task') return 'Task · saved to Anytime';
-  if (target.objectKind === 'plan') {
-    return `${planKindLabel(target.type)} plan · saved to Needs a date`;
+export function successToast(
+  target: CreationTarget,
+  schedule: DraftSchedule,
+  today: string,
+): string {
+  const noun =
+    target.objectKind === 'task'
+      ? 'Task'
+      : target.objectKind === 'plan'
+        ? `${planKindLabel(target.type)} plan`
+        : undefined;
+
+  if (noun === undefined) return 'Added to list';
+
+  const date = schedule.date;
+  if (date === undefined || date === '') {
+    return target.objectKind === 'task'
+      ? 'Task · saved to Anytime'
+      : `${noun} · saved to Needs a date`;
   }
-  return 'Added to list';
+
+  // `YYYY-MM-DD` is fixed-width and big-endian, so string order is date order.
+  if (date < today) return `${noun} · logged for ${formatWallDate(date)}`;
+  if (date === today && target.objectKind === 'task') return 'Task · added to Today';
+  return `${noun} · planned for ${formatWallDate(date)}`;
 }

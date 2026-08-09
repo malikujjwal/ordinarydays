@@ -2,7 +2,7 @@ import { ApiError, type CreationTarget, createActivity } from '@od/shared/client
 import type { Activity } from '@od/shared/types';
 import { useMutation } from '@tanstack/react-query';
 import {
-  type CommonDraftFields,
+  type DraftFields,
   toCreateActivityInput,
 } from '@/features/compose/model/targets';
 import { apiClient } from '@/lib/apiClient';
@@ -21,7 +21,9 @@ import { useComposeDraft } from '@/stores/composeDraft';
 export interface CreateActivityResult {
   save: (
     target: CreationTarget,
-    fields: CommonDraftFields,
+    fields: DraftFields,
+    /** The zone the wall-clock schedule is anchored in, supplied by the route. */
+    timezone: string,
   ) => Promise<Activity | undefined>;
   isSaving: boolean;
   /** `interaction-contract.md` §5.3 copy for the banner. The draft stays open behind it. */
@@ -67,11 +69,13 @@ export function useCreateActivity(): CreateActivityResult {
     mutationFn: ({
       target,
       fields,
+      timezone,
     }: {
       target: CreationTarget;
-      fields: CommonDraftFields;
+      fields: DraftFields;
+      timezone: string;
     }) => {
-      const input = toCreateActivityInput(target, fields);
+      const input = toCreateActivityInput(target, fields, timezone);
       if (input === undefined) {
         // Unreachable from the UI: a List item never gets a save button on this path in
         // Phase 1. Thrown rather than silently no-oped so that if Phase 3 wires it wrong,
@@ -93,9 +97,9 @@ export function useCreateActivity(): CreateActivityResult {
   const failure = mutation.error === null ? undefined : describe(mutation.error);
 
   return {
-    save: async (target, fields) => {
+    save: async (target, fields, timezone) => {
       try {
-        return await mutation.mutateAsync({ target, fields });
+        return await mutation.mutateAsync({ target, fields, timezone });
       } catch {
         // Swallowed on purpose: the error is already on `mutation.error` and is rendered as
         // the banner. Rethrowing here would surface an unhandled rejection for a failure the

@@ -1,7 +1,9 @@
 import { createActivityInput } from '@od/shared/schemas';
 import { describe, expect, it } from 'vitest';
+import { EMPTY_DETAILS, EMPTY_LOCATION, EMPTY_SCHEDULE } from './draft';
 import {
   canSave,
+  type DraftFields,
   objectChoices,
   planKindChoices,
   planKindLabel,
@@ -112,10 +114,31 @@ describe('the named write button', () => {
 });
 
 describe('toCreateActivityInput', () => {
-  const fields = { title: '  Call the dentist  ', notes: '' };
+  /**
+   * A whole draft from a few fields. P1-25 widened this function's input from the three
+   * common fields to the six tables' worth, so every case here states only what it is about
+   * and inherits the empty rest — which is also what keeps a new field from silently
+   * appearing in an assertion that was not written for it.
+   */
+  const draft = (patch: Partial<DraftFields> = {}): DraftFields => ({
+    title: '',
+    notes: '',
+    schedule: EMPTY_SCHEDULE,
+    location: EMPTY_LOCATION,
+    reminderOffset: undefined,
+    details: EMPTY_DETAILS,
+    ...patch,
+  });
+
+  const ZONE = 'America/New_York';
+  const fields = draft({ title: '  Call the dentist  ' });
 
   it('sends objectKind and type for a Task, and trims the title', () => {
-    const input = toCreateActivityInput({ objectKind: 'task', type: 'task' }, fields);
+    const input = toCreateActivityInput(
+      { objectKind: 'task', type: 'task' },
+      fields,
+      ZONE,
+    );
 
     expect(input).toEqual({
       objectKind: 'task',
@@ -131,7 +154,8 @@ describe('toCreateActivityInput', () => {
     (type) => {
       const input = toCreateActivityInput(
         { objectKind: 'plan', type },
-        { title: 'Severance', notes: '' },
+        draft({ title: 'Severance', notes: '' }),
+        ZONE,
       );
 
       expect(input).toMatchObject({ objectKind: 'plan', type });
@@ -144,7 +168,8 @@ describe('toCreateActivityInput', () => {
     for (const { value } of planKindChoices) {
       const input = toCreateActivityInput(
         { objectKind: 'plan', type: value },
-        { title: 'Severance', notes: '' },
+        draft({ title: 'Severance', notes: '' }),
+        ZONE,
       );
       expect(input?.details?.kind).toBe(value);
     }
@@ -153,7 +178,8 @@ describe('toCreateActivityInput', () => {
   it('starts a Watch plan mediaTitle equal to the title', () => {
     const input = toCreateActivityInput(
       { objectKind: 'plan', type: 'watch' },
-      { title: 'Severance', notes: '' },
+      draft({ title: 'Severance', notes: '' }),
+      ZONE,
     );
     expect(input?.details).toEqual({ kind: 'watch', mediaTitle: 'Severance' });
   });
@@ -161,7 +187,8 @@ describe('toCreateActivityInput', () => {
   it('starts an Outing placeName equal to the title', () => {
     const input = toCreateActivityInput(
       { objectKind: 'plan', type: 'outing' },
-      { title: 'Zahav', notes: '' },
+      draft({ title: 'Zahav', notes: '' }),
+      ZONE,
     );
     expect(input?.details).toEqual({ kind: 'outing', placeName: 'Zahav' });
   });
@@ -169,7 +196,8 @@ describe('toCreateActivityInput', () => {
   it('omits notes and sourceUrl rather than sending empty strings', () => {
     const input = toCreateActivityInput(
       { objectKind: 'task', type: 'task' },
-      { title: 'x', notes: '   ', sourceUrl: '' },
+      draft({ title: 'x', notes: '   ', sourceUrl: '' }),
+      ZONE,
     );
     expect(input).not.toHaveProperty('notes');
     expect(input).not.toHaveProperty('sourceUrl');
@@ -178,7 +206,8 @@ describe('toCreateActivityInput', () => {
   it('carries notes and sourceUrl when they have content', () => {
     const input = toCreateActivityInput(
       { objectKind: 'task', type: 'task' },
-      { title: 'x', notes: ' bring cash ', sourceUrl: 'https://example.com/a' },
+      draft({ title: 'x', notes: ' bring cash ', sourceUrl: 'https://example.com/a' }),
+      ZONE,
     );
     expect(input).toMatchObject({
       notes: 'bring cash',
@@ -192,7 +221,8 @@ describe('toCreateActivityInput', () => {
     expect(
       toCreateActivityInput(
         { objectKind: 'listItem', listId: 'lst_01J000000000000000000000' },
-        { title: 'Chicken', notes: '' },
+        draft({ title: 'Chicken', notes: '' }),
+        ZONE,
       ),
     ).toBeUndefined();
   });
@@ -206,19 +236,199 @@ describe('canSave', () => {
   });
 });
 
+const TODAY = '2026-08-12';
+
 describe('successToast', () => {
   it('names the object and where it landed', () => {
-    expect(successToast({ objectKind: 'task', type: 'task' })).toBe(
-      'Task · saved to Anytime',
-    );
-    expect(successToast({ objectKind: 'plan', type: 'outing' })).toBe(
-      'Outing plan · saved to Needs a date',
-    );
-    expect(successToast({ objectKind: 'plan', type: 'custom' })).toBe(
-      'General plan · saved to Needs a date',
-    );
     expect(
-      successToast({ objectKind: 'listItem', listId: 'lst_01J000000000000000000000' }),
+      successToast({ objectKind: 'task', type: 'task' }, EMPTY_SCHEDULE, TODAY),
+    ).toBe('Task · saved to Anytime');
+    expect(
+      successToast({ objectKind: 'plan', type: 'outing' }, EMPTY_SCHEDULE, TODAY),
+    ).toBe('Outing plan · saved to Needs a date');
+    expect(
+      successToast({ objectKind: 'plan', type: 'custom' }, EMPTY_SCHEDULE, TODAY),
+    ).toBe('General plan · saved to Needs a date');
+    expect(
+      successToast(
+        { objectKind: 'listItem', listId: 'lst_01J000000000000000000000' },
+        EMPTY_SCHEDULE,
+        TODAY,
+      ),
     ).toBe('Added to list');
+  });
+});
+
+/**
+ * The schedule, location and reminder the six forms collect (P1-25).
+ *
+ * Every case round-trips through `createActivityInput`, because the value of this function is
+ * not that it builds an object — it is that the object it builds is one the server accepts.
+ */
+describe('toCreateActivityInput — schedule, location and reminders', () => {
+  const ZONE2 = 'Europe/London';
+  const base = (patch: Partial<DraftFields> = {}): DraftFields => ({
+    title: 'Dinner',
+    notes: '',
+    schedule: EMPTY_SCHEDULE,
+    location: EMPTY_LOCATION,
+    reminderOffset: undefined,
+    details: EMPTY_DETAILS,
+    ...patch,
+  });
+
+  const task = { objectKind: 'task', type: 'task' } as const;
+
+  it('sends no schedule at all for an undated draft', () => {
+    const input = toCreateActivityInput(task, base(), ZONE2);
+    expect(input).not.toHaveProperty('schedule');
+    expect(createActivityInput.safeParse(input).success).toBe(true);
+  });
+
+  it('anchors a date in the caller’s zone', () => {
+    const input = toCreateActivityInput(
+      task,
+      base({ schedule: { date: '2026-08-15', time: undefined, endTime: undefined } }),
+      ZONE2,
+    );
+    expect(input?.schedule).toEqual({ date: '2026-08-15', timezone: ZONE2 });
+    expect(createActivityInput.safeParse(input).success).toBe(true);
+  });
+
+  /** `time` requires `date` and `endTime` requires `time` (§3 rule 4). */
+  it('drops a time left behind by a cleared date', () => {
+    const input = toCreateActivityInput(
+      task,
+      base({ schedule: { date: undefined, time: '19:00', endTime: '21:00' } }),
+      ZONE2,
+    );
+    expect(input).not.toHaveProperty('schedule');
+  });
+
+  it('drops an end time with no start time', () => {
+    const input = toCreateActivityInput(
+      task,
+      base({ schedule: { date: '2026-08-15', time: undefined, endTime: '21:00' } }),
+      ZONE2,
+    );
+    expect(input?.schedule).not.toHaveProperty('endTime');
+    expect(createActivityInput.safeParse(input).success).toBe(true);
+  });
+
+  it('carries a full schedule when all three are set', () => {
+    const input = toCreateActivityInput(
+      task,
+      base({ schedule: { date: '2026-08-15', time: '19:00', endTime: '21:00' } }),
+      ZONE2,
+    );
+    expect(input?.schedule).toEqual({
+      date: '2026-08-15',
+      time: '19:00',
+      endTime: '21:00',
+      timezone: ZONE2,
+    });
+    expect(createActivityInput.safeParse(input).success).toBe(true);
+  });
+
+  /** `activityLocation` makes `label` required, so an address alone is not a location. */
+  it('sends no location for an address with no label', () => {
+    const input = toCreateActivityInput(
+      task,
+      base({ location: { label: '  ', address: '237 St James Place' } }),
+      ZONE2,
+    );
+    expect(input).not.toHaveProperty('location');
+  });
+
+  it('sends the label, and the address with it when there is one', () => {
+    expect(
+      toCreateActivityInput(
+        task,
+        base({ location: { label: 'Zahav', address: '' } }),
+        ZONE2,
+      )?.location,
+    ).toEqual({ label: 'Zahav' });
+
+    expect(
+      toCreateActivityInput(
+        task,
+        base({ location: { label: ' Zahav ', address: ' 237 St James ' } }),
+        ZONE2,
+      )?.location,
+    ).toEqual({ label: 'Zahav', address: '237 St James' });
+  });
+
+  /**
+   * A reminder is an offset from an instant, so it needs a date — and it becomes the
+   * creator's own `REM#` row rather than a field on the Activity (ADR-047).
+   */
+  it('sends a reminder only alongside a schedule', () => {
+    expect(
+      toCreateActivityInput(task, base({ reminderOffset: -15 }), ZONE2),
+    ).not.toHaveProperty('reminders');
+
+    const dated = toCreateActivityInput(
+      task,
+      base({
+        reminderOffset: -15,
+        schedule: { date: '2026-08-15', time: '19:00', endTime: undefined },
+      }),
+      ZONE2,
+    );
+    expect(dated?.reminders).toEqual([{ offsetMinutes: -15 }]);
+    expect(createActivityInput.safeParse(dated).success).toBe(true);
+  });
+
+  it('sends no reminder for Off', () => {
+    const input = toCreateActivityInput(
+      task,
+      base({
+        reminderOffset: undefined,
+        schedule: { date: '2026-08-15', time: '19:00', endTime: undefined },
+      }),
+      ZONE2,
+    );
+    expect(input).not.toHaveProperty('reminders');
+  });
+});
+
+/** All seven rows of §2.5's toast table, now that a date can reach them. */
+describe('successToast — dated rows', () => {
+  const dated = (date: string) => ({ date, time: undefined, endTime: undefined });
+  const TODAY_2 = '2026-08-12';
+
+  it('names Today for a task dated today', () => {
+    expect(
+      successToast({ objectKind: 'task', type: 'task' }, dated(TODAY_2), TODAY_2),
+    ).toBe('Task · added to Today');
+  });
+
+  it('names the day for a task dated another day', () => {
+    expect(
+      successToast({ objectKind: 'task', type: 'task' }, dated('2026-08-14'), TODAY_2),
+    ).toBe('Task · planned for Fri, 14 Aug');
+  });
+
+  it('names the day for a dated plan, whichever kind', () => {
+    expect(
+      successToast({ objectKind: 'plan', type: 'meal' }, dated('2026-08-14'), TODAY_2),
+    ).toBe('Meal plan · planned for Fri, 14 Aug');
+  });
+
+  /** A past date is the retro-log path, and `logged for` is what tells the user so. */
+  it('says logged for a past date, on both objects', () => {
+    expect(
+      successToast({ objectKind: 'task', type: 'task' }, dated('2026-08-04'), TODAY_2),
+    ).toBe('Task · logged for Tue, 4 Aug');
+    expect(
+      successToast({ objectKind: 'plan', type: 'custom' }, dated('2026-08-04'), TODAY_2),
+    ).toBe('General plan · logged for Tue, 4 Aug');
+  });
+
+  /** A plan dated today is planned, not "added to Today" — that row is the Task's alone. */
+  it('keeps added to Today for tasks only', () => {
+    expect(
+      successToast({ objectKind: 'plan', type: 'event' }, dated(TODAY_2), TODAY_2),
+    ).toBe('Event plan · planned for Wed, 12 Aug');
   });
 });

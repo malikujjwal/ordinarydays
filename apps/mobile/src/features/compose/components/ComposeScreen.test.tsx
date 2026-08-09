@@ -8,6 +8,10 @@ import { useComposeDraft } from '@/stores/composeDraft';
 import { useToast } from '@/stores/toast';
 import { ComposeScreen } from './ComposeScreen';
 
+/** Injected rather than read from a clock, so `This weekend` means the same in every run. */
+const TODAY = '2026-08-12';
+const ZONE = 'America/New_York';
+
 /**
  * The Add flow end to end (P1-24).
  *
@@ -100,7 +104,7 @@ function mount(onClose = () => {}) {
       </ThemeProvider>
     </SafeAreaProvider>
   );
-  return render(wrap(<ComposeScreen onClose={onClose} />));
+  return render(wrap(<ComposeScreen onClose={onClose} today={TODAY} timezone={ZONE} />));
 }
 
 beforeEach(() => {

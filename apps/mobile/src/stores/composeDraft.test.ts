@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  EMPTY_DETAILS,
+  EMPTY_LOCATION,
+  EMPTY_SCHEDULE,
+} from '@/features/compose/model/draft';
 import { hasContent, useComposeDraft } from './composeDraft';
 
 /**
@@ -227,6 +232,9 @@ describe('hasContent', () => {
     notes: '',
     sourceUrl: undefined,
     attachmentUri: undefined,
+    schedule: EMPTY_SCHEDULE,
+    location: EMPTY_LOCATION,
+    details: EMPTY_DETAILS,
   };
 
   /**
@@ -247,6 +255,18 @@ describe('hasContent', () => {
     ['notes', { ...empty, notes: 'x' }],
     ['a source URL', { ...empty, sourceUrl: 'https://example.com' }],
     ['an attachment', { ...empty, attachmentUri: 'file:///tmp/a.jpg' }],
+    // A chosen date is content too: backing out and losing Saturday without being asked is
+    // exactly what the discard prompt exists to prevent (P1-25).
+    [
+      'a date',
+      { ...empty, schedule: { date: '2026-08-15', time: undefined, endTime: undefined } },
+    ],
+    ['a location', { ...empty, location: { label: 'Zahav', address: '' } }],
+    ['a typed detail', { ...empty, details: { ...EMPTY_DETAILS, service: 'Netflix' } }],
+    [
+      'a chosen slot',
+      { ...empty, details: { ...EMPTY_DETAILS, mealSlot: 'dinner' as const } },
+    ],
   ])('is true for %s', (_label, state) => {
     expect(hasContent(state)).toBe(true);
   });

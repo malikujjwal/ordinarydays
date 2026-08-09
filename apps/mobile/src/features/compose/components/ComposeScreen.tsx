@@ -7,8 +7,10 @@ import { DiscardPrompt } from '@/features/compose/components/DiscardPrompt';
 import { ListItemPlaceholder } from '@/features/compose/components/ListItemPlaceholder';
 import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
+import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
-import { successToast } from '@/features/compose/model/targets';
+import { outingLocationLabel } from '@/features/compose/model/fields';
+import { canSave, successToast } from '@/features/compose/model/targets';
 import { hasContent, useComposeDraft } from '@/stores/composeDraft';
 import { useToast } from '@/stores/toast';
 
@@ -27,15 +29,42 @@ import { useToast } from '@/stores/toast';
 export interface ComposeScreenProps {
   /** Dismisses the modal. Supplied by the route so this component never navigates itself. */
   onClose: () => void;
+  /**
+   * The user's today and zone, resolved at the route (P1-25).
+   *
+   * Both are injected for the reason `coding-standards.md` §4.3 gives: a component that read
+   * the clock could not be tested across a date boundary, and `This weekend` would mean
+   * something different in a test than on a device. The route is the edge; this is not.
+   */
+  today: string;
+  timezone: string;
 }
 
-export function ComposeScreen({ onClose }: ComposeScreenProps) {
+export function ComposeScreen({ onClose, today, timezone }: ComposeScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const draft = useComposeDraft();
   const showToast = useToast((s) => s.show);
   const create = useCreateActivity();
   const [discardOpen, setDiscardOpen] = useState(false);
+
+  /**
+   * An Outing's `Location` **pre-fills** from Place, and only pre-fills (`activities.md` §4.5).
+   *
+   * `details.placeName` is the other half of that rule and needs nothing here: it is derived
+   * from the title at submit time, so the two are identical by construction rather than by two
+   * setters agreeing. The label is different — once the user has typed one of their own, the
+   * Place stops overwriting it, because a venue and its address line are not always the same
+   * words.
+   */
+  function setTitleAndMirror(next: string) {
+    if (draft.target?.objectKind === 'plan' && draft.target.type === 'outing') {
+      draft.setLocation({
+        label: outingLocationLabel(next, draft.location.label, draft.title),
+      });
+    }
+    draft.setTitle(next);
+  }
 
   /** Closing with content asks first; closing an empty draft just closes (§2.2). */
   function requestClose() {
@@ -50,17 +79,25 @@ export function ComposeScreen({ onClose }: ComposeScreenProps) {
   async function save() {
     if (draft.target === undefined) return;
     const target = draft.target;
-    const saved = await create.save(target, {
-      title: draft.title,
-      notes: draft.notes,
-      ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
-    });
+    const saved = await create.save(
+      target,
+      {
+        title: draft.title,
+        notes: draft.notes,
+        ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
+        schedule: draft.schedule,
+        location: draft.location,
+        reminderOffset: draft.reminderOffset,
+        details: draft.details,
+      },
+      timezone,
+    );
     if (saved === undefined) return; // The banner is already showing; the draft stays put.
 
     // §2.5's order: the form dismisses, then the toast names where it landed.
     draft.reset();
     onClose();
-    showToast({ message: successToast(target) });
+    showToast({ message: successToast(target, draft.schedule, today) });
   }
 
   const showBack = draft.step !== 'object';
@@ -112,9 +149,11 @@ export function ComposeScreen({ onClose }: ComposeScreenProps) {
           <ObjectChooser onChoose={draft.chooseObject} />
         ) : draft.step === 'planKind' ? (
           <PlanKindChooser onChoose={draft.choosePlanKind} />
-        ) : draft.target === undefined ? (
-          // `form` with no target is reachable by exactly one route: `List item`, which has
-          // no destination to fix in Phase 1.
+        ) : draft.target === undefined || draft.target.objectKind === 'listItem' ? (
+          // `form` with no Activity target is reachable by exactly one route: `List item`,
+          // which has no destination to fix in Phase 1. The store leaves `target` undefined
+          // there; the `listItem` arm is named as well so the narrowing below is the
+          // compiler's rather than a comment's.
           <ListItemPlaceholder onBack={() => draft.back()} />
         ) : (
           <ComposeForm
@@ -124,9 +163,29 @@ export function ComposeScreen({ onClose }: ComposeScreenProps) {
               notes: draft.notes,
               ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
             }}
+            saveEnabled={canSave({ title: draft.title, notes: draft.notes })}
+            typedFields={
+              <TypedFields
+                type={draft.target.type}
+                title={draft.title}
+                schedule={draft.schedule}
+                location={draft.location}
+                reminderOffset={draft.reminderOffset}
+                details={draft.details}
+                notes={draft.notes}
+                today={today}
+                onDateChange={draft.setDate}
+                onTimeChange={draft.setTime}
+                onEndTimeChange={draft.setEndTime}
+                onLocationChange={draft.setLocation}
+                onReminderChange={draft.setReminderOffset}
+                onDetailsChange={draft.setDetails}
+                onNotesChange={draft.setNotes}
+                fieldErrors={create.fieldErrors}
+              />
+            }
             attachmentUri={draft.attachmentUri}
-            onTitleChange={draft.setTitle}
-            onNotesChange={draft.setNotes}
+            onTitleChange={setTitleAndMirror}
             onSourceUrlChange={draft.setSourceUrl}
             onAttach={draft.attachImage}
             onClearAttachment={draft.clearAttachment}
