@@ -16,6 +16,7 @@ import { requestId } from './middleware/requestId.js';
 import { assertRegistryMatchesRoutes, routeSplit } from './middleware/routeSplit.js';
 import { securityHeaders } from './middleware/securityHeaders.js';
 import { health } from './routes/health.js';
+import { me } from './routes/me.js';
 
 /**
  * Builds the Hono app.
@@ -85,6 +86,7 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
   // entry says they create — so nothing in Phase 1 reaches its DynamoDB calls.
   app.use('*', idempotency);
 
+  app.route('/v1/me', me);
   app.route('/v1/health', health);
 
   // Anything reaching here matched no route. `routeSplit` has already rejected unknown

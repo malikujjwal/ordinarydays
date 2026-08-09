@@ -134,8 +134,22 @@ export const dateSuggestion = (
 
 const userPk = (userId: string) => `USER#${userId}`;
 
-/** The tenant record (pattern 6). */
-export const userProfile = (userId: string) => ({ pk: userPk(userId), sk: META });
+/**
+ * The tenant record (§3.2, pattern 6).
+ *
+ * **`PROFILE`, not `META`.** Corrected in P1-07, which was the first task to read the item
+ * rather than merely use its partition. `META` is this file's convention for *a partition
+ * that has one canonical row* — `ACT#<id>` / `META` is right, because everything else under
+ * an Activity hangs off it. The user partition is not that shape: it also holds `IDX#`,
+ * `LIST#`, `PERSON#`, `PLINK#`, `LLINK#`, `BAL#`, `SETTLE#` and `DEVICE#` rows, none of
+ * which is subordinate to the profile, which is why §3.2 names this row descriptively.
+ *
+ * The mismatch survived P1-05 because `keys.test.ts` asserted the value the code produced
+ * rather than the value the table specifies, and because nothing had read a profile yet —
+ * every other caller uses only `.pk`. Nothing had written one either, so this was a string
+ * change rather than a migration.
+ */
+export const userProfile = (userId: string) => ({ pk: userPk(userId), sk: 'PROFILE' });
 
 /**
  * One per activity the user owns **or participates in** — how a shared plan reaches someone

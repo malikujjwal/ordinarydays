@@ -176,7 +176,8 @@ describe('get, put, update and delete', () => {
     expect(await getItem(userProfile(ALICE))).toMatchObject({ schemaVersion: 1 });
     expect(ddbMock.commandCalls(GetCommand)[0]?.args[0]?.input).toMatchObject({
       TableName: 'od-main-local',
-      Key: { pk: `USER#${ALICE}`, sk: 'META' },
+      // `PROFILE`, per `data-model.md` §3.2 — corrected in P1-07.
+      Key: { pk: `USER#${ALICE}`, sk: 'PROFILE' },
     });
   });
 
@@ -228,7 +229,7 @@ describe('get, put, update and delete', () => {
     await deleteItem(userProfile(ALICE));
 
     expect(ddbMock.commandCalls(DeleteCommand)[0]?.args[0]?.input).toMatchObject({
-      Key: { pk: `USER#${ALICE}`, sk: 'META' },
+      Key: { pk: `USER#${ALICE}`, sk: 'PROFILE' },
     });
   });
 });

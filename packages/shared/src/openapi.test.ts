@@ -32,9 +32,10 @@ function asSchema(value: unknown, what: string): SchemaObject {
 
 describe('the generated document', () => {
   it('describes every endpoint registered so far', () => {
-    // One, in Phase 0. This assertion is what makes adding a route without registering it
-    // visible: the count moves, and the person adding it has to say so.
-    expect(Object.keys(document.paths ?? {})).toEqual(['/v1/health']);
+    // This assertion is what makes adding a route without registering it visible: the count
+    // moves, and the person adding it has to say so. Saying so: **P1-07 added `/v1/me`**,
+    // whose `GET` and `PATCH` share one path entry.
+    expect(Object.keys(document.paths ?? {})).toEqual(['/v1/me', '/v1/health']);
   });
 
   it('carries a servers block with the local URL', () => {
@@ -52,10 +53,17 @@ describe('the generated document', () => {
     expect(Array.isArray(document.servers)).toBe(true);
   });
 
+  /**
+   * `User` and `PatchUserInput` arrive with P1-07's paths, not before — a shape reaches
+   * `components/schemas` only when a registered path references it, which is the mechanism
+   * `openapi.ts` explains at length.
+   */
   it('names its schemas as components instead of inlining them', () => {
     expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual([
       'ErrorResponse',
       'HealthResponse',
+      'PatchUserInput',
+      'User',
     ]);
   });
 

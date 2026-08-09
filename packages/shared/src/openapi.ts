@@ -1,7 +1,12 @@
 import { OpenAPIRegistry, OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import type { OpenAPIObject } from 'openapi3-ts/oas31';
+import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
+import { patchUserInput, user } from './schemas/user.js';
+
+/** `GET`/`PATCH /v1/me` both answer with the profile inside the standard envelope. */
+const userResponse = envelope(user);
 
 /**
  * The OpenAPI document, generated from the **same Zod schemas both sides import**
@@ -43,6 +48,67 @@ export const registry = new OpenAPIRegistry();
  * `agent-playbook.md` §7 step 15 already requires of every endpoint, so nothing is lost
  * except the illusion that this task could front-run it.
  */
+
+/**
+ * `/v1/me` (P1-07). The first authenticated pair, and the registration that brings `User`
+ * and `PatchUserInput` into `components/schemas` — see the note above on why a shape reaches
+ * the components map only when a registered path references it.
+ */
+registry.registerPath({
+  method: 'get',
+  path: '/v1/me',
+  summary: 'The signed-in user’s profile',
+  description:
+    'Profile, preferences, timezone and currency. In local mode this answers for the ' +
+    'seeded development user rather than `401`, which falls out of the `IdentityProvider` ' +
+    'seam rather than being special-cased.',
+  tags: ['me'],
+  responses: {
+    200: {
+      description: 'The profile.',
+      content: { 'application/json': { schema: userResponse } },
+    },
+    404: {
+      description:
+        'No profile for this user. The message never describes a developer workflow — ' +
+        'the same path serves an account whose post-confirmation trigger failed.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'patch',
+  path: '/v1/me',
+  summary: 'Update preferences',
+  description:
+    'Accepts `displayName`, `timezone`, `currency`, `weekStartsOn`, ' +
+    '`defaultReminderOffset` and `defaultLists` — and nothing else. The body schema is ' +
+    'strict, so any other field is `400` naming it: `email`, `cognitoSub` and ' +
+    '`onboardingState` belong to the auth flow. `defaultReminderOffset` takes any integer ' +
+    'in `[-10080, 0]`, where `0` is a real "at the time" reminder and `null` clears it to ' +
+    'Off — the two are different states, not two spellings of one.',
+  tags: ['me'],
+  request: {
+    body: {
+      content: { 'application/json': { schema: patchUserInput } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The updated profile.',
+      content: { 'application/json': { schema: userResponse } },
+    },
+    400: {
+      description: 'A field outside the accepted set, or a value out of range.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No profile for this user.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
 
 registry.registerPath({
   method: 'get',

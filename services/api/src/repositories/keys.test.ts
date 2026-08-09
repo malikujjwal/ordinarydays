@@ -78,7 +78,10 @@ describe('§3.1 the activity partition', () => {
 
 describe('§3.2 the user partition', () => {
   it.each([
-    ['userProfile', keys.userProfile(USR), { pk: `USER#${USR}`, sk: 'META' }],
+    // `PROFILE`, per `data-model.md` §3.2 and access pattern 6 — not `META`. Corrected in
+    // P1-07; this assertion previously pinned the value the code produced rather than the
+    // one the key table specifies, which is why the mismatch survived P1-05.
+    ['userProfile', keys.userProfile(USR), { pk: `USER#${USR}`, sk: 'PROFILE' }],
     [
       'activityIndex',
       keys.activityIndex(USR, ACT),

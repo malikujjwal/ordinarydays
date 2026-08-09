@@ -66,6 +66,10 @@ export interface RouteEntry {
  * high-contention table in `git-workflow.md` §6.2.
  */
 export const ROUTE_REGISTRY: readonly RouteEntry[] = [
+  // §2.1 Me
+  { method: 'GET', pattern: '/v1/me', auth: 'authenticated' },
+  { method: 'PATCH', pattern: '/v1/me', auth: 'authenticated' },
+
   // §2.1a Health
   { method: 'GET', pattern: '/v1/health', auth: 'unauthenticated-private' },
 ];

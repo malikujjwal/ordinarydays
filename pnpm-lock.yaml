@@ -212,6 +212,9 @@ importers:
       '@aws-sdk/lib-dynamodb':
         specifier: 3.1106.0
         version: 3.1106.0(@aws-sdk/client-dynamodb@3.1106.0)
+      '@hono/zod-validator':
+        specifier: 0.7.4
+        version: 0.7.4(hono@4.13.1)(zod@4.4.3)
       '@od/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -221,6 +224,9 @@ importers:
       pino:
         specifier: 9.14.0
         version: 9.14.0
+      ulid:
+        specifier: 2.4.0
+        version: 2.4.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1352,6 +1358,12 @@ packages:
     engines: {node: '>=18.14.1'}
     peerDependencies:
       hono: ^4
+
+  '@hono/zod-validator@0.7.4':
+    resolution: {integrity: sha512-biKGn3BRJVaftZlIPMyK+HCe/UHAjJ6sH0UyXe3+v0OcgVr9xfImDROTJFLtn9e3XEEAHGZIM9U6evu85abm8Q==}
+    peerDependencies:
+      hono: '>=3.9.0'
+      zod: ^3.25.0 || ^4.0.0
 
   '@isaacs/cliui@8.0.2':
     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
@@ -4693,6 +4705,10 @@ packages:
     resolution: {integrity: sha512-LbBDqdIC5s8iROCUjMbW1f5dJQTEFB1+KO9ogbvlb3nm9n4YHa5p4KTvFPWvh2Hs8gZMBuiB1/8+pdfe/tDPug==}
     hasBin: true
 
+  ulid@2.4.0:
+    resolution: {integrity: sha512-fIRiVTJNcSRmXKPZtGzFQv9WRrZ3M9eoptl/teFJvjOzmpU+/K/JH6HZ8deBfb5vMEpicJcLn7JmvdknlMq7Zg==}
+    hasBin: true
+
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
@@ -6479,6 +6495,11 @@ snapshots:
   '@hono/node-server@1.19.17(hono@4.13.1)':
     dependencies:
       hono: 4.13.1
+
+  '@hono/zod-validator@0.7.4(hono@4.13.1)(zod@4.4.3)':
+    dependencies:
+      hono: 4.13.1
+      zod: 4.4.3
 
   '@isaacs/cliui@8.0.2':
     dependencies:
@@ -10048,6 +10069,8 @@ snapshots:
   typescript@5.9.3: {}
 
   ua-parser-js@1.0.41: {}
+
+  ulid@2.4.0: {}
 
   undici-types@6.21.0: {}
 
