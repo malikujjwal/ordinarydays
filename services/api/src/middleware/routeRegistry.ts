@@ -34,6 +34,20 @@ export interface RouteEntry {
   /** The Hono path, verbatim — `/v1/activities/:id`, not a regex and not a prefix. */
   readonly pattern: string;
   readonly auth: RouteAuth;
+  /**
+   * Whether this route **creates**, and therefore requires an `Idempotency-Key` (P1-04).
+   *
+   * `api-contract.md` §1 requires the header on "all `POST` that create", which the method
+   * alone cannot answer: `POST /v1/activities/:id/complete`, `/skip` and `/snooze` are
+   * naturally idempotent and take no key (`phase-02-today-and-tasks.md` §P2-09), while
+   * `/duplicate` does create and takes one. Deriving it from the verb would 400 every
+   * completion or let every duplicate through — so the route states it, in the same place
+   * and for the same reason it states whether it needs an identity.
+   *
+   * Absent means false. Only creating routes carry the flag, so the registry reads as a
+   * list of the exceptional ones rather than a column of `false`.
+   */
+  readonly creates?: true;
 }
 
 /**

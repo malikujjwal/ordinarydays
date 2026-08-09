@@ -4,6 +4,7 @@ import { AppError } from './lib/errors.js';
 import { bodyLimitMiddleware } from './middleware/bodyLimit.js';
 import { corsMiddleware } from './middleware/cors.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { idempotency } from './middleware/idempotency.js';
 import {
   createIdentity,
   type IdentityProvider,
@@ -38,11 +39,8 @@ import { health } from './routes/health.js';
  *
  * 8. `identity`       — resolves the user for `authenticated` routes, and only those
  * 9. `rateLimit`      — the per-user fixed-window counter, on `authenticated` routes
- *
- * **10 (`idempotency`) does not exist yet.** It is P1-04, and it is absent rather than
- * stubbed: a pass-through that blocks nothing looks like an implemented control while being
- * none. It mounts directly after `rateLimit`, so a retry storm cannot write idempotency
- * records for free.
+ * 10. `idempotency`   — replays a stored response on creating `POST`s, after rate limiting
+ *                       so a retry storm cannot write idempotency records for free
  */
 export interface AppOverrides {
   /**
@@ -83,6 +81,9 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
   // user it just resolved. It limits `authenticated` routes only, so `/v1/health` — which
   // every smoke test and alarm calls — reaches its handler without touching DynamoDB.
   app.use('*', rateLimit);
+  // Position 10. After `rateLimit` by design, and it acts only on routes whose registry
+  // entry says they create — so nothing in Phase 1 reaches its DynamoDB calls.
+  app.use('*', idempotency);
 
   app.route('/v1/health', health);
 
