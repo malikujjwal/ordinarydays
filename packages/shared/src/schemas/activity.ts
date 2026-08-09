@@ -276,6 +276,20 @@ export const createActivityInput = z
   .meta({ id: 'CreateActivityInput' });
 
 /**
+ * Inferred rather than hand-written, and inferred **from the union** rather than flattened.
+ *
+ * That distinction is the whole value of the type. Because it is a union, a value of this
+ * type always carries a complete target pair: there is no assignable object with `objectKind`
+ * and no `type`, and none with `objectKind: 'task'` and `type: 'meal'`. A draft that has not
+ * been given a target cannot be widened into one, so the client cannot build a create request
+ * before the user has chosen (`CLAUDE.md` rule 2, and see `client/endpoints/activities.ts`).
+ *
+ * Flattening it to an interface with optional fields — the shape a form store reaches for —
+ * would discard exactly that guarantee.
+ */
+export type CreateActivityInput = z.infer<typeof createActivityInput>;
+
+/**
  * `PATCH /v1/activities/:id` (`api-contract.md` §2.3).
  *
  * Two things are load-bearing:

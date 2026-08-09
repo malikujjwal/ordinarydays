@@ -105,6 +105,23 @@ content. Each row determines the stored object before capture starts:
 | **Plan** | **General / Meal / Watch / Event / Outing**, with none selected | The matching Plan form sends `objectKind: 'plan'`; General sends `type: 'custom'`. |
 | **List item** | A destination list, unless a contextual list already fixed it | List-item form; its final button names that list. |
 
+The Plan-kind step asks `What kind of plan?` and lists the five kinds in the order above,
+with nothing selected:
+
+```
+┌──────────────────────────────────────┐
+│  Back                                │
+│                                      │
+│  What kind of plan?                  │
+│                                      │
+│  General                           › │
+│  Meal                              › │
+│  Watch                             › │
+│  Event                             › │
+│  Outing                            › │
+└──────────────────────────────────────┘
+```
+
 General is a real, visible choice. The app must not silently use it when no Plan kind was
 selected. Back returns to the chooser without writing. Closing a non-empty form prompts
 `Discard this?` with `Discard` / `Keep editing`.

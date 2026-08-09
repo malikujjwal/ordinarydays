@@ -1,7 +1,17 @@
 import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { Bowl, Diamond, MapPin, PlayRect, Ticket, typeIcons } from '../icons/index';
+import {
+  Bowl,
+  Diamond,
+  ListLines,
+  MapPin,
+  navIcons,
+  PlayRect,
+  Sun,
+  Ticket,
+  typeIcons,
+} from '../icons/index';
 import type { ColorScheme } from '../theme/colors';
 import { colors } from '../theme/colors';
 import { elevation } from '../theme/elevation';
@@ -289,8 +299,24 @@ describe('icons', () => {
     ['Ticket', Ticket],
     ['MapPin', MapPin],
     ['Diamond', Diamond],
+    ['Sun', Sun],
+    ['ListLines', ListLines],
   ])('%s renders at a given size and colour', (_name, Icon) => {
     wrap(<Icon size={16} color="#965D78" />);
     expect(document.querySelector('[data-svg]')).toBeDefined();
+  });
+
+  /**
+   * The nav map is keyed by **route name**, not by label, so `(tabs)/_layout.tsx` looks its
+   * icon up rather than switching on the tab. A missing key would render nothing and be
+   * noticed only in a screenshot.
+   */
+  it('has one icon per tab, keyed by route name', () => {
+    expect(Object.keys(navIcons)).toEqual(['index', 'plans', 'lists']);
+  });
+
+  /** Today and Plans must not both be calendars — two tabs nobody can tell apart. */
+  it('gives Today and Plans different shapes', () => {
+    expect(navIcons.index).not.toBe(navIcons.plans);
   });
 });

@@ -1249,6 +1249,17 @@ present on each. Playwright: the app loads at `/` with no redirect.
 
 ### P1-24 — The explicit Add chooser and target routing
 
+> **Built 2026-08-08. Three deviations, recorded rather than edited into the plan.**
+>
+> | # | What happened | Why |
+> | --- | --- | --- |
+> | 1 | **P1-23's shell was built in this task's branch**, not before it. | Neither of P1-24's declared dependencies had landed: `(app)/_layout.tsx` was a bare `Stack` with one route, so there was no FAB to open the chooser from and no way to honour "the FAB opens the same chooser from every tab". The three tabs, the header, the FAB and the placeholders are here; the Plans tab is a placeholder rather than P1-16's flat list, because P1-16 has not landed either. |
+> | 2 | **P1-20 was delivered as a slice**, not in full: `createActivity` and the three `capture` functions. `me` is untouched. | Those four are what P1-24 calls. `POST /v1/activities` (P1-11) does not exist yet, so a save currently fails with the `interaction-contract.md` §5.3 banner and an intact draft — which is spec'd behaviour, and the request body is asserted by unit and render tests either way. |
+> | 3 | **The Plan-kind chooser's heading is new copy**: `What kind of plan?`. | `activities.md` §2.2 drew the object chooser's heading and named none for the second step. Added to that section in the same PR; the founder confirms or replaces it. |
+>
+> Also moved: the Phase 0 health screen from `/` to `/health`, because the root route is
+> Today once the shell exists.
+
 **Files.** `apps/mobile/app/(app)/compose.tsx`,
 `apps/mobile/src/features/compose/{hooks,components,model}/**`,
 `apps/mobile/src/stores/composeDraft.ts`.

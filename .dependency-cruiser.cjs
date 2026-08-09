@@ -196,9 +196,10 @@ module.exports = {
           // Tightening `pathNot` is what this rule's own note prescribes over tolerating a
           // permanent warning.
           '(^|/)vitest\\.setup\\.ts$',
-          // Test doubles reached through a vitest `resolve.alias` (P1-22's `react-native-svg`
-          // stub). Same shape of invisibility: the edge is a config string, not an import.
-          '^packages/ui/test/',
+          // Test doubles reached through a vitest `resolve.alias` — P1-22's `react-native-svg`
+          // stub, and P1-24's `react-native-safe-area-context` one. Same shape of
+          // invisibility: the edge is a config string, not an import.
+          '^(packages/ui|apps/mobile)/test/',
           // Entry points, which are orphans by definition: nothing in the repo imports the
           // Lambda handler, the dev server, the CDK app or a generation script.
           '^apps/mobile/app/',

@@ -23,6 +23,30 @@ export default defineConfig({
      */
     alias: [
       { find: /^react-native$/, replacement: 'react-native-web' },
+      /**
+       * The same `react-native-svg` stub `packages/ui` uses, for the same reason and from the
+       * same file rather than a copy — the full note is in `packages/ui/vitest.config.ts`.
+       * Needed here from P1-23 on: the shell's FAB and the chooser rows render `@od/ui`
+       * icons, so the moment a screen test mounts one, this workspace hits the untranspiled
+       * source too. A second copy of the stub would be a second thing to keep in step.
+       */
+      {
+        find: /^react-native-svg$/,
+        replacement: fileURLToPath(
+          new URL('../../packages/ui/test/svg-stub.tsx', import.meta.url),
+        ),
+      },
+      /**
+       * `react-native-safe-area-context` is stubbed, not resolved — the reasoning is written
+       * out at the top of `test/safe-area-stub.tsx`. Short version: its package entry under
+       * the `react-native` condition is untranspiled TypeScript, and its compiled build
+       * reaches into `react-native`'s Flow source, so both routes end in a parse error
+       * several modules from anything this repository wrote.
+       */
+      {
+        find: /^react-native-safe-area-context$/,
+        replacement: fileURLToPath(new URL('./test/safe-area-stub.tsx', import.meta.url)),
+      },
       {
         find: /^@\//,
         replacement: fileURLToPath(new URL('./src/', import.meta.url)),
@@ -44,6 +68,20 @@ export default defineConfig({
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
+    server: {
+      /**
+       * Both libraries publish **untranspiled source** under the `react-native` condition
+       * that the `react-native` → `react-native-web` alias puts this workspace on, so Node
+       * parses their TypeScript and fails with `Unexpected token 'typeof'` — an error that
+       * surfaces as a test file which will not import, several modules from the cause.
+       * Inlining hands them to Vite's transform instead.
+       *
+       * `react-native-svg` for the reason written out in `packages/ui/vitest.config.ts`;
+       * `react-native-safe-area-context` is new here, because `packages/ui` never mounts a
+       * provider and `apps/mobile`'s screens do.
+       */
+      deps: { inline: ['react-native-svg', 'react-native-safe-area-context'] },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'html', 'lcov'],

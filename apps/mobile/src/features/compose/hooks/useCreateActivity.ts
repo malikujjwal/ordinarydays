@@ -1,0 +1,112 @@
+import { ApiError, type CreationTarget, createActivity } from '@od/shared/client';
+import type { Activity } from '@od/shared/types';
+import { useMutation } from '@tanstack/react-query';
+import {
+  type CommonDraftFields,
+  toCreateActivityInput,
+} from '@/features/compose/model/targets';
+import { apiClient } from '@/lib/apiClient';
+import { useComposeDraft } from '@/stores/composeDraft';
+
+/**
+ * `POST /v1/activities` from the compose form (P1-24, `activities.md` §2.5).
+ *
+ * One write per save. The `Idempotency-Key` comes from the draft store's
+ * `takeIdempotencyKey`, which generates it at `onMutate` and hands back the *same* key on
+ * every retry until the draft changes — the client's transport then retries a 5xx or a
+ * network fault under that key, so a save that succeeded on the server but lost its response
+ * resolves to one Activity rather than two.
+ */
+
+export interface CreateActivityResult {
+  save: (
+    target: CreationTarget,
+    fields: CommonDraftFields,
+  ) => Promise<Activity | undefined>;
+  isSaving: boolean;
+  /** `interaction-contract.md` §5.3 copy for the banner. The draft stays open behind it. */
+  errorMessage: string | undefined;
+  /** Shown in small text beside the banner so a support message can name it. */
+  errorRequestId: string | undefined;
+  /** Per-field messages from a `validation_failed`, keyed by the path they name. */
+  fieldErrors: Record<string, string>;
+  dismissError: () => void;
+}
+
+/**
+ * Maps a failure onto the copy in `interaction-contract.md` §5.3.
+ *
+ * Never the exception's own text for a 5xx: `Failed to fetch` describes a socket. A 4xx that
+ * came back through the envelope *is* the server's user-facing sentence, so it is used.
+ */
+function describe(error: unknown): { message: string; requestId?: string } {
+  if (error instanceof ApiError) {
+    if (error.status >= 500) {
+      return { message: 'Something went wrong.', requestId: error.requestId };
+    }
+    if (error.code === 'not_found') {
+      return { message: "This isn't here any more.", requestId: error.requestId };
+    }
+    return { message: error.message, requestId: error.requestId };
+  }
+  return { message: "Couldn't save this." };
+}
+
+/** `details[]` entries become one message per field path, for the inline errors on the form. */
+function toFieldErrors(error: unknown): Record<string, string> {
+  if (!(error instanceof ApiError) || error.details === undefined) return {};
+  const out: Record<string, string> = {};
+  for (const detail of error.details) out[detail.path] = detail.message;
+  return out;
+}
+
+export function useCreateActivity(): CreateActivityResult {
+  const takeIdempotencyKey = useComposeDraft((s) => s.takeIdempotencyKey);
+
+  const mutation = useMutation({
+    mutationFn: ({
+      target,
+      fields,
+    }: {
+      target: CreationTarget;
+      fields: CommonDraftFields;
+    }) => {
+      const input = toCreateActivityInput(target, fields);
+      if (input === undefined) {
+        // Unreachable from the UI: a List item never gets a save button on this path in
+        // Phase 1. Thrown rather than silently no-oped so that if Phase 3 wires it wrong,
+        // it fails loudly instead of appearing to save.
+        throw new Error('A List item is not created through POST /v1/activities.');
+      }
+      return createActivity(apiClient, input, takeIdempotencyKey());
+    },
+    /**
+     * No retries at this layer. `createHttpClient` already retries a 5xx or a network fault
+     * three times under the one idempotency key; stacking Query's rounds on top multiplies
+     * that to sixteen requests and makes the user wait a minute to be told it failed.
+     */
+    retry: false,
+    /** The form must be reachable while a save is in flight, and must survive a failure. */
+    networkMode: 'always',
+  });
+
+  const failure = mutation.error === null ? undefined : describe(mutation.error);
+
+  return {
+    save: async (target, fields) => {
+      try {
+        return await mutation.mutateAsync({ target, fields });
+      } catch {
+        // Swallowed on purpose: the error is already on `mutation.error` and is rendered as
+        // the banner. Rethrowing here would surface an unhandled rejection for a failure the
+        // UI has fully handled.
+        return undefined;
+      }
+    },
+    isSaving: mutation.isPending,
+    errorMessage: failure?.message,
+    errorRequestId: failure?.requestId,
+    fieldErrors: toFieldErrors(mutation.error),
+    dismissError: () => mutation.reset(),
+  };
+}

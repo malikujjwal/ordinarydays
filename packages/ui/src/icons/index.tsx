@@ -169,6 +169,38 @@ export const Repeat = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+/**
+ * The Today tab. A sun rather than another calendar: Plans is already a calendar, and two
+ * calendars side by side in a three-tab bar is two tabs a user cannot tell apart at a glance.
+ */
+export const Sun = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Circle cx={12} cy={12} r={4.5} stroke={color} {...stroke} />
+    <Path
+      d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"
+      stroke={color}
+      {...stroke}
+    />
+  </Frame>
+);
+
+/** The Lists tab. Three lines with leading dots — a list, not a checklist. */
+export const ListLines = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path d="M9 6.5h11M9 12h11M9 17.5h11" stroke={color} {...stroke} />
+    <Circle cx={4.8} cy={6.5} r={1.1} stroke={color} {...stroke} />
+    <Circle cx={4.8} cy={12} r={1.1} stroke={color} {...stroke} />
+    <Circle cx={4.8} cy={17.5} r={1.1} stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** The three nouns, in tab order. Keyed by route name so the layout does not switch on it. */
+export const navIcons = {
+  index: Sun,
+  plans: Calendar,
+  lists: ListLines,
+} as const;
+
 /** The per-type marker map, so a row does not switch on the type itself. */
 export const typeIcons = {
   task: CheckSquare,

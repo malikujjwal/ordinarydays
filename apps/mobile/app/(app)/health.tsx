@@ -12,6 +12,10 @@ import { useHealth } from '@/features/health/hooks/useHealth';
  * glance. It is therefore rendered in every state, including the failing one, and before any
  * request has been made.
  *
+ * **Moved off `/` by P1-23.** The root route is Today now that the three-noun shell exists,
+ * so this lives at `/health` — reachable, unchanged, and still the first thing to open when
+ * the device cannot see the API.
+ *
  * Layering (`tech-stack.md` §3.2): this route reads no params, owns no data and calls one
  * feature hook. Presentation lives here rather than in a feature component only because the
  * whole screen is under fifty lines; the moment it needs a second one, it splits.
