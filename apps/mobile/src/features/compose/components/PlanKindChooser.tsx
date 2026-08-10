@@ -15,7 +15,6 @@ import { planKindChoices } from '@/features/compose/model/targets';
  * Meal                        ›
  * Watch                       ›
  * Event                       ›
- * Event                       ›
  * ```
  *
  * **`General` is a real, visible choice and is never the value used when nothing was

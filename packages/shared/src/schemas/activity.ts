@@ -60,7 +60,7 @@ export const mealIngredient = z.object({
 export const eventReservation = z.object({
   name: freeText.optional(),
   time: hhmm.optional(),
-  partySize: z.number().int().positive().max(100).optional(),
+  partySize: z.number().int().positive().max(99).optional(),
   reference: freeText.optional(),
 });
 

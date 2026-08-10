@@ -167,11 +167,12 @@ describe('back', () => {
 });
 
 describe('Event reservation defaults', () => {
-  it('pre-fills the reservation name from the profile when Event is chosen', () => {
+  it('pre-fills reservation name and price currency from the profile', () => {
     draft().chooseObject('plan');
-    draft().choosePlanKind('event', 'Ada');
+    draft().choosePlanKind('event', { reservationName: 'Ada', currency: 'usd' });
 
     expect(draft().details.reservation.name).toBe('Ada');
+    expect(draft().details.currency).toBe('USD');
   });
 
   it('tracks the Event start time until a distinct reservation time is entered', () => {

@@ -6,7 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useComposeDraft } from '@/stores/composeDraft';
 import { useToast } from '@/stores/toast';
-import { ComposeScreen } from './ComposeScreen';
+import { ComposeScreen, type ComposeScreenProps } from './ComposeScreen';
 
 /** Injected rather than read from a clock, so `This weekend` means the same in every run. */
 const TODAY = '2026-08-12';
@@ -93,7 +93,10 @@ function stubFetch(...responses: Array<{ status: number; body: unknown }>) {
   });
 }
 
-function mount(onClose = () => {}) {
+function mount(
+  onClose = () => {},
+  overrides: Partial<Omit<ComposeScreenProps, 'onClose' | 'today' | 'timezone'>> = {},
+) {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
@@ -104,7 +107,11 @@ function mount(onClose = () => {}) {
       </ThemeProvider>
     </SafeAreaProvider>
   );
-  return render(wrap(<ComposeScreen onClose={onClose} today={TODAY} timezone={ZONE} />));
+  return render(
+    wrap(
+      <ComposeScreen onClose={onClose} today={TODAY} timezone={ZONE} {...overrides} />,
+    ),
+  );
 }
 
 beforeEach(() => {
@@ -278,6 +285,46 @@ describe('Plan', () => {
     expect(screen.getByRole('heading', { name: 'What kind of plan?' })).toBeDefined();
     tap('Event');
     expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Chicken tacos');
+  });
+
+  it('waits for a cold profile before opening Event and sends its currency', async () => {
+    let resolveDefaults:
+      | ((value: { reservationName: string; currency: string }) => void)
+      | undefined;
+    const loadEventDefaults = vi.fn(
+      () =>
+        new Promise<{ reservationName: string; currency: string }>((resolve) => {
+          resolveDefaults = resolve;
+        }),
+    );
+    mount(() => {}, { loadEventDefaults });
+
+    tap('Plan');
+    tap('Event');
+    expect(loadEventDefaults).toHaveBeenCalledOnce();
+    expect(screen.queryByLabelText('Title')).toBeNull();
+
+    resolveDefaults?.({ reservationName: 'Ada', currency: 'USD' });
+    await waitFor(() => expect(screen.getByLabelText('Title')).toBeDefined());
+
+    tap('Reservation');
+    expect(screen.getByLabelText('Reservation name').getAttribute('value')).toBe('Ada');
+    tap('Tickets & details');
+    fireEvent.change(screen.getByLabelText('Price'), { target: { value: '18.50' } });
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Concert' } });
+    tap('Save plan');
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.body).toMatchObject({
+      objectKind: 'plan',
+      type: 'event',
+      details: {
+        kind: 'event',
+        priceCents: 1850,
+        currency: 'USD',
+        reservation: { name: 'Ada' },
+      },
+    });
   });
 });
 

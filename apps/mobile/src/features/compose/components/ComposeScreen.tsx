@@ -10,7 +10,11 @@ import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
 import { canSave, successToast } from '@/features/compose/model/targets';
-import { hasContent, useComposeDraft } from '@/stores/composeDraft';
+import {
+  type EventDraftDefaults,
+  hasContent,
+  useComposeDraft,
+} from '@/stores/composeDraft';
 import { useToast } from '@/stores/toast';
 
 /**
@@ -37,15 +41,15 @@ export interface ComposeScreenProps {
    */
   today: string;
   timezone: string;
-  /** Used only to pre-fill Event reservation name; an empty value leaves the field empty. */
-  displayName?: string;
+  /** Resolves the profile-backed defaults only when the user chooses Event. */
+  loadEventDefaults?: () => Promise<EventDraftDefaults | undefined>;
 }
 
 export function ComposeScreen({
   onClose,
   today,
   timezone,
-  displayName = '',
+  loadEventDefaults,
 }: ComposeScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -53,6 +57,19 @@ export function ComposeScreen({
   const showToast = useToast((s) => s.show);
   const create = useCreateActivity();
   const [discardOpen, setDiscardOpen] = useState(false);
+
+  function choosePlanKind(type: Parameters<typeof draft.choosePlanKind>[0]) {
+    if (type !== 'event' || loadEventDefaults === undefined) {
+      draft.choosePlanKind(type);
+      return;
+    }
+
+    // The route starts `/me` eagerly. Awaiting it here closes the cold-cache race without
+    // copying query data into draft state from an effect after the form is already visible.
+    void loadEventDefaults()
+      .then((defaults) => draft.choosePlanKind(type, defaults))
+      .catch(() => draft.choosePlanKind(type));
+  }
 
   /** Closing with content asks first; closing an empty draft just closes (§2.2). */
   function requestClose() {
@@ -143,11 +160,7 @@ export function ComposeScreen({
         {draft.step === 'object' ? (
           <ObjectChooser onChoose={draft.chooseObject} />
         ) : draft.step === 'planKind' ? (
-          <PlanKindChooser
-            onChoose={(type) =>
-              draft.choosePlanKind(type, displayName.trim() || undefined)
-            }
-          />
+          <PlanKindChooser onChoose={choosePlanKind} />
         ) : draft.target === undefined || draft.target.objectKind === 'listItem' ? (
           // `form` with no Activity target is reachable by exactly one route: `List item`,
           // which has no destination to fix in Phase 1. The store leaves `target` undefined

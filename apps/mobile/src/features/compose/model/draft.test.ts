@@ -100,12 +100,18 @@ describe('toActivityDetails', () => {
     });
   });
 
-  it('sends a price as integer cents', () => {
-    const details = { ...EMPTY_DETAILS, price: '18.50', organiser: 'Dr Patel' };
+  it('sends a price as integer cents with the profile currency', () => {
+    const details = {
+      ...EMPTY_DETAILS,
+      price: '18.50',
+      currency: 'usd',
+      organiser: 'Dr Patel',
+    };
 
     expect(toActivityDetails('event', details, 'Gig')).toEqual({
       kind: 'event',
       priceCents: 1850,
+      currency: 'USD',
       organiser: 'Dr Patel',
     });
   });
@@ -163,6 +169,8 @@ describe('fromActivityDetails', () => {
   });
 
   it('brings a price back as the digits the field shows', () => {
-    expect(fromActivityDetails({ kind: 'event', priceCents: 1850 }).price).toBe('18.50');
+    expect(
+      fromActivityDetails({ kind: 'event', priceCents: 1850, currency: 'USD' }),
+    ).toMatchObject({ price: '18.50', currency: 'USD' });
   });
 });

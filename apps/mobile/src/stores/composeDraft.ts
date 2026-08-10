@@ -36,6 +36,12 @@ import type { ObjectChoice } from '@/features/compose/model/targets';
 /** Which screen of the modal is showing. `object` is always where it opens. */
 export type ComposeStep = 'object' | 'planKind' | 'form';
 
+/** Profile-backed values that belong to a newly chosen Event draft. */
+export interface EventDraftDefaults {
+  reservationName?: string;
+  currency?: string;
+}
+
 /**
  * The store's own field types are **present-and-possibly-undefined**, not optional.
  *
@@ -74,7 +80,7 @@ export interface ComposeDraftState {
 
   open: () => void;
   chooseObject: (choice: ObjectChoice) => void;
-  choosePlanKind: (type: PlanType, eventReservationName?: string) => void;
+  choosePlanKind: (type: PlanType, eventDefaults?: EventDraftDefaults) => void;
   back: () => void;
   setTitle: (title: string) => void;
   setNotes: (notes: string) => void;
@@ -140,6 +146,27 @@ const edited = (patch: Partial<ComposeDraftState>) => ({
   idempotencyKey: undefined,
 });
 
+function withEventDefaults(
+  type: PlanType,
+  details: DraftDetails,
+  defaults: EventDraftDefaults | undefined,
+): DraftDetails {
+  if (type !== 'event' || defaults === undefined) return details;
+
+  const reservationName = defaults.reservationName?.trim();
+  const currency = defaults.currency?.trim().toUpperCase();
+  return {
+    ...details,
+    ...(details.currency === '' && currency ? { currency } : {}),
+    reservation: {
+      ...details.reservation,
+      ...(details.reservation.name === '' && reservationName
+        ? { name: reservationName }
+        : {}),
+    },
+  };
+}
+
 export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
   ...EMPTY,
 
@@ -181,7 +208,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    * `dropped` list it returns is the *reason* the Season field vanishes from the form rather
    * than lurking in the store.
    */
-  choosePlanKind: (type, eventReservationName) => {
+  choosePlanKind: (type, eventDefaults) => {
     const { target, title, details } = get();
     const previousType = target?.objectKind === 'plan' ? target.type : 'task';
 
@@ -190,14 +217,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
         edited({
           step: 'form',
           target: { objectKind: 'plan', type },
-          ...(type === 'event' && details.reservation.name === '' && eventReservationName
-            ? {
-                details: {
-                  ...details,
-                  reservation: { ...details.reservation, name: eventReservationName },
-                },
-              }
-            : {}),
+          details: withEventDefaults(type, details, eventDefaults),
         }),
       );
       return;
@@ -219,13 +239,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     );
 
     const mappedDetails = fromActivityDetails(mapped.details);
-    const nextDetails =
-      type === 'event' && mappedDetails.reservation.name === '' && eventReservationName
-        ? {
-            ...mappedDetails,
-            reservation: { ...mappedDetails.reservation, name: eventReservationName },
-          }
-        : mappedDetails;
+    const nextDetails = withEventDefaults(type, mappedDetails, eventDefaults);
 
     set(
       edited({

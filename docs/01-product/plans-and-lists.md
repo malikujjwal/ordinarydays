@@ -1426,8 +1426,8 @@ are:
 
 ### 8.2 Scheduling a watch session
 
-From the watchlist item: `Plan this item` → the required **General / Meal / Watch / Event /
-Event** chooser (§6). For this flow the user explicitly chooses **Watch**; the list does not
+From the watchlist item: `Plan this item` → the required **General / Meal / Watch / Event**
+chooser (§6). For this flow the user explicitly chooses **Watch**; the list does not
 infer or pre-select it. Confirming eventually calls
 `POST /v1/lists/:id/items/:itemId/schedule` with the chosen type `watch`.
 

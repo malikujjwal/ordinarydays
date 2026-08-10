@@ -123,6 +123,23 @@ describe('title bounds', () => {
   });
 });
 
+describe('Event reservation party size', () => {
+  const withPartySize = (partySize: number) => ({
+    ...base,
+    objectKind: 'plan',
+    type: 'event',
+    details: { kind: 'event', reservation: { partySize } },
+  });
+
+  it('accepts the documented maximum of 99', () => {
+    expect(activity.safeParse(withPartySize(99)).success).toBe(true);
+  });
+
+  it('rejects 100', () => {
+    expect(activity.safeParse(withPartySize(100)).success).toBe(false);
+  });
+});
+
 /**
  * The tests this task exists for. A body that does not name its target is rejected — never
  * completed from context, a default, or `details.kind`.

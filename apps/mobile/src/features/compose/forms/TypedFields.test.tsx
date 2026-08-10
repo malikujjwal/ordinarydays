@@ -1,6 +1,6 @@
 import type { ActivityType } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { describe, expect, it, vi } from 'vitest';
@@ -120,6 +120,25 @@ describe('every form renders its table, in order', () => {
 });
 
 describe('conditional fields', () => {
+  it('keeps both Event disclosure groups collapsed until opened', () => {
+    mount('event');
+
+    const reservation = screen.getByRole('button', { name: 'Reservation' });
+    const tickets = screen.getByRole('button', { name: 'Tickets & details' });
+    expect(reservation.getAttribute('aria-expanded')).toBe('false');
+    expect(tickets.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByLabelText('Reservation name')).toBeNull();
+    expect(screen.queryByLabelText('Price')).toBeNull();
+
+    fireEvent.click(reservation);
+    expect(reservation.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByLabelText('Reservation name')).toBeDefined();
+
+    fireEvent.click(tickets);
+    expect(tickets.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByLabelText('Price')).toBeDefined();
+  });
+
   /** "Shown only once a start time exists" (§3.4) — absent, not disabled. */
   it('shows End time on an Event only once a start time is set', () => {
     const { unmount } = mount('event');

@@ -719,7 +719,7 @@
                           "partySize": {
                             "type": "integer",
                             "exclusiveMinimum": 0,
-                            "maximum": 100
+                            "maximum": 99
                           },
                           "reference": {
                             "type": "string",
@@ -1111,7 +1111,7 @@
                           "partySize": {
                             "type": "integer",
                             "exclusiveMinimum": 0,
-                            "maximum": 100
+                            "maximum": 99
                           },
                           "reference": {
                             "type": "string",
@@ -1666,7 +1666,7 @@
                           "partySize": {
                             "type": "integer",
                             "exclusiveMinimum": 0,
-                            "maximum": 100
+                            "maximum": 99
                           },
                           "reference": {
                             "type": "string",
@@ -1971,7 +1971,7 @@
                           "partySize": {
                             "type": "integer",
                             "exclusiveMinimum": 0,
-                            "maximum": 100
+                            "maximum": 99
                           },
                           "reference": {
                             "type": "string",
@@ -2404,7 +2404,7 @@
                       "partySize": {
                         "type": "integer",
                         "exclusiveMinimum": 0,
-                        "maximum": 100
+                        "maximum": 99
                       },
                       "reference": {
                         "type": "string",

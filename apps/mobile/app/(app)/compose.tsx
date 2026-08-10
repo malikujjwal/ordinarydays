@@ -1,9 +1,14 @@
 import { getMe } from '@od/shared/client';
-import { useQuery } from '@tanstack/react-query';
+import { queryOptions, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { useRouter } from 'expo-router';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
 import { apiClient } from '@/lib/apiClient';
+
+const profileQuery = queryOptions({
+  queryKey: ['me'],
+  queryFn: ({ signal }) => getMe(apiClient, signal),
+});
 
 /**
  * The Add flow, presented modally (P1-24).
@@ -24,17 +29,18 @@ import { apiClient } from '@/lib/apiClient';
  */
 export default function ComposeRoute() {
   const router = useRouter();
-  const profile = useQuery({
-    queryKey: ['me'],
-    queryFn: ({ signal }) => getMe(apiClient, signal),
-  });
+  const queryClient = useQueryClient();
+  const profile = useQuery(profileQuery);
 
   return (
     <ComposeScreen
       onClose={() => router.back()}
       today={format(new Date(), 'yyyy-MM-dd')}
       timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-      displayName={profile.data?.displayName ?? ''}
+      loadEventDefaults={async () => {
+        const user = profile.data ?? (await queryClient.ensureQueryData(profileQuery));
+        return { reservationName: user.displayName, currency: user.currency };
+      }}
     />
   );
 }

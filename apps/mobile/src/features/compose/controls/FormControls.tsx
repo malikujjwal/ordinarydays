@@ -1,6 +1,7 @@
 import { MAX_INGREDIENTS, MAX_NOTES_LEN } from '@od/shared/constants';
 import {
   Checkbox,
+  ChevronRight,
   Chip,
   Close as CloseIcon,
   DatePicker,
@@ -10,8 +11,10 @@ import {
   SegmentedControl,
   Text,
   TimePicker,
+  Touchable,
   useTheme,
 } from '@od/ui';
+import { type ReactNode, useState } from 'react';
 import { View } from 'react-native';
 import {
   type DraftIngredient,
@@ -377,14 +380,52 @@ export interface ReservationControlProps {
   onChange: (patch: Partial<DraftReservation>) => void;
 }
 
+interface DisclosureGroupProps {
+  label: string;
+  testID: string;
+  children: ReactNode;
+}
+
+/** A compact, keyboard- and screen-reader-operable disclosure shared by Event groups. */
+function DisclosureGroup({ label, testID, children }: DisclosureGroupProps) {
+  const theme = useTheme();
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <View style={{ gap: theme.space[4] }} testID={testID}>
+      <Touchable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ expanded }}
+        aria-expanded={expanded}
+        onPress={() => setExpanded((current) => !current)}
+        testID={`${testID}-toggle`}
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <Text variant="footnoteStrong" color="textSecondary">
+          {label}
+        </Text>
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
+        >
+          <ChevronRight size={20} color={theme.colors.textSecondary} />
+        </View>
+      </Touchable>
+      {expanded ? <View style={{ gap: theme.space[4] }}>{children}</View> : null}
+    </View>
+  );
+}
+
 /** The Event reservation disclosure group (`activities.md` §4.4). */
 export function ReservationControl({ value, onChange }: ReservationControlProps) {
-  const theme = useTheme();
   return (
-    <View style={{ gap: theme.space[4] }} testID="compose-reservation">
-      <Text variant="footnoteStrong" color="textSecondary">
-        Reservation
-      </Text>
+    <DisclosureGroup label="Reservation" testID="compose-reservation">
       <Field
         label="Reservation name"
         value={value.name}
@@ -411,7 +452,7 @@ export function ReservationControl({ value, onChange }: ReservationControlProps)
         onChangeText={(reference) => onChange({ reference })}
         maxLength={120}
       />
-    </View>
+    </DisclosureGroup>
   );
 }
 
@@ -431,12 +472,8 @@ export function TicketsAndDetailsControl({
   onChange,
   fieldErrors,
 }: TicketsAndDetailsControlProps) {
-  const theme = useTheme();
   return (
-    <View style={{ gap: theme.space[4] }} testID="compose-tickets-details">
-      <Text variant="footnoteStrong" color="textSecondary">
-        Tickets &amp; details
-      </Text>
+    <DisclosureGroup label="Tickets & details" testID="compose-tickets-details">
       <Field
         label="Price"
         value={price}
@@ -461,7 +498,7 @@ export function TicketsAndDetailsControl({
         maxLength={120}
         testID="compose-organiser"
       />
-    </View>
+    </DisclosureGroup>
   );
 }
 

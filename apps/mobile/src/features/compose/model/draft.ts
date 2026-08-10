@@ -68,6 +68,8 @@ export interface DraftDetails {
   service: string;
   description: string;
   price: string;
+  /** Profile currency used when a typed Event price becomes integer minor units. */
+  currency: string;
   ticketUrl: string;
   organiser: string;
   reservation: DraftReservation;
@@ -91,6 +93,7 @@ export const EMPTY_DETAILS: DraftDetails = Object.freeze({
   service: '',
   description: '',
   price: '',
+  currency: '',
   ticketUrl: '',
   organiser: '',
   reservation: EMPTY_RESERVATION,
@@ -252,7 +255,14 @@ function kindedDetails(
         ...(trimmed(details.description) === undefined
           ? {}
           : { description: details.description.trim() }),
-        ...(priceCents === undefined ? {} : { priceCents }),
+        ...(priceCents === undefined
+          ? {}
+          : {
+              priceCents,
+              ...(trimmed(details.currency) === undefined
+                ? {}
+                : { currency: details.currency.trim().toUpperCase() }),
+            }),
         ...(trimmed(details.ticketUrl) === undefined
           ? {}
           : { ticketUrl: details.ticketUrl.trim() }),
@@ -305,6 +315,7 @@ export function fromActivityDetails(details: ActivityDetails): DraftDetails {
         ...next,
         description: details.description ?? '',
         price: details.priceCents === undefined ? '' : centsToDraft(details.priceCents),
+        currency: details.currency ?? '',
         ticketUrl: details.ticketUrl ?? '',
         organiser: details.organiser ?? '',
         reservation: {
