@@ -31,6 +31,13 @@ export function addWallDays(value: string, amount: number): string {
   return format(addDays(asCalendarDate(value), amount), WALL_DATE_FORMAT);
 }
 
+/**
+ * Returns the first day of the month `amount` calendar months from `value`'s month.
+ *
+ * This is deliberately a month cursor, not conventional clamped add-months arithmetic:
+ * `addWallMonths('2026-01-31', 1)` is `2026-02-01`. Monthly expansion reads the cursor's
+ * year/month and then applies the rule's day through `clampWallDate`, producing 28 February.
+ */
 export function addWallMonths(value: string, amount: number): string {
   return format(startOfMonth(addMonths(asCalendarDate(value), amount)), WALL_DATE_FORMAT);
 }

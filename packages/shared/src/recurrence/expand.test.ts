@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { isoDate } from '../schemas/common.js';
 import { recurrence as recurrenceSchema } from '../schemas/recurrence.js';
-import type { Occurrence } from '../types/occurrence.js';
 import type {
   MonthNumber,
   Recurrence,
@@ -340,6 +339,7 @@ const engineCases: EngineCase[] = [
   {
     number: 32,
     name: 'start after the window returns before rule dispatch',
+    // Deliberate contract: a window before the first anchor short-circuits before rule validation.
     recurrence: recurrence({
       freq: 'fortnightly' as never,
       effectiveFrom: '2027-08-01',
@@ -651,22 +651,12 @@ describe('P2-02 exhaustive recurrence matrix', () => {
       effectiveFrom: '2026-09-10',
     });
     const expected = ['2027-09-03', '2028-09-03', '2029-09-03'];
-    const oneOffOverride = {
-      date: '2026-09-03',
-      status: 'rescheduled',
-      overrideTime: '19:00',
-    } satisfies Pick<Occurrence, 'date' | 'status' | 'overrideTime'>;
 
     const storedDates = expand(stored, '2027-01-01', '2029-12-31');
     const rewrittenDates = expand(rewrittenLowerBound, '2027-01-01', '2029-12-31');
 
     expect(storedDates).toEqual(expected);
     expect(rewrittenDates).toEqual(expected);
-    expect(oneOffOverride).toEqual({
-      date: '2026-09-03',
-      status: 'rescheduled',
-      overrideTime: '19:00',
-    });
   });
 });
 
@@ -829,7 +819,35 @@ function naiveDailyOrWeekdays(rec: Recurrence, from: string, to: string): string
   return dates;
 }
 
-describe('independent daily and weekday cross-check', () => {
+function naiveMonthly(rec: Recurrence, from: string, to: string): string[] {
+  const segment = rec.segments[0];
+  if (segment === undefined) return [];
+  const [anchorYear, anchorMonth, anchorDay] = segment.effectiveFrom
+    .split('-')
+    .map(Number);
+  const recurrenceDay = segment.byMonthDay?.[0] ?? anchorDay;
+  if (
+    anchorYear === undefined ||
+    anchorMonth === undefined ||
+    recurrenceDay === undefined
+  )
+    return [];
+  const dates: string[] = [];
+
+  for (let offset = 0; ; offset += 1) {
+    const month = new Date(Date.UTC(anchorYear, anchorMonth - 1 + offset, 1));
+    const year = month.getUTCFullYear();
+    const monthNumber = month.getUTCMonth() + 1;
+    const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+    const date = `${year}-${String(monthNumber).padStart(2, '0')}-${String(Math.min(recurrenceDay, lastDay)).padStart(2, '0')}`;
+    if (date > to) break;
+    if (date >= segment.effectiveFrom && date >= from) dates.push(date);
+  }
+
+  return dates;
+}
+
+describe('independent recurrence cross-checks', () => {
   const crossCheckCases = [
     {
       name: 'daily with a count consumed before the window',
@@ -866,6 +884,28 @@ describe('independent daily and weekday cross-check', () => {
 
     expect(engine).toEqual(testCase.expectedDates);
     expect(naive).toEqual(testCase.expectedDates);
+    expect(engine).toEqual(naive);
+  });
+
+  it('matches a component-based month walker across short months', () => {
+    const rec = recurrence({
+      freq: 'monthly',
+      byMonthDay: [31],
+      effectiveFrom: '2026-01-31',
+    });
+    const expected = [
+      '2026-01-31',
+      '2026-02-28',
+      '2026-03-31',
+      '2026-04-30',
+      '2026-05-31',
+      '2026-06-30',
+    ];
+    const engine = expand(rec, '2026-01-01', '2026-06-30');
+    const naive = naiveMonthly(rec, '2026-01-01', '2026-06-30');
+
+    expect(engine).toEqual(expected);
+    expect(naive).toEqual(expected);
     expect(engine).toEqual(naive);
   });
 });
