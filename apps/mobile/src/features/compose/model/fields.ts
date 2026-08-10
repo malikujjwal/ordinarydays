@@ -180,17 +180,25 @@ const SLOT_TIME: Readonly<Record<MealSlot, string | undefined>> = Object.freeze(
 });
 
 /**
- * The time a chosen slot implies, **only when no time is set**.
+ * The time a chosen slot implies, **unless the user set the current one**.
  *
- * The "only when the other is unset" condition is the whole rule. Without it, choosing Dinner
- * after typing 20:15 would silently move the meal an hour and a quarter earlier — the app
- * overwriting something the user typed, which no derivation in this product is allowed to do.
+ * The condition that matters is *who set the time*, not *whether a time is set*. Without the
+ * distinction the app's own guess blocks the next one: picking Breakfast writes 08:00, and
+ * then Dinner is refused because "a time is set", leaving the meal at eight in the morning.
+ * That is what §4.2 said literally and it is not what it meant — the rule exists to protect a
+ * time the **user** typed, and `derived` is what tells the two apart.
+ *
+ * Snack returns `undefined` and so **clears** a derived time. That is the table's own value:
+ * a snack has no hour the product is willing to guess, and leaving lunch's 12:30 behind under
+ * a Snack label would be the app asserting something it was never told.
  */
 export function timeForSlot(
   slot: MealSlot,
   currentTime: string | undefined,
+  derived: boolean,
 ): string | undefined {
-  if (currentTime !== undefined && currentTime !== '') return currentTime;
+  const hasTime = currentTime !== undefined && currentTime !== '';
+  if (hasTime && !derived) return currentTime;
   return SLOT_TIME[slot];
 }
 

@@ -41,6 +41,27 @@ describe('DatePicker', () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith('2026-08-12');
   });
 
+  /** The calendar's half of the `Done` defect: it opens on `today` and must be able to mean it. */
+  it('commits the day the calendar is showing when Done is pressed without a change', () => {
+    const onChange = vi.fn();
+    wrap(<DatePicker label="Date" value={null} onChange={onChange} today={TODAY} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pick a date' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(TODAY);
+  });
+
+  it('writes nothing when the calendar is dismissed instead of confirmed', () => {
+    const onChange = vi.fn();
+    wrap(<DatePicker label="Date" value={null} onChange={onChange} today={TODAY} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pick a date' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('shows which chip the current value corresponds to', () => {
     wrap(
       <DatePicker label="Date" value="2026-08-15" onChange={() => {}} today={TODAY} />,
@@ -173,6 +194,43 @@ describe('TimePicker', () => {
 
     fireEvent.change(wheel, { target: { value: '19:30' } });
     expect(onChange).toHaveBeenCalledExactlyOnceWith('19:30');
+  });
+
+  /**
+   * Reported from a device: open the wheel, agree with the time it is already showing, tap
+   * `Done`, and no time was set. The wheel renders `value ?? openAt`, and `onChange` fires
+   * only when the spinner moves — so agreeing with the opening position was unsayable.
+   */
+  it('commits the time the wheel is showing when Done is pressed without a change', () => {
+    const onChange = vi.fn();
+    wrap(<TimePicker label="Time" value={null} onChange={onChange} openAt="19:00" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set a time' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('19:00');
+  });
+
+  /** Dismissing is how the user says "no time". Only `Done` writes. */
+  it('writes nothing when the sheet is dismissed instead of confirmed', () => {
+    const onChange = vi.fn();
+    wrap(<TimePicker label="Time" value={null} onChange={onChange} openAt="19:00" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set a time' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  /** A time already set is not re-written by confirming it. */
+  it('does not re-fire for a value the caller already holds', () => {
+    const onChange = vi.fn();
+    wrap(<TimePicker label="Time" value="19:30" onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '7:30 PM' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   /** Cleared means all-day. What the screen calls that is the screen's business. */

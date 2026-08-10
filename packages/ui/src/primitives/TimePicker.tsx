@@ -31,9 +31,13 @@ export interface TimePickerProps {
   /** Whether the clear affordance renders. */
   allowClear?: boolean;
   /**
-   * Where the wheel opens when nothing is set yet. It is a starting position and never a
-   * value: nothing is written until the user picks. A meal form passes its slot's time here
-   * so the wheel opens at dinner rather than at nine in the morning.
+   * Where the wheel opens when nothing is set yet. A meal form passes its slot's time here so
+   * the wheel opens at dinner rather than at nine in the morning.
+   *
+   * It is a starting position, not a value — **until the user confirms it**. Nothing is
+   * written by opening the sheet; `Done` writes whatever the wheel is showing, and dismissing
+   * writes nothing. This used to say "nothing is written until the user picks", which meant a
+   * user who agreed with the wheel's opening position had no way to say so.
    */
   openAt?: WallTime;
   disabled?: boolean;
@@ -92,7 +96,25 @@ export function TimePicker({
           fallback={openAt}
           onChange={onChange}
         />
-        <Button label="Done" onPress={() => setWheelOpen(false)} />
+        {/*
+          **`Done` commits what the wheel is showing.**
+
+          The wheel renders `value ?? openAt`, so with nothing set it displays a real time the
+          user can read — and `onChange` only fires when the spinner actually moves. Opening
+          the sheet, agreeing with what it already says, and tapping `Done` therefore used to
+          write nothing at all: a confirm button that discarded the value it was displaying.
+
+          Dismissing is still the way to set nothing. `✕` and the scrim run `onClose`, which
+          only closes — so the two exits mean different things, which is what makes committing
+          here safe: `Done` is the only path that writes.
+        */}
+        <Button
+          label="Done"
+          onPress={() => {
+            if (value === null) onChange(openAt);
+            setWheelOpen(false);
+          }}
+        />
       </Sheet>
     </View>
   );

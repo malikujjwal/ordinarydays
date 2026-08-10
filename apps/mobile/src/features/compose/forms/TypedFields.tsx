@@ -54,6 +54,11 @@ export interface TypedFieldsProps {
   today: string;
   onDateChange: (date: string | undefined) => void;
   onTimeChange: (time: string | undefined) => void;
+  /**
+   * The Meal slot's implied time. Separate from {@link onTimeChange} because the draft records
+   * which of the two set the value: only the app's own guess may be replaced by a later slot.
+   */
+  onSlotTimeChange: (time: string | undefined) => void;
   onEndTimeChange: (endTime: string | undefined) => void;
   onLocationChange: (patch: Partial<DraftLocation>) => void;
   onReminderChange: (offsetMinutes: number | undefined) => void;
@@ -124,7 +129,7 @@ function renderField(
            * the user picks.
            */
           {...(props.type === 'meal' && details.mealSlot !== undefined
-            ? { openAt: timeForSlot(details.mealSlot, undefined) ?? '09:00' }
+            ? { openAt: timeForSlot(details.mealSlot, undefined, false) ?? '09:00' }
             : {})}
           onChange={(time) => {
             props.onTimeChange(time);
@@ -192,9 +197,15 @@ function renderField(
           value={details.mealSlot}
           onChange={(mealSlot) => {
             props.onDetailsChange({ mealSlot });
-            // Slot → time, only when no time is set.
-            const next = timeForSlot(mealSlot, schedule.time);
-            if (next !== schedule.time) props.onTimeChange(next);
+            /**
+             * Slot → time, unless the user set the time themselves (§4.2).
+             *
+             * Written through `onSlotTimeChange`, which marks the value as the app's guess, so
+             * that the **next** slot change may replace it. Sending it through the user's own
+             * setter is what made the first slot's time permanent.
+             */
+            const next = timeForSlot(mealSlot, schedule.time, schedule.timeFromSlot);
+            if (next !== schedule.time) props.onSlotTimeChange(next);
           }}
         />
       );

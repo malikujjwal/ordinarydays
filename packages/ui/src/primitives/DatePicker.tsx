@@ -138,7 +138,18 @@ export function DatePicker({
           {...(max === undefined ? {} : { max })}
           onChange={onChange}
         />
-        <Button label="Done" onPress={() => setCalendarOpen(false)} />
+        {/*
+          `Done` commits the day the calendar is showing — see the same note in `TimePicker`.
+          With nothing set the surface opens on `today`, so `Pick a date` → `Done` means today
+          rather than meaning nothing. `✕` and the scrim still leave without choosing.
+        */}
+        <Button
+          label="Done"
+          onPress={() => {
+            if (value === null) onChange(today);
+            setCalendarOpen(false);
+          }}
+        />
       </Sheet>
     </View>
   );

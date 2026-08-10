@@ -301,40 +301,28 @@ tsconfig, CI — before I start scheduling tasks. Change nothing.
 
 ### Sequencing
 
-> **Read this before scheduling anything. Numeric order is no longer a valid dependency
-> order.**
->
-> Phase 1's IDs were originally numbered so that ascending ID order satisfied every
-> dependency row. The phase-gate audit on **2026-08-08** broke that property by appending two
-> tasks that both run *early*:
->
-> - **P1-30** (`routeSplit` per-route registry) runs **first of everything in Track A**,
->   before P1-01. Ten tasks mount a route and every one of them assumed this work existed.
-> - **P1-31** (the React Native test environment) runs **first of everything in Track B**,
->   before P1-22. Every `.tsx` render test in Track B is unrunnable until it lands.
-> - **P1-19 is struck.** Its seam shipped in P0-20. Do not open a branch for it; the
->   subsection is kept and amended in the phase file so Phase 4 still has the reasoning.
->
-> Within each track, ascending order is still correct **once those two are moved to the
-> front**. Follow the explicit orders below rather than the ID column.
+The task IDs are numbered so that **ascending ID order is a valid dependency order** —
+within each track below, just run the IDs in numeric sequence and every dependency row is
+satisfied. Do not reorder for convenience; P1-11 needs P1-04's idempotency middleware and
+P1-15 needs P1-11, which numeric order handles and cherry-picking breaks.
 
 **Step 1 — `packages/shared`, serially, before anything else** (the merge-order rule in
 git-workflow.md: never two open branches on `shared`):
 
 1. **P1-06** — the `User`/`Activity`/`Reminder` schemas. Solo; everything imports it.
-2. **P1-17** → **P1-20** — the remaining `shared` tasks, one at a time. Both need P1-06, and
-   both are prerequisites for Track B's later tasks, so front-loading them unblocks
-   everything. (P1-19 previously sat between these two and is struck.)
+2. **P1-17** → **P1-19** → **P1-20** — the remaining `shared` tasks, one at a time.
+   (P1-17 and P1-20 need P1-06; P1-19 needs only P0-20. All three are prerequisites for
+   Track B's later tasks, so front-loading them unblocks everything.)
 
 **Step 2 — two parallel tracks in separate git worktrees** (they share no files):
 
-- **Track A — API. P1-30 first, then numeric order:**
-  **P1-30** → P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-07 → P1-08 → P1-09 → P1-10 →
-  P1-11 → P1-12 → P1-13 → P1-14 → P1-15 → P1-16 → P1-18 → P1-21 → P1-28.
-  (P1-18, the capture stubs, needs only P1-30 and can run any time you want a small task
-  between large ones — it is the one legitimate float in the track.)
-- **Track B — UI. P1-31 first, then numeric order:**
-  **P1-31** → P1-22 → P1-23 → P1-24 → P1-25 → P1-26 → P1-27 → P1-29.
+- **Track A — API, in numeric order:**
+  P1-01 → P1-02 → P1-03 → P1-04 → P1-05 → P1-07 → P1-08 → P1-09 → P1-10 → P1-11 →
+  P1-12 → P1-13 → P1-14 → P1-15 → P1-16 → P1-18 → P1-21 → P1-28.
+  (P1-18, the capture stubs, depends only on P0-13 and can run any time you want a
+  small task between large ones — it is the one legitimate float in the track.)
+- **Track B — UI, in numeric order:**
+  P1-22 → P1-23 → P1-24 → P1-25 → P1-26 → P1-27 → P1-29.
 
 **The only cross-track waits** (Track B pauses if Track A hasn't landed these yet):
 P1-26 needs **P1-12** (GET endpoint), P1-29 needs **P1-21** (the seed script). Everything
@@ -342,41 +330,7 @@ else in Track B rests on Step 1 and on Track B's own predecessors. In practice T
 reaches P1-12 long before Track B finishes the creation forms, so the wait is
 theoretical — but check, don't assume.
 
-**P1-30 and P1-31 can run concurrently with each other and with Step 1** — different
-workspaces, no shared files — so the two new tasks cost no elapsed time if you start them
-alongside P1-06 rather than after it.
-
 ### Prompts for the tasks that need more than the template
-
-**P1-30 — `routeSplit` per-route registry** *(M — plan mode; do this before any other API task)*
-
-```
-Pick up task P1-30. Follow the start-of-task protocol. This is a refactor of one Phase 0
-file that ten later tasks depend on: services/api/src/middleware/routeSplit.ts currently
-gates on an exact-match set containing only /v1/health, cannot express a parameterised
-path like /v1/activities/:id, and exports UNAUTHENTICATED_PRIVATE_PATHS without ever
-reading it. Read the P1-30 subsection, then tech-stack.md §4.2 for the chain and
-api-contract.md §2 for the route list. Match on the route pattern Hono resolved — do not
-write a second matcher. Keep "unrecognised path is 404, not 401". Branch
-feat/P1-30-route-registry. The test that matters most is the one that walks Hono's route
-table and fails on any mounted route with no registry entry; show me it failing before it
-passes.
-```
-
-**P1-31 — the React Native test environment** *(M — plan mode; do this before P1-22)*
-
-```
-Pick up task P1-31. Follow the start-of-task protocol, then testing.md §5. This is
-configuration only — no primitives, no screens. packages/ui declares no react or
-react-native dependency, both client workspaces run Vitest under environment: 'node' with
-a .test.ts-only include, and apps/mobile's coverage floor is commented out waiting for
-this. Pin react and react-native to exactly the versions apps/mobile already uses; prefer
-aliasing react-native to react-native-web over a Flow transform, and say why in the PR.
-Add the tech-stack.md lines the new dependencies require, and wire syncpack into ci.yml —
-it is a devDependency that currently runs nowhere. Arm apps/mobile's floor LAST, after one
-real render test clears it. Branch chore/P1-31-rn-test-env. Show me `pnpm test` green with
-the floor armed.
-```
 
 **P1-06 — shared schemas** *(L — plan mode, solo, high contention)*
 
@@ -407,11 +361,10 @@ owner-only authz rules come from the docs verbatim — do not re-derive them. Re
 is one row, never materialised (CLAUDE.md rule 3). Branch feat/P1-09-activity-repo.
 ```
 
-**P1-22 — `packages/ui` primitives** *(L — plan mode; needs P1-31 merged; the design refresh lands here)*
+**P1-22 — `packages/ui` primitives** *(L — plan mode; the design refresh lands here)*
 
 ```
-Pick up task P1-22 (depends on merged P1-31 — if Button.test.tsx does not run when you
-start, stop and tell me). Follow the start-of-task protocol, then read ALL of
+Pick up task P1-22. Follow the start-of-task protocol, then read ALL of
 docs/04-conventions/design-system.md — it was rewritten on 2026-08-08 from the
 founder's design mock (decision #49): cream/olive palette, mulberry accent, Newsreader
 serif for display/title only, new radii and shadows, IconTile / SegmentedControl /
@@ -421,8 +374,7 @@ variable font) via expo-font with the required one-line entry in tech-stack.md, 
 PR. Include the programmatic AA contrast test over every token pair in both schemes —
 it is a CI gate. ALSO build a dev-only token-gallery screen that renders every
 primitive in every state, light and dark; I will review the gallery before any feature
-screen is built. Configure no test environment in this task — that is P1-31's, already
-merged. Branch feat/P1-22-ui-primitives. Screenshot the gallery at 390px and
+screen is built. Branch feat/P1-22-ui-primitives. Screenshot the gallery at 390px and
 1280px and show me.
 ```
 
@@ -446,10 +398,9 @@ opens detail and never mutates (rule 6); U4: tapping a date opens the reschedule
 sheet. Branch feat/P1-26-activity-detail. Screenshots at 390px and 1280px.
 ```
 
-For everything else in Phase 1 (P1-01…P1-04, P1-07, P1-08, P1-11…P1-18, P1-20, P1-21,
-P1-23, P1-27, P1-28, P1-29), the generic template at the top of this file is enough — each
-has a full detail subsection or a mechanical-list entry in the phase file. P1-19 is struck
-and has no prompt.
+For everything else in Phase 1 (P1-01…P1-04, P1-07, P1-08, P1-11…P1-21, P1-23, P1-27,
+P1-28, P1-29), the generic template at the top of this file is enough — each has a full
+detail subsection or a mechanical-list entry in the phase file.
 
 ### Phase 1 exit check
 
@@ -461,6 +412,55 @@ docs/03-implementation/definition-of-done.md. Audit the repo as built against ev
 criterion and give me a pass/fail table with evidence (file paths, test names, command
 output). Change nothing.
 ```
+
+---
+
+## Phase 2 — the autonomous run
+
+From Phase 2 on there is a second way to work: `scripts/run-phase.mjs` runs a span of
+tasks unattended — one fresh headless Claude Code session per task (`claude -p`), the
+same one-task-one-branch discipline, with the script (not the agent) re-running the
+gates between tasks and merging `--no-ff` only when they are green.
+
+**Still manual, before and after:** the phase gate (read-only session, prompt above)
+before scheduling anything, and the exit check after the last task. Those two need your
+eyes; the middle mostly does not.
+
+**Phase 2 happens to be single-track:** plain numeric order P2-01 → P2-37 satisfies
+every dependency row, and the `packages/shared` tasks (P2-01…P2-06) sit at the front, so
+one worktree suffices — no parallel scheduling needed.
+
+```bash
+# from the repo root, on a clean integration branch (e.g. `phase-2` cut from main):
+node scripts/run-phase.mjs --range P2-01..P2-37 --pause-after P2-02,P2-11,P2-22
+```
+
+The three default checkpoints are where a human genuinely adds value:
+
+| After | Review |
+| --- | --- |
+| P2-02 | The recurrence engine and its test matrix — the highest-correctness-stakes code in the product. Read the segment-boundary tests yourself. |
+| P2-11 | `GET /v1/agenda` end to end — hit it against seeded data, eyeball the four sections in the JSON. |
+| P2-22 | The Today screen with rows and gestures — run the app, compare against the design mock and `design-system.md` §7.1. |
+
+Resume after a checkpoint with the `--range` the script prints.
+
+**The safety model, so you can trust it while away:**
+
+- No `bypassPermissions` — sessions run `--permission-mode acceptEdits` plus an explicit
+  allowlist (pnpm, scoped git, npx/node, docker compose). No push, no installs outside
+  the repo, no network fetches beyond what pnpm itself does.
+- The script re-runs `pnpm typecheck && pnpm lint && pnpm test` itself after every task.
+  A red run gets exactly one repair attempt in the same session, then the run halts with
+  the branch left in place.
+- Agents are told there is no human: any doc conflict or founder-decision trigger goes
+  into `.claude/phase-runs/QUESTIONS.md` and the run **halts** instead of guessing —
+  the unattended version of "Ask. Do not decide."
+- Every task starts from a clean tree; a dirty tree or a missing branch halts the run.
+  `git log --first-parent` on the integration branch reads as one line per task.
+
+When the run completes, review the integration branch as a whole (the checkpoints saw
+the risky parts already), merge it to `main`, and run the exit check.
 
 ---
 

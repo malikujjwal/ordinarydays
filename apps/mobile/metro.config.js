@@ -1,4 +1,5 @@
-// Metro's config. A deliberate passthrough — see the amendment in `tech-stack.md` §3.3.
+// Metro's config. Expo owns the monorepo defaults; the one resolver bridge below keeps the
+// shared package's Node ESM output and React Native source entry compatible.
 //
 // §3.3 prescribes three overrides for workspace support. Under Expo SDK 54 all three are
 // wrong, and `getDefaultConfig` already does the job, which was checked rather than assumed:
@@ -19,11 +20,41 @@
 //                            `expo-router` importing `@react-navigation/native` is simply the
 //                            first to fail.
 //
-// The file stays because it is where a real Metro change belongs, and because a future
-// SDK's defaults are worth re-checking against the three lines above.
+// A future SDK's defaults are still worth re-checking against the three lines above.
 //
 // CommonJS on purpose: Metro loads this with `require`, so `apps/mobile` must not declare
 // `"type": "module"`.
 const { getDefaultConfig } = require('expo/metro-config');
+const { isAbsolute, relative, resolve, sep } = require('node:path');
 
-module.exports = getDefaultConfig(__dirname);
+const config = getDefaultConfig(__dirname);
+const sharedSourceRoot = resolve(__dirname, '..', '..', 'packages', 'shared', 'src');
+
+function isInsideSharedSource(filePath) {
+  const fromSharedRoot = relative(sharedSourceRoot, filePath);
+  return (
+    fromSharedRoot !== '..' &&
+    !fromSharedRoot.startsWith(`..${sep}`) &&
+    !isAbsolute(fromSharedRoot)
+  );
+}
+
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (
+    moduleName.startsWith('.') &&
+    moduleName.endsWith('.js') &&
+    isInsideSharedSource(context.originModulePath)
+  ) {
+    try {
+      return context.resolveRequest(context, moduleName, platform);
+    } catch {
+      // TypeScript preserves `.js` in ESM output so Node can run `dist/`. React Native reads
+      // the package's `src/*.ts` export instead, where that emitted file does not exist.
+      return context.resolveRequest(context, moduleName.slice(0, -3), platform);
+    }
+  }
+
+  return context.resolveRequest(context, moduleName, platform);
+};
+
+module.exports = config;

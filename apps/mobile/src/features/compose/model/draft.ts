@@ -36,6 +36,19 @@ export interface DraftSchedule {
   date: string | undefined;
   time: string | undefined;
   endTime: string | undefined;
+  /**
+   * Whether `time` is the app's guess from a Meal slot rather than something the user chose.
+   *
+   * §4.2's rule is "auto-set from the slot when a slot is chosen and no time is set", written
+   * to stop a slot change silently moving a time the user typed. Without this flag the rule
+   * cannot tell those apart, so the **app's own guess** froze the field: picking Breakfast set
+   * 08:00, and every later slot was then refused its time because "a time is set". Choosing
+   * Dinner left the meal at eight in the morning.
+   *
+   * So the flag records provenance, and only a derived time is re-derived. A time the user
+   * picked is still never overwritten, which is the half of §4.2 that was always right.
+   */
+  timeFromSlot: boolean;
 }
 
 export interface DraftLocation {
@@ -87,6 +100,7 @@ export const EMPTY_SCHEDULE: DraftSchedule = Object.freeze({
   date: undefined,
   time: undefined,
   endTime: undefined,
+  timeFromSlot: false,
 });
 
 export const EMPTY_LOCATION: DraftLocation = Object.freeze({ label: '', address: '' });

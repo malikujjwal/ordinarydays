@@ -19,6 +19,20 @@ import type { DateSurfaceProps, TimeSurfaceProps } from './pickerSurface';
 function useInputStyle(): React.CSSProperties {
   const theme = useTheme();
   return {
+    /**
+     * **`border-box`, and it is load-bearing.**
+     *
+     * These are raw DOM inputs, so they take the browser's default `content-box` rather than
+     * the `border-box` React Native Web applies to everything it renders. With `width: 100%`
+     * plus 12 pt of padding and a 1 pt border on each side, the input measured **26 px wider
+     * than the box it sits in** — the sheet's content width was 766 px and the control was
+     * 792 px, so its right edge cleared the card entirely and the picker appeared to spill out
+     * of the dialog.
+     *
+     * The one line that has to change when a DOM element borrows RN's layout assumptions, and
+     * the reason the comment above this hook is worth reading.
+     */
+    boxSizing: 'border-box',
     fontFamily: theme.font('body').fontFamily,
     fontSize: theme.type.body.size,
     lineHeight: `${theme.type.body.lineHeight}px`,

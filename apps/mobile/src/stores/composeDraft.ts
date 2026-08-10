@@ -83,6 +83,8 @@ export interface ComposeDraftState {
   clearAttachment: () => void;
   setDate: (date: string | undefined) => void;
   setTime: (time: string | undefined) => void;
+  /** The time a Meal slot implies, recorded as the app's guess rather than the user's. */
+  setTimeFromSlot: (time: string | undefined) => void;
   setEndTime: (endTime: string | undefined) => void;
   setLocation: (patch: Partial<DraftLocation>) => void;
   setReminderOffset: (offsetMinutes: number | undefined) => void;
@@ -117,6 +119,7 @@ const EMPTY = {
   | 'clearAttachment'
   | 'setDate'
   | 'setTime'
+  | 'setTimeFromSlot'
   | 'setEndTime'
   | 'setLocation'
   | 'setReminderOffset'
@@ -254,16 +257,44 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       }),
     ),
 
+  /**
+   * The user's own choice of time, from the picker or the clear affordance.
+   *
+   * `timeFromSlot: false` is the whole difference between this and {@link setTimeFromSlot}:
+   * once the user has named a time, a later slot change must not move it (§4.2).
+   */
   setTime: (time) =>
     set((state) =>
       edited({
         schedule: {
           ...state.schedule,
           time,
+          timeFromSlot: false,
           // An end time needs a start time (§3 rule 4).
           ...(time === undefined ? { endTime: undefined } : {}),
         },
         // The two pickers offer different lists; keep only an offset the new one shows.
+        reminderOffset: reconcileReminder(state.reminderOffset, time !== undefined),
+      }),
+    ),
+
+  /**
+   * The time a Meal slot implies — the app's guess, marked as one.
+   *
+   * Identical to {@link setTime} but for the flag, and separate rather than a boolean
+   * parameter because the two call sites mean different things: one is the user speaking and
+   * the other is the form filling in. A parameter would let a caller pass the wrong one
+   * without the code reading wrongly.
+   */
+  setTimeFromSlot: (time) =>
+    set((state) =>
+      edited({
+        schedule: {
+          ...state.schedule,
+          time,
+          timeFromSlot: time !== undefined,
+          ...(time === undefined ? { endTime: undefined } : {}),
+        },
         reminderOffset: reconcileReminder(state.reminderOffset, time !== undefined),
       }),
     ),

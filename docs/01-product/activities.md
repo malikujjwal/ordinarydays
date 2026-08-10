@@ -277,11 +277,22 @@ Columns: **Field** (label as shown), **Control**, **Req.**, **Validation**, **De
 
 ### 4.2 Meal
 
+> **Amended after implementation review.** The Time row read "auto-set from the slot when a
+> slot is chosen **and no time is set**". That protected a time the user typed, which is right,
+> but it could not tell one from a time **the app had just derived itself** — so the first slot
+> picked froze the field. Choosing Breakfast wrote 08:00, and Dinner was then refused its 19:00
+> because "a time is set", leaving the meal at eight in the morning. Snack was worse: it has no
+> hour to offer, so it silently kept the previous slot's.
+>
+> The rule now turns on **who set the time**, not whether one is set. The app re-derives its own
+> guess as often as the slot changes; a time the user picked is never touched, which was always
+> the point.
+
 | Field | Control | Req. | Validation | Default | Maps to |
 | --- | --- | --- | --- | --- | --- |
 | Meal | Single-line text | Yes | 1–200 | Text from the Add screen | `title` |
 | Date | Date picker | No | Valid date | Empty | `schedule.date` |
-| Time | Time picker | No | `HH:mm`; requires a date | Auto-set from the slot when a slot is chosen and no time is set: breakfast 08:00, lunch 12:30, dinner 19:00, snack unset | `schedule.time` |
+| Time | Time picker | No | `HH:mm`; requires a date | Set from the slot **every time the slot changes, unless the user chose the time themselves**: breakfast 08:00, lunch 12:30, dinner 19:00, snack unset — and choosing Snack *clears* a slot-derived time. Once the user picks a time, no slot change touches it again | `schedule.time` |
 | Slot | Segmented: Breakfast / Lunch / Dinner / Snack | No | One of the four | Inferred from Time if a time is set and no slot chosen: < 11:00 breakfast, < 15:00 lunch, < 17:00 snack, else dinner | `details.mealSlot` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Ingredients | Repeating rows: name + optional quantity, each with a checkbox | No | Name 1–120; max 60 rows | Empty | `details.ingredients[]` (`name`, `quantity`) |

@@ -288,7 +288,14 @@ describe('toCreateActivityInput — schedule, location and reminders', () => {
   it('anchors a date in the caller’s zone', () => {
     const input = toCreateActivityInput(
       task,
-      base({ schedule: { date: '2026-08-15', time: undefined, endTime: undefined } }),
+      base({
+        schedule: {
+          date: '2026-08-15',
+          time: undefined,
+          endTime: undefined,
+          timeFromSlot: false,
+        },
+      }),
       ZONE2,
     );
     expect(input?.schedule).toEqual({ date: '2026-08-15', timezone: ZONE2 });
@@ -299,7 +306,14 @@ describe('toCreateActivityInput — schedule, location and reminders', () => {
   it('drops a time left behind by a cleared date', () => {
     const input = toCreateActivityInput(
       task,
-      base({ schedule: { date: undefined, time: '19:00', endTime: '21:00' } }),
+      base({
+        schedule: {
+          date: undefined,
+          time: '19:00',
+          endTime: '21:00',
+          timeFromSlot: false,
+        },
+      }),
       ZONE2,
     );
     expect(input).not.toHaveProperty('schedule');
@@ -308,7 +322,14 @@ describe('toCreateActivityInput — schedule, location and reminders', () => {
   it('drops an end time with no start time', () => {
     const input = toCreateActivityInput(
       task,
-      base({ schedule: { date: '2026-08-15', time: undefined, endTime: '21:00' } }),
+      base({
+        schedule: {
+          date: '2026-08-15',
+          time: undefined,
+          endTime: '21:00',
+          timeFromSlot: false,
+        },
+      }),
       ZONE2,
     );
     expect(input?.schedule).not.toHaveProperty('endTime');
@@ -318,7 +339,14 @@ describe('toCreateActivityInput — schedule, location and reminders', () => {
   it('carries a full schedule when all three are set', () => {
     const input = toCreateActivityInput(
       task,
-      base({ schedule: { date: '2026-08-15', time: '19:00', endTime: '21:00' } }),
+      base({
+        schedule: {
+          date: '2026-08-15',
+          time: '19:00',
+          endTime: '21:00',
+          timeFromSlot: false,
+        },
+      }),
       ZONE2,
     );
     expect(input?.schedule).toEqual({
@@ -371,7 +399,12 @@ describe('toCreateActivityInput — schedule, location and reminders', () => {
       task,
       base({
         reminderOffset: -15,
-        schedule: { date: '2026-08-15', time: '19:00', endTime: undefined },
+        schedule: {
+          date: '2026-08-15',
+          time: '19:00',
+          endTime: undefined,
+          timeFromSlot: false,
+        },
       }),
       ZONE2,
     );
@@ -384,7 +417,12 @@ describe('toCreateActivityInput — schedule, location and reminders', () => {
       task,
       base({
         reminderOffset: undefined,
-        schedule: { date: '2026-08-15', time: '19:00', endTime: undefined },
+        schedule: {
+          date: '2026-08-15',
+          time: '19:00',
+          endTime: undefined,
+          timeFromSlot: false,
+        },
       }),
       ZONE2,
     );
@@ -394,7 +432,12 @@ describe('toCreateActivityInput — schedule, location and reminders', () => {
 
 /** All seven rows of §2.5's toast table, now that a date can reach them. */
 describe('successToast — dated rows', () => {
-  const dated = (date: string) => ({ date, time: undefined, endTime: undefined });
+  const dated = (date: string) => ({
+    date,
+    time: undefined,
+    endTime: undefined,
+    timeFromSlot: false,
+  });
   const TODAY_2 = '2026-08-12';
 
   it('names Today for a task dated today', () => {

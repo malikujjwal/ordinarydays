@@ -114,6 +114,18 @@ export function ComposeScreen({ onClose, today, timezone }: ComposeScreenProps) 
           paddingBottom: theme.space[3],
         }}
       >
+        {/*
+          `Back` on the later steps, and **nothing** on the first one.
+
+          The first step used to carry a `Cancel` beside the `✕`, and the two called the same
+          handler — two controls, one behaviour, which is a thing to hunt for rather than a
+          choice. `Back` and `✕` on the later steps are genuinely different actions (previous
+          step versus leave), so both stay: without the `✕` the only way out of a deep form
+          would be to step backwards through every screen of it.
+
+          The empty `View` holds the layout: this row is `space-between`, and dropping the
+          child entirely would pull the close button to the left edge.
+        */}
         {showBack ? (
           <Button
             label="Back"
@@ -122,12 +134,7 @@ export function ComposeScreen({ onClose, today, timezone }: ComposeScreenProps) 
             testID="compose-back"
           />
         ) : (
-          <Button
-            label="Cancel"
-            variant="ghost"
-            onPress={requestClose}
-            testID="compose-cancel"
-          />
+          <View />
         )}
         <IconButton
           icon={Close}
@@ -176,6 +183,7 @@ export function ComposeScreen({ onClose, today, timezone }: ComposeScreenProps) 
                 today={today}
                 onDateChange={draft.setDate}
                 onTimeChange={draft.setTime}
+                onSlotTimeChange={draft.setTimeFromSlot}
                 onEndTimeChange={draft.setEndTime}
                 onLocationChange={draft.setLocation}
                 onReminderChange={draft.setReminderOffset}

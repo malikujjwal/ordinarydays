@@ -174,17 +174,31 @@ describe('meal slot ↔ time', () => {
     ['lunch', '12:30'],
     ['dinner', '19:00'],
   ] as const)('choosing %s with no time set fills %s', (slot, expected) => {
-    expect(timeForSlot(slot, undefined)).toBe(expected);
+    expect(timeForSlot(slot, undefined, false)).toBe(expected);
   });
 
   /** Snack has no hour the product is willing to guess. The table says so. */
-  it('leaves the time alone for snack', () => {
-    expect(timeForSlot('snack', undefined)).toBeUndefined();
+  it('offers no time for snack', () => {
+    expect(timeForSlot('snack', undefined, false)).toBeUndefined();
   });
 
   it('never overwrites a time the user set', () => {
-    expect(timeForSlot('dinner', '20:15')).toBe('20:15');
-    expect(timeForSlot('breakfast', '10:00')).toBe('10:00');
+    expect(timeForSlot('dinner', '20:15', false)).toBe('20:15');
+    expect(timeForSlot('breakfast', '10:00', false)).toBe('10:00');
+  });
+
+  /**
+   * The defect P1-29's UI review surfaced: the app's **own** guess used to block the next one,
+   * so picking Breakfast and then Dinner left the meal at 08:00.
+   */
+  it('re-derives a time it set itself, so a second slot moves it', () => {
+    expect(timeForSlot('dinner', '08:00', true)).toBe('19:00');
+    expect(timeForSlot('lunch', '08:00', true)).toBe('12:30');
+  });
+
+  /** Snack clears a derived time rather than leaving the previous slot's behind. */
+  it('clears a derived time when snack is chosen', () => {
+    expect(timeForSlot('snack', '12:30', true)).toBeUndefined();
   });
 
   it.each([

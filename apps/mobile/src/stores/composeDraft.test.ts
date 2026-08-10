@@ -259,7 +259,15 @@ describe('hasContent', () => {
     // exactly what the discard prompt exists to prevent (P1-25).
     [
       'a date',
-      { ...empty, schedule: { date: '2026-08-15', time: undefined, endTime: undefined } },
+      {
+        ...empty,
+        schedule: {
+          date: '2026-08-15',
+          time: undefined,
+          endTime: undefined,
+          timeFromSlot: false,
+        },
+      },
     ],
     ['a location', { ...empty, location: { label: 'Zahav', address: '' } }],
     ['a typed detail', { ...empty, details: { ...EMPTY_DETAILS, service: 'Netflix' } }],

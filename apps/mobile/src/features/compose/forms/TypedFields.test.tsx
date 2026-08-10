@@ -41,6 +41,7 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
     today: TODAY,
     onDateChange: vi.fn(),
     onTimeChange: vi.fn(),
+    onSlotTimeChange: vi.fn(),
     onEndTimeChange: vi.fn(),
     onLocationChange: vi.fn(),
     onReminderChange: vi.fn(),
@@ -117,7 +118,12 @@ describe('conditional fields', () => {
     unmount();
 
     mount('event', {
-      schedule: { date: '2026-08-15', time: '19:00', endTime: undefined },
+      schedule: {
+        date: '2026-08-15',
+        time: '19:00',
+        endTime: undefined,
+        timeFromSlot: false,
+      },
     });
     expect(screen.getByTestId('compose-end-time')).toBeDefined();
   });
@@ -169,7 +175,12 @@ describe('the interlocks in §3.4', () => {
     unmount();
 
     mount('task', {
-      schedule: { date: '2026-08-15', time: undefined, endTime: undefined },
+      schedule: {
+        date: '2026-08-15',
+        time: undefined,
+        endTime: undefined,
+        timeFromSlot: false,
+      },
     });
     expect(screen.queryByText('Pick a date first.')).toBeNull();
   });
@@ -184,14 +195,24 @@ describe('the interlocks in §3.4', () => {
   /** §3.2: the untimed picker offers days, not minutes. */
   it('offers the untimed reminder list until a time is set', () => {
     const { unmount } = mount('task', {
-      schedule: { date: '2026-08-15', time: undefined, endTime: undefined },
+      schedule: {
+        date: '2026-08-15',
+        time: undefined,
+        endTime: undefined,
+        timeFromSlot: false,
+      },
     });
     expect(screen.getByRole('button', { name: 'On the day' })).toBeDefined();
     expect(screen.queryByRole('button', { name: '15 minutes before' })).toBeNull();
     unmount();
 
     mount('task', {
-      schedule: { date: '2026-08-15', time: '09:00', endTime: undefined },
+      schedule: {
+        date: '2026-08-15',
+        time: '09:00',
+        endTime: undefined,
+        timeFromSlot: false,
+      },
     });
     expect(screen.getByRole('button', { name: '15 minutes before' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'On the day' })).toBeNull();
