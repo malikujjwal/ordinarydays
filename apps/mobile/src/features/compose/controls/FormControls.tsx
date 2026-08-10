@@ -267,7 +267,22 @@ export function ComingSoonControl({ label, hint, testID }: ComingSoonControlProp
           backgroundColor: theme.colors.surfaceSunken,
         }}
       >
-        <Text variant="footnote" color="textDisabled">
+        {/*
+          `textSecondary`, not `textDisabled`.
+
+          `textDisabled` is deliberately below AA (`contrast.test.ts` asserts it), and that
+          exemption is real — WCAG 1.4.3 excuses an **inactive control's own label**. This is
+          not that. The hint is the copy naming what will fill the field, and P1-25 requires it
+          precisely so this is never a bare disabled control: it is the only thing telling the
+          user why the field is inert, which makes it informative prose that happens to sit
+          next to a disabled control.
+
+          At 2.53:1 it was unreadable for anyone who needs contrast, and P1-29's axe gate
+          reported it as a `serious` violation on the compose route — the first thing that flow
+          found. `textSecondary` on `surfaceSunken` is already pinned at AA by
+          `contrast.test.ts`, which is the pair the light `surfaceSunken` was nudged for.
+        */}
+        <Text variant="footnote" color="textSecondary">
           {hint}
         </Text>
       </View>

@@ -15,6 +15,16 @@
       "outputs": ["../../docs/generated/openapi.json"]
     },
     "dev": { "dependsOn": ["^build"], "cache": false, "persistent": true },
-    "e2e": { "dependsOn": ["build"], "cache": false }
+    "e2e": {
+      "dependsOn": ["build"],
+      "cache": false,
+      "passThroughEnv": [
+        "E2E_BASE_URL",
+        "E2E_WEB_PORT",
+        "E2E_API_PORT",
+        "E2E_TABLE_NAME",
+        "DDB_ENDPOINT"
+      ]
+    }
   }
 }

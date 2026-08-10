@@ -1567,6 +1567,47 @@ changes (`testing.md` §8.2).
 the phase is called done. A flaky E2E test is worse than no E2E test — quarantine rather than
 retry-until-green.
 
+> **Amended during implementation.**
+>
+> **The flow asserts on Plans, and gives the Task a date.** This section said "the flat activity
+> list" and `testing.md` §6.1 said "see it on Today"; they disagreed, and neither was reachable.
+> Today is a placeholder until P2-11, and the Plans tab reads `filter=upcoming`, so an
+> **undated** Task created through global Add appears on no screen at all. The flow picks
+> `Tomorrow` before saving, which puts the row in `#S` where `upcoming` reads it.
+> `testing.md` §6.1 was amended to match rather than left disagreeing.
+>
+> **The harness found three real defects on its first runs, all fixed here.** This is the whole
+> argument for the task, so it is written down rather than left in a commit message:
+>
+> 1. Every exported web page shipped an **empty `<title>`** — `expo-router/head` renders one and
+>    nothing set it — which `axe-core` reports as a `serious` violation on every route
+>    (`definition-of-done.md` §5 item 11). Fixed with one `<Head>` in `app/_layout.tsx`.
+> 2. **A saved activity never appeared in the list.** `useCreateActivity` invalidated nothing and
+>    the client's `staleTime` is 60 s, so the modal closed, the toast named where it landed, and
+>    the row was not there. Every layer below passes because every layer below is correct in
+>    isolation; this is the first thing in the repository that could have caught it. Fixed by
+>    invalidating the activity-list root on success.
+> 3. `ComingSoonControl` rendered its **hint copy in `textDisabled` at 2.53:1**. That token is
+>    deliberately below AA and WCAG does exempt a disabled control's own label — but this hint is
+>    informative prose, and P1-25 requires it precisely so the field is never a bare disabled
+>    control. Now `textSecondary`, a pair `contrast.test.ts` already pins at AA.
+>
+> The invalidation fix needed a key both features may name, and `check-forbidden`'s
+> `client-layer-rules` rightly bans `features/compose` importing from `features/plans`. The root
+> moved to `src/lib/queryKeys.ts` — a neutral module, the same shape as `lib/apiClient.ts` — and
+> `usePlans` builds `plansKey` from it, so writer and reader cannot drift apart again.
+>
+> **Two things added that the file list did not name.** An `e2e` job in `ci.yml`, because "green
+> in CI twice consecutively" needs a CI job to be green in; and `e2e/tsconfig.json` plus a
+> `typecheck:e2e` script, because `e2e/` is not a pnpm workspace and the harness would otherwise
+> have been the only unchecked TypeScript in the repository — the hole both `tsconfig.test.json`
+> files exist to close.
+>
+> **Maestro ships as flows, not as a workflow.** `apps/mobile/e2e/add-task.yaml` and
+> `.maestro/config.yaml` are here; `mobile.yml` is P5-11's, and `infrastructure.md` §7.4 is
+> explicit that iOS E2E must never gate a PR. The flow is **unrun** — there is no macOS simulator
+> in this environment — and is written to be run with one command when there is.
+
 ---
 
 ### P1-30 — `routeSplit`: the per-route registry and the identity split

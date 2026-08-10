@@ -11,6 +11,7 @@
     "dev:preflight": "node scripts/dev-preflight.mjs",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
+    "typecheck:e2e": "tsc -p e2e/tsconfig.json",
     "test": "turbo run test",
     "test:coverage": "turbo run test -- --coverage",
     "test:int": "docker compose up -d && turbo run test:int",
@@ -23,13 +24,15 @@
     "gen:openapi": "pnpm --filter @od/shared run gen:openapi",
     "seed:local": "pnpm --filter @od/api run seed:local",
     "gen:openapi:check": "pnpm gen:openapi && git diff --exit-code docs/generated/openapi.json",
-    "e2e:web": "playwright test",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm depcruise && pnpm check:forbidden && pnpm check:versions"
+    "e2e:web": "pnpm --filter @od/mobile build && playwright test --config e2e/playwright.config.ts",
+    "verify": "pnpm lint && pnpm typecheck && pnpm typecheck:e2e && pnpm test:coverage && pnpm depcruise && pnpm check:forbidden && pnpm check:versions"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
     "@biomejs/biome": "2.5.7",
     "@commitlint/cli": "21.2.1",
     "@commitlint/config-conventional": "21.2.0",
+    "@playwright/test": "1.62.1",
     "@types/node": "22.20.1",
     "@vitest/coverage-v8": "3.2.7",
     "dependency-cruiser": "18.1.1",

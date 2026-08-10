@@ -2,6 +2,7 @@ import { ApiError, listActivities } from '@od/shared/client';
 import type { ActivityFilter, ActivityListItem } from '@od/shared/types';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
+import { ACTIVITIES_KEY } from '@/lib/queryKeys';
 
 /**
  * The flat activity list behind the Plans tab (P1-23, reading P1-16).
@@ -14,8 +15,12 @@ import { apiClient } from '@/lib/apiClient';
  * explicit: `type` narrows a page *after* the Query, so a full page can come back nearly empty
  * with `nextCursor` still set. `getNextPageParam` therefore reads the cursor and never the
  * length.
+ *
+ * The key is built from `ACTIVITIES_KEY` rather than spelling `'activities'` here, so that a
+ * writer invalidating the root and this reader can never be talking about different keys —
+ * which is the failure P1-29 found, where a saved activity never appeared in this list.
  */
-export const plansKey = (filter: ActivityFilter) => ['activities', filter] as const;
+export const plansKey = (filter: ActivityFilter) => [...ACTIVITIES_KEY, filter] as const;
 
 /**
  * One page as the client returns it — the whole envelope.

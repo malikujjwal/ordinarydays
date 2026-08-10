@@ -1233,16 +1233,22 @@ there. That is correct — an untrusted PR should not be able to read the accoun
 
 > **Amended in P0-29: the workflow as shipped has four jobs and no AWS credentials at all.**
 > The snippet above is the Phase 4 shape and is kept because that is what it returns to.
+> **P1-29 added a fifth, `e2e`.**
 >
 > | Job | What it runs |
 > | --- | --- |
-> | `validate` | `check-node-versions.mjs`, `biome ci .`, `turbo run typecheck`, `turbo run test -- --coverage`, `gen:openapi:check`, `check:bundle-size`, `expo-doctor`, gitleaks, coverage upload |
+> | `validate` | `check-node-versions.mjs`, `biome ci .`, `turbo run typecheck`, `typecheck:e2e`, `turbo run test -- --coverage`, `gen:openapi:check`, `check:bundle-size`, `expo-doctor`, gitleaks, coverage upload |
 > | `depcruise` | `pnpm depcruise`, then each of the four forbidden-pattern checks as its own step |
 > | `integration` | `scripts/dev-preflight.mjs`, then `pnpm --filter @od/api test:int` |
+> | `e2e` | **P1-29.** `playwright install --with-deps chromium`, `scripts/dev-preflight.mjs`, then `pnpm run e2e:web` (which builds the web export first). Uploads `playwright-report/` on failure. `testing.md` §6.1 describes running this against the deployed dev site; that is Phase 4, and `E2E_BASE_URL` re-aims it then without the job changing shape. |
 > | `synth` | `cdk synth 'od-*-dev' --quiet`, **no credentials, no `id-token: write`** |
 >
-> Four jobs rather than one because a failure should name itself: a forbidden import reports
-> as `depcruise`, not as step nine of `validate`. They share only the pnpm store cache.
+> Separate jobs rather than one because a failure should name itself: a forbidden import
+> reports as `depcruise`, not as step nine of `validate`, and a browser failure reports as
+> `e2e`. They share only the pnpm store cache.
+>
+> `typecheck:e2e` is a `validate` step rather than part of `turbo run typecheck` because `e2e/`
+> is not a pnpm workspace and Turbo cannot see it.
 >
 > `synth` drops the role and runs `cdk synth` instead of `cdk diff` because there is nothing
 > deployed to diff against before Phase 4, and a job needing credentials cannot run on a fork

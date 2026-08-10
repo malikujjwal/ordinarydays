@@ -1,11 +1,12 @@
 import { ApiError, type CreationTarget, createActivity } from '@od/shared/client';
 import type { Activity } from '@od/shared/types';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   type DraftFields,
   toCreateActivityInput,
 } from '@/features/compose/model/targets';
 import { apiClient } from '@/lib/apiClient';
+import { ACTIVITIES_KEY } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -64,6 +65,7 @@ function toFieldErrors(error: unknown): Record<string, string> {
 
 export function useCreateActivity(): CreateActivityResult {
   const takeIdempotencyKey = useComposeDraft((s) => s.takeIdempotencyKey);
+  const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: ({
@@ -83,6 +85,22 @@ export function useCreateActivity(): CreateActivityResult {
         throw new Error('A List item is not created through POST /v1/activities.');
       }
       return createActivity(apiClient, input, takeIdempotencyKey());
+    },
+    /**
+     * **The write is not finished until the lists know about it.**
+     *
+     * Without this the save succeeds, the modal closes, the toast names where it landed — and
+     * the activity is not there. `queryClient`'s `staleTime` is 60 s and the Plans screen stays
+     * mounted behind the modal, so nothing refetches: the user is told it worked and shown a
+     * list that says otherwise, for a minute. Found by P1-29's E2E flow, which is the first
+     * thing in this repository that could have found it; every layer below passes because
+     * every layer below is correct in isolation.
+     *
+     * The **root** key, not one stage: a new activity lands in whichever of the four its date
+     * and kind imply, and this hook has no business working out which.
+     */
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ACTIVITIES_KEY });
     },
     /**
      * No retries at this layer. `createHttpClient` already retries a 5xx or a network fault

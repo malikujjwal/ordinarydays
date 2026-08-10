@@ -73,6 +73,12 @@ jobs:
       - name: Typecheck
         run: pnpm turbo run typecheck
 
+      # `e2e/` is deliberately not a pnpm workspace, so `turbo run typecheck` cannot see it and
+      # the Playwright harness would otherwise be the only unchecked TypeScript in the
+      # repository — the hole both `tsconfig.test.json` files exist to close (P1-29).
+      - name: Typecheck the E2E harness
+        run: pnpm run typecheck:e2e
+
       # Coverage thresholds live in each package's vitest config and are gates, not
       # reports (`testing.md` §9). `--coverage` is what arms them.
       - name: Unit tests with coverage gates
@@ -156,6 +162,46 @@ jobs:
 
       - name: Integration tests
         run: pnpm --filter @od/api test:int
+
+  # The Playwright flow, against the local stack (P1-29). Its own job for the same reason
+  # `integration` is: a browser failure should report as `e2e`, not as step eleven of
+  # `validate`, and it needs Docker and a browser download that the other jobs do not.
+  #
+  # `testing.md` §6.1 describes running this against the deployed dev site. That is Phase 4
+  # (P4-14) and there is nothing deployed yet; `E2E_BASE_URL` is what re-aims it on the day
+  # there is, without this job changing shape.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Chromium only. WebKit is run locally before a release (`testing.md` §6.1), not on
+      # every PR — three browsers is three downloads for one flow's worth of signal.
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # The containers and the shared build. The harness creates and seeds its **own** table
+      # (`od-main-e2e`), so this is here for DynamoDB Local itself.
+      - name: Start DynamoDB Local
+        run: node scripts/dev-preflight.mjs
+
+      # Builds the web export, then runs the flow against it.
+      - name: Web E2E
+        run: pnpm run e2e:web
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
 
   # Eight stacks synthesised with no AWS credentials. This is also a build check: the
   # NodeLambda construct runs esbuild at synth time, so a runtime-invalid import that `tsc`

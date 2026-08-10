@@ -1,0 +1,37 @@
+{
+  "//": [
+    "Typechecks the Playwright harness, which no workspace tsconfig covers.",
+    "",
+    "`e2e/` is deliberately not a pnpm workspace (`repo-structure.md` §7 places it at the",
+    "root with its own config), so `turbo run typecheck` never sees it. Without this file the",
+    "specs and the config would be the only TypeScript in the repository that nothing checks —",
+    "which is the exact hole `services/api/tsconfig.test.json` and",
+    "`packages/shared/tsconfig.test.json` were each added to close, both times after unchecked",
+    "test code hid a real defect.",
+    "",
+    "Run by `pnpm typecheck:e2e`, which `verify` and CI's `validate` job both call. It emits",
+    "nothing; it exists to fail.",
+    "",
+    "`module: commonjs` is not a style choice. Playwright transpiles these files to CommonJS —",
+    "the nearest package.json has no `type: module` — so `__dirname` is what they can use and",
+    "`import.meta` is a runtime syntax error. Typechecking them as ESM would accept code that",
+    "cannot load, which is how both `import.meta` versions of this config got written before",
+    "the first run rejected them.",
+    "",
+    "`verbatimModuleSyntax` is off for the same reason it is on everywhere else: it exists to",
+    "stop TypeScript rewriting import syntax, and here the rewriting is the point — the files",
+    "are authored as ESM and loaded as CJS, which is precisely the combination it forbids."
+  ],
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "verbatimModuleSyntax": false,
+    "types": ["node"],
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

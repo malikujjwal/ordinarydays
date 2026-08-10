@@ -1,6 +1,8 @@
 import { ThemeProvider } from '@od/ui';
 import { QueryClientProvider } from '@tanstack/react-query';
+import Constants from 'expo-constants';
 import { Stack } from 'expo-router';
+import Head from 'expo-router/head';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -19,11 +21,37 @@ import { queryClient } from '@/lib/queryClient';
  * `undefined` until then and the theme falls back to the platform serif, so nothing is
  * gated on a network-ish load.
  */
+
+/**
+ * The app's own name, from `app.config.ts` — so the profile suffix that already distinguishes
+ * `Ordinary Days (local)` from `Ordinary Days` distinguishes the browser tabs too.
+ */
+const APP_NAME =
+  typeof Constants.expoConfig?.name === 'string'
+    ? Constants.expoConfig.name
+    : 'Ordinary Days';
+
 export default function RootLayout() {
   const serifFamily = useSerifFamily();
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      {/*
+        The document title, on web only — `expo-router/head` is a no-op on native.
+
+        Without it the static export writes a **present but empty** `<title></title>` on every
+        page, which `axe-core` reports as a `serious` `document-title` violation and which
+        `definition-of-done.md` §5 item 11 does not allow. Found by P1-29's Playwright flow on
+        its first run, which is what that gate is for.
+
+        One title for the whole app, not one per route. A per-route title is better for the
+        "aid in navigation" the rule is named after, but the copy for each is a product
+        decision this task does not own — the web surface is Phase 5. A screen that wants its
+        own renders its own `<Head>`, and this stays the fallback.
+      */}
+      <Head>
+        <title>{APP_NAME}</title>
+      </Head>
       <SafeAreaProvider>
         <ThemeProvider {...(serifFamily === undefined ? {} : { serifFamily })}>
           <QueryClientProvider client={queryClient}>

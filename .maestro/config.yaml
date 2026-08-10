@@ -1,0 +1,22 @@
+# Maestro's workspace config (`testing.md` §6.2, P1-29).
+#
+# Flows live with the app they drive — `apps/mobile/e2e/*.yaml` — and this file is at the
+# repository root because that is where Maestro looks for workspace settings.
+#
+# Run them against a simulator with the app already installed:
+#
+#   maestro test apps/mobile/e2e
+#
+# There is no CI job yet, and that is deliberate rather than unfinished. `mobile.yml` is
+# Phase 5 (P5-11), simulator runners are slow, and `infrastructure.md` §7.4 is explicit that
+# iOS E2E must never gate a PR — it gates a TestFlight submission. The flows are written now
+# so that workflow has something to run on the day it exists, and so a label regression is
+# caught by a human running one command in the meantime.
+
+flows:
+  - ../apps/mobile/e2e/*.yaml
+
+# No `--continuous`, no retries. A flaky E2E flow is worse than no E2E flow (P1-29): a flow
+# that only passes on the second attempt is quarantined and fixed, never retried into green.
+executionOrder:
+  continueOnFailure: false

@@ -442,10 +442,21 @@ Specs in `e2e/specs/`, config in `e2e/playwright.config.ts`. Runs against the de
 site after `deploy-dev.yml` (`infrastructure.md` §7.2), and locally against
 `expo export --platform web` served statically.
 
+> **Amended in P1-29.** The `create-activity.spec.ts` row below said "save it, and see it on
+> **Today**". Today is a Phase 2 placeholder (P2-11) and the Plans tab reads `filter=upcoming`,
+> so an **undated** Task created through global Add appears on no screen at all — the flow as
+> written had nothing to assert on. The row now matches `phase-01-activity-core.md` P1-29 ("the
+> flat activity list") and adds the step that makes it reachable: the flow picks a date, which
+> puts the row in `#S` where `upcoming` reads it. The undated-Task-on-Today assertion belongs
+> to Phase 2, when there is a Today to make it on.
+>
+> The other seven rows describe flows that do not exist yet; each is written by the phase that
+> builds the surface it drives. P1-29 delivers the harness and this one flow.
+
 | Flow | Spec | Why it is E2E |
 | --- | --- | --- |
 | Sign up, verify, land on Today | `auth.spec.ts` | Crosses Cognito's hosted redirect — nothing below E2E can prove it |
-| Choose **Task** in global Add, save it, and see it on Today | `create-activity.spec.ts` | Explicit object intent → API → agenda projection; the title never selects the kind |
+| Choose **Task** in global Add, give it a date, save it, and see it in the flat activity list | `create-activity.spec.ts` | Explicit object intent → API → list projection; the title never selects the kind |
 | Complete a task and undo it | `complete-undo.spec.ts` | Optimistic update, compensating call, toast |
 | Use **Plan this item**, choose a Plan kind and audience, and confirm the item is linked, not duplicated | `list-to-plan.spec.ts` | Explicit kind/audience plus the central linkage rule (`data-model.md` §4.6) |
 | Add a guest participant and open the invite link in a fresh context | `invite-rsvp.spec.ts` | The public surface, unauthenticated |
@@ -456,6 +467,27 @@ site after `deploy-dev.yml` (`infrastructure.md` §7.2), and locally against
 Rules: no `waitForTimeout`; wait on a role or a network response. Each spec creates its own
 user via a fixture and deletes it in teardown. `E2E_BASE_URL` selects the target;
 `--project=chromium` in CI, WebKit locally before a release.
+
+Locally the harness owns the whole stack: `global-setup.ts` seeds its **own** table
+(`od-main-e2e`, dropped and rebuilt each run, so a run can never destroy the `od-main-local`
+data a developer is looking at), and two `webServer` entries start the API on `:3000` and
+`e2e/serve-export.mjs` on `:8082`. That server resolves the `expo export` layout rather than
+falling everything back to `index.html` — `web.output` is `static`, so each route is its own
+HTML file and an SPA-style fallback would serve the wrong page.
+
+**Per-user fixtures are Phase 4.** There is no sign-up to build a user with while `AUTH_MODE`
+is `local` and every request resolves as `usr_local_dev`; a spec isolates itself by creating
+its own uniquely-titled row instead, and asserts only on that.
+
+`axe-core` runs on every route a flow reaches, failing on `serious` and `critical` only —
+`definition-of-done.md` §5 item 11. The failure message names the selector and the measured
+value, not just the rule id, because a rule id alone sends the reader to open a browser.
+
+The harness's five variables — `E2E_BASE_URL`, `E2E_WEB_PORT`, `E2E_API_PORT`,
+`E2E_TABLE_NAME`, `DDB_ENDPOINT` — are declared on `turbo.json`'s `e2e` task. Nothing runs
+that task today (`e2e/` is not a workspace; the harness is driven by the root `e2e:web`
+script), but it is where Biome's `noUndeclaredEnvVars` looks and where an `@od/e2e` workspace
+would inherit them from. `turbo.json` takes no comments, which is why that note is here.
 
 ### 6.2 iOS — Maestro
 
