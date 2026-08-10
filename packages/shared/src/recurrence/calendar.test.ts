@@ -56,6 +56,27 @@ describe('toUtcInstant', () => {
     );
   });
 
+  it('shifts an ordinary wall time across both London DST boundaries', () => {
+    expect([
+      toUtcInstant('2026-03-28', '18:00', 'Europe/London'),
+      toUtcInstant('2026-03-29', '18:00', 'Europe/London'),
+      toUtcInstant('2026-03-30', '18:00', 'Europe/London'),
+    ]).toEqual([
+      '2026-03-28T18:00:00.000Z',
+      '2026-03-29T17:00:00.000Z',
+      '2026-03-30T17:00:00.000Z',
+    ]);
+    expect([
+      toUtcInstant('2026-10-24', '18:00', 'Europe/London'),
+      toUtcInstant('2026-10-25', '18:00', 'Europe/London'),
+      toUtcInstant('2026-10-26', '18:00', 'Europe/London'),
+    ]).toEqual([
+      '2026-10-24T17:00:00.000Z',
+      '2026-10-25T18:00:00.000Z',
+      '2026-10-26T18:00:00.000Z',
+    ]);
+  });
+
   it('throws a typed error when an entire wall date cannot resolve in the bounded search', () => {
     expect(() => toUtcInstant('2011-12-30', '12:00', 'Pacific/Apia')).toThrow(
       RecurrenceValidationError,

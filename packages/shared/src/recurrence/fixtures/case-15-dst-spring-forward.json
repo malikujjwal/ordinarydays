@@ -1,0 +1,24 @@
+{
+  "case": 15,
+  "name": "DST spring forward, daily 18:00",
+  "recurrence": {
+    "mode": "fixed",
+    "segments": [
+      {
+        "freq": "daily",
+        "interval": 1,
+        "effectiveFrom": "2026-03-07",
+        "time": "18:00"
+      }
+    ]
+  },
+  "from": "2026-03-07",
+  "to": "2026-03-09",
+  "timezone": "America/New_York",
+  "expectedDates": ["2026-03-07", "2026-03-08", "2026-03-09"],
+  "expectedInstants": [
+    "2026-03-07T23:00:00.000Z",
+    "2026-03-08T22:00:00.000Z",
+    "2026-03-09T22:00:00.000Z"
+  ]
+}

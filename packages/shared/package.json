@@ -58,6 +58,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "fast-check": "3.23.2",
     "openapi3-ts": "4.6.1",
     "tsx": "4.23.11",
     "vitest": "3.2.7"

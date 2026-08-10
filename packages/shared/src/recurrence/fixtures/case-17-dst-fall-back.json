@@ -1,0 +1,20 @@
+{
+  "case": 17,
+  "name": "DST fall back, ambiguous local time",
+  "recurrence": {
+    "mode": "fixed",
+    "segments": [
+      {
+        "freq": "daily",
+        "interval": 1,
+        "effectiveFrom": "2026-11-01",
+        "time": "01:30"
+      }
+    ]
+  },
+  "from": "2026-11-01",
+  "to": "2026-11-01",
+  "timezone": "America/New_York",
+  "expectedDates": ["2026-11-01"],
+  "expectedInstants": ["2026-11-01T05:30:00.000Z"]
+}

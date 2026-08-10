@@ -343,7 +343,7 @@ says otherwise; the multi-segment cases are in the list after the table.
 | 12 | **Month-end, 29th non-leap** | `byMonthDay: [29]`, Feb 2026 | 28 Feb. |
 | 13 | **Every N days** | `{ freq: 'interval_days', interval: 3, startDate: '2026-08-01' }`, window 1–14 Aug | 1, 4, 7, 10, 13 Aug. Anchored on `startDate`, not on the window. |
 | 14 | **Every N days, window offset from the anchor** | Same series, window 5–14 Aug | 7, 10, 13 Aug. The phase is preserved. |
-| 15 | **DST spring forward, daily 18:00** | `America/New_York`, daily, window 7–9 Mar 2026 | Three dates; `toUtcInstant` gives 23:00Z, 23:00Z, **22:00Z** across the transition — wall clock constant, instant shifts. |
+| 15 | **DST spring forward, daily 18:00** | `America/New_York`, daily, window 7–9 Mar 2026 | Three dates; `toUtcInstant` gives 23:00Z, **22:00Z**, 22:00Z across the transition — wall clock constant, instant shifts. |
 | 16 | **DST spring forward, non-existent local time** | Daily at 02:30, `America/New_York`, transition day | The date is emitted; `toUtcInstant` resolves to 03:00 local. Never dropped. |
 | 17 | **DST fall back, ambiguous local time** | Daily at 01:30, `America/New_York`, transition day | The date is emitted **once**; `toUtcInstant` returns the **earlier** (first) instant. |
 | 18 | **DST in a southern-hemisphere zone** | `Australia/Sydney`, daily 18:00 across the October transition | Wall clock constant; instant shifts the other way. Catches a hard-coded northern assumption. |
@@ -366,6 +366,11 @@ says otherwise; the multi-segment cases are in the list after the table.
 | 41 | **Yearly with an end date** | `{ freq: 'yearly', startDate: '2026-09-03', endDate: '2028-09-03' }`, window 2026–2030 | 3 Sep 2026, 2027, 2028. `endDate` is inclusive; 2029 and 2030 are absent. |
 | 42 | **Yearly across a DST boundary at its anchor time** | `{ freq: 'yearly', startDate: '2026-11-01' }` at 01:30 `America/New_York`, window 2026–2027 | The date is emitted once each year; on the 2026 fall-back date `toUtcInstant` returns the **earlier** instant, and in 2027 (no transition on 1 Nov) the ordinary instant. The wall clock is 01:30 in both years. |
 | 43 | **Rescheduling an occurrence does not move a yearly series** | `{ freq: 'yearly', byMonth: [9], byMonthDay: [3], startDate: '2026-09-03' }`; run it once as stored, then again with `startDate` rewritten to `'2026-09-10'` and the anchors untouched, plus `Occurrence { date: '2026-09-03', status: 'rescheduled', overrideTime: '19:00' }`; window 2027–2029 | 3 Sep in 2027, 2028 and 2029 in **both** runs. The override changes one date; the anchors, not `startDate`, decide every other year. The same rewrite on the unanchored shape of case 40 would move every future year, which is why the client always writes anchors. |
+
+> **P2-02 correction — 2026-08-10.** Case 15 originally listed the UTC instants as
+> 23:00Z, 23:00Z, 22:00Z. New York enters daylight time on 8 March 2026, before the
+> occurrence at 18:00, so the canonical sequence is 23:00Z, 22:00Z, 22:00Z. The golden
+> fixture records that corrected IANA-zone result.
 
 Cases 37–43 call `expandRecurrence` with multi-year windows on purpose. The 62-day cap is a
 route-level rule (P2-11), not an engine-level one, and a yearly series cannot be observed

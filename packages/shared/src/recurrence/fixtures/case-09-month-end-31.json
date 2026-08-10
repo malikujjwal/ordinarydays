@@ -1,0 +1,25 @@
+{
+  "case": 9,
+  "name": "Month-end rollover, 31st",
+  "recurrence": {
+    "mode": "fixed",
+    "segments": [
+      {
+        "freq": "monthly",
+        "byMonthDay": [31],
+        "effectiveFrom": "2026-01-31"
+      }
+    ]
+  },
+  "from": "2026-01-01",
+  "to": "2026-06-30",
+  "timezone": "America/New_York",
+  "expectedDates": [
+    "2026-01-31",
+    "2026-02-28",
+    "2026-03-31",
+    "2026-04-30",
+    "2026-05-31",
+    "2026-06-30"
+  ]
+}
