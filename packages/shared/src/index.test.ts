@@ -33,6 +33,7 @@ describe('exports map', () => {
     expect(client.nullTokenProvider).toBeDefined();
     expect(constants.MAX_AGENDA_DAYS).toBe(62);
     expect(errors.ERROR_CODES).toContain('validation_failed');
+    expect(recurrence.describeRecurrence).toBeDefined();
     expect(recurrence.expandRecurrence).toBeDefined();
     expect(recurrence.toUtcInstant).toBeDefined();
     // `types` is types-only at runtime; importing it must still not throw.
