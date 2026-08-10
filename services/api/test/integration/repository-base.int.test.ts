@@ -1,8 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { tableName } from '@od/shared/table';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createLocalTable } from '../../scripts/create-local-table.js';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AppError } from '../../src/lib/errors.js';
+import { useTestTable } from './harness.js';
 
 /**
  * `base.ts` and `tx.ts` against a real DynamoDB Local.
@@ -14,19 +12,10 @@ import { AppError } from '../../src/lib/errors.js';
  * answers come from the database or not at all. A mock would assert that the code sends the
  * command the code sends.
  *
- * The environment is set before the modules load, because `lib/config.ts` parses it at
- * module scope and `lib/ddb.ts` builds its client from the result.
+ * The modules are imported in `beforeAll` rather than at the top, because `lib/config.ts`
+ * parses the environment at module scope and `harness.js` is what sets it (`testing.md` §4.3).
  */
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
-const NAME = process.env.TABLE_NAME ?? tableName('local');
-
-process.env.STAGE = 'local';
-process.env.TABLE_NAME = NAME;
-process.env.MEDIA_BUCKET = 'od-media-local';
-process.env.LOG_LEVEL = 'fatal';
-process.env.DDB_ENDPOINT = ENDPOINT;
-process.env.AWS_ACCESS_KEY_ID ??= 'local';
-process.env.AWS_SECRET_ACCESS_KEY ??= 'localsecret';
+useTestTable();
 
 type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
@@ -36,35 +25,14 @@ let base: Base;
 let keys: Keys;
 let tx: Tx;
 
-const admin = new DynamoDBClient({
-  region: 'us-east-1',
-  endpoint: ENDPOINT,
-  credentials: { accessKeyId: 'local', secretAccessKey: 'localsecret' },
-});
-
-/** A user id per test file, so a parallel file cannot see these rows. */
+/** Two invented users. Neither needs a profile — the keys are what is under test. */
 const ALICE = 'usr_int_alice';
 const BEN = 'usr_int_ben';
 
 beforeAll(async () => {
-  await createLocalTable(admin, NAME);
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
   tx = await import('../../src/repositories/tx.js');
-});
-
-afterAll(() => {
-  admin.destroy();
-});
-
-/** Every test starts from its own users' partitions being empty. */
-beforeEach(async () => {
-  for (const userId of [ALICE, BEN]) {
-    const rows = await base.queryAll<{ pk: string; sk: string }>({
-      pk: keys.userProfile(userId).pk,
-    });
-    await base.deleteAll(rows.map((row) => ({ pk: row.pk, sk: row.sk })));
-  }
 });
 
 const profileOf = (userId: string) => ({
@@ -174,13 +142,6 @@ describe('query', () => {
     );
 
     expect(page.items.map((item) => item.date)).toEqual(['2026-08-01', '2026-08-15']);
-
-    await base.deleteAll(
-      (await base.queryAll<{ pk: string; sk: string }>({ pk: range.pk })).map((row) => ({
-        pk: row.pk,
-        sk: row.sk,
-      })),
-    );
   });
 
   it('reads newest-first when asked, which is what Needs a date wants', async () => {

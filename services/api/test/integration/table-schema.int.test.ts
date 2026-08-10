@@ -3,17 +3,17 @@ import {
   DeleteTableCommand,
   DescribeTableCommand,
   DescribeTimeToLiveCommand,
-  DynamoDBClient,
 } from '@aws-sdk/client-dynamodb';
-import {
-  DeleteCommand,
-  DynamoDBDocumentClient,
-  GetCommand,
-  PutCommand,
-} from '@aws-sdk/lib-dynamodb';
-import { GSI1_PROJECTED_ATTRIBUTES, TABLE, tableName } from '@od/shared/table';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DeleteCommand, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { GSI1_PROJECTED_ATTRIBUTES, TABLE } from '@od/shared/table';
+import { describe, expect, it } from 'vitest';
 import { createLocalTable } from '../../scripts/create-local-table.js';
+import {
+  admin as client,
+  documents,
+  TEST_TABLE as NAME,
+  useTestTable,
+} from './harness.js';
 
 /**
  * The test that makes "the local database is the real schema" a fact.
@@ -37,24 +37,11 @@ import { createLocalTable } from '../../scripts/create-local-table.js';
  * pull request rather than resolved silently.
  */
 
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
-const NAME = process.env.TABLE_NAME ?? tableName('local');
-
-const client = new DynamoDBClient({
-  region: process.env.AWS_REGION ?? 'us-east-1',
-  endpoint: ENDPOINT,
-  // DynamoDB Local requires credentials to be present, not valid.
-  credentials: { accessKeyId: 'local', secretAccessKey: 'localsecret' },
-});
-const documents = DynamoDBDocumentClient.from(client);
-
-beforeAll(async () => {
-  await createLocalTable(client, NAME);
-});
-
-afterAll(() => {
-  client.destroy();
-});
+/**
+ * No truncation between tests: this file asserts the table's *shape*, and the one test that
+ * writes an item cleans up the item it wrote.
+ */
+useTestTable({ truncateBetweenTests: false });
 
 describe('the local table', () => {
   it('is created by the same script the dev workflow runs', async () => {

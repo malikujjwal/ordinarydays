@@ -9,8 +9,11 @@ import { defineConfig } from 'vitest/config';
  * `cache: false`.
  *
  *   docker compose up -d
- *   pnpm --filter @od/api ddb:create-table
  *   pnpm --filter @od/api test:int
+ *
+ * `ddb:create-table` is not a prerequisite. Every file builds and drops its own table through
+ * `test/integration/harness.ts`; the script is for the dev server, and this suite never touches
+ * `od-main-local`.
  */
 export default defineConfig({
   test: {
@@ -20,7 +23,21 @@ export default defineConfig({
     // `create-local-table.ts` are allowed up to 30 s each.
     testTimeout: 60_000,
     hookTimeout: 60_000,
-    // One database, one table name: parallel files would delete each other's table.
+    /**
+     * Still serial — but for a **different reason than before**, and the distinction matters
+     * to whoever reads this next.
+     *
+     * It used to say "one database, one table name: parallel files would delete each other's
+     * table". That was a correctness constraint, and P1-28's table-per-file removed it: eight
+     * files on eight tables cannot interfere, and the suite passes either way.
+     *
+     * It stays off because parallel is **measurably slower here**. Measured on this suite:
+     * serial 54 s wall for 51 s of test time; parallel 69 s wall for 238 s of test time. Eight
+     * workers get 3.4x the concurrency out of one DynamoDB Local container and pay 4.6x per
+     * request for it, because the container is the bottleneck and it is one process. Turn this
+     * on if the suite ever gets a database it can actually saturate; do not turn it on for the
+     * reason the old comment ruled out, which no longer applies.
+     */
     fileParallelism: false,
     /**
      * The environment `lib/config.ts` parses at module load, mirroring `vitest.config.ts`.
@@ -31,13 +48,16 @@ export default defineConfig({
      * `pnpm test`, which does not run this suite. Setting it here rather than at the top of
      * each file is what stops the next required variable doing the same thing.
      *
-     * A file that needs different values still overrides them at its top, which is where the
-     * `DDB_ENDPOINT` and per-file `TABLE_NAME` conventions already live.
+     * Everything here is the same for every file. The two values that are not — the per-file
+     * `TABLE_NAME` and the local `DDB_ENDPOINT` — are set by `test/integration/harness.ts`
+     * when it is imported, which is why no test file sets an environment variable of its own
+     * any more (P1-28).
      */
     env: {
       STAGE: 'local',
       AUTH_MODE: 'local',
       MEDIA_BUCKET: 'od-media-local',
+      WEB_ORIGINS: 'http://localhost:8081',
       LOG_LEVEL: 'fatal',
     },
   },

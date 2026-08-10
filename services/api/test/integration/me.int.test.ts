@@ -1,7 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { tableName } from '@od/shared/table';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createLocalTable } from '../../scripts/create-local-table.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { authedHeaders, withUser } from '../helpers/auth.js';
+import { useTestTable } from './harness.js';
 
 /**
  * `GET`/`PATCH /v1/me` against a real DynamoDB Local (P1-07).
@@ -12,36 +11,17 @@ import { createLocalTable } from '../../scripts/create-local-table.js';
  * rather than storing a null, and — the one that matters most — that a second user's read
  * genuinely finds nothing rather than finding the dev profile.
  */
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
-const NAME = process.env.TABLE_NAME ?? tableName('local');
+useTestTable();
 
-process.env.STAGE = 'local';
-process.env.AUTH_MODE = 'local';
-process.env.TABLE_NAME = NAME;
-process.env.MEDIA_BUCKET = 'od-media-local';
-process.env.WEB_ORIGINS = 'http://localhost:8081';
-process.env.LOG_LEVEL = 'fatal';
-process.env.DDB_ENDPOINT = ENDPOINT;
-process.env.AWS_ACCESS_KEY_ID ??= 'local';
-process.env.AWS_SECRET_ACCESS_KEY ??= 'localsecret';
-
-type CreateApp = typeof import('../../src/app.js').createApp;
 type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
 
-let createApp: CreateApp;
 let base: Base;
 let keys: Keys;
 
 /** The id `LocalIdentityProvider` resolves, which is what the real app will read as. */
 const DEV = 'usr_local_dev';
 const OTHER = 'usr_int_me_other';
-
-const admin = new DynamoDBClient({
-  region: 'us-east-1',
-  endpoint: ENDPOINT,
-  credentials: { accessKeyId: 'local', secretAccessKey: 'localsecret' },
-});
 
 const seededProfile = () => ({
   ...keys.userProfile(DEV),
@@ -58,35 +38,20 @@ const seededProfile = () => ({
 });
 
 beforeAll(async () => {
-  await createLocalTable(admin, NAME);
-  createApp = (await import('../../src/app.js')).createApp;
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
 });
 
-afterAll(() => {
-  admin.destroy();
-});
+const get = (userId?: string) =>
+  withUser(userId).fetch(
+    new Request('http://localhost/v1/me', { headers: authedHeaders() }),
+  );
 
-/** Both partitions empty, so a test that seeds nothing genuinely finds nothing. */
-beforeEach(async () => {
-  for (const userId of [DEV, OTHER]) {
-    const rows = await base.queryAll<{ pk: string; sk: string }>({
-      pk: keys.userProfile(userId).pk,
-    });
-    await base.deleteAll(rows.map((row) => ({ pk: row.pk, sk: row.sk })));
-  }
-});
-
-const app = () => createApp();
-
-const get = () => app().fetch(new Request('http://localhost/v1/me'));
-
-const patch = (body: unknown, on = app()) =>
-  on.fetch(
+const patch = (body: unknown, userId?: string) =>
+  withUser(userId).fetch(
     new Request('http://localhost/v1/me', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authedHeaders(),
       body: JSON.stringify(body),
     }),
   );
@@ -145,11 +110,7 @@ describe('GET /v1/me', () => {
   it('does not serve the dev profile to a different user', async () => {
     await base.putItem(seededProfile());
 
-    const res = await createApp({
-      identityProvider: { resolve: () => Promise.resolve(OTHER) },
-    }).fetch(new Request('http://localhost/v1/me'));
-
-    expect(res.status).toBe(404);
+    expect((await get(OTHER)).status).toBe(404);
   });
 });
 

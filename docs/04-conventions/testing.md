@@ -125,40 +125,52 @@ against real DynamoDB in Docker, never against mocks — a mock cannot tell you 
 `docker-compose.yml` at the repo root already defines DynamoDB Local
 (`infrastructure.md` §6.1). Tests bring their own table.
 
-```ts
-// services/api/test/integration/harness.ts
-import { CreateTableCommand, DeleteTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { TABLE } from '@od/shared/table';
-
-export const testClient = new DynamoDBClient({
-  endpoint: process.env.DDB_ENDPOINT ?? 'http://localhost:8000',
-  region: 'us-east-1',
-  credentials: { accessKeyId: 'local', secretAccessKey: 'local' },
-});
-
-/** One table per test FILE, named for it, so files run in parallel without interference. */
-export async function createTestTable(name: string): Promise<string> {
-  await testClient.send(new CreateTableCommand(toCreateTableInput(TABLE, name)));
-  return name;
-}
-
-export async function dropTestTable(name: string): Promise<void> {
-  await testClient.send(new DeleteTableCommand({ TableName: name }));
-}
-```
+`services/api/test/integration/harness.ts` owns the whole lifecycle. A file claims a table by
+importing it and calling `useTestTable()` once, at module scope:
 
 ```ts
 // services/api/test/integration/activityRepository.int.test.ts
-const TABLE_NAME = 'od-main-test-activity-repo';
+import { useTestTable } from './harness.js';
 
-beforeAll(async () => { await createTestTable(TABLE_NAME); });
-afterAll(async () => { await dropTestTable(TABLE_NAME); });
-beforeEach(async () => { await truncate(TABLE_NAME); });   // Query + BatchWriteItem delete
+useTestTable();                                 // create → truncate per test → drop
+useTestTable({ truncateBetweenTests: false });  // a file whose tests build on one write
 ```
 
-`toCreateTableInput` reads the same `TABLE` definition `DataStack` uses
-(`repo-structure.md` §3), so the local table and the deployed table cannot drift. An `infra`
-assertion test compares the synthesised CloudFormation table against the same object.
+That one call registers `beforeAll` (create), `beforeEach` (truncate) and `afterAll` (drop).
+**One table per test FILE, named for it** — `od-main-test-activity-repository` — so no file can
+see another's rows whatever order they run in. The name is derived from the importing file
+rather than passed in: a constant a file states is a constant two files can state the same way,
+and a harness that silently put two files on one table would reintroduce exactly the
+interference it exists to remove.
+
+Table-per-file is what makes `fileParallelism` a **performance** question rather than a
+correctness one. It is currently off, and the reason is measured rather than assumed: against
+one DynamoDB Local container, serial runs this suite in 54 s and parallel in 69 s, because the
+container is a single process and eight workers queue on it. See the comment in
+`vitest.int.config.ts` before changing it.
+
+Importing the harness is also the whole of a file's environment setup. It sets `TABLE_NAME` and
+`DDB_ENDPOINT` at module scope, before `lib/config.ts` parses them; everything constant across
+files lives in `vitest.int.config.ts`'s `env` block. No integration test sets an environment
+variable of its own.
+
+The table is created by `scripts/create-local-table.ts`, which reads the same `TABLE` definition
+`DataStack` uses (`repo-structure.md` §3), so the local table and the deployed table cannot
+drift. `infra/test/data-stack.test.ts` pins the CDK table to that object and
+`table-schema.int.test.ts` pins the live local one to it, from both ends.
+
+`truncate` empties the table with a **`Scan` plus batched deletes**. The `Scan` ban
+(`data-model.md` §5) is about application code, where a `Scan` reads a multi-tenant table in
+full and is denied by the Lambda's IAM policy at runtime; neither applies to a disposable table
+holding one file's fixtures, and `check-forbidden.mjs`'s `no-scan` roots deliberately exclude
+test code. The alternative is what the per-partition sweeps this harness replaced actually did:
+clean only the partitions a test can name, and be wrong about `ACT#`, `IDEM#` and `RATE#`.
+
+Authenticated requests come from `test/helpers/auth.ts`: `authedHeaders()` for the headers a
+client sends, and `withUser(userId)` for an app running as a chosen user. **Neither sends an
+identity header, because there is none** — a second user is a second app built with a stub
+`IdentityProvider` (P1-01), never a bypass header that would have to exist in the shipped
+bundle.
 
 ### 3.2 Fixtures
 
@@ -287,29 +299,42 @@ guard.
 
 ```ts
 // services/api/test/helpers/auth.ts
-import { createApp } from '../../src/app';
-import type { IdentityProvider } from '../../src/middleware/identity';
 
-/** An IdentityProvider that always resolves to the given user. */
-export const stubIdentity = (userId: string): IdentityProvider => ({
-  resolve: async () => userId as UserId,
-});
-
-/** An app whose identity seam is pinned to one user. */
-export const withUser = (userId: string) =>
-  createApp({ identityProvider: stubIdentity(userId) });
+/** An app whose identity seam is pinned to one user; no argument means whoever AUTH_MODE resolves. */
+export function withUser(userId?: string): { fetch(request: Request): Promise<Response> } {
+  return {
+    fetch: async (request) => {
+      // Imported on first use, not at the top: `src/app.ts` parses the environment when it
+      // loads, and the integration harness is what sets the table name in it.
+      const { createApp } = await import('../../src/app.js');
+      return createApp(
+        userId === undefined
+          ? {}
+          : { identityProvider: { resolve: () => Promise.resolve(userId) } },
+      ).fetch(request);
+    },
+  };
+}
 
 /** The non-identity headers a normal request carries. */
 export function authedHeaders(opts: {
   idempotencyKey?: string;
+  timezone?: string;
   clientVersion?: string;
 } = {}): Record<string, string> {
   return {
-    'content-type': 'application/json',
-    'x-request-id': `req_test_${randomSuffix()}`,
-    'x-client-timezone': 'America/New_York',
-    'x-client-version': opts.clientVersion ?? 'ios/1.0.0',
-    ...(opts.idempotencyKey ? { 'idempotency-key': opts.idempotencyKey } : {}),
+    'Content-Type': 'application/json',
+    // Dashes stripped, as `resolveRequestId` does. Some routes echo this into
+    // `meta.requestId`, and a dashed UUID drops four random `-<hex>` pairs into every response
+    // body — enough to satisfy a `not.toContain('-90')` leak assertion by accident.
+    'X-Request-Id': `req_test_${randomUUID().replaceAll('-', '')}`,
+    // Not UTC, on purpose: UTC is also the server's fallback, so a UTC default would let a
+    // handler that ignored the header pass every test.
+    'X-Client-Timezone': opts.timezone ?? 'America/New_York',
+    'X-Client-Version': opts.clientVersion ?? 'ios/1.0.0',
+    ...(opts.idempotencyKey === undefined
+      ? {}
+      : { 'Idempotency-Key': opts.idempotencyKey }),
   };
 }
 ```

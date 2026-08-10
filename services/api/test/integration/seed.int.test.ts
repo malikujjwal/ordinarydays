@@ -1,57 +1,35 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { authedHeaders, withUser } from '../helpers/auth.js';
+import { useTestTable } from './harness.js';
 
 /**
  * `pnpm seed:local` against a real DynamoDB Local (P1-21).
  *
- * **Its own table**, not the shared `od-main-local`, because `--reset` drops and rebuilds
- * whatever it is pointed at. `fileParallelism: false` means nothing else is running, but a
- * test that destroys the table its siblings use is one scheduling change away from being a
- * mystery, and isolating it costs one environment variable.
+ * No truncation between tests: the seed is written once and every test below asserts against
+ * that one write, which is what makes "running it twice produces the same ids" a statement
+ * about the script rather than about the fixture. The table is still this file's own, so
+ * `--reset` — which drops and rebuilds whatever it is pointed at — can only ever destroy this.
  */
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
-const NAME = 'od-main-seedtest';
-
-process.env.STAGE = 'local';
-process.env.AUTH_MODE = 'local';
-process.env.TABLE_NAME = NAME;
-process.env.MEDIA_BUCKET = 'od-media-local';
-process.env.WEB_ORIGINS = 'http://localhost:8081';
-process.env.LOG_LEVEL = 'fatal';
-process.env.DDB_ENDPOINT = ENDPOINT;
-process.env.AWS_ACCESS_KEY_ID ??= 'local';
-process.env.AWS_SECRET_ACCESS_KEY ??= 'localsecret';
+useTestTable({ truncateBetweenTests: false });
 
 type Seed = typeof import('../../scripts/seed-local.js');
 type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
-type CreateApp = typeof import('../../src/app.js').createApp;
 
 let seed: Seed;
 let base: Base;
 let keys: Keys;
-let createApp: CreateApp;
 
 const DEV = 'usr_local_dev';
-
-const admin = new DynamoDBClient({
-  region: 'us-east-1',
-  endpoint: ENDPOINT,
-  credentials: { accessKeyId: 'local', secretAccessKey: 'localsecret' },
-});
 
 beforeAll(async () => {
   seed = await import('../../scripts/seed-local.js');
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
-  createApp = (await import('../../src/app.js')).createApp;
 
-  // A clean table, whatever a previous run left.
+  // `reset: true` rather than relying on the harness's empty table, because dropping and
+  // rebuilding is the path `pnpm seed:local -- --reset` takes and nothing else exercises it.
   await seed.seedLocal({ reset: true });
-});
-
-afterAll(() => {
-  admin.destroy();
 });
 
 /** Everything in the dev user's partition: the profile plus one index entry per activity. */
@@ -72,7 +50,9 @@ describe('what a seed writes', () => {
    * fine in the table and breaks the first screen.
    */
   it('serves the seeded profile through GET /v1/me', async () => {
-    const res = await createApp().fetch(new Request('http://localhost/v1/me'));
+    const res = await withUser().fetch(
+      new Request('http://localhost/v1/me', { headers: authedHeaders() }),
+    );
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -92,7 +72,9 @@ describe('what a seed writes', () => {
    */
   it('configures a saved reminder default, so that path is exercised', async () => {
     const body = await (
-      await createApp().fetch(new Request('http://localhost/v1/me'))
+      await withUser().fetch(
+        new Request('http://localhost/v1/me', { headers: authedHeaders() }),
+      )
     ).json();
 
     expect(body.data.defaultReminderOffset).toBe(-15);

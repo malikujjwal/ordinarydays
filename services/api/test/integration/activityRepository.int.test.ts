@@ -1,8 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { tableName } from '@od/shared/table';
 import type { Activity } from '@od/shared/types';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createLocalTable } from '../../scripts/create-local-table.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { useTestTable } from './harness.js';
 
 /**
  * `ActivityRepository` against a real DynamoDB Local.
@@ -13,16 +11,7 @@ import { createLocalTable } from '../../scripts/create-local-table.js';
  * really cancels the write, and — the one that matters most — that two users' activities are
  * invisible to each other.
  */
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
-const NAME = process.env.TABLE_NAME ?? tableName('local');
-
-process.env.STAGE = 'local';
-process.env.TABLE_NAME = NAME;
-process.env.MEDIA_BUCKET = 'od-media-local';
-process.env.LOG_LEVEL = 'fatal';
-process.env.DDB_ENDPOINT = ENDPOINT;
-process.env.AWS_ACCESS_KEY_ID ??= 'local';
-process.env.AWS_SECRET_ACCESS_KEY ??= 'localsecret';
+useTestTable();
 
 type Repo = typeof import('../../src/repositories/activityRepository.js');
 type Base = typeof import('../../src/repositories/base.js');
@@ -32,42 +21,25 @@ let repo: Repo;
 let base: Base;
 let keys: Keys;
 
-const admin = new DynamoDBClient({
-  region: 'us-east-1',
-  endpoint: ENDPOINT,
-  credentials: { accessKeyId: 'local', secretAccessKey: 'localsecret' },
-});
-
 /** Two invented users. Neither needs a profile — the keys are what is under test. */
 const ALICE = 'usr_int_repo_alice';
 const BEN = 'usr_int_repo_ben';
 
 /**
- * A fresh activity id, **unique to this run** (`data-model.md` §8's Crockford alphabet, which
- * excludes I, L, O and U).
+ * A fresh activity id per call (`data-model.md` §8's Crockford alphabet, which excludes I, L,
+ * O and U).
  *
- * ## Why the run tag is here
- *
- * `beforeEach` empties the two `USER#` partitions, but an `ACT#<id>` partition cannot be
- * enumerated without a `Scan` and so is never cleaned. With a counter alone the ids restart
- * at the same values every run, so each test inherits whatever the *previous* run left in the
- * partition at its sequence position — and inserting a test anywhere in the file shifts every
- * id after it onto somebody else's leftovers.
- *
- * That is not hypothetical: adding one case in P1-10 moved
- * `writes exactly two items for a weekly series` onto a partition an earlier run had left
- * three `OCC#` rows in, and it failed for a reason that had nothing to do with recurrence.
- * The run tag makes every partition this run touches its own, so a count is a fact about this
- * run rather than about the history of the container.
+ * A plain counter is enough now that the table is this file's alone and empty at the start of
+ * every test. It was not before: this generator used to mix in a random per-run tag, because
+ * an `ACT#<id>` partition on the shared table survived the run that wrote it, so the same id
+ * at the same sequence position inherited the previous run's rows — which is how, in P1-10,
+ * adding one case above `writes exactly two items for a weekly series` made it fail on three
+ * `OCC#` rows it had never written. P1-28's table-per-file removed the cause, so the
+ * workaround is gone rather than kept as decoration.
  */
-const RUN = Array.from(
-  { length: 4 },
-  () => '0123456789ABCDEFGHJKMNPQRSTVWXYZ'[Math.floor(Math.random() * 32)],
-).join('');
-
 let seq = 0;
-/** `act_` + 26: 18 fixed characters, the 4-character run tag, and a 4-digit counter. */
-const nextId = () => `act_01J8XKQ2M4N5P6R7S8${RUN}${String(seq++).padStart(4, '0')}`;
+/** `act_` + 26: 22 fixed characters and a 4-digit counter. */
+const nextId = () => `act_01J8XKQ2M4N5P6R7S8T9V0${String(seq++).padStart(4, '0')}`;
 
 const anActivity = (overrides: Partial<Activity> = {}): Activity =>
   ({
@@ -90,24 +62,9 @@ const anActivity = (overrides: Partial<Activity> = {}): Activity =>
   }) as Activity;
 
 beforeAll(async () => {
-  await createLocalTable(admin, NAME);
   repo = await import('../../src/repositories/activityRepository.js');
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
-});
-
-afterAll(() => {
-  admin.destroy();
-});
-
-/** Both users' partitions start empty, so a bucket count is a fact rather than a guess. */
-beforeEach(async () => {
-  for (const userId of [ALICE, BEN]) {
-    const rows = await base.queryAll<{ pk: string; sk: string }>({
-      pk: keys.userProfile(userId).pk,
-    });
-    await base.deleteAll(rows.map((row) => ({ pk: row.pk, sk: row.sk })));
-  }
 });
 
 describe('create and read back', () => {

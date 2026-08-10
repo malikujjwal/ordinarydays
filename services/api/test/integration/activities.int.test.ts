@@ -1,7 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { tableName } from '@od/shared/table';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createLocalTable } from '../../scripts/create-local-table.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { authedHeaders, withUser } from '../helpers/auth.js';
+import { useTestTable } from './harness.js';
 
 /**
  * `POST /v1/activities` against a real DynamoDB Local (P1-11).
@@ -10,26 +9,20 @@ import { createLocalTable } from '../../scripts/create-local-table.js';
  * transaction lands: that the index entry really goes in the bucket the agenda will query,
  * that a retry with the same key really returns the first response instead of creating a
  * second activity, and that a rejected body really leaves the table untouched.
+ *
+ * The empty table between tests is doing more work here than it looks. Before P1-28 this file
+ * swept the two users' `USER#` partitions **and** their `RATE#` counters by hand, the latter
+ * added after the suite grew past the limiter's 120-per-minute budget and began answering
+ * `429` — which surfaced as four unrelated-looking failures, none of them about rate limiting.
+ * Truncating the whole table covers that partition and every other one nobody has thought of
+ * yet.
  */
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
-const NAME = process.env.TABLE_NAME ?? tableName('local');
+useTestTable();
 
-process.env.STAGE = 'local';
-process.env.AUTH_MODE = 'local';
-process.env.TABLE_NAME = NAME;
-process.env.MEDIA_BUCKET = 'od-media-local';
-process.env.WEB_ORIGINS = 'http://localhost:8081';
-process.env.LOG_LEVEL = 'fatal';
-process.env.DDB_ENDPOINT = ENDPOINT;
-process.env.AWS_ACCESS_KEY_ID ??= 'local';
-process.env.AWS_SECRET_ACCESS_KEY ??= 'localsecret';
-
-type CreateApp = typeof import('../../src/app.js').createApp;
 type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
 type Repo = typeof import('../../src/repositories/activityRepository.js');
 
-let createApp: CreateApp;
 let base: Base;
 let keys: Keys;
 let repo: Repo;
@@ -38,69 +31,17 @@ let repo: Repo;
 const DEV = 'usr_local_dev';
 const OTHER = 'usr_int_activities_other';
 
-const admin = new DynamoDBClient({
-  region: 'us-east-1',
-  endpoint: ENDPOINT,
-  credentials: { accessKeyId: 'local', secretAccessKey: 'localsecret' },
-});
-
 beforeAll(async () => {
-  await createLocalTable(admin, NAME);
-  createApp = (await import('../../src/app.js')).createApp;
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
   repo = await import('../../src/repositories/activityRepository.js');
 });
 
-afterAll(() => {
-  admin.destroy();
-});
-
-/**
- * Both users' partitions start empty, so an index count is a fact rather than a guess.
- *
- * The `ACT#` partitions each request creates are left behind — they cannot be enumerated
- * without a `Scan` — but every activity id here is a fresh ULID minted by the service, so no
- * run can ever inherit another's rows. That is the property the sibling repository suite has
- * to construct by hand, and it comes free here.
- */
-beforeEach(async () => {
-  for (const userId of [DEV, OTHER]) {
-    const rows = await base.queryAll<{ pk: string; sk: string }>({
-      pk: keys.userProfile(userId).pk,
-    });
-    await base.deleteAll(rows.map((row) => ({ pk: row.pk, sk: row.sk })));
-
-    /**
-     * **And the rate-limit counter, which lives in its own partition.**
-     *
-     * `rateLimit` allows 120 requests per user per minute and its rows are keyed
-     * `RATE#<scope>#<subject>`, not `USER#<u>` — so the cleanup above never touched them and
-     * the count carried across every test in the file. This suite passed 120 as it grew and
-     * started answering `429`, which surfaced as four unrelated-looking failures: a page with
-     * no `data`, a cursor that was `undefined`, and an assertion expecting `400` getting
-     * `429`. Clearing it per test makes each one start with its own budget, which is right
-     * anyway — the limiter is not what any of these assert.
-     */
-    const counter = keys.rateLimit('general', userId, '');
-    const windows = await base.queryAll<{ pk: string; sk: string }>({ pk: counter.pk });
-    await base.deleteAll(windows.map((row) => ({ pk: row.pk, sk: row.sk })));
-  }
-});
-
-const asUser = (userId?: string) =>
-  userId === undefined
-    ? createApp()
-    : createApp({ identityProvider: { resolve: () => Promise.resolve(userId) } });
-
 const post = (body: unknown, options: { key?: string; userId?: string } = {}) =>
-  asUser(options.userId).fetch(
+  withUser(options.userId).fetch(
     new Request('http://localhost/v1/activities', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Idempotency-Key': options.key ?? crypto.randomUUID(),
-      },
+      headers: authedHeaders({ idempotencyKey: options.key ?? crypto.randomUUID() }),
       body: JSON.stringify(body),
     }),
   );
@@ -356,7 +297,9 @@ describe('a prep task', () => {
  */
 describe('reading one activity back', () => {
   const read = (id: string, userId?: string) =>
-    asUser(userId).fetch(new Request(`http://localhost/v1/activities/${id}`));
+    withUser(userId).fetch(
+      new Request(`http://localhost/v1/activities/${id}`, { headers: authedHeaders() }),
+    );
 
   it('returns what was written, in named collections', async () => {
     const { data } = await (await post(TASK)).json();
@@ -480,11 +423,11 @@ describe('patching an activity', () => {
     body: unknown,
     options: { ifMatch?: string; userId?: string } = {},
   ) =>
-    asUser(options.userId).fetch(
+    withUser(options.userId).fetch(
       new Request(`http://localhost/v1/activities/${id}`, {
         method: 'PATCH',
         headers: {
-          'Content-Type': 'application/json',
+          ...authedHeaders(),
           ...(options.ifMatch === undefined ? {} : { 'If-Match': options.ifMatch }),
         },
         body: JSON.stringify(body),
@@ -631,10 +574,10 @@ describe('converting a plan to a task', () => {
     ).data;
 
   const convert = (id: string, ifMatch: string, body: unknown) =>
-    asUser().fetch(
+    withUser().fetch(
       new Request(`http://localhost/v1/activities/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'If-Match': ifMatch },
+        headers: { ...authedHeaders(), 'If-Match': ifMatch },
         body: JSON.stringify(body),
       }),
     );
@@ -729,8 +672,11 @@ describe('converting a plan to a task', () => {
  */
 describe('deleting an activity', () => {
   const remove = (id: string, userId?: string) =>
-    asUser(userId).fetch(
-      new Request(`http://localhost/v1/activities/${id}`, { method: 'DELETE' }),
+    withUser(userId).fetch(
+      new Request(`http://localhost/v1/activities/${id}`, {
+        method: 'DELETE',
+        headers: authedHeaders(),
+      }),
     );
 
   const plan = async () =>
@@ -835,10 +781,10 @@ describe('deleting an activity', () => {
  */
 describe('duplicating an activity', () => {
   const copy = (id: string, userId?: string) =>
-    asUser(userId).fetch(
+    withUser(userId).fetch(
       new Request(`http://localhost/v1/activities/${id}/duplicate`, {
         method: 'POST',
-        headers: { 'Idempotency-Key': crypto.randomUUID() },
+        headers: authedHeaders({ idempotencyKey: crypto.randomUUID() }),
       }),
     );
 
@@ -954,10 +900,10 @@ describe('duplicating an activity', () => {
     const key = crypto.randomUUID();
 
     const send = () =>
-      asUser().fetch(
+      withUser().fetch(
         new Request(`http://localhost/v1/activities/${original.activityId}/duplicate`, {
           method: 'POST',
-          headers: { 'Idempotency-Key': key },
+          headers: authedHeaders({ idempotencyKey: key }),
         }),
       );
 
@@ -980,9 +926,12 @@ describe('duplicating an activity', () => {
  */
 describe('the flat lists', () => {
   const list = (query: string, userId?: string) =>
-    asUser(userId).fetch(
+    withUser(userId).fetch(
       new Request(`http://localhost/v1/activities?${query}`, {
-        headers: { 'X-Client-Timezone': 'UTC' },
+        // The `upcoming`/`past` split is drawn at the caller's current date, and every row
+        // below is dated in UTC — so this is the one place the header is stated rather than
+        // left at the helper's deliberately-not-UTC default.
+        headers: authedHeaders({ timezone: 'UTC' }),
       }),
     );
 

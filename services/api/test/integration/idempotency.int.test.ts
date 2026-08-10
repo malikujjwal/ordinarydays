@@ -1,7 +1,5 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { tableName } from '@od/shared/table';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { createLocalTable } from '../../scripts/create-local-table.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { useTestTable } from './harness.js';
 
 /**
  * The idempotency record against a real DynamoDB Local (P1-04).
@@ -13,17 +11,7 @@ import { createLocalTable } from '../../scripts/create-local-table.js';
  * produce exactly one winner. That is the race a duplicate create would come through, so it
  * is asserted here or nowhere (`testing.md` §4.2).
  */
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
-const NAME = process.env.TABLE_NAME ?? tableName('local');
-
-process.env.STAGE = 'local';
-process.env.AUTH_MODE = 'local';
-process.env.TABLE_NAME = NAME;
-process.env.MEDIA_BUCKET = 'od-media-local';
-process.env.LOG_LEVEL = 'fatal';
-process.env.DDB_ENDPOINT = ENDPOINT;
-process.env.AWS_ACCESS_KEY_ID ??= 'local';
-process.env.AWS_SECRET_ACCESS_KEY ??= 'localsecret';
+useTestTable();
 
 type Repo = typeof import('../../src/repositories/idempotencyRepository.js');
 type Base = typeof import('../../src/repositories/base.js');
@@ -33,65 +21,30 @@ let repo: Repo;
 let base: Base;
 let keys: Keys;
 
-/** A user id per test file, so a parallel file cannot see these rows. */
 const USER = 'usr_int_idem';
 const OTHER_USER = 'usr_int_idem_other';
 const NOW = Date.UTC(2026, 7, 9, 12, 0, 0);
 
-const admin = new DynamoDBClient({
-  region: 'us-east-1',
-  endpoint: ENDPOINT,
-  credentials: { accessKeyId: 'local', secretAccessKey: 'localsecret' },
-});
-
 /**
- * A fresh UUID-shaped key per test, unique **per run**.
+ * A fresh UUID-shaped key per test.
  *
- * The run component is not decoration. An idempotency record lives in its own partition,
- * `IDEM#<userId>#<key>` — not under `USER#<userId>` — so the partition sweep in `beforeEach`
- * cannot reach it, and a counter that restarted at 1 each run would find the previous run's
- * reservations still sitting there. The first version of this file did exactly that and
- * passed once, then failed on every subsequent run with `reserved` coming back `in-flight`.
- *
- * Each key is also recorded so `afterEach` can delete it: relying on the 24-hour TTL would
- * leave the local table filling up, and DynamoDB Local does not evict on schedule anyway.
+ * A plain counter is enough now that the table is this file's alone and empty at the start of
+ * every test. It was not before: an idempotency record lives in its own partition,
+ * `IDEM#<userId>#<key>` rather than under `USER#<userId>`, so no partition sweep could reach
+ * it — the first version of this file passed once and then failed on every later run with
+ * `reserved` coming back `in-flight`, and was fixed by mixing the clock into every key and
+ * deleting each one in an `afterEach`. P1-28's table-per-file made both unnecessary.
  */
-const RUN = Date.now().toString(16).slice(-8).padStart(8, '0');
 let counter = 0;
-const issued: string[] = [];
-
 const nextKey = () => {
   counter += 1;
-  const key = `${RUN}-8b86-d011-b42d-${String(counter).padStart(12, '0')}`;
-  issued.push(key);
-  return key;
+  return `9f8e7d6c-8b86-d011-b42d-${String(counter).padStart(12, '0')}`;
 };
 
 beforeAll(async () => {
-  await createLocalTable(admin, NAME);
   repo = await import('../../src/repositories/idempotencyRepository.js');
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
-});
-
-afterAll(() => {
-  admin.destroy();
-});
-
-/**
- * Deletes every key this file issued, for both users that may hold one.
- *
- * A partition sweep is not available here: each record is its own partition, so there is no
- * `pk` to query. Deleting by the keys the test handed out is the only way to leave the table
- * as it was found.
- */
-afterEach(async () => {
-  const doomed = issued.flatMap((key) => [
-    keys.idempotency(USER, key),
-    keys.idempotency(OTHER_USER, key),
-  ]);
-  await base.deleteAll(doomed);
-  issued.length = 0;
 });
 
 describe('claiming a key', () => {

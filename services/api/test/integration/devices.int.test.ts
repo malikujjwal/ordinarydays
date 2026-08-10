@@ -1,7 +1,6 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { tableName } from '@od/shared/table';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createLocalTable } from '../../scripts/create-local-table.js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { authedHeaders, withUser } from '../helpers/auth.js';
+import { useTestTable } from './harness.js';
 
 /**
  * `POST`/`DELETE /v1/me/devices` against a real DynamoDB Local (P1-08).
@@ -12,24 +11,11 @@ import { createLocalTable } from '../../scripts/create-local-table.js';
  * will look for it, and — the one that matters most — that one user's device id is genuinely
  * unreachable from another user's session rather than merely filtered out.
  */
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
-const NAME = process.env.TABLE_NAME ?? tableName('local');
+useTestTable();
 
-process.env.STAGE = 'local';
-process.env.AUTH_MODE = 'local';
-process.env.TABLE_NAME = NAME;
-process.env.MEDIA_BUCKET = 'od-media-local';
-process.env.WEB_ORIGINS = 'http://localhost:8081';
-process.env.LOG_LEVEL = 'fatal';
-process.env.DDB_ENDPOINT = ENDPOINT;
-process.env.AWS_ACCESS_KEY_ID ??= 'local';
-process.env.AWS_SECRET_ACCESS_KEY ??= 'localsecret';
-
-type CreateApp = typeof import('../../src/app.js').createApp;
 type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
 
-let createApp: CreateApp;
 let base: Base;
 let keys: Keys;
 
@@ -39,53 +25,26 @@ const OTHER = 'usr_int_devices_other';
 
 const TOKEN = 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]';
 
-const admin = new DynamoDBClient({
-  region: 'us-east-1',
-  endpoint: ENDPOINT,
-  credentials: { accessKeyId: 'local', secretAccessKey: 'localsecret' },
-});
-
 beforeAll(async () => {
-  await createLocalTable(admin, NAME);
-  createApp = (await import('../../src/app.js')).createApp;
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
 });
 
-afterAll(() => {
-  admin.destroy();
-});
-
-/** Both partitions empty, so a test that seeds nothing genuinely finds nothing. */
-beforeEach(async () => {
-  for (const userId of [DEV, OTHER]) {
-    const rows = await base.queryAll<{ pk: string; sk: string }>({
-      pk: keys.userProfile(userId).pk,
-    });
-    await base.deleteAll(rows.map((row) => ({ pk: row.pk, sk: row.sk })));
-  }
-});
-
-const asUser = (userId?: string) =>
-  userId === undefined
-    ? createApp()
-    : createApp({ identityProvider: { resolve: () => Promise.resolve(userId) } });
-
 const register = (body: unknown, userId?: string) =>
-  asUser(userId).fetch(
+  withUser(userId).fetch(
     new Request('http://localhost/v1/me/devices', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Idempotency-Key': crypto.randomUUID(),
-      },
+      headers: authedHeaders({ idempotencyKey: crypto.randomUUID() }),
       body: JSON.stringify(body),
     }),
   );
 
 const unregister = (deviceId: string, userId?: string) =>
-  asUser(userId).fetch(
-    new Request(`http://localhost/v1/me/devices/${deviceId}`, { method: 'DELETE' }),
+  withUser(userId).fetch(
+    new Request(`http://localhost/v1/me/devices/${deviceId}`, {
+      method: 'DELETE',
+      headers: authedHeaders(),
+    }),
   );
 
 /** Access pattern 15, run for real: every device row in one user's partition. */

@@ -1507,6 +1507,33 @@ wrong change.
 **Tests.** The harness is the deliverable. Prove it by running the full integration suite
 twice consecutively with `--sequence.shuffle` and getting identical results.
 
+> **Amended during implementation.** Three details settled differently from the sketch above,
+> none of them changing what is delivered.
+>
+> 1. **The table name is derived, not passed.** `useTestTable()` takes no name; it reads the
+>    calling file's own and kebab-cases it. A name a file states is a name two files can state
+>    the same way, and the failure that causes is silent.
+> 2. **`withUser(userId)` returns something with a `fetch`, not the `Hono` app itself.** The app
+>    is built on first use inside `fetch`, because `src/app.ts` parses the environment when it
+>    loads and the harness is what sets the table name in it. A static import would make every
+>    file depend on importing the harness first — an ordering rule that is invisible at the call
+>    site and fails as a query against the wrong table rather than as an error.
+> 3. **`truncate` uses `Scan` plus `BatchWriteItem`,** and `testing.md` §3.1 was amended in the
+>    same commit to say so rather than the `Query` it used to describe. A `Query` cannot
+>    enumerate the partitions that caused the bugs this task exists to fix — `ACT#`, `IDEM#`,
+>    `RATE#` — which is precisely why three files had grown a hand-rolled workaround each. The
+>    `no-scan` rule is scoped to `services/api/src`, `apps` and `packages`; test code is
+>    deliberately outside it, and the ban's stated reason — the Lambda's IAM policy denies it at
+>    runtime — does not apply to a per-file local table.
+>
+> **On "table-per-file is what allows Vitest to run files in parallel"** — it allows it, and
+> the suite passes with it on, but parallel was measured **slower** and is left off: serial 54 s
+> wall against parallel 69 s, because one DynamoDB Local container is a single process and
+> eight workers simply queue on it. What table-per-file bought is the property the edge case
+> actually names — no failure that depends on file ordering — and that holds either way. The
+> `fileParallelism: false` comment was rewritten to say this, so the next reader does not turn
+> it on expecting a speedup or leave it off fearing a shared table.
+
 ---
 
 ### P1-29 — Playwright and Maestro harnesses
