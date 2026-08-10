@@ -1205,6 +1205,15 @@ of one-off migration scripts under `infra/scripts/`.
 This is the trickiest piece of logic in the product. It lives in exactly one place:
 `packages/shared/src/recurrence/expand.ts`, is pure, and is unit-tested hard.
 
+> **P2-01 correction — 2026-08-10.** An amendment-era version of the pseudocode below
+> called `expandRecurrence` once per segment and left series termination outside the engine.
+> That drifted from the canonical P2-01/P2-08 signature and cannot enforce a cross-segment
+> `count` without duplicating termination logic in the agenda service. The agenda now calls
+> `expandRecurrence` **once per hydrated series** with the complete `Recurrence`; the function
+> walks the ordered segments internally and applies series-level `endDate` and `count` across
+> their combined occurrence stream. Each segment still self-anchors on `effectiveFrom` and is
+> expanded only inside its own in-force window.
+
 ```
 expandAgenda(userId, fromDate, toDate, tz):
   1. candidates = Query GSI1 U#<u>#S BETWEEN (from-2d)..(to+2d)
@@ -1217,11 +1226,15 @@ expandAgenda(userId, fromDate, toDate, tz):
        // hydrate every selected #R row before expansion; chunk at 100, retry
        // UnprocessedKeys, and never treat an ActivityIndex projection as Recurrence
   5. for each s in series:
-       for each segment g in s.recurrence.segments:            // ordered; almost always one
-         inForce = [g.effectiveFrom .. dayBefore(nextSegment.effectiveFrom) ?? seriesEnd ?? ∞]
-          dates  += expandRecurrence(g, intersect([from-2d..to+2d], inForce), s.schedule.timezone)
-                                                               // pure, no I/O; anchor = g.effectiveFrom
-       apply series-level endDate / count across the concatenated, ordered dates
+       dates = expandRecurrence(
+         s.recurrence,
+         from-2d,
+         to+2d,
+         s.schedule.timezone,
+       )                                                       // pure, no I/O; one call per series
+       // Inside expandRecurrence: walk ordered segments; intersect each requested window
+       // with [g.effectiveFrom .. dayBefore(next.effectiveFrom)]; self-anchor each rule on
+       // g.effectiveFrom; apply series-level endDate / count across the combined stream.
        // retain the widened nominal set; no exact viewer-window filter yet
   6. overrides = BatchGetItem OCC#<date> for every (series, nominal date) pair produced in 5,
                  plus MOVE#<destinationDate> for each series and each date in the widened window

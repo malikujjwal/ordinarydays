@@ -38,6 +38,11 @@
       "types": "./dist/errors.d.ts",
       "react-native": "./src/errors.ts",
       "default": "./dist/errors.js"
+    },
+    "./recurrence": {
+      "types": "./dist/recurrence/index.d.ts",
+      "react-native": "./src/recurrence/index.ts",
+      "default": "./dist/recurrence/index.js"
     }
   },
   "scripts": {
@@ -48,6 +53,8 @@
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "9.1.0",
+    "date-fns": "4.1.0",
+    "date-fns-tz": "3.2.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

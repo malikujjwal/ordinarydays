@@ -286,9 +286,20 @@ agenda both need it and must agree at the boundary.
 **Tests.** P2-02 is the test matrix and is a separate task because it is the deliverable
 that makes this one trustworthy.
 
+> **Implementation clarification — 2026-08-10.** P2-01 owns the focused unit tests needed
+> to keep `packages/shared/src/recurrence/**` at 100% statements, branches, functions and
+> lines from the same commit that deletes the P0-24 placeholders. P2-02 adds the exhaustive
+> named matrix, golden fixtures, property tests and independent cross-check. No task merges
+> test-less; `definition-of-done.md` applies to both tasks independently.
+
 ---
 
 ### P2-02 — The recurrence test matrix
+
+> **Ownership clarification — 2026-08-10.** This task extends, rather than creates, the
+> P2-01 test baseline: it owns the exhaustive named cases, fixtures, property suite and
+> independent implementation cross-check. P2-01 already owns focused tests sufficient to
+> hold the 100% recurrence coverage gate.
 
 **Files.** `packages/shared/src/recurrence/expand.test.ts`,
 `packages/shared/src/recurrence/calendar.test.ts`,
