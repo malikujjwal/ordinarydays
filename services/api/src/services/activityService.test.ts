@@ -266,7 +266,7 @@ describe('createActivity', () => {
         schedule: { date: '2026-08-09', time: '19:30', timezone: 'America/New_York' },
         recurrence: {
           mode: 'fixed',
-          segments: [{ freq: 'weekly', effectiveFrom: '2026-08-01' }],
+          segments: [{ freq: 'weekly', byWeekday: [1], effectiveFrom: '2026-08-01' }],
         },
         location: { label: 'Home' },
         sourceUrl: 'https://example.com/recipe',
@@ -282,7 +282,75 @@ describe('createActivity', () => {
       details: { kind: 'meal', mealSlot: 'dinner' },
     });
     expect(activity.recurrence?.mode).toBe('fixed');
+    expect(activity.recurrence?.segments).toEqual([
+      {
+        freq: 'weekly',
+        byWeekday: [1],
+        effectiveFrom: '2026-08-09',
+        time: '19:30',
+      },
+    ]);
     expect(activity.schedule?.time).toBe('19:30');
+  });
+
+  it('rejects a two-segment create even when called without the route schema', async () => {
+    await expect(
+      createActivity(
+        USER,
+        task({
+          schedule: { date: '2026-08-09', timezone: 'America/New_York' },
+          recurrence: {
+            mode: 'fixed',
+            segments: [
+              { freq: 'daily', effectiveFrom: '2026-08-09' },
+              { freq: 'daily', effectiveFrom: '2026-08-10' },
+            ],
+          },
+        }),
+        NOW,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: 'A new recurrence must contain exactly one segment.',
+    });
+
+    expect(repository.createActivity).not.toHaveBeenCalled();
+  });
+
+  it('rejects recurrence without a schedule date at the service boundary', async () => {
+    await expect(
+      createActivity(
+        USER,
+        task({
+          recurrence: {
+            mode: 'fixed',
+            segments: [{ freq: 'daily', effectiveFrom: '2026-08-09' }],
+          },
+        }),
+        NOW,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: 'Repeat needs a scheduled date.',
+    });
+
+    expect(repository.createActivity).not.toHaveBeenCalled();
+  });
+
+  it('normalises every one day to daily before storing it', async () => {
+    const { activity } = await createActivity(
+      USER,
+      task({
+        schedule: { date: '2026-08-09', timezone: 'America/New_York' },
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'interval_days', interval: 1, effectiveFrom: '2099-01-01' }],
+        },
+      }),
+      NOW,
+    );
+
+    expect(activity.recurrence?.segments[0]?.freq).toBe('daily');
   });
 
   /** An all-day schedule stores its date and zone and derives no instant. */
@@ -708,6 +776,25 @@ describe('patchActivity', () => {
     ...overrides,
   });
 
+  const firstSegment = {
+    freq: 'daily' as const,
+    effectiveFrom: '2026-08-01',
+    time: '09:00',
+  };
+
+  const recurring = (overrides: Record<string, unknown> = {}): StoredItem =>
+    stored({
+      status: 'scheduled',
+      schedule: {
+        date: '2026-08-01',
+        time: '09:00',
+        timezone: 'America/New_York',
+        scheduledAtUtc: '2026-08-01T13:00:00.000Z',
+      },
+      recurrence: { mode: 'fixed', segments: [firstSegment] },
+      ...overrides,
+    });
+
   /**
    * `mockClear` as well as `mockResolvedValue`: the outer `beforeEach` clears the *create*
    * mock and not this one, so without it `mock.calls[0]` is the first call recorded anywhere
@@ -827,6 +914,249 @@ describe('patchActivity', () => {
     expect(result).not.toHaveProperty('pk');
     expect(result).not.toHaveProperty('entity');
     expect(vi.mocked(repository.patchActivity).mock.calls[0]?.[1]).toHaveProperty('pk');
+  });
+
+  it('adds a first recurrence segment anchored to the stored schedule date', async () => {
+    seed(
+      stored({
+        status: 'scheduled',
+        schedule: {
+          date: '2026-08-08',
+          time: '18:30',
+          endTime: '20:00',
+          timezone: 'America/New_York',
+        },
+      }),
+    );
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'weekly', byWeekday: [6], effectiveFrom: '2099-01-01' }],
+        },
+      },
+      VERSION,
+      LATER,
+    );
+
+    expect(result.recurrence?.segments).toEqual([
+      {
+        freq: 'weekly',
+        byWeekday: [6],
+        effectiveFrom: '2026-08-08',
+        time: '18:30',
+        endTime: '20:00',
+      },
+    ]);
+  });
+
+  it('appends one segment at a valid emitted editedFromDate', async () => {
+    seed(recurring());
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            firstSegment,
+            { freq: 'weekly', byWeekday: [1, 3, 5], effectiveFrom: '2099-01-01' },
+          ],
+        },
+        editedFromDate: '2026-08-10',
+      },
+      VERSION,
+      LATER,
+    );
+
+    expect(result.recurrence?.segments[0]).toEqual(firstSegment);
+    expect(result.recurrence?.segments[1]).toEqual({
+      freq: 'weekly',
+      byWeekday: [1, 3, 5],
+      effectiveFrom: '2026-08-10',
+      time: '09:00',
+    });
+  });
+
+  it('rejects an editedFromDate the current active rule does not emit', async () => {
+    const monday = {
+      freq: 'weekly' as const,
+      byWeekday: [1 as const],
+      effectiveFrom: '2026-08-03',
+      time: '09:00',
+    };
+    seed(
+      recurring({
+        schedule: {
+          date: '2026-08-03',
+          time: '09:00',
+          timezone: 'America/New_York',
+        },
+        recurrence: { mode: 'fixed', segments: [monday] },
+      }),
+    );
+
+    await expect(
+      patchActivity(
+        USER,
+        PLAN,
+        {
+          recurrence: {
+            mode: 'fixed',
+            segments: [monday, { freq: 'daily', effectiveFrom: '2099-01-01' }],
+          },
+          editedFromDate: '2026-08-11',
+        },
+        VERSION,
+        LATER,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: expect.stringContaining('must be an occurrence'),
+    });
+
+    expect(repository.patchActivity).not.toHaveBeenCalled();
+  });
+
+  it('uses Activity-local today when an append has no editedFromDate', async () => {
+    seed(recurring());
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [firstSegment, { freq: 'daily', effectiveFrom: '2099-01-01' }],
+        },
+      },
+      VERSION,
+      '2026-08-10T01:00:00.000Z',
+    );
+
+    expect(result.recurrence?.segments[1]?.effectiveFrom).toBe('2026-08-09');
+  });
+
+  it('ignores a conflicting client effectiveFrom on the appended segment', async () => {
+    seed(recurring());
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [firstSegment, { freq: 'daily', effectiveFrom: '2099-12-31' }],
+        },
+        editedFromDate: '2026-08-12',
+      },
+      VERSION,
+      LATER,
+    );
+
+    expect(result.recurrence?.segments[1]?.effectiveFrom).toBe('2026-08-12');
+  });
+
+  it('allows an Ends-only edit without appending or rewriting history', async () => {
+    seed(recurring());
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [firstSegment],
+          count: 12,
+        },
+      },
+      VERSION,
+      LATER,
+    );
+
+    expect(result.recurrence).toEqual({
+      mode: 'fixed',
+      segments: [firstSegment],
+      count: 12,
+    });
+  });
+
+  it.each([
+    ['rewrites a previous segment', [{ ...firstSegment, freq: 'weekdays' as const }]],
+    ['deletes previous history', []],
+    [
+      'adds two segments in one edit',
+      [
+        firstSegment,
+        { freq: 'daily' as const, effectiveFrom: '2026-08-09' },
+        { freq: 'daily' as const, effectiveFrom: '2026-08-10' },
+      ],
+    ],
+  ])('rejects a recurrence patch that %s', async (_name, segments) => {
+    seed(recurring());
+
+    await expect(
+      patchActivity(
+        USER,
+        PLAN,
+        { recurrence: { mode: 'fixed', segments } },
+        VERSION,
+        LATER,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: expect.stringContaining('append-only'),
+    });
+
+    expect(repository.patchActivity).not.toHaveBeenCalled();
+  });
+
+  it('rejects editedFromDate when no segment is appended', async () => {
+    seed(recurring());
+
+    await expect(
+      patchActivity(
+        USER,
+        PLAN,
+        {
+          recurrence: { mode: 'fixed', segments: [firstSegment] },
+          editedFromDate: '2026-08-10',
+        },
+        VERSION,
+        LATER,
+      ),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+
+  it('rejects the append that would create a 21st segment with explaining copy', async () => {
+    const segments = Array.from({ length: 20 }, (_, index) => ({
+      freq: 'daily' as const,
+      effectiveFrom: `2026-07-${String(index + 1).padStart(2, '0')}`,
+      time: '09:00',
+    }));
+    seed(recurring({ recurrence: { mode: 'fixed', segments } }));
+
+    await expect(
+      patchActivity(
+        USER,
+        PLAN,
+        {
+          recurrence: {
+            mode: 'fixed',
+            segments: [...segments, { freq: 'daily', effectiveFrom: '2099-01-01' }],
+          },
+        },
+        VERSION,
+        '2026-08-10T12:00:00.000Z',
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: expect.stringContaining('start a new one'),
+    });
   });
 
   it('409s a stale version before composing anything, and writes nothing', async () => {

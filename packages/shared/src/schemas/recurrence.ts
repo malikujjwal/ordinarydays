@@ -1,12 +1,9 @@
 import { z } from 'zod';
 import { MAX_RECURRENCE_SEGMENTS } from '../constants.js';
+import type { Recurrence, RecurrenceSegment } from '../types/recurrence.js';
 import { hhmm, isoDate } from './common.js';
 
-/**
- * The segmented recurrence rule (`data-model.md` §4.2).
- *
- * The interface is in `../types/recurrence.ts`; `recurrence.test.ts` pins the two together.
- */
+/** The stored segmented recurrence contract (`data-model.md` §4.2, P2-04). */
 
 export const recurrenceMode = z.enum(['fixed', 'after_completion']);
 
@@ -20,7 +17,7 @@ export const recurrenceFreq = z.enum([
   'custom',
 ]);
 
-/** `0` = Sunday. */
+/** `0` = Sunday. A literal union keeps the inferred type equal to `Weekday`. */
 export const weekday = z.union([
   z.literal(0),
   z.literal(1),
@@ -31,12 +28,7 @@ export const weekday = z.union([
   z.literal(6),
 ]);
 
-/**
- * A literal union rather than `z.number().min(1).max(12)`, for the same reason as
- * {@link weekday}: the inferred type has to be `1 | 2 | … | 12` to match the interface, and
- * a range check infers plain `number`. Casting the range to the literal union would be a
- * lie the compiler cannot check — the union is longer to write and true.
- */
+/** A literal union keeps the inferred type equal to `MonthNumber`. */
 export const monthNumber = z.union([
   z.literal(1),
   z.literal(2),
@@ -52,44 +44,149 @@ export const monthNumber = z.union([
   z.literal(12),
 ]);
 
-export const recurrenceSegment = z.object({
+const segmentShape = z.strictObject({
   freq: recurrenceFreq,
   interval: z.number().int().positive().max(365).optional(),
   byWeekday: z.array(weekday).min(1).max(7).optional(),
-  byMonthDay: z.array(z.number().int().min(1).max(31)).min(1).max(31).optional(),
-  byMonth: z.array(monthNumber).min(1).max(12).optional(),
+  byMonthDay: z.array(z.number().int().min(1).max(31)).length(1).optional(),
+  byMonth: z.array(monthNumber).length(1).optional(),
   rrule: z.string().min(1).max(500).optional(),
   effectiveFrom: isoDate,
   time: hhmm.optional(),
   endTime: hhmm.optional(),
 });
 
-/**
- * `segments` is 1–20 and **strictly ascending by `effectiveFrom`**.
- *
- * The ordering is asserted here because nothing else in Phase 1 enforces it and the
- * expansion engine (P2-01) will assume it: a segment list that is out of order silently
- * makes an older rule shadow a newer one, and the symptom is an occurrence on the wrong day
- * months later. Cheaper to reject at the boundary than to debug from a bug report.
- */
-export const recurrence = z
-  .object({
-    mode: recurrenceMode,
-    segments: z.array(recurrenceSegment).min(1).max(MAX_RECURRENCE_SEGMENTS),
-    endDate: isoDate.optional(),
-    count: z.number().int().positive().max(1000).optional(),
+export const recurrenceSegment = segmentShape
+  .superRefine((segment, ctx) => {
+    if (segment.freq === 'custom') {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Custom recurrence is not available until Phase 9.',
+        path: ['freq'],
+      });
+    }
+    if (segment.freq === 'weekly' && segment.byWeekday === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Weekly recurrence requires at least one weekday.',
+        path: ['byWeekday'],
+      });
+    }
+    if (segment.freq === 'monthly' && segment.byMonthDay === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Monthly recurrence requires one month-day anchor.',
+        path: ['byMonthDay'],
+      });
+    }
+    if (segment.freq === 'yearly') {
+      const hasMonth = segment.byMonth !== undefined;
+      const hasMonthDay = segment.byMonthDay !== undefined;
+      if (hasMonth !== hasMonthDay) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'Yearly recurrence requires both anchors, or neither.',
+          path: [hasMonth ? 'byMonthDay' : 'byMonth'],
+        });
+      }
+    }
+    if (segment.freq === 'interval_days' && segment.interval === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Every-X-days recurrence requires an interval from 2 to 365.',
+        path: ['interval'],
+      });
+    }
   })
-  .refine(
-    (value) =>
-      value.segments.every(
-        (segment, index) =>
-          index === 0 ||
-          // biome-ignore lint/style/noNonNullAssertion: index > 0, so the predecessor exists.
-          segment.effectiveFrom > value.segments[index - 1]!.effectiveFrom,
-      ),
-    {
-      message: 'Recurrence segments must be ordered by effectiveFrom, strictly ascending',
-      path: ['segments'],
-    },
+  .transform(
+    (segment): RecurrenceSegment => ({
+      freq:
+        segment.freq === 'interval_days' && segment.interval === 1
+          ? 'daily'
+          : segment.freq,
+      ...(segment.interval === undefined ? {} : { interval: segment.interval }),
+      ...(segment.byWeekday === undefined ? {} : { byWeekday: segment.byWeekday }),
+      ...(segment.byMonthDay === undefined ? {} : { byMonthDay: segment.byMonthDay }),
+      ...(segment.byMonth === undefined ? {} : { byMonth: segment.byMonth }),
+      ...(segment.rrule === undefined ? {} : { rrule: segment.rrule }),
+      effectiveFrom: segment.effectiveFrom,
+      ...(segment.time === undefined ? {} : { time: segment.time }),
+      ...(segment.endTime === undefined ? {} : { endTime: segment.endTime }),
+    }),
+  );
+
+const recurrenceShape = z.strictObject({
+  mode: recurrenceMode,
+  segments: z
+    .array(recurrenceSegment)
+    .min(1)
+    .max(
+      MAX_RECURRENCE_SEGMENTS,
+      `A recurrence can have at most ${MAX_RECURRENCE_SEGMENTS} segments. End this series and start a new one.`,
+    ),
+  endDate: isoDate.optional(),
+  count: z.number().int().min(1).max(999).optional(),
+});
+
+export const recurrence = recurrenceShape
+  .superRefine((value, ctx) => {
+    if (value.mode !== 'fixed') {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Completion-relative recurrence is not available until Phase 9.',
+        path: ['mode'],
+      });
+    }
+
+    value.segments.forEach((segment, index) => {
+      const previous = value.segments[index - 1];
+      if (previous !== undefined && segment.effectiveFrom <= previous.effectiveFrom) {
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            'Recurrence segments must be ordered by effectiveFrom, strictly ascending.',
+          path: ['segments', index, 'effectiveFrom'],
+        });
+      }
+    });
+
+    const first = value.segments[0];
+    if (
+      first !== undefined &&
+      value.endDate !== undefined &&
+      value.endDate < first.effectiveFrom
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'The recurrence end date cannot be before its first segment.',
+        path: ['endDate'],
+      });
+    }
+  })
+  .transform(
+    (value): Recurrence => ({
+      mode: value.mode,
+      segments: value.segments,
+      ...(value.endDate === undefined ? {} : { endDate: value.endDate }),
+      ...(value.count === undefined ? {} : { count: value.count }),
+    }),
   )
   .meta({ id: 'Recurrence' });
+
+export type CreateRecurrence = Omit<Recurrence, 'segments'> & {
+  segments: [RecurrenceSegment];
+};
+
+/** Creation is the only recurrence input whose segment list is exactly one at the type level. */
+export const createRecurrence = recurrence
+  .refine((value) => value.segments.length === 1, {
+    message: 'A new recurrence must contain exactly one segment.',
+    path: ['segments'],
+  })
+  .transform(
+    (value): CreateRecurrence => ({
+      ...value,
+      // The refinement immediately above proves this element exists and is the only one.
+      segments: [value.segments[0] as RecurrenceSegment],
+    }),
+  );

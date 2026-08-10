@@ -259,6 +259,49 @@ describe('schedule validation', () => {
   });
 });
 
+describe('recurrence on create', () => {
+  const schedule = { date: '2026-08-08', timezone: 'America/New_York' };
+  const first = { freq: 'daily' as const, effectiveFrom: '2099-01-01' };
+
+  it('accepts one segment when the activity has a date', () => {
+    expect(
+      createActivityInput.safeParse({
+        title: 'Gym',
+        objectKind: 'task',
+        type: 'task',
+        schedule,
+        recurrence: { mode: 'fixed', segments: [first] },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a two-segment create', () => {
+    expect(
+      createActivityInput.safeParse({
+        title: 'Gym',
+        objectKind: 'task',
+        type: 'task',
+        schedule,
+        recurrence: {
+          mode: 'fixed',
+          segments: [first, { ...first, effectiveFrom: '2099-02-01' }],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects recurrence without a schedule date', () => {
+    expect(
+      createActivityInput.safeParse({
+        title: 'Gym',
+        objectKind: 'task',
+        type: 'task',
+        recurrence: { mode: 'fixed', segments: [first] },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('patch', () => {
   it('accepts cancelled, the one status a client may set', () => {
     expect(patchActivityInput.safeParse({ status: 'cancelled' }).success).toBe(true);
@@ -287,5 +330,24 @@ describe('patch', () => {
 
   it('rejects an unknown field rather than ignoring it', () => {
     expect(patchActivityInput.safeParse({ ownerId: 'usr_other' }).success).toBe(false);
+  });
+
+  it('accepts editedFromDate with a recurrence append request', () => {
+    expect(
+      patchActivityInput.safeParse({
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'daily', effectiveFrom: '2026-08-08' }],
+        },
+        editedFromDate: '2026-08-10',
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['no recurrence field', { editedFromDate: '2026-08-10' }],
+    ['recurrence removal', { recurrence: null, editedFromDate: '2026-08-10' }],
+  ])('rejects editedFromDate with %s', (_name, patch) => {
+    expect(patchActivityInput.safeParse(patch).success).toBe(false);
   });
 });

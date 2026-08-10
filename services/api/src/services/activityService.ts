@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import {
   blockerMessage,
   type ChangeResult,
@@ -5,11 +6,13 @@ import {
   changeActivityKind,
 } from '@od/shared';
 import { MAX_TITLE_LEN } from '@od/shared/constants';
+import { expandRecurrence } from '@od/shared/recurrence';
 import type {
   ActivityListQuery,
   CreateActivityInput,
   PatchActivityInput,
 } from '@od/shared/schemas';
+import { recurrence as recurrenceSchema } from '@od/shared/schemas';
 import type {
   Activity,
   ActivityDetail,
@@ -18,9 +21,11 @@ import type {
   ActivitySchedule,
   ActivityStatus,
   Gsi1Bucket,
+  Recurrence,
+  RecurrenceSegment,
   Reminder,
 } from '@od/shared/types';
-import { fromZonedTime } from 'date-fns-tz';
+import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
 import type { Logger } from '../lib/logger.js';
 import {
@@ -189,6 +194,67 @@ export interface CreateResult {
   readonly reminders: readonly Reminder[];
 }
 
+const RECURRENCE_NEEDS_DATE = 'Repeat needs a scheduled date.';
+const RECURRENCE_CREATE_ONE = 'A new recurrence must contain exactly one segment.';
+const RECURRENCE_APPEND_ONLY =
+  'Recurrence history is append-only. Existing segments cannot be changed or removed.';
+const EDIT_DATE_NEEDS_APPEND = 'editedFromDate requires a recurrence segment append.';
+
+function recurrenceFailure(message: string, path = 'recurrence'): never {
+  throw new AppError('validation_failed', message, [{ path, message }]);
+}
+
+function serverSegment(
+  segment: RecurrenceSegment,
+  effectiveFrom: string,
+  schedule: ActivitySchedule,
+): RecurrenceSegment {
+  return {
+    freq: segment.freq,
+    ...(segment.interval === undefined ? {} : { interval: segment.interval }),
+    ...(segment.byWeekday === undefined ? {} : { byWeekday: segment.byWeekday }),
+    ...(segment.byMonthDay === undefined ? {} : { byMonthDay: segment.byMonthDay }),
+    ...(segment.byMonth === undefined ? {} : { byMonth: segment.byMonth }),
+    ...(segment.rrule === undefined ? {} : { rrule: segment.rrule }),
+    effectiveFrom,
+    ...(schedule.time === undefined ? {} : { time: schedule.time }),
+    ...(schedule.endTime === undefined ? {} : { endTime: schedule.endTime }),
+  };
+}
+
+function validateRecurrence(candidate: Recurrence): Recurrence {
+  const result = recurrenceSchema.safeParse(candidate);
+  if (result.success) return result.data;
+
+  const details = result.error.issues.map((issue) => ({
+    path: ['recurrence', ...issue.path].map(String).join('.'),
+    message: issue.message,
+  }));
+  throw new AppError(
+    'validation_failed',
+    details[0]?.message ?? 'The recurrence is invalid.',
+    details,
+  );
+}
+
+function recurrenceForCreate(
+  supplied: Recurrence | undefined,
+  schedule: ActivitySchedule | undefined,
+): Recurrence | undefined {
+  if (supplied === undefined) return undefined;
+  if (schedule === undefined) recurrenceFailure(RECURRENCE_NEEDS_DATE);
+  if (supplied.segments.length !== 1) recurrenceFailure(RECURRENCE_CREATE_ONE);
+
+  const first = supplied.segments[0];
+  if (first === undefined) recurrenceFailure(RECURRENCE_CREATE_ONE);
+  return validateRecurrence({
+    mode: supplied.mode,
+    segments: [serverSegment(first, schedule.date, schedule)],
+    ...(supplied.endDate === undefined ? {} : { endDate: supplied.endDate }),
+    ...(supplied.count === undefined ? {} : { count: supplied.count }),
+  });
+}
+
 /**
  * Creates an activity from a validated input, and returns what was stored.
  *
@@ -225,6 +291,9 @@ export async function createActivity(
     await assertCanParent(userId, input.parentActivityId);
   }
 
+  const schedule = input.schedule === undefined ? undefined : toSchedule(input.schedule);
+  const storedRecurrence = recurrenceForCreate(input.recurrence, schedule);
+
   const activity: Activity = {
     activityId: newActivityId(),
     ownerId: userId,
@@ -233,8 +302,8 @@ export async function createActivity(
     type: input.type,
     title: input.title,
     ...(input.notes === undefined ? {} : { notes: input.notes }),
-    ...(input.schedule === undefined ? {} : { schedule: toSchedule(input.schedule) }),
-    ...(input.recurrence === undefined ? {} : { recurrence: input.recurrence }),
+    ...(schedule === undefined ? {} : { schedule }),
+    ...(storedRecurrence === undefined ? {} : { recurrence: storedRecurrence }),
     ...(input.location === undefined ? {} : { location: input.location }),
     ...(input.parentActivityId === undefined
       ? {}
@@ -362,6 +431,98 @@ function applyKindChange(
 /** A stable event code a Log Insights query can filter on (`definition-of-done.md` §8 rule 2). */
 const KIND_CHANGED = 'activity_kind_changed';
 
+function seriesLevel(supplied: Recurrence, segments: RecurrenceSegment[]): Recurrence {
+  return {
+    mode: supplied.mode,
+    segments,
+    ...(supplied.endDate === undefined ? {} : { endDate: supplied.endDate }),
+    ...(supplied.count === undefined ? {} : { count: supplied.count }),
+  };
+}
+
+function recurrenceForPatch(
+  current: Activity,
+  patch: PatchActivityInput,
+  schedule: ActivitySchedule | undefined,
+  now: string,
+): Recurrence | null | undefined {
+  if (patch.recurrence === undefined) {
+    if (patch.editedFromDate !== undefined) {
+      recurrenceFailure(EDIT_DATE_NEEDS_APPEND, 'editedFromDate');
+    }
+    return undefined;
+  }
+  if (patch.recurrence === null) {
+    if (patch.editedFromDate !== undefined) {
+      recurrenceFailure(EDIT_DATE_NEEDS_APPEND, 'editedFromDate');
+    }
+    return null;
+  }
+  if (schedule === undefined) recurrenceFailure(RECURRENCE_NEEDS_DATE);
+
+  const supplied = patch.recurrence;
+  const stored = current.recurrence;
+  if (stored === undefined) {
+    if (patch.editedFromDate !== undefined) {
+      recurrenceFailure(
+        'editedFromDate can only target an occurrence of an existing series.',
+        'editedFromDate',
+      );
+    }
+    if (supplied.segments.length !== 1) recurrenceFailure(RECURRENCE_CREATE_ONE);
+    const first = supplied.segments[0];
+    if (first === undefined) recurrenceFailure(RECURRENCE_CREATE_ONE);
+    return validateRecurrence(
+      seriesLevel(supplied, [serverSegment(first, schedule.date, schedule)]),
+    );
+  }
+
+  const oldCount = stored.segments.length;
+  if (supplied.segments.length < oldCount || supplied.segments.length > oldCount + 1) {
+    recurrenceFailure(RECURRENCE_APPEND_ONLY);
+  }
+  for (const [index, oldSegment] of stored.segments.entries()) {
+    if (!isDeepStrictEqual(supplied.segments[index], oldSegment)) {
+      recurrenceFailure(RECURRENCE_APPEND_ONLY, `recurrence.segments.${index}`);
+    }
+  }
+
+  if (supplied.segments.length === oldCount) {
+    if (patch.editedFromDate !== undefined) {
+      recurrenceFailure(EDIT_DATE_NEEDS_APPEND, 'editedFromDate');
+    }
+    return validateRecurrence(seriesLevel(supplied, stored.segments));
+  }
+
+  const incoming = supplied.segments[oldCount];
+  if (incoming === undefined) recurrenceFailure(RECURRENCE_APPEND_ONLY);
+  const anchor =
+    patch.editedFromDate ??
+    formatInTimeZone(new Date(now), schedule.timezone, 'yyyy-MM-dd');
+
+  if (
+    patch.editedFromDate !== undefined &&
+    !expandRecurrence(
+      stored,
+      patch.editedFromDate,
+      patch.editedFromDate,
+      schedule.timezone,
+    ).includes(patch.editedFromDate)
+  ) {
+    recurrenceFailure(
+      'editedFromDate must be an occurrence emitted by the current active rule.',
+      'editedFromDate',
+    );
+  }
+
+  return validateRecurrence(
+    seriesLevel(supplied, [
+      ...stored.segments,
+      serverSegment(incoming, anchor, schedule),
+    ]),
+  );
+}
+
 /**
  * Applies a validated patch, behind `PATCH /v1/activities/:id` (P1-13).
  *
@@ -476,12 +637,14 @@ function merge(
               ? {}
               : { endTime: patch.schedule.endTime }),
           });
+  const recurrenceUpdate = recurrenceForPatch(current, patch, schedule, now);
 
   const next: Record<string, unknown> = {
     ...base,
     ...pick(patch, 'title', 'notes', 'details'),
     ...(schedule === undefined ? {} : { schedule }),
-    ...nullable(patch, 'recurrence', 'location', 'sourceUrl', 'parentActivityId'),
+    ...(recurrenceUpdate == null ? {} : { recurrence: recurrenceUpdate }),
+    ...nullable(patch, 'location', 'sourceUrl', 'parentActivityId'),
     /**
      * Re-derived rather than carried, because clearing a date is a scheduling-state change:
      * an activity with no date is `saved`. `cancelled` from the client and the two terminal
@@ -494,12 +657,8 @@ function merge(
   };
 
   if (schedule === undefined) delete next.schedule;
-  for (const field of [
-    'recurrence',
-    'location',
-    'sourceUrl',
-    'parentActivityId',
-  ] as const) {
+  if (recurrenceUpdate === null) delete next.recurrence;
+  for (const field of ['location', 'sourceUrl', 'parentActivityId'] as const) {
     if (patch[field] === null) delete next[field];
   }
 

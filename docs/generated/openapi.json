@@ -1302,9 +1302,7 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 31
-                  },
-                  "minItems": 1,
-                  "maxItems": 31
+                  }
                 },
                 "byMonth": {
                   "type": "array",
@@ -1383,9 +1381,7 @@
                         ]
                       }
                     ]
-                  },
-                  "minItems": 1,
-                  "maxItems": 12
+                  }
                 },
                 "rrule": {
                   "type": "string",
@@ -1408,7 +1404,8 @@
               "required": [
                 "freq",
                 "effectiveFrom"
-              ]
+              ],
+              "additionalProperties": false
             },
             "minItems": 1,
             "maxItems": 20
@@ -1419,14 +1416,15 @@
           },
           "count": {
             "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 1000
+            "minimum": 1,
+            "maximum": 999
           }
         },
         "required": [
           "mode",
           "segments"
-        ]
+        ],
+        "additionalProperties": false
       },
       "CreateActivityInput": {
         "oneOf": [
@@ -1470,7 +1468,217 @@
                 ]
               },
               "recurrence": {
-                "$ref": "#/components/schemas/Recurrence"
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "fixed",
+                      "after_completion"
+                    ]
+                  },
+                  "segments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "freq": {
+                          "type": "string",
+                          "enum": [
+                            "daily",
+                            "weekly",
+                            "monthly",
+                            "yearly",
+                            "interval_days",
+                            "weekdays",
+                            "custom"
+                          ]
+                        },
+                        "interval": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 365
+                        },
+                        "byWeekday": {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "enum": [
+                                  0
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  1
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  2
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  3
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  4
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  5
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  6
+                                ]
+                              }
+                            ]
+                          },
+                          "minItems": 1,
+                          "maxItems": 7
+                        },
+                        "byMonthDay": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 31
+                          }
+                        },
+                        "byMonth": {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "enum": [
+                                  1
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  2
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  3
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  4
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  5
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  6
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  7
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  8
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  9
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  10
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  11
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  12
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "rrule": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "time": {
+                          "type": "string",
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                        },
+                        "endTime": {
+                          "type": "string",
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                        }
+                      },
+                      "required": [
+                        "freq",
+                        "effectiveFrom"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  },
+                  "endDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 999
+                  }
+                },
+                "required": [
+                  "mode",
+                  "segments"
+                ],
+                "additionalProperties": false
               },
               "reminders": {
                 "type": "array",
@@ -1775,7 +1983,217 @@
                 ]
               },
               "recurrence": {
-                "$ref": "#/components/schemas/Recurrence"
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "fixed",
+                      "after_completion"
+                    ]
+                  },
+                  "segments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "freq": {
+                          "type": "string",
+                          "enum": [
+                            "daily",
+                            "weekly",
+                            "monthly",
+                            "yearly",
+                            "interval_days",
+                            "weekdays",
+                            "custom"
+                          ]
+                        },
+                        "interval": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 365
+                        },
+                        "byWeekday": {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "enum": [
+                                  0
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  1
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  2
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  3
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  4
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  5
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  6
+                                ]
+                              }
+                            ]
+                          },
+                          "minItems": 1,
+                          "maxItems": 7
+                        },
+                        "byMonthDay": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 31
+                          }
+                        },
+                        "byMonth": {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "enum": [
+                                  1
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  2
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  3
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  4
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  5
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  6
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  7
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  8
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  9
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  10
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  11
+                                ]
+                              },
+                              {
+                                "type": "number",
+                                "enum": [
+                                  12
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "rrule": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        },
+                        "effectiveFrom": {
+                          "type": "string",
+                          "format": "date"
+                        },
+                        "time": {
+                          "type": "string",
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                        },
+                        "endTime": {
+                          "type": "string",
+                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                        }
+                      },
+                      "required": [
+                        "freq",
+                        "effectiveFrom"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  },
+                  "endDate": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 999
+                  }
+                },
+                "required": [
+                  "mode",
+                  "segments"
+                ],
+                "additionalProperties": false
               },
               "reminders": {
                 "type": "array",
@@ -2213,6 +2631,10 @@
                 ]
               }
             ]
+          },
+          "editedFromDate": {
+            "type": "string",
+            "format": "date"
           },
           "location": {
             "type": [

@@ -9,7 +9,7 @@ import {
   MAX_TITLE_LEN,
 } from '../constants.js';
 import { cents, cursor, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
-import { recurrence } from './recurrence.js';
+import { createRecurrence, recurrence } from './recurrence.js';
 import { reminder, reminderInput } from './reminder.js';
 
 /**
@@ -202,6 +202,13 @@ export const activity = z
   .superRefine((value, ctx) => {
     checkDetailsMatchType(value, ctx);
     if (value.schedule !== undefined) checkSchedule(value.schedule, ctx);
+    if (value.recurrence !== undefined && value.schedule === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Repeat needs a scheduled date.',
+        path: ['recurrence'],
+      });
+    }
   })
   .meta({ id: 'Activity' });
 
@@ -229,7 +236,7 @@ const createFieldsShape = {
       timezone: ianaTimezone,
     })
     .optional(),
-  recurrence: recurrence.optional(),
+  recurrence: createRecurrence.optional(),
   /**
    * Written as `REM#` rows for the **creator alone**. Never a field on the stored Activity,
    * and never a reminder for anybody else.
@@ -274,6 +281,13 @@ export const createActivityInput = z
   .superRefine((value, ctx) => {
     checkDetailsMatchType(value, ctx);
     if (value.schedule !== undefined) checkSchedule(value.schedule, ctx);
+    if (value.recurrence !== undefined && value.schedule === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Repeat needs a scheduled date.',
+        path: ['recurrence'],
+      });
+    }
   })
   .meta({ id: 'CreateActivityInput' });
 
@@ -357,6 +371,7 @@ export const patchActivityInput = z
       .nullable()
       .optional(),
     recurrence: recurrence.nullable().optional(),
+    editedFromDate: isoDate.optional(),
     location: activityLocation.nullable().optional(),
     details: activityDetails.optional(),
     sourceUrl: z.url().nullable().optional(),
@@ -405,6 +420,13 @@ export const patchActivityInput = z
         },
         ctx,
       );
+    }
+    if (value.editedFromDate !== undefined && value.recurrence == null) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'editedFromDate requires a recurrence segment append.',
+        path: ['editedFromDate'],
+      });
     }
   })
   .meta({ id: 'PatchActivityInput' });
