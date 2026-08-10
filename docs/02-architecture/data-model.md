@@ -463,6 +463,7 @@ interface ActivityBase {
   icsSequence: number;         // starts at 0; RFC 5545 SEQUENCE for calendar exports
 
   createdAt: string;
+  lastActivityAt: string;      // discussion activity; sorts #P, never backs If-Match
   updatedAt: string;
   schemaVersion: 1;
 }

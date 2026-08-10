@@ -37,6 +37,7 @@ const base = {
   visibility: 'private',
   icsSequence: 0,
   createdAt: '2026-08-08T00:00:00.000Z',
+  lastActivityAt: '2026-08-08T00:00:00.000Z',
   updatedAt: '2026-08-08T00:00:00.000Z',
   schemaVersion: 1,
 } as const;
@@ -302,7 +303,28 @@ describe('recurrence on create', () => {
   });
 });
 
+describe('server-derived timestamps on create', () => {
+  it.each(['lastActivityAt', 'updatedAt'])(
+    'rejects %s instead of accepting mass assignment',
+    (field) => {
+      expect(
+        createActivityInput.safeParse({
+          title: 'Buy milk',
+          objectKind: 'task',
+          type: 'task',
+          [field]: '2026-08-09T00:00:00.000Z',
+        }).success,
+      ).toBe(false);
+    },
+  );
+});
+
 describe('patch', () => {
+  it.each(['lastActivityAt', 'updatedAt'])('rejects server-derived %s', (field) => {
+    expect(
+      patchActivityInput.safeParse({ [field]: '2026-08-09T00:00:00.000Z' }).success,
+    ).toBe(false);
+  });
   it('accepts cancelled, the one status a client may set', () => {
     expect(patchActivityInput.safeParse({ status: 'cancelled' }).success).toBe(true);
   });

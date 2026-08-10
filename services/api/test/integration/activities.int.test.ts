@@ -22,10 +22,12 @@ useTestTable();
 type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
 type Repo = typeof import('../../src/repositories/activityRepository.js');
+type Tx = typeof import('../../src/repositories/tx.js');
 
 let base: Base;
 let keys: Keys;
 let repo: Repo;
+let tx: Tx;
 
 /** The id `LocalIdentityProvider` resolves, which is what the real app will read as. */
 const DEV = 'usr_local_dev';
@@ -35,6 +37,7 @@ beforeAll(async () => {
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
   repo = await import('../../src/repositories/activityRepository.js');
+  tx = await import('../../src/repositories/tx.js');
 });
 
 const post = (body: unknown, options: { key?: string; userId?: string } = {}) =>
@@ -72,6 +75,7 @@ describe('a minimal body', () => {
       visibility: 'private',
       schemaVersion: 1,
     });
+    expect(body.data.lastActivityAt).toBe(body.data.createdAt);
   });
 
   it('stores a row the next read finds', async () => {
@@ -83,9 +87,11 @@ describe('a minimal body', () => {
   });
 
   it('writes exactly one index entry for the owner', async () => {
-    await post(TASK);
+    const { data } = await (await post(TASK)).json();
 
-    expect(await indexRows(DEV)).toHaveLength(1);
+    const rows = await indexRows(DEV);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.lastActivityAt).toBe(data.createdAt);
   });
 
   it('returns a body the shared activity schema accepts', async () => {
@@ -449,6 +455,35 @@ describe('patching an activity', () => {
     expect(res.status).toBe(200);
     expect(body.data.title).toBe('Buy oat milk');
     expect(body.data.updatedAt).not.toBe(activity.updatedAt);
+    expect(body.data.lastActivityAt).toBe(activity.lastActivityAt);
+  });
+
+  it('keeps a captured If-Match valid after discussion activity moves', async () => {
+    const createdPlan = await created({
+      objectKind: 'plan',
+      type: 'custom',
+      title: 'Dinner sometime',
+    });
+    const before = await repo.getActivityMeta(createdPlan.activityId);
+    if (before === undefined) throw new Error('Expected the created Activity META row');
+    const capturedIfMatch = before.updatedAt;
+    const touchedAt = '2026-08-10T12:00:00.000Z';
+    const items: Parameters<typeof repo.touchLastActivity>[3] = [];
+
+    repo.touchLastActivity(before, touchedAt, [DEV], items);
+    await tx.transactWrite(items, { operation: 'touchLastActivityTest' });
+
+    const touched = await repo.getActivityMeta(createdPlan.activityId);
+    expect(touched?.lastActivityAt).toBe(touchedAt);
+    expect(touched?.updatedAt).toBe(capturedIfMatch);
+
+    const res = await patch(
+      createdPlan.activityId,
+      { title: 'Dinner at Zahav' },
+      { ifMatch: capturedIfMatch },
+    );
+
+    expect(res.status).toBe(200);
   });
 
   it('persists, so the next read sees it', async () => {

@@ -286,7 +286,7 @@ gets forgotten.
    is a `400`, not a silently-ignored value. This is what stops mass-assignment: a client
    cannot smuggle `ownerId` or `status` into a `PATCH`.
 4. **Server-derived fields are never accepted from the client.** `ownerId`, `status`,
-   `createdAt`, `updatedAt`, `participantCount`, `expenseTotalCents`, and
+   `createdAt`, `updatedAt`, `lastActivityAt`, `participantCount`, `expenseTotalCents`, and
    `schemaVersion` are omitted from every input schema. `status` is derived on write
    (`data-model.md` §4.1).
 5. **Bounds on everything.** `title` 1–200, `notes` ≤ 4,000, participants ≤ 50, agenda

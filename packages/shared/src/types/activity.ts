@@ -137,6 +137,8 @@ export interface ActivityBase {
   icsSequence: number;
 
   createdAt: string;
+  /** Discussion activity; sorts undated Plans without invalidating edit concurrency. */
+  lastActivityAt: string;
   updatedAt: string;
   schemaVersion: 1;
 }

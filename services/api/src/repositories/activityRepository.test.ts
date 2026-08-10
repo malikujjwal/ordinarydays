@@ -8,7 +8,9 @@ import {
   newActivityId,
   newReminderId,
   patchActivity,
+  touchLastActivity,
 } from './activityRepository.js';
+import type { TransactItem } from './tx.js';
 
 /**
  * The derivation rules, and *did we compose the right transaction*.
@@ -43,6 +45,7 @@ const activity = (overrides: Partial<Activity> = {}): Activity =>
     visibility: 'private',
     icsSequence: 0,
     createdAt: '2026-08-08T10:00:00.000Z',
+    lastActivityAt: '2026-08-08T10:00:00.000Z',
     updatedAt: '2026-08-08T10:00:00.000Z',
     schemaVersion: 1,
     ...overrides,
@@ -110,6 +113,60 @@ describe('id generation', () => {
 
     expect(ulidId('act').safeParse(newActivityId()).success).toBe(true);
     expect(ulidId('rem').safeParse(newReminderId()).success).toBe(true);
+  });
+});
+
+describe('touchLastActivity transaction composition', () => {
+  const touchedAt = '2026-08-09T15:30:00.000Z';
+
+  it.each([
+    [
+      'S',
+      activity({ schedule: { ...schedule, time: '19:30' } }),
+      `U#${ALICE}#S`,
+      `2026-08-15T19:30#${ACT}`,
+    ],
+    ['P', plan(), `U#${ALICE}#P`, `${touchedAt}#${ACT}`],
+    ['N', activity(), `U#${ALICE}#N`, `2026-08-08T10:00:00.000Z#${ACT}`],
+    ['R', activity({ recurrence: series }), `U#${ALICE}#R`, `2026-08-01#${ACT}`],
+  ])(
+    'updates projected lastActivityAt while preserving the #%s bucket key rule',
+    (_bucket, subject, expectedPk, expectedSk) => {
+      const tx: TransactItem[] = [];
+
+      const touched = touchLastActivity(subject, touchedAt, [ALICE], tx);
+      const meta = tx[0]?.Put?.Item;
+      const index = tx[1]?.Put?.Item;
+
+      expect(touched).toMatchObject({
+        lastActivityAt: touchedAt,
+        updatedAt: subject.updatedAt,
+      });
+      expect(meta).toMatchObject({
+        entity: 'Activity',
+        lastActivityAt: touchedAt,
+        updatedAt: subject.updatedAt,
+      });
+      expect(index).toMatchObject({
+        entity: 'ActivityIndex',
+        lastActivityAt: touchedAt,
+        gsi1pk: expectedPk,
+        gsi1sk: expectedSk,
+      });
+      expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    },
+  );
+
+  it('writes one index per distinct caller-supplied owner/participant id', () => {
+    const tx: TransactItem[] = [];
+
+    touchLastActivity(activity(), touchedAt, [ALICE, 'usr_ben', ALICE], tx);
+
+    expect(tx).toHaveLength(3);
+    expect(tx.slice(1).map((item) => item.Put?.Item?.pk)).toEqual([
+      `USER#${ALICE}`,
+      'USER#usr_ben',
+    ]);
   });
 });
 

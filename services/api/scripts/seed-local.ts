@@ -161,6 +161,7 @@ function anActivity(index: number, row: Partial<Activity> & Pick<Activity, 'titl
     visibility: 'private',
     icsSequence: 0,
     createdAt: NOW,
+    lastActivityAt: NOW,
     updatedAt: NOW,
     schemaVersion: 1,
     ...row,

@@ -169,6 +169,7 @@ const activityBaseShape = {
     .optional(),
   icsSequence: z.number().int().nonnegative(),
   createdAt: z.string().min(1),
+  lastActivityAt: z.string().min(1),
   updatedAt: z.string().min(1),
   schemaVersion: z.literal(1),
 } as const;

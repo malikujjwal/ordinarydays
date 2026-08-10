@@ -322,6 +322,7 @@ export async function createActivity(
     visibility: 'private',
     icsSequence: 0,
     createdAt: now,
+    lastActivityAt: now,
     updatedAt: now,
     schemaVersion: 1,
   } as Activity;
@@ -903,6 +904,7 @@ export async function duplicateActivity(
     visibility: 'private',
     icsSequence: 0,
     createdAt: now,
+    lastActivityAt: now,
     updatedAt: now,
     schemaVersion: 1,
   } as Activity;
@@ -1135,6 +1137,7 @@ function toActivity(row: StoredItem): Activity {
     ...(stored.outcome === undefined ? {} : { outcome: stored.outcome }),
     icsSequence: stored.icsSequence,
     createdAt: stored.createdAt,
+    lastActivityAt: stored.lastActivityAt,
     updatedAt: stored.updatedAt,
     schemaVersion: stored.schemaVersion,
   } as Activity;

@@ -775,6 +775,10 @@
                 "type": "string",
                 "minLength": 1
               },
+              "lastActivityAt": {
+                "type": "string",
+                "minLength": 1
+              },
               "updatedAt": {
                 "type": "string",
                 "minLength": 1
@@ -810,6 +814,7 @@
               "details",
               "icsSequence",
               "createdAt",
+              "lastActivityAt",
               "updatedAt",
               "schemaVersion",
               "objectKind",
@@ -1167,6 +1172,10 @@
                 "type": "string",
                 "minLength": 1
               },
+              "lastActivityAt": {
+                "type": "string",
+                "minLength": 1
+              },
               "updatedAt": {
                 "type": "string",
                 "minLength": 1
@@ -1205,6 +1214,7 @@
               "details",
               "icsSequence",
               "createdAt",
+              "lastActivityAt",
               "updatedAt",
               "schemaVersion",
               "objectKind",

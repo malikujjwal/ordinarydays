@@ -48,6 +48,7 @@ const meta = (overrides: Record<string, unknown> = {}) => ({
   visibility: 'private',
   icsSequence: 0,
   createdAt: '2026-08-09T00:00:00.000Z',
+  lastActivityAt: '2026-08-09T00:00:00.000Z',
   updatedAt: '2026-08-09T00:00:00.000Z',
   schemaVersion: 1,
   ...overrides,

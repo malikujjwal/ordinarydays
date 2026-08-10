@@ -42,6 +42,7 @@ const meta = (overrides: Record<string, unknown> = {}) => ({
   visibility: 'private',
   icsSequence: 0,
   createdAt: '2026-08-01T00:00:00.000Z',
+  lastActivityAt: '2026-08-05T00:00:00.000Z',
   updatedAt: VERSION,
   schemaVersion: 1,
   ...overrides,
@@ -91,6 +92,20 @@ const indexEntry = () => {
 };
 
 describe('an ordinary patch', () => {
+  it.each(['lastActivityAt', 'updatedAt'])(
+    '400s client-supplied server-derived %s',
+    async (field) => {
+      seed();
+
+      const res = await patch(createApp(), {
+        [field]: '2026-08-10T00:00:00.000Z',
+      });
+
+      expect(res.status).toBe(400);
+      expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    },
+  );
+
   it('applies the change and returns the updated activity', async () => {
     seed();
 
@@ -118,6 +133,7 @@ describe('an ordinary patch', () => {
 
     expect(body.data.notes).toBe('Semi-skimmed');
     expect(body.data.createdAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(body.data.lastActivityAt).toBe('2026-08-05T00:00:00.000Z');
   });
 
   /**

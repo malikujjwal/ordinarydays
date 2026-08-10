@@ -126,11 +126,10 @@ function gsi1KeysFor(
     case 'P':
       /**
        * Sorted by `lastActivityAt` descending, so the plan people are actually discussing
-       * floats up rather than the oldest one. **That field does not exist until P2-06**,
-       * which initialises it to `createdAt` — so `createdAt` is the correct Phase 1 value
-       * and P2-06 replaces this line rather than adding to it.
+       * floats up rather than the oldest one. Creation initialises it to `createdAt`, and
+       * discussion writers move it without touching edit-concurrency state.
        */
-      return gsi1NeedsDate(userId, activity.createdAt, id);
+      return gsi1NeedsDate(userId, activity.lastActivityAt, id);
     case 'N':
       return gsi1Anytime(userId, activity.createdAt, id);
   }
@@ -149,6 +148,7 @@ export interface IndexProjection {
   type: Activity['type'];
   title: string;
   status: Activity['status'];
+  lastActivityAt: string;
   time?: string;
   endTime?: string;
   isRecurring: boolean;
@@ -204,6 +204,7 @@ function indexItem(
     type: activity.type,
     title: activity.title,
     status: activity.status,
+    lastActivityAt: activity.lastActivityAt,
     ...(activity.schedule?.time === undefined ? {} : { time: activity.schedule.time }),
     ...(activity.schedule?.endTime === undefined
       ? {}
@@ -421,6 +422,41 @@ export async function patchActivity(
   }
 
   await transactWrite(items, { operation: 'patchActivity' });
+}
+
+/**
+ * Appends the Activity and all of its index projections to an originating domain
+ * transaction after discussion activity (`data-model.md` §3.5).
+ *
+ * This helper performs no read and sends no transaction. RSVP, update, and expense writers
+ * already hold the complete Activity and participant user-id set; keeping composition here
+ * prevents those services from rebuilding GSI keys or touching `updatedAt`.
+ */
+export function touchLastActivity(
+  activity: Activity,
+  at: string,
+  indexedUserIds: readonly string[],
+  tx: TransactItem[],
+): Activity {
+  const touched = { ...activity, lastActivityAt: at } as Activity;
+
+  tx.push({
+    Put: {
+      Item: stamp(ENTITY.activity, touched, {
+        ...activityMeta(touched.activityId),
+        ...touched,
+      }),
+      ConditionExpression: '#updatedAt = :expected',
+      ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: { ':expected': activity.updatedAt },
+    },
+  });
+
+  for (const indexedUserId of new Set(indexedUserIds)) {
+    tx.push({ Put: { Item: indexItem(indexedUserId, touched) } });
+  }
+
+  return touched;
 }
 
 /**

@@ -16,10 +16,12 @@ useTestTable();
 type Repo = typeof import('../../src/repositories/activityRepository.js');
 type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
+type Tx = typeof import('../../src/repositories/tx.js');
 
 let repo: Repo;
 let base: Base;
 let keys: Keys;
+let tx: Tx;
 
 /** Two invented users. Neither needs a profile — the keys are what is under test. */
 const ALICE = 'usr_int_repo_alice';
@@ -56,6 +58,7 @@ const anActivity = (overrides: Partial<Activity> = {}): Activity =>
     visibility: 'private',
     icsSequence: 0,
     createdAt: '2026-08-08T10:00:00.000Z',
+    lastActivityAt: '2026-08-08T10:00:00.000Z',
     updatedAt: '2026-08-08T10:00:00.000Z',
     schemaVersion: 1,
     ...overrides,
@@ -65,6 +68,7 @@ beforeAll(async () => {
   repo = await import('../../src/repositories/activityRepository.js');
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
+  tx = await import('../../src/repositories/tx.js');
 });
 
 describe('create and read back', () => {
@@ -223,6 +227,38 @@ describe('bucket assignment', () => {
     });
 
     expect(august.items).toHaveLength(1);
+  });
+});
+
+describe('lastActivityAt ordering', () => {
+  it('returns an older touched Needs-a-date Plan before a newer untouched one', async () => {
+    const older = anActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+      title: 'Older plan',
+      createdAt: '2026-08-01T10:00:00.000Z',
+      lastActivityAt: '2026-08-01T10:00:00.000Z',
+      updatedAt: '2026-08-01T10:00:00.000Z',
+    } as Partial<Activity>);
+    const newer = anActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+      title: 'Newer plan',
+      createdAt: '2026-08-02T10:00:00.000Z',
+      lastActivityAt: '2026-08-02T10:00:00.000Z',
+      updatedAt: '2026-08-02T10:00:00.000Z',
+    } as Partial<Activity>);
+    await repo.createActivity(ALICE, older);
+    await repo.createActivity(ALICE, newer);
+    const items: Parameters<typeof repo.touchLastActivity>[3] = [];
+    repo.touchLastActivity(older, '2026-08-03T10:00:00.000Z', [ALICE], items);
+    await tx.transactWrite(items, { operation: 'touchLastActivityTest' });
+
+    const page = await repo.listByBucket(ALICE, 'P', { ascending: false });
+
+    expect(page.items.map((item) => item.title)).toEqual(['Older plan', 'Newer plan']);
   });
 });
 

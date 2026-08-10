@@ -60,6 +60,7 @@ function createdBody(overrides: Record<string, unknown> = {}) {
       details: { kind: 'task' },
       icsSequence: 0,
       createdAt: '2026-08-08T10:00:00.000Z',
+      lastActivityAt: '2026-08-08T10:00:00.000Z',
       updatedAt: '2026-08-08T10:00:00.000Z',
       schemaVersion: 1,
       ...overrides,

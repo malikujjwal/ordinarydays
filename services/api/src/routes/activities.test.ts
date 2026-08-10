@@ -53,6 +53,21 @@ const post = (
   );
 
 describe('creating a task', () => {
+  it.each(['lastActivityAt', 'updatedAt'])(
+    '400s client-supplied server-derived %s',
+    async (field) => {
+      const res = await post(createApp(), {
+        objectKind: 'task',
+        type: 'task',
+        title: 'Buy milk',
+        [field]: '2026-08-09T00:00:00.000Z',
+      });
+
+      expect(res.status).toBe(400);
+      expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    },
+  );
+
   it('returns 201 with the created activity', async () => {
     const res = await post(createApp(), {
       objectKind: 'task',

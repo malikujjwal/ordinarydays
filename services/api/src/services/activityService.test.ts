@@ -204,6 +204,7 @@ describe('createActivity', () => {
       visibility: 'private',
       icsSequence: 0,
       createdAt: NOW,
+      lastActivityAt: NOW,
       updatedAt: NOW,
       schemaVersion: 1,
     });
@@ -529,6 +530,7 @@ describe('projectDetail', () => {
     visibility: 'shared',
     icsSequence: 0,
     createdAt: NOW,
+    lastActivityAt: NOW,
     updatedAt: NOW,
     schemaVersion: 1,
   };
@@ -771,6 +773,7 @@ describe('patchActivity', () => {
     visibility: 'private',
     icsSequence: 0,
     createdAt: '2026-08-01T00:00:00.000Z',
+    lastActivityAt: '2026-08-05T00:00:00.000Z',
     updatedAt: VERSION,
     schemaVersion: 1,
     ...overrides,
@@ -894,6 +897,15 @@ describe('patchActivity', () => {
     await patchActivity(USER, PLAN, { title: 'Renamed' }, VERSION, LATER);
 
     expect(vi.mocked(repository.patchActivity).mock.calls[0]?.[2]).toBe(VERSION);
+  });
+
+  it('moves updatedAt on an edit and leaves lastActivityAt unchanged', async () => {
+    seed();
+
+    const result = await patchActivity(USER, PLAN, { title: 'Renamed' }, VERSION, LATER);
+
+    expect(result.updatedAt).toBe(LATER);
+    expect(result.lastActivityAt).toBe('2026-08-05T00:00:00.000Z');
   });
 
   it('hands the repository the row it read, so a bucket move can rewrite the index', async () => {
