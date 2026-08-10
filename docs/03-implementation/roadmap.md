@@ -239,7 +239,7 @@ and can be started against the contract alone.
 graph TD
     P0["Phase 0 · Foundations<br/>local · 31 tasks · 63 AWU"]
     P1["Phase 1 · Activity core<br/>local · 30 tasks · 72 AWU"]
-    P2["Phase 2 · Today and tasks<br/>local · 38 tasks · 97 AWU"]
+    P2["Phase 2 · Today and tasks<br/>local · 38 tasks · 99 AWU"]
     P3["Phase 3 · Plans and lists<br/>local · 43 tasks · 110 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
     P5["Phase 5 · Ship v1<br/>TestFlight · 37 tasks · 82 AWU"]
@@ -396,17 +396,17 @@ sizings did not support; those are corrected here.
 | --- | --- | --- | --- | --- |
 | 0 — Foundations | 31 | 9 / 17 / 5 | **63** | ~3 weeks |
 | 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
-| 2 — Today and tasks | 38 | 5 / 20 / 13 | **97** | ~4.85 weeks |
+| 2 — Today and tasks | 38 | 5 / 19 / 14 | **99** | ~4.95 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **142** | **22 / 80 / 40** | **342** | **~17.1 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **142** | **22 / 79 / 41** | **344** | **~17.2 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **212** | **34 / 125 / 53** | **496** | **~24.8 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **212** | **34 / 124 / 54** | **498** | **~24.9 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9** | **361** | **47 / 216 / 98** | **871** | **~43.6 weeks (~10 months)** |
+| **Total 0–9** | **361** | **47 / 215 / 99** | **873** | **~43.7 weeks (~10 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -418,7 +418,7 @@ P1-01…P1-18 and P1-20…P1-31.
 
 The previous roadmap's total was ~683 AWU and ~34 weeks. The first recomputation on
 2026-08-07 produced **859 AWU and ~43 weeks**; the dated gate corrections below bring the
-current plan to 871 AWU. The difference is not drift but explicit, auditable corrections.
+current plan to 873 AWU. The difference is not drift but explicit, auditable corrections.
 
 | Change | AWU |
 | --- | --- |
@@ -466,8 +466,15 @@ response storage atomic with domain writes and hardens crash replay before new P
 mutations land. That is **+1 task and +2 AWU**. It has one explicit out-of-numeric-order slot:
 after P2-11 and before P2-12; all other task sizes are unchanged.
 
-Use **871 AWU and ~43.6 weeks** (871 / 20 ≈ 43.55) as the plan of record. Everything
-through Phase 5 is now 496 AWU and ~24.8 weeks; the
+The sixth and final Phase 2 gate on **2026-08-10** expands P2-38 from M to L: multi-phase
+mutations now persist response receipt plus resumable cleanup work in their main transaction,
+and the protocol adds replay, next-Activity-mutation recovery and a crash-shaped fixture.
+That is **+2 AWU**, with no new task or dependency change. This re-sum also corrects the
+pre-existing End-of-Phase-7 milestone subtotal, which said 691 even though its constituent
+phase rows totalled 699 before this amendment; the amended milestone total is 701.
+
+Use **873 AWU and ~43.7 weeks** (873 / 20 ≈ 43.65) as the plan of record. Everything
+through Phase 5 is now 498 AWU and ~24.9 weeks; the
 remaining ~18.8 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
 participant can act on.
@@ -606,7 +613,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-142 tasks, 342 AWU, ~17.1 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+142 tasks, 344 AWU, ~17.2 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -618,7 +625,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-212 tasks, 496 AWU, ~24.8 weeks. External testers who are not the founder are using it on
+212 tasks, 498 AWU, ~24.9 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -630,7 +637,7 @@ after the first TestFlight build, migrations are mandatory in both environments.
 
 ### 6.3 End of Phase 7 — the full multi-player product, before any AI spend
 
-296 tasks, 691 AWU, ~34.6 weeks. Sharing, guests, invites, shared lists, date suggestions,
+296 tasks, 701 AWU, ~35.1 weeks. Sharing, guests, invites, shared lists, date suggestions,
 expenses, balances and settlement all work. Every marginal cost in the system is still a fraction of a cent per
 request, and every AWS line item is either free-tier or the domain.
 

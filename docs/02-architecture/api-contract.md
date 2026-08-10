@@ -91,15 +91,29 @@ free.
 ### Idempotency
 
 Every mutating `POST` writes an `IDEM#<userId>#<key>` item with a 24 h TTL holding the
-successful response's **status and body**. The idempotency item and the domain mutation are
-members of the same `TransactWriteItems`: repositories accept the conditional idempotency put
-as an extra transaction item, and transaction builders reserve capacity for it. There is no
-separate durable `in-flight` reservation that can survive a crash after the domain write.
+successful response's **status and body**. For a single-transaction operation, the receipt and
+domain mutation are members of the same `TransactWriteItems`: repositories accept the
+conditional receipt put as an extra item, and transaction builders reserve capacity for it.
+There is no separate durable `in-flight` reservation that can survive a crash after the domain
+write.
+
+A multi-phase operation writes its main domain state, receipt, and an
+`ACT#<activityId>/CLEANUP#<userId>#<key>` work item in the **same main transaction**. The work item
+records the remaining phases and their progress; the receipt points to it. The response is
+committed after that main transaction and does not wait for cleanup as a client-visible part
+of success. Cleanup is nevertheless attempted inline immediately, drained before a replay
+returns the stored response, and drained opportunistically before the next mutation touching
+the same Activity. Each phase is idempotent and deletes the work item only when all phases are
+complete. Unschedule reminder deletion, reminder-offset normalisation that exceeds transaction
+capacity, and the >45-participant RSVP reset use this shape. A crash can delay cleanup but
+cannot strand unrecorded work.
 
 A repeat with the same key returns the stored status and body unchanged — `201` remains `201`;
-no replay path hard-codes `200`. Concurrent first attempts race on the conditional idempotency
-put; the loser uses a strongly consistent read with bounded retry to return the winner's
-committed record instead of executing a second domain write. A failed domain transaction
+no replay path hard-codes `200`. When the receipt references outstanding cleanup, the replay
+path drains it before returning that stored response; it is not an unconditional middleware
+short-circuit. Concurrent first attempts race on the conditional idempotency put; the loser
+uses a strongly consistent read with bounded retry to return the winner's committed record
+instead of executing a second domain write. A failed domain transaction
 stores no successful response. P2-38 hardens the
 Phase 1 middleware and existing creating routes to this rule before Phase 2 adds further
 mutating `POST`s. Required because mobile networks retry and persisted mutations survive
@@ -320,11 +334,11 @@ Also:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `POST` | `/v1/activities` | Create a **Task or Plan chosen by the client**. Body = `CreateActivityInput`; both `objectKind` and `type` are required. Requires `Idempotency-Key`. |
+| `POST` | `/v1/activities` | Create a **Task or Plan chosen by the client**. Body = `CreateActivityInput`; both `objectKind` and `type` are required. When `recurrence` is present it contains **exactly one** segment; more is `validation_failed`. Stored recurrence still supports 1–20 segments, which grow only through the all-future PATCH path. Requires `Idempotency-Key`. |
 | `GET` | `/v1/activities/:id` | Full detail: activity + participants + expenses + updates + attachments + children + **the caller's own reminders** + date suggestions. Response shape is `ActivityDetail` (`packages/shared/src/types/activity.ts`), an object of named collections so each one is **added** as its phase lands rather than changing the envelope; Phase 1 defines `{ activity, reminders }` and nothing else exists to return yet. One DynamoDB Query; the `REM#` rows are filtered to the caller in the projection before responding. Stored `listId` / `listItemId` are included only when the caller also passes `assertListAccess`; a Plan participant outside the list receives no reverse link. |
 | `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. **Does not accept `schedule` or unschedule fields**; `POST .../schedule` is the single scheduling write path. A recurrence edit may additionally carry `editedFromDate?: WallDate`. When supplied, it must be a date emitted by the current stored active rule and becomes the server-written `effectiveFrom` of the one appended segment; when absent, the server uses today in the Activity's timezone. Any `effectiveFrom` values inside client-supplied segments are ignored. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
 | `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7 and deletes every child Expense locator with its row. The cascade deletes children and external pointers first and `ACT#/META` **last**, so an interrupted retry can still authorise; after META is gone, a replayed `404` is success for the client. **The settlement guard and the Expense-locator half of the cascade arrive in Phase 7 (P7-08), not Phase 1 (P1-14)** — see the note below. |
-| `POST` | `/v1/activities/:id/schedule` | The **single schedule write path**: `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule is `{ date: null }`. Requires `Idempotency-Key`. Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies; a time-only change does not. The response includes `rsvpReset: true` only when it happened. Status is server-derived from schedule presence (unless terminal), and `icsSequence` increments once iff an exported schedule field changed. Shared `toUtcInstant` derives UTC values; the spring gap `2026-03-08 02:30 America/New_York` moves forward to `03:00`. With `occurrenceDate`, writes the nominal override and, for a cross-day move, its destination marker in one transaction while leaving META unchanged. |
+| `POST` | `/v1/activities/:id/schedule` | The **single schedule write path**: `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule is `{ date: null }`. Requires `Idempotency-Key`. Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies; a time-only change does not. The response includes `rsvpReset: true` only when it happened. A timed → date-only transition retains reminders, coerces sub-day offsets to the nearest whole-day multiple (half-day ties choose the earlier reminder), and returns `reminderOffsetsNormalized: true` whether or not a row changed, so no participant's reminder existence is disclosed. Status is server-derived from schedule presence (unless terminal), and `icsSequence` increments once iff an exported schedule field changed. Shared `toUtcInstant` derives UTC values; the spring gap `2026-03-08 02:30 America/New_York` moves forward to `03:00`. With `occurrenceDate`, writes the nominal override and, for a cross-day move, its destination marker in one transaction while leaving META unchanged. |
 | `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. Requires `Idempotency-Key`; replay returns the original `2xx`. With `occurrenceDate` → writes an Occurrence, never touches the series. Plan completion is global and owner-only; ADR-051 allows the prep-task owner, parent-plan owner or a parent-plan participant to complete a prep task. Without `occurrenceDate`, META and every denormalised ActivityIndex status change in one transaction. |
 | `POST` | `/v1/activities/:id/uncomplete` | Requires `Idempotency-Key`; replay returns the original `2xx`. Reverses the above under the same ADR-051 policy and transaction/occurrence split. |
 | `POST` | `/v1/activities/:id/skip` | `{ occurrenceDate? }`. Requires `Idempotency-Key`; replay returns the original `2xx`. Uses the same ADR-051 policy; without an occurrence, META plus every index status are one transaction. |
@@ -376,7 +390,7 @@ interface ActivityCreateFields {
   title: string;                       // 1..200
   notes?: string;                      // ..4000
   schedule?: { date, time?, endTime?, timezone };
-  recurrence?: Recurrence;
+  recurrence?: Recurrence & { segments: [RecurrenceSegment] }; // create is exactly one segment
   reminders?: { offsetMinutes: number }[];
   location?: { label, address?, lat?, lng?, mapUrl? };
   details?: ActivityDetails;           // must match `type`
@@ -403,9 +417,11 @@ participants. Plan requires one of the four visible Plan kinds — `custom` (Gen
 never silently rewrite `objectKind`.
 
 `reminders` requires `schedule.date`; a create carrying reminders without a date is
-`400 validation_failed`. Unscheduling commits the META/index schedule change first, then
-removes the Activity's reminder rows through the separate idempotent, resumable cleanup in
-`data-model.md` §7. The reminder deletion is not atomic with the unschedule transaction.
+`400 validation_failed`. On date-only create, every offset is a whole-day multiple. The
+unschedule main transaction commits the META/index schedule change, successful receipt and
+persisted cleanup work together; the worker then removes reminder rows idempotently in
+bounded batches (`data-model.md` §7). The row deletion is not atomic with META/index state,
+but the obligation to finish it is durable before the response can be returned.
 
 The entry points map to writes as follows. There is deliberately no generic `/v1/add`
 endpoint whose handler guesses what the user meant.
@@ -466,6 +482,10 @@ rule and does not create direct participant rows.
 
 All three management routes require the Activity to have `schedule.date`; reminders on an
 undated Activity are `400 validation_failed`, consistent with `notifications.md` §2/§3.
+For a timed Activity, `offsetMinutes` is any integer in `[-10080, 0]`. For a date-only
+Activity it must also satisfy `offsetMinutes % 1440 === 0`; schema and service both enforce the
+schedule-aware rule. Clearing an Activity's time retains its reminder rows and normalises any
+sub-day offsets as specified by the schedule endpoint above.
 The client generates the reminder-create idempotency key once at the public action boundary
 and reuses it across transport retry or persisted replay.
 
@@ -546,7 +566,7 @@ interface ScheduleListItemInput {
   title?: string;                       // omitted => copy item title once
   notes?: string;
   schedule?: { date, time?, endTime?, timezone };
-  recurrence?: Recurrence;
+  recurrence?: Recurrence & { segments: [RecurrenceSegment] }; // this path also creates
   reminders?: { offsetMinutes: number }[]; // caller only
   location?: { label, address?, lat?, lng?, mapUrl? };
   details?: ActivityDetails;            // must match creationTarget.type

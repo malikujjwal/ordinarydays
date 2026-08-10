@@ -83,6 +83,7 @@ plan-detail screen is a single `Query`.
 | Child pointer | `ACT#<activityId>` | `SUB#<childActivityId>` | `ChildPointer` |
 | **Reminder** | `ACT#<activityId>` | `REM#<userId>#<reminderId>` | `Reminder` — **per user** |
 | Date suggestion | `ACT#<activityId>` | `SUGG#<isoTs>#<suggestionId>` | `DateSuggestion` |
+| Durable cleanup work | `ACT#<activityId>` | `CLEANUP#<userId>#<idempotencyKey>` | `CleanupWork` — internal, never projected to clients |
 
 > **Reminders are per user, not per activity.** A shared plan has **one schedule and many
 > reminder sets**. If Ujjwal wants "leave in 15 minutes", that is his reminder; Alice must
@@ -93,6 +94,10 @@ plan-detail screen is a single `Query`.
 > When someone joins a shared plan, their own explicitly set `User.defaultReminderOffset`
 > creates their own `REM#` row. `0` means At the time; absent/null means Off and creates no
 > row. Nobody inherits anybody else's.
+
+`CLEANUP#` rows are internal durability records for successful multi-phase mutations. A full
+detail Query ignores them during projection; they are never included in `ActivityDetail` or
+any agenda response.
 
 `SUB#` items are thin pointers written when an activity is given a `parentActivityId` —
 a prep task under a plan. They carry `childActivityId`, `title`, `status` and `rank` so the
@@ -182,7 +187,7 @@ pattern 8b and `security-privacy.md` §1 row 15a).
 | Guest email → person refs | `GUESTEMAIL#<lowercased-email>` | `OWNER#<ownerId>#PERSON#<personId>` | reverse index so guest→account linking is a `Query`, never a `Scan` |
 | Expense id → activity | `EXPENSE#<expenseId>` | `META` | thin `ExpenseLocator`; resolves a globally unique expense id to `activityId`, then the service authorises the caller against that Activity |
 | Settlement id → history row | `SETTLEMENT#<settlementId>` | `META` | thin `SettlementLocator`; resolves to `ownerId` + the exact `SETTLE#…` sort key for guarded undo |
-| Idempotency record | `IDEM#<userId>#<key>` | `META` | Stored successful response status + body; `ttl` = now + 24 h; conditionally written in the same transaction as the domain mutation |
+| Idempotency record | `IDEM#<userId>#<key>` | `META` | Stored successful response status + body and optional cleanup reference; `ttl` = now + 24 h; conditionally written in the main domain transaction |
 | Rate-limit counter | `RATE#<scope>#<subject>` | `<windowStart>` | `ttl` = window end |
 
 > Idempotency keys are **user-scoped**. A bare `IDEM#<key>` partition would let one user's
@@ -248,12 +253,18 @@ the Activity itself, because it backs the `If-Match` optimistic-concurrency head
 one field for both purposes would make a participant's RSVP spuriously fail an unrelated
 open edit sheet with `409`.
 
+The repository helper takes the complete post-write value:
+`touchLastActivity(activity, at, indexedUserIds, tx)`, mirroring `patchActivity`. It updates
+the projected `lastActivityAt` for every ActivityIndex row. Only a `#P` row rewrites `gsi1sk`
+to `<lastActivityAt>#<activityId>`; `#S`, `#R` and `#N` preserve their bucket-specific
+`gsi1pk`/`gsi1sk` strings byte-for-byte.
+
 `localDateTime` is the **user's local** wall-clock time, stored as `YYYY-MM-DDTHH:mm` with
 no offset. Reasoning: "Today" is a wall-clock concept. The absolute UTC instant is stored
 separately in `scheduledAtUtc` for reminders and `.ics` export.
 
 Every scheduled `ActivityIndex` projection also stores the Activity schedule's IANA zone as
-`ActivityIndex.timezone`. Agenda reads widen the `#S` key range by one day on each side,
+`ActivityIndex.timezone`. Agenda reads widen the `#S` key range by two days on each side,
 convert each timed row from that stored zone into the requested viewer zone, and only then
 filter to the exact requested dates. Without the projection, New York evening rows viewed
 from Tokyo can fall outside the unconverted key range and disappear.
@@ -541,6 +552,10 @@ startDate, time: schedule.time, endTime: schedule.endTime }] }`. See
 decision (segmented recurrence, 2026-08-07: history always renders under the rule in force
 at the time).
 
+`Recurrence` remains a 1–20-segment stored shape, but `CreateActivityInput` accepts exactly
+one segment. Supplying more on create is `validation_failed`; the only way stored history
+grows is the all-future append path below.
+
 The server owns every `effectiveFrom`. On PATCH, optional top-level
 `editedFromDate: WallDate` must be a date emitted by the current stored active rule and becomes
 the appended segment's anchor; when absent, the anchor is today in the Activity's timezone.
@@ -588,8 +603,16 @@ must filter by the caller's `userId`; any code path that *schedules* them reads 
 and fans out per user.
 
 A reminder requires `Activity.schedule.date`. Create and reminder-management writes reject
-an undated reminder; unscheduling deletes the Activity's reminder rows in the same
-transaction. This is the notifications §2/§3 rule, not a client convenience.
+an undated reminder. A timed Activity accepts every integer offset in `[-10080, 0]`; a
+date-only Activity additionally requires `offsetMinutes % 1440 === 0`. Both shared schema and
+service enforce the schedule-aware rule. When an Activity keeps its date but loses its time,
+sub-day offsets are retained and coerced to the nearest whole-day multiple; an exact half-day
+tie chooses the earlier reminder (away from zero).
+
+Unscheduling commits the cleared META/index state, idempotency receipt and a persisted
+`CLEANUP#` reminder-delete work item in the same **main** transaction. Reminder rows are then
+deleted in resumable bounded batches, not in that transaction. This is the notifications
+§2/§3 rule, not a client convenience.
 
 ### 4.3a DateSuggestion
 
@@ -619,6 +642,29 @@ interface DateSuggestion {
   path, including the RSVP reset in §7.1.
 - Guests on the public invite page cannot suggest dates. They read and RSVP.
 - Suggestions are deleted when the activity is scheduled.
+
+### 4.3b Durable cleanup work
+
+```ts
+interface CleanupWork {
+  activityId: string;
+  userId: string;                    // receipt owner; never client-selectable
+  idempotencyKey: string;
+  phases: Array<{
+    kind: 'delete_reminders' | 'normalise_untimed_reminders' | 'reset_rsvp';
+    cursor?: string;                 // opaque progress within the bounded phase
+    complete?: boolean;
+  }>;
+}
+```
+
+The main mutation transaction creates this row together with its domain write and successful
+idempotency receipt. The service then drains it inline. If that process dies, idempotent replay
+drains the receipt-linked row before returning the stored response, and the next mutation of
+the same Activity queries and drains any outstanding `CLEANUP#` rows before writing. Every
+phase is idempotent; already-deleted or already-normalised rows are success. Delete the work
+item only when every phase is complete. A cleanup row is post-success work, not an `in-flight`
+idempotency reservation, and never changes the response status/body already stored.
 
 ### 4.4 Type-specific details
 
@@ -1120,13 +1166,14 @@ before writing the code.
 
 | # | Pattern | Operation |
 | --- | --- | --- |
-| 1 | Today / date range for a user | `Query GSI1` `gsi1pk = U#<u>#S` and `gsi1sk BETWEEN <from − 1 day>T00:00 AND <to + 1 day>T23:59`; hydrate candidate META, convert timed rows from projected stored `timezone` or the mixed-generation META fallback into request `tz`, then filter to exact `[from, to]` viewer-local dates |
+| 1 | Today / date range for a user | `Query GSI1` `gsi1pk = U#<u>#S` and `gsi1sk BETWEEN <from − 2 days>T00:00 AND <to + 2 days>T23:59`; hydrate the widened candidate set, apply one-off/occurrence overrides before conversion, convert effective timed rows from projected stored `timezone` or the mixed-generation META fallback into request `tz`, then filter to exact `[from, to]` viewer-local dates |
 | 1a | Caller reminders for an agenda window (`include=reminders`) | After pattern 1/3 establishes the bounded distinct Activity ids emitted in the exact window, query each `ACT#<a>` with `sk begins_with REM#<callerUserId>#` and attach those rows to its AgendaItems. This is bounded repository fan-out behind the one agenda HTTP request and can never read another user's prefix |
 | 2 | Anytime items (undated solo tasks) | `Query GSI1` `gsi1pk = U#<u>#N` |
 | 2b | Needs a date — Plans, most recently discussed first | `Query GSI1` `gsi1pk = U#<u>#P`, `ScanIndexForward=false` |
 | 3 | Active recurring series for a user | `Query GSI1` `gsi1pk = U#<u>#R` |
 | 4 | Full plan detail (activity + participants + expenses + updates + attachments + reminders + suggestions) | `Query` `pk = ACT#<a>`. Filter `REM#` to the caller's `userId` before responding. |
 | 4b | Every reminder on an activity, for scheduling | Same query; the scheduler keeps all `REM#` rows and fans out per user |
+| 4c | Outstanding durable cleanup for an Activity | `Query` `pk = ACT#<a>`, `sk begins_with CLEANUP#` before a new mutation; idempotent replay instead follows the receipt's exact cleanup reference. Internal only, never serialised. |
 | 5 | Occurrence overrides and moved-in markers for a series window | Exact-key `BatchGetItem`: `OCC#<nominalDate>` for emitted nominal dates and `MOVE#<destinationDate>` for every calendar date in the timezone-widened request window. A bounded second `BatchGetItem` hydrates the source `OCC#<movedFrom>` rows named by returned markers. Never use one Query per series. |
 | 6 | User profile | `GetItem` `USER#<u>` / `PROFILE` |
 | 7 | Lists for a user | Paged `Query` `pk = USER#<u>`, `sk begins_with LIST#` (50 pointers per API page), then one `BatchGetItem` for that page's `LIST#<l>` / `META` rows. The 100 cap is on owned-list creation, not incoming memberships. |
@@ -1164,8 +1211,7 @@ expandAgenda(userId, fromDate, toDate, tz):
   2. scheduled  = BatchGetItem ACT#<id>/META for every candidate
        // canonical one-off snoozedUntil lives on META, not the index projection
        // Phase 1 index rows may lack timezone; META.schedule.timezone is the fallback
-       scheduled = convert each timed candidate from (index.timezone ?? META.schedule.timezone) to tz,
-                   then retain only viewer-local dates inside exact [from..to]
+       // retain the complete widened set; do not exact-window filter nominal/base times
   3. seriesIdx  = Query GSI1 U#<u>#R, capped at 200           // thin index rows only
   4. series     = BatchGetItem ACT#<id>/META for every seriesIdx row
        // hydrate every selected #R row before expansion; chunk at 100, retry
@@ -1176,7 +1222,7 @@ expandAgenda(userId, fromDate, toDate, tz):
           dates  += expandRecurrence(g, intersect([from-2d..to+2d], inForce), s.schedule.timezone)
                                                                // pure, no I/O; anchor = g.effectiveFrom
        apply series-level endDate / count across the concatenated, ordered dates
-       convert emitted instants from s.schedule.timezone to tz and filter exact [from..to]
+       // retain the widened nominal set; no exact viewer-window filter yet
   6. overrides = BatchGetItem OCC#<date> for every (series, nominal date) pair produced in 5,
                  plus MOVE#<destinationDate> for each series and each date in the widened window
        // MOVE keys are exact and collision-free even when a normal occurrence is due there
@@ -1195,7 +1241,8 @@ expandAgenda(userId, fromDate, toDate, tz):
        with "moved from <source date>"; never emit the marker as its own occurrence
      for each one-off scheduled item:
        if activity.snoozedUntil           -> emit at activity.snoozedUntil
-  8. merge scheduled + expanded, de-duplicate after timezone conversion
+  8. convert every effective scheduled/occurrence instant to viewer tz,
+       filter exact viewer-local [from..to], merge scheduled + expanded, then de-duplicate
   9. if include=reminders:
        query REM#<callerUserId># for each bounded distinct emitted Activity and attach rows
        to that Activity's AgendaItems in [from..to]
@@ -1204,6 +1251,12 @@ expandAgenda(userId, fromDate, toDate, tz):
 ```
 
 Constraints:
+
+- The read order is normative: **expand → fetch overrides for the widened candidate set →
+  apply `overrideTime` / `overrideDate` / `snoozedUntil` → filter the exact viewer window**.
+  Filtering a nominal date or base time before override application can drop an occurrence
+  that moves into the requested day. The named New York → Tokyo cross-midnight override test
+  locks this order.
 
 - Window is capped at **62 days**. Reject wider requests with `400`.
 - Segments per series are capped at **20** (`validation_failed` on append beyond it),
@@ -1227,15 +1280,17 @@ Constraints:
 ## 7. Write paths that touch multiple items
 
 Use `TransactWriteItems` for these. They are the only places transactions are required.
-Every operation reached through a mutating POST also includes the conditional
-`IDEM#<userId>#<key>` response-record put in that same transaction (P2-38); transaction-size
-calculations reserve one item for it. Replays return the stored status/body and execute no
-domain write.
+Every operation reached through a mutating POST includes the conditional
+`IDEM#<userId>#<key>` response receipt in its main transaction (P2-38); transaction-size
+calculations reserve one item for it. A multi-phase operation additionally writes a
+`CLEANUP#<userId>#<key>` item in that main transaction and reserves a second item. Replay
+executes no second main domain write; it drains receipt-linked cleanup before returning the stored
+status/body.
 
 | Operation | Items written |
 | --- | --- |
 | Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and `ACT#<parent>/SUB#<child>` when `parentActivityId` is set (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two) |
-| Schedule / reschedule | One transaction writes `ACT#/META` plus `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change), plus `ACT#<parent>/SUB#<child>` when a prep task's derived status changes. An occurrence-only cross-day move instead writes its nominal `OCC#` override plus destination `MOVE#` marker and never META. RSVP reset follows §7.1: it may join through 45 participants and uses the documented two-phase marker/batches above that. Unscheduling deletes every `REM#` row in a separate idempotent, resumable bounded-batch cleanup; reminder deletion is never claimed to fit in the META/index transaction. |
+| Schedule / reschedule | One main transaction writes `ACT#/META` plus `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change), plus `ACT#<parent>/SUB#<child>` when a prep task's derived status changes. An occurrence-only cross-day move instead writes its nominal `OCC#` override plus destination `MOVE#` marker and never META. RSVP reset follows §7.1: it may join through 45 participants; above that the main transaction writes `rsvpResetPending`, receipt and `CLEANUP#` work, then bounded idempotent phases rewrite participants and clear the marker. Unscheduling's main transaction similarly persists receipt + reminder-delete cleanup before bounded deletion. A timed → date-only change normalises sub-day reminder offsets, using persisted cleanup when the fan-out cannot fit. None of those reminder rows is falsely claimed to be atomic with META/index state. |
 | Add participant (app user) | `ACT#/PART#`, `USER#<invitee>/IDX#`, `USER#<owner>/PLINK#`, `USER#<invitee>/PLINK#`, counter update on `ACT#/META` |
 | Add participant (guest) | `ACT#/PART#`, `USER#<owner>/PERSON#`, `USER#<owner>/PLINK#`, `INVITE#<token>/META` |
 | Add list member (app user) | `LIST#/MEMBER#`, invitee `USER#/LIST#`, owner and reciprocal `USER#/PERSON#` when absent, both active `USER#/LLINK#` rows, and `LIST#/META` member counter — at most 7 items |
@@ -1258,9 +1313,11 @@ domain write.
 Participant fan-out is bounded: **cap participants at 50 per activity** in v1. Enforce it
 in validation. The cap alone does **not** keep every write under DynamoDB's 100-item
 transaction limit: the RSVP-reset reschedule is 103 items at the cap, so above 45
-participants it runs as phase-06 P6-15's two-phase reset — an `rsvpResetPending` marker on
-`ACT#/META` in phase one, `PART#` rows rewritten in batches in phase two, with every RSVP
-read returning `pending` while the marker is set — rather than one transaction.
+participants it runs as the P2-12/P6-15 two-phase reset — an `rsvpResetPending` marker,
+successful receipt and `CLEANUP#` work item are committed with `ACT#/META` in phase one;
+`PART#` rows are rewritten in idempotent batches and the marker is cleared in later recorded
+phases, with every RSVP read returning `pending` while the marker is set. Inline, replay and
+next-Activity-mutation drains all resume the same work rather than starting a new reset.
 
 ### 7.1 RSVP consent does not survive a date change
 

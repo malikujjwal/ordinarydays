@@ -136,7 +136,10 @@ An activity with a `date` and no `time` has no meaningful instant, so:
 > a profile setting defaulting to **09:00 local** on the item's date. Offsets on an untimed
 > item are interpreted in whole days from that hour: `1 day before` = 09:00 the previous
 > day. Sub-day offsets (`-5`, `-15`, `-30`, `-60`, `-120`) are not offered on an untimed
-> item; the picker shows `On the day`, `1 day before`, `2 days before`, `Custom…`.
+> item and are rejected by schema and service; `offsetMinutes % 1440` must be zero. The picker
+> shows `On the day`, `1 day before`, `2 days before`, `Custom…`. If a timed Activity keeps its
+> date but loses its time, existing sub-day offsets are retained as reminders and rounded to
+> the nearest whole-day multiple; exact half-day ties choose the earlier reminder.
 
 If the all-day hour falls inside quiet hours, the rule in §4 applies.
 

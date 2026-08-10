@@ -52,6 +52,16 @@ Anytime list. This is the phase where the product becomes usable daily.
 > and P2-38 hardens idempotency response storage atomically. The one deliberate execution-order
 > exception is `P2-01…P2-11 → P2-38 → P2-12…P2-37`. Phase 2 is now 38 tasks / 97 AWU.
 
+> **Sixth and final gate amendment — 2026-08-10.** The execution contract now makes
+> post-response cleanup crash-safe, applies occurrence overrides before exact viewer-window
+> filtering, gives `touchLastActivity` the full post-write Activity, narrows recurrence creation
+> to one segment, finishes the ±2-day documentation sweep, and makes date-only reminder offsets
+> whole-day values. P2-38 grows from M to L for the durable cleanup protocol and its crash
+> harness, taking Phase 2 to **38 tasks / 99 AWU**; dependencies and execution order are unchanged.
+> **This plan is now frozen for execution.** Later edits to this phase file may record deviations
+> discovered during implementation, but must not redesign the planned scope; that is the
+> phase-docs-are-living rule applied to a plan that has passed its final gate.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -125,7 +135,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-09 | Overdue roll-forward query rule | api | P2-08 | no | M |
 | P2-10 | `AgendaItem` projection: subtitle, checkbox, isPast | api | P2-08 | no | M |
 | P2-11 | `GET /v1/agenda` route, window cap, `ETag`, warnings | api | P2-08, P2-09, P2-10 | no | M |
-| **P2-38** | **Idempotency replay hardening (deliberate pre-P2-12 execution slot)** | api | P1-04, P1-05, P1-09 | no | M |
+| **P2-38** | **Idempotency replay hardening (deliberate pre-P2-12 execution slot)** | api | P1-04, P1-05, P1-09 | no | L |
 | P2-12 | Sole schedule write path and detail-UI migration | shared/api/mobile | P2-01, P2-05, P2-07, P2-38, P1-10 | yes | L |
 | P2-13 | `POST /v1/activities/:id/complete` and `/uncomplete` | api | P2-05, P2-07, P2-10, P2-38, P1-10 | no | L |
 | P2-14 | `POST /v1/activities/:id/skip` | api | P2-13 | yes | S |
@@ -457,8 +467,11 @@ each `RecurrenceSegment` carries the rule fields of
 [`../02-architecture/data-model.md#42-recurrence`](../02-architecture/data-model.md#42-recurrence)
 minus `startDate`, plus a required `effectiveFrom` (`YYYY-MM-DD`, its expansion anchor) and
 an optional `time`/`endTime` snapshot of the schedule time in force while it applies.
-`segments` is ordered ascending by `effectiveFrom` with no duplicates, length 1–20; the
-write that would create a 21st segment is `validation_failed`, and the message says so, so
+`segments` is ordered ascending by `effectiveFrom` with no duplicates, length 1–20 in stored
+state. **Creation accepts exactly one segment**: the `CreateActivityInput` recurrence schema
+narrows `segments` to length 1, and `POST /v1/activities` returns `validation_failed` if a
+caller supplies more. The write that would create a 21st stored segment is
+`validation_failed`, and the message says so, so
 the sheet can explain it (§6.2). `mode`, `endDate` and `count` belong to the series — one
 Ends setting closes the whole series, however many segments it has. (`data-model.md` §4.2
 carries the same segmented shape, including the lazy-migration reading of pre-segment
@@ -466,7 +479,9 @@ rows.)
 
 The shared Zod shape is necessary but not sufficient. `activityService` enforces the
 stored-state rules on **both** `POST /v1/activities` and the `PATCH` recurrence path after
-loading the current Activity. The PATCH body may carry `editedFromDate?: WallDate` alongside
+loading the current Activity. Create proves that there is exactly one segment; segment history
+can grow only through the all-future PATCH path. The PATCH body may carry
+`editedFromDate?: WallDate` alongside
 `recurrence`. When present, the service proves that the current stored active rule emits that
 date and uses it as the appended segment's `effectiveFrom`; when absent, it uses today in the
 Activity's timezone. `editedFromDate` without a recurrence append is `validation_failed`.
@@ -494,7 +509,9 @@ Per-segment rule constraints, which the shared shape and service apply to **ever
 'after_completion'` rejected with a message naming the phase; `interval: 1` on
 `interval_days` normalised; a 20-segment series accepted and a 21st rejected with the
 explaining message; an append with a rewritten past segment rejected; `effectiveFrom` not
-ascending rejected. Service tests cover create and PATCH separately, prove supplied
+ascending rejected. The create schema and service each reject a two-segment create with
+`validation_failed`, while a one-segment create succeeds and a previously stored series may
+grow by one valid append. Service tests cover create and PATCH separately, prove supplied
 `effectiveFrom` values are overwritten by the server, and prove PATCH cannot alter any
 stored segment while it may append exactly one final segment and/or edit series-level Ends.
 Named service tests prove a valid emitted `editedFromDate` becomes the appended anchor, a date
@@ -636,14 +653,18 @@ a collision the model invented. Two fields cost eight bytes and remove the whole
   rule 4. A request containing either is `400`.
 - `lastActivityAt` is initialised to `createdAt` on creation, so a plan that has never been
   discussed still sorts.
-- The bump is one repository transaction builder,
-  `touchLastActivity(activityId, at, indexedUserIds, transactionBuilder)`. The caller supplies
-  the owner/participant user-id set and the transaction builder under construction, matching Phase 1's
-  `PatchOptions.indexedUserIds` fan-out pattern. The service layer already holds the
+- The bump is one repository transaction-builder helper,
+  `touchLastActivity(activity, at, indexedUserIds, tx)`. `activity` is the full post-write
+  Activity, mirroring `patchActivity`; the helper never re-reads or reconstructs it. The
+  caller supplies the owner/participant user-id set and the transaction builder under
+  construction, matching Phase 1's `PatchOptions.indexedUserIds` fan-out pattern. The service layer already holds the
   participant set for the originating update, RSVP or expense write and provides it; the
   helper performs no discovery read, sends no transaction of its own, and appends the META
-  plus every `IDX#` write to the caller's transaction. Never a second round trip, and never
-  a bare `UpdateItem` from a service.
+  plus every `IDX#` write to the caller's transaction. For a `#P` row it rewrites `gsi1sk`
+  from the new `lastActivityAt`. For `#S`, `#R` and `#N`, it updates the projected
+  `lastActivityAt` attribute while preserving both existing GSI key strings byte-for-byte;
+  touching an activity must not turn their bucket-specific sort keys into timestamps. Never a
+  second round trip, and never a bare `UpdateItem` from a service.
 - **An edit bumps `updatedAt` only.** Renaming a plan is not a discussion, and letting a
   rename reorder the Needs-a-date list would make the stage twitch on every keystroke-saved
   edit.
@@ -662,6 +683,8 @@ a collision the model invented. Two fields cost eight bytes and remove the whole
 - `PATCH`ing the title moves `updatedAt` and leaves `lastActivityAt` unchanged.
 - Two activities in the `#P` bucket, the older one touched: a descending query on
   `U#<u>#P` returns it first.
+- One touched row in each of `#S`, `#R` and `#N` has a changed projected
+  `lastActivityAt` and byte-identical `gsi1pk`/`gsi1sk`; only the `#P` case changes `gsi1sk`.
 - `lastActivityAt` equals `createdAt` on a freshly created activity.
 - A request body containing `lastActivityAt` or `updatedAt` is rejected with `400`.
 
@@ -759,9 +782,8 @@ implemented literally:
 2. `BatchGetItem` `ACT#<activityId>/META` for every scheduled candidate, so one-off
    `snoozedUntil` comes from its canonical META field. For a timed row, use the index
    projection's `timezone` when present and fall back to the hydrated
-   `META.schedule.timezone` for a Phase 1 row that predates the projection. Convert that
-   stored zone to an instant with shared `toUtcInstant`, then into request `tz`; **only after
-   conversion**, retain rows whose viewer-local date is inside `[from, to]`.
+   `META.schedule.timezone` for a Phase 1 row that predates the projection. Keep every
+   hydrated candidate from the widened range; do **not** exact-window filter it yet.
 3. `Query GSI1 U#<u>#R` — at most the first 200 active-series index rows, with the existing
    warning if more exist.
 4. **Series hydration:** before any expansion, `BatchGetItem` `ACT#<activityId>/META` for
@@ -769,13 +791,14 @@ implemented literally:
    unauthorised META rows are dropped with a warning. Expansion must never treat the thin
    index projection as a `Recurrence`.
 5. For each hydrated series, `expandRecurrence(...)` over `[from-2d, to+2d]` in the
-   series' stored timezone — pure, no I/O, called inside a loop with no awaits — then
-   convert emitted instants into request `tz` and filter by the exact viewer-local
-   `[from, to]` window.
+   series' stored timezone — pure, no I/O, called inside a loop with no awaits. Retain the
+   full widened candidate set; do **not** convert and exact-window filter it yet.
 6. In one exact-key batch pass, request `OCC#<date>` overrides for every emitted nominal pair
    and collision-safe `MOVE#<destinationDate>` markers for every series/date in the widened
-   calendar window. A marker contains sorted, unique `movedFrom` nominal dates. Collect those
-   source keys and hydrate their `OCC#<movedFrom>` rows in a **second** bounded batch pass.
+   calendar window. This lookup happens before exact-window filtering, so an override may
+   move an otherwise out-of-window nominal occurrence into the requested viewer day. A marker
+   contains sorted, unique `movedFrom` nominal dates. Collect those source keys and hydrate
+   their `OCC#<movedFrom>` rows in a **second** bounded batch pass.
    DynamoDB cannot follow a pointer discovered in the response to the first `BatchGetItem`;
    both passes are chunked at 100 with `UnprocessedKeys` retry, and the 60-day write bound
    caps the source set.
@@ -791,8 +814,11 @@ implemented literally:
    §6.2).
    For a one-off row, apply `ACT#/META.snoozedUntil` as its effective time; occurrence
    overrides remain series-only.
-8. Merge the scheduled and expanded results and de-duplicate by `(activityId,
-   occurrenceDate?)` after viewer-timezone conversion.
+8. Only now convert every effective scheduled/occurrence instant into request `tz`, retain
+   rows whose effective viewer-local date is in exact `[from, to]`, merge the scheduled and
+   expanded results, and de-duplicate by `(activityId, occurrenceDate?)`. The normative order
+   is **expand → fetch widened overrides → apply overrides → exact viewer-window filter**;
+   filtering a nominal date or base time before step 7 is incorrect.
 9. **Action-context hydration:** before projection, materialise one already-hydrated
    `ActionCapabilityContext` per distinct Activity: the canonical Activity, the caller's
    relationship to it, and—when `parentActivityId` is present—the parent `ownerId` and whether
@@ -859,6 +885,11 @@ on its ticker (P2-20).
 - Widening the `#S` query never widens the response. Rows are filtered only after conversion
   to request `tz`; transferred matrix case 30 (22:00 New York viewed from Tokyo) is an acceptance
   test here, proving the item appears on the following Tokyo date exactly once.
+- The named **`New York → Tokyo cross-midnight override enters the viewer window`** test uses
+  a New York occurrence whose nominal 23:30 time converts to the following Tokyo date, then
+  overrides it to 08:00 so it converts to the prior Tokyo date. A request for that prior date
+  includes it exactly once. The test fails if nominal conversion/filtering runs before override
+  hydration and application.
 - The named extreme-zone test **`2026-01-01 23:30 UTC−12 becomes 2026-01-03 UTC+14`** proves
   both the ±2-day scheduled query and series-expansion window. Replacing either with ±1 makes
   the test fail.
@@ -1010,14 +1041,33 @@ each of the three cases.
 `services/api/src/repositories/tx.ts`, the existing Phase 1 mutating-POST handlers/services
 and repositories, and their unit/integration tests.
 
-**Approach.** Replace Phase 1's reserve → domain write → complete sequence with the atomic
-contract in API contract §1. For every mutating POST, the service precomputes the successful
-HTTP status/body and passes a conditional `IDEM#<userId>#<key>` put as an extra item to the
-repository transaction that performs the domain write. Transaction builders reserve one of
-DynamoDB's 100 item slots for that record. A domain repository that cannot accept this extra
-item is not ready to back a mutating POST.
+**Approach.** Replace Phase 1's reserve → domain write → complete sequence with the durable
+contract in API contract §1. For a **single-transaction** mutating POST, the service precomputes
+the successful HTTP status/body and passes a conditional `IDEM#<userId>#<key>` put as an extra
+item to the repository transaction that performs the domain write. Transaction builders
+reserve one of DynamoDB's 100 item slots for that record. A domain repository that cannot
+accept this extra item is not ready to back a mutating POST.
 
-The record stores `{ status, body, ttl }`. Replay returns **that stored status and body**;
+For a **multi-phase** operation, the main transaction atomically writes three things: its main
+domain state, the successful idempotency receipt, and a persisted
+`ACT#<activityId>/CLEANUP#<userId>#<idempotencyKey>` work item that records each remaining
+phase and its cursor/progress. Builders reserve two slots for the receipt and work item. This is the shape
+used by unschedule reminder deletion and the >45-participant RSVP reset; P2-12 also uses it for
+any reminder-normalisation fan-out that cannot fit the main transaction. The HTTP response is
+eligible immediately after the main transaction commits—cleanup completion is not
+client-visible—but the service attempts the drain inline before returning.
+
+Outstanding work is drained idempotently from all three recovery paths: immediately inline
+after the main transaction; on an idempotent replay; and opportunistically before the next
+mutation touching the same Activity. The replay middleware therefore must not blindly
+short-circuit on a stored receipt: when its receipt points to outstanding cleanup, it invokes
+the cleanup coordinator and drains that work **before** returning the stored response. A
+transient drain failure leaves the work item and returns a retryable failure rather than
+pretending the drain completed. The opportunistic path queries the Activity's `CLEANUP#`
+prefix before its next write. A worker deletes its work item only after all recorded phases
+complete, and every phase treats already-applied work as success.
+
+The receipt stores `{ status, body, ttl, cleanupRef? }`. Replay returns **that stored status and body**;
 there is no hard-coded `200`. Remove the durable in-flight record/state. Two concurrent first
 attempts may both reach the transaction, but the conditional idempotency put permits only one
 commit; the cancelled contender performs a strongly consistent read with bounded retry for
@@ -1037,7 +1087,14 @@ the transaction committed but before the HTTP response reaches the caller, then 
 same key and assert the original status/body with exactly one domain write. A `201` replay
 stays `201`. Concurrent same-key requests produce one transaction commit and two identical
 responses. An injected transaction cancellation stores neither item. Grep/registry tests
-prove no mutating POST bypasses the middleware and no replay branch hard-codes `200`.
+prove no mutating POST bypasses the middleware and no replay branch hard-codes `200`. Because
+the first real multi-phase schedule operations land in P2-12, P2-38's protocol integration
+test uses a test-only Activity mutation fixture; P2-12 repeats the assertions through real
+unschedule and RSVP paths. The protocol test crashes after the main transaction but before cleanup, then proves that (a) the
+receipt and work item both exist, (b) replay drains the outstanding phases before returning
+the stored response, and (c) a later same-Activity mutation also drains an abandoned item.
+Repeated inline/replay/opportunistic drains produce no duplicate effects, and cancellation of
+the main transaction leaves neither receipt nor cleanup item.
 
 ---
 
@@ -1084,20 +1141,34 @@ gets `404` under the authorisation policy in API contract §3.
   for a prep task whose derived status changes, its parent `SUB#` pointer row.
   Scheduling moves `N → S` or `P → S`; unscheduling moves `S → N` for a Task and `S → P`
   for a Plan.
-- **Unscheduling deletes reminders as a separate idempotent, resumable step.** After the
-  atomic META + index rewrite clears the date, the service deletes every `REM#` row in the
-  Activity partition in bounded batches, records/resumes incomplete cleanup, and treats
-  already-absent rows as success. It is not folded into the transaction: at the participant
-  and per-user reminder caps that transaction cannot fit. Best-effort fire-and-forget cleanup
-  is still not acceptable.
+- **Unscheduling deletes reminders as a separate idempotent, resumable phase.** The main
+  META + index transaction that clears the date also writes the P2-38 receipt and a persisted
+  `CLEANUP#` work item describing the bounded reminder-delete batches. It is not folded into
+  that transaction: at the participant and per-user reminder caps the delete set cannot fit.
+  The response is based on the committed main write; cleanup then drains inline, on replay
+  before the stored response is returned, or before the next mutation of this Activity.
+  Already-absent rows are success. Best-effort fire-and-forget cleanup is not acceptable.
+- **Clearing only the time keeps reminders and normalises their offsets.** When an Activity
+  remains dated but changes from timed to date-only, every sub-day reminder offset is coerced
+  to the nearest whole-day multiple (`offsetMinutes % 1440 === 0` afterwards); exact half-day
+  ties choose the earlier reminder, away from zero. This fan-out uses the same persisted
+  `CLEANUP#` mechanism whenever it cannot fit the main transaction. The schedule response
+  includes `reminderOffsetsNormalized: true` whenever a timed → date-only transition occurs,
+  whether or not any row needed changing, so it states the rule without revealing another
+  participant's reminder existence, count, ids or offsets. The RescheduleSheet explains before
+  save that reminders are kept and sub-day offsets become the nearest whole day; this is the
+  retained-data/additive case under `interaction-contract.md` §1a.1, not reminder deletion.
 - **The RSVP reset ships now, reachable in Phase 6.** A date set or changed resets every
   non-declined participant to `pending`, clears `respondedAt`, and sets `rsvpForDate`; a
   time-only change keeps responses; clearing the date keeps them and clears `rsvpForDate`
   ([`../02-architecture/data-model.md#71-rsvp-consent-does-not-survive-a-date-change`](../02-architecture/data-model.md#71-rsvp-consent-does-not-survive-a-date-change)
   §7.1). That section is authoritative for transaction shape: through 45 participants the
-  reset may join the write; above 45 it uses the documented two-phase
-  `rsvpResetPending` path and bounded participant batches. The response carries
-  `rsvpReset: true` only when a reset occurred.
+  reset may join the write; above 45 the main write atomically sets the documented
+  `rsvpResetPending` state and persists the receipt plus a `CLEANUP#` work item whose phases
+  advance the bounded participant batches and clear the pending marker. Inline, replay and
+  next-mutation drains use the same idempotent worker. The response carries
+  `rsvpReset: true` only when a reset occurred. `reminderOffsetsNormalized: true` is present
+  only for a timed → date-only transition, as defined above.
 - **`icsSequence` follows the API contract.** Compare the before/after exported fields and
   increment once when `schedule.date`, `schedule.time`, `schedule.endTime` or
   `schedule.timezone` changes, including set and clear. Repeating an identical request does
@@ -1115,8 +1186,9 @@ gets `404` under the authorisation policy in API contract §3.
   `validation_failed`; all-future edits append a recurrence segment through PATCH under
   P2-04/P2-26 and never rewrite schedule history.
 - `fromSuggestionId` belongs to the later date-suggestion phase and is not in this schema.
-  Schedule is a mutating POST and requires the P2-38 `Idempotency-Key`; replay returns its
-  stored original `2xx` without repeating the transaction or reminder cleanup.
+  Schedule is a mutating POST and requires the P2-38 `Idempotency-Key`; replay does not repeat
+  the main transaction, drains any receipt-linked cleanup, then returns the stored original
+  `2xx`.
 - Callers in this phase are the existing detail UI, the reschedule sheet (P2-26), Snooze's
   `Tomorrow` option (P2-25), the overdue chip and `Do today` swipe (P2-29, P2-22).
 
@@ -1125,8 +1197,10 @@ accepts it; the existing detail-screen test asserts its date change and clear no
 `POST .../schedule` and issue no PATCH. Integration proves schedule/unschedule rewrites
 META and all index rows in one transaction with exactly one index row per user; proves the
 parent `SUB#` status is rewritten in the same transaction for a prep task; proves the
-§7.1 RSVP path at 45 and 46 participants; interrupts and resumes reminder cleanup without
-leaving any dated reminder row; derives status and `icsSequence` exactly as above; resets
+§7.1 RSVP path at 45 and 46 participants; proves the receipt and `CLEANUP#` work item commit
+with the main state at the multi-phase boundary; interrupts and resumes reminder cleanup
+through replay and through the next same-Activity mutation without leaving any dated reminder
+row; derives status and `icsSequence` exactly as above; resets
 RSVP only for a date change; returns
 participant `403` and stranger `404` without writes; and keeps META byte-identical for an
 occurrence move. Calendar tests include case 15 plus the named 2026-03-08 02:30 spring-gap
@@ -1430,7 +1504,14 @@ could name another user's row. A handler that took a `userId` from anywhere but 
 would be the bug; there is nowhere to take one from.
 
 **Validation.** `offsetMinutes` is an integer in `[-10080, 0]` — up to a week before, never
-after the start. `-0` means "at start time" and is stored as `0`. Duplicate offsets for the
+after the start. `-0` means "at start time" and is stored as `0`. For a timed Activity every
+integer in that range remains valid. For a date-only Activity the offset must additionally be
+a whole-day multiple (`offsetMinutes % 1440 === 0`), otherwise `validation_failed`.
+`packages/shared/src/schemas/reminder.ts` owns the schedule-aware refinement (a schema factory
+or equivalent shared refinement). `activityService` invokes it for
+`CreateActivityInput.reminders` against the proposed schedule, and `reminderService` invokes
+it after hydrating the stored Activity for reminder management, so service enforcement cannot
+be bypassed by an internal caller. Duplicate offsets for the
 same user on the same activity are rejected with `409`, not silently deduplicated: two
 identical reminders is a mistake, and a silent drop looks like the write failed.
 
@@ -1465,7 +1546,13 @@ rejected. Creating or adding a reminder to an undated activity is rejected, and
 unscheduling a dated activity eventually deletes all of its reminder rows after an injected
 mid-cleanup interruption and resume. Replaying the same reminder-creation idempotency key
 returns the original 2xx body and id; a new key at the same offset returns the business-rule
-`409`.
+`409`. Timed reminder tests accept a sub-day offset; date-only schema and service tests accept
+`0`, `-1440` and `-10080` and reject `-15` and `-1439`; create-path tests enforce the same
+split against the proposed schedule. Schedule-service tests clear a time,
+coerce sub-day offsets to the nearest whole-day values (including the earlier-reminder
+half-day tie), retain already-whole-day rows, and return the non-leaking
+`reminderOffsetsNormalized: true` flag. A crash during a large normalization resumes through
+the P2-38 cleanup work item.
 
 ---
 
@@ -2214,11 +2301,14 @@ different times for one dinner, and neither device knows the other's offset.
   Phase 5 with the pre-prompt sheet. In Phase 2, if permission has not been granted, local
   scheduling silently no-ops and the reminder controls stay usable.
 - Untimed items fire at the profile's all-day reminder hour, default 09:00 local.
+  Their server-provided offsets are whole-day multiples by P2-16, so local scheduling applies
+  the day offset to that all-day hour rather than interpreting a sub-day minute delta.
 - A reminder whose fire time is already past is dropped silently.
 - Web is a no-op (`push.web.ts`).
 
-**Tests.** Unit on the schedule-computation function (offset arithmetic, all-day hour, past
-reminders dropped) with the `expo-notifications` API mocked. A scheduler test asserts one
+**Tests.** Unit on the schedule-computation function (timed offset arithmetic, whole-day
+untimed offsets applied to the all-day hour, past reminders dropped) with the
+`expo-notifications` API mocked. A scheduler test asserts one
 eight-day `include=reminders` agenda request per cadence tick, no Activity-reminder request,
 and scheduling of a seven-days-away Activity whose reminder fires today. A Today component
 test proves its cold render remains one request and does not trigger the scheduler. The named simulator
@@ -2441,7 +2531,9 @@ out the undo handler locally; the suite must catch it).
     schedule PATCH.
 25. Bumping `lastActivityAt` leaves `updatedAt` byte-identical, and a `PATCH` carrying the
     `If-Match` captured before the bump returns `200`, not `409`. Editing the title moves
-    `updatedAt` and leaves `lastActivityAt` unchanged.
+    `updatedAt` and leaves `lastActivityAt` unchanged. Touching a `#P` row rewrites its
+    timestamp sort key; touching `#S`, `#R` or `#N` changes the projected attribute but leaves
+    both GSI key strings byte-identical.
 26. A caller identified as a **participant** on a seeded shared plan receives `403` from
     `complete`, `uncomplete`, `skip` and `snooze`, and the `ACT#<id>` partition has the same
     item count and the same `META.updatedAt` after the attempt as before it. A stranger
@@ -2455,7 +2547,10 @@ out the undo handler locally; the suite must catch it).
 27. `GET /v1/activities/:id/reminders` as user B, on an activity carrying two of user A's
     reminders, returns `[]`, and neither A's `offsetMinutes` nor A's reminder id appears
     anywhere in the serialised response. `POST`ing a fourth reminder as one user returns
-    `422` while a fourth as the other user returns `201`.
+    `422` while a fourth as the other user returns `201`. A date-only Activity accepts only
+    whole-day offsets while a timed one accepts sub-day offsets. Clearing its time retains and
+    normalises reminders, and returns `reminderOffsetsNormalized: true` without ids, counts or
+    values belonging to another user.
 28. Today's `+ Add a task` opens the Task form directly, the final action reads `Save task`,
     and the request contains `type: 'task'`. The same title entered through global
     `+` → `Plan` → `General` remains a `custom` Plan, proving the words do not route it.
@@ -2464,7 +2559,9 @@ out the undo handler locally; the suite must catch it).
     Tokyo day is found by the ±2-day scheduled query, appears on the following Tokyo date
     exactly once, and is filtered out of the adjacent response day. The named
     **`2026-01-01 23:30 UTC−12 becomes 2026-01-03 UTC+14`** case also passes for one-off and
-    recurring rows and fails under ±1 widening.
+    recurring rows and fails under ±1 widening. The named **`New York → Tokyo cross-midnight
+    override enters the viewer window`** case proves override hydration/application precedes
+    exact viewer-window filtering.
 30. Non-occurrence complete, uncomplete and skip mutations write META plus every
     owner/participant `ActivityIndex.status` and any parent `SUB#` status in one transaction;
     forced cancellation leaves every row unchanged. A prep-task title PATCH also rewrites its
@@ -2481,7 +2578,10 @@ out the undo handler locally; the suite must catch it).
     applied state from true divergence; replayed DELETE treats post-cascade `404` as success.
 32. P2-38's crash-shaped integration test loses the first HTTP response after the domain +
     idempotency transaction commits. Replay returns the stored original status and body
-    (`201` remains `201`) with exactly one domain write and no durable in-flight state.
+    (`201` remains `201`) with exactly one main domain write and no durable in-flight state.
+    Its multi-phase variant crashes after main state + receipt + `CLEANUP#` commit but before
+    cleanup: replay drains that work before returning, and a next same-Activity mutation can
+    drain the same abandoned work idempotently.
 
 ## Out of scope for this phase
 
@@ -2512,6 +2612,8 @@ out the undo handler locally; the suite must catch it).
 | **The bucket rule is re-derived in a second place** — a client-side `type === 'task'` check, a service that builds an index entry by hand, or a filter in the agenda | An undated Plan appears on Today, or a Task vanishes from ANYTIME, and the two implementations disagree only for some inputs | One pure function (P2-05), one caller, a grep test asserting both. The agenda excludes `#P` by not querying it rather than by filtering it, so there is no filter to drop. |
 | A write path changes `objectKind`, date or recurrence and forgets to rewrite the index entry | The activity is in the wrong tab and the stored row looks entirely correct | The three inputs are named in P2-05 and the rewrite happens in the same transaction as the write. Transitions 12–24 are tests, and the integration tests assert exactly one index entry after each. |
 | **`lastActivityAt` is folded back into `updatedAt`** "because two timestamps is redundant" | An owner editing a plan gets a `409` because somebody RSVP'd, and the fix looks like it needs a merge engine | Acceptance criterion 25 fails immediately. The reason the fields are separate is in `data-model.md` §3.5 and is restated in P2-06. |
+| An agenda filters nominal dates before applying overrides | A cross-timezone snooze or move that should enter the viewer's day disappears | P2-08 and data-model §6 prescribe expand → widened override fetch → override application → exact filter, with the named New York → Tokyo cross-midnight test. |
+| A successful multi-phase mutation leaves unrecorded cleanup after a crash | Unschedule returns success but reminders survive indefinitely, or RSVP reset stays pending | P2-38 commits receipt + `CLEANUP#` work with the main state and drains it inline, on replay and before the next same-Activity mutation. Criterion 32 kills the process at that boundary. |
 | A second request creeps into Today's cold open | Nobody notices until Today is slow on 4G | The Playwright network-count assertion is a gating acceptance criterion, not a review item. |
 | The client's optimistic projection disagrees with the server | Rows visibly flip back a second after a tap | P2-23's golden tests compare the pure function's output to recorded server responses. |
 | Overdue roll-forward mutates the activity | Plans shows the task on the wrong date; "Today owns no data" quietly stops being true | Roll-forward is a query rule with an explicit acceptance criterion asserting the stored date is unchanged after render **and** after completion. |
