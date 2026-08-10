@@ -78,6 +78,7 @@ plan-detail screen is a single `Query`.
 | Expense | `ACT#<activityId>` | `EXP#<expenseId>` | `Expense` |
 | Update / note entry | `ACT#<activityId>` | `UPD#<isoTs>#<updateId>` | `ActivityUpdate` |
 | Occurrence override | `ACT#<activityId>` | `OCC#<yyyy-mm-dd>` | `Occurrence` |
+| Inbound occurrence-move marker | `ACT#<activityId>` | `MOVE#<yyyy-mm-dd>` | `OccurrenceMoveMarker` |
 | Attachment | `ACT#<activityId>` | `ATT#<attachmentId>` | `Attachment` |
 | Child pointer | `ACT#<activityId>` | `SUB#<childActivityId>` | `ChildPointer` |
 | **Reminder** | `ACT#<activityId>` | `REM#<userId>#<reminderId>` | `Reminder` — **per user** |
@@ -181,7 +182,7 @@ pattern 8b and `security-privacy.md` §1 row 15a).
 | Guest email → person refs | `GUESTEMAIL#<lowercased-email>` | `OWNER#<ownerId>#PERSON#<personId>` | reverse index so guest→account linking is a `Query`, never a `Scan` |
 | Expense id → activity | `EXPENSE#<expenseId>` | `META` | thin `ExpenseLocator`; resolves a globally unique expense id to `activityId`, then the service authorises the caller against that Activity |
 | Settlement id → history row | `SETTLEMENT#<settlementId>` | `META` | thin `SettlementLocator`; resolves to `ownerId` + the exact `SETTLE#…` sort key for guarded undo |
-| Idempotency record | `IDEM#<userId>#<key>` | `META` | `ttl` = now + 24 h |
+| Idempotency record | `IDEM#<userId>#<key>` | `META` | Stored successful response status + body; `ttl` = now + 24 h; conditionally written in the same transaction as the domain mutation |
 | Rate-limit counter | `RATE#<scope>#<subject>` | `<windowStart>` | `ttl` = window end |
 
 > Idempotency keys are **user-scoped**. A bare `IDEM#<key>` partition would let one user's
@@ -540,6 +541,12 @@ startDate, time: schedule.time, endTime: schedule.endTime }] }`. See
 decision (segmented recurrence, 2026-08-07: history always renders under the rule in force
 at the time).
 
+The server owns every `effectiveFrom`. On PATCH, optional top-level
+`editedFromDate: WallDate` must be a date emitted by the current stored active rule and becomes
+the appended segment's anchor; when absent, the anchor is today in the Activity's timezone.
+Any client-supplied `effectiveFrom` inside the segment is ignored. The first segment remains
+anchored to `schedule.date` when recurrence is created.
+
 **`yearly`** exists because birthdays and anniversaries are the most common recurring events
 in a life planner, and forcing them through a hand-written `rrule` would put the single most
 obvious use case behind the least accessible option.
@@ -659,11 +666,34 @@ interface Occurrence {
                                     // "moved from <date>" affix. The series is untouched.
   completedAt?: string;
 }
+
+interface OccurrenceMoveMarker {
+  activityId: string;
+  destinationDate: string;          // YYYY-MM-DD in the series timezone
+  movedFrom: string[];              // sorted, unique nominal dates targeting this date
+}
 ```
 
+A cross-day occurrence move writes the nominal `OCC#<date>` override and updates the
+destination's `MOVE#<destinationDate>` marker in one transaction. `MOVE#` is a separate key
+namespace so a moved-in occurrence cannot overwrite the real occurrence or override already
+due on the destination date; the sorted `movedFrom` list permits more than one nominal
+occurrence to target that date. Removing or undoing a move removes only its nominal date from
+the marker and deletes the marker row when the list becomes empty. Replacing one destination
+with another removes the old marker reference in the same transaction as the source and new
+marker writes.
+
+`overrideDate` and a cross-day `snoozedUntil` are accepted only when the absolute calendar-day
+distance from the nominal `date` is at most **60 days**. The API returns
+`400 validation_failed` beyond that bound. An `HH:mm` snooze remains on the nominal day; an
+ISO-instant snooze is converted in the Activity's timezone before applying the bound and
+choosing the destination marker.
+
 > **Occurrences carry no participant identity, and that is deliberate: completion is global
-> and owner-only.** An `Occurrence` says *the thing happened*, not *I attended*. On a shared
-> plan only the owner may complete, skip or snooze, and the result is the same for everyone.
+> and action policy is object-scoped.** An `Occurrence` says *the thing happened*, not *I
+> attended*. On a shared plan only the owner may complete, skip or snooze. A prep task follows
+> ADR-051: its owner, the parent Plan owner or a parent participant may act. In every case the
+> result is one global occurrence with no actor identity, visible to everyone.
 >
 > This resolves a genuine ambiguity rather than papering over it. Per-participant completion
 > would need `OCC#<date>#<userId>`, and then the agenda expansion has to answer "whose
@@ -1097,7 +1127,7 @@ before writing the code.
 | 3 | Active recurring series for a user | `Query GSI1` `gsi1pk = U#<u>#R` |
 | 4 | Full plan detail (activity + participants + expenses + updates + attachments + reminders + suggestions) | `Query` `pk = ACT#<a>`. Filter `REM#` to the caller's `userId` before responding. |
 | 4b | Every reminder on an activity, for scheduling | Same query; the scheduler keeps all `REM#` rows and fans out per user |
-| 5 | Occurrence overrides for a series in a window | `Query` `pk = ACT#<a>`, `sk BETWEEN OCC#<from> AND OCC#<to>` |
+| 5 | Occurrence overrides and moved-in markers for a series window | Exact-key `BatchGetItem`: `OCC#<nominalDate>` for emitted nominal dates and `MOVE#<destinationDate>` for every calendar date in the timezone-widened request window. A bounded second `BatchGetItem` hydrates the source `OCC#<movedFrom>` rows named by returned markers. Never use one Query per series. |
 | 6 | User profile | `GetItem` `USER#<u>` / `PROFILE` |
 | 7 | Lists for a user | Paged `Query` `pk = USER#<u>`, `sk begins_with LIST#` (50 pointers per API page), then one `BatchGetItem` for that page's `LIST#<l>` / `META` rows. The 100 cap is on owned-list creation, not incoming memberships. |
 | 7b | Members of a list | `GetItem` `LIST#<l>` / `META`, get the owner's `USER#<ownerId>` / `LIST#<l>` pointer and profile, then `Query` `pk = LIST#<l>`, `sk begins_with MEMBER#`. Prepend the synthesised owner DTO; the query itself returns non-owners only. |
@@ -1130,7 +1160,7 @@ This is the trickiest piece of logic in the product. It lives in exactly one pla
 
 ```
 expandAgenda(userId, fromDate, toDate, tz):
-  1. candidates = Query GSI1 U#<u>#S BETWEEN (from-1d)..(to+1d)
+  1. candidates = Query GSI1 U#<u>#S BETWEEN (from-2d)..(to+2d)
   2. scheduled  = BatchGetItem ACT#<id>/META for every candidate
        // canonical one-off snoozedUntil lives on META, not the index projection
        // Phase 1 index rows may lack timezone; META.schedule.timezone is the fallback
@@ -1143,21 +1173,26 @@ expandAgenda(userId, fromDate, toDate, tz):
   5. for each s in series:
        for each segment g in s.recurrence.segments:            // ordered; almost always one
          inForce = [g.effectiveFrom .. dayBefore(nextSegment.effectiveFrom) ?? seriesEnd ?? ∞]
-         dates  += expandRecurrence(g, intersect([from-1d..to+1d], inForce), s.schedule.timezone)
+          dates  += expandRecurrence(g, intersect([from-2d..to+2d], inForce), s.schedule.timezone)
                                                                // pure, no I/O; anchor = g.effectiveFrom
        apply series-level endDate / count across the concatenated, ordered dates
        convert emitted instants from s.schedule.timezone to tz and filter exact [from..to]
-  6. overrides = BatchGetItem OCC#<date> for every (series, date) pair produced in 5
-       // past segments are immutable, so every historical OCC# row's date is emitted by
-       // the segment that was in force when it was written — history always renders
+  6. overrides = BatchGetItem OCC#<date> for every (series, nominal date) pair produced in 5,
+                 plus MOVE#<destinationDate> for each series and each date in the widened window
+       // MOVE keys are exact and collision-free even when a normal occurrence is due there
+       movedSources = BatchGetItem OCC#<movedFrom> named by returned MOVE markers
+       // this second bounded pass is required: BatchGet cannot follow a pointer discovered
+       // in its own response. The 60-day write cap bounds the source set.
   7. for each (series, date):
        t = time of the segment in force for date (falling back to schedule.time)
-       if override.overrideDate          -> emit on overrideDate instead of date
-                                            (this-occurrence-only move; "moved from <date>")
+        if override.overrideDate          -> source emits nothing at its nominal date
        if override.status == 'skipped'   -> emit as SKIPPED (hidden by default)
        if override.status == 'completed' -> emit as COMPLETED
        if override.status == 'snoozed'   -> emit at override.snoozedUntil
        else                               -> emit at t
+     for each hydrated (MOVE marker, moved source override):
+       emit the source once at its overrideDate / cross-day snoozedUntil
+       with "moved from <source date>"; never emit the marker as its own occurrence
      for each one-off scheduled item:
        if activity.snoozedUntil           -> emit at activity.snoozedUntil
   8. merge scheduled + expanded, de-duplicate after timezone conversion
@@ -1173,8 +1208,8 @@ Constraints:
 - Window is capped at **62 days**. Reject wider requests with `400`.
 - Segments per series are capped at **20** (`validation_failed` on append beyond it),
   bounding expansion cost per series; the 62-day window and 200-series limits are unchanged.
-- Scheduled META hydration (step 2), series META hydration (step 4) and occurrence override
-  hydration (step 6) are `BatchGetItem`, chunked at 100 keys with `UnprocessedKeys`
+- Scheduled META hydration (step 2), series META hydration (step 4), marker discovery and
+  both occurrence-override passes (step 6) are `BatchGetItem`, chunked at 100 keys with `UnprocessedKeys`
   retried. If a user has > 200
   active series, hydrate only the bounded set and return a `series_limit_exceeded` warning
   in the response rather than timing out.
@@ -1192,11 +1227,15 @@ Constraints:
 ## 7. Write paths that touch multiple items
 
 Use `TransactWriteItems` for these. They are the only places transactions are required.
+Every operation reached through a mutating POST also includes the conditional
+`IDEM#<userId>#<key>` response-record put in that same transaction (P2-38); transaction-size
+calculations reserve one item for it. Replays return the stored status/body and execute no
+domain write.
 
 | Operation | Items written |
 | --- | --- |
 | Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and `ACT#<parent>/SUB#<child>` when `parentActivityId` is set (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two) |
-| Schedule / reschedule | One transaction writes `ACT#/META` plus `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change). RSVP reset follows §7.1: it may join through 45 participants and uses the documented two-phase marker/batches above that. Unscheduling deletes every `REM#` row in a separate idempotent, resumable bounded-batch cleanup; reminder deletion is never claimed to fit in the META/index transaction. |
+| Schedule / reschedule | One transaction writes `ACT#/META` plus `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change), plus `ACT#<parent>/SUB#<child>` when a prep task's derived status changes. An occurrence-only cross-day move instead writes its nominal `OCC#` override plus destination `MOVE#` marker and never META. RSVP reset follows §7.1: it may join through 45 participants and uses the documented two-phase marker/batches above that. Unscheduling deletes every `REM#` row in a separate idempotent, resumable bounded-batch cleanup; reminder deletion is never claimed to fit in the META/index transaction. |
 | Add participant (app user) | `ACT#/PART#`, `USER#<invitee>/IDX#`, `USER#<owner>/PLINK#`, `USER#<invitee>/PLINK#`, counter update on `ACT#/META` |
 | Add participant (guest) | `ACT#/PART#`, `USER#<owner>/PERSON#`, `USER#<owner>/PLINK#`, `INVITE#<token>/META` |
 | Add list member (app user) | `LIST#/MEMBER#`, invitee `USER#/LIST#`, owner and reciprocal `USER#/PERSON#` when absent, both active `USER#/LLINK#` rows, and `LIST#/META` member counter — at most 7 items |
@@ -1209,10 +1248,12 @@ Use `TransactWriteItems` for these. They are the only places transactions are re
 | Mark obligations settled | Update each covered `ACT#/EXP#` (`settledPersonIds`, `settlementIdByPersonId`, derived `settled`) + write one `USER#/SETTLE#` audit row and one `SETTLEMENT#<settlementId>/META` locator. Server derives amount/currency/direction and exact per-Expense coverage before the transaction; balance recompute reads Expenses only. |
 | Undo settlement | Resolve and delete the `USER#/SETTLE#` row and its `SETTLEMENT#` locator + conditionally remove only each recorded debtor/Settlement pair from the covered `ACT#/EXP#` items, recompute their roll-ups, then recompute balances from Expenses |
 | Purge account | **Shared-plan financial records survive the purge — retain and anonymise, never unwind (decision 2026-08-07).** Expenses and Settlement audit rows, with their locators, on shared plans that still have surviving participants are retained for those participants, with the deleted user's display name replaced by `Deleted user` wherever those rows render it. Balances involving the deleted account become read-only history: no further settlement, no recompute against a partition that no longer exists. Owned **shared** plans are cancelled, with notification to the participants, before any removal, and their partitions are retained for the survivors. Checkpoint and run exact whole-Settlement Undo only for financial rows nothing retains — Settlements whose covered Expenses sit on plans with no surviving participant. Then cascade owned private Activities and owned Lists (all pointers/`LLINK#`/`LNK#`) and remove the user from other-owned Lists (`MEMBER#`, both links, pointer, counter, viewer links) while retaining other users' `PERSON#` rows. Only after cross-partition cleanup may the user partition be deleted; see `auth.md` §8. |
-| Complete / uncomplete / skip a non-occurrence | `ACT#/META` plus every owner/participant `USER#/IDX#` status in one transaction, following the Phase 1 PATCH transaction pattern |
-| Complete / skip / snooze / unsnooze an occurrence | `ACT#/OCC#<date>` only (put or delete as appropriate). Never the series. |
+| Patch a prep task's title | Child `ACT#/META`, every required index row, and parent `ACT#/SUB#<child>` in one transaction. P2-13 repairs the Phase 1 omission that updated the child title without rewriting this denormalised pointer. |
+| Complete / uncomplete / skip a non-occurrence | `ACT#/META` plus every owner/participant `USER#/IDX#` status and, for a prep task, parent `ACT#/SUB#<child>` in one transaction, following the Phase 1 PATCH transaction pattern |
+| Complete / skip an occurrence | `ACT#/OCC#<date>` only (put or delete as appropriate). Never the series. |
+| Cross-day occurrence reschedule / snooze / unsnooze | Nominal `ACT#/OCC#<date>` plus the destination `ACT#/MOVE#<date>` marker in one transaction; replacing a destination also removes the prior marker reference. Never the series. Same-day snooze remains one `OCC#` write. |
 | Snooze / unsnooze a non-recurring one-off | Update or delete `ACT#/META.snoozedUntil`; never create an `OCC#` row |
-| Delete activity | First query child Expenses: any non-empty `settlementIdByPersonId` makes the whole operation `409 settlement_conflict` with no tombstone or write. After explicit Undo clears them, delete the `ACT#` partition items, every corresponding `EXPENSE#<expenseId>` locator, every `USER#/IDX#` + `PLINK#`, and only matching `LNK#` pointers derived from its `listId`, `listItemId`, owner and participant set. |
+| Delete activity | First query child Expenses: any non-empty `settlementIdByPersonId` makes the whole operation `409 settlement_conflict` with no tombstone or write. After explicit Undo clears them, delete child rows and external pointers (`EXPENSE#` locators, every `USER#/IDX#` + `PLINK#`, and matching `LNK#` pointers) first, and delete `ACT#/META` **last**. Until that final delete a retry can re-authorise and resume the cascade; after it, a replayed `404` is success. |
 
 Participant fan-out is bounded: **cap participants at 50 per activity** in v1. Enforce it
 in validation. The cap alone does **not** keep every write under DynamoDB's 100-item
@@ -1294,7 +1335,9 @@ Do not add these without a product decision:
   and three.** Supporting ranges means either an index entry per day of the range or a
   second query for straddling activities on every agenda read, and neither is worth it
   before somebody complains. No v1 screen, example or mock may show a date range.
-- **Per-participant completion.** See §4.5 — completion is global and owner-only.
+- **Per-participant completion.** See §4.5 — completion is global. Plan actions are owner-only;
+  a prep task may be acted on by its owner, parent owner or parent participant, but still
+  writes one shared occurrence with no participant identity.
 - Sub-lists, tags, labels, projects, priorities, custom fields.
 - A fourth list behaviour. Templates are unbounded and free to add; behaviours are not.
 - User-authored list templates. The catalogue ships with the app.

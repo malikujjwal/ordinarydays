@@ -44,6 +44,14 @@ Anytime list. This is the phase where the product becomes usable daily.
 > fixed local identity. P2-13 now depends on the lower-numbered P2-10 policy owner, so numeric
 > order P2-01 through P2-37 remains dependency-valid. Task sizes and phase totals are unchanged.
 
+> **Fifth gate amendment — 2026-08-10.** The final behaviour trace closed the long-range
+> read and replay paths before scheduling: recurrence edits carry explicit occurrence context;
+> cross-day occurrence moves have collision-safe destination markers and a 60-day bound;
+> timezone widening is ±2 days; notification refresh owns an eight-day request; every
+> mutating POST is replay-protected; child pointers and ETags exclude stale/volatile data;
+> and P2-38 hardens idempotency response storage atomically. The one deliberate execution-order
+> exception is `P2-01…P2-11 → P2-38 → P2-12…P2-37`. Phase 2 is now 38 tasks / 97 AWU.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -81,7 +89,8 @@ Anytime list. This is the phase where the product becomes usable daily.
 - [ ] `complete`, `uncomplete`, `skip`, `snooze`, `unsnooze` and `schedule` endpoints, with
       occurrence scoping that provably never writes `ACT#/META`; non-occurrence status writes
       update `META` and every `ActivityIndex` row atomically; plan completion is global and
-      owner-only, while ADR-051 permits a parent-plan participant to complete a prep task.
+      owner-only, while ADR-051 permits the prep-task owner, parent-plan owner or a parent-plan
+      participant to complete a prep task.
 - [ ] Per-user reminders: `GET`/`POST`/`DELETE /v1/activities/:id/reminders` operating on
       `REM#<userId>#` rows scoped to the caller by key construction, capped at 3 per user per
       activity.
@@ -95,8 +104,8 @@ Anytime list. This is the phase where the product becomes usable daily.
 - [ ] Snooze, reschedule and repeat sheets, including the two-option sheet for a series.
 - [ ] Optimistic updates with a six-second undo toast, and a persisted offline mutation
       queue on iOS.
-- [ ] Local notifications scheduled on device for **the signed-in user's own** reminders on
-      the current and next day.
+- [ ] Local notifications scheduled on device for **the signed-in user's own** reminders from
+      one independent eight-day agenda refresh, covering the seven-day maximum offset.
 - [ ] The Plans tab rendering a multi-day **window** from the same endpoint, with the `#P`
       bucket excluded — the three-stage Plans screen is Phase 3. A wider window, not an
       activity that spans days: there is no `schedule.endDate` in v1 (ADR-050).
@@ -116,8 +125,9 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-09 | Overdue roll-forward query rule | api | P2-08 | no | M |
 | P2-10 | `AgendaItem` projection: subtitle, checkbox, isPast | api | P2-08 | no | M |
 | P2-11 | `GET /v1/agenda` route, window cap, `ETag`, warnings | api | P2-08, P2-09, P2-10 | no | M |
-| P2-12 | Sole schedule write path and detail-UI migration | shared/api/mobile | P2-01, P2-05, P2-07, P1-10 | yes | L |
-| P2-13 | `POST /v1/activities/:id/complete` and `/uncomplete` | api | P2-05, P2-07, P2-10, P1-10 | no | L |
+| **P2-38** | **Idempotency replay hardening (deliberate pre-P2-12 execution slot)** | api | P1-04, P1-05, P1-09 | no | M |
+| P2-12 | Sole schedule write path and detail-UI migration | shared/api/mobile | P2-01, P2-05, P2-07, P2-38, P1-10 | yes | L |
+| P2-13 | `POST /v1/activities/:id/complete` and `/uncomplete` | api | P2-05, P2-07, P2-10, P2-38, P1-10 | no | L |
 | P2-14 | `POST /v1/activities/:id/skip` | api | P2-13 | yes | S |
 | P2-15 | One-off and occurrence `snooze` / `unsnooze` | api | P2-13 | no | L |
 | P2-16 | Per-user reminders: items, endpoints, and the write paths | api | P2-08, P2-12 | yes | M |
@@ -137,7 +147,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-30 | Today's empty states | mobile | P2-19 | yes | S |
 | P2-31 | Today's contextual `+ Add a task` action | mobile | P2-19, P1-24 | yes | S |
 | P2-32 | The Plans tab: date-range agenda | mobile | P2-18 | yes | M |
-| P2-33 | Persisted query cache and the offline mutation queue | mobile | P2-23 | no | L |
+| P2-33 | Persisted query cache and the offline mutation queue | shared/api/mobile | P2-16, P2-23 | no | L |
 | P2-34 | Local notifications on device | mobile | P2-11, P2-16, P2-18 | no | M |
 | P2-35 | `Show skipped` device-local toggle | mobile | P2-21 | yes | S |
 | P2-36 | Worked-example-day integration fixture and test | ci | P2-04, P2-08, P2-11, P2-13, P2-19, P2-23 | no | M |
@@ -456,9 +466,13 @@ rows.)
 
 The shared Zod shape is necessary but not sufficient. `activityService` enforces the
 stored-state rules on **both** `POST /v1/activities` and the `PATCH` recurrence path after
-loading the current Activity: it overwrites every client-supplied `effectiveFrom` with the
-server-derived date, compares an edited series to stored history, and rejects any rewrite,
-reorder or deletion of an existing segment. Routes do not duplicate this logic.
+loading the current Activity. The PATCH body may carry `editedFromDate?: WallDate` alongside
+`recurrence`. When present, the service proves that the current stored active rule emits that
+date and uses it as the appended segment's `effectiveFrom`; when absent, it uses today in the
+Activity's timezone. `editedFromDate` without a recurrence append is `validation_failed`.
+The service ignores every client-supplied segment `effectiveFrom`, compares the edit to stored
+history, and rejects any rewrite, reorder or deletion of an existing segment. Routes do not
+duplicate this logic.
 
 Per-segment rule constraints, which the shared shape and service apply to **every** segment:
 
@@ -472,7 +486,7 @@ Per-segment rule constraints, which the shared shape and service apply to **ever
 | `interval_days` | `interval` required, 2–365. `interval: 1` normalised to `freq: 'daily'`. |
 | `count` | 1–999. Series-level. |
 | `endDate` | ≥ the first segment's `effectiveFrom`. Series-level. |
-| `effectiveFrom` | For the **first** segment: always the activity's `schedule.date` at the moment recurrence is set; not separately editable; server overwrites any client value. For an **appended** segment: the edited occurrence's date, or today when the edit was made from the series' detail screen outside any occurrence context ([`today-and-tasks.md`](../01-product/today-and-tasks.md#62-one-row-per-series) §6.2); server-set on the same rule. Strictly greater than the previous segment's. |
+| `effectiveFrom` | For the **first** segment: always the activity's `schedule.date` at the moment recurrence is set; not separately editable; server overwrites any client value. For an **appended** segment: server derives it from validated PATCH `editedFromDate`, or today in the Activity's timezone when that field is absent ([`today-and-tasks.md`](../01-product/today-and-tasks.md#62-one-row-per-series) §6.2). It must be strictly greater than the previous segment's. Client-supplied values inside segments are ignored. |
 | Append-only history | A `PATCH` carrying `recurrence` on an existing series must leave every previously stored segment byte-identical and may only append one new final segment (and/or change the series-level Ends fields). Anything else — a rewritten, reordered or deleted past segment — is `validation_failed`. Past segments are immutable. |
 | Recurrence with no `schedule.date` | `validation_failed` — Repeat is only enabled when a date is set. |
 
@@ -483,6 +497,9 @@ explaining message; an append with a rewritten past segment rejected; `effective
 ascending rejected. Service tests cover create and PATCH separately, prove supplied
 `effectiveFrom` values are overwritten by the server, and prove PATCH cannot alter any
 stored segment while it may append exactly one final segment and/or edit series-level Ends.
+Named service tests prove a valid emitted `editedFromDate` becomes the appended anchor, a date
+the current active rule does not emit is `validation_failed`, absence uses Activity-local
+today, and a segment's conflicting client `effectiveFrom` never wins.
 
 ---
 
@@ -693,7 +710,7 @@ repository is the per-participant-completion defect from the risk table arriving
 | `get(activityId, date)` | occurrence-scoped mutations' read-before-write | `GetItem`. Absence returns `null` — "scheduled, not yet acted on" is the absence of a row, and the repository never fabricates one. |
 | `batchGetForPairs(pairs: { activityId, date }[])` | agenda override hydration (P2-08) | `BatchGetItem`, chunked at 100 keys, with `UnprocessedKeys` retried with backoff. The chunking lives **here**, not in the agenda service — override hydration must not be an N-query loop and the service must not know the limit. |
 | `queryWindow(activityId, from, to)` | occurrence history for one series and the plan-detail screen | Access pattern 5: `Query pk = ACT#<a>`, `sk BETWEEN OCC#<from> AND OCC#<to>`, both inclusive. |
-| `put(occurrence)` | complete, skip, snooze, reschedule-this-occurrence | Upsert of exactly one item. This method is structurally incapable of touching `ACT#/META` — it takes an `Occurrence`, builds one `OCC#` key, and writes one item. That is the storage-layer half of success criterion S6; the endpoint tests (P2-13, P2-14, P2-15) assert the visible half. |
+| `put(occurrence)` | complete, skip, snooze, reschedule-this-occurrence | Upsert of exactly one **domain** item. This method is structurally incapable of touching `ACT#/META` — it takes an `Occurrence` and builds one `OCC#` item. P2-38 extends the mutating repository seam to contribute that item to a caller transaction beside the separate `IDEM#` response item; that does not weaken the one-Activity-row invariant. This is the storage-layer half of success criterion S6; the endpoint tests (P2-13, P2-14, P2-15) assert the visible half. |
 | `delete(activityId, date)` | `uncomplete` on an occurrence, `Undo skip`, undo of a snooze | Deletes the row; absence restores "not yet acted on". |
 | `countCompleted(activityId)` | the `Delete whole series` confirmation, which must name the real count of stored past completions ([`../01-product/activities.md`](../01-product/activities.md#64-deleting) §6.4) | `Query` on the partition with `begins_with OCC#`, `Select: COUNT`, filtered to `status = 'completed'`. A partition-scoped query, not a `Scan`, and computed on demand — the dialog is rare and a denormalised counter would be a second copy of the truth (decision recorded here — raise in PR if wrong). |
 
@@ -721,6 +738,7 @@ byte-identical (read before and after); `delete` then `get` returns `null`;
 
 **Files.** `services/api/src/services/agendaService.ts`,
 `services/api/src/repositories/activityRepository.ts`,
+`services/api/src/repositories/occurrenceRepository.ts`,
 `services/api/src/repositories/reminderRepository.ts` (read seam),
 `services/api/src/repositories/reminderRepository.test.ts`,
 `packages/shared/src/types/activity.ts`,
@@ -735,8 +753,9 @@ timezone handling is a hydrated read fallback, not a schema migration.
 [`../02-architecture/data-model.md#6-recurrence-expansion-algorithm`](../02-architecture/data-model.md#6-recurrence-expansion-algorithm),
 implemented literally:
 
-1. Widen the scheduled query one calendar day on each side:
-   `Query GSI1 U#<u>#S BETWEEN <from-1d>T00:00 AND <to+1d>T23:59`.
+1. Widen the scheduled query two calendar days on each side:
+   `Query GSI1 U#<u>#S BETWEEN <from-2d>T00:00 AND <to+2d>T23:59`. The full IANA span is
+   26 hours (UTC−12 through UTC+14), so one day is not sufficient.
 2. `BatchGetItem` `ACT#<activityId>/META` for every scheduled candidate, so one-off
    `snoozedUntil` comes from its canonical META field. For a timed row, use the index
    projection's `timezone` when present and fall back to the hydrated
@@ -749,16 +768,22 @@ implemented literally:
    every `#R` row selected in step 3, chunked at 100 with unprocessed-key retry. Missing or
    unauthorised META rows are dropped with a warning. Expansion must never treat the thin
    index projection as a `Recurrence`.
-5. For each hydrated series, `expandRecurrence(...)` over `[from-1d, to+1d]` in the
+5. For each hydrated series, `expandRecurrence(...)` over `[from-2d, to+2d]` in the
    series' stored timezone — pure, no I/O, called inside a loop with no awaits — then
    convert emitted instants into request `tz` and filter by the exact viewer-local
    `[from, to]` window.
-6. `BatchGetItem` the `OCC#<date>` overrides for every (series, date) pair from step 5,
-   batched at 100 keys.
+6. In one exact-key batch pass, request `OCC#<date>` overrides for every emitted nominal pair
+   and collision-safe `MOVE#<destinationDate>` markers for every series/date in the widened
+   calendar window. A marker contains sorted, unique `movedFrom` nominal dates. Collect those
+   source keys and hydrate their `OCC#<movedFrom>` rows in a **second** bounded batch pass.
+   DynamoDB cannot follow a pointer discovered in the response to the first `BatchGetItem`;
+   both passes are chunked at 100 with `UnprocessedKeys` retry, and the 60-day write bound
+   caps the source set.
 7. Merge overrides: `skipped` → emit as skipped (hidden by default); `completed` → emit as
-   completed; `snoozed` → emit at `snoozedUntil`; `rescheduled` → emit at `overrideTime`,
-   and on `overrideDate` instead of the original date when it is set (the cross-day
-   this-occurrence move, data-model §4.5), never on both days;
+   completed; same-day `snoozed` → emit at `snoozedUntil`; a cross-day `snoozed` or
+   `rescheduled` source emits nothing on its nominal date. Its destination marker emits the
+   hydrated source exactly once at `snoozedUntil` or `overrideDate`/`overrideTime`, with the
+   “moved from” affix. A normal occurrence already due at the destination remains independent;
    otherwise emit at the time of the **segment in force** for that date — its `time`
    snapshot, falling back to `schedule.time` when the segment carries none — so past
    completions and skips render forever under the rule and time in force on their date
@@ -770,8 +795,8 @@ implemented literally:
    occurrenceDate?)` after viewer-timezone conversion.
 9. **Action-context hydration:** before projection, materialise one already-hydrated
    `ActionCapabilityContext` per distinct Activity: the canonical Activity, the caller's
-   relationship to it, and—when `parentActivityId` is present—whether the caller participates
-   in that parent plan. Resolve and de-duplicate this repository work at the assembly boundary;
+   relationship to it, and—when `parentActivityId` is present—the parent `ownerId` and whether
+   the caller participates in that parent plan. Resolve and de-duplicate this repository work at the assembly boundary;
    repeated occurrences of one series reuse the same context. No projection call performs a
    `GetItem`, participant query or `assertActivityAccess` call. P2-10 consumes these contexts
    with the pure `deriveActionCapabilities` function.
@@ -814,7 +839,8 @@ on its ticker (P2-20).
 
 **Edge cases.**
 
-- Scheduled META hydration, series META hydration and occurrence override hydration must
+- Scheduled META hydration, series META hydration, destination-marker discovery and both
+  occurrence override passes must
   not be N-query loops. Each uses `BatchGetItem`, one request per 100 keys, with retry for
   unprocessed keys.
 - Capability derivation itself performs zero reads. Access-context hydration is de-duplicated
@@ -833,6 +859,9 @@ on its ticker (P2-20).
 - Widening the `#S` query never widens the response. Rows are filtered only after conversion
   to request `tz`; transferred matrix case 30 (22:00 New York viewed from Tokyo) is an acceptance
   test here, proving the item appears on the following Tokyo date exactly once.
+- The named extreme-zone test **`2026-01-01 23:30 UTC−12 becomes 2026-01-03 UTC+14`** proves
+  both the ±2-day scheduled query and series-expansion window. Replacing either with ±1 makes
+  the test fail.
 
 **Tests.** Unit with a mocked repository covering each merge branch. Integration against
 DynamoDB Local self-seeds the rows needed for this task, including a compact version of the
@@ -858,9 +887,9 @@ traceability, but they are P2-08 tests because each crosses the engine/agenda bo
 | 25 | **Snoozed occurrence** | A daily 18:00 series with a snoozed override emits today at 20:00 and every other date at 18:00; recurrence is neither rewritten nor re-anchored. |
 | 26 | **Completed occurrence** | The emitted row is `completed_occurrence`; series `ACT#/META.updatedAt` remains byte-identical. |
 | 27 | **Skipped occurrence** | The emitted row is `skipped_occurrence`, hidden by default and present under `Show skipped`; every other occurrence is unchanged. |
-| 28 | **Rescheduled occurrence** | `overrideTime` moves only that occurrence; `overrideDate` emits it on the replacement date exactly once, never on both dates. |
+| 28 | **Rescheduled occurrence** | `overrideTime` moves only that occurrence; `overrideDate` writes nominal `OCC#` + destination `MOVE#` atomically and emits it on the replacement date exactly once, never on both dates. A normal occurrence and two moved-in occurrences may coexist on that date without key collision. |
 | 29 | **Timezone travel** | An 18:00 `America/New_York` row viewed in `Europe/London` keeps its stored zone while request boundaries and “now” use the profile zone. Run once with projected `timezone` and once with that field absent, proving the hydrated-META fallback is identical. |
-| 30 | **Timezone travel across a date boundary** | A 22:00 New York row viewed from Tokyo is found by the widened query and appears on the following Tokyo date exactly once. Run the legacy-row variant without projected `timezone` too. |
+| 30 | **Timezone travel across a date boundary** | A 22:00 New York row viewed from Tokyo is found by the widened query and appears on the following Tokyo date exactly once. Run the legacy-row variant without projected `timezone` too, plus the named UTC−12 → UTC+14 two-date jump that requires ±2 days. |
 
 ---
 
@@ -942,7 +971,9 @@ server-side, so the client never derives presentation from `type` with a switch 
 ```ts
 interface ActionCapabilityContext {
   activity: Activity;
+  callerId: string;
   callerRole: 'owner' | 'participant' | 'none';
+  parentOwnerId?: string;
   participatesInParent: boolean;
 }
 
@@ -951,21 +982,62 @@ function deriveActionCapabilities(
 ): { complete: boolean; skip: boolean; snooze: boolean };
 ```
 
-The policy is literal: when `activity.parentActivityId` is present, the Activity owner or a
-participant of the parent plan may complete it; for every other Activity, only its owner may
-complete it. `skip` and `snooze` have the same verdict as `complete`. P2-10 calls the function
+The policy is literal: when `activity.parentActivityId` is present, the Activity owner, the
+parent Plan's owner (`callerId === parentOwnerId`) or a participant of the parent Plan may
+complete it; for every other Activity, only its owner may complete it. The explicit parent-
+owner branch preserves Phase 1's inherited-owner access even when a different participant
+created the prep task. `skip` and `snooze` have the same verdict as `complete`. P2-10 calls the function
 once per projected item using P2-08's hydrated context; repeated occurrences reuse their
 Activity context, so capability projection adds **zero reads per AgendaItem**. P2-13 is the
 second consumer and the only endpoint-side consumer. The client receives the three booleans
 but never receives `ownerId` and never re-derives authority.
 
 **Tests.** Table-driven: one case per type asserting `hasCheckbox` and `subtitle`; the pure
-policy's owner, plan-participant, parent-plan-participant prep-task, direct-child-participant
-without parent participation and stranger cases assert the exact three booleans. A repository
+policy's Activity-owner, parent-owner, plan-participant, parent-plan-participant prep-task,
+direct-child-participant without parent participation and stranger cases assert the exact
+three booleans. A repository
 spy proves projecting any number of AgendaItems performs zero reads; a snoozed
 occurrence's `time` equals `snoozedUntil`; a rescheduled occurrence's equals `overrideTime`;
 `occurrenceDate` present only for series items; `isPast` at exactly the boundary minute for
 each of the three cases.
+
+---
+
+### P2-38 — Idempotency replay hardening *(execute before P2-12)*
+
+**Files.** `services/api/src/middleware/idempotency.ts`,
+`services/api/src/repositories/idempotencyRepository.ts`,
+`services/api/src/repositories/tx.ts`, the existing Phase 1 mutating-POST handlers/services
+and repositories, and their unit/integration tests.
+
+**Approach.** Replace Phase 1's reserve → domain write → complete sequence with the atomic
+contract in API contract §1. For every mutating POST, the service precomputes the successful
+HTTP status/body and passes a conditional `IDEM#<userId>#<key>` put as an extra item to the
+repository transaction that performs the domain write. Transaction builders reserve one of
+DynamoDB's 100 item slots for that record. A domain repository that cannot accept this extra
+item is not ready to back a mutating POST.
+
+The record stores `{ status, body, ttl }`. Replay returns **that stored status and body**;
+there is no hard-coded `200`. Remove the durable in-flight record/state. Two concurrent first
+attempts may both reach the transaction, but the conditional idempotency put permits only one
+commit; the cancelled contender performs a strongly consistent read with bounded retry for
+the winning commit, then returns that record. If no winner committed, it may retry its own
+whole transaction. A validation/domain failure commits neither domain data nor a success record.
+
+Migrate every mutating POST already present after Phase 1 (including create, duplicate and
+device registration) to the transaction-attached item. P2-12 and later endpoint tasks consume
+the same repository option rather than rebuilding idempotency locally. Extend mutating
+repository methods, including `OccurrenceRepository.put/delete`, to accept the shared
+transaction builder/extra items before those endpoint tasks use them. The route registry's
+classification becomes `mutates` for every mutating POST, not the narrower Phase 1 `creates`
+meaning; read-only POST stubs remain explicitly non-mutating.
+
+**Crash-shaped tests.** Integration tests inject a failure immediately after DynamoDB reports
+the transaction committed but before the HTTP response reaches the caller, then replay the
+same key and assert the original status/body with exactly one domain write. A `201` replay
+stays `201`. Concurrent same-key requests produce one transaction commit and two identical
+responses. An injected transaction cancellation stores neither item. Grep/registry tests
+prove no mutating POST bypasses the middleware and no replay branch hard-codes `200`.
 
 ---
 
@@ -989,7 +1061,8 @@ Its body is `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule u
 `patchActivityInput` schema, update its tests so PATCH rejects schedule/unschedule fields,
 add the typed client method, and migrate the already-built detail screen and its
 `RescheduleSheet` callbacks from `detail.patch({ schedule: ... })` to the schedule client
-method. No temporary dual path is accepted.
+method. The client method requires an `Idempotency-Key` allocated at enqueue and carried in
+the persisted mutation variables. No temporary dual path is accepted.
 
 The route is owner-only for ordinary activities: a participant gets `403` and a stranger
 gets `404` under the authorisation policy in API contract §3.
@@ -1007,7 +1080,8 @@ gets `404` under the authorisation policy in API contract §3.
   first valid wall time after the gap, not “add one hour”. The named test
   **`spring gap forwards 2026-03-08 02:30 America/New_York to 03:00`** locks it.
 - **The bucket rewrite is atomic.** Because `schedule.date` is a P2-05 input, one
-  `TransactWriteItems` writes `ACT#/META` and every owner/participant `ActivityIndex` row.
+  `TransactWriteItems` writes `ACT#/META`, every owner/participant `ActivityIndex` row and,
+  for a prep task whose derived status changes, its parent `SUB#` pointer row.
   Scheduling moves `N → S` or `P → S`; unscheduling moves `S → N` for a Task and `S → P`
   for a Plan.
 - **Unscheduling deletes reminders as a separate idempotent, resumable step.** After the
@@ -1028,14 +1102,21 @@ gets `404` under the authorisation policy in API contract §3.
   increment once when `schedule.date`, `schedule.time`, `schedule.endTime` or
   `schedule.timezone` changes, including set and clear. Repeating an identical request does
   not increment it. Never accept a client-supplied sequence.
-- **Recurring series.** With `occurrenceDate`, write one
-  `Occurrence { status: 'rescheduled', overrideDate?, overrideTime? }` through P2-07 and
-  leave `META` byte-identical; a body date differing from `occurrenceDate` becomes
-  `overrideDate`. Without `occurrenceDate`, a request against a series is
+- **Recurring series.** With `occurrenceDate`, validate that it is emitted by the stored rule.
+  A same-day change writes one `Occurrence { status: 'rescheduled', overrideTime? }`. A body
+  date differing from `occurrenceDate` must be no more than 60 calendar days away and writes
+  the nominal `Occurrence { status: 'rescheduled', overrideDate, overrideTime? }` **plus** the
+  collision-safe destination `MOVE#<overrideDate>` marker in one transaction; replacing or
+  undoing a prior destination removes its marker reference in that transaction. Undo uses
+  the same schedule endpoint with the occurrence's in-force segment date/time; when those
+  values equal the unmodified occurrence, the service deletes the source override and marker
+  reference instead of retaining a redundant `rescheduled` row. Both paths
+  leave `META` byte-identical. Without `occurrenceDate`, a request against a series is
   `validation_failed`; all-future edits append a recurrence segment through PATCH under
   P2-04/P2-26 and never rewrite schedule history.
 - `fromSuggestionId` belongs to the later date-suggestion phase and is not in this schema.
-  The schedule POST is naturally idempotent and requires no idempotency key.
+  Schedule is a mutating POST and requires the P2-38 `Idempotency-Key`; replay returns its
+  stored original `2xx` without repeating the transaction or reminder cleanup.
 - Callers in this phase are the existing detail UI, the reschedule sheet (P2-26), Snooze's
   `Tomorrow` option (P2-25), the overdue chip and `Do today` swipe (P2-29, P2-22).
 
@@ -1043,12 +1124,16 @@ gets `404` under the authorisation policy in API contract §3.
 accepts it; the existing detail-screen test asserts its date change and clear now call
 `POST .../schedule` and issue no PATCH. Integration proves schedule/unschedule rewrites
 META and all index rows in one transaction with exactly one index row per user; proves the
+parent `SUB#` status is rewritten in the same transaction for a prep task; proves the
 §7.1 RSVP path at 45 and 46 participants; interrupts and resumes reminder cleanup without
 leaving any dated reminder row; derives status and `icsSequence` exactly as above; resets
 RSVP only for a date change; returns
 participant `403` and stranger `404` without writes; and keeps META byte-identical for an
 occurrence move. Calendar tests include case 15 plus the named 2026-03-08 02:30 spring-gap
-test and assert both the 03:00 local result and its UTC instant.
+test and assert both the 03:00 local result and its UTC instant. Cross-day tests assert the
+source + marker transaction, collision with a normal destination occurrence, marker cleanup
+on undo/replacement, acceptance at exactly 60 days and `validation_failed` at 61. A crash-
+shaped replay reuses the enqueue-time key and observes one committed schedule mutation.
 
 ---
 
@@ -1056,6 +1141,8 @@ test and assert both the 03:00 local result and its UTC instant.
 
 **Files.** `services/api/src/routes/activities.ts`,
 `services/api/src/services/completionService.ts`,
+`services/api/src/services/activityService.ts`,
+`services/api/src/repositories/activityRepository.ts`,
 `packages/shared/src/client/endpoints/activities.ts` (complete/uncomplete methods).
 
 **Approach.** `POST /v1/activities/:id/complete` with `{ occurrenceDate?, outcome? }`.
@@ -1076,7 +1163,8 @@ reachable and walks it in the authorisation matrix (P6-28); it does not introduc
 **ADR-051 — completion authority follows the object.** Prep tasks are the exception, and it costs one rule. Completion authority follows the
 object: completing a *plan* asserts a shared fact about an event, but completing a *prep
 task* ticks an item on a shared checklist. **Any participant of the parent plan may
-complete, uncomplete and edit a prep task, whoever created it**
+complete, uncomplete and edit a prep task, whoever created it; the parent owner retains the
+same inherited authority even when a participant created the child**
 ([`../02-architecture/api-contract.md#3-authorisation-rules`](../02-architecture/api-contract.md#3-authorisation-rules)
 §3, [`../01-product/sharing-and-people.md`](../01-product/sharing-and-people.md) §3.4,
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §5.5). If Alice books
@@ -1090,8 +1178,9 @@ levels cannot express “owner-only plan, parent-participant prep task” as one
 Completion-route authorisation is therefore a two-stage service decision:
 
 1. Resolve the Activity, the caller's relationship to it and, for a child, the caller's
-   participation in its parent through the repository. A caller with no relationship receives
-   `404` before any action verdict is exposed.
+   parent `ownerId` and participation in that parent through the repository. The parent owner
+   is an authorised inherited owner even when somebody else created the child. A caller with
+   no direct or inherited parent relationship receives `404` before any action verdict is exposed.
 2. Pass that already-hydrated context to the pure function and assert the requested
    `complete`, `skip` or `snooze` boolean. A related caller whose boolean is false receives
    `403`; no repository read occurs inside the pure function.
@@ -1114,18 +1203,25 @@ Two paths, and their difference is the most important invariant in this phase:
 
 | Body | Writes | Does **not** write |
 | --- | --- | --- |
-| No `occurrenceDate` | One transaction writes `ACT#/META` (`status: 'completed'`, `completedAt`, `outcome`) **and every owner/participant `ActivityIndex` row's denormalised `status`** | No split or best-effort index update |
-| With `occurrenceDate` | **Exactly one item**, `ACT#<id>/OCC#<date>`, with `status: 'completed'`, `completedAt` | `ACT#/META`. Its `updatedAt` does not change. |
+| No `occurrenceDate` | One transaction writes `ACT#/META` (`status: 'completed'`, `completedAt`, `outcome`), **every owner/participant `ActivityIndex` row's denormalised `status`** and, for a prep task, the parent `SUB#` pointer's status | No split or best-effort denormalised update |
+| With `occurrenceDate` | **Exactly one Activity-domain item**, `ACT#<id>/OCC#<date>`, with `status: 'completed'`, `completedAt`; P2-38 also attaches the separate `IDEM#` response item | `ACT#/META`. Its `updatedAt` does not change. |
 
-That second row is success criterion S6 and is asserted by an integration test, not by
-inspection.
+That second row's one-Activity-domain-item invariant is success criterion S6 and is asserted
+by an integration test, not by inspection. Every mutating POST transaction additionally
+contains P2-38's idempotency response record.
 
 The first row follows the Phase 1 PATCH transaction pattern in
 `services/api/src/repositories/activityRepository.ts`: compute all projected index rows
 from the post-mutation Activity, then write META and the complete fan-out in one
-`TransactWriteItems`. A response must never expose completed META while a stale index still
-says scheduled. `uncomplete` uses the same transaction and derives the restored nonterminal
+`TransactWriteItems`, including the parent's `SUB#` pointer for a prep task. A response must
+never expose completed META while an index or child pointer still says scheduled. `uncomplete`
+uses the same transaction and derives the restored nonterminal
 status from schedule presence; it does not accept a prior status from the client.
+
+P2-13 also repairs the as-built Phase 1 PATCH omission: a title patch on a prep task currently
+updates the child Activity/index rows but leaves the denormalised parent `SUB#` title stale.
+Extend that existing PATCH transaction so every child-title change rewrites the pointer. This
+is a baseline bug fix in this task, not a second child-detail read path.
 
 `outcome` defaults per type from the verb table in
 [`../01-product/activities.md`](../01-product/activities.md) §5.2. `didnt_happen` and
@@ -1154,7 +1250,7 @@ something without claiming it happened.
 **Tests.** Integration: completing and uncompleting a non-occurrence atomically update META
 and every seeded owner/participant index status, using a transaction spy shaped like the
 Phase 1 PATCH test; a forced transaction cancellation leaves all rows unchanged. Completing
-an occurrence writes exactly one item (count the
+an occurrence writes exactly one item in the `ACT#` partition (count the
 partition before and after) and leaves `ACT#/META.updatedAt` byte-identical; tomorrow's
 expansion still emits the series at its normal time; `uncomplete` on an occurrence deletes
 the row; `outcome: 'didnt_go'` sets `status: 'skipped'`; completing twice is idempotent.
@@ -1166,10 +1262,13 @@ handler that returns `403` after writing fails. The same case for `uncomplete`, 
 `snooze`, and the mirror case that a stranger gets `404` on all four.
 
 Plus the parent-participant rule, on a seeded prep task whose `parentActivityId` points at
-that shared plan and whose `ownerId` is the plan owner's: a participant who did **not**
-create the prep task completes it with `200`, and `uncomplete` reverses it; a stranger to the
-parent gets `404` on both. Both cases go through the same helper, so a fix that special-cases
-the endpoint fails them.
+that shared plan: a participant who did **not** create the prep task completes it with `200`,
+and `uncomplete` reverses it; the parent owner also receives `200` when another participant
+owns the child; a stranger to the parent gets `404` on both. Both cases go through the same
+helper, so a fix that special-cases the endpoint fails them. Completion/uncompletion assert
+the parent `SUB#` status changed in the same transaction. A Phase 1-style title PATCH asserts
+the child META and parent pointer titles change together and forced cancellation changes
+neither.
 
 Client and route tests allocate the key before invoking the mutation function, replay the
 same complete and uncomplete requests with that key, receive the byte-equivalent original
@@ -1200,8 +1299,8 @@ Two paths, on P2-13's exact pattern:
 
 | Body | Writes | Does **not** write |
 | --- | --- | --- |
-| No `occurrenceDate` | One transaction writes `ACT#/META.status = 'skipped'` **and every owner/participant `ActivityIndex.status = 'skipped'`**. The row leaves Today. | No split or best-effort index update |
-| With `occurrenceDate` | Exactly one item, `ACT#<id>/OCC#<date>`, `{ status: 'skipped' }`, via P2-07 | `ACT#/META`. Its `updatedAt` does not change (S6). |
+| No `occurrenceDate` | One transaction writes `ACT#/META.status = 'skipped'`, **every owner/participant `ActivityIndex.status = 'skipped'`** and, for a prep task, the parent `SUB#` pointer status. The row leaves Today. | No split or best-effort denormalised update |
+| With `occurrenceDate` | Exactly one Activity-domain item, `ACT#<id>/OCC#<date>`, `{ status: 'skipped' }`, via P2-07; P2-38 also attaches the separate `IDEM#` response item | `ACT#/META`. Its `updatedAt` does not change (S6). |
 
 - **Skip is private.** It never notifies anyone and never appears in a shared plan's
   updates feed (§5.4) — unlike `cancelled`, which is the plan being off rather than the
@@ -1220,13 +1319,15 @@ Two paths, on P2-13's exact pattern:
   Which rows *offer* Skip is the gesture table's business (P2-22).
 - The non-occurrence path uses the Phase 1 PATCH transaction pattern cited in P2-13:
   derive the complete post-write index projection and commit META plus every fan-out row in
-  one `TransactWriteItems`. Transaction cancellation leaves every row unchanged.
+  one `TransactWriteItems`, including the parent `SUB#` pointer for a prep task. Transaction
+  cancellation leaves every row unchanged.
 
-**Tests.** Integration: skipping an occurrence writes exactly one item (partition count
+**Tests.** Integration: skipping an occurrence writes exactly one item in the `ACT#` partition (partition count
 before and after) and leaves `ACT#/META.updatedAt` byte-identical; the same series'
 other dates expand unchanged; a non-recurring skip flips `META.status` and every seeded
 `ActivityIndex.status` in one transaction and the item leaves
 the agenda response; skip then `uncomplete` restores `scheduled` / deletes the row; the
+prep-task variant rewrites and restores the parent `SUB#` status in those same transactions;
 skipped occurrence is emitted as `skipped_occurrence` and hidden by default in the agenda
 merge (P2-08); forced transaction cancellation changes no META or index row; a participant
 gets `403` with nothing written; a stranger gets `404`; replaying the same
@@ -1243,12 +1344,14 @@ gets `403` with nothing written; a stranger gets `404`; replaying the same
 
 **Approach.** `POST /v1/activities/:id/snooze` accepts
 `{ occurrenceDate?, until }`, where `until` is `HH:mm` on the same day or an ISO instant.
-The storage target is determined only by `occurrenceDate`:
+Both snooze and unsnooze require an `Idempotency-Key` allocated when the mutation is enqueued
+and stored in its variables. The storage target is determined only by `occurrenceDate`:
 
 | Target | Snooze write | Undo / unsnooze write |
 | --- | --- | --- |
 | Non-recurring one-off (no `occurrenceDate`) | Update `ACT#/META.snoozedUntil`; status remains derived from schedule | `POST /v1/activities/:id/unsnooze {}` deletes the META snooze field |
-| Recurring occurrence | Write `Occurrence { status: 'snoozed', snoozedUntil }` and leave META byte-identical | `POST /v1/activities/:id/unsnooze { occurrenceDate }` deletes that snoozed `Occurrence` row |
+| Recurring occurrence, same day | Write `Occurrence { status: 'snoozed', snoozedUntil }` and leave META byte-identical | `POST /v1/activities/:id/unsnooze { occurrenceDate }` deletes that snoozed `Occurrence` row |
+| Recurring occurrence, cross-day ISO instant | In one transaction write the nominal snoozed `Occurrence` and add its date to destination `MOVE#<date>.movedFrom` | In one transaction delete the snoozed source and remove only its marker reference; delete an empty marker row |
 
 This is the compensating operation required by interaction-contract §4.1: undo **deletes
 the snooze fields**, it does not reschedule to a guessed prior time. Occurrence overrides
@@ -1267,9 +1370,12 @@ Tomorrow → still 6:00 PM
 **Edge cases.**
 
 - Snooze is repeatable; a second snooze overwrites `snoozedUntil` on the same storage target.
+  Moving it to a different date also removes the old marker reference in the same transaction.
 - `unsnooze` is idempotent. It may delete an occurrence only when that row is a snooze;
   it never erases a completion, skip or reschedule override.
 - `until` earlier than the current time is `validation_failed`.
+- The effective date of an ISO `until`, computed in the Activity timezone, must be within 60
+  calendar days of `occurrenceDate`; exactly 60 is accepted and 61 is `validation_failed`.
 - Snooze is not offered on an undated or all-day task — there is no time to move.
 - `Tomorrow` is deliberately absent for a recurring occurrence. Moving tomorrow's Gym into a
   day that already has one produces two rows for one series. For a non-recurring task,
@@ -1280,8 +1386,11 @@ Tomorrow → still 6:00 PM
 no `OCC#` item, renders at the effective time, and unsnooze deletes the field. A recurring
 snooze writes one `OCC#` item and leaves `ACT#/META.updatedAt` byte-identical; the next day's
 agenda shows the series time; unsnooze deletes only that occurrence; a second snooze updates
-one target; an `until` in the past `400`s. A repository spy proves no `#R` query occurs on
-either mutation path.
+one target; a cross-day snooze writes source + collision-safe marker atomically, renders once
+beside any normal destination occurrence, and unsnooze removes both without disturbing other
+`movedFrom` entries; 60/61-day boundary tests and an `until` in the past `400` test pass. A
+repository spy proves no `#R` query occurs on either mutation path. Replay tests reuse the
+enqueue-time key and observe one committed write.
 
 ---
 
@@ -1366,8 +1475,9 @@ returns the original 2xx body and id; a new key at the same offset returns the b
 `anytime_unscheduled`, `overdue`, `reminders`). `include=reminders` attaches only the
 authenticated caller's `REM#<userId>#` rows to activities emitted in the window; it never
 returns another user's reminder. Window strictly capped at 62 days →
-`400 validation_failed`. `ETag` on the response, computed from the response body hash, with
-`If-None-Match` returning `304`. Response is client-cacheable for 60 s.
+`400 validation_failed`. `ETag` hashes a canonical serialisation of the response's **`data`
+payload only**; volatile envelope metadata such as `meta.requestId` never participates.
+`If-None-Match` returns `304`. Response is client-cacheable for 60 s.
 
 `warnings[]` carries `series_limit_exceeded` when the user has more than 200 active series
 (a `200` with a warning, not an error) and the duplicate-occurrence warning from P2-08.
@@ -1378,16 +1488,18 @@ returns another user's reminder. Window strictly capped at 62 days →
 GET /v1/agenda?from=<today>&to=<tomorrow>&tz=<tz>&include=anytime_unscheduled,overdue,reminders
 ```
 
-Today renders `days[0]`; the second day exists in the same response so P2-34 can schedule
-tomorrow's reminders without another request. Any feature requiring a second request to
-render Today is rejected. That is success criterion S2 and it is asserted by a Playwright
-network-count assertion, not by review.
+Today renders `days[0]`; the second day remains part of the same response. P2-34's independent
+background refresh is cadence-driven and is not started by rendering Today. Any feature
+requiring a second request to render Today is rejected. That is success criterion S2 and it
+is asserted by a Playwright network-count assertion, not by review.
 
 **Tests.** A 63-day window `400`s; a 62-day one succeeds. `If-None-Match` with the current
-`ETag` returns `304` with no body. With two users' reminders on the same activity,
+`ETag` returns `304` with no body. The named test **`ETag ignores requestId`** builds two
+byte-equivalent `data` payloads under different envelope request ids, asserts equal ETags and
+asserts the second conditional request returns `304`. With two users' reminders on the same activity,
 `include=reminders` returns only the caller's rows for the window. The Playwright assertion
-counts exactly one data request on a cold Today open, including the reminder data P2-34
-needs.
+counts exactly one Today-owned data request on a cold open; a background notification refresh
+is neither triggered nor awaited by that render.
 
 ---
 
@@ -1414,7 +1526,8 @@ phase. Feature hooks are the only place `useQuery` appears and own their query k
 - **Today's call is the single request** from
   [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#1-what-today-is)
   §1: `from = today`, `to = tomorrow`, all three `include` tokens, one fetch. Today renders
-  the first day and P2-34 consumes reminders from both. The hook exposes the whole response;
+  the first day; P2-34 does not consume this hook and owns a separate cadence-driven request.
+  The hook exposes the whole response;
   sectioning is `partition.ts` (P2-19). No per-section fetches, ever — that is
   success criterion S2.
 - **`tz` is the profile timezone** (transferred matrix case 29, now owned by P2-08 —
@@ -1764,10 +1877,13 @@ edits in place on a row.
 For a **recurring series** it presents a two-option sheet: `This occurrence only` /
 `All future occurrences`. The first writes an `Occurrence` with `status: 'rescheduled'` and
 `overrideTime` — plus `overrideDate` when the user moved it to a different day, which a
-this-occurrence reschedule may do (P2-12, data-model §4.5). The second **appends a rule segment** to `recurrence` with
-`effectiveFrom` = the edited occurrence's date — or today, when the sheet was opened from
-the series' detail screen outside any occurrence context — carrying the new time as its
-`time` snapshot; `schedule.time` mirrors the new active segment. Past segments and past
+this-occurrence reschedule may do (P2-12, data-model §4.5). A cross-day move is capped at 60
+calendar days and uses P2-12's atomic nominal override + destination marker write. The second
+submits the append-only recurrence PATCH with top-level `editedFromDate` equal to the edited
+occurrence's date — or omits it when the sheet was opened from series detail outside any
+occurrence context. The server validates/derives the appended segment's `effectiveFrom` and
+ignores the segment's client value. The new segment carries the new time as its `time`
+snapshot; `schedule.time` mirrors the new active segment. Past segments and past
 occurrences are untouched, and at the 20-segment cap the write returns `validation_failed`
 and the sheet explains it and suggests ending the series
 ([`../01-product/activities.md`](../01-product/activities.md#62-editing-schedule) §6.2,
@@ -1781,8 +1897,10 @@ their replies — which are **not** reset. The copy is
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md#1a1-additive-changes-happen-immediately-destructive-changes-explain-what-will-be-lost)
 §1a.1. (Phase 6 makes this reachable; build the branch now.)
 
-**Tests.** Integration: `This occurrence only` writes one `OCC#` row and leaves the series
-untouched; `All future occurrences` appends exactly one segment, leaves every earlier
+**Tests.** Integration: same-day `This occurrence only` writes one `OCC#` row; a cross-day
+choice writes the source + destination marker transaction and leaves the series untouched;
+`All future occurrences` sends `editedFromDate` outside `recurrence`, appends exactly one
+server-anchored segment, leaves every earlier
 segment byte-identical and leaves existing occurrence overrides intact; the 21st-segment
 attempt surfaces the explanatory sheet, not a raw error.
 
@@ -1812,9 +1930,9 @@ however many segments it has.
 - **On an existing series the sheet shows and edits the active (last) segment only.**
   Earlier segments are history with no UI (§6.1). A rule change is an "all future" edit:
   the client sends the full new `recurrence` value on the ordinary `PATCH`, equal to the
-  stored one plus one appended segment whose `effectiveFrom` is the edited occurrence's
-  date — or today, from the series detail outside any occurrence context — and the server
-  enforces the append-only property (P2-04) (decision recorded here — raise in PR if
+  stored one plus one appended segment, and sends top-level `editedFromDate` when invoked
+  from an occurrence. From series detail it omits that field. The server supplies the new
+  segment's `effectiveFrom` and enforces the append-only property (P2-04) (decision recorded here — raise in PR if
   wrong: the alternative is a server-side append taking only the new rule).
 - **The 21st segment**: the server returns `validation_failed`; the sheet explains it and
   suggests ending the series and starting a new one (§6.2), rather than surfacing a raw
@@ -1948,6 +2066,9 @@ surfaces it does not exist yet.
 `apps/mobile/app/_layout.tsx` (root hydration gate),
 `apps/mobile/src/features/compose/hooks/useCreateActivity.ts`,
 `apps/mobile/src/features/activity/hooks/{useActivity,useActivityActions}.ts`,
+`packages/shared/src/client/endpoints/activities.ts`,
+`services/api/src/services/activityService.ts`,
+`services/api/src/repositories/activityRepository.ts`,
 `apps/mobile/package.json`, `pnpm-lock.yaml`,
 and their existing tests.
 
@@ -1968,16 +2089,19 @@ A best-effort module-scope restore racing mounted hooks does not satisfy cold-st
 behaviour.
 
 Register stable mutation keys and default mutation functions on the shared `QueryClient` for
-**create, duplicate, delete, patch, complete, uncomplete and skip** before hydration calls
+**create, duplicate, delete, patch, schedule, complete, uncomplete, skip, snooze, unsnooze
+and reminder-create** before hydration calls
 `resumePausedMutations()`. A persisted mutation without a matching default is not resumable;
 component-local `mutationFn` closures are insufficient after process death.
 
 `mutationKeys.ts` owns the literal keys — `['activity', 'create']`,
 `['activity', 'duplicate']`, `['activity', 'delete']`, `['activity', 'patch']`,
-`['activity', 'complete']`, `['activity', 'uncomplete']` and `['activity', 'skip']` — and hooks
+`['activity', 'schedule']`, `['activity', 'complete']`, `['activity', 'uncomplete']`,
+`['activity', 'skip']`, `['activity', 'snooze']`, `['activity', 'unsnooze']` and
+`['activity', 'reminder-create']` — and hooks
 import them rather than constructing lookalikes. Those keys are persistence identifiers;
-changing them is a stored-cache migration, not a refactor. The three action defaults call the
-typed P2-13/P2-14 client methods; they do not reconstruct endpoint paths.
+changing them is a stored-cache migration, not a refactor. The endpoint defaults call the
+typed endpoint methods owned by P2-12 through P2-16; they do not reconstruct endpoint paths.
 
 **Retry ownership: the transport is the only retry layer.** P2-33 changes the shared
 `QueryClient` defaults to `retry: false` for both queries and mutations; the transport's
@@ -1990,7 +2114,8 @@ from `useCreateActivity`, `useActivity`'s PATCH mutation and `useActivityActions
 mutations inherit the queue's `networkMode: 'offlineFirst'` and global `retry: false`.
 Keep `useActivity`'s GET-query `networkMode: 'always'` / `retry: false` override and its
 comment: it is what makes the explicit `Try again` action issue a request rather than remain
-paused. Replay-protected POSTs (create, duplicate, complete, uncomplete and skip) carry an
+paused. Every mutating POST in the registry (create, duplicate, schedule, complete,
+uncomplete, skip, snooze, unsnooze and reminder-create) carries an
 `Idempotency-Key` generated **before** `mutationFn` runs — in the mutation variables/public
 action boundary — and the default function reuses that stored key on every retry and replay.
 Never generate a key inside `mutationFn`: resumed and retried calls must identify the same
@@ -1998,6 +2123,20 @@ logical write. Patch and delete also have stable keys/default functions even tho
 not use idempotency headers. For completion, “before `mutationFn`” means the checkbox action
 allocates the key as it enqueues the optimistic mutation; a resumed default receives it from
 the persisted variables rather than minting another.
+
+**PATCH reconciliation after process death.** A resumed PATCH may receive `409` because the
+first attempt committed and its `If-Match` is now stale. The default refetches the Activity
+and compares the server's canonical values against the persisted intended partial patch. If
+every intended field already has the intended value (including server-normalised recurrence
+and its `editedFromDate` anchor), resolve success and refresh the cache; if any intended field
+diverges, surface the conflict. Never turn every 409 into success.
+
+**DELETE replay and server ordering.** Amend the existing Phase 1 cascade so child rows and
+external pointers are removed first and `ACT#/META` is deleted last. An interrupted retry can
+therefore still resolve the Activity and authorise the remaining cleanup. Once META is gone,
+the Activity-delete default treats `404` as success because the requested terminal state is
+already true. This is endpoint-specific reconciliation, not a transport-wide conversion of
+all 404s into success.
 
 **Platform difference, deliberate:** the mutation queue is **iOS only**. On web the
 persisted cache is enabled but the queue is disabled and the app warns on unload if the
@@ -2010,19 +2149,23 @@ a server-computed projection; reimplementing expansion against a local store wou
 the hardest logic in the product in a second place that can disagree with the first.
 
 **Edge cases.** Queue cap of 200 pending mutations, then new writes are refused with
-`You're offline and there's a lot waiting to sync.` A queued write returning `409` surfaces
-one banner naming the affected changes, not one toast per change.
+`You're offline and there's a lot waiting to sync.` Genuinely divergent queued PATCHes
+returning `409` after reconciliation surface one banner naming the affected changes, not one
+toast per change.
 
 **Tests.** The named `offline-queue-relaunch.yaml` Maestro acceptance flow is owned by
 P2-37's catalogue: airplane mode on, complete three tasks, kill the app, relaunch, airplane
 mode off, assert all three land exactly once (verified by item count, since the idempotency
 key should make a duplicate impossible even if the queue double-fires). P2-33 supplies its
 testable hooks and fixtures. Unit/integration tests dehydrate and rehydrate one create,
-duplicate, delete, patch, complete, uncomplete and skip mutation, then prove
+duplicate, delete, patch, schedule, complete, uncomplete, skip, snooze, unsnooze and
+reminder-create mutation, then prove
 each resolves through its registered default function. Create/duplicate tests spy on a
 transport retry and a resumed replay and assert the exact same `Idempotency-Key` is reused;
-complete/uncomplete/skip tests make the same assertion, and a completion replay returns the
-stored original `2xx` with one server-side write. Grep tests inspect **mutation option
+every other mutating POST makes the same assertion, and replays return the stored original
+`2xx` with one server-side write. PATCH tests cover both already-applied success and genuine
+divergence; DELETE tests interrupt after child cleanup, resume while META still authorises,
+then treat the final replayed 404 as success. Grep tests inspect **mutation option
 objects only** and assert they no longer set
 `networkMode: 'always'` or `retry: false`. A separate assertion pins the `useActivity`
 GET-query override so a broad grep-and-delete cannot remove it.
@@ -2042,18 +2185,21 @@ notifications iOS-only. Keeping that fork at the sanctioned push seam prevents t
 or reminder feature from growing platform branches.
 
 **Approach.** Push is Phase 5. This phase schedules **local** notifications with
-`expo-notifications` for reminders on activities in the current and next day, so reminders
-work end to end on device before any server-side scheduling exists.
+`expo-notifications` from an eight-calendar-day agenda window, so an Activity seven days away
+can still fire its maximum-offset reminder today and reminders work end to end on device
+before any server-side scheduling exists.
 
-Rescheduled on every agenda refresh: cancel all previously scheduled local notifications
-owned by the app and re-schedule from the current agenda. That is simpler and more correct
-than tracking deltas, and the volume is tiny.
+The notification scheduler owns its cadence and request. On its background/startup refresh it
+issues exactly one
+`GET /v1/agenda?from=<today>&to=<today+7d>&tz=<tz>&include=reminders`, cancels previously
+scheduled local notifications owned by the app and re-schedules from that response. It does
+not consume `useAgenda`, piggyback on a Today render or issue per-Activity reminder-detail
+requests. The eight inclusive dates cover the seven-day maximum negative offset.
 
-Today requests
-`include=anytime_unscheduled,overdue,reminders`; the agenda response carries the caller's
-own reminder rows for the current/next-day window. This task consumes those rows from
-`useAgenda` and issues **no reminder-detail request**, so the cold Today render remains one
-HTTP data request (P2-11/P2-18/P2-37).
+Today still requests `include=anytime_unscheduled,overdue,reminders` once and renders from that
+one response. The scheduler's cadence is independent: mounting or refreshing Today neither
+starts nor awaits its background request, preserving P2-11/P2-18/P2-37's screen-owned
+one-request rule.
 
 **The device only ever sees its own user's reminders**, because that is all the API returns
 (P2-16, P1-10 rule 6). There is therefore no filtering to do here and none to write — if this
@@ -2072,8 +2218,10 @@ different times for one dinner, and neither device knows the other's offset.
 - Web is a no-op (`push.web.ts`).
 
 **Tests.** Unit on the schedule-computation function (offset arithmetic, all-day hour, past
-reminders dropped) with the `expo-notifications` API mocked. A hook/component test supplies
-agenda reminder data and asserts no activity-reminder endpoint is called. The named simulator
+reminders dropped) with the `expo-notifications` API mocked. A scheduler test asserts one
+eight-day `include=reminders` agenda request per cadence tick, no Activity-reminder request,
+and scheduling of a seven-days-away Activity whose reminder fires today. A Today component
+test proves its cold render remains one request and does not trigger the scheduler. The named simulator
 setup step **`Grant notification permission fixture`** runs before criterion 18: use
 `xcrun simctl privacy booted grant notifications <bundle-id>` where that simulator runtime
 supports it, otherwise an E2E-only Expo test hook grants the equivalent permission. The hook
@@ -2223,18 +2371,22 @@ out the undo handler locally; the suite must catch it).
    28 Feb, 31 Mar, 30 Apr, 31 May, 30 Jun. A yearly series anchored on 29 February 2028
    expanded over 2028–2032 yields 29 Feb 2028, 28 Feb 2029, 28 Feb 2030, 28 Feb 2031 and
    29 Feb 2032, and its stored anchors and segment `effectiveFrom` are unchanged.
-4. `POST /v1/activities/:id/complete { occurrenceDate }` writes exactly one item and leaves
+4. `POST /v1/activities/:id/complete { occurrenceDate }` writes exactly one item in the
+   `ACT#<id>` partition (plus P2-38's separate idempotency record) and leaves
    `ACT#<id>/META.updatedAt` byte-identical, verified by reading the item before and after.
    Tomorrow's agenda still shows the series at its normal time.
 5. Snoozing today's occurrence to 20:00 shows it at 20:00 today and at the series time
-   tomorrow, and no query against the `#R` bucket occurs on the snooze path. Snoozing a
-   one-off writes META snooze fields and no `OCC#` row; `unsnooze` deletes the matching
-   fields/row for each scope without deleting another occurrence status.
+    tomorrow, and no query against the `#R` bucket occurs on the snooze path. Snoozing a
+    one-off writes META snooze fields and no `OCC#` row; `unsnooze` deletes the matching
+    fields/row for each scope without deleting another occurrence status. A cross-day move
+    writes nominal `OCC#` + destination `MOVE#` atomically and renders exactly once; 60 days
+    from nominal is accepted, 61 is `validation_failed`, and undo removes both references.
 6. A cold open of Today issues **exactly one** data request, with
-   `from=today`, `to=tomorrow` and
-   `include=anytime_unscheduled,overdue,reminders`; Today renders the first day and that
-   response includes only the caller's reminder rows for both days. This is asserted by a
-   Playwright network-count assertion (success criterion S2).
+    `from=today`, `to=tomorrow` and
+    `include=anytime_unscheduled,overdue,reminders`; Today renders the first day and that
+    response includes only the caller's reminder rows for both days. This is asserted by a
+    Playwright network-count assertion (success criterion S2). It does not trigger or await
+    P2-34's independently-cadenced background refresh.
 7. Loading the worked example day from
    [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §9 as a fixture at
    local time 15:10 produces the exact screen in §9.3: the same nine rows, in the same
@@ -2263,8 +2415,9 @@ out the undo handler locally; the suite must catch it).
 17. An unresolved passed item shows its type's prompt today, and does not appear on Today
     tomorrow, carries no prompt in Plans, and is counted nowhere.
 18. After P2-34's named **`Grant notification permission fixture`** simulator setup step, a
-    local notification fires at the configured offset for a timed task and at 09:00 for an
-    untimed one. The shipped Phase 2 app itself never prompts.
+    single eight-day `include=reminders` agenda refresh schedules a local notification at the
+    configured offset for a timed task seven days away and at 09:00 for an untimed one. The
+    shipped Phase 2 app itself never prompts.
 19. VoiceOver reads a timed task row as three elements in the order checkbox, body, time,
     with the labels in
     [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §6.2,
@@ -2294,7 +2447,8 @@ out the undo handler locally; the suite must catch it).
     item count and the same `META.updatedAt` after the attempt as before it. A stranger
     receives `404` from the same four. On a **prep task** of that plan, which they did not
     create, the same participant receives `200` from `complete` and `uncomplete`, and a
-    stranger to the parent receives `404`. The route guard and every projected
+    parent owner receives `200` even when a participant owns the child; a stranger to the
+    parent receives `404`. The route guard and every projected
     `capabilities` object receive their verdict from the same pure
     `deriveActionCapabilities` function; projection performs zero authorization reads per
     AgendaItem.
@@ -2307,19 +2461,27 @@ out the undo handler locally; the suite must catch it).
     `+` → `Plan` → `General` remains a `custom` Plan, proving the words do not route it.
 29. A `#R` index row is never expanded until `ACT#<id>/META` has been included in the
     bounded hydration `BatchGetItem`. A 22:00 New York activity requested for the matching
-    Tokyo day is found by the ±1-day scheduled query, appears on the following Tokyo date
-    exactly once, and is filtered out of the adjacent response day.
+    Tokyo day is found by the ±2-day scheduled query, appears on the following Tokyo date
+    exactly once, and is filtered out of the adjacent response day. The named
+    **`2026-01-01 23:30 UTC−12 becomes 2026-01-03 UTC+14`** case also passes for one-off and
+    recurring rows and fails under ±1 widening.
 30. Non-occurrence complete, uncomplete and skip mutations write META plus every
-    owner/participant `ActivityIndex.status` in one transaction; forced cancellation leaves
-    every row unchanged. Occurrence-scoped variants still leave META byte-identical. All
-    three routes require an `Idempotency-Key`; replay returns the original `2xx` and performs
-    no second write.
+    owner/participant `ActivityIndex.status` and any parent `SUB#` status in one transaction;
+    forced cancellation leaves every row unchanged. A prep-task title PATCH also rewrites its
+    `SUB#` title, fixing the Phase 1 omission. Occurrence-scoped variants still leave META
+    byte-identical. All three routes require an `Idempotency-Key`; replay returns the original
+    `2xx` and performs no second write.
 31. The shared HTTP client stores an ETag/body pair and resolves a later `304` as the cached
     success value, transparently to `useAgenda`; identities requesting the same URL cannot
-    read one another's cached body, and `clearCache()` empties every pair. Persisted create,
-    duplicate, delete, patch, complete, uncomplete and skip mutations resume through stable
-    default functions, and every replay-protected POST reuses the exact original idempotency
-    key.
+    read one another's cached body, and `clearCache()` empties every pair. Two agenda envelopes
+    with identical canonical `data` but different `meta.requestId` values have the same ETag.
+    Persisted create, duplicate, delete, patch, schedule, complete, uncomplete, skip, snooze,
+    unsnooze and reminder-create mutations resume through stable default functions, and every
+    mutating POST reuses the exact original idempotency key. PATCH distinguishes already-
+    applied state from true divergence; replayed DELETE treats post-cascade `404` as success.
+32. P2-38's crash-shaped integration test loses the first HTTP response after the domain +
+    idempotency transaction commits. Replay returns the stored original status and body
+    (`201` remains `201`) with exactly one domain write and no durable in-flight state.
 
 ## Out of scope for this phase
 
@@ -2344,7 +2506,7 @@ out the undo handler locally; the suite must catch it).
 
 | Risk | Signal | Mitigation |
 | --- | --- | --- |
-| **The recurrence engine is subtly wrong** and nobody notices for weeks | A user reports "my gym disappeared in March" or "the 31st skipped February" | P2-01 is built first and alone; P2-02's 37 engine/calendar cases (1–24, 31–43) plus property tests and an independent cross-check implementation; P2-08 owns boundary cases 25–30; 100% branch coverage is gated in CI; golden fixtures make a refactor fail loudly. |
+| **The recurrence engine is subtly wrong** and nobody notices for weeks | A user reports "my gym disappeared in March" or "the 31st skipped February" | P2-01 is built first and alone; P2-02's 37 engine/calendar cases (1–24, 31–43) plus property tests and an independent cross-check implementation; P2-08 owns boundary cases 25–30 plus the named UTC−12 → UTC+14 ±2-day test; 100% branch coverage is gated in CI; golden fixtures make a refactor fail loudly. |
 | DST handled by adding milliseconds | Everything is right for ten months a year | Calendar arithmetic only, in `calendar.ts`; cases 15–19 include both hemispheres and a half-hour zone. A `+ 86400000` anywhere in `recurrence/` is a review rejection. |
 | An occurrence-scoped snooze or complete writes `ACT#/META` | The visible result looks correct; the series' `updatedAt` churns and Phase 6's conflict detection starts firing spuriously | Success criterion S6, asserted by reading the item before and after; one-off snooze is the explicit META exception, while a repository spy asserts no `#R` query on either snooze path. |
 | **The bucket rule is re-derived in a second place** — a client-side `type === 'task'` check, a service that builds an index entry by hand, or a filter in the agenda | An undated Plan appears on Today, or a Task vanishes from ANYTIME, and the two implementations disagree only for some inputs | One pure function (P2-05), one caller, a grep test asserting both. The agenda excludes `#P` by not querying it rather than by filtering it, so there is no filter to drop. |
@@ -2357,5 +2519,5 @@ out the undo handler locally; the suite must catch it).
 | Section sort order drifts between server and client | Rows reorder on refresh | Both use the sort keys in `today-and-tasks.md` §3.1, and `partition.ts` is tested against the same fixture the server integration test uses. |
 | A badge or count for unresolved items is added "because it's useful" | The product becomes a nag | Acceptance criterion 11 plus a test that fails on a badge bound to an unresolved count. |
 | The 62-day cap is enforced only on the client | A wide window times out the Lambda | Enforced server-side in the route validator and tested at 62 and 63. |
-| **Per-participant completion is built by accident**, because "a participant should be able to tick their own row" reads as obviously right | An `OCC#<date>#<userId>` key, or an `attendedBy` array, appears in a Phase 2 pull request. In Phase 6 the agenda cannot say whose occurrence a row is | Completion of a **plan** is global and owner-only (ADR-048, amended by ADR-051). `Occurrence` has no user field and the endpoints are owner-gated in `authz.ts`, with criterion 26 asserting the `403` and asserting **nothing was written**. The prep-task branch is the parent-participant rule, not a per-participant occurrence. The real feature and its five-part cost are deferred in `../00-open-decisions.md` item 31. |
+| **Per-participant completion is built by accident**, because "a participant should be able to tick their own row" reads as obviously right | An `OCC#<date>#<userId>` key, or an `attendedBy` array, appears in a Phase 2 pull request. In Phase 6 the agenda cannot say whose occurrence a row is | Completion of a **plan** is global and owner-only (ADR-048, amended by ADR-051). `Occurrence` has no user field and both route guards and agenda capabilities consume `deriveActionCapabilities`, with criterion 26 asserting the `403` and asserting **nothing was written**. The prep-task branch admits the child owner, parent owner or parent participant; it is not a per-participant occurrence. The real feature and its five-part cost are deferred in `../00-open-decisions.md` item 31. |
 | **Reminders are scoped by a filter rather than by the key** | It works until one handler forgets, and the thing that leaks is a statement about somebody's day | The `sk` prefix is built from `c.get('userId')` (P2-16), so there is no id to get wrong. The only place a filter is needed is the plan-detail projection, which is one function with one test (P1-10 rule 6, criterion 24 of Phase 1). |

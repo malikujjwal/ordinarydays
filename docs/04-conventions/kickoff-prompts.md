@@ -426,9 +426,9 @@ gates between tasks and merging `--no-ff` only when they are green.
 before scheduling anything, and the exit check after the last task. Those two need your
 eyes; the middle mostly does not.
 
-**Phase 2 happens to be single-track:** plain numeric order P2-01 → P2-37 satisfies
-every dependency row, and the `packages/shared` tasks (P2-01…P2-06) sit at the front, so
-one worktree suffices — no parallel scheduling needed.
+**Phase 2 is single-track with one deliberate numeric splice:** run P2-01 → P2-11, then
+P2-38, then P2-12 → P2-37. The `packages/shared` tasks (P2-01…P2-06) still sit at the front,
+so one worktree suffices — no parallel scheduling needed.
 
 The 2026-08-10 Phase 2 plan amendment preserves that run order: every added dependency
 still points to a lower-numbered P2 task (or a completed Phase 1 task). No task may be
@@ -444,9 +444,16 @@ and P2-13 adds P2-10 as its only new dependency. The producer remains lower-numb
 endpoint and offline-queue consumers, so the autonomous numeric run requires no pause or
 reordering.
 
+The fifth gate amendment adds P2-38 as an explicit pre-P2-12 infrastructure cutover. This is
+the only dependency-valid exception to numeric order: P2-12 and P2-13 depend on P2-38, and
+every later consumer follows after those tasks. Do not leave P2-38 until the end merely because
+its identifier is numerically last.
+
 ```bash
 # from the repo root, on a clean integration branch (e.g. `phase-2` cut from main):
-node scripts/run-phase.mjs --range P2-01..P2-37 --pause-after P2-02,P2-11,P2-22
+node scripts/run-phase.mjs --range P2-01..P2-11 --pause-after P2-02,P2-11
+node scripts/run-phase.mjs --range P2-38..P2-38
+node scripts/run-phase.mjs --range P2-12..P2-37 --pause-after P2-22
 ```
 
 The three default checkpoints are where a human genuinely adds value:

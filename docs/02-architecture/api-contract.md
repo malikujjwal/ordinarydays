@@ -28,7 +28,7 @@ survives warm invocations). Rejections return `401` with `code: "unauthenticated
 | Header | Direction | Purpose |
 | --- | --- | --- |
 | `X-Request-Id` | both | Correlation. Echoed in every log line and error body. |
-| `Idempotency-Key` | request | Required on all `POST` that create and on the explicitly replay-protected `complete`, `uncomplete` and `skip` mutation routes. UUID from the client, allocated once when the logical mutation is enqueued and reused by every retry or offline replay. |
+| `Idempotency-Key` | request | Required on **every mutating `POST`**. UUID from the client, allocated once when the logical mutation is enqueued and reused by every transport retry, offline resume or process-death replay. Read-only `POST`s, if one is ever introduced, must be explicitly registered as non-mutating rather than silently opting out. |
 | `X-Client-Timezone` | request | IANA tz. Used when the body omits one. |
 | `X-Client-Version` | request | `ios/1.4.0` or `web/1.4.0`. Enables server-side kill switches. |
 
@@ -90,9 +90,20 @@ free.
 
 ### Idempotency
 
-`POST` creates write an `IDEM#<userId>#<key>` item with a 24 h TTL holding the response body.
-A repeat with the same key returns the stored response with `200` instead of creating a
-duplicate. Required because mobile networks retry.
+Every mutating `POST` writes an `IDEM#<userId>#<key>` item with a 24 h TTL holding the
+successful response's **status and body**. The idempotency item and the domain mutation are
+members of the same `TransactWriteItems`: repositories accept the conditional idempotency put
+as an extra transaction item, and transaction builders reserve capacity for it. There is no
+separate durable `in-flight` reservation that can survive a crash after the domain write.
+
+A repeat with the same key returns the stored status and body unchanged — `201` remains `201`;
+no replay path hard-codes `200`. Concurrent first attempts race on the conditional idempotency
+put; the loser uses a strongly consistent read with bounded retry to return the winner's
+committed record instead of executing a second domain write. A failed domain transaction
+stores no successful response. P2-38 hardens the
+Phase 1 middleware and existing creating routes to this rule before Phase 2 adds further
+mutating `POST`s. Required because mobile networks retry and persisted mutations survive
+process death.
 
 ---
 
@@ -190,7 +201,10 @@ interface AgendaItem {
 The server computes all three `capabilities` booleans at projection time by applying the
 existing authorisation policies to the authenticated caller and projected activity. They
 are part of the one agenda response; clients consume them and never reconstruct ownership,
-parent-participant access or any other authorisation rule.
+parent-participant access or any other authorisation rule. For a prep task, the hydrated
+context includes the parent Plan's `ownerId`: the child owner, parent owner or parent
+participant may act. This preserves inherited parent-owner access when somebody else created
+the child.
 
 Additional `AgendaItem` field:
 
@@ -205,13 +219,17 @@ Query parameters:
 | --- | --- |
 | `include=anytime_unscheduled` | Merges the undated Anytime bucket into the first day. Today uses this; a multi-day Plans view does not. |
 | `include=overdue` | Rolls incomplete, non-recurring **tasks** with a date in the past forward onto the first day, each carrying `overdueFromDate`. Capped at 30 days back. Never applies to recurring occurrences or non-task types. See `../01-product/today-and-tasks.md` §7. |
-| `include=reminders` | Attaches the authenticated caller's own `REM#<userId>#` rows to the AgendaItems emitted for the requested window. Never returns another user's row. Today and local notification scheduling use this; it does not add a second HTTP request. |
+| `include=reminders` | Attaches the authenticated caller's own `REM#<userId>#` rows to the AgendaItems emitted for the requested window. Never returns another user's row. Today uses it in its one screen request; local notification scheduling independently makes one eight-day agenda request on its background cadence. |
 
 Tokens may be combined: Today requests `from=today&to=tomorrow`, renders `days[0]`, and uses
-`?include=anytime_unscheduled,overdue,reminders` so local notifications can schedule both
-days without a second HTTP request.
+`?include=anytime_unscheduled,overdue,reminders` in exactly one screen-owned request. The
+notification scheduler does not derive from that response: on its independent cadence it
+issues one `from=today&to=today+7d&include=reminders` request, covering the seven-day maximum
+reminder offset without being triggered or awaited by Today.
 - Window capped at 62 days → `400 validation_failed`.
-- Response is cacheable client-side for 60 s; server sends `ETag`.
+- Response is cacheable client-side for 60 s; server sends `ETag`, computed from a canonical
+  serialisation of `data` only. Volatile envelope metadata such as `meta.requestId` is excluded,
+  so identical agendas produce the same ETag and the second conditional request returns `304`.
 
 Agenda **never** returns activities in the `#P` (Needs a date) bucket. An undecided group
 plan is not a thing you have to do today.
@@ -304,16 +322,23 @@ Also:
 | --- | --- | --- |
 | `POST` | `/v1/activities` | Create a **Task or Plan chosen by the client**. Body = `CreateActivityInput`; both `objectKind` and `type` are required. Requires `Idempotency-Key`. |
 | `GET` | `/v1/activities/:id` | Full detail: activity + participants + expenses + updates + attachments + children + **the caller's own reminders** + date suggestions. Response shape is `ActivityDetail` (`packages/shared/src/types/activity.ts`), an object of named collections so each one is **added** as its phase lands rather than changing the envelope; Phase 1 defines `{ activity, reminders }` and nothing else exists to return yet. One DynamoDB Query; the `REM#` rows are filtered to the caller in the projection before responding. Stored `listId` / `listItemId` are included only when the caller also passes `assertListAccess`; a Plan participant outside the list receives no reverse link. |
-| `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. **Does not accept `schedule` or unschedule fields**; `POST .../schedule` is the single scheduling write path. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
-| `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7 and deletes every child Expense locator with its row. **The settlement guard and the Expense-locator half of the cascade arrive in Phase 7 (P7-08), not Phase 1 (P1-14)** — see the note below. |
-| `POST` | `/v1/activities/:id/schedule` | The **single schedule write path**: `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule is `{ date: null }`. Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies; a time-only change does not. The response includes `rsvpReset: true` only when it happened. Status is server-derived from schedule presence (unless terminal), and `icsSequence` increments once iff an exported schedule field changed. Shared `toUtcInstant` derives UTC values; the spring gap `2026-03-08 02:30 America/New_York` moves forward to `03:00`. With `occurrenceDate`, writes one series override and leaves META unchanged. |
-| `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. Requires `Idempotency-Key`; replay returns the original `2xx`. With `occurrenceDate` → writes an Occurrence, never touches the series. Plan completion is global and owner-only; ADR-051 allows a participant of the parent plan to complete a prep task. Without `occurrenceDate`, META and every denormalised ActivityIndex status change in one transaction. |
+| `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. **Does not accept `schedule` or unschedule fields**; `POST .../schedule` is the single scheduling write path. A recurrence edit may additionally carry `editedFromDate?: WallDate`. When supplied, it must be a date emitted by the current stored active rule and becomes the server-written `effectiveFrom` of the one appended segment; when absent, the server uses today in the Activity's timezone. Any `effectiveFrom` values inside client-supplied segments are ignored. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
+| `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7 and deletes every child Expense locator with its row. The cascade deletes children and external pointers first and `ACT#/META` **last**, so an interrupted retry can still authorise; after META is gone, a replayed `404` is success for the client. **The settlement guard and the Expense-locator half of the cascade arrive in Phase 7 (P7-08), not Phase 1 (P1-14)** — see the note below. |
+| `POST` | `/v1/activities/:id/schedule` | The **single schedule write path**: `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule is `{ date: null }`. Requires `Idempotency-Key`. Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies; a time-only change does not. The response includes `rsvpReset: true` only when it happened. Status is server-derived from schedule presence (unless terminal), and `icsSequence` increments once iff an exported schedule field changed. Shared `toUtcInstant` derives UTC values; the spring gap `2026-03-08 02:30 America/New_York` moves forward to `03:00`. With `occurrenceDate`, writes the nominal override and, for a cross-day move, its destination marker in one transaction while leaving META unchanged. |
+| `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. Requires `Idempotency-Key`; replay returns the original `2xx`. With `occurrenceDate` → writes an Occurrence, never touches the series. Plan completion is global and owner-only; ADR-051 allows the prep-task owner, parent-plan owner or a parent-plan participant to complete a prep task. Without `occurrenceDate`, META and every denormalised ActivityIndex status change in one transaction. |
 | `POST` | `/v1/activities/:id/uncomplete` | Requires `Idempotency-Key`; replay returns the original `2xx`. Reverses the above under the same ADR-051 policy and transaction/occurrence split. |
 | `POST` | `/v1/activities/:id/skip` | `{ occurrenceDate? }`. Requires `Idempotency-Key`; replay returns the original `2xx`. Uses the same ADR-051 policy; without an occurrence, META plus every index status are one transaction. |
-| `POST` | `/v1/activities/:id/snooze` | `{ occurrenceDate?, until }` — `until` is `HH:mm` (same day) or an ISO instant. Without `occurrenceDate`, writes one-off META snooze fields; with it, writes a series Occurrence override. |
-| `POST` | `/v1/activities/:id/unsnooze` | `{ occurrenceDate? }`. Compensating Undo operation: without `occurrenceDate`, deletes one-off META snooze fields; with it, deletes only a snoozed Occurrence row and cannot erase completion, skip or reschedule. Idempotent. |
+| `POST` | `/v1/activities/:id/snooze` | `{ occurrenceDate?, until }` — `until` is `HH:mm` (same day) or an ISO instant. Requires `Idempotency-Key`. Without `occurrenceDate`, writes one-off META snooze fields; with it, writes a series Occurrence override and, when the effective date changes, its destination marker. |
+| `POST` | `/v1/activities/:id/unsnooze` | `{ occurrenceDate? }`. Requires `Idempotency-Key`. Compensating Undo operation: without `occurrenceDate`, deletes one-off META snooze fields; with it, deletes only the snoozed source override and its destination-marker reference and cannot erase completion, skip or reschedule. Idempotent. |
 | `POST` | `/v1/activities/:id/duplicate` | |
 | `GET` | `/v1/activities/:id/ics` | Single-event `.ics`. Authenticated variant of the public one. |
+
+For occurrence-scoped schedule/snooze writes, `overrideDate` and the Activity-local date of an
+ISO `snoozedUntil` must be within 60 calendar days of `occurrenceDate`; farther moves return
+`400 validation_failed`. A cross-day write commits the nominal source override and destination
+`MOVE#` marker together. Reschedule Undo calls the same schedule route with the occurrence's
+in-force segment date/time; when they match the unmodified occurrence the server deletes the
+source override and marker reference. Unsnooze likewise removes both references together.
 
 > **Amended 2026-08-08 — when `settlement_conflict` becomes real.** §1 above enumerates the
 > closed `ErrorCode` union and **`settlement_conflict` is not in it**, while this section and
@@ -378,7 +403,9 @@ participants. Plan requires one of the four visible Plan kinds — `custom` (Gen
 never silently rewrite `objectKind`.
 
 `reminders` requires `schedule.date`; a create carrying reminders without a date is
-`400 validation_failed`. Unscheduling deletes the Activity's reminder rows atomically.
+`400 validation_failed`. Unscheduling commits the META/index schedule change first, then
+removes the Activity's reminder rows through the separate idempotent, resumable cleanup in
+`data-model.md` §7. The reminder deletion is not atomic with the unschedule transaction.
 
 The entry points map to writes as follows. There is deliberately no generic `/v1/add`
 endpoint whose handler guesses what the user meant.
@@ -798,13 +825,16 @@ notification keys, their triggers and their copy lives in
 
 ## 3. Authorisation rules
 
-Enforced in a single middleware, not scattered through handlers.
+Baseline read/write/owner access is enforced in the shared middleware, not scattered through
+handlers. Complete/uncomplete/skip/snooze are the deliberate exception: the service first
+hydrates Activity + parent context, then both route guards and agenda projection call the same
+pure `deriveActionCapabilities(ctx)` policy.
 
 | Actor | Can |
 | --- | --- |
 | Owner | Everything on their activity, including delete and removing participants. |
 | Participant (app user) | Read the activity, change **their own** RSVP, manage **their own** reminders, add and withdraw date suggestions, mark a suggestion as workable, add updates, add expenses. **Cannot complete, skip or snooze the plan** — that is global and owner-only. Cannot reschedule, rename, delete, or remove others. |
-| Participant, on a **prep task** of a plan they are in | May complete, uncomplete and edit it, whoever created it. This **does** require a rule beyond the owner check: *a participant of the parent may act on a child*. See the decision below. |
+| Parent owner or participant, on a **prep task** of that plan | May complete, uncomplete and edit it, whoever created it. This **does** require a rule beyond the child owner check: *the parent owner or a parent participant may act on a child*. See the decision below. |
 | List owner | Everything on their list, including delete, member management, and changing `behaviour`, `capabilities` or `slot`. |
 | List member | Full CRUD on **items**, plus rename the list, schedule an item using an explicit audience, and leave it. Can receive only their own per-viewer Activity link in a list response. Cannot change behaviour or capabilities (destructive under the interaction contract), delete the list, or remove anyone but themselves. |
 | Guest with valid invite token | Read the public projection, set their own RSVP. Nothing else. |
@@ -812,7 +842,8 @@ Enforced in a single middleware, not scattered through handlers.
 
 Ownership is checked by loading `ACT#<id>/META` and comparing `ownerId`, plus a
 `PART#<personId>` lookup for participant access. When the activity has a
-`parentActivityId`, the check also consults the **parent's** participant set. For lists, the
+`parentActivityId`, action-context hydration also loads the parent `ownerId` and consults the
+**parent's** participant set. For lists, the
 same middleware requires the caller's exact `USER#<userId>` / `LIST#<listId>` pointer, then
 loads `LIST#<id>/META` for ownership and capabilities. `MEMBER#` is roster and lifecycle
 state; `LLINK#` is People discovery state. **Neither can substitute for the pointer or
@@ -831,8 +862,9 @@ rows, and a private list has `memberCount: 1` with zero `MEMBER#` rows.
 >
 > So a prep task behaves like an item on a **shared list**, not like a plan outcome, and
 > that is the consistent reading rather than a special case: in both places, a collaborator
-> may check a shared checklist item. It costs one rule in `authz.ts` — a participant of the
-> parent may act on a child — applied once, not per endpoint.
+> may check a shared checklist item. It costs one pure service-layer rule — the child owner,
+> parent owner or a parent participant may act on the child — applied by both projection and
+> endpoint guards, not reimplemented per endpoint.
 
 **Two self-service exceptions**, both of which must be explicit in the middleware rather
 than emergent from an owner check:

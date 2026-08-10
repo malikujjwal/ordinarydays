@@ -77,7 +77,7 @@ occurrence scoping that provably never writes `ACT#/META`. The Today screen with
 sections, the one-minute UP NEXT ticker, swipe actions that are also accessibility actions,
 a six-second undo, passed-plan prompts, a persisted offline mutation queue, and local
 reminders scheduled on device. This is the phase where the product becomes usable daily —
-still entirely on the laptop. **37 tasks.**
+still entirely on the laptop. **38 tasks.**
 
 ### 1.4 Phase 3 — Plans and lists
 
@@ -239,7 +239,7 @@ and can be started against the contract alone.
 graph TD
     P0["Phase 0 · Foundations<br/>local · 31 tasks · 63 AWU"]
     P1["Phase 1 · Activity core<br/>local · 30 tasks · 72 AWU"]
-    P2["Phase 2 · Today and tasks<br/>local · 37 tasks · 95 AWU"]
+    P2["Phase 2 · Today and tasks<br/>local · 38 tasks · 97 AWU"]
     P3["Phase 3 · Plans and lists<br/>local · 43 tasks · 110 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
     P5["Phase 5 · Ship v1<br/>TestFlight · 37 tasks · 82 AWU"]
@@ -396,17 +396,17 @@ sizings did not support; those are corrected here.
 | --- | --- | --- | --- | --- |
 | 0 — Foundations | 31 | 9 / 17 / 5 | **63** | ~3 weeks |
 | 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
-| 2 — Today and tasks | 37 | 5 / 19 / 13 | **95** | ~4.75 weeks |
+| 2 — Today and tasks | 38 | 5 / 20 / 13 | **97** | ~4.85 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **141** | **22 / 79 / 40** | **340** | **~17 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **142** | **22 / 80 / 40** | **342** | **~17.1 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **211** | **34 / 124 / 53** | **494** | **~24.75 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **212** | **34 / 125 / 53** | **496** | **~24.8 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9** | **360** | **47 / 215 / 98** | **869** | **~43.5 weeks (~10 months)** |
+| **Total 0–9** | **361** | **47 / 216 / 98** | **871** | **~43.6 weeks (~10 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -418,7 +418,7 @@ P1-01…P1-18 and P1-20…P1-31.
 
 The previous roadmap's total was ~683 AWU and ~34 weeks. The first recomputation on
 2026-08-07 produced **859 AWU and ~43 weeks**; the dated gate corrections below bring the
-current plan to 869 AWU. The difference is not drift but explicit, auditable corrections.
+current plan to 871 AWU. The difference is not drift but explicit, auditable corrections.
 
 | Change | AWU |
 | --- | --- |
@@ -461,9 +461,14 @@ existing tasks, and added P2-07 to P2-12's dependency column. This exposed work 
 required by the acceptance criteria rather than adding product scope, so task sizes, AWU
 and the numeric run order are unchanged.
 
-Use **869 AWU and ~43.5 weeks** (869 / 20 ≈ 43.45) as the plan of record. Everything
-through Phase 5 is now 494 AWU and ~24.75 weeks; the
-remaining ~19 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
+The fifth Phase 2 gate on **2026-08-10** adds **P2-38**, an M task that makes idempotency
+response storage atomic with domain writes and hardens crash replay before new Phase 2
+mutations land. That is **+1 task and +2 AWU**. It has one explicit out-of-numeric-order slot:
+after P2-11 and before P2-12; all other task sizes are unchanged.
+
+Use **871 AWU and ~43.6 weeks** (871 / 20 ≈ 43.55) as the plan of record. Everything
+through Phase 5 is now 496 AWU and ~24.8 weeks; the
+remaining ~18.8 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
 participant can act on.
 
@@ -518,7 +523,7 @@ tells you where a third agent earns its keep.
 | --- | --- | --- |
 | 0 | 12 of 31 | Stacks, toolchain and scaffolds fan out well. |
 | 1 | 11 of 30 | Pure `shared` work and independent route files. P1-30 is the opposite — it is the one task the ten route tasks all queue behind, so it is worth doing first and alone. |
-| 2 | 15 of 37 | The highest count, but the engine itself (P2-01, P2-02) is strictly one agent. |
+| 2 | 15 of 38 | The highest count, but the engine itself (P2-01, P2-02) and the P2-38 idempotency cutover are strictly one agent. |
 | 3 | 10 of 44 | The link lifecycle is one model of one problem; the template catalogue and the two read-only endpoints fan out. |
 | **4** | **4 of 33** | **The least parallel phase in the plan.** Bootstrap → account → data → pool → API → token is one chain, and every link is a deploy. Do not staff it for throughput; staff it for one person's undivided attention. |
 | 5 | 6 of 37 | Serial in code, but the App Store items are calendar-bound and should run alongside. |
@@ -601,7 +606,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-141 tasks, 340 AWU, ~17 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+142 tasks, 342 AWU, ~17.1 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -613,7 +618,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-211 tasks, 494 AWU, ~24.75 weeks. External testers who are not the founder are using it on
+212 tasks, 496 AWU, ~24.8 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -625,7 +630,7 @@ after the first TestFlight build, migrations are mandatory in both environments.
 
 ### 6.3 End of Phase 7 — the full multi-player product, before any AI spend
 
-295 tasks, 689 AWU, ~34.5 weeks. Sharing, guests, invites, shared lists, date suggestions,
+296 tasks, 691 AWU, ~34.6 weeks. Sharing, guests, invites, shared lists, date suggestions,
 expenses, balances and settlement all work. Every marginal cost in the system is still a fraction of a cent per
 request, and every AWS line item is either free-tier or the domain.
 
@@ -694,7 +699,7 @@ rows, reminders and completion history built on the wrong dates.
 | A test in `recurrence/` is skipped, marked `todo`, or has its expectation edited to match the output | Build it **first and alone**, before any consumer. One agent, one head. |
 | The coverage threshold on `recurrence/**` is lowered, even to 99% | The 100% statement and branch gate is configured in Phase 0 (P0-24), against a placeholder file, *before* the first line exists — so it can never be "added afterwards and tuned to fit". |
 | `+ 86400000`, `setDate(d.getDate() + 1)` on a UTC `Date`, or any millisecond arithmetic appears in `recurrence/` | Wall-clock calendar arithmetic only, in `calendar.ts`. Millisecond date-stepping in that directory is an automatic review rejection. |
-| A bug report mentions a specific month or a specific weekend in March or November | P2-02's 37 engine/calendar cases (numbered 1–24 and 31–43) cover both hemispheres, a half-hour offset zone, the spring-forward gap, the fall-back ambiguity, four month-end variants and seven yearly cases. P2-08 owns the six occurrence-merge and timezone-travel boundary cases 25–30. Plus 1,000 property-based cases and an independent cross-check implementation in the engine test file. |
+| A bug report mentions a specific month or a specific weekend in March or November | P2-02's 37 engine/calendar cases (numbered 1–24 and 31–43) cover both hemispheres, a half-hour offset zone, the spring-forward gap, the fall-back ambiguity, four month-end variants and seven yearly cases. P2-08 owns the six occurrence-merge and timezone-travel boundary cases 25–30 plus the named UTC−12 → UTC+14 test that requires ±2-day widening. Plus 1,000 property-based cases and an independent cross-check implementation in the engine test file. |
 | The engine reads or writes anything | It is pure and takes four arguments. A `Date.now()` in it fails the determinism test. |
 
 **If it happens anyway:** the engine is pure and isolated, so the fix is one file and the
@@ -706,7 +711,7 @@ isolation, and it only holds if the isolation is real.
 **Phases 0 through 3, surfacing in Phase 4. New with the local-first ordering, and the price
 paid for it.**
 
-Nothing runs on AWS for 141 tasks. Every divergence between DynamoDB Local and DynamoDB,
+Nothing runs on AWS for 142 tasks. Every divergence between DynamoDB Local and DynamoDB,
 between the Hono Node adapter and an API Gateway v2 payload, and between a warm laptop
 process and a cold Lambda accumulates silently and is discovered in one phase — tangled up
 with a Cognito user pool, a first deploy and a new IAM surface, so that when something fails
