@@ -239,7 +239,7 @@ and can be started against the contract alone.
 graph TD
     P0["Phase 0 · Foundations<br/>local · 31 tasks · 63 AWU"]
     P1["Phase 1 · Activity core<br/>local · 30 tasks · 72 AWU"]
-    P2["Phase 2 · Today and tasks<br/>local · 37 tasks · 87 AWU"]
+    P2["Phase 2 · Today and tasks<br/>local · 37 tasks · 95 AWU"]
     P3["Phase 3 · Plans and lists<br/>local · 43 tasks · 110 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
     P5["Phase 5 · Ship v1<br/>TestFlight · 37 tasks · 82 AWU"]
@@ -356,17 +356,17 @@ Three things pay that cost down, and all three are cheap.
 - **`cdk synth` is green in CI from day one.** Every pull request in Phases 0–3 synthesises
   eight stacks and runs their assertion tests, with no AWS credentials. The infrastructure
   cannot rot while the product is built.
-- **Phase 0 ends with a throwaway deploy.** P0-31 bootstraps, deploys one stack containing a
-  single SSM parameter through the real GitHub OIDC path, reads the value back, destroys it,
-  and asserts it is gone. Five things have to be simultaneously correct for any `cdk deploy`
-  from CI to work, and each fails with a different and unclear error. Discovering all five
-  for the first time in Phase 4 means debugging them tangled up with a Cognito user pool.
+- **The Phase 0 throwaway deploy is deferred into Phase 4's account opening (2026-08-10).**
+  P0-31 still bootstraps, deploys one stack containing a single SSM parameter through the
+  real GitHub OIDC path, reads it back, destroys it, and asserts it is gone; it runs before
+  P4-15 and the first product-stack deploy. The account-controlled smoke was not performed
+  during the local phases, and the risk register records that deferral explicitly.
 - **Phase 4 opens with an explicit divergence checklist.** P4-15 is an L-sized task whose
   output is a row-by-row detection result recorded in the pull request, and acceptance
   criterion 8 requires it. It is the reason Phase 4 has a task budget at all.
 
-> **Decision:** the bootstrap stack is deliberately left in place at the end of Phase 0
-> rather than torn down and repeated. `cdk bootstrap` is idempotent, it costs nothing at
+> **Decision, execution deferred to Phase 4:** the bootstrap stack is deliberately left in
+> place after P0-31 rather than torn down and repeated. `cdk bootstrap` is idempotent, it costs nothing at
 > rest, and re-bootstrapping with a different qualifier creates a second unused set of roles
 > and buckets — the exact failure P0-31 exists to prevent. Phase 4 verifies the bootstrap
 > rather than repeating it.
@@ -396,17 +396,17 @@ sizings did not support; those are corrected here.
 | --- | --- | --- | --- | --- |
 | 0 — Foundations | 31 | 9 / 17 / 5 | **63** | ~3 weeks |
 | 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
-| 2 — Today and tasks | 37 | 5 / 23 / 9 | **87** | ~4.5 weeks |
+| 2 — Today and tasks | 37 | 5 / 19 / 13 | **95** | ~4.75 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **141** | **22 / 83 / 36** | **332** | **~16.5 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **141** | **22 / 79 / 40** | **340** | **~17 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **211** | **34 / 128 / 49** | **486** | **~24 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **211** | **34 / 124 / 53** | **494** | **~24.75 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9** | **360** | **47 / 219 / 94** | **861** | **~43 weeks (~10 months)** |
+| **Total 0–9** | **360** | **47 / 215 / 98** | **869** | **~43.5 weeks (~10 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -416,8 +416,9 @@ P1-01…P1-18 and P1-20…P1-31.
 
 ### 4.3 The headline changed
 
-The previous roadmap's total was ~683 AWU and ~34 weeks. The recomputed total is **859 AWU
-and ~43 weeks**. The difference is not drift; it is thirteen separate corrections.
+The previous roadmap's total was ~683 AWU and ~34 weeks. The first recomputation on
+2026-08-07 produced **859 AWU and ~43 weeks**; the dated gate corrections below bring the
+current plan to 869 AWU. The difference is not drift but explicit, auditable corrections.
 
 | Change | AWU |
 | --- | --- |
@@ -449,8 +450,13 @@ is worth noting what this correction is: not scope growth, but two unowned depen
 one duplicate, found by reading the plan against the code for an hour. That is the cheapest
 kind of correction available and the argument for running the phase gate before every phase.
 
-Use **861 AWU and ~43 weeks** (861 / 20 ≈ 43.1) as the plan of record. Note that the first four sevenths of
-that — everything through Phase 5, 486 AWU and ~24 weeks — is the shipped product; the
+The Phase 2 gate amendment on **2026-08-10** expanded P2-04, P2-12, P2-15 and P2-18 from M
+to L: service-level recurrence enforcement, the sole cross-layer schedule write path,
+one-off/occurrence snooze plus unsnooze, and transport-level ETag body caching. That is
+**+8 AWU**, with no new task and no dependency inversion.
+
+Use **869 AWU and ~43.5 weeks** (869 / 20 ≈ 43.45) as the plan of record. Everything
+through Phase 5 is now 494 AWU and ~24.75 weeks; the
 remaining ~19 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
 participant can act on.
@@ -589,7 +595,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-141 tasks, 332 AWU, ~16.5 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+141 tasks, 340 AWU, ~17 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -601,7 +607,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-211 tasks, 486 AWU, ~24 weeks. External testers who are not the founder are using it on
+211 tasks, 494 AWU, ~24.75 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -700,10 +706,15 @@ process and a cold Lambda accumulates silently and is discovered in one phase �
 with a Cognito user pool, a first deploy and a new IAM surface, so that when something fails
 it is not obvious which of four unrelated things caused it.
 
+> **Dated deferral — 2026-08-10.** P0-31's real deploy smoke remains intentionally deferred
+> because it requires the founder-controlled AWS account work. Run it with Phase 4's account
+> and bootstrap opening sequence, before P4-15's divergence pass and before any product
+> stack deploy; the deferral is not permission to omit it.
+
 | Trigger signals | Mitigation |
 | --- | --- |
 | A `cdk synth` job is made optional, skipped on a draft PR, or allowed to fail | Synth plus the per-stack assertion tests run on **every** pull request from P0-29, with no AWS credentials involved. The infrastructure cannot rot while the product is built locally. |
-| P0-31 is skipped as "we'll bootstrap in Phase 4 anyway" | It is the acceptance criterion that proves bootstrap, the OIDC thumbprint and audience, the role's trust `sub` condition, the execution policy and `id-token: write` are all simultaneously correct. Five failure modes, five unclear errors, twenty minutes, at a moment when nothing else is changing. |
+| Deferred P0-31 reaches Phase 4 and is skipped, or runs after product stacks | It is the first account smoke, before P4-15: the acceptance criterion that proves bootstrap, the OIDC thumbprint and audience, the role's trust `sub` condition, the execution policy and `id-token: write` are simultaneously correct. Five failure modes, five unclear errors, twenty minutes, while account setup is the only changing variable. |
 | P4-15 is treated as a checklist to tick rather than a task to do | It is L-sized, it has a task budget, and acceptance criterion 8 requires a recorded detection result per row plus the API Gateway v2 event fixture under test in CI. |
 | Local code relies on read-after-write consistency, ignores the 400 KB item limit, or assumes an unbounded response body | These are the specific things DynamoDB Local and the Node adapter do not enforce. Each is a row on the P4-15 checklist with a test, not an inspection. |
 | Somebody points `DDB_ENDPOINT` at a deployed table "just to test something" | No table exists to point at until P4-07, and `.env.example` carries no AWS endpoint. The property holds because it is enforced by absence. |
@@ -747,7 +758,7 @@ Playwright against.
 | --- | --- |
 | A new `.web.tsx` or `.ios.tsx` file appears that is not on the sanctioned list in [`../02-architecture/tech-stack.md`](../02-architecture/tech-stack.md) §3.5 | The list is short and explicit: storage, push, the date picker, haptics. Adding to it is a decision with a written reason, not a convenience. |
 | A file is more than about 30% platform branches | Split it — but ask first whether the divergence is real. A file with one branch should not be split. |
-| A web bug is fixed by changing a component that iOS also uses, with no iOS check | Playwright and Maestro both run against the **local** stack from P1-29, on every pull request, covering the same journeys. They move to the deployed environment in P4-33 and P5-34. |
+| A web bug is fixed by changing a component that iOS also uses, with no iOS check | **Playwright runs on every pull request; Maestro runs on `workflow_dispatch` and release tags.** Both cover the same journeys against the local stack from P1-29; P4-33 and P5-34 move those journeys to the deployed environment and Maestro gates release rather than every merge. |
 | `Dimensions.get()` at module scope, or an absolute pixel layout | Flexbox and `maxWidth` only, read through `useBreakpoint()`. |
 | `expo-doctor` failures are ignored, or React versions drift between `apps/mobile` and `packages/ui` | `syncpack` and `expo-doctor` both run in `ci.yml` from Phase 0. Version drift produces invalid-hook-call errors that cost a day to diagnose. |
 | The physical-device target is quietly dropped because the simulator is faster | P0-22 makes the LAN device a gated acceptance criterion and renders the resolved base URL on screen. The device is what catches `localhost` assumptions, and until Phase 4 there is no deployed API to catch them instead. |

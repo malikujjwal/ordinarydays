@@ -430,6 +430,10 @@ eyes; the middle mostly does not.
 every dependency row, and the `packages/shared` tasks (P2-01…P2-06) sit at the front, so
 one worktree suffices — no parallel scheduling needed.
 
+The 2026-08-10 Phase 2 plan amendment preserves that run order: every added dependency
+still points to a lower-numbered P2 task (or a completed Phase 1 task). No task may be
+scheduled out of numeric order to work around the expanded cross-layer scopes.
+
 ```bash
 # from the repo root, on a clean integration branch (e.g. `phase-2` cut from main):
 node scripts/run-phase.mjs --range P2-01..P2-37 --pause-after P2-02,P2-11,P2-22

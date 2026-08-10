@@ -211,7 +211,7 @@ forbidden — see `security-privacy.md`.
 #### Bucket derivation
 
 Exactly one pure function decides the bucket. It lives in
-`packages/shared/src/activities/bucket.ts`, has no I/O, and has its own test matrix.
+`packages/shared/src/activity/bucket.ts`, has no I/O, and has its own test matrix.
 
 ```ts
 function deriveGsi1Bucket(a: Activity): 'S' | 'P' | 'N' | 'R' {
@@ -250,6 +250,18 @@ open edit sheet with `409`.
 `localDateTime` is the **user's local** wall-clock time, stored as `YYYY-MM-DDTHH:mm` with
 no offset. Reasoning: "Today" is a wall-clock concept. The absolute UTC instant is stored
 separately in `scheduledAtUtc` for reminders and `.ics` export.
+
+Every scheduled `ActivityIndex` projection also stores the Activity schedule's IANA zone as
+`ActivityIndex.timezone`. Agenda reads widen the `#S` key range by one day on each side,
+convert each timed row from that stored zone into the requested viewer zone, and only then
+filter to the exact requested dates. Without the projection, New York evening rows viewed
+from Tokyo can fall outside the unconverted key range and disappear. Existing Phase 1
+index rows gain `timezone` through P1-05's repository `schemaVersion` upgrade-on-read and
+are persisted on their next write; no standalone scan/backfill is introduced.
+
+`ActivityIndex.status` is denormalised presentation state. Any non-occurrence operation that
+changes META status must update **every** owner/participant index row in the same
+transaction; readers do not repair stale status after the fact.
 
 > An `ActivityIndex` item exists for the **owner and every participating app user**. That
 > is how a shared plan appears on someone else's Today. Guests (non-users) get no index
@@ -428,6 +440,7 @@ interface ActivityBase {
 
   completedAt?: string;
   outcome?: 'done' | 'attended' | 'watched' | 'had_it' | 'didnt_happen' | 'didnt_go';
+  snoozedUntil?: string;       // one-off only; recurring snooze is an Occurrence override
 
   icsSequence: number;         // starts at 0; RFC 5545 SEQUENCE for calendar exports
 
@@ -475,6 +488,9 @@ type Activity = ActivityBase & (
   `schedule.timezone`, `location`, `status → cancelled`, and the event description. It
   never increments for notes, expenses, participants, or attachments. Calendar clients use
   a decreasing or static `SEQUENCE` as a signal to ignore an update.
+- A non-recurring snooze writes `snoozedUntil` on this META row and keeps `status` derived
+  from schedule. Undo/unsnooze deletes the field. A recurring snooze never writes it here;
+  it writes the `Occurrence` in §4.5.
 
 ### 4.2 Recurrence
 
@@ -557,6 +573,10 @@ interface Reminder {
 shared plan has one schedule and many reminder sets. Any code path that reads reminders
 must filter by the caller's `userId`; any code path that *schedules* them reads all of them
 and fans out per user.
+
+A reminder requires `Activity.schedule.date`. Create and reminder-management writes reject
+an undated reminder; unscheduling deletes the Activity's reminder rows in the same
+transaction. This is the notifications §2/§3 rule, not a client convenience.
 
 ### 4.3a DateSuggestion
 
@@ -1064,7 +1084,8 @@ before writing the code.
 
 | # | Pattern | Operation |
 | --- | --- | --- |
-| 1 | Today / date range for a user | `Query GSI1` `gsi1pk = U#<u>#S` and `gsi1sk BETWEEN <from>T00:00 AND <to>T23:59` |
+| 1 | Today / date range for a user | `Query GSI1` `gsi1pk = U#<u>#S` and `gsi1sk BETWEEN <from − 1 day>T00:00 AND <to + 1 day>T23:59`; convert timed rows from projected stored `timezone` into request `tz`, then filter to exact `[from, to]` viewer-local dates |
+| 1a | Caller reminders for an agenda window (`include=reminders`) | After pattern 1/3 establishes the bounded distinct Activity ids emitted in the exact window, query each `ACT#<a>` with `sk begins_with REM#<callerUserId>#` and attach those rows to its AgendaItems. This is bounded repository fan-out behind the one agenda HTTP request and can never read another user's prefix |
 | 2 | Anytime items (undated solo tasks) | `Query GSI1` `gsi1pk = U#<u>#N` |
 | 2b | Needs a date — Plans, most recently discussed first | `Query GSI1` `gsi1pk = U#<u>#P`, `ScanIndexForward=false` |
 | 3 | Active recurring series for a user | `Query GSI1` `gsi1pk = U#<u>#R` |
@@ -1103,18 +1124,26 @@ This is the trickiest piece of logic in the product. It lives in exactly one pla
 
 ```
 expandAgenda(userId, fromDate, toDate, tz):
-  1. scheduled  = Query GSI1 U#<u>#S BETWEEN from..to        // one-off + already-dated
-  2. series     = Query GSI1 U#<u>#R                          // all active recurring
-  3. for each s in series:
+  1. candidates = Query GSI1 U#<u>#S BETWEEN (from-1d)..(to+1d)
+  2. scheduled  = BatchGetItem ACT#<id>/META for every candidate
+       // canonical one-off snoozedUntil lives on META, not the index projection
+       scheduled = convert each timed candidate from projected stored timezone to tz,
+                   then retain only viewer-local dates inside exact [from..to]
+  3. seriesIdx  = Query GSI1 U#<u>#R, capped at 200           // thin index rows only
+  4. series     = BatchGetItem ACT#<id>/META for every seriesIdx row
+       // hydrate every selected #R row before expansion; chunk at 100, retry
+       // UnprocessedKeys, and never treat an ActivityIndex projection as Recurrence
+  5. for each s in series:
        for each segment g in s.recurrence.segments:            // ordered; almost always one
          inForce = [g.effectiveFrom .. dayBefore(nextSegment.effectiveFrom) ?? seriesEnd ?? ∞]
-         dates  += expandRecurrence(g, intersect([from..to], inForce), tz)
+         dates  += expandRecurrence(g, intersect([from-1d..to+1d], inForce), s.schedule.timezone)
                                                                // pure, no I/O; anchor = g.effectiveFrom
        apply series-level endDate / count across the concatenated, ordered dates
-  4. overrides = BatchGetItem OCC#<date> for every (series, date) pair produced in 3
+       convert emitted instants from s.schedule.timezone to tz and filter exact [from..to]
+  6. overrides = BatchGetItem OCC#<date> for every (series, date) pair produced in 5
        // past segments are immutable, so every historical OCC# row's date is emitted by
        // the segment that was in force when it was written — history always renders
-  5. for each (series, date):
+  7. for each (series, date):
        t = time of the segment in force for date (falling back to schedule.time)
        if override.overrideDate          -> emit on overrideDate instead of date
                                             (this-occurrence-only move; "moved from <date>")
@@ -1122,7 +1151,13 @@ expandAgenda(userId, fromDate, toDate, tz):
        if override.status == 'completed' -> emit as COMPLETED
        if override.status == 'snoozed'   -> emit at override.snoozedUntil
        else                               -> emit at t
-  6. merge 1 + 5, sort by effective local time, partition into
+     for each one-off scheduled item:
+       if activity.snoozedUntil           -> emit at activity.snoozedUntil
+  8. merge scheduled + expanded, de-duplicate after timezone conversion
+  9. if include=reminders:
+       query REM#<callerUserId># for each bounded distinct emitted Activity and attach rows
+       to that Activity's AgendaItems in [from..to]
+ 10. sort by effective viewer-local time, partition into
        UP NEXT / SCHEDULE / ANYTIME / EARLIER TODAY
 ```
 
@@ -1131,13 +1166,19 @@ Constraints:
 - Window is capped at **62 days**. Reject wider requests with `400`.
 - Segments per series are capped at **20** (`validation_failed` on append beyond it),
   bounding expansion cost per series; the 62-day window and 200-series limits are unchanged.
-- If step 4 would exceed 100 keys, batch it; if a user has > 200 active series, return a
-  `series_limit_exceeded` warning in the response rather than timing out.
+- Scheduled META hydration (step 2), series META hydration (step 4) and occurrence override
+  hydration (step 6) are `BatchGetItem`, chunked at 100 keys with `UnprocessedKeys`
+  retried. If a user has > 200
+  active series, hydrate only the bounded set and return a `series_limit_exceeded` warning
+  in the response rather than timing out.
 - `after_completion` mode (Phase 9+): next occurrence = last completion date + interval.
   If never completed, use the active segment's `effectiveFrom`. It produces **at most one** future occurrence — do
   not project a series into the future for completion-relative recurrence.
-- DST: expand in the activity's stored `timezone` using `Temporal`-style date arithmetic
-  (`date-fns-tz`). A 6 PM daily task stays 6 PM local across a DST boundary.
+- DST: expand and derive instants in the activity's stored `timezone` using
+  `Temporal`-style date arithmetic (`date-fns-tz`), then convert to viewer `tz`. A 6 PM
+  daily task stays 6 PM in its stored zone across a DST boundary. A nonexistent local time
+  moves to the first valid time after the gap: `2026-03-08 02:30 America/New_York` becomes
+  `03:00`, not `03:30` and not a dropped occurrence.
 
 ---
 
@@ -1148,7 +1189,7 @@ Use `TransactWriteItems` for these. They are the only places transactions are re
 | Operation | Items written |
 | --- | --- |
 | Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and `ACT#<parent>/SUB#<child>` when `parentActivityId` is set (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two) |
-| Schedule / reschedule | `ACT#/META`, `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket and sort key both change), plus every `PART#` row when the date changes — see below |
+| Schedule / reschedule | `ACT#/META`, `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change), plus every `PART#` row when the date changes and every `REM#` row when unscheduling deletes reminders — see below |
 | Add participant (app user) | `ACT#/PART#`, `USER#<invitee>/IDX#`, `USER#<owner>/PLINK#`, `USER#<invitee>/PLINK#`, counter update on `ACT#/META` |
 | Add participant (guest) | `ACT#/PART#`, `USER#<owner>/PERSON#`, `USER#<owner>/PLINK#`, `INVITE#<token>/META` |
 | Add list member (app user) | `LIST#/MEMBER#`, invitee `USER#/LIST#`, owner and reciprocal `USER#/PERSON#` when absent, both active `USER#/LLINK#` rows, and `LIST#/META` member counter — at most 7 items |
@@ -1161,7 +1202,9 @@ Use `TransactWriteItems` for these. They are the only places transactions are re
 | Mark obligations settled | Update each covered `ACT#/EXP#` (`settledPersonIds`, `settlementIdByPersonId`, derived `settled`) + write one `USER#/SETTLE#` audit row and one `SETTLEMENT#<settlementId>/META` locator. Server derives amount/currency/direction and exact per-Expense coverage before the transaction; balance recompute reads Expenses only. |
 | Undo settlement | Resolve and delete the `USER#/SETTLE#` row and its `SETTLEMENT#` locator + conditionally remove only each recorded debtor/Settlement pair from the covered `ACT#/EXP#` items, recompute their roll-ups, then recompute balances from Expenses |
 | Purge account | **Shared-plan financial records survive the purge — retain and anonymise, never unwind (decision 2026-08-07).** Expenses and Settlement audit rows, with their locators, on shared plans that still have surviving participants are retained for those participants, with the deleted user's display name replaced by `Deleted user` wherever those rows render it. Balances involving the deleted account become read-only history: no further settlement, no recompute against a partition that no longer exists. Owned **shared** plans are cancelled, with notification to the participants, before any removal, and their partitions are retained for the survivors. Checkpoint and run exact whole-Settlement Undo only for financial rows nothing retains — Settlements whose covered Expenses sit on plans with no surviving participant. Then cascade owned private Activities and owned Lists (all pointers/`LLINK#`/`LNK#`) and remove the user from other-owned Lists (`MEMBER#`, both links, pointer, counter, viewer links) while retaining other users' `PERSON#` rows. Only after cross-partition cleanup may the user partition be deleted; see `auth.md` §8. |
-| Complete an occurrence | `ACT#/OCC#<date>` only. Never the series. |
+| Complete / uncomplete / skip a non-occurrence | `ACT#/META` plus every owner/participant `USER#/IDX#` status in one transaction, following the Phase 1 PATCH transaction pattern |
+| Complete / skip / snooze / unsnooze an occurrence | `ACT#/OCC#<date>` only (put or delete as appropriate). Never the series. |
+| Snooze / unsnooze a non-recurring one-off | Update or delete `ACT#/META.snoozedUntil`; never create an `OCC#` row |
 | Delete activity | First query child Expenses: any non-empty `settlementIdByPersonId` makes the whole operation `409 settlement_conflict` with no tombstone or write. After explicit Undo clears them, delete the `ACT#` partition items, every corresponding `EXPENSE#<expenseId>` locator, every `USER#/IDX#` + `PLINK#`, and only matching `LNK#` pointers derived from its `listId`, `listItemId`, owner and participant set. |
 
 Participant fan-out is bounded: **cap participants at 50 per activity** in v1. Enforce it

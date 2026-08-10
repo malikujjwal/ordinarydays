@@ -16,6 +16,12 @@ looking like unfinished work. One pure function decides which GSI1 bucket every 
 index entry lives in, so an undated plan with people on it goes to Plans and never to Today's
 Anytime list. This is the phase where the product becomes usable daily.
 
+> **Plan amendment — 2026-08-10.** Before any Phase 2 task was scheduled, the phase gate
+> was reconciled against the Phase 1 repository, including the Event/Outing kind merge.
+> The task scopes, dependencies, file paths, acceptance criteria and estimates below are the
+> amended plan of record. P2-02 remains the recurrence matrix; the post-merge presentation-
+> type bucket matrix is P2-05, where the duplicated Event rows were found and corrected.
+
 ## Prerequisites
 
 | # | Item | Notes |
@@ -23,7 +29,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | 1 | Phase 1 complete and its acceptance criteria passing | In particular the repository layer, the `ActivityIndex` write path, and `packages/ui`. Phase 1's inline bucket logic is **replaced** by `deriveGsi1Bucket` in P2-05, not extended. |
 | 1a | [`../02-architecture/data-model.md#35-gsi1-buckets`](../02-architecture/data-model.md#35-gsi1-buckets) read, including the bucket-derivation function and the `lastActivityAt` paragraph | Four buckets, not three. `#P` and `#N` mean opposite things and the reason is in that section. |
 | 2 | [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) read in full | It is the specification for this phase, including the worked example day in §9 which doubles as a fixture. |
-| 3 | [`../02-architecture/data-model.md#6-recurrence-expansion-algorithm`](../02-architecture/data-model.md#6-recurrence-expansion-algorithm) read | The six-step algorithm is normative. |
+| 3 | [`../02-architecture/data-model.md#6-recurrence-expansion-algorithm`](../02-architecture/data-model.md#6-recurrence-expansion-algorithm) read | The amended hydration-and-expansion algorithm is normative. |
 | 4 | Coverage gate at 100% on `packages/shared/src/recurrence/**` already configured | Set up in P0-24 precisely so it is live before the first line of engine code exists. |
 
 ## Deliverables
@@ -38,12 +44,14 @@ Anytime list. This is the phase where the product becomes usable daily.
 - [ ] `lastActivityAt` on the Activity and on the `ActivityIndex` entry, distinct from
       `updatedAt`, sorting the `#P` bucket and never touching `If-Match`.
 - [ ] `GET /v1/agenda` with `?from`, `?to`, `?tz`, and the `include` tokens
-      `anytime_unscheduled` and `overdue`; window capped at 62 days; `ETag`; `warnings[]`.
+      `anytime_unscheduled`, `overdue` and `reminders`; window capped at 62 days; `ETag`;
+      `warnings[]`. Today receives its own reminder rows in this same request.
 - [ ] `AgendaItem` projection with server-set `hasCheckbox`, `subtitle`, `isPast`,
       `occurrenceDate` and `overdueFromDate`.
-- [ ] `complete`, `uncomplete`, `skip`, `snooze`, `schedule` endpoints, with occurrence
-      scoping that provably never writes `ACT#/META`, and completion enforced as **global and
-      owner-only** — a participant gets `403`.
+- [ ] `complete`, `uncomplete`, `skip`, `snooze`, `unsnooze` and `schedule` endpoints, with
+      occurrence scoping that provably never writes `ACT#/META`; non-occurrence status writes
+      update `META` and every `ActivityIndex` row atomically; plan completion is global and
+      owner-only, while ADR-051 permits a parent-plan participant to complete a prep task.
 - [ ] Per-user reminders: `GET`/`POST`/`DELETE /v1/activities/:id/reminders` operating on
       `REM#<userId>#` rows scoped to the caller by key construction, capped at 3 per user per
       activity.
@@ -70,29 +78,29 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-01 | The recurrence engine `expandRecurrence` | shared | — | no | L |
 | P2-02 | The recurrence test matrix | shared | P2-01 | no | L |
 | P2-03 | `describeRecurrence` for the UI | shared | P2-01 | yes | M |
-| P2-04 | `Recurrence` Zod schema and server-side validation | shared | P1-06 | yes | M |
+| P2-04 | `Recurrence` Zod schema and server-side validation | shared/api | P1-06, P1-10 | yes | L |
 | P2-05 | `deriveGsi1Bucket` and its test matrix | shared | P1-06 | yes | M |
 | P2-06 | `lastActivityAt`, distinct from `updatedAt` | shared/api | P2-05, P1-05 | no | M |
 | P2-07 | `OccurrenceRepository` | api | P1-05 | yes | M |
-| P2-08 | Agenda service: query, expand, merge, project | api | P2-01, P2-07, P1-09 | no | L |
+| P2-08 | Agenda service: query, hydrate, expand, merge, project | api | P2-01, P2-07, P1-09 | no | L |
 | P2-09 | Overdue roll-forward query rule | api | P2-08 | no | M |
 | P2-10 | `AgendaItem` projection: subtitle, checkbox, isPast | api | P2-08 | no | M |
 | P2-11 | `GET /v1/agenda` route, window cap, `ETag`, warnings | api | P2-08, P2-09, P2-10 | no | M |
-| P2-12 | `POST /v1/activities/:id/schedule` and unschedule | api | P1-10, P2-05 | yes | M |
-| P2-13 | `POST /v1/activities/:id/complete` and `/uncomplete` | api | P2-07, P1-10 | no | L |
+| P2-12 | Sole schedule write path and detail-UI migration | shared/api/mobile | P2-01, P2-05, P1-10 | yes | L |
+| P2-13 | `POST /v1/activities/:id/complete` and `/uncomplete` | api | P2-05, P2-07, P1-10 | no | L |
 | P2-14 | `POST /v1/activities/:id/skip` | api | P2-13 | yes | S |
-| P2-15 | `POST /v1/activities/:id/snooze` | api | P2-13 | no | M |
-| P2-16 | Per-user reminders: items, endpoints, and the write paths | api | P2-12 | yes | M |
+| P2-15 | One-off and occurrence `snooze` / `unsnooze` | api | P2-13 | no | L |
+| P2-16 | Per-user reminders: items, endpoints, and the write paths | api | P2-08, P2-12 | yes | M |
 | P2-17 | Series limit and window warnings | api | P2-08 | yes | S |
-| P2-18 | Agenda client hook, query keys and cache policy | mobile | P2-11, P1-20 | no | M |
+| P2-18 | Agenda client hook, ETag transport cache and query policy | shared/mobile | P2-11, P1-20 | no | L |
 | P2-19 | Today screen shell and the four sections | mobile | P2-18, P1-22 | no | L |
 | P2-20 | The UP NEXT card and the one-minute ticker | mobile | P2-19 | no | M |
 | P2-21 | Agenda row components and affordances by type | mobile | P2-19 | no | L |
 | P2-22 | Swipe actions and the gesture table | mobile | P2-21 | no | L |
 | P2-23 | Optimistic mutation model functions | shared/mobile | P2-13, P2-15 | no | L |
 | P2-24 | The undo toast system | mobile | P2-23 | no | M |
-| P2-25 | The snooze sheet | mobile | P2-22, P2-15 | yes | M |
-| P2-26 | The reschedule sheet, including the series two-option case | mobile | P2-22, P2-12 | yes | M |
+| P2-25 | The snooze sheet | mobile | P2-15, P2-22, P2-24 | yes | M |
+| P2-26 | Extend the reschedule sheet, including the series two-option case | mobile | P2-04, P2-12, P2-22 | yes | M |
 | P2-27 | The repeat sheet | mobile | P2-03, P2-04 | yes | M |
 | P2-28 | Passed-plan resolution prompts | mobile | P2-21, P2-13 | no | M |
 | P2-29 | Overdue rows: date chip, cap and collapse | mobile | P2-21, P2-09 | no | M |
@@ -100,10 +108,10 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-31 | Today's contextual `+ Add a task` action | mobile | P2-19, P1-24 | yes | S |
 | P2-32 | The Plans tab: date-range agenda | mobile | P2-18 | yes | M |
 | P2-33 | Persisted query cache and the offline mutation queue | mobile | P2-23 | no | L |
-| P2-34 | Local notifications on device | mobile | P2-16 | no | M |
+| P2-34 | Local notifications on device | mobile | P2-11, P2-16, P2-18 | no | M |
 | P2-35 | `Show skipped` device-local toggle | mobile | P2-21 | yes | S |
-| P2-36 | Worked-example-day integration fixture and test | ci | P2-11 | no | M |
-| P2-37 | E2E: Today flows on web and iOS | ci | P2-28, P2-29 | no | M |
+| P2-36 | Worked-example-day integration fixture and test | ci | P2-04, P2-11, P2-13 | no | M |
+| P2-37 | E2E: Today flows on web and iOS | ci | P2-20, P2-24, P2-25, P2-26, P2-28, P2-29, P2-31 | no | M |
 
 P2-17, P2-30, P2-31 and P2-35 are mechanical; follow the canonical sections named in the
 table and skip the design discussion. P2-31's exact label is `+ Add a task`: it bypasses the
@@ -270,7 +278,7 @@ says otherwise; the multi-segment cases are in the list after the table.
 | 27 | **Skipped occurrence** | `Occurrence { date: today, status: 'skipped' }` | The date is emitted and marked `skipped_occurrence`; it is hidden from Today unless `Show skipped` is on; every other date is unaffected. |
 | 28 | **Rescheduled occurrence** | `Occurrence { status: 'rescheduled', overrideTime: '21:00' }` | Emitted at 21:00 on that date only. With `overrideDate` also set, the merge emits it on `overrideDate` instead — once, never on both days (data-model §4.5). |
 | 29 | **Timezone travel** | Activity stored with `schedule.timezone: 'America/New_York'`, 18:00; profile timezone changed to `Europe/London`; agenda requested with `tz=Europe/London` | The activity keeps its stored timezone. Today's boundaries and the "now" comparison use the **profile** timezone. A 6:00 PM New York task renders as 11:00 PM on the London day, and may land on the *next* London date. |
-| 30 | **Timezone travel across a date boundary** | 22:00 `America/New_York` viewed from `Asia/Tokyo` | Appears on the following local date, not the same one, and is not duplicated on both. |
+| 30 | **Timezone travel across a date boundary** | 22:00 `America/New_York` viewed from `Asia/Tokyo` | Appears on the following local date, not the same one, and is not duplicated on both. This engine fixture is also a required P2-08 agenda integration acceptance test. |
 | 31 | **Empty window** | `from > to` | `[]`, no throw. |
 | 32 | **Start after the window** | `startDate` a year later | `[]`, with no iteration (assert the internal step counter). |
 | 33 | **62-day window, daily** | Maximum legal window | 62 dates, in ascending order, unique, no duplicates at month boundaries. |
@@ -382,7 +390,10 @@ labels); purity and determinism as in P2-01; `custom` and `after_completion` thr
 
 ### P2-04 — `Recurrence` Zod schema and validation
 
-**Files.** `packages/shared/src/schemas/recurrence.ts`.
+**Files.** `packages/shared/src/schemas/recurrence.ts`,
+`packages/shared/src/schemas/activity.ts`,
+`services/api/src/services/activityService.ts`,
+`services/api/src/services/activityService.test.ts`.
 
 **Approach.** The stored shape is the **segmented** one from
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#62-one-row-per-series)
@@ -398,7 +409,13 @@ Ends setting closes the whole series, however many segments it has. (`data-model
 carries the same segmented shape, including the lazy-migration reading of pre-segment
 rows.)
 
-Per-segment rule constraints, which the schema applies to **every** segment:
+The shared Zod shape is necessary but not sufficient. `activityService` enforces the
+stored-state rules on **both** `POST /v1/activities` and the `PATCH` recurrence path after
+loading the current Activity: it overwrites every client-supplied `effectiveFrom` with the
+server-derived date, compares an edited series to stored history, and rejects any rewrite,
+reorder or deletion of an existing segment. Routes do not duplicate this logic.
+
+Per-segment rule constraints, which the shared shape and service apply to **every** segment:
 
 | Rule | Enforcement |
 | --- | --- |
@@ -414,18 +431,21 @@ Per-segment rule constraints, which the schema applies to **every** segment:
 | Append-only history | A `PATCH` carrying `recurrence` on an existing series must leave every previously stored segment byte-identical and may only append one new final segment (and/or change the series-level Ends fields). Anything else — a rewritten, reordered or deleted past segment — is `validation_failed`. Past segments are immutable. |
 | Recurrence with no `schedule.date` | `validation_failed` — Repeat is only enabled when a date is set. |
 
-**Tests.** One valid and at least two invalid cases per row; `mode: 'after_completion'`
-rejected with a message naming the phase; `interval: 1` on `interval_days` normalised; a
-20-segment series accepted and a 21st rejected with the explaining message; an append with
-a rewritten past segment rejected; `effectiveFrom` not ascending rejected.
+**Tests.** One valid and at least two invalid schema cases per row; `mode:
+'after_completion'` rejected with a message naming the phase; `interval: 1` on
+`interval_days` normalised; a 20-segment series accepted and a 21st rejected with the
+explaining message; an append with a rewritten past segment rejected; `effectiveFrom` not
+ascending rejected. Service tests cover create and PATCH separately, prove supplied
+`effectiveFrom` values are overwritten by the server, and prove PATCH cannot alter any
+stored segment while it may append exactly one final segment and/or edit series-level Ends.
 
 ---
 
 ### P2-05 — `deriveGsi1Bucket` and its test matrix
 
-**Files.** `packages/shared/src/activities/bucket.ts`,
-`packages/shared/src/activities/bucket.test.ts`,
-`packages/shared/src/activities/index.ts`.
+**Files.** `packages/shared/src/activity/bucket.ts`,
+`packages/shared/src/activity/bucket.test.ts`,
+`packages/shared/src/activity/index.ts`.
 
 **What to build.** The one pure function that decides which GSI1 bucket an activity's index
 entry belongs in. It is transcribed exactly from
@@ -480,35 +500,36 @@ tab, and the storage looks correct while the product does not.
 | 5 | — | — | `plan` | `meal` | `P` |
 | 6 | — | — | `plan` | `event` | `P` |
 | 7 | — | — | `plan` | `watch` | `P` |
-| 8 | — | — | `plan` | `event` | `P` |
-| 9 | — | `2026-08-15` | `plan` | `meal` | `S` |
-| 10 | `{ freq: 'daily' }` | — | `task` | `task` | `R` |
-| 11 | `{ freq: 'daily' }` | `2026-08-14` | `task` | `task` | `R` — recurrence beats a date |
-| 12 | `{ freq: 'weekly' }` | — | `plan` | `meal` | `R` — recurrence beats object kind |
+| 8 | — | `2026-08-15` | `plan` | `meal` | `S` |
+| 9 | `{ freq: 'daily' }` | — | `task` | `task` | `R` |
+| 10 | `{ freq: 'daily' }` | `2026-08-14` | `task` | `task` | `R` — recurrence beats a date |
+| 11 | `{ freq: 'weekly' }` | — | `plan` | `meal` | `R` — recurrence beats object kind |
 
 Transitions. Each is a second call to the function with one input changed, asserting the
 bucket moves and therefore that the index entry must be rewritten:
 
 | # | Transition | Before → after |
 | --- | --- | --- |
-| 13 | A date is set on an undated Task | `N` → `S` |
-| 14 | A date is set on an undated Plan | `P` → `S` |
-| 15 | A date is cleared on a Task | `S` → `N` |
-| 16 | A date is cleared on a Plan | `S` → `P` |
-| 17 | `objectKind` explicitly changes Task → Plan while undated | `N` → `P` |
-| 18 | `objectKind` explicitly changes Plan → Task while undated | `P` → `N` |
-| 19 | Plan `type` changes `custom` → `event` while undated | `P` → `P`, no rewrite needed |
-| 20 | Participants are added to an undated Plan | `P` → `P`, no rewrite needed |
-| 21 | Participants are removed from an undated Plan | `P` → `P`, no rewrite needed |
-| 22 | `type` changes while dated | `S` → `S`, no rewrite needed |
-| 23 | A recurrence is added to a dated task | `S` → `R` |
-| 24 | A recurrence is removed from a dated series | `R` → `S` |
-| 25 | A recurrence is removed from an undated Plan | `R` → `P` |
+| 12 | A date is set on an undated Task | `N` → `S` |
+| 13 | A date is set on an undated Plan | `P` → `S` |
+| 14 | A date is cleared on a Task | `S` → `N` |
+| 15 | A date is cleared on a Plan | `S` → `P` |
+| 16 | `objectKind` explicitly changes Task → Plan while undated | `N` → `P` |
+| 17 | `objectKind` explicitly changes Plan → Task while undated | `P` → `N` |
+| 18 | Plan `type` changes `custom` → `event` while undated | `P` → `P`, no rewrite needed |
+| 19 | Participants are added to an undated Plan | `P` → `P`, no rewrite needed |
+| 20 | Participants are removed from an undated Plan | `P` → `P`, no rewrite needed |
+| 21 | `type` changes while dated | `S` → `S`, no rewrite needed |
+| 22 | A recurrence is added to a dated task | `S` → `R` |
+| 23 | A recurrence is removed from a dated series | `R` → `S` |
+| 24 | A recurrence is removed from an undated Plan | `R` → `P` |
 
 Beyond the table: a purity test that freezes the `Activity` and asserts no mutation; a
 determinism test that calls twice with the process clock moved and asserts identical output;
-and an exhaustiveness test that enumerates `{ task, plan } × { dated, undated }` and all six
-presentation types, asserting only `objectKind` distinguishes undated `#N` from `#P`.
+and an exhaustiveness test over every **valid** `{ objectKind, type }` pairing, dated and
+undated, across the five post-merge presentation types (`task`, `meal`, `watch`, `event`,
+`custom`). It asserts only `objectKind` distinguishes undated `#N` from `#P`; there are no
+duplicated Event/Outing rows because Outing is no longer a type.
 
 Integration, against DynamoDB Local: scheduling an undated Plan moves its index
 entry from `U#<u>#P` to `U#<u>#S` and leaves exactly one index entry per user; unscheduling
@@ -575,6 +596,7 @@ a collision the model invented. Two fields cost eight bytes and remove the whole
 ### P2-07 — `OccurrenceRepository`
 
 **Files.** `services/api/src/repositories/occurrenceRepository.ts`,
+`services/api/src/repositories/activityRepository.ts`,
 `packages/shared/src/types/occurrence.ts`,
 `packages/shared/src/schemas/occurrence.ts`.
 
@@ -586,6 +608,12 @@ repositories rule, applied to the item type this phase lives on. Built on the P1
 key builders take `activityId` explicitly, items are validated against the shared schema on
 read, `schemaVersion` upgrade-on-read applies.
 
+Phase 1 already placed `listOccurrences` in `activityRepository.ts`. This task **moves that
+function into `OccurrenceRepository`, updates every caller, and deletes the original
+export and tests from `activityRepository`**. The rule that no `OCC#` access exists outside
+`OccurrenceRepository` is an end-state invariant after this move, not a claim about the
+Phase 1 starting tree.
+
 The `Occurrence` shape is §4.5 verbatim: `date` is the series' **nominal** date — the date
 expansion emitted — never the snoozed or rescheduled display time's date. It carries **no
 participant identity and no user field**; a `userId` parameter on any method of this
@@ -596,7 +624,7 @@ repository is the per-participant-completion defect from the risk table arriving
 | Method | Backs | Notes |
 | --- | --- | --- |
 | `get(activityId, date)` | occurrence-scoped mutations' read-before-write | `GetItem`. Absence returns `null` — "scheduled, not yet acted on" is the absence of a row, and the repository never fabricates one. |
-| `batchGetForPairs(pairs: { activityId, date }[])` | expansion step 4 (P2-08) | `BatchGetItem`, chunked at 100 keys, with `UnprocessedKeys` retried with backoff. The chunking lives **here**, not in the agenda service — step 4 must not be an N-query loop and the service must not know the limit. |
+| `batchGetForPairs(pairs: { activityId, date }[])` | agenda override hydration (P2-08) | `BatchGetItem`, chunked at 100 keys, with `UnprocessedKeys` retried with backoff. The chunking lives **here**, not in the agenda service — override hydration must not be an N-query loop and the service must not know the limit. |
 | `queryWindow(activityId, from, to)` | occurrence history for one series — the plan-detail screen and the P2-36 assertions | Access pattern 5: `Query pk = ACT#<a>`, `sk BETWEEN OCC#<from> AND OCC#<to>`, both inclusive. |
 | `put(occurrence)` | complete, skip, snooze, reschedule-this-occurrence | Upsert of exactly one item. This method is structurally incapable of touching `ACT#/META` — it takes an `Occurrence`, builds one `OCC#` key, and writes one item. That is the storage-layer half of success criterion S6; the endpoint tests (P2-13, P2-14, P2-15) assert the visible half. |
 | `delete(activityId, date)` | `uncomplete` on an occurrence, `Undo skip`, undo of a snooze | Deletes the row; absence restores "not yet acted on". |
@@ -614,7 +642,9 @@ repository is the per-participant-completion defect from the risk table arriving
 **Tests.** Integration against DynamoDB Local: put/get round-trip preserves every field;
 `batchGetForPairs` with 250 pairs issues three `BatchGetItem` calls (client spy) and
 returns results correctly paired, including misses; a seeded `UnprocessedKeys` response is
-retried; `queryWindow` bounds are inclusive at both ends; `put` leaves `ACT#/META`
+retried; `queryWindow` bounds are inclusive at both ends; a grep assertion finds
+`listOccurrences` only in this repository and no remaining `OCC#` access in
+`activityRepository`; `put` leaves `ACT#/META`
 byte-identical (read before and after); `delete` then `get` returns `null`;
 `countCompleted` counts completed rows only, ignoring skipped and snoozed.
 
@@ -622,20 +652,37 @@ byte-identical (read before and after); `delete` then `get` returns `null`;
 
 ### P2-08 — Agenda service
 
-**Files.** `services/api/src/services/agendaService.ts`.
+**Files.** `services/api/src/services/agendaService.ts`,
+`services/api/src/repositories/activityRepository.ts`,
+`services/api/src/repositories/reminderRepository.ts` (read seam),
+`services/api/src/repositories/reminderRepository.test.ts`,
+`packages/shared/src/types/activity.ts`,
+`packages/shared/src/schemas/activity.ts`.
 
-**Approach.** The six-step algorithm in
+**Approach.** The amended hydration-and-expansion algorithm in
 [`../02-architecture/data-model.md#6-recurrence-expansion-algorithm`](../02-architecture/data-model.md#6-recurrence-expansion-algorithm),
 implemented literally:
 
-1. `Query GSI1 U#<u>#S BETWEEN <from>T00:00 AND <to>T23:59` — one-off and already-dated
-   items.
-2. `Query GSI1 U#<u>#R` — every active series.
-3. For each series, `expandRecurrence(...)` — pure, no I/O, called inside a loop with no
-   awaits in it.
-4. `BatchGetItem` the `OCC#<date>` overrides for every (series, date) pair from step 3,
+1. Widen the scheduled query one calendar day on each side:
+   `Query GSI1 U#<u>#S BETWEEN <from-1d>T00:00 AND <to+1d>T23:59`.
+2. `BatchGetItem` `ACT#<activityId>/META` for every scheduled candidate, so one-off
+   `snoozedUntil` comes from its canonical META field. Convert each timed row from its
+   projected stored `timezone` to an instant with shared `toUtcInstant`, then into request
+   `tz`; **only after conversion**, retain rows whose viewer-local date is inside
+   `[from, to]`.
+3. `Query GSI1 U#<u>#R` — at most the first 200 active-series index rows, with the existing
+   warning if more exist.
+4. **Series hydration:** before any expansion, `BatchGetItem` `ACT#<activityId>/META` for
+   every `#R` row selected in step 3, chunked at 100 with unprocessed-key retry. Missing or
+   unauthorised META rows are dropped with a warning. Expansion must never treat the thin
+   index projection as a `Recurrence`.
+5. For each hydrated series, `expandRecurrence(...)` over `[from-1d, to+1d]` in the
+   series' stored timezone — pure, no I/O, called inside a loop with no awaits — then
+   convert emitted instants into request `tz` and filter by the exact viewer-local
+   `[from, to]` window.
+6. `BatchGetItem` the `OCC#<date>` overrides for every (series, date) pair from step 5,
    batched at 100 keys.
-5. Merge overrides: `skipped` → emit as skipped (hidden by default); `completed` → emit as
+7. Merge overrides: `skipped` → emit as skipped (hidden by default); `completed` → emit as
    completed; `snoozed` → emit at `snoozedUntil`; `rescheduled` → emit at `overrideTime`,
    and on `overrideDate` instead of the original date when it is set (the cross-day
    this-occurrence move, data-model §4.5), never on both days;
@@ -644,7 +691,20 @@ implemented literally:
    completions and skips render forever under the rule and time in force on their date
    ([`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#62-one-row-per-series)
    §6.2).
-6. Merge 1 + 5, sort by effective local time, and return per-day buckets.
+   For a one-off row, apply `ACT#/META.snoozedUntil` as its effective time; occurrence
+   overrides remain series-only.
+8. Merge the scheduled and expanded results and de-duplicate by `(activityId,
+   occurrenceDate?)` after viewer-timezone conversion.
+9. When `include=reminders`, use the read-only `ReminderRepository` seam introduced here to
+   query `REM#<callerUserId>#` for each distinct Activity emitted in the bounded result,
+   attach those rows to its AgendaItems, and never read another user's prefix. This is
+   bounded fan-out behind one HTTP agenda request; P2-16 extends the
+   same repository with management writes.
+10. Sort by effective viewer-local time and return per-day buckets.
+
+P2-08 also amends the `ActivityIndex` writer/schema to project `schedule.timezone`.
+Existing Phase 1 rows use P1-05's `schemaVersion` upgrade-on-read and persist the projection
+on their next write; do not add a scan or one-off migration script.
 
 **The agenda never touches `U#<u>#P`.** Three buckets feed it — `#S` for dated items, `#R`
 for series, and `#N` for the Anytime section when `include=anytime_unscheduled` is set. The
@@ -663,7 +723,9 @@ on its ticker (P2-20).
 
 **Edge cases.**
 
-- Step 4 must not be an N-query loop. One `BatchGetItem` per 100 keys.
+- Scheduled META hydration, series META hydration and occurrence override hydration must
+  not be N-query loops. Each uses `BatchGetItem`, one request per 100 keys, with retry for
+  unprocessed keys.
 - Sorting ties break on `activityId` ascending, which is a ULID and therefore creation
   order. This is deliberately *not* type priority and not alphabetical — a type ranking
   would be a hidden hierarchy of types.
@@ -674,6 +736,9 @@ on its ticker (P2-20).
   as the subtitle.
 - A series that would emit two occurrences on one date (only reachable via a malformed
   custom rule, which is Phase 9) emits the earliest and drops the rest, adding a warning.
+- Widening the `#S` query never widens the response. Rows are filtered only after conversion
+  to request `tz`; P2-02 case 30 (22:00 New York viewed from Tokyo) is also an acceptance
+  test here, proving the item appears on the following Tokyo date exactly once.
 
 **Tests.** Unit with a mocked repository covering each merge branch. Integration against
 DynamoDB Local using the worked example day from
@@ -681,8 +746,14 @@ DynamoDB Local using the worked example day from
 (P2-36), asserting the exact section membership and order of all nine rows.
 
 Plus, seeded with one activity in every bucket: a repository spy asserts that **no query
-against `U#<u>#P` occurs on any agenda path**, with and without both `include` tokens, and
+against `U#<u>#P` occurs on any agenda path**, with and without all `include` tokens, and
 the undated Plan in that bucket appears in no section of the response.
+
+Also seed a `#R` index row whose projection contains no recurrence: assert its
+`ACT#/META` is included in the hydration `BatchGetItem` before `expandRecurrence` is called.
+Seed the New York → Tokyo boundary case from P2-02 case 30 and assert the widened query finds
+it, post-conversion filtering places it only on the following Tokyo date, and the exact
+unwidened response window is preserved.
 
 ---
 
@@ -757,87 +828,72 @@ each of the three cases.
 
 ---
 
-### P2-12 — `POST /v1/activities/:id/schedule` and unschedule
+### P2-12 — The sole schedule write path and detail-UI migration
 
 **Files.** `services/api/src/routes/activities.ts`,
 `services/api/src/services/scheduleService.ts`,
-`packages/shared/src/schemas/schedule.ts`.
+`packages/shared/src/schemas/{activity,schedule}.ts`,
+`packages/shared/src/client/endpoints/activities.ts`,
+`packages/shared/src/recurrence/calendar.ts`,
+`apps/mobile/src/features/activity/hooks/useActivity.ts`,
+`apps/mobile/src/features/activity/components/{ActivityDetailScreen,RescheduleSheet}.tsx`,
+and their existing tests.
 
-**Approach.** The endpoint from
-[`../02-architecture/api-contract.md#23-activities`](../02-architecture/api-contract.md#23-activities)
-§2.3: body `{ date, time?, endTime?, timezone }`; unschedule is the same route with
-`{ date: null }`. **Owner only** — a participant cannot reschedule
-([`../02-architecture/api-contract.md#3-authorisation-rules`](../02-architecture/api-contract.md#3-authorisation-rules)
-§3), so a participant gets `403` through the same `assertActivityAccess` as P2-13 and a
-stranger gets `404`.
+**Approach.** `POST /v1/activities/:id/schedule` is the **single schedule write path**.
+Its body is `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule uses
+`{ date: null }`. In the same task, remove `schedule` from the shared
+`patchActivityInput` schema, update its tests so PATCH rejects schedule/unschedule fields,
+add the typed client method, and migrate the already-built detail screen and its
+`RescheduleSheet` callbacks from `detail.patch({ schedule: ... })` to the schedule client
+method. No temporary dual path is accepted.
+
+The route is owner-only for ordinary activities: a participant gets `403` and a stranger
+gets `404` under the authorisation policy in API contract §3.
 
 - **Validation.** `time` requires `date`; `endTime` requires and must be after `time`
-  (same-day) → `validation_failed` per
-  [`../01-product/activities.md`](../01-product/activities.md#3-progressive-creation-forms--shared-rules)
-  §3.4; `timezone` is IANA, falling back to `X-Client-Timezone` when the body omits it.
-  `{ date: null }` removes `schedule` **entirely** — time, end time, timezone,
-  derived instants — and returns the Activity to `saved` (§3.4's Date control).
-- **Status is derived, never accepted**: `schedule?.date ? 'scheduled' : 'saved'`
-  ([`../02-architecture/data-model.md#41-activity`](../02-architecture/data-model.md#41-activity)
-  §4.1). `scheduledAtUtc` / `endAtUtc` are recomputed on every schedule write with
-  `toUtcInstant` from `calendar.ts` (P2-01) — the reminder scheduler and the agenda must
-  agree at the boundary, so there is exactly one derivation.
-- **The bucket rewrite, in the same transaction.** `schedule.date` is a bucket input
-  (P2-05), so the write is one `TransactWriteItems` over `ACT#/META` and every user's
-  `IDX#` entry per
-  [`../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items`](../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items):
-  scheduling moves `N → S` or `P → S`; unscheduling moves `S → N` for a Task and `S → P`
-  for a Plan, by `objectKind` and nothing else (acceptance criterion 24).
+  (same-day) → `validation_failed`; `timezone` is IANA, falling back to
+  `X-Client-Timezone` when omitted. `{ date: null }` removes `schedule` **entirely** —
+  time, end time, timezone and derived instants.
+- **Status is derived, never accepted.** After the mutation, terminal statuses remain the
+  endpoint-owned terminal value; otherwise the service derives
+  `schedule?.date ? 'scheduled' : 'saved'`. The request schema accepts no `status`.
+- **One time conversion.** Delete any route- or API-local wall-time conversion and call
+  shared `toUtcInstant` from `packages/shared/src/recurrence/calendar.ts` for
+  `scheduledAtUtc` and `endAtUtc`. The helper's spring-gap rule is the product rule: the
+  first valid wall time after the gap, not “add one hour”. The named test
+  **`spring gap forwards 2026-03-08 02:30 America/New_York to 03:00`** locks it.
+- **The bucket rewrite is atomic.** Because `schedule.date` is a P2-05 input, one
+  `TransactWriteItems` writes `ACT#/META` and every owner/participant `ActivityIndex` row.
+  Scheduling moves `N → S` or `P → S`; unscheduling moves `S → N` for a Task and `S → P`
+  for a Plan.
 - **The RSVP reset ships now, reachable in Phase 6.** A date set or changed resets every
-  non-declined participant's `rsvp` to `pending` (declined participants are excluded on both
-  the app-user and guest sides — decision 2026-08-07, see phase-06 P6-15), clears
-  `respondedAt`, sets `rsvpForDate`; a time-only
-  change keeps responses; clearing the date keeps them and clears `rsvpForDate`
-  ([`../02-architecture/data-model.md#71-rsvp-consent-does-not-survive-a-date-change`](../02-architecture/data-model.md#71-rsvp-consent-does-not-survive-a-date-change)
-  §7.1). The response carries `rsvpReset: true` when it happened. The `PART#` writes join
-  the same transaction. Like P2-13's authz, this is built now against seeded rows while
-  nothing can create them.
-- `icsSequence` increments — date, time, end time and timezone are all in the exported set
-  (§4.1).
-- **A recurring series does not go through this route's schedule path.** Series edits are
-  either an occurrence override or a segment append (P2-26), never a rewrite of
-  `schedule.date` — the series' `#R` sort key is the first segment's `effectiveFrom` and
-  `schedule.time` mirrors the active segment. Two rules:
-  - With `occurrenceDate` in the body and `recurrence` present, the route writes
-    `Occurrence { status: 'rescheduled', overrideDate?: date, overrideTime: time }` through
-    P2-07 and touches
-    nothing else — this is the write behind the reschedule sheet's `This occurrence only`
-    (P2-26). `occurrenceDate` is an additive body field and is added to the API contract
-    and the shared schema before the client uses it, on the same rule as P2-09's additions.
-    The body's `date` **may differ** from `occurrenceDate`: a this-occurrence reschedule
-    may move the occurrence cross-day. `Occurrence.overrideDate`
-    ([`../02-architecture/data-model.md`](../02-architecture/data-model.md) §4.5) exists
-    for exactly this — a differing `date` is stored as `overrideDate` (an equal one stores
-    none), the override row stays keyed by its original `occurrenceDate`, and the expansion
-    merge emits the occurrence on `overrideDate` when set. This is the resolution of the
-    ambiguity `today-and-tasks.md` §5.3's note pointed at (decision resolved 2026-08-07);
-    it is no longer an open flag.
-  - Without `occurrenceDate`, a request against an activity with `recurrence` is
-    `validation_failed`. The sheet never issues it, and accepting it would be a series
-    write that bypasses segment history (decision recorded here — raise in PR if wrong).
-- `fromSuggestionId` (`data-model.md` §4.3a) belongs to the phase that ships date
-  suggestions; this handler ignores no field silently — the schema simply does not include
-  it yet.
-- Not a creating `POST`: no `Idempotency-Key` required. The operation is naturally
-  idempotent — scheduling to the same date twice is one state.
-- Callers in this phase: the reschedule sheet (P2-26), the snooze sheet's `Tomorrow`
-  option (P2-25), the overdue chip and `Do today` swipe (P2-29, P2-22).
+  non-declined participant to `pending`, clears `respondedAt`, and sets `rsvpForDate`; a
+  time-only change keeps responses; clearing the date keeps them and clears `rsvpForDate`
+  (data-model §7.1). These writes join the same transaction and the response carries
+  `rsvpReset: true` only when they occurred.
+- **`icsSequence` follows the API contract.** Compare the before/after exported fields and
+  increment once when `schedule.date`, `schedule.time`, `schedule.endTime` or
+  `schedule.timezone` changes, including set and clear. Repeating an identical request does
+  not increment it. Never accept a client-supplied sequence.
+- **Recurring series.** With `occurrenceDate`, write one
+  `Occurrence { status: 'rescheduled', overrideDate?, overrideTime? }` through P2-07 and
+  leave `META` byte-identical; a body date differing from `occurrenceDate` becomes
+  `overrideDate`. Without `occurrenceDate`, a request against a series is
+  `validation_failed`; all-future edits append a recurrence segment through PATCH under
+  P2-04/P2-26 and never rewrite schedule history.
+- `fromSuggestionId` belongs to the later date-suggestion phase and is not in this schema.
+  The schedule POST is naturally idempotent and requires no idempotency key.
+- Callers in this phase are the existing detail UI, the reschedule sheet (P2-26), Snooze's
+  `Tomorrow` option (P2-25), the overdue chip and `Do today` swipe (P2-29, P2-22).
 
-**Tests.** Integration: scheduling an undated Task moves its index entry `N → S` in one
-transaction with exactly one entry per user afterwards; unscheduling returns a Task to `N`
-and a Plan to `P`; `endTime` before `time` and `time` without `date` each `400`;
-unschedule removes the whole `schedule` object and flips status to `saved`; a daily-18:00
-date in `America/New_York` on a DST boundary derives the shifted instant (matches P2-02
-case 15); with seeded `PART#` rows a date change resets `rsvp` and sets `rsvpForDate`, a
-time-only change does not, and the response says `rsvpReset: true` only for the former; a
-participant gets `403` and nothing is written (partition count before and after); a
-stranger gets `404`; on a series, no `occurrenceDate` → `400`, with `occurrenceDate` → one
-`OCC#` row, `META` byte-identical.
+**Tests.** Shared-schema and route tests prove PATCH rejects `schedule` while POST schedule
+accepts it; the existing detail-screen test asserts its date change and clear now call
+`POST .../schedule` and issue no PATCH. Integration proves schedule/unschedule rewrites
+META and all index rows in one transaction with exactly one index row per user; derives
+status and `icsSequence` exactly as above; resets RSVP only for a date change; returns
+participant `403` and stranger `404` without writes; and keeps META byte-identical for an
+occurrence move. Calendar tests include case 15 plus the named 2026-03-08 02:30 spring-gap
+test and assert both the 03:00 local result and its UTC instant.
 
 ---
 
@@ -848,7 +904,7 @@ stranger gets `404`; on a series, no `occurrenceDate` → `400`, with `occurrenc
 
 **Approach.** `POST /v1/activities/:id/complete` with `{ occurrenceDate?, outcome? }`.
 
-**Owner only.** Completion is **global**: an `Occurrence` records that *the thing happened*,
+**Plan completion is owner-only.** Completion is **global**: an `Occurrence` records that *the thing happened*,
 not that *somebody attended*, and it carries no participant identity by design
 ([`../02-architecture/data-model.md#45-occurrence`](../02-architecture/data-model.md#45-occurrence)
 §4.5, ADR-048). A participant calling `complete`, `uncomplete`, `skip` or `snooze` on a plan
@@ -859,7 +915,7 @@ be a lie. The check is `assertActivityAccess(userId, activityId, 'owner')` in `a
 Enforce it now, in this phase, while there is one user and nothing to break. Phase 6 makes it
 reachable and walks it in the authorisation matrix (P6-28); it does not introduce it.
 
-**Prep tasks are the exception, and it costs one rule.** Completion authority follows the
+**ADR-051 — completion authority follows the object.** Prep tasks are the exception, and it costs one rule. Completion authority follows the
 object: completing a *plan* asserts a shared fact about an event, but completing a *prep
 task* ticks an item on a shared checklist. **Any participant of the parent plan may
 complete, uncomplete and edit a prep task, whoever created it**
@@ -879,11 +935,18 @@ Two paths, and their difference is the most important invariant in this phase:
 
 | Body | Writes | Does **not** write |
 | --- | --- | --- |
-| No `occurrenceDate` | `ACT#/META`: `status: 'completed'`, `completedAt`, `outcome` | — |
+| No `occurrenceDate` | One transaction writes `ACT#/META` (`status: 'completed'`, `completedAt`, `outcome`) **and every owner/participant `ActivityIndex` row's denormalised `status`** | No split or best-effort index update |
 | With `occurrenceDate` | **Exactly one item**, `ACT#<id>/OCC#<date>`, with `status: 'completed'`, `completedAt` | `ACT#/META`. Its `updatedAt` does not change. |
 
 That second row is success criterion S6 and is asserted by an integration test, not by
 inspection.
+
+The first row follows the Phase 1 PATCH transaction pattern in
+`services/api/src/repositories/activityRepository.ts`: compute all projected index rows
+from the post-mutation Activity, then write META and the complete fan-out in one
+`TransactWriteItems`. A response must never expose completed META while a stale index still
+says scheduled. `uncomplete` uses the same transaction and derives the restored nonterminal
+status from schedule presence; it does not accept a prior status from the client.
 
 `outcome` defaults per type from the verb table in
 [`../01-product/activities.md`](../01-product/activities.md) §5.2. `didnt_happen` and
@@ -906,7 +969,10 @@ something without claiming it happened.
 - No follow-up suggestion is offered on a recurring completion. The next occurrence already
   exists.
 
-**Tests.** Integration: completing an occurrence writes exactly one item (count the
+**Tests.** Integration: completing and uncompleting a non-occurrence atomically update META
+and every seeded owner/participant index status, using a transaction spy shaped like the
+Phase 1 PATCH test; a forced transaction cancellation leaves all rows unchanged. Completing
+an occurrence writes exactly one item (count the
 partition before and after) and leaves `ACT#/META.updatedAt` byte-identical; tomorrow's
 expansion still emits the series at its normal time; `uncomplete` on an occurrence deletes
 the row; `outcome: 'didnt_go'` sets `status: 'skipped'`; completing twice is idempotent.
@@ -932,16 +998,16 @@ the endpoint fails them.
 
 **Approach.** `POST /v1/activities/:id/skip` with `{ occurrenceDate? }`, per
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#54-skip) §5.4. Skip
-says "not this one, and I do not want to be asked again". Same authorisation as P2-13,
-through the same `assertActivityAccess` — owner only, participant `403` with nothing
-written, stranger `404`; the parent-participant branch applies to prep tasks because it
-lives in the middleware, not in this handler.
+says "not this one, and I do not want to be asked again". Authorisation comes from the
+ADR-051-aware policy established in P2-13: plan actions remain owner-only, while the
+parent-plan participant rule applies to prep tasks in middleware. An unauthorised
+participant gets `403` with nothing written and a stranger gets `404`.
 
 Two paths, on P2-13's exact pattern:
 
 | Body | Writes | Does **not** write |
 | --- | --- | --- |
-| No `occurrenceDate` | `ACT#/META`: `status: 'skipped'`. The row leaves Today. | — |
+| No `occurrenceDate` | One transaction writes `ACT#/META.status = 'skipped'` **and every owner/participant `ActivityIndex.status = 'skipped'`**. The row leaves Today. | No split or best-effort index update |
 | With `occurrenceDate` | Exactly one item, `ACT#<id>/OCC#<date>`, `{ status: 'skipped' }`, via P2-07 | `ACT#/META`. Its `updatedAt` does not change (S6). |
 
 - **Skip is private.** It never notifies anyone and never appears in a shared plan's
@@ -959,29 +1025,41 @@ Two paths, on P2-13's exact pattern:
 - No type gate server-side: `complete` with `outcome: 'didnt_happen'` already writes
   `skipped` for plan types (P2-13), so refusing direct skip by type would be a fiction.
   Which rows *offer* Skip is the gesture table's business (P2-22).
+- The non-occurrence path uses the Phase 1 PATCH transaction pattern cited in P2-13:
+  derive the complete post-write index projection and commit META plus every fan-out row in
+  one `TransactWriteItems`. Transaction cancellation leaves every row unchanged.
 
 **Tests.** Integration: skipping an occurrence writes exactly one item (partition count
 before and after) and leaves `ACT#/META.updatedAt` byte-identical; the same series'
-other dates expand unchanged; a non-recurring skip flips `META.status` and the item leaves
+other dates expand unchanged; a non-recurring skip flips `META.status` and every seeded
+`ActivityIndex.status` in one transaction and the item leaves
 the agenda response; skip then `uncomplete` restores `scheduled` / deletes the row; the
 skipped occurrence is emitted as `skipped_occurrence` and hidden by default in the agenda
-merge (P2-08); a participant gets `403` with nothing written; a stranger gets `404`.
+merge (P2-08); forced transaction cancellation changes no META or index row; a participant
+gets `403` with nothing written; a stranger gets `404`.
 
 ---
 
-### P2-15 — `snooze`
+### P2-15 — One-off and occurrence `snooze` / `unsnooze`
 
-**Files.** `services/api/src/services/completionService.ts`.
+**Files.** `services/api/src/services/completionService.ts`,
+`services/api/src/routes/activities.ts`,
+`packages/shared/src/schemas/occurrence.ts`,
+`packages/shared/src/client/endpoints/activities.ts`.
 
-**Approach.** `POST /v1/activities/:id/snooze` with `{ occurrenceDate, until }`, where
-`until` is `HH:mm` on the same day or an ISO instant. Writes `Occurrence { status:
-'snoozed', snoozedUntil }` and **nothing else**. **Owner only**, on the same rule and through
-the same check as P2-13: a snooze moves the thing for everybody, so it is not a participant's
-to move.
+**Approach.** `POST /v1/activities/:id/snooze` accepts
+`{ occurrenceDate?, until }`, where `until` is `HH:mm` on the same day or an ISO instant.
+The storage target is determined only by `occurrenceDate`:
 
-> A code path that snoozes and then writes `ACT#/META` is wrong even if the visible result
-> looks right. This is a required test case, from
-> [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §6.5.
+| Target | Snooze write | Undo / unsnooze write |
+| --- | --- | --- |
+| Non-recurring one-off (no `occurrenceDate`) | Update `ACT#/META.snoozedUntil`; status remains derived from schedule | `POST /v1/activities/:id/unsnooze {}` deletes the META snooze field |
+| Recurring occurrence | Write `Occurrence { status: 'snoozed', snoozedUntil }` and leave META byte-identical | `POST /v1/activities/:id/unsnooze { occurrenceDate }` deletes that snoozed `Occurrence` row |
+
+This is the compensating operation required by interaction-contract §4.1: undo **deletes
+the snooze fields**, it does not reschedule to a guessed prior time. Occurrence overrides
+are series-only; a one-off must never manufacture an `OCC#` row. Both routes use the
+ADR-051-aware authorisation policy from P2-13; a snooze moves the item for every viewer.
 
 The concept's own example is the acceptance test:
 
@@ -993,7 +1071,9 @@ Tomorrow → still 6:00 PM
 
 **Edge cases.**
 
-- Snooze is repeatable; a second snooze overwrites `snoozedUntil` on the same row.
+- Snooze is repeatable; a second snooze overwrites `snoozedUntil` on the same storage target.
+- `unsnooze` is idempotent. It may delete an occurrence only when that row is a snooze;
+  it never erases a completion, skip or reschedule override.
 - `until` earlier than the current time is `validation_failed`.
 - Snooze is not offered on an undated or all-day task — there is no time to move.
 - `Tomorrow` is deliberately absent for a recurring occurrence. Moving tomorrow's Gym into a
@@ -1001,10 +1081,12 @@ Tomorrow → still 6:00 PM
   `Tomorrow` is a **reschedule**, not a snooze, and the client must call
   `/schedule`, not `/snooze`.
 
-**Tests.** Integration: snoozing writes one `OCC#` item and leaves `ACT#/META.updatedAt`
-unchanged; the next day's agenda shows the series time; a second snooze updates one row; an
-`until` in the past `400`s; `Recurrence` is never read on the snooze path (assert with a
-repository spy that no `#R` query occurs).
+**Tests.** Integration covers both rows of the table. A one-off snooze writes META, creates
+no `OCC#` item, renders at the effective time, and unsnooze deletes the field. A recurring
+snooze writes one `OCC#` item and leaves `ACT#/META.updatedAt` byte-identical; the next day's
+agenda shows the series time; unsnooze deletes only that occurrence; a second snooze updates
+one target; an `until` in the past `400`s. A repository spy proves no `#R` query occurs on
+either mutation path.
 
 ---
 
@@ -1015,8 +1097,10 @@ repository spy that no `#R` query occurs).
 `services/api/src/routes/activities.ts` (three routes),
 `packages/shared/src/schemas/reminder.ts` (extend P1-06).
 
-**What to build.** The management surface for the `REM#<userId>#<reminderId>` items P1-09
-already writes at create time, and the validation that keeps them bounded.
+**What to build.** Extend the read-only `ReminderRepository` seam introduced by P2-08 with
+the management surface for the `REM#<userId>#<reminderId>` items P1-09 already writes at
+create time, and the validation that keeps them bounded. Do not create a second repository
+or a second agenda-specific reminder reader.
 
 **A reminder belongs to a person, not to a plan.** A shared plan has **one schedule and many
 reminder sets**
@@ -1048,9 +1132,10 @@ identical reminders is a mistake, and a silent drop looks like the write failed.
 
 - Nothing here fires anything. Local scheduling is P2-34; server-side push is Phase 5
   (P5-13, P5-14).
-- An undated activity may carry reminders. They are stored and simply have nothing to
-  schedule against until a date lands, at which point P5-14 picks them up. Rejecting them
-  would mean the user had to remember to come back.
+- **Reminders require a date.** Creation and reminder-management writes reject a reminder
+  when the activity has no `schedule.date`, and unscheduling deletes its reminder rows in
+  the same transaction. This is the rule in `notifications.md` §2/§3; the Phase 1 compose
+  store already behaves correctly and is not changed by this task.
 - Deleting an activity deletes its `REM#` rows for **every** user in the cascade (P1-14),
   which is already true because the cascade deletes the whole partition.
 - The three routes are participant-accessible, unlike completion. This is the asymmetry worth
@@ -1063,14 +1148,17 @@ the response body contains neither A's offset nor A's reminder id; `POST` as B c
 under B's key and A's `GET` is unchanged; `DELETE` of A's reminder id by B returns `404` and
 A's row survives; a fourth `POST` by one user returns `422` while a fourth by the *other*
 user succeeds, proving the cap is per user and not per activity; `offsetMinutes: 30` is
-rejected.
+rejected. Creating or adding a reminder to an undated activity is rejected, and
+unscheduling a dated activity deletes all of its reminder rows atomically.
 
 ---
 
 ### P2-11 — `GET /v1/agenda`
 
 **Approach.** Query parameters `from`, `to`, `tz`, `include` (comma-separated:
-`anytime_unscheduled`, `overdue`). Window strictly capped at 62 days →
+`anytime_unscheduled`, `overdue`, `reminders`). `include=reminders` attaches only the
+authenticated caller's `REM#<userId>#` rows to activities emitted in the window; it never
+returns another user's reminder. Window strictly capped at 62 days →
 `400 validation_failed`. `ETag` on the response, computed from the response body hash, with
 `If-None-Match` returning `304`. Response is client-cacheable for 60 s.
 
@@ -1080,23 +1168,29 @@ rejected.
 **Edge cases.** Today issues **exactly one** request:
 
 ```
-GET /v1/agenda?from=<today>&to=<today>&tz=<tz>&include=anytime_unscheduled,overdue
+GET /v1/agenda?from=<today>&to=<tomorrow>&tz=<tz>&include=anytime_unscheduled,overdue,reminders
 ```
 
-Any feature requiring a second request to render Today is rejected. That is success
-criterion S2 and it is asserted by a Playwright network-count assertion, not by review.
+Today renders `days[0]`; the second day exists in the same response so P2-34 can schedule
+tomorrow's reminders without another request. Any feature requiring a second request to
+render Today is rejected. That is success criterion S2 and it is asserted by a Playwright
+network-count assertion, not by review.
 
 **Tests.** A 63-day window `400`s; a 62-day one succeeds. `If-None-Match` with the current
-`ETag` returns `304` with no body. The Playwright assertion counts exactly one data request
-on a cold Today open.
+`ETag` returns `304` with no body. With two users' reminders on the same activity,
+`include=reminders` returns only the caller's rows for the window. The Playwright assertion
+counts exactly one data request on a cold Today open, including the reminder data P2-34
+needs.
 
 ---
 
-### P2-18 — Agenda client hook, query keys and cache policy
+### P2-18 — Agenda client hook, ETag transport cache and query policy
 
 **Files.** `apps/mobile/src/features/agenda/hooks/useAgenda.ts`,
 `apps/mobile/src/features/agenda/keys.ts`,
-`packages/shared/src/api/` (extend the P1-20 client with `getAgenda`).
+`packages/shared/src/client/http.ts`,
+`packages/shared/src/client/http.test.ts`,
+`packages/shared/src/client/endpoints/agenda.ts` (add `getAgenda`).
 
 **Approach.** The data layer between `GET /v1/agenda` (P2-11) and every screen in this
 phase. Feature hooks are the only place `useQuery` appears and own their query keys
@@ -1108,12 +1202,13 @@ phase. Feature hooks are the only place `useQuery` appears and own their query k
 - **One key helper.** `agendaKey(from, to, tz, include)` in `keys.ts` is the only
   constructor of agenda query keys, used by this hook, by every `onMutate` in P2-23, and by
   invalidation in P2-24. The key includes **every** parameter that changes the response;
-  omitting `include` would make Today (both tokens) and the Plans window (neither) collide
+  omitting `include` would make Today (all three tokens) and the Plans window (neither) collide
   in one cache entry, and the bug would look like phantom rows.
 - **Today's call is the single request** from
   [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#1-what-today-is)
-  §1: `from = to = today`, both `include` tokens, one fetch. The hook exposes the whole
-  response; sectioning is `partition.ts` (P2-19). No per-section fetches, ever — that is
+  §1: `from = today`, `to = tomorrow`, all three `include` tokens, one fetch. Today renders
+  the first day and P2-34 consumes reminders from both. The hook exposes the whole response;
+  sectioning is `partition.ts` (P2-19). No per-section fetches, ever — that is
   success criterion S2.
 - **`tz` is the profile timezone** (P2-02 case 29 —
   `../01-product/today-and-tasks.md` §6.6): read from the cached `me` query, falling back
@@ -1131,13 +1226,21 @@ phase. Feature hooks are the only place `useQuery` appears and own their query k
   refetches; UP NEXT and section movement are local recomputation (P2-19, P2-20).
 - The Plans tab (P2-32) calls the same hook with a multi-day window and no
   `include=anytime_unscheduled`; there is one hook, parameterised, not two.
-- `ETag`/`If-None-Match` is transport-level in the shared client, invisible here.
+- **`ETag`/`If-None-Match` is transport-level and invisible to hooks.** The shared client
+  keeps an in-memory `{ etag, body }` pair per GET request identity. On a later GET it sends
+  `If-None-Match`; `304` is a successful response resolved from the paired cached body, not
+  an `ApiError`, schema failure or query error. A 304 without a paired body retries once
+  without the conditional header. The cache belongs to the client instance so it cannot
+  cross an auth/sign-out boundary.
 
 **Tests.** Unit: the key helper produces distinct keys for distinct `include` sets and
 identical keys for identical inputs; a mounted hook for Today issues exactly one fetch
 (mock transport call count); a response that fails schema parsing surfaces the query's
 error state rather than partial data; crossing midnight (frozen clock advanced) re-keys to
-the new date. The end-to-end single-request assertion is Playwright's, in P2-37.
+the new date. Transport tests prove `200` stores the ETag/body pair, the next `304` returns
+that body as success, no body parsing is attempted for 304, and hooks observe no distinction
+between cached-304 and fresh-200 results. The end-to-end single-request assertion is
+Playwright's, in P2-37.
 
 ---
 
@@ -1364,7 +1467,7 @@ secretly a different endpoint:
 
 | Context | Options | Dispatch |
 | --- | --- | --- |
-| Non-recurring task, today, timed | `15 minutes`, `1 hour`, `3 hours`, `This evening (6 PM)`, `Tomorrow`, `Pick a time` | All but `Tomorrow` → `POST /v1/activities/:id/snooze` with `until` as `HH:mm`. **`Tomorrow` → `POST /v1/activities/:id/schedule`** with tomorrow's date and the same time — moving a one-off task to another day *is* a reschedule (P2-12), and routing it through snooze would be the wrong write. |
+| Non-recurring task, today, timed | `15 minutes`, `1 hour`, `3 hours`, `This evening (6 PM)`, `Tomorrow`, `Pick a time` | All but `Tomorrow` → `POST /v1/activities/:id/snooze` with `{ until }` and **no** `occurrenceDate`, so P2-15 writes META snooze fields. **`Tomorrow` → `POST /v1/activities/:id/schedule`** with tomorrow's date and the same time — moving a one-off task to another day *is* a reschedule (P2-12). |
 | Recurring occurrence | The same **minus `Tomorrow`** | Always `POST .../snooze` with `{ occurrenceDate, until }`. The absent option is deliberate (§5.3's decision): tomorrow already has its own occurrence. |
 | Undated or all-day task | The sheet is never opened — the swipe action is not offered (P2-22). There is no time to move. | — |
 
@@ -1377,8 +1480,9 @@ secretly a different endpoint:
   §3.4), same-day only; a picked past time shows the inline error, mirroring the server
   rule rather than duplicating it in a second shape.
 - The result is optimistic through `applySnooze` (P2-23) with the 6-second undo toast
-  (P2-24); undo deletes the snooze via the compensating call, restoring the original time
-  (§5.3 `Undo snooze`). The row re-sorts to its new effective time with the snooze glyph
+  (P2-24); undo calls `POST /v1/activities/:id/unsnooze`, with `occurrenceDate` only for a
+  series occurrence. P2-15 then deletes the META field for a one-off or the snoozed
+  Occurrence row for a series, restoring the original time (§5.3 `Undo snooze`). The row re-sorts to its new effective time with the snooze glyph
   and `6:00 PM → 8:00 PM` treatment (P2-21).
 - Snooze is repeatable: opening the sheet on an already-snoozed item snoozes from now and
   overwrites `snoozedUntil` (P2-15).
@@ -1392,7 +1496,8 @@ secretly a different endpoint:
 
 **Tests.** Unit: the option set for each of the three contexts matches the table;
 `Tomorrow` dispatches `/schedule` with tomorrow's date and the unchanged time, never
-`/snooze` (spy on the client); the recurring dispatch always carries `occurrenceDate`; at
+`/snooze` (spy on the client); a one-off snooze omits `occurrenceDate`, a recurring dispatch
+always carries it, and undo calls `/unsnooze` with the matching scope; at
 19:00 the evening option is absent; each fixed option computes the correct `until` from a
 frozen clock. Component: options are announced with their resulting time. The storage-side
 guarantees are P2-15's integration tests, not repeated here.
@@ -1401,7 +1506,12 @@ guarantees are P2-15's integration tests, not repeated here.
 
 ### P2-26 — The reschedule sheet
 
-**Approach.** Opened by tapping a date or time **anywhere** it is rendered (U4). It never
+**Files.** Extend the existing
+`apps/mobile/src/features/activity/components/RescheduleSheet.tsx` and its existing tests;
+do not recreate or fork the sheet under `features/agenda`.
+
+**Approach.** Extend the Phase 1 component opened by tapping a date or time **anywhere** it
+is rendered (U4). It never
 edits in place on a row.
 
 For a **recurring series** it presents a two-option sheet: `This occurrence only` /
@@ -1433,7 +1543,7 @@ attempt surfaces the explanatory sheet, not a raw error.
 
 ### P2-27 — The repeat sheet
 
-**Files.** `apps/mobile/src/features/activities/components/RepeatSheet.tsx` — it is a
+**Files.** `apps/mobile/src/features/activity/components/RepeatSheet.tsx` — it is a
 creation-form control (`../01-product/activities.md` §3.4) as much as an agenda one, so it
 does not live under `features/agenda`.
 
@@ -1585,8 +1695,12 @@ surfaces it does not exist yet.
 ### P2-33 — Persisted query cache and the offline mutation queue
 
 **Files.** `apps/mobile/src/lib/queryClient.ts`,
+`apps/mobile/src/lib/mutationKeys.ts`,
 `apps/mobile/src/lib/persister.ts`,
-`apps/mobile/src/lib/onlineManager.ts`.
+`apps/mobile/src/lib/onlineManager.ts`,
+`apps/mobile/src/features/compose/hooks/useCreateActivity.ts`,
+`apps/mobile/src/features/activity/hooks/{useActivity,useActivityActions}.ts`,
+and their existing tests.
 
 **Approach.** The three mechanisms in
 [`../02-architecture/tech-stack.md#34-offline-and-optimistic-updates`](../02-architecture/tech-stack.md#34-offline-and-optimistic-updates):
@@ -1594,8 +1708,24 @@ a persisted query cache via `@tanstack/query-async-storage-persister`; optimisti
 (P2-23); and a persisted mutation cache resumed with `resumePausedMutations()` on reconnect,
 driven by `@react-native-community/netinfo`.
 
-Every creating `POST` carries an `Idempotency-Key` generated once at `onMutate` and reused
-on every retry. That is why the server's idempotency records exist.
+Register stable mutation keys and default mutation functions on the shared `QueryClient` for
+**create, duplicate, delete and patch** before hydration calls
+`resumePausedMutations()`. A persisted mutation without a matching default is not resumable;
+component-local `mutationFn` closures are insufficient after process death.
+
+`mutationKeys.ts` owns the literal keys — `['activity', 'create']`,
+`['activity', 'duplicate']`, `['activity', 'delete']`, `['activity', 'patch']` — and hooks
+import them rather than constructing lookalikes. Those keys are persistence identifiers;
+changing them is a stored-cache migration, not a refactor.
+
+Remove the existing per-hook `networkMode: 'always'` and `retry: false` overrides from
+`useCreateActivity`, `useActivity` and `useActivityActions`; the hooks inherit the queue's
+offline-aware defaults and retry predicate. Creating POSTs (create and duplicate) carry an
+`Idempotency-Key` generated **before** `mutationFn` runs — in the mutation variables/public
+action boundary — and the default function reuses that stored key on every retry and replay.
+Never generate a key inside `mutationFn`: resumed and retried calls must identify the same
+logical write. Patch and delete also have stable keys/default functions even though they do
+not use idempotency headers.
 
 **Platform difference, deliberate:** the mutation queue is **iOS only**. On web the
 persisted cache is enabled but the queue is disabled and the app warns on unload if the
@@ -1613,7 +1743,11 @@ one banner naming the affected changes, not one toast per change.
 
 **Tests.** Maestro: airplane mode on, complete three tasks, kill the app, relaunch, airplane
 mode off, assert all three land exactly once (verified by item count, since the idempotency
-key should make a duplicate impossible even if the queue double-fires).
+key should make a duplicate impossible even if the queue double-fires). Unit/integration
+tests dehydrate and rehydrate one create, duplicate, delete and patch mutation, then prove
+each resolves through its registered default function. Create/duplicate tests spy on a
+retry and a resumed replay and assert the exact same `Idempotency-Key` is reused; grep tests
+assert the three hooks no longer set `networkMode: 'always'` or `retry: false`.
 
 ---
 
@@ -1628,6 +1762,12 @@ work end to end on device before any server-side scheduling exists.
 Rescheduled on every agenda refresh: cancel all previously scheduled local notifications
 owned by the app and re-schedule from the current agenda. That is simpler and more correct
 than tracking deltas, and the volume is tiny.
+
+Today requests
+`include=anytime_unscheduled,overdue,reminders`; the agenda response carries the caller's
+own reminder rows for the current/next-day window. This task consumes those rows from
+`useAgenda` and issues **no reminder-detail request**, so the cold Today render remains one
+HTTP data request (P2-11/P2-18/P2-37).
 
 **The device only ever sees its own user's reminders**, because that is all the API returns
 (P2-16, P1-10 rule 6). There is therefore no filtering to do here and none to write — if this
@@ -1646,8 +1786,9 @@ different times for one dinner, and neither device knows the other's offset.
 - Web is a no-op (`push.web.ts`).
 
 **Tests.** Unit on the schedule-computation function (offset arithmetic, all-day hour, past
-reminders dropped) with the `expo-notifications` API mocked. Manual verification on a
-simulator with the clock advanced.
+reminders dropped) with the `expo-notifications` API mocked. A hook/component test supplies
+agenda reminder data and asserts no activity-reminder endpoint is called. Manual
+verification on a simulator with the clock advanced.
 
 ---
 
@@ -1674,7 +1815,9 @@ against the spec.
   `effectiveFrom` 2026-01-05 — with no occurrence row for 6 August.
 - **Frozen clock**: Thursday 6 August 2026, 15:10 `America/New_York`, via the injected
   clock, never real time.
-- **The single request from §9.2**, both `include` tokens. Assert:
+- **The single Today request from §9.2**, `from=2026-08-06`, `to=2026-08-07`, all three
+  `include` tokens. Seed one caller-owned dated
+  reminder and assert it arrives in that response. Assert:
   - the exact section membership and order of all nine rows per §9.3/§9.4 — `upNext` is
     Pick up groceries; `schedule` is C, D, E, F ascending; `anytime` is H (with
     `overdueFromDate: '2026-08-04'`), then G, then I (subtitle `New York Trip`);
@@ -1710,7 +1853,8 @@ CI.
 
 **Files.** Web: `e2e/specs/{complete-undo.spec.ts, reschedule.spec.ts,
 a11y-keyboard.spec.ts}`. iOS: `apps/mobile/e2e/{add-and-complete.yaml,
-snooze-occurrence.yaml, up-next-ticker.yaml}`.
+snooze-occurrence.yaml, up-next-ticker.yaml}`. Wiring:
+`.github/workflows/ci.yml`, `.github/workflows/mobile.yml`.
 
 **What to build.** The Today-owning subset of the fixed E2E catalogue in
 [`../04-conventions/testing.md`](../04-conventions/testing.md#6-end-to-end) §6 — no flows
@@ -1749,9 +1893,9 @@ never the seed data):
   and confirm UP NEXT advanced without a refetch (the foreground recompute, criterion 8's
   device-side cousin).
 
-CI wiring per §6.2: Playwright gates the PR (retries: 1 in CI, and a pass-on-retry is
-still flagged); Maestro runs in `mobile.yml` on `workflow_dispatch` and tags and gates the
-TestFlight submission, not the merge.
+CI wiring per §6.2: Playwright runs in `ci.yml` on **every pull request** (retries: 1 in CI,
+and a pass-on-retry is still flagged); Maestro runs in `mobile.yml` on
+`workflow_dispatch` and **release tags** and gates the TestFlight submission, not the merge.
 
 **Tests.** This task is tests. Its own acceptance is that criteria 6, 13, 14 and 19's
 end-to-end halves are asserted by these files and fail when deliberately broken (comment
@@ -1763,7 +1907,8 @@ out the undo handler locally; the suite must catch it).
    at **100% statement and branch coverage**, and CI fails if coverage drops below it.
 2. A daily 18:00 task in `America/New_York` expanded across 7–9 March 2026 yields three
    dates whose derived UTC instants are 23:00Z, 23:00Z and 22:00Z — the wall clock is
-   constant and the instant shifts.
+   constant and the instant shifts. The named `spring gap forwards 2026-03-08 02:30
+   America/New_York to 03:00` test passes through shared `toUtcInstant`.
 3. A monthly series on `byMonthDay: [31]` expanded over January–June 2026 yields 31 Jan,
    28 Feb, 31 Mar, 30 Apr, 31 May, 30 Jun. A yearly series anchored on 29 February 2028
    expanded over 2028–2032 yields 29 Feb 2028, 28 Feb 2029, 28 Feb 2030, 28 Feb 2031 and
@@ -1772,9 +1917,14 @@ out the undo handler locally; the suite must catch it).
    `ACT#<id>/META.updatedAt` byte-identical, verified by reading the item before and after.
    Tomorrow's agenda still shows the series at its normal time.
 5. Snoozing today's occurrence to 20:00 shows it at 20:00 today and at the series time
-   tomorrow, and no query against the `#R` bucket occurs on the snooze path.
-6. A cold open of Today issues **exactly one** data request, asserted by a Playwright
-   network-count assertion (success criterion S2).
+   tomorrow, and no query against the `#R` bucket occurs on the snooze path. Snoozing a
+   one-off writes META snooze fields and no `OCC#` row; `unsnooze` deletes the matching
+   fields/row for each scope without deleting another occurrence status.
+6. A cold open of Today issues **exactly one** data request, with
+   `from=today`, `to=tomorrow` and
+   `include=anytime_unscheduled,overdue,reminders`; Today renders the first day and that
+   response includes only the caller's reminder rows for both days. This is asserted by a
+   Playwright network-count assertion (success criterion S2).
 7. Loading the worked example day from
    [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §9 as a fixture at
    local time 15:10 produces the exact screen in §9.3: the same nine rows, in the same
@@ -1809,7 +1959,7 @@ out the undo handler locally; the suite must catch it).
 20. The Plans tab renders a multi-day window from the same endpoint with one row per series
     per date, and does **not** send `include=anytime_unscheduled`. A non-recurring activity
     appears on exactly one date in that window, however many days it lasts in real life.
-21. `deriveGsi1Bucket` passes all 25 matrix cases in P2-05 at 100% branch coverage, and is
+21. `deriveGsi1Bucket` passes all 24 post-merge matrix cases in P2-05 at 100% branch coverage, and is
     called from exactly one place in the codebase — asserted by a grep test that finds one
     caller and no second implementation of the rule.
 22. An undated `{ objectKind: 'plan', type: 'event' }` has a `U#<u>#P` index entry, appears
@@ -1819,8 +1969,10 @@ out the undo handler locally; the suite must catch it).
 23. An undated `{ objectKind: 'task', type: 'task' }` has a `U#<u>#N` index entry and appears
     in Today's ANYTIME section. Changing title text or presentation fields leaves it there;
     only an explicit `objectKind` change can move an undated Activity between `#N` and `#P`.
-24. Giving the Plan in criterion 22 a date moves its index entry to `U#<u>#S`; clearing the
-    date returns it to `U#<u>#P`, not to `#N`.
+24. Giving the Plan in criterion 22 a date through `POST .../schedule` moves its index entry
+    to `U#<u>#S`; clearing the date through the same route returns it to `U#<u>#P`, not to
+    `#N`. The shared PATCH schema rejects `schedule`, and the existing detail UI sends no
+    schedule PATCH.
 25. Bumping `lastActivityAt` leaves `updatedAt` byte-identical, and a `PATCH` carrying the
     `If-Match` captured before the bump returns `200`, not `409`. Editing the title moves
     `updatedAt` and leaves `lastActivityAt` unchanged.
@@ -1837,6 +1989,17 @@ out the undo handler locally; the suite must catch it).
 28. Today's `+ Add a task` opens the Task form directly, the final action reads `Save task`,
     and the request contains `type: 'task'`. The same title entered through global
     `+` → `Plan` → `General` remains a `custom` Plan, proving the words do not route it.
+29. A `#R` index row is never expanded until `ACT#<id>/META` has been included in the
+    bounded hydration `BatchGetItem`. A 22:00 New York activity requested for the matching
+    Tokyo day is found by the ±1-day scheduled query, appears on the following Tokyo date
+    exactly once, and is filtered out of the adjacent response day.
+30. Non-occurrence complete, uncomplete and skip mutations write META plus every
+    owner/participant `ActivityIndex.status` in one transaction; forced cancellation leaves
+    every row unchanged. Occurrence-scoped variants still leave META byte-identical.
+31. The shared HTTP client stores an ETag/body pair and resolves a later `304` as the cached
+    success value, transparently to `useAgenda`. Persisted create, duplicate, delete and
+    patch mutations resume through stable default functions, and a replay reuses the exact
+    original idempotency key.
 
 ## Out of scope for this phase
 
@@ -1863,9 +2026,9 @@ out the undo handler locally; the suite must catch it).
 | --- | --- | --- |
 | **The recurrence engine is subtly wrong** and nobody notices for weeks | A user reports "my gym disappeared in March" or "the 31st skipped February" | P2-01 is built first and alone; P2-02's 43-case matrix plus property tests plus an independent cross-check implementation; 100% branch coverage gated in CI; golden fixtures so a refactor fails loudly. |
 | DST handled by adding milliseconds | Everything is right for ten months a year | Calendar arithmetic only, in `calendar.ts`; cases 15–19 include both hemispheres and a half-hour zone. A `+ 86400000` anywhere in `recurrence/` is a review rejection. |
-| Snooze or complete writes `ACT#/META` | The visible result looks correct; the series' `updatedAt` churns and Phase 6's conflict detection starts firing spuriously | Success criterion S6, asserted by reading the item before and after; a repository spy asserting no `#R` query on the snooze path. |
+| An occurrence-scoped snooze or complete writes `ACT#/META` | The visible result looks correct; the series' `updatedAt` churns and Phase 6's conflict detection starts firing spuriously | Success criterion S6, asserted by reading the item before and after; one-off snooze is the explicit META exception, while a repository spy asserts no `#R` query on either snooze path. |
 | **The bucket rule is re-derived in a second place** — a client-side `type === 'task'` check, a service that builds an index entry by hand, or a filter in the agenda | An undated Plan appears on Today, or a Task vanishes from ANYTIME, and the two implementations disagree only for some inputs | One pure function (P2-05), one caller, a grep test asserting both. The agenda excludes `#P` by not querying it rather than by filtering it, so there is no filter to drop. |
-| A write path changes `objectKind`, date or recurrence and forgets to rewrite the index entry | The activity is in the wrong tab and the stored row looks entirely correct | The three inputs are named in P2-05 and the rewrite happens in the same transaction as the write. Transitions 13–25 are tests, and the integration tests assert exactly one index entry after each. |
+| A write path changes `objectKind`, date or recurrence and forgets to rewrite the index entry | The activity is in the wrong tab and the stored row looks entirely correct | The three inputs are named in P2-05 and the rewrite happens in the same transaction as the write. Transitions 12–24 are tests, and the integration tests assert exactly one index entry after each. |
 | **`lastActivityAt` is folded back into `updatedAt`** "because two timestamps is redundant" | An owner editing a plan gets a `409` because somebody RSVP'd, and the fix looks like it needs a merge engine | Acceptance criterion 25 fails immediately. The reason the fields are separate is in `data-model.md` §3.5 and is restated in P2-06. |
 | A second request creeps into Today's cold open | Nobody notices until Today is slow on 4G | The Playwright network-count assertion is a gating acceptance criterion, not a review item. |
 | The client's optimistic projection disagrees with the server | Rows visibly flip back a second after a tap | P2-23's golden tests compare the pure function's output to recorded server responses. |

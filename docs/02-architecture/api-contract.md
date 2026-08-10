@@ -178,6 +178,7 @@ interface AgendaItem {
   locationLabel?: string;
   subtitle?: string;          // "Meal · Chicken tacos", "S2 E4", "Zahav"
   isPast: boolean;
+  reminders?: Reminder[];     // present only with include=reminders; caller's rows only
 }
 ```
 
@@ -194,8 +195,11 @@ Query parameters:
 | --- | --- |
 | `include=anytime_unscheduled` | Merges the undated Anytime bucket into the first day. Today uses this; a multi-day Plans view does not. |
 | `include=overdue` | Rolls incomplete, non-recurring **tasks** with a date in the past forward onto the first day, each carrying `overdueFromDate`. Capped at 30 days back. Never applies to recurring occurrences or non-task types. See `../01-product/today-and-tasks.md` §7. |
+| `include=reminders` | Attaches the authenticated caller's own `REM#<userId>#` rows to the AgendaItems emitted for the requested window. Never returns another user's row. Today and local notification scheduling use this; it does not add a second HTTP request. |
 
-Both may be combined: `?include=anytime_unscheduled,overdue`.
+Tokens may be combined: Today requests `from=today&to=tomorrow`, renders `days[0]`, and uses
+`?include=anytime_unscheduled,overdue,reminders` so local notifications can schedule both
+days without a second HTTP request.
 - Window capped at 62 days → `400 validation_failed`.
 - Response is cacheable client-side for 60 s; server sends `ETag`.
 
@@ -290,13 +294,14 @@ Also:
 | --- | --- | --- |
 | `POST` | `/v1/activities` | Create a **Task or Plan chosen by the client**. Body = `CreateActivityInput`; both `objectKind` and `type` are required. Requires `Idempotency-Key`. |
 | `GET` | `/v1/activities/:id` | Full detail: activity + participants + expenses + updates + attachments + children + **the caller's own reminders** + date suggestions. Response shape is `ActivityDetail` (`packages/shared/src/types/activity.ts`), an object of named collections so each one is **added** as its phase lands rather than changing the envelope; Phase 1 defines `{ activity, reminders }` and nothing else exists to return yet. One DynamoDB Query; the `REM#` rows are filtered to the caller in the projection before responding. Stored `listId` / `listItemId` are included only when the caller also passes `assertListAccess`; a Plan participant outside the list receives no reverse link. |
-| `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
+| `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. **Does not accept `schedule` or unschedule fields**; `POST .../schedule` is the single scheduling write path. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
 | `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7 and deletes every child Expense locator with its row. **The settlement guard and the Expense-locator half of the cascade arrive in Phase 7 (P7-08), not Phase 1 (P1-14)** — see the note below. |
-| `POST` | `/v1/activities/:id/schedule` | `{ date, time?, endTime?, timezone }`. Also used to *unschedule* with `{ date: null }`. **Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies** (declined rows are neither reset nor notified — decision 2026-08-07) — see [`data-model.md` §7.1](data-model.md#71-rsvp-consent-does-not-survive-a-date-change). A time-only change does not. The response includes `rsvpReset: true` so the client can say so rather than letting people discover it. |
-| `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. With `occurrenceDate` → writes an Occurrence, never touches the series. **Owner only** — completion is global, see [`data-model.md` §4.5](data-model.md#45-occurrence). |
-| `POST` | `/v1/activities/:id/uncomplete` | Reverses the above. Owner only. |
-| `POST` | `/v1/activities/:id/skip` | `{ occurrenceDate? }`. Owner only. |
-| `POST` | `/v1/activities/:id/snooze` | `{ occurrenceDate, until }` — `until` is `HH:mm` (same day) or an ISO instant. Owner only. |
+| `POST` | `/v1/activities/:id/schedule` | The **single schedule write path**: `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule is `{ date: null }`. Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies; a time-only change does not. The response includes `rsvpReset: true` only when it happened. Status is server-derived from schedule presence (unless terminal), and `icsSequence` increments once iff an exported schedule field changed. Shared `toUtcInstant` derives UTC values; the spring gap `2026-03-08 02:30 America/New_York` moves forward to `03:00`. With `occurrenceDate`, writes one series override and leaves META unchanged. |
+| `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. With `occurrenceDate` → writes an Occurrence, never touches the series. Plan completion is global and owner-only; ADR-051 allows a participant of the parent plan to complete a prep task. Without `occurrenceDate`, META and every denormalised ActivityIndex status change in one transaction. |
+| `POST` | `/v1/activities/:id/uncomplete` | Reverses the above under the same ADR-051 policy and transaction/occurrence split. |
+| `POST` | `/v1/activities/:id/skip` | `{ occurrenceDate? }`. Uses the same ADR-051 policy; without an occurrence, META plus every index status are one transaction. |
+| `POST` | `/v1/activities/:id/snooze` | `{ occurrenceDate?, until }` — `until` is `HH:mm` (same day) or an ISO instant. Without `occurrenceDate`, writes one-off META snooze fields; with it, writes a series Occurrence override. |
+| `POST` | `/v1/activities/:id/unsnooze` | `{ occurrenceDate? }`. Compensating Undo operation: without `occurrenceDate`, deletes one-off META snooze fields; with it, deletes only a snoozed Occurrence row and cannot erase completion, skip or reschedule. Idempotent. |
 | `POST` | `/v1/activities/:id/duplicate` | |
 | `GET` | `/v1/activities/:id/ics` | Single-event `.ics`. Authenticated variant of the public one. |
 
@@ -362,6 +367,9 @@ participants. Plan requires one of the four visible Plan kinds — `custom` (Gen
 `objectKind: 'plan', type: 'task'` combination. Dates, participant changes, and type changes
 never silently rewrite `objectKind`.
 
+`reminders` requires `schedule.date`; a create carrying reminders without a date is
+`400 validation_failed`. Unscheduling deletes the Activity's reminder rows atomically.
+
 The entry points map to writes as follows. There is deliberately no generic `/v1/add`
 endpoint whose handler guesses what the user meant.
 
@@ -418,6 +426,9 @@ rule and does not create direct participant rows.
 | `GET` | `/v1/activities/:id/reminders` | **The caller's own reminders only.** Never anyone else's, on any plan, ever. |
 | `POST` | `/v1/activities/:id/reminders` | `{ offsetMinutes }`. Any participant, for themselves. Max 3 per user per activity. |
 | `DELETE` | `/v1/activities/:id/reminders/:reminderId` | Only your own. |
+
+All three management routes require the Activity to have `schedule.date`; reminders on an
+undated Activity are `400 validation_failed`, consistent with `notifications.md` §2/§3.
 
 On a shared plan there is **one schedule and many reminder sets**. `CreateActivityInput`'s
 `reminders` field creates rows for the **creator only**. When somebody joins a shared plan, an
