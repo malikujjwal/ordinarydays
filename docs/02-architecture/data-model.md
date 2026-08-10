@@ -1196,7 +1196,7 @@ Use `TransactWriteItems` for these. They are the only places transactions are re
 | Operation | Items written |
 | --- | --- |
 | Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and `ACT#<parent>/SUB#<child>` when `parentActivityId` is set (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two) |
-| Schedule / reschedule | `ACT#/META`, `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change), plus every `PART#` row when the date changes and every `REM#` row when unscheduling deletes reminders — see below |
+| Schedule / reschedule | One transaction writes `ACT#/META` plus `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change). RSVP reset follows §7.1: it may join through 45 participants and uses the documented two-phase marker/batches above that. Unscheduling deletes every `REM#` row in a separate idempotent, resumable bounded-batch cleanup; reminder deletion is never claimed to fit in the META/index transaction. |
 | Add participant (app user) | `ACT#/PART#`, `USER#<invitee>/IDX#`, `USER#<owner>/PLINK#`, `USER#<invitee>/PLINK#`, counter update on `ACT#/META` |
 | Add participant (guest) | `ACT#/PART#`, `USER#<owner>/PERSON#`, `USER#<owner>/PLINK#`, `INVITE#<token>/META` |
 | Add list member (app user) | `LIST#/MEMBER#`, invitee `USER#/LIST#`, owner and reciprocal `USER#/PERSON#` when absent, both active `USER#/LLINK#` rows, and `LIST#/META` member counter — at most 7 items |

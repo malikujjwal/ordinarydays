@@ -173,6 +173,11 @@ interface AgendaItem {
   isRecurring: boolean;
   isSnoozed: boolean;
   hasCheckbox: boolean;       // true iff type === 'task'
+  capabilities: {
+    complete: boolean;
+    skip: boolean;
+    snooze: boolean;
+  };                          // server-derived for this caller; client never re-derives authz
   participantAvatars: { personId: string; displayName: string; avatarUrl?: string }[];
   participantCount: number;
   locationLabel?: string;
@@ -181,6 +186,11 @@ interface AgendaItem {
   reminders?: Reminder[];     // present only with include=reminders; caller's rows only
 }
 ```
+
+The server computes all three `capabilities` booleans at projection time by applying the
+existing authorisation policies to the authenticated caller and projected activity. They
+are part of the one agenda response; clients consume them and never reconstruct ownership,
+parent-participant access or any other authorisation rule.
 
 Additional `AgendaItem` field:
 
@@ -424,11 +434,13 @@ rule and does not create direct participant rows.
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/v1/activities/:id/reminders` | **The caller's own reminders only.** Never anyone else's, on any plan, ever. |
-| `POST` | `/v1/activities/:id/reminders` | `{ offsetMinutes }`. Any participant, for themselves. Max 3 per user per activity. |
+| `POST` | `/v1/activities/:id/reminders` | `{ offsetMinutes }`. Any participant, for themselves. Max 3 per user per activity. Creates a server-id row, so `Idempotency-Key` is required: replay returns the original 2xx response, while a new logical request at an existing offset returns the business-rule `409`. |
 | `DELETE` | `/v1/activities/:id/reminders/:reminderId` | Only your own. |
 
 All three management routes require the Activity to have `schedule.date`; reminders on an
 undated Activity are `400 validation_failed`, consistent with `notifications.md` §2/§3.
+The client generates the reminder-create idempotency key once at the public action boundary
+and reuses it across transport retry or persisted replay.
 
 On a shared plan there is **one schedule and many reminder sets**. `CreateActivityInput`'s
 `reminders` field creates rows for the **creator only**. When somebody joins a shared plan, an

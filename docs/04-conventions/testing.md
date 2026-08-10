@@ -24,7 +24,7 @@ broke the product.
 | Integration — repository | Vitest + DynamoDB Local | `services/api/test/integration/**` | ~60 | < 90 s | Key design, transactions, GSI1 projections, tenant isolation, pagination |
 | Infrastructure | Vitest + `aws-cdk-lib/assertions` | `infra/test/**` | ~25 | < 30 s | Stack synthesis, IAM shape, removal policies, table schema parity |
 | E2E — web | Playwright | `e2e/specs/**` | 8 flows | < 4 min | The flows in §6.1 against the exported static site |
-| E2E — iOS | Maestro | `apps/mobile/e2e/**` | 5 flows | < 8 min | The flows in §6.2 on a simulator |
+| E2E — iOS | Maestro | `apps/mobile/e2e/**` | 6 flows | < 8 min | The flows in §6.2 on a simulator |
 
 Counts are targets, not quotas. A layer far under its target means something is untested; a
 layer far over usually means tests were written at the wrong level — the commonest version
@@ -501,6 +501,7 @@ device before a TestFlight submission.
 | Swipe a row to snooze, confirm the series is unchanged | `snooze-occurrence.yaml` |
 | Add a person to a plan and send an invite | `share-plan.yaml` |
 | Background, return, and confirm UP NEXT has advanced | `up-next-ticker.yaml` |
+| Queue three completions offline, kill/relaunch, reconnect, and land each exactly once | `offline-queue-relaunch.yaml` |
 
 Maestro flows are YAML and readable by an agent, which is why they are the iOS choice
 (`tech-stack.md` §2.5). They assert on accessibility labels — the same labels

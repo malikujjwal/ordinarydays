@@ -29,6 +29,21 @@ Anytime list. This is the phase where the product becomes usable daily.
 > touch; P2-36 uses the repository's real integration-test command. These are ownership and
 > sequencing corrections, not new product scope, so task sizes and phase totals are unchanged.
 
+> **Third gate amendment — 2026-08-10.** The final pre-scheduling read against the merged
+> Phase 1 tree corrected fixture ownership, transaction bounds, route/client ownership,
+> authorisation projection, cache isolation, device-test setup and the remaining dependency
+> rows. Earlier tasks self-seed; P2-36 is the capstone that replaces those local fixtures with
+> the canonical worked-example fixture. Numeric order P2-01 through P2-37 remains
+> dependency-valid after removing the earlier forward references to P2-36.
+
+> **File inventories are minima, not exhaustive.** The checklists in
+> [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
+> route checklist, export-map tests, dependency declarations and lockfile — bind every task
+> implicitly. An implementing agent extends the task's file scope as needed to satisfy them
+> and lists those extensions in the PR description. A gate finding of the form “task X omits
+> file Y required by convention Z” is resolved by this standing rule; explicitly named
+> product, data, dependency and cross-task ownership below remains binding.
+
 ## Prerequisites
 
 | # | Item | Notes |
@@ -104,21 +119,21 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-20 | The UP NEXT card and the one-minute ticker | mobile | P2-19 | no | M |
 | P2-21 | Agenda row components and affordances by type | mobile | P2-19 | no | L |
 | P2-22 | Swipe actions and the gesture table | mobile | P2-21 | no | L |
-| P2-23 | Optimistic mutation model functions | shared/mobile | P2-13, P2-15 | no | L |
+| P2-23 | Optimistic mutation model functions | shared/mobile | P2-12, P2-13, P2-14, P2-15 | no | L |
 | P2-24 | The undo toast system | mobile | P2-23 | no | M |
-| P2-25 | The snooze sheet | mobile | P2-15, P2-22, P2-24 | yes | M |
+| P2-25 | The snooze sheet | mobile | P2-12, P2-15, P2-22, P2-24 | yes | M |
 | P2-26 | Extend the reschedule sheet, including the series two-option case | mobile | P2-04, P2-12, P2-22 | yes | M |
 | P2-27 | The repeat sheet | mobile | P2-03, P2-04 | yes | M |
 | P2-28 | Passed-plan resolution prompts | mobile | P2-21, P2-13 | no | M |
-| P2-29 | Overdue rows: date chip, cap and collapse | mobile | P2-21, P2-09 | no | M |
+| P2-29 | Overdue rows: date chip, cap and collapse | mobile | P2-09, P2-12, P2-21, P2-26 | no | M |
 | P2-30 | Today's empty states | mobile | P2-19 | yes | S |
 | P2-31 | Today's contextual `+ Add a task` action | mobile | P2-19, P1-24 | yes | S |
 | P2-32 | The Plans tab: date-range agenda | mobile | P2-18 | yes | M |
 | P2-33 | Persisted query cache and the offline mutation queue | mobile | P2-23 | no | L |
 | P2-34 | Local notifications on device | mobile | P2-11, P2-16, P2-18 | no | M |
 | P2-35 | `Show skipped` device-local toggle | mobile | P2-21 | yes | S |
-| P2-36 | Worked-example-day integration fixture and test | ci | P2-04, P2-11, P2-13 | no | M |
-| P2-37 | E2E: Today flows on web and iOS | ci | P2-20, P2-24, P2-25, P2-26, P2-28, P2-29, P2-31 | no | M |
+| P2-36 | Worked-example-day integration fixture and test | ci | P2-04, P2-08, P2-11, P2-13, P2-19, P2-23 | no | M |
+| P2-37 | E2E: Today flows on web and iOS | ci | P2-20, P2-24, P2-25, P2-26, P2-28, P2-29, P2-31, P2-33 | no | M |
 
 P2-17, P2-30, P2-31 and P2-35 are mechanical; follow the canonical sections named in the
 table and skip the design discussion. P2-31's exact label is `+ Add a task`: it bypasses the
@@ -249,7 +264,12 @@ that makes this one trustworthy.
 
 **Files.** `packages/shared/src/recurrence/expand.test.ts`,
 `packages/shared/src/recurrence/calendar.test.ts`,
-`packages/shared/src/recurrence/fixtures/*.json`.
+`packages/shared/src/recurrence/fixtures/*.json`,
+`packages/shared/package.json`, `pnpm-lock.yaml`.
+
+Declare `fast-check` as a direct `packages/shared` dev dependency in this task, at the
+version sanctioned in `tech-stack.md` §2.5. A transitive lockfile entry does not satisfy the
+dependency rule.
 
 **Coverage requirement: 100% statements and 100% branches**, enforced by the gate configured
 in P0-24. Not "high coverage". A branch in this file that no test exercises is a branch
@@ -324,7 +344,7 @@ Beyond the table:
   already-elapsed window expands to (run the one-segment series, append, re-run the past
   window, assert identical output). Each segment self-anchors: an `interval_days` second
   segment phases from its own `effectiveFrom`, not the first segment's.
-- **Property-based tests** (`fast-check` or a hand-rolled generator) over random valid
+- **Property-based tests** with `fast-check` over random valid
   `Recurrence` objects and random 1–62-day windows, asserting three invariants: output is
   strictly ascending; output is a subset of the window; output has no duplicates. Run 1,000
   cases in CI.
@@ -406,7 +426,9 @@ labels); purity and determinism as in P2-01; `custom` and `after_completion` thr
 ### P2-04 — `Recurrence` Zod schema and validation
 
 **Files.** `packages/shared/src/schemas/recurrence.ts`,
+`packages/shared/src/schemas/recurrence.test.ts`,
 `packages/shared/src/schemas/activity.ts`,
+`packages/shared/src/schemas/activity.test.ts`,
 `services/api/src/services/activityService.ts`,
 `services/api/src/services/activityService.test.ts`.
 
@@ -460,7 +482,9 @@ stored segment while it may append exactly one final segment and/or edit series-
 
 **Files.** `packages/shared/src/activity/bucket.ts`,
 `packages/shared/src/activity/bucket.test.ts`,
-`packages/shared/src/activity/index.ts`.
+`packages/shared/src/activity/index.ts`, plus the Phase 1 repository caller and the shared
+coverage configuration. Convention-required barrels, export tests and integration tests are
+implicit under the preamble rule.
 
 **What to build.** The one pure function that decides which GSI1 bucket an activity's index
 entry belongs in. It is transcribed exactly from
@@ -484,10 +508,13 @@ prevent.
    `gsi1sk`, and does not write anything.
 2. The repository layer calls it in exactly one place — the function that builds an
    `ActivityIndex` item — so no service, route or client ever re-derives a bucket. Phase 1
-   built the index entry with the three-bucket rule inline; this task replaces that inline
-   logic with a call and deletes the original. **Two implementations is the defect.**
-3. `#P` is new in this phase. `#N` narrows to mean an explicitly chosen undated Task only, and the reason
-   the two are separate buckets rather than one is in
+   already ships the full four-bucket rule inline, including `#P`, with unit and integration
+   coverage. This task transcribes that proven baseline into the shared function, extends it
+   for the amended rules and matrix, replaces the repository caller, and deletes the inline
+   original. **Two implementations is the defect.**
+3. `#P` is not new in this phase. Phase 1 already separates it from `#N`; this task preserves
+   that distinction while making the shared derivation canonical. The reason the two are
+   separate buckets rather than one is in
    [`../02-architecture/data-model.md#35-gsi1-buckets`](../02-architecture/data-model.md#35-gsi1-buckets):
    `#N` means "today, whenever", `#P` means "someday, undecided". An undated Plan on Today's
    Anytime list next to an errand is the exact error the split prevents.
@@ -504,7 +531,9 @@ touches one of those and does not rewrite the index entry leaves an activity in 
 tab, and the storage looks correct while the product does not.
 
 **Tests.** Table-driven, one case per row, with the expected bucket written out literally.
-100% branch coverage on this file, gated with the recurrence module.
+This task owns the path-scoped 100% statement and branch coverage gate for `bucket.ts` in
+`packages/shared/vitest.config.ts`; an asserted percentage without that CI threshold is not
+the deliverable.
 
 | # | `recurrence` | `schedule.date` | `objectKind` | `type` (not an input) | Bucket |
 | --- | --- | --- | --- | --- | --- |
@@ -582,10 +611,14 @@ a collision the model invented. Two fields cost eight bytes and remove the whole
   rule 4. A request containing either is `400`.
 - `lastActivityAt` is initialised to `createdAt` on creation, so a plan that has never been
   discussed still sorts.
-- The bump is one repository helper, `touchLastActivity(activityId, at)`, which updates
-  `ACT#/META` and every participating user's `IDX#` entry in the same transaction the
-  originating write uses. Never a second round trip, and never a bare `UpdateItem` from a
-  service.
+- The bump is one repository transaction builder,
+  `touchLastActivity(activityId, at, indexedUserIds, transactionBuilder)`. The caller supplies
+  the owner/participant user-id set and the transaction builder under construction, matching Phase 1's
+  `PatchOptions.indexedUserIds` fan-out pattern. The service layer already holds the
+  participant set for the originating update, RSVP or expense write and provides it; the
+  helper performs no discovery read, sends no transaction of its own, and appends the META
+  plus every `IDX#` write to the caller's transaction. Never a second round trip, and never
+  a bare `UpdateItem` from a service.
 - **An edit bumps `updatedAt` only.** Renaming a plan is not a discussion, and letting a
   rename reorder the Needs-a-date list would make the stage twitch on every keystroke-saved
   edit.
@@ -596,8 +629,9 @@ a collision the model invented. Two fields cost eight bytes and remove the whole
 **Tests.**
 
 - **The `If-Match` test, which is the point of the task.** Read an activity and capture its
-  `updatedAt` as the `If-Match` value. Call `touchLastActivity` directly — standing in for
-  the Phase 6 RSVP writer, which does not exist yet. Re-read: `lastActivityAt` has moved,
+  `updatedAt` as the `If-Match` value. Build and commit a transaction with
+  `touchLastActivity`, supplying the seeded owner/participant ids — standing in for the
+  Phase 6 RSVP writer, which does not exist yet. Re-read: `lastActivityAt` has moved,
   `updatedAt` is byte-identical. Then issue the `PATCH` with the captured `If-Match` and
   assert it returns `200`, not `409`. Phase 6 repeats this test through an actual RSVP.
 - `PATCH`ing the title moves `updatedAt` and leaves `lastActivityAt` unchanged.
@@ -650,7 +684,7 @@ repository is the per-participant-completion defect from the risk table arriving
 | --- | --- | --- |
 | `get(activityId, date)` | occurrence-scoped mutations' read-before-write | `GetItem`. Absence returns `null` — "scheduled, not yet acted on" is the absence of a row, and the repository never fabricates one. |
 | `batchGetForPairs(pairs: { activityId, date }[])` | agenda override hydration (P2-08) | `BatchGetItem`, chunked at 100 keys, with `UnprocessedKeys` retried with backoff. The chunking lives **here**, not in the agenda service — override hydration must not be an N-query loop and the service must not know the limit. |
-| `queryWindow(activityId, from, to)` | occurrence history for one series — the plan-detail screen and the P2-36 assertions | Access pattern 5: `Query pk = ACT#<a>`, `sk BETWEEN OCC#<from> AND OCC#<to>`, both inclusive. |
+| `queryWindow(activityId, from, to)` | occurrence history for one series and the plan-detail screen | Access pattern 5: `Query pk = ACT#<a>`, `sk BETWEEN OCC#<from> AND OCC#<to>`, both inclusive. |
 | `put(occurrence)` | complete, skip, snooze, reschedule-this-occurrence | Upsert of exactly one item. This method is structurally incapable of touching `ACT#/META` — it takes an `Occurrence`, builds one `OCC#` key, and writes one item. That is the storage-layer half of success criterion S6; the endpoint tests (P2-13, P2-14, P2-15) assert the visible half. |
 | `delete(activityId, date)` | `uncomplete` on an occurrence, `Undo skip`, undo of a snooze | Deletes the row; absence restores "not yet acted on". |
 | `countCompleted(activityId)` | the `Delete whole series` confirmation, which must name the real count of stored past completions ([`../01-product/activities.md`](../01-product/activities.md#64-deleting) §6.4) | `Query` on the partition with `begins_with OCC#`, `Select: COUNT`, filtered to `status = 'completed'`. A partition-scoped query, not a `Scan`, and computed on demand — the dialog is rare and a denormalised counter would be a second copy of the truth (decision recorded here — raise in PR if wrong). |
@@ -682,7 +716,9 @@ byte-identical (read before and after); `delete` then `get` returns `null`;
 `services/api/src/repositories/reminderRepository.ts` (read seam),
 `services/api/src/repositories/reminderRepository.test.ts`,
 `packages/shared/src/types/activity.ts`,
-`packages/shared/src/schemas/activity.ts`.
+`packages/shared/src/schemas/activity.ts`,
+`packages/shared/src/table/definition.ts`,
+`packages/shared/src/table/definition.test.ts`.
 
 **Explicitly untouched:** `services/api/src/repositories/migrate.ts`. Mixed-generation
 timezone handling is a hydrated read fallback, not a schema migration.
@@ -740,6 +776,12 @@ entry, scan or one-off backfill:** `services/api/src/repositories/migrate.ts` is
 untouched because an old thin index row does not contain enough information to derive its
 Activity's zone.
 
+`GSI1` is not deployed anywhere yet: the local-first plan does not create a dev or production
+table through Phase 3. Adding `timezone` to the shared `INCLUDE` projection is therefore a
+table-definition edit plus recreation of the disposable DynamoDB Local table, not a live
+index migration. The shared definition remains the source consumed by local-table creation
+and the later CDK stack.
+
 **The agenda never touches `U#<u>#P`.** Three buckets feed it — `#S` for dated items, `#R`
 for series, and `#N` for the Anytime section when `include=anytime_unscheduled` is set. The
 `#P` bucket holds undecided plans, which are not things to do today, and
@@ -775,9 +817,10 @@ on its ticker (P2-20).
   test here, proving the item appears on the following Tokyo date exactly once.
 
 **Tests.** Unit with a mocked repository covering each merge branch. Integration against
-DynamoDB Local using the worked example day from
-[`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §9 as the fixture
-(P2-36), asserting the exact section membership and order of all nine rows.
+DynamoDB Local self-seeds the rows needed for this task, including a compact version of the
+worked-example day from
+[`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §9, and asserts the
+exact section membership and order. P2-08 has no dependency on a later shared fixture.
 
 Plus, seeded with one activity in every bucket: a repository spy asserts that **no query
 against `U#<u>#P` occurs on any agenda path**, with and without all `include` tokens, and
@@ -806,7 +849,9 @@ traceability, but they are P2-08 tests because each crosses the engine/agenda bo
 ### P2-09 — Overdue roll-forward
 
 **Files.** `services/api/src/services/agendaService.ts` (a separate exported function),
-`services/api/src/repositories/activityRepository.ts` (the window query).
+`services/api/src/repositories/activityRepository.ts` (the window query),
+`packages/shared/src/types/agenda.ts`,
+`packages/shared/src/schemas/agenda.ts` (add `overdueFromDate`).
 
 **Approach.** Implement the overdue rule from
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §7 exactly, and
@@ -848,7 +893,9 @@ completing a rolled-forward task leaves `schedule.date` untouched and sets `comp
 ### P2-10 — `AgendaItem` projection
 
 **Files.** `services/api/src/services/agendaProjection.ts`,
-`packages/shared/src/schemas/agenda.ts`.
+`packages/shared/src/schemas/agenda.ts`,
+`packages/shared/src/types/agenda.ts`,
+and the reserved `packages/shared/src/{schemas,types}/index.ts` barrels.
 
 **Approach.** Build the `AgendaItem` shape from
 [`../02-architecture/api-contract.md#22-agenda--powers-today-and-plans`](../02-architecture/api-contract.md#22-agenda--powers-today-and-plans),
@@ -866,8 +913,15 @@ server-side, so the client never derives presentation from `type` with a switch 
 - `occurrenceDate` is present **if and only if** the item came from a series expansion. The
   client must send it back on every occurrence-scoped call; omitting it targets the series
   and is a bug.
+- `capabilities: { complete, skip, snooze }` is server-derived for the authenticated caller
+  by the existing `authz.ts` policies at projection time. It captures owner-only plan
+  actions and the ADR-051 parent-participant prep-task exception without exposing `ownerId`
+  or asking the client to infer authority. Every AgendaItem carries all three booleans, and
+  the one agenda response remains sufficient to render its allowed actions.
 
-**Tests.** Table-driven: one case per type asserting `hasCheckbox` and `subtitle`; a snoozed
+**Tests.** Table-driven: one case per type asserting `hasCheckbox` and `subtitle`; owner,
+plan-participant, parent-plan-participant prep-task and stranger fixtures assert the exact
+three capability booleans from the existing policy; a snoozed
 occurrence's `time` equals `snoozedUntil`; a rescheduled occurrence's equals `overrideTime`;
 `occurrenceDate` present only for series items; `isPast` at exactly the boundary minute for
 each of the three cases.
@@ -915,15 +969,20 @@ gets `404` under the authorisation policy in API contract §3.
   `TransactWriteItems` writes `ACT#/META` and every owner/participant `ActivityIndex` row.
   Scheduling moves `N → S` or `P → S`; unscheduling moves `S → N` for a Task and `S → P`
   for a Plan.
-- **Unscheduling deletes reminders atomically.** The same repository transaction deletes
-  every `REM#` row in the Activity partition when the date is cleared, as required by the
-  API contract. This is why the repository transaction files are in scope; a service-layer
-  best-effort cleanup is not acceptable.
+- **Unscheduling deletes reminders as a separate idempotent, resumable step.** After the
+  atomic META + index rewrite clears the date, the service deletes every `REM#` row in the
+  Activity partition in bounded batches, records/resumes incomplete cleanup, and treats
+  already-absent rows as success. It is not folded into the transaction: at the participant
+  and per-user reminder caps that transaction cannot fit. Best-effort fire-and-forget cleanup
+  is still not acceptable.
 - **The RSVP reset ships now, reachable in Phase 6.** A date set or changed resets every
   non-declined participant to `pending`, clears `respondedAt`, and sets `rsvpForDate`; a
   time-only change keeps responses; clearing the date keeps them and clears `rsvpForDate`
-  (data-model §7.1). These writes join the same transaction and the response carries
-  `rsvpReset: true` only when they occurred.
+  ([`../02-architecture/data-model.md#71-rsvp-consent-does-not-survive-a-date-change`](../02-architecture/data-model.md#71-rsvp-consent-does-not-survive-a-date-change)
+  §7.1). That section is authoritative for transaction shape: through 45 participants the
+  reset may join the write; above 45 it uses the documented two-phase
+  `rsvpResetPending` path and bounded participant batches. The response carries
+  `rsvpReset: true` only when a reset occurred.
 - **`icsSequence` follows the API contract.** Compare the before/after exported fields and
   increment once when `schedule.date`, `schedule.time`, `schedule.endTime` or
   `schedule.timezone` changes, including set and clear. Repeating an identical request does
@@ -942,8 +1001,10 @@ gets `404` under the authorisation policy in API contract §3.
 **Tests.** Shared-schema and route tests prove PATCH rejects `schedule` while POST schedule
 accepts it; the existing detail-screen test asserts its date change and clear now call
 `POST .../schedule` and issue no PATCH. Integration proves schedule/unschedule rewrites
-META and all index rows in one transaction with exactly one index row per user; derives
-status and `icsSequence` exactly as above; resets RSVP only for a date change; returns
+META and all index rows in one transaction with exactly one index row per user; proves the
+§7.1 RSVP path at 45 and 46 participants; interrupts and resumes reminder cleanup without
+leaving any dated reminder row; derives status and `icsSequence` exactly as above; resets
+RSVP only for a date change; returns
 participant `403` and stranger `404` without writes; and keeps META byte-identical for an
 occurrence move. Calendar tests include case 15 plus the named 2026-03-08 02:30 spring-gap
 test and assert both the 03:00 local result and its UTC instant.
@@ -953,9 +1014,12 @@ test and assert both the 03:00 local result and its UTC instant.
 ### P2-13 — `complete` and `uncomplete`
 
 **Files.** `services/api/src/routes/activities.ts`,
-`services/api/src/services/completionService.ts`.
+`services/api/src/services/completionService.ts`,
+`packages/shared/src/client/endpoints/activities.ts` (complete/uncomplete methods).
 
 **Approach.** `POST /v1/activities/:id/complete` with `{ occurrenceDate?, outcome? }`.
+P2-13 owns both typed client methods, including the compensating `/uncomplete` call used by
+Undo; later mobile tasks consume them rather than constructing request paths.
 
 **Plan completion is owner-only.** Completion is **global**: an `Occurrence` records that *the thing happened*,
 not that *somebody attended*, and it carries no participant identity by design
@@ -1047,7 +1111,8 @@ the endpoint fails them.
 ### P2-14 — `skip`
 
 **Files.** `services/api/src/services/completionService.ts`,
-`services/api/src/routes/activities.ts`.
+`services/api/src/routes/activities.ts`,
+`packages/shared/src/client/endpoints/activities.ts` (skip method).
 
 **Approach.** `POST /v1/activities/:id/skip` with `{ occurrenceDate? }`, per
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#54-skip) §5.4. Skip
@@ -1055,6 +1120,8 @@ says "not this one, and I do not want to be asked again". Authorisation comes fr
 ADR-051-aware policy established in P2-13: plan actions remain owner-only, while the
 parent-plan participant rule applies to prep tasks in middleware. An unauthorised
 participant gets `403` with nothing written and a stranger gets `404`.
+P2-14 owns the typed skip client method; gesture and optimistic tasks call it rather than
+constructing the route locally.
 
 Two paths, on P2-13's exact pattern:
 
@@ -1149,7 +1216,8 @@ either mutation path.
 `services/api/src/services/reminderService.ts`,
 `services/api/src/services/{scheduleService,scheduleService.test}.ts`,
 `services/api/src/routes/activities.ts` (three routes),
-`packages/shared/src/schemas/reminder.ts` (extend P1-06).
+`packages/shared/src/schemas/reminder.ts` (extend P1-06),
+`packages/shared/src/client/endpoints/activities.ts` (reminder methods).
 
 **What to build.** Extend the read-only `ReminderRepository` seam introduced by P2-08 with
 the management surface for the `REM#<userId>#<reminderId>` items P1-09 already writes at
@@ -1182,14 +1250,21 @@ after the start. `-0` means "at start time" and is stored as `0`. Duplicate offs
 same user on the same activity are rejected with `409`, not silently deduplicated: two
 identical reminders is a mistake, and a silent drop looks like the write failed.
 
+**Creation idempotency.** `POST .../reminders` creates a server-id row and therefore requires
+`Idempotency-Key` under API contract §1. Its typed client method accepts and sends the key,
+generated once at the public action boundary. Replaying that key returns the original 2xx
+response from the idempotency store. The duplicate-offset `409` is a separate business rule
+for a distinct logical request with a different key; it is not the replay response.
+
 **Edge cases.**
 
 - Nothing here fires anything. Local scheduling is P2-34; server-side push is Phase 5
   (P5-13, P5-14).
 - **Reminders require a date.** Creation and reminder-management writes reject a reminder
-  when the activity has no `schedule.date`, and unscheduling deletes its reminder rows in
-  the same transaction. This is the rule in `notifications.md` §2/§3; the Phase 1 compose
-  store already behaves correctly and is not changed by this task.
+  when the activity has no `schedule.date`, and unscheduling deletes its reminder rows
+  through P2-12's separate idempotent, resumable cleanup. This is the rule in
+  `notifications.md` §2/§3; the Phase 1 compose store already behaves correctly and is not
+  changed by this task.
 - Deleting an activity deletes its `REM#` rows for **every** user in the cascade (P1-14),
   which is already true because the cascade deletes the whole partition.
 - The three routes are participant-accessible, unlike completion. This is the asymmetry worth
@@ -1203,7 +1278,10 @@ under B's key and A's `GET` is unchanged; `DELETE` of A's reminder id by B retur
 A's row survives; a fourth `POST` by one user returns `422` while a fourth by the *other*
 user succeeds, proving the cap is per user and not per activity; `offsetMinutes: 30` is
 rejected. Creating or adding a reminder to an undated activity is rejected, and
-unscheduling a dated activity deletes all of its reminder rows atomically.
+unscheduling a dated activity eventually deletes all of its reminder rows after an injected
+mid-cleanup interruption and resume. Replaying the same reminder-creation idempotency key
+returns the original 2xx body and id; a new key at the same offset returns the business-rule
+`409`.
 
 ---
 
@@ -1281,11 +1359,13 @@ phase. Feature hooks are the only place `useQuery` appears and own their query k
 - The Plans tab (P2-32) calls the same hook with a multi-day window and no
   `include=anytime_unscheduled`; there is one hook, parameterised, not two.
 - **`ETag`/`If-None-Match` is transport-level and invisible to hooks.** The shared client
-  keeps an in-memory `{ etag, body }` pair per GET request identity. On a later GET it sends
-  `If-None-Match`; `304` is a successful response resolved from the paired cached body, not
-  an `ApiError`, schema failure or query error. A 304 without a paired body retries once
-  without the conditional header. The cache belongs to the client instance so it cannot
-  cross an auth/sign-out boundary.
+  keeps an in-memory `{ etag, body }` pair per authenticated-user GET request identity: the
+  stable authenticated `userId` is part of the key alongside the request path/parameters.
+  On a later GET it sends `If-None-Match`; `304` is a successful response resolved from the
+  paired cached body, not an `ApiError`, schema failure or query error. A 304 without a
+  paired body retries once without the conditional header. The existing sign-out lifecycle
+  explicitly clears the ETag/body cache together with the Query cache; instance lifetime is
+  not an auth boundary.
 
 **Tests.** Unit: the key helper produces distinct keys for distinct `include` sets and
 identical keys for identical inputs; a mounted hook for Today issues exactly one fetch
@@ -1293,8 +1373,9 @@ identical keys for identical inputs; a mounted hook for Today issues exactly one
 error state rather than partial data; crossing midnight (frozen clock advanced) re-keys to
 the new date. Transport tests prove `200` stores the ETag/body pair, the next `304` returns
 that body as success, no body parsing is attempted for 304, and hooks observe no distinction
-between cached-304 and fresh-200 results. The end-to-end single-request assertion is
-Playwright's, in P2-37.
+between cached-304 and fresh-200 results. Two user ids requesting the same path never share
+a pair, and sign-out empties every pair before the next identity can issue a request. The
+end-to-end single-request assertion is Playwright's, in P2-37.
 
 ---
 
@@ -1333,9 +1414,9 @@ a proposed feature needs state that would be lost by throwing the screen away an
 re-querying, it does not belong here.
 
 **Tests.** `partition.ts` unit tests over the worked example day at 15:10, at 17:31, and at
-23:59, asserting exact section membership each time. A render test asserting section order
+23:59, self-seeded in this task and asserting exact section membership each time. A render test asserting section order
 and that an empty section is absent from the tree. A test that an undated
-`{ objectKind: 'plan', type: 'event' }`, seeded alongside the fixture, renders in no section
+`{ objectKind: 'plan', type: 'event' }`, seeded alongside the local test data, renders in no section
 on Today — asserted against the response, and separately by a grep test that `partition.ts`
 contains no comparison against `type` or `participantCount`.
 
@@ -1448,6 +1529,11 @@ Full-swipe commits only the **first** action on that side and **never** a destru
 Every swipe action is additionally exposed as an `accessibilityAction` on the row, so it is
 reachable without swiping. Nothing important is behind a gesture alone.
 
+The gesture table supplies the type-appropriate candidates; the rendered set is their
+intersection with `AgendaItem.capabilities`. `complete`, `skip` and `snooze` are shown only
+when the corresponding server-derived boolean is true. The client never compares owner ids,
+participant counts or parent links to reconstruct authorisation.
+
 Built on `react-native-gesture-handler` + `react-native-reanimated` so the gesture runs on
 the UI thread — the `Animated` API drops frames during list scrolling, which is exactly when
 swipe actions fire.
@@ -1475,15 +1561,14 @@ pattern in
 
 They must produce **exactly** what the server will return, or the row visibly flips back a
 second later. That is why they are pure and separately tested: the test asserts the
-optimistic projection equals a real server response for the same mutation, using fixtures
-captured from the integration tests.
+optimistic projection equals a locally recorded server response for the same mutation.
 
 Optimistic mutations in this phase: task completion, occurrence complete/skip/snooze, and
 reschedule.
 
 **Tests.** For each function: a golden test comparing its output to a recorded server
-response for the same input. Property test: applying and then reversing a mutation returns
-the original object deep-equal.
+response self-seeded in this task for the same input. Property test: applying and then
+reversing a mutation returns the original object deep-equal.
 
 ---
 
@@ -1549,8 +1634,9 @@ secretly a different endpoint:
 - Entry points: partial left swipe → `Snooze`, full left swipe → this sheet (gesture
   table §3.1). Options are buttons whose accessibility labels name the resulting time
   (`Snooze until 8:00 PM`), not just the offset.
-- Never rendered for a shared plan the user does not own — snooze is owner-only (P2-15)
-  and the swipe that opens it is already absent
+- Never rendered when `AgendaItem.capabilities.snooze` is false. The server-derived
+  capability covers a shared plan the user does not own while preserving the ADR-051 prep-
+  task rule; the client never re-derives ownership, and the swipe that opens it is absent
   ([`../01-product/interaction-contract.md`](../01-product/interaction-contract.md#31-today-and-agenda-rows)
   §3.1).
 
@@ -1758,6 +1844,7 @@ surfaces it does not exist yet.
 `apps/mobile/src/lib/mutationKeys.ts`,
 `apps/mobile/src/lib/persister.ts`,
 `apps/mobile/src/lib/onlineManager.ts`,
+`apps/mobile/app/_layout.tsx` (root hydration gate),
 `apps/mobile/src/features/compose/hooks/useCreateActivity.ts`,
 `apps/mobile/src/features/activity/hooks/{useActivity,useActivityActions}.ts`,
 `apps/mobile/package.json`, `pnpm-lock.yaml`,
@@ -1772,6 +1859,12 @@ mobile dependencies here, at the versions recorded in `tech-stack.md` §2.2.
 a persisted query cache via `@tanstack/query-async-storage-persister`; optimistic updates
 (P2-23); and a persisted mutation cache resumed with `resumePausedMutations()` on reconnect,
 driven by `@react-native-community/netinfo`.
+
+The root provider is hydration-gated: restoration of the persisted client completes before
+feature queries mount, default mutation functions are registered before paused mutations can
+resume, and the app renders the existing neutral loading shell during that bounded restore.
+A best-effort module-scope restore racing mounted hooks does not satisfy cold-start offline
+behaviour.
 
 Register stable mutation keys and default mutation functions on the shared `QueryClient` for
 **create, duplicate, delete and patch** before hydration calls
@@ -1815,10 +1908,12 @@ the hardest logic in the product in a second place that can disagree with the fi
 `You're offline and there's a lot waiting to sync.` A queued write returning `409` surfaces
 one banner naming the affected changes, not one toast per change.
 
-**Tests.** Maestro: airplane mode on, complete three tasks, kill the app, relaunch, airplane
+**Tests.** The named `offline-queue-relaunch.yaml` Maestro acceptance flow is owned by
+P2-37's catalogue: airplane mode on, complete three tasks, kill the app, relaunch, airplane
 mode off, assert all three land exactly once (verified by item count, since the idempotency
-key should make a duplicate impossible even if the queue double-fires). Unit/integration
-tests dehydrate and rehydrate one create, duplicate, delete and patch mutation, then prove
+key should make a duplicate impossible even if the queue double-fires). P2-33 supplies its
+testable hooks and fixtures. Unit/integration tests dehydrate and rehydrate one create,
+duplicate, delete and patch mutation, then prove
 each resolves through its registered default function. Create/duplicate tests spy on a
 transport retry and a resumed replay and assert the exact same `Idempotency-Key` is reused;
 grep tests inspect **mutation option objects only** and assert they no longer set
@@ -1871,8 +1966,12 @@ different times for one dinner, and neither device knows the other's offset.
 
 **Tests.** Unit on the schedule-computation function (offset arithmetic, all-day hour, past
 reminders dropped) with the `expo-notifications` API mocked. A hook/component test supplies
-agenda reminder data and asserts no activity-reminder endpoint is called. Manual
-verification on a simulator with the clock advanced.
+agenda reminder data and asserts no activity-reminder endpoint is called. The named simulator
+setup step **`Grant notification permission fixture`** runs before criterion 18: use
+`xcrun simctl privacy booted grant notifications <bundle-id>` where that simulator runtime
+supports it, otherwise an E2E-only Expo test hook grants the equivalent permission. The hook
+is compiled/enabled only for the test profile and is not a product permission prompt. Manual
+verification then advances the simulator clock and observes both timed and all-day delivery.
 
 ---
 
@@ -1880,7 +1979,12 @@ verification on a simulator with the clock advanced.
 
 **Files.** `services/api/test/fixtures/workedExampleDay.ts`,
 `services/api/test/integration/agenda.workedExample.test.ts`,
-`packages/shared/src/fixtures/workedExampleDay.response.json` (the captured response).
+`packages/shared/src/fixtures/workedExampleDay.response.json` (the captured response),
+`packages/shared/src/test-fixtures/index.ts`,
+`packages/shared/package.json` (the `./test-fixtures` export),
+`packages/shared/src/index.test.ts`,
+and the P2-08 agenda-service, P2-19 partition and P2-23 optimistic-model tests migrated from
+their self-seeded data.
 
 **What to build.** The worked example day in
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#9-worked-example-day)
@@ -1926,6 +2030,12 @@ against the spec.
   (P2-19) and the optimistic-model golden tests (P2-23) consume. One fixture, three
   consumers — that is what makes server and client ordering provably agree (risk table,
   "Section sort order drifts").
+- **This task performs the migration.** P2-08, P2-19 and P2-23 entered the phase with
+  self-seeded tests and no forward dependency. Once the canonical response is captured,
+  P2-36 replaces those local fixtures with imports from the test-only
+  `@od/shared/test-fixtures` subpath and deletes the superseded test data in the same change.
+  The subpath has the normal conditional export-map entry and resolution test, so mobile
+  never reaches across the workspace into `packages/shared/src` and depcruise remains green.
 
 **Tests.** This task **is** the test; its deliverable is the passing suite plus the
 committed response fixture. It runs in `pnpm test:int` against DynamoDB Local in
@@ -1937,7 +2047,7 @@ CI.
 
 **Files.** Web: `e2e/specs/{complete-undo.spec.ts, reschedule.spec.ts,
 a11y-keyboard.spec.ts}`. iOS: `apps/mobile/e2e/{add-and-complete.yaml,
-snooze-occurrence.yaml, up-next-ticker.yaml}`. Wiring:
+snooze-occurrence.yaml, up-next-ticker.yaml, offline-queue-relaunch.yaml}`. Wiring:
 `.github/workflows/ci.yml`, `.github/workflows/mobile.yml`.
 
 **What to build.** The Today-owning subset of the fixed E2E catalogue in
@@ -1976,12 +2086,16 @@ never the seed data):
 - `up-next-ticker.yaml` — background the app, advance past the next item's time, return,
   and confirm UP NEXT advanced without a refetch (the foreground recompute, criterion 8's
   device-side cousin).
+- `offline-queue-relaunch.yaml` — the fourth catalogue flow and criterion 15's owner:
+  enable airplane mode, complete three tasks, kill and relaunch the app, restore networking,
+  and assert exactly three server-side completions with no duplicates. It consumes P2-33's
+  persisted-cache test hooks and verifies process-death replay end to end.
 
 CI wiring per §6.2: Playwright runs in `ci.yml` on **every pull request** (retries: 1 in CI,
 and a pass-on-retry is still flagged); Maestro runs in `mobile.yml` on
 `workflow_dispatch` and **release tags** and gates the TestFlight submission, not the merge.
 
-**Tests.** This task is tests. Its own acceptance is that criteria 6, 13, 14 and 19's
+**Tests.** This task is tests. Its own acceptance is that criteria 6, 13, 14, 15 and 19's
 end-to-end halves are asserted by these files and fail when deliberately broken (comment
 out the undo handler locally; the suite must catch it).
 
@@ -2030,13 +2144,15 @@ out the undo handler locally; the suite must catch it).
 14. Completing a task shows a 6-second undo toast; the network call has already fired when
     the toast appears (asserted by a network log); undo issues the compensating call and
     restores the exact prior sort position.
-15. With the device offline, completing three tasks, killing the app and relaunching online
-    results in exactly three server-side completions and no duplicates.
+15. P2-37's `offline-queue-relaunch.yaml` flow completes three tasks with the device offline,
+    kills the app and relaunches online, and observes exactly three server-side completions
+    with no duplicates.
 16. A 63-day agenda window returns `400 validation_failed`; a 62-day one returns `200`.
 17. An unresolved passed item shows its type's prompt today, and does not appear on Today
     tomorrow, carries no prompt in Plans, and is counted nowhere.
-18. A local notification fires on the simulator at the configured offset for a timed task
-    and at 09:00 for an untimed one.
+18. After P2-34's named **`Grant notification permission fixture`** simulator setup step, a
+    local notification fires at the configured offset for a timed task and at 09:00 for an
+    untimed one. The shipped Phase 2 app itself never prompts.
 19. VoiceOver reads a timed task row as three elements in the order checkbox, body, time,
     with the labels in
     [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §6.2,

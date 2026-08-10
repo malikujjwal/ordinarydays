@@ -22,6 +22,18 @@ given one, stop and ask; do not invent one, and do not start work "to be helpful
 Your task ID determines your branch (`git-workflow.md` §1.1), your commit footer, your PR
 title, and the scope you are allowed to touch.
 
+### 1.1a Task file inventories are minima
+
+**A phase task's file inventory is a minimum, not an exhaustive allow-list.** The checklists
+in [`repo-structure.md`](repo-structure.md) — including the route checklist, export-map tests,
+dependency declarations and lockfile — bind every task implicitly. An implementing agent
+extends the task's file scope to satisfy them and lists every extension in the PR description.
+
+A gate finding of the form “task X omits file Y required by convention Z” is resolved by
+this standing rule. It does not authorise unrelated product work, weaken a phase scope guard,
+or replace an explicit task dependency or named owner; it only carries the mechanical files
+that the repository conventions already require for the stated deliverable.
+
 ### 1.2 Read the right docs
 
 Do not read all 11,000 lines of `docs/`. Read the rows that match your task, in order. Every
@@ -59,7 +71,8 @@ Write down — in the PR description draft, or in your first message back — th
 and only start once they are consistent with the phase doc:
 
 1. **What you are building**, in one sentence, in product language.
-2. **The files you expect to touch**, from `repo-structure.md` §7.
+2. **The files you expect to touch**, starting with the task's minimum inventory and extending
+   it with every file required by `repo-structure.md` §7. List those extensions explicitly.
 3. **What you are explicitly not building** — copy the phase doc's "do not do this yet" scope
    guards verbatim.
 4. **Any canonical doc that needs a row added** (a new access pattern, a new endpoint, a new
@@ -149,7 +162,8 @@ It is a §8 trigger.
       made.
 - [ ] The PR title is a valid Conventional Commit header (`git-workflow.md` §2.1).
 - [ ] The diff is under 400 lines, or the first sentence of the description says why not.
-- [ ] Everything I touched is inside my task ID's scope. Nothing else.
+- [ ] Everything I touched implements my task ID or is a convention-required file-scope
+      extension listed in the PR description. Nothing else.
 
 ---
 
