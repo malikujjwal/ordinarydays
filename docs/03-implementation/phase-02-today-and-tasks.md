@@ -22,6 +22,13 @@ Anytime list. This is the phase where the product becomes usable daily.
 > amended plan of record. P2-02 remains the recurrence matrix; the post-merge presentation-
 > type bucket matrix is P2-05, where the duplicated Event rows were found and corrected.
 
+> **Second gate amendment — 2026-08-10.** A second read against the merged Phase 1 tree
+> found hidden file ownership, dependency and retry assumptions before scheduling began.
+> Cases 25–30 now belong to P2-08 rather than the engine-only P2-02; P2-01, P2-07, P2-12,
+> P2-16, P2-22, P2-33 and P2-34 name the as-built files and dependency installs they must
+> touch; P2-36 uses the repository's real integration-test command. These are ownership and
+> sequencing corrections, not new product scope, so task sizes and phase totals are unchanged.
+
 ## Prerequisites
 
 | # | Item | Notes |
@@ -86,7 +93,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-09 | Overdue roll-forward query rule | api | P2-08 | no | M |
 | P2-10 | `AgendaItem` projection: subtitle, checkbox, isPast | api | P2-08 | no | M |
 | P2-11 | `GET /v1/agenda` route, window cap, `ETag`, warnings | api | P2-08, P2-09, P2-10 | no | M |
-| P2-12 | Sole schedule write path and detail-UI migration | shared/api/mobile | P2-01, P2-05, P1-10 | yes | L |
+| P2-12 | Sole schedule write path and detail-UI migration | shared/api/mobile | P2-01, P2-05, P2-07, P1-10 | yes | L |
 | P2-13 | `POST /v1/activities/:id/complete` and `/uncomplete` | api | P2-05, P2-07, P1-10 | no | L |
 | P2-14 | `POST /v1/activities/:id/skip` | api | P2-13 | yes | S |
 | P2-15 | One-off and occurrence `snooze` / `unsnooze` | api | P2-13 | no | L |
@@ -134,7 +141,17 @@ packages/shared/src/recurrence/expand.ts       expandRecurrence — the only pub
 packages/shared/src/recurrence/rules/{daily,weekdays,weekly,monthly,yearly,intervalDays}.ts
 packages/shared/src/recurrence/calendar.ts     wall-clock date arithmetic helpers
 packages/shared/src/recurrence/index.ts
+packages/shared/src/recurrence/{placeholder.ts,placeholder.test.ts}  delete
+packages/shared/package.json                   add ./recurrence export + date dependencies
+packages/shared/src/index.test.ts              prove the new export resolves
+pnpm-lock.yaml                                 lock date-fns and date-fns-tz for shared
 ```
+
+`date-fns` and `date-fns-tz` become direct `packages/shared` dependencies in this task,
+at the exact versions sanctioned in `tech-stack.md` §2.2/§2.3. The API already has them;
+hoisting is not dependency declaration. Add the conditional `./recurrence` export
+(`types` → `dist`, `react-native` → `src`, `default` → `dist`) in the same change, and delete
+both P0-24 placeholder files that explicitly hand ownership to P2-01.
 
 **Signature.**
 
@@ -238,7 +255,11 @@ that makes this one trustworthy.
 in P0-24. Not "high coverage". A branch in this file that no test exercises is a branch
 whose behaviour nobody has decided.
 
-Every row below is a required test case. Each is table-driven with explicit expected date
+Every row below is a required **engine or calendar** test case. The engine-pure matrix is
+exhaustive for the behavior owned by P2-01: cases **1–24 and 31–43**, retaining the original
+numbers for traceability. Cases 25–30 exercise occurrence merging, persistence and agenda
+timezone projection rather than recurrence expansion; they are required P2-08 acceptance
+tests and are listed there. Each case here is table-driven with explicit expected date
 arrays — no computed expectations, because a bug in the expectation helper and a bug in the
 engine cancel out.
 
@@ -273,12 +294,6 @@ says otherwise; the multi-segment cases are in the list after the table.
 | 22 | **Count limit** | `{ freq: 'weekly', byWeekday: [1], count: 3, startDate: '2026-08-03' }`, wide window | Exactly three Mondays. |
 | 23 | **Count exhausted before the window** | Same series, window starting 1 Sep | `[]`. Occurrences before `from` still consume the count. |
 | 24 | **Count and end date together** | `count: 10`, `endDate` reached at occurrence 4 | Four dates. The earlier bound wins. |
-| 25 | **Snoozed occurrence** | Series daily 18:00; `Occurrence { date: today, status: 'snoozed', snoozedUntil: '20:00' }` | The engine emits today; the **agenda merge** emits it at 20:00 and every other date at 18:00. `Recurrence` is neither read nor written by snooze. |
-| 26 | **Completed occurrence** | `Occurrence { date: today, status: 'completed' }` | The date is still emitted; the merge marks it `completed_occurrence`; the series `ACT#/META` `updatedAt` is unchanged (success criterion S6). |
-| 27 | **Skipped occurrence** | `Occurrence { date: today, status: 'skipped' }` | The date is emitted and marked `skipped_occurrence`; it is hidden from Today unless `Show skipped` is on; every other date is unaffected. |
-| 28 | **Rescheduled occurrence** | `Occurrence { status: 'rescheduled', overrideTime: '21:00' }` | Emitted at 21:00 on that date only. With `overrideDate` also set, the merge emits it on `overrideDate` instead — once, never on both days (data-model §4.5). |
-| 29 | **Timezone travel** | Activity stored with `schedule.timezone: 'America/New_York'`, 18:00; profile timezone changed to `Europe/London`; agenda requested with `tz=Europe/London` | The activity keeps its stored timezone. Today's boundaries and the "now" comparison use the **profile** timezone. A 6:00 PM New York task renders as 11:00 PM on the London day, and may land on the *next* London date. |
-| 30 | **Timezone travel across a date boundary** | 22:00 `America/New_York` viewed from `Asia/Tokyo` | Appears on the following local date, not the same one, and is not duplicated on both. This engine fixture is also a required P2-08 agenda integration acceptance test. |
 | 31 | **Empty window** | `from > to` | `[]`, no throw. |
 | 32 | **Start after the window** | `startDate` a year later | `[]`, with no iteration (assert the internal step counter). |
 | 33 | **62-day window, daily** | Maximum legal window | 62 dates, in ascending order, unique, no duplicates at month boundaries. |
@@ -316,7 +331,7 @@ Beyond the table:
 - **A cross-check** for `daily` and `weekdays` against a naive day-by-day filter
   implementation written independently in the test file. If two independent implementations
   disagree, the test fails and one of them is wrong — that is the point.
-- **Golden fixtures** in `fixtures/` for cases 9, 15, 17 and 29, so a refactor that changes
+- **Golden fixtures** in `fixtures/` for cases 9, 15 and 17, so a refactor that changes
   behaviour fails loudly rather than quietly.
 
 ---
@@ -597,6 +612,8 @@ a collision the model invented. Two fields cost eight bytes and remove the whole
 
 **Files.** `services/api/src/repositories/occurrenceRepository.ts`,
 `services/api/src/repositories/activityRepository.ts`,
+`services/api/src/repositories/base.ts`,
+`services/api/src/repositories/{base,activityRepository,occurrenceRepository}.test.ts`,
 `packages/shared/src/types/occurrence.ts`,
 `packages/shared/src/schemas/occurrence.ts`.
 
@@ -613,6 +630,14 @@ function into `OccurrenceRepository`, updates every caller, and deletes the orig
 export and tests from `activityRepository`**. The rule that no `OCC#` access exists outside
 `OccurrenceRepository` is an end-state invariant after this move, not a claim about the
 Phase 1 starting tree.
+
+P1-05's base has no batch-get or filtered/count query primitive yet. P2-07 adds both as
+named deliverables in `base.ts`: `BatchGetItem` chunks at 100 keys, retries
+`UnprocessedKeys` with bounded backoff, and upgrades every returned item on read; the query
+primitive supports the repository-owned filter plus `Select: COUNT` needed below without
+exposing raw DynamoDB expressions to services. Unit tests pin chunking, retry exhaustion,
+upgrade-on-read, filter/count command shapes and empty input. P2-08 consumes the same
+batch-get primitive for scheduled and series META hydration rather than inventing another.
 
 The `Occurrence` shape is §4.5 verbatim: `date` is the series' **nominal** date — the date
 expansion emitted — never the snoozed or rescheduled display time's date. It carries **no
@@ -659,6 +684,9 @@ byte-identical (read before and after); `delete` then `get` returns `null`;
 `packages/shared/src/types/activity.ts`,
 `packages/shared/src/schemas/activity.ts`.
 
+**Explicitly untouched:** `services/api/src/repositories/migrate.ts`. Mixed-generation
+timezone handling is a hydrated read fallback, not a schema migration.
+
 **Approach.** The amended hydration-and-expansion algorithm in
 [`../02-architecture/data-model.md#6-recurrence-expansion-algorithm`](../02-architecture/data-model.md#6-recurrence-expansion-algorithm),
 implemented literally:
@@ -666,10 +694,11 @@ implemented literally:
 1. Widen the scheduled query one calendar day on each side:
    `Query GSI1 U#<u>#S BETWEEN <from-1d>T00:00 AND <to+1d>T23:59`.
 2. `BatchGetItem` `ACT#<activityId>/META` for every scheduled candidate, so one-off
-   `snoozedUntil` comes from its canonical META field. Convert each timed row from its
-   projected stored `timezone` to an instant with shared `toUtcInstant`, then into request
-   `tz`; **only after conversion**, retain rows whose viewer-local date is inside
-   `[from, to]`.
+   `snoozedUntil` comes from its canonical META field. For a timed row, use the index
+   projection's `timezone` when present and fall back to the hydrated
+   `META.schedule.timezone` for a Phase 1 row that predates the projection. Convert that
+   stored zone to an instant with shared `toUtcInstant`, then into request `tz`; **only after
+   conversion**, retain rows whose viewer-local date is inside `[from, to]`.
 3. `Query GSI1 U#<u>#R` — at most the first 200 active-series index rows, with the existing
    warning if more exist.
 4. **Series hydration:** before any expansion, `BatchGetItem` `ACT#<activityId>/META` for
@@ -703,8 +732,13 @@ implemented literally:
 10. Sort by effective viewer-local time and return per-day buckets.
 
 P2-08 also amends the `ActivityIndex` writer/schema to project `schedule.timezone`.
-Existing Phase 1 rows use P1-05's `schemaVersion` upgrade-on-read and persist the projection
-on their next write; do not add a scan or one-off migration script.
+Every index row written from P2-08 onward carries it. Existing Phase 1 rows form a supported
+mixed generation: absence means “read the stored zone from the META row this algorithm
+already hydrated”, never “use the viewer zone”. The next ordinary write rebuilds the whole
+index projection and stamps the field opportunistically. **Do not add a migration-registry
+entry, scan or one-off backfill:** `services/api/src/repositories/migrate.ts` is deliberately
+untouched because an old thin index row does not contain enough information to derive its
+Activity's zone.
 
 **The agenda never touches `U#<u>#P`.** Three buckets feed it — `#S` for dated items, `#R`
 for series, and `#N` for the Anytime section when `include=anytime_unscheduled` is set. The
@@ -737,7 +771,7 @@ on its ticker (P2-20).
 - A series that would emit two occurrences on one date (only reachable via a malformed
   custom rule, which is Phase 9) emits the earliest and drops the rest, adding a warning.
 - Widening the `#S` query never widens the response. Rows are filtered only after conversion
-  to request `tz`; P2-02 case 30 (22:00 New York viewed from Tokyo) is also an acceptance
+  to request `tz`; transferred matrix case 30 (22:00 New York viewed from Tokyo) is an acceptance
   test here, proving the item appears on the following Tokyo date exactly once.
 
 **Tests.** Unit with a mocked repository covering each merge branch. Integration against
@@ -751,9 +785,21 @@ the undated Plan in that bucket appears in no section of the response.
 
 Also seed a `#R` index row whose projection contains no recurrence: assert its
 `ACT#/META` is included in the hydration `BatchGetItem` before `expandRecurrence` is called.
-Seed the New York → Tokyo boundary case from P2-02 case 30 and assert the widened query finds
+Seed the New York → Tokyo boundary from transferred case 30 and assert the widened query finds
 it, post-conversion filtering places it only on the following Tokyo date, and the exact
 unwidened response window is preserved.
+
+**Transferred acceptance cases 25–30.** These retain their original matrix numbers for
+traceability, but they are P2-08 tests because each crosses the engine/agenda boundary:
+
+| # | Case | Required P2-08 assertion |
+| --- | --- | --- |
+| 25 | **Snoozed occurrence** | A daily 18:00 series with a snoozed override emits today at 20:00 and every other date at 18:00; recurrence is neither rewritten nor re-anchored. |
+| 26 | **Completed occurrence** | The emitted row is `completed_occurrence`; series `ACT#/META.updatedAt` remains byte-identical. |
+| 27 | **Skipped occurrence** | The emitted row is `skipped_occurrence`, hidden by default and present under `Show skipped`; every other occurrence is unchanged. |
+| 28 | **Rescheduled occurrence** | `overrideTime` moves only that occurrence; `overrideDate` emits it on the replacement date exactly once, never on both dates. |
+| 29 | **Timezone travel** | An 18:00 `America/New_York` row viewed in `Europe/London` keeps its stored zone while request boundaries and “now” use the profile zone. Run once with projected `timezone` and once with that field absent, proving the hydrated-META fallback is identical. |
+| 30 | **Timezone travel across a date boundary** | A 22:00 New York row viewed from Tokyo is found by the widened query and appears on the following Tokyo date exactly once. Run the legacy-row variant without projected `timezone` too. |
 
 ---
 
@@ -832,6 +878,9 @@ each of the three cases.
 
 **Files.** `services/api/src/routes/activities.ts`,
 `services/api/src/services/scheduleService.ts`,
+`services/api/src/repositories/activityRepository.ts`,
+`services/api/src/repositories/tx.ts`,
+`services/api/src/repositories/{activityRepository,tx}.test.ts`,
 `packages/shared/src/schemas/{activity,schedule}.ts`,
 `packages/shared/src/client/endpoints/activities.ts`,
 `packages/shared/src/recurrence/calendar.ts`,
@@ -866,6 +915,10 @@ gets `404` under the authorisation policy in API contract §3.
   `TransactWriteItems` writes `ACT#/META` and every owner/participant `ActivityIndex` row.
   Scheduling moves `N → S` or `P → S`; unscheduling moves `S → N` for a Task and `S → P`
   for a Plan.
+- **Unscheduling deletes reminders atomically.** The same repository transaction deletes
+  every `REM#` row in the Activity partition when the date is cleared, as required by the
+  API contract. This is why the repository transaction files are in scope; a service-layer
+  best-effort cleanup is not acceptable.
 - **The RSVP reset ships now, reachable in Phase 6.** A date set or changed resets every
   non-declined participant to `pending`, clears `respondedAt`, and sets `rsvpForDate`; a
   time-only change keeps responses; clearing the date keeps them and clears `rsvpForDate`
@@ -925,11 +978,11 @@ complete, uncomplete and edit a prep task, whoever created it**
 the hotel for a trip you are planning together, she ticks `Book hotel` whether or not she
 typed it.
 
-The ordinary owner check does **not** grant this, so `authz.ts` carries one participant
-branch: *a participant of the parent may act on a child*. When the activity has a
-`parentActivityId`, `assertActivityAccess` also consults the **parent's** `PART#` rows.
-It is applied once in the middleware, never per endpoint, and Phase 6 walks it with a real
-participant (P6-28).
+P2-13 **consumes the existing Phase 1 ADR-051 branch** in `authz.ts`; it does not build or
+rewrite it. That branch already makes `assertActivityAccess(..., 'write')` consult the
+parent's `PART#` rows for a child and already has service-level tests. This task adds only
+the endpoint-level completion/uncompletion coverage that proves the existing branch is
+wired to the new routes. Phase 6 later walks the same rule with a real participant (P6-28).
 
 Two paths, and their difference is the most important invariant in this phase:
 
@@ -1094,6 +1147,7 @@ either mutation path.
 
 **Files.** `services/api/src/repositories/reminderRepository.ts`,
 `services/api/src/services/reminderService.ts`,
+`services/api/src/services/{scheduleService,scheduleService.test}.ts`,
 `services/api/src/routes/activities.ts` (three routes),
 `packages/shared/src/schemas/reminder.ts` (extend P1-06).
 
@@ -1210,7 +1264,7 @@ phase. Feature hooks are the only place `useQuery` appears and own their query k
   the first day and P2-34 consumes reminders from both. The hook exposes the whole response;
   sectioning is `partition.ts` (P2-19). No per-section fetches, ever — that is
   success criterion S2.
-- **`tz` is the profile timezone** (P2-02 case 29 —
+- **`tz` is the profile timezone** (transferred matrix case 29, now owned by P2-08 —
   `../01-product/today-and-tasks.md` §6.6): read from the cached `me` query, falling back
   to the device timezone before the profile has ever loaded (decision recorded here —
   raise in PR if wrong). "Today" itself is derived in that timezone, not from
@@ -1378,7 +1432,13 @@ Largest accessibility size reflow.
 
 ### P2-22 — Swipe actions and the gesture table
 
-**Files.** `apps/mobile/src/features/agenda/components/SwipeableRow.tsx`.
+**Files.** `apps/mobile/src/features/agenda/components/SwipeableRow.tsx`,
+`apps/mobile/package.json`, `pnpm-lock.yaml`.
+
+Declare `react-native-reanimated` as a direct mobile dependency in this task, at the
+Expo-compatible version sanctioned in `tech-stack.md` §2.2. `react-native-gesture-handler`
+is already direct; a transitive or lockfile-only Reanimated entry does not satisfy the
+runtime dependency.
 
 **Approach.** Implement §3.1 of
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) exactly.
@@ -1700,7 +1760,12 @@ surfaces it does not exist yet.
 `apps/mobile/src/lib/onlineManager.ts`,
 `apps/mobile/src/features/compose/hooks/useCreateActivity.ts`,
 `apps/mobile/src/features/activity/hooks/{useActivity,useActivityActions}.ts`,
+`apps/mobile/package.json`, `pnpm-lock.yaml`,
 and their existing tests.
+
+Declare `@tanstack/query-async-storage-persister`,
+`@react-native-async-storage/async-storage` and `@react-native-community/netinfo` as direct
+mobile dependencies here, at the versions recorded in `tech-stack.md` §2.2.
 
 **Approach.** The three mechanisms in
 [`../02-architecture/tech-stack.md#34-offline-and-optimistic-updates`](../02-architecture/tech-stack.md#34-offline-and-optimistic-updates):
@@ -1718,9 +1783,18 @@ component-local `mutationFn` closures are insufficient after process death.
 import them rather than constructing lookalikes. Those keys are persistence identifiers;
 changing them is a stored-cache migration, not a refactor.
 
-Remove the existing per-hook `networkMode: 'always'` and `retry: false` overrides from
-`useCreateActivity`, `useActivity` and `useActivityActions`; the hooks inherit the queue's
-offline-aware defaults and retry predicate. Creating POSTs (create and duplicate) carry an
+**Retry ownership: the transport is the only retry layer.** P2-33 changes the shared
+`QueryClient` defaults to `retry: false` for both queries and mutations; the transport's
+bounded retry policy remains untouched. Record in `queryClient.ts`'s doc comment that a
+TanStack retry count of three wrapped around the transport's four attempts produces up to
+16 HTTP attempts, which is why the layers must not both retry.
+
+Remove the existing **mutation-level** `networkMode: 'always'` and `retry: false` overrides
+from `useCreateActivity`, `useActivity`'s PATCH mutation and `useActivityActions`; those
+mutations inherit the queue's `networkMode: 'offlineFirst'` and global `retry: false`.
+Keep `useActivity`'s GET-query `networkMode: 'always'` / `retry: false` override and its
+comment: it is what makes the explicit `Try again` action issue a request rather than remain
+paused. Creating POSTs (create and duplicate) carry an
 `Idempotency-Key` generated **before** `mutationFn` runs — in the mutation variables/public
 action boundary — and the default function reuses that stored key on every retry and replay.
 Never generate a key inside `mutationFn`: resumed and retried calls must identify the same
@@ -1746,14 +1820,24 @@ mode off, assert all three land exactly once (verified by item count, since the 
 key should make a duplicate impossible even if the queue double-fires). Unit/integration
 tests dehydrate and rehydrate one create, duplicate, delete and patch mutation, then prove
 each resolves through its registered default function. Create/duplicate tests spy on a
-retry and a resumed replay and assert the exact same `Idempotency-Key` is reused; grep tests
-assert the three hooks no longer set `networkMode: 'always'` or `retry: false`.
+transport retry and a resumed replay and assert the exact same `Idempotency-Key` is reused;
+grep tests inspect **mutation option objects only** and assert they no longer set
+`networkMode: 'always'` or `retry: false`. A separate assertion pins the `useActivity`
+GET-query override so a broad grep-and-delete cannot remove it.
 
 ---
 
 ### P2-34 — Local notifications on device
 
-**Files.** `apps/mobile/src/features/reminders/localSchedule.ts`.
+**Files.** `apps/mobile/src/features/reminders/localSchedule.ts`,
+`apps/mobile/src/lib/push.ts`, `apps/mobile/src/lib/push.web.ts`,
+`apps/mobile/package.json`, `pnpm-lock.yaml`, and their tests.
+
+Declare the Expo-SDK-compatible `expo-notifications` version as a direct mobile dependency
+in this task, as recorded in `tech-stack.md` §2.2. `push.ts` is the iOS adapter used by local
+scheduling; `push.web.ts` is an explicit no-op because `notifications.md` makes v1
+notifications iOS-only. Keeping that fork at the sanctioned push seam prevents the agenda
+or reminder feature from growing platform branches.
 
 **Approach.** Push is Phase 5. This phase schedules **local** notifications with
 `expo-notifications` for reminders on activities in the current and next day, so reminders
@@ -1844,7 +1928,7 @@ against the spec.
   "Section sort order drifts").
 
 **Tests.** This task **is** the test; its deliverable is the passing suite plus the
-committed response fixture. It runs in `pnpm test:integration` against DynamoDB Local in
+committed response fixture. It runs in `pnpm test:int` against DynamoDB Local in
 CI.
 
 ---
@@ -1903,8 +1987,9 @@ out the undo handler locally; the suite must catch it).
 
 ## Acceptance criteria
 
-1. `expandRecurrence` passes all 43 matrix cases in P2-02 plus 1,000 property-based cases,
-   at **100% statement and branch coverage**, and CI fails if coverage drops below it.
+1. `expandRecurrence` passes P2-02's 37 engine/calendar cases (numbered 1–24 and 31–43)
+   plus 1,000 property-based cases, at **100% statement and branch coverage**, and CI fails
+   if coverage drops below it. P2-08 passes the six transferred boundary cases 25–30.
 2. A daily 18:00 task in `America/New_York` expanded across 7–9 March 2026 yields three
    dates whose derived UTC instants are 23:00Z, 23:00Z and 22:00Z — the wall clock is
    constant and the instant shifts. The named `spring gap forwards 2026-03-08 02:30
@@ -2024,7 +2109,7 @@ out the undo handler locally; the suite must catch it).
 
 | Risk | Signal | Mitigation |
 | --- | --- | --- |
-| **The recurrence engine is subtly wrong** and nobody notices for weeks | A user reports "my gym disappeared in March" or "the 31st skipped February" | P2-01 is built first and alone; P2-02's 43-case matrix plus property tests plus an independent cross-check implementation; 100% branch coverage gated in CI; golden fixtures so a refactor fails loudly. |
+| **The recurrence engine is subtly wrong** and nobody notices for weeks | A user reports "my gym disappeared in March" or "the 31st skipped February" | P2-01 is built first and alone; P2-02's 37 engine/calendar cases (1–24, 31–43) plus property tests and an independent cross-check implementation; P2-08 owns boundary cases 25–30; 100% branch coverage is gated in CI; golden fixtures make a refactor fail loudly. |
 | DST handled by adding milliseconds | Everything is right for ten months a year | Calendar arithmetic only, in `calendar.ts`; cases 15–19 include both hemispheres and a half-hour zone. A `+ 86400000` anywhere in `recurrence/` is a review rejection. |
 | An occurrence-scoped snooze or complete writes `ACT#/META` | The visible result looks correct; the series' `updatedAt` churns and Phase 6's conflict detection starts firing spuriously | Success criterion S6, asserted by reading the item before and after; one-off snooze is the explicit META exception, while a repository spy asserts no `#R` query on either snooze path. |
 | **The bucket rule is re-derived in a second place** — a client-side `type === 'task'` check, a service that builds an index entry by hand, or a filter in the agenda | An undated Plan appears on Today, or a Task vanishes from ANYTIME, and the two implementations disagree only for some inputs | One pure function (P2-05), one caller, a grep test asserting both. The agenda excludes `#P` by not querying it rather than by filtering it, so there is no filter to drop. |

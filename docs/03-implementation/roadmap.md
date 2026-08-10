@@ -455,6 +455,12 @@ to L: service-level recurrence enforcement, the sole cross-layer schedule write 
 one-off/occurrence snooze plus unsnooze, and transport-level ETag body caching. That is
 **+8 AWU**, with no new task and no dependency inversion.
 
+The second Phase 2 gate on **2026-08-10** moved six agenda-boundary cases from P2-02 to
+P2-08, assigned the as-built repository, dependency-install and platform files to their
+existing tasks, and added P2-07 to P2-12's dependency column. This exposed work already
+required by the acceptance criteria rather than adding product scope, so task sizes, AWU
+and the numeric run order are unchanged.
+
 Use **869 AWU and ~43.5 weeks** (869 / 20 ≈ 43.45) as the plan of record. Everything
 through Phase 5 is now 494 AWU and ~24.75 weeks; the
 remaining ~19 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
@@ -688,7 +694,7 @@ rows, reminders and completion history built on the wrong dates.
 | A test in `recurrence/` is skipped, marked `todo`, or has its expectation edited to match the output | Build it **first and alone**, before any consumer. One agent, one head. |
 | The coverage threshold on `recurrence/**` is lowered, even to 99% | The 100% statement and branch gate is configured in Phase 0 (P0-24), against a placeholder file, *before* the first line exists — so it can never be "added afterwards and tuned to fit". |
 | `+ 86400000`, `setDate(d.getDate() + 1)` on a UTC `Date`, or any millisecond arithmetic appears in `recurrence/` | Wall-clock calendar arithmetic only, in `calendar.ts`. Millisecond date-stepping in that directory is an automatic review rejection. |
-| A bug report mentions a specific month or a specific weekend in March or November | The 43-case matrix in P2-02 covers both hemispheres, a half-hour offset zone, the spring-forward gap, the fall-back ambiguity, four month-end variants, seven yearly cases including 29 February in and out of a leap year and a proof that rescheduling one occurrence does not move the series, and timezone travel. Plus 1,000 property-based cases and an independent cross-check implementation in the test file. |
+| A bug report mentions a specific month or a specific weekend in March or November | P2-02's 37 engine/calendar cases (numbered 1–24 and 31–43) cover both hemispheres, a half-hour offset zone, the spring-forward gap, the fall-back ambiguity, four month-end variants and seven yearly cases. P2-08 owns the six occurrence-merge and timezone-travel boundary cases 25–30. Plus 1,000 property-based cases and an independent cross-check implementation in the engine test file. |
 | The engine reads or writes anything | It is pure and takes four arguments. A `Date.now()` in it fails the determinism test. |
 
 **If it happens anyway:** the engine is pure and isolated, so the fix is one file and the
@@ -760,7 +766,7 @@ Playwright against.
 | A file is more than about 30% platform branches | Split it — but ask first whether the divergence is real. A file with one branch should not be split. |
 | A web bug is fixed by changing a component that iOS also uses, with no iOS check | **Playwright runs on every pull request; Maestro runs on `workflow_dispatch` and release tags.** Both cover the same journeys against the local stack from P1-29; P4-33 and P5-34 move those journeys to the deployed environment and Maestro gates release rather than every merge. |
 | `Dimensions.get()` at module scope, or an absolute pixel layout | Flexbox and `maxWidth` only, read through `useBreakpoint()`. |
-| `expo-doctor` failures are ignored, or React versions drift between `apps/mobile` and `packages/ui` | `syncpack` and `expo-doctor` both run in `ci.yml` from Phase 0. Version drift produces invalid-hook-call errors that cost a day to diagnose. |
+| `expo-doctor` failures are ignored, or React versions drift between `apps/mobile` and `packages/ui` | `syncpack` and `expo-doctor` are both enforced by `ci.yml` today. Expo Doctor ran from Phase 0; syncpack was installed then but enforcement began at P1-31, when `packages/ui` introduced the second React declaration it needed to police. Version drift produces invalid-hook-call errors that cost a day to diagnose. |
 | The physical-device target is quietly dropped because the simulator is faster | P0-22 makes the LAN device a gated acceptance criterion and renders the resolved base URL on screen. The device is what catches `localhost` assumptions, and until Phase 4 there is no deployed API to catch them instead. |
 
 **If it happens anyway:** the recovery is expensive — the alternative is a second Next.js

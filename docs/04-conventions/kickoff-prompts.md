@@ -434,6 +434,11 @@ The 2026-08-10 Phase 2 plan amendment preserves that run order: every added depe
 still points to a lower-numbered P2 task (or a completed Phase 1 task). No task may be
 scheduled out of numeric order to work around the expanded cross-layer scopes.
 
+The second gate amendment on the same date preserves it too: agenda-boundary cases 25–30
+moved from P2-02 to their existing owner P2-08 rather than adding a forward dependency, and
+the only dependency-column addition is P2-07 to P2-12. Numeric P2-01…P2-37 remains the
+dependency-valid run order.
+
 ```bash
 # from the repo root, on a clean integration branch (e.g. `phase-2` cut from main):
 node scripts/run-phase.mjs --range P2-01..P2-37 --pause-after P2-02,P2-11,P2-22

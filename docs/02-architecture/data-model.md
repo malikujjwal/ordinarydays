@@ -255,9 +255,15 @@ Every scheduled `ActivityIndex` projection also stores the Activity schedule's I
 `ActivityIndex.timezone`. Agenda reads widen the `#S` key range by one day on each side,
 convert each timed row from that stored zone into the requested viewer zone, and only then
 filter to the exact requested dates. Without the projection, New York evening rows viewed
-from Tokyo can fall outside the unconverted key range and disappear. Existing Phase 1
-index rows gain `timezone` through P1-05's repository `schemaVersion` upgrade-on-read and
-are persisted on their next write; no standalone scan/backfill is introduced.
+from Tokyo can fall outside the unconverted key range and disappear.
+
+**Mixed-generation read rule.** Index rows written from P2-08 onward carry `timezone`.
+Phase 1 rows may not. Agenda already hydrates every scheduled candidate's `ACT#/META`; when
+the thin row has no `timezone`, it uses `META.schedule.timezone` as the canonical fallback.
+It never substitutes the viewer's zone. The next ordinary write rebuilds the entire index
+projection and stamps `timezone` opportunistically. This is deliberately **not** a
+`schemaVersion` migration: the old index row does not contain enough information to derive
+the zone, so `migrate.ts` is untouched and there is no scan or one-off backfill.
 
 `ActivityIndex.status` is denormalised presentation state. Any non-occurrence operation that
 changes META status must update **every** owner/participant index row in the same
@@ -1084,7 +1090,7 @@ before writing the code.
 
 | # | Pattern | Operation |
 | --- | --- | --- |
-| 1 | Today / date range for a user | `Query GSI1` `gsi1pk = U#<u>#S` and `gsi1sk BETWEEN <from − 1 day>T00:00 AND <to + 1 day>T23:59`; convert timed rows from projected stored `timezone` into request `tz`, then filter to exact `[from, to]` viewer-local dates |
+| 1 | Today / date range for a user | `Query GSI1` `gsi1pk = U#<u>#S` and `gsi1sk BETWEEN <from − 1 day>T00:00 AND <to + 1 day>T23:59`; hydrate candidate META, convert timed rows from projected stored `timezone` or the mixed-generation META fallback into request `tz`, then filter to exact `[from, to]` viewer-local dates |
 | 1a | Caller reminders for an agenda window (`include=reminders`) | After pattern 1/3 establishes the bounded distinct Activity ids emitted in the exact window, query each `ACT#<a>` with `sk begins_with REM#<callerUserId>#` and attach those rows to its AgendaItems. This is bounded repository fan-out behind the one agenda HTTP request and can never read another user's prefix |
 | 2 | Anytime items (undated solo tasks) | `Query GSI1` `gsi1pk = U#<u>#N` |
 | 2b | Needs a date — Plans, most recently discussed first | `Query GSI1` `gsi1pk = U#<u>#P`, `ScanIndexForward=false` |
@@ -1127,7 +1133,8 @@ expandAgenda(userId, fromDate, toDate, tz):
   1. candidates = Query GSI1 U#<u>#S BETWEEN (from-1d)..(to+1d)
   2. scheduled  = BatchGetItem ACT#<id>/META for every candidate
        // canonical one-off snoozedUntil lives on META, not the index projection
-       scheduled = convert each timed candidate from projected stored timezone to tz,
+       // Phase 1 index rows may lack timezone; META.schedule.timezone is the fallback
+       scheduled = convert each timed candidate from (index.timezone ?? META.schedule.timezone) to tz,
                    then retain only viewer-local dates inside exact [from..to]
   3. seriesIdx  = Query GSI1 U#<u>#R, capped at 200           // thin index rows only
   4. series     = BatchGetItem ACT#<id>/META for every seriesIdx row
