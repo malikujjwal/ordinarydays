@@ -149,6 +149,21 @@ P1-19 is struck: the seam it describes shipped in P0-20 and this phase verifies 
 than building it. Its subsection is kept, and amended, because the shape is load-bearing for
 Phase 4 and deleting it would lose the reasoning.
 
+> **P1-27 completed 2026-08-09.** It has no detail subsection, so its scope came from
+> [`../01-product/activities.md`](../01-product/activities.md) §6.3, §6.4 and §7.1 plus
+> [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §1a.1 and
+> §4.1 directly. Four things are recorded rather than assumed:
+>
+> | # | What happened | Why |
+> | --- | --- | --- |
+> | 1 | **The recurring-series delete sheet is not built.** §6.4 specifies `This occurrence` · `End series` · `Delete whole series`. | All three write or read `Occurrence` rows and `recurrence.endDate`, which are Phase 2 — the out-of-scope table names the engine, the rows and the Repeat sheet. A series cannot be created in Phase 1, so the sheet has nothing to open on. Delete confirms and deletes the one Activity, which is every case reachable now. |
+> | 2 | **The delete confirmation counts notes, the caller's reminders and prep children, and nothing else.** §6.4's example also names attachments, the shared-plan access line, the `LNK#` line and the settled-expense block. | Each belongs to a phase that has not landed: attachments are Phase 3 and are not on the stored Activity at all, sharing is Phase 6, list pointers are Phase 3, settlements are Phase 7 (P1-14 removed `settlement_conflict` for exactly this reason). Approximating a count would be worse than omitting the line — §1a.1's rule is that the number must be real. |
+> | 3 | **The `Keeps:` line is built from what the activity has**, not from §6.3's example list verbatim. | Naming a date on an undated plan would be the confirmation telling the user about data that is not there. §1a.1's rule about counts — "the number of records that **actually carry** the data" — reads the same way in both directions. |
+> | 4 | **One `ConfirmDialog` serves both destructive paths.** | §1a.1 says a feature spec "may point at this section; it may not restate it differently". One component is how that holds: the delete dialog and the kind-change dialog cannot drift into two shapes. |
+>
+> The Plan → Task blocker copy and the `⋯` rows for the two conversions were already built by
+> P1-26, which took them early so the mapping and blocker copy had somewhere to be exercised.
+
 P1-08, P1-12, P1-15, P1-16 and P1-27 have no detail subsection. They follow
 [`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §2 and the
 primitives from P1-05 and P1-09 directly, with no design decision left in them. The one

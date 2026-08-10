@@ -1,5 +1,6 @@
+import type { ChangeTarget } from '@od/shared';
 import type { PatchActivityInput } from '@od/shared/schemas';
-import type { Activity } from '@od/shared/types';
+import type { Activity, PlanType } from '@od/shared/types';
 import {
   Button,
   EmptyState,
@@ -15,11 +16,22 @@ import {
 import { useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ComingSoonSection } from '@/features/activity/components/ComingSoonSection';
+import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
 import { useActivityDetail } from '@/features/activity/hooks/useActivity';
+import {
+  kindChangePatch,
+  useActivityActions,
+} from '@/features/activity/hooks/useActivityActions';
+import {
+  type Confirmation,
+  deleteConfirmation,
+  kindChangeConfirmation,
+} from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
 import { planKindLabel } from '@/lib/planKinds';
@@ -56,19 +68,73 @@ export interface ActivityDetailScreenProps {
   /** The user's today, in their zone. Injected so the quick chips are testable (§4.3). */
   today: WallDate;
   onBack: () => void;
+  /** Where a duplicate lands: its own detail screen (P1-27, `activities.md` §7.1). */
+  onOpenActivity: (activityId: string) => void;
+}
+
+/** A kind change waiting on its confirmation. Absent means nothing is being confirmed. */
+interface PendingChange {
+  target: ChangeTarget;
+  confirmation: Confirmation;
 }
 
 export function ActivityDetailScreen({
   activityId,
   today,
   onBack,
+  onOpenActivity,
 }: ActivityDetailScreenProps) {
   const theme = useTheme();
   const breakpoint = useBreakpoint();
   const insets = useSafeAreaInsets();
   const detail = useActivityDetail(activityId);
+  const actions = useActivityActions(activityId);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [kindSheet, setKindSheet] = useState<'planKind' | 'toPlan' | undefined>(
+    undefined,
+  );
+  const [pending, setPending] = useState<PendingChange | undefined>(undefined);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
+  /**
+   * A kind change confirms **only when it would drop something** (`activities.md` §6.3 rule 6,
+   * `interaction-contract.md` §1a.1 rule 3). An additive change — Task → Plan, or any pair the
+   * mapping carries whole — applies immediately with no dialog, because a confirmation that
+   * can appear with nothing to name is a bug rather than caution.
+   */
+  function propose(current: Activity, target: ChangeTarget) {
+    const confirmation = kindChangeConfirmation(
+      current,
+      target,
+      detail.detail?.reminders.length ?? 0,
+    );
+
+    if (confirmation === undefined) {
+      void applyKind(current, target);
+      return;
+    }
+    setPending({ target, confirmation });
+  }
+
+  async function applyKind(current: Activity, target: ChangeTarget) {
+    await detail.patch(kindChangePatch(current, target));
+    setPending(undefined);
+  }
+
+  /** The copy opens in its own detail screen, titled `<title> (copy)` (§7.1). */
+  async function duplicate() {
+    const copy = await actions.duplicate();
+    if (copy !== undefined) onOpenActivity(copy.activityId);
+  }
+
+  /** Delete has no undo (§6.4), so the screen leaves only once the server has agreed. */
+  async function remove() {
+    if (await actions.remove()) {
+      setDeleteOpen(false);
+      onBack();
+    }
+  }
 
   const activity = detail.detail?.activity;
 
@@ -165,8 +231,58 @@ export function ActivityDetailScreen({
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
             activity={activity}
-            onChangePlanKind={() => {}}
-            onChangeObject={() => {}}
+            onChangePlanKind={() => setKindSheet('planKind')}
+            onChangeObject={() => {
+              if (activity.objectKind === 'task') {
+                setKindSheet('toPlan');
+                return;
+              }
+              // Plan → Task needs no kind chosen; the menu already checked the blockers.
+              propose(activity, { objectKind: 'task', type: 'task' });
+            }}
+            onDuplicate={() => void duplicate()}
+            onDelete={() => setDeleteOpen(true)}
+          />
+
+          <ChangeKindSheet
+            open={kindSheet !== undefined}
+            onClose={() => setKindSheet(undefined)}
+            title={kindSheet === 'toPlan' ? 'Change to Plan' : 'Change Plan kind'}
+            {...(kindSheet === 'planKind' && activity.objectKind === 'plan'
+              ? { current: activity.type as PlanType }
+              : {})}
+            onChoose={(type) => {
+              setKindSheet(undefined);
+              propose(activity, { objectKind: 'plan', type });
+            }}
+          />
+
+          {/**
+           * One dialog for both destructive paths, because `interaction-contract.md` §1a.1 is
+           * one shape — "a feature spec may point at this section; it may not restate it
+           * differently."
+           */}
+          {pending === undefined ? null : (
+            <ConfirmDialog
+              open
+              confirmation={pending.confirmation}
+              busy={detail.isSaving}
+              onCancel={() => setPending(undefined)}
+              onConfirm={() => void applyKind(activity, pending.target)}
+              testID="kind-change-confirm"
+            />
+          )}
+
+          <ConfirmDialog
+            open={deleteOpen}
+            confirmation={deleteConfirmation(
+              activity,
+              detail.detail?.reminders.length ?? 0,
+            )}
+            busy={actions.isBusy}
+            onCancel={() => setDeleteOpen(false)}
+            onConfirm={() => void remove()}
+            testID="delete-confirm"
           />
         </>
       )}

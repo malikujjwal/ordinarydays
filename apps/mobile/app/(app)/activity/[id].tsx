@@ -1,5 +1,5 @@
 import { format } from 'date-fns';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
 
 /**
@@ -21,6 +21,12 @@ export default function ActivityDetailRoute() {
       activityId={id ?? ''}
       today={format(new Date(), 'yyyy-MM-dd')}
       onBack={() => router.back()}
+      /**
+       * `replace`, not `push`: the copy takes the original's place in the stack, so Back from
+       * it returns where the user came from rather than to the row they just duplicated. Two
+       * detail screens for two versions of one thing is a stack nobody asked for.
+       */
+      onOpenActivity={(next) => router.replace(`/activity/${next}` as Href)}
     />
   );
 }

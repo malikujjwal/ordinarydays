@@ -8,6 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
 
 /**
+ * `expo-crypto` is a native module with no jsdom implementation, and P1-27's duplicate
+ * generates its `Idempotency-Key` from it. Stubbed here rather than globally, the same way
+ * the compose tests do it, so the mock is visible in the file that needs it.
+ */
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-test-key' }));
+
+/**
  * The Activity detail screen (P1-26).
  *
  * The screen is a read of server data, so every case here drives a stubbed `fetch` returning
@@ -98,7 +105,7 @@ function stubFetch(...responses: Array<{ status: number; body: unknown }>) {
   });
 }
 
-function mount(onBack = () => {}) {
+function mount(onBack = () => {}, onOpenActivity: (id: string) => void = () => {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -110,7 +117,14 @@ function mount(onBack = () => {}) {
     </SafeAreaProvider>
   );
   return render(
-    wrap(<ActivityDetailScreen activityId={ID} today={TODAY} onBack={onBack} />),
+    wrap(
+      <ActivityDetailScreen
+        activityId={ID}
+        today={TODAY}
+        onBack={onBack}
+        onOpenActivity={onOpenActivity}
+      />,
+    ),
   );
 }
 
@@ -450,5 +464,185 @@ describe('the overflow menu', () => {
     for (const verb of ['Done', 'Complete', 'Attended', 'Had it', 'Watched']) {
       expect(screen.queryByRole('button', { name: verb })).toBeNull();
     }
+  });
+});
+
+/**
+ * Change kind, duplicate and delete — the three `⋯` actions (P1-27).
+ *
+ * The rule under every one of them is U6: **nothing destructive happens from a tap on the
+ * menu**. Each opens a chooser or the §1a.1 confirmation, and the write happens only after
+ * the named button in that dialog.
+ */
+describe('the ⋯ actions', () => {
+  const openMenu = async () => {
+    await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+  };
+
+  it('offers Duplicate and Delete, with Delete last', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await openMenu();
+
+    expect(screen.getByRole('button', { name: 'Duplicate' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined();
+  });
+
+  /** §6.4: delete always confirms, and the dialog names what goes. */
+  it('confirms a delete before writing, in the §1a.1 shape', async () => {
+    stubFetch({ status: 200, body: detailBody(plan({ notes: 'Check in after 3' })) });
+    mount();
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(screen.getByTestId('delete-confirm')).toBeDefined());
+    expect(screen.getByText('Delete "Zahav"?')).toBeDefined();
+    expect(screen.getByText('This removes: the plan and its notes.')).toBeDefined();
+    // Cancel first, and the destructive button repeats the verb.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Delete plan' })).toBeDefined();
+    // Nothing has been written: still just the one GET.
+    expect(sent).toHaveLength(1);
+  });
+
+  it('deletes only after the named button, then leaves the screen', async () => {
+    const onBack = vi.fn();
+    stubFetch(
+      { status: 200, body: detailBody(plan()) },
+      // `DELETE` answers with the deleted id in the envelope, not a 204 — the shared client
+      // parses it against `deletedActivityResponse`, so a bodyless fixture would fail there
+      // rather than in the screen.
+      {
+        status: 200,
+        body: { data: { activityId: ID }, meta: { requestId: 'req_test' } },
+      },
+    );
+    mount(onBack);
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.getByTestId('delete-confirm')).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: 'Delete plan' }));
+
+    await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+    expect(sent[1]?.method).toBe('DELETE');
+  });
+
+  it('writes nothing when the delete is cancelled', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.getByTestId('delete-confirm')).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(sent).toHaveLength(1);
+  });
+
+  /**
+   * §7.1: duplicate is a creating `POST`, so it carries an `Idempotency-Key` — without one
+   * the transport refuses to retry it at all — and the copy opens in its own screen.
+   */
+  it('duplicates with an idempotency key and opens the copy', async () => {
+    const onOpen = vi.fn();
+    const copy = plan({
+      activityId: 'act_01J0000000000000000000000C',
+      title: 'Zahav (copy)',
+    });
+    stubFetch(
+      { status: 200, body: detailBody(plan()) },
+      { status: 201, body: { data: copy, meta: { requestId: 'req_test' } } },
+    );
+    mount(() => {}, onOpen);
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }));
+
+    await waitFor(() =>
+      expect(onOpen).toHaveBeenCalledExactlyOnceWith('act_01J0000000000000000000000C'),
+    );
+    expect(sent[1]?.method).toBe('POST');
+    expect(sent[1]?.url).toMatch(/\/duplicate$/);
+    expect(sent[1]?.headers['Idempotency-Key']).toBeDefined();
+  });
+
+  /** §6.3 rule 6: a lossy kind change confirms first, naming the fields by their labels. */
+  it('confirms a lossy Plan-kind change before writing', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          type: 'watch',
+          details: {
+            kind: 'watch',
+            mediaTitle: 'Severance',
+            season: 2,
+            episode: 4,
+            service: 'Apple TV',
+          },
+        }),
+      ),
+    });
+    mount();
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change Plan kind' }));
+    await waitFor(() => expect(screen.getByTestId('change-kind-sheet')).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: 'Outing' }));
+
+    await waitFor(() => expect(screen.getByTestId('kind-change-confirm')).toBeDefined());
+    expect(screen.getByText('Change Watch → Outing?')).toBeDefined();
+    expect(screen.getByText('Season and episode (S2 E4)')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Change to Outing' })).toBeDefined();
+    expect(sent).toHaveLength(1);
+  });
+
+  /**
+   * §1a.1 rule 3, the other direction: an **additive** change shows no dialog at all and
+   * applies straight away. Task → Plan carries every common field, so there is nothing to
+   * warn about — and a confirmation that appears with nothing to name is a bug.
+   */
+  it('applies an additive Task → Plan change with no confirmation', async () => {
+    stubFetch(
+      { status: 200, body: detailBody(task()) },
+      { status: 200, body: { data: task(), meta: { requestId: 'req_test' } } },
+    );
+    mount();
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change to Plan' }));
+    await waitFor(() => expect(screen.getByTestId('change-kind-sheet')).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: 'General' }));
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(screen.queryByTestId('kind-change-confirm')).toBeNull();
+    expect(sent[1]?.method).toBe('PATCH');
+    expect(sent[1]?.body).toMatchObject({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+    });
+  });
+
+  /** The pair always travels together: the server never chooses one from the other. */
+  it('never sends objectKind without type', async () => {
+    stubFetch(
+      { status: 200, body: detailBody(task()) },
+      { status: 200, body: { data: task(), meta: { requestId: 'req_test' } } },
+    );
+    mount();
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change to Plan' }));
+    await waitFor(() => expect(screen.getByTestId('change-kind-sheet')).toBeDefined());
+    fireEvent.click(screen.getByRole('button', { name: 'Meal' }));
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    const body = sent[1]?.body as Record<string, unknown>;
+    expect('objectKind' in body).toBe(true);
+    expect('type' in body).toBe(true);
   });
 });

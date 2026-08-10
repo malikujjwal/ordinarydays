@@ -35,6 +35,8 @@ export interface OverflowMenuProps {
   activity: Activity;
   onChangePlanKind: () => void;
   onChangeObject: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
 }
 
 export function OverflowMenu({
@@ -43,6 +45,8 @@ export function OverflowMenu({
   activity,
   onChangePlanKind,
   onChangeObject,
+  onDuplicate,
+  onDelete,
 }: OverflowMenuProps) {
   const theme = useTheme();
   const isTask = activity.objectKind === 'task';
@@ -83,6 +87,33 @@ export function OverflowMenu({
             </Text>
           )}
         </View>
+
+        <Button
+          label="Duplicate"
+          variant="secondary"
+          fullWidth
+          onPress={() => {
+            onClose();
+            onDuplicate();
+          }}
+          testID="overflow-duplicate"
+        />
+
+        {/**
+         * Last, and the only `danger` row. U6: nothing destructive lives anywhere but here,
+         * and §6.4 gives it its own confirmation naming what is removed — the button opens
+         * that dialog rather than deleting.
+         */}
+        <Button
+          label="Delete"
+          variant="danger"
+          fullWidth
+          onPress={() => {
+            onClose();
+            onDelete();
+          }}
+          testID="overflow-delete"
+        />
       </View>
     </Sheet>
   );
