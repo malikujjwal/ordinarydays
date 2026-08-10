@@ -9,7 +9,6 @@ import {
   navIcons,
   PlayRect,
   Sun,
-  Ticket,
   typeIcons,
 } from '../icons/index';
 import type { ColorScheme } from '../theme/colors';
@@ -157,7 +156,7 @@ describe('Row', () => {
   });
 
   it('carries a non-interactive type marker for a non-task row', () => {
-    wrap(<Row title="Dinner" accent="outing" onPress={() => {}} />);
+    wrap(<Row title="Dinner" accent="event" onPress={() => {}} />);
     expect(screen.getByRole('button', { name: 'Dinner' })).toBeDefined();
   });
 
@@ -296,7 +295,6 @@ describe('icons', () => {
   it.each([
     ['Bowl', Bowl],
     ['PlayRect', PlayRect],
-    ['Ticket', Ticket],
     ['MapPin', MapPin],
     ['Diamond', Diamond],
     ['Sun', Sun],

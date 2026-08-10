@@ -95,7 +95,7 @@ export function sectionsFor(activity: Activity): DetailSection[] {
 }
 
 /**
- * The header's second line: `Outing · Just you`, `Task`.
+ * The header's second line: `Event · Just you`, `Task`.
  *
  * Phase 1 has no participants, so the share state is always "just you" on a Plan and is
  * omitted entirely on a Task — a Task has no sharing state to describe, not even a solo one

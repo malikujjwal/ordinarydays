@@ -30,7 +30,7 @@ feed it, can be produced by it, or can sit entirely outside it and still be doin
 | Step | What happens | Primary surfaces |
 | --- | --- | --- |
 | **Capture** | The user first names the object they are creating — **Task**, **Plan**, or **List item** — then enters its details by text, photo, screenshot, or link. | Add button, [`ai-capture.md`](ai-capture.md) |
-| **Organise** | The chosen object opens with the right fields. A Plan additionally requires an explicit kind: **General**, **Meal**, **Watch**, **Event**, or **Outing**. Words and automatic capture never make either choice. | [`activities.md`](activities.md), [`plans-and-lists.md`](plans-and-lists.md) |
+| **Organise** | The chosen object opens with the right fields. A Plan additionally requires an explicit kind: **General**, **Meal**, **Watch**, **Event**. Words and automatic capture never make either choice. | [`activities.md`](activities.md), [`plans-and-lists.md`](plans-and-lists.md) |
 | **Schedule** | It gets a date, and optionally a time. Until then a plan waits in Plans → Needs a date; only a dated plan can reach Today. | Activity detail, list-item scheduling |
 | **Share** | People are added — to a plan, or to a list. App users get it in their app; someone invited to a plan without an account gets a link. | [`sharing-and-people.md`](sharing-and-people.md) |
 | **Do** | It shows up on Today at the right moment with the right affordance. | [`today-and-tasks.md`](today-and-tasks.md) |
@@ -86,7 +86,7 @@ entered. It is not inferred from the title, a date, a person, a source image, or
 >
 > A **Task** is stored as an Activity with `objectKind: 'task'`, `type: 'task'`. A **Plan**
 > is stored as an Activity with `objectKind: 'plan'`; its explicitly chosen kind maps to
-> `custom`, `meal`, `watch`, `event`, or `outing`. A **List item** is stored as a `ListItem`
+> `custom`, `meal`, `watch`, `event`. A **List item** is stored as a `ListItem`
 > in a destination the user chose.
 
 This is the rule for the whole document set, stated here once and canonical in
@@ -99,7 +99,7 @@ un-plans it: an undated plan is a plan waiting for a day.
 | --- | --- | --- |
 | **Lists** | Things the user wants to keep together. Groceries, restaurants they love, books, a packing list. Shareable. | Nothing. A list that never produces an activity is complete and finished. |
 | **Activities** | Tasks and Plans. The one schedulable entity. Created only after the user chose Task or Plan, or explicitly chose `Plan this item` on a list item. | Nothing. Most activities never touch a list. |
-| **Plans** | An Activity created as a Plan, with an explicit kind: General, Meal, Watch, Event, or Outing. A date is not required. | An Activity. That is all a plan is. |
+| **Plans** | An Activity created as a Plan, with an explicit kind: General, Meal, Watch, Event. A date is not required. | An Activity. That is all a plan is. |
 | **Today** | What matters now. A query, never storage. | Activities for one date. |
 
 ```
@@ -152,7 +152,7 @@ Three optional edges, and that is all of them:
   the lists it generates and never does so automatically.
 
 An undated plan and an undated list item are not the same thing waiting at different stages.
-The words `Try Zahav` can title either one: choosing **Plan → Outing** creates an undated
+The words `Try Zahav` can title either one: choosing **Plan → Event** creates an undated
 plan; choosing **List item → Restaurants to try** creates a list item. Adding Alice later is
 an explicit sharing action; her name in typed text never makes the choice. Neither object
 promotes into the other ([`plans-and-lists.md`](plans-and-lists.md) §1.2).
@@ -167,7 +167,7 @@ violates one of these is rejected regardless of how good the feature is.
 The global `+` opens exactly three choices: **Task**, **Plan**, and **List item**. A
 contextual action fixes that same choice in its label — `+ Add a task`, `+ Add an item`, or
 `+ Add a prep task`. Plan then requires an explicit **General**, **Meal**, **Watch**,
-**Event**, or **Outing** choice. Nothing is pre-selected, including General.
+**Event** choice. Nothing is pre-selected, including General.
 
 General `New list` likewise requires an explicit style choice from the full catalogue before
 its editable title appears. A typed destination the user already chose may show only eligible
@@ -192,7 +192,7 @@ plan`, or `Add to <list name>`.
 Within `objectKind: 'plan'`, Activity `type` changes which fields the form shows and which
 completion verb it uses. It never blocks a Plan action, prevents scheduling, or hides a Plan
 from Today, and the user may explicitly change it among General, Meal, Watch, Event, and
-Outing. `objectKind` does carry a real boundary: Tasks have checkboxes and never gain their
+Event. `objectKind` does carry a real boundary: Tasks have checkboxes and never gain their
 own participants or expenses; coordinated work is an explicit Plan, usually General. A prep
 Task may inherit access from its parent Plan, but that parent relationship is explicit and
 does not turn the Task into a directly shared object.
@@ -236,7 +236,7 @@ it is stated once there rather than re-derived per feature.
   another operation. `POST /v1/capture/*` returns a draft and never persists — see
   [`../02-architecture/api-contract.md#211-capture--phase-8-stubbed-earlier`](../02-architecture/api-contract.md#211-capture--phase-8-stubbed-earlier).
   Marking a watch session complete does not create the next session and does not move the
-  watchlist item's progress. Completing a meal does not add groceries. Completing an outing
+  watchlist item's progress. Completing a meal does not add groceries. Completing an event
   does not check the list item it came from. Creating a trip plan does not create a packing
   list, and creating a list from a shared plan does not share it with that plan's people.
 

@@ -96,7 +96,7 @@ const plural = (count: number, one: string, many: string) =>
  * Blockers, from the three stored counts (§6.3 point 3).
  *
  * **Only Plan → Task is ever blocked.** A Plan-kind change never is: moving a Watch to an
- * Outing keeps every participant, expense and prep task, so there is nothing coordinated to
+ * Event keeps every participant, expense and prep task, so there is nothing coordinated to
  * lose. Task → Plan cannot be blocked either — a Task has none of these by construction.
  *
  * The counts are read, never written: the conversion "never deletes coordinated data as a
@@ -148,7 +148,7 @@ function seasonEpisodeLabel(season?: number, episode?: number): string {
  * that is **absent** on the source is not dropped — there is nothing to lose — so the
  * confirmation never lists a field the user never filled in.
  */
-function droppedFrom(details: ActivityDetails, placeNameMoved: boolean): DroppedField[] {
+function droppedFrom(details: ActivityDetails): DroppedField[] {
   const dropped: DroppedField[] = [];
   const add = (key: string, label: string | undefined) => {
     if (label !== undefined) dropped.push({ key, label });
@@ -214,21 +214,32 @@ function droppedFrom(details: ActivityDetails, placeNameMoved: boolean): Dropped
         'event.organiser',
         details.organiser === undefined ? undefined : `Organiser (${details.organiser})`,
       );
-      break;
-    }
-
-    case 'outing': {
-      /**
-       * `placeName` moves into `location.label` **only if** that label is empty (§6.3). When
-       * the activity already has a location, the place name has nowhere to go and is a real
-       * loss — so whether it is dropped depends on the location, not on the field alone.
-       * {@link changeActivityKind} makes that decision once and passes the answer here,
-       * rather than this re-deriving it and the two disagreeing.
-       */
-      if (details.placeName !== undefined && !placeNameMoved) {
-        add('outing.placeName', `Place (${details.placeName})`);
+      if (details.reservation !== undefined) {
+        add(
+          'event.reservation.name',
+          details.reservation.name === undefined
+            ? undefined
+            : `Reservation name (${details.reservation.name})`,
+        );
+        add(
+          'event.reservation.time',
+          details.reservation.time === undefined
+            ? undefined
+            : `Reservation time (${details.reservation.time})`,
+        );
+        add(
+          'event.reservation.partySize',
+          details.reservation.partySize === undefined
+            ? undefined
+            : `Party size (${details.reservation.partySize})`,
+        );
+        add(
+          'event.reservation.reference',
+          details.reservation.reference === undefined
+            ? undefined
+            : `Reservation reference (${details.reservation.reference})`,
+        );
       }
-      // `reservation` is folded into `notes` as one formatted line, so it is carried.
       break;
     }
 
@@ -242,49 +253,9 @@ function droppedFrom(details: ActivityDetails, placeNameMoved: boolean): Dropped
   return dropped;
 }
 
-/**
- * Whether `placeName` survives as `location.label`.
- *
- * §6.3: `outing → event` moves it "**only if** `location.label` is empty", and the row for
- * `outing → any other` says "same as above" — so the condition is the label being free, not
- * the target being `event` specifically.
- *
- * The single source of truth for both halves of the answer: {@link locationFor} fills the
- * label when this is true, and {@link droppedFrom} reports a loss when it is false.
- */
-function movesPlaceName(source: ChangeSource): boolean {
-  if (source.details.kind !== 'outing') return false;
-  if (source.details.placeName === undefined) return false;
-
-  const label = source.location?.label;
-  return label === undefined || label === '';
-}
-
 function formatPrice(cents: number, currency?: string): string {
   const amount = (cents / 100).toFixed(2);
   return currency === undefined ? amount : `${amount} ${currency}`;
-}
-
-/**
- * A reservation as one line of notes: `Reservation: Luca, 19:30, party of 4, ref ABC123`.
- *
- * One formatted line, per §6.3's `outing →` rows, and only the parts that exist — a
- * reservation with just a time should not read `Reservation: , 19:30, party of , ref`.
- */
-function reservationLine(reservation: {
-  name?: string;
-  time?: string;
-  partySize?: number;
-  reference?: string;
-}): string | undefined {
-  const parts = [
-    reservation.name,
-    reservation.time,
-    reservation.partySize === undefined ? undefined : `party of ${reservation.partySize}`,
-    reservation.reference === undefined ? undefined : `ref ${reservation.reference}`,
-  ].filter((part): part is string => part !== undefined && part !== '');
-
-  return parts.length === 0 ? undefined : `Reservation: ${parts.join(', ')}`;
 }
 
 /**
@@ -297,11 +268,7 @@ function reservationLine(reservation: {
  */
 function notesFor(source: ChangeSource): string | undefined {
   const appended =
-    source.details.kind === 'event'
-      ? source.details.description
-      : source.details.kind === 'outing' && source.details.reservation !== undefined
-        ? reservationLine(source.details.reservation)
-        : undefined;
+    source.details.kind === 'event' ? source.details.description : undefined;
 
   if (appended === undefined || appended === '') return source.notes;
   if (source.notes === undefined || source.notes === '') return appended;
@@ -309,22 +276,12 @@ function notesFor(source: ChangeSource): string | undefined {
   return `${source.notes}\n\n${appended}`;
 }
 
-/** `location` after the change: the source's, unless `placeName` has a free label to fill. */
-function locationFor(source: ChangeSource): ActivityLocation | undefined {
-  if (!movesPlaceName(source)) return source.location;
-
-  // Narrowed by `movesPlaceName`, which the compiler cannot see through a function boundary.
-  const placeName = (source.details as { placeName: string }).placeName;
-
-  return { ...source.location, label: placeName };
-}
-
 /**
  * The target's `details`, carrying across only what the table says survives.
  *
  * Every target starts from its **empty** variant rather than from the source, which is what
  * makes "a meal with watch fields" unrepresentable in the result as well as in storage. The
- * two carries are `any → watch` and `any → outing`, both of which seed a field from `title`.
+ * The one carry is `any → watch`, which seeds its required field from `title`.
  */
 function detailsFor(source: ChangeSource, target: ChangeTarget): ActivityDetails {
   switch (target.type) {
@@ -332,8 +289,6 @@ function detailsFor(source: ChangeSource, target: ChangeTarget): ActivityDetails
       // `mediaTitle` is required on a watch, so this is not merely a nicety — a watch with
       // no media title is not a representable value.
       return { kind: 'watch', mediaTitle: source.title };
-    case 'outing':
-      return { kind: 'outing', placeName: source.title };
     case 'meal':
       return { kind: 'meal' };
     case 'event':
@@ -355,8 +310,8 @@ function detailsFor(source: ChangeSource, target: ChangeTarget): ActivityDetails
  * confirmation at all (§6.3 point 6).
  *
  * `status`, `completedAt` and `outcome` are absent from the result on purpose: **no
- * conversion changes them** (§6.3 point 8). An `event` that was attended and becomes an
- * `outing` stays completed with `outcome: 'attended'`. Leaving them out means a caller
+ * conversion changes them** (§6.3 point 8). An attended Event that becomes another kind
+ * stays completed with `outcome: 'attended'`. Leaving them out means a caller
  * cannot pass them through by accident.
  */
 export function changeActivityKind(
@@ -390,7 +345,7 @@ export function changeActivityKind(
   }
 
   const notes = notesFor(source);
-  const location = locationFor(source);
+  const location = source.location === undefined ? undefined : { ...source.location };
 
   return {
     objectKind: target.objectKind,
@@ -398,7 +353,7 @@ export function changeActivityKind(
     details: detailsFor(source, target),
     ...(notes === undefined ? {} : { notes }),
     ...(location === undefined ? {} : { location }),
-    dropped: droppedFrom(source.details, movesPlaceName(source)),
+    dropped: droppedFrom(source.details),
     blockers: blockersFor(source, target),
   };
 }

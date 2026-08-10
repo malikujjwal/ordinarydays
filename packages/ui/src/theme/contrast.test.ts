@@ -118,14 +118,7 @@ describe.each(schemes)('%s scheme — boundaries and focus meet 3:1', (scheme) =
  * this rule and exactly why the threshold here is not 4.5.
  */
 describe.each(schemes)('%s scheme — type accents meet 3:1 as glyphs', (scheme) => {
-  const names: ActivityTypeName[] = [
-    'task',
-    'meal',
-    'watch',
-    'event',
-    'outing',
-    'custom',
-  ];
+  const names: ActivityTypeName[] = ['task', 'meal', 'watch', 'event', 'custom'];
 
   it.each(names)('%s accent on its own surface tint', (name) => {
     const { accent, surface } = typeAccents[scheme][name];

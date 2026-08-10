@@ -371,7 +371,6 @@
               "meal",
               "watch",
               "event",
-              "outing",
               "custom"
             ]
           },
@@ -703,24 +702,6 @@
                         "format": "uri"
                       },
                       "organiser": {
-                        "type": "string",
-                        "maxLength": 120
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ]
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": [
-                          "outing"
-                        ]
-                      },
-                      "placeName": {
                         "type": "string",
                         "maxLength": 120
                       },
@@ -1115,24 +1096,6 @@
                       "organiser": {
                         "type": "string",
                         "maxLength": 120
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ]
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": [
-                          "outing"
-                        ]
-                      },
-                      "placeName": {
-                        "type": "string",
-                        "maxLength": 120
                       },
                       "reservation": {
                         "type": "object",
@@ -1226,7 +1189,6 @@
                   "meal",
                   "watch",
                   "event",
-                  "outing",
                   "custom"
                 ]
               }
@@ -1689,24 +1651,6 @@
                       "organiser": {
                         "type": "string",
                         "maxLength": 120
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ]
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": [
-                          "outing"
-                        ]
-                      },
-                      "placeName": {
-                        "type": "string",
-                        "maxLength": 120
                       },
                       "reservation": {
                         "type": "object",
@@ -2012,24 +1956,6 @@
                       "organiser": {
                         "type": "string",
                         "maxLength": 120
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ]
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": [
-                          "outing"
-                        ]
-                      },
-                      "placeName": {
-                        "type": "string",
-                        "maxLength": 120
                       },
                       "reservation": {
                         "type": "object",
@@ -2106,7 +2032,6 @@
                   "meal",
                   "watch",
                   "event",
-                  "outing",
                   "custom"
                 ]
               },
@@ -2464,24 +2389,6 @@
                   "organiser": {
                     "type": "string",
                     "maxLength": 120
-                  }
-                },
-                "required": [
-                  "kind"
-                ]
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "enum": [
-                      "outing"
-                    ]
-                  },
-                  "placeName": {
-                    "type": "string",
-                    "maxLength": 120
                   },
                   "reservation": {
                     "type": "object",
@@ -2564,7 +2471,6 @@
               "meal",
               "watch",
               "event",
-              "outing",
               "custom"
             ]
           }
@@ -2636,7 +2542,6 @@
                       "meal",
                       "watch",
                       "event",
-                      "outing",
                       "custom"
                     ]
                   }
@@ -2723,7 +2628,6 @@
                       "meal",
                       "watch",
                       "event",
-                      "outing",
                       "custom"
                     ]
                   }
@@ -2809,7 +2713,6 @@
                       "meal",
                       "watch",
                       "event",
-                      "outing",
                       "custom"
                     ]
                   }
@@ -3211,7 +3114,6 @@
                 "meal",
                 "watch",
                 "event",
-                "outing",
                 "custom"
               ]
             },

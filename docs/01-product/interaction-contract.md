@@ -84,7 +84,7 @@ line added to it in the same pull request.
 | --- | --- | --- |
 | Changing a Plan's kind, nothing dropped | additive | — (no confirmation) |
 | Changing a Plan's kind, `details` dropped | destructive | Each dropped field with its current value, plus the `Keeps:` line ([`activities.md`](activities.md#63-changing-object-or-plan-kind) §6.3) |
-| Task → Plan | additive explicit conversion | No confirmation; requires an unselected General / Meal / Watch / Event / Outing choice and review before `Save changes` |
+| Task → Plan | additive explicit conversion | No confirmation; requires an unselected General / Meal / Watch / Event choice and review before `Save changes` |
 | Plan → Task with participants, expenses, or prep children | blocked | No confirmation or write; name each blocking section and count so the user can remove them explicitly first |
 | Plan → Task after blockers are removed, with Plan-specific details | destructive | Every dropped field and value, plus the common fields that remain |
 | A list's `checkable` capability, on or off | additive both ways | — (`checked` is retained when off) |
@@ -153,7 +153,7 @@ Rules for the follow-up itself:
 The global `+` always opens **Task / Plan / List item** in that fixed order, with nothing
 selected. A contextual control fixes intent only by naming it: `+ Add a task`,
 `+ Add an item`, or `+ Add a prep task`. Plan then requires **General / Meal / Watch /
-Event / Outing**, also fixed and unselected; General is an explicit choice, never a hidden
+Event**, also fixed and unselected; General is an explicit choice, never a hidden
 fallback. List item requires an explicit destination unless the current list already names
 it.
 
@@ -213,7 +213,7 @@ row does not move under the finger.
 | Meal | Open plan detail | — (no checkbox) | `Had it` | Had it | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | Watch | Open plan detail | — | `Watched` | Watched | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | Event | Open plan detail | — | `Attended` | Attended | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
-| Outing | Open plan detail | — | `Done` | Done | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
+| Event | Open plan detail | — | `Done` | Done | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | General | Open plan detail | — | `Done` | Done | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | Prep task (on Today) | Open task detail | Complete | `Complete` | Complete | `Open plan` · `Reschedule` · `Delete` | Opens the parent plan | Preview + `⋯` menu |
 | Any row with a pending RSVP | Open plan detail | — | `Going` | Sets RSVP going | `Maybe` · `Decline` | Sets RSVP maybe | Preview + `⋯` menu |
@@ -482,13 +482,12 @@ not obvious from the label.
 | Meal | 1. Row body<br>2. Time | 1. `Chicken tacos, meal, dinner, 7:30 PM`<br>2. `7:30 PM, change time` | `button`, `button` | `Had it`, `Reschedule`, `Delete` |
 | Watch | 1. Row body<br>2. Time | 1. `Severance, watch, season 2 episode 4, 8:00 PM, with Alice` | `button`, `button` | `Watched`, `Reschedule`, `Delete` |
 | Event | 1. Row body<br>2. Time | 1. `Dentist appointment, event, 2:30 PM, at Dr Patel` | `button`, `button` | `Attended`, `Reschedule`, `Delete` |
-| Outing | 1. Row body<br>2. Time | 1. `Zahav, outing, 7:00 PM, with Alice and 2 others` | `button`, `button` | `Done`, `Reschedule`, `Delete` |
 | General | 1. Row body<br>2. Time | 1. `Practice guitar, general plan, 9:00 PM` | `button`, `button` | `Done`, `Reschedule`, `Delete` |
 | Passed, unresolved | 1. Row body<br>2. Prompt chip | 2. `How did it go? Choose an outcome for Dentist appointment` | `button`, `button` | `Attended`, `Didn't go` |
 | Completed row | 1. Row body | `Overnight oats, had it, 8:00 AM` | `button` | `Undo` |
 | Pending RSVP | 1. Row body<br>2–4. RSVP buttons | 1. `Dinner at Zahav, Saturday 7:00 PM, from Alice, awaiting your reply` | `button` ×4 | — |
-| Needs-a-date row | 1. Row body | `Dinner at Zahav, outing, no date. Alice is interested. Ben hasn't replied. 2 dates suggested.` | `button` | Owner: `Set date`, `Delete`. Participant: `Suggest a date`, `Leave plan` |
-| Needs-a-date row, no participants | 1. Row body | `Poconos trip, outing, no date. Just you.` | `button` | `Set date`, `Delete` |
+| Needs-a-date row | 1. Row body | `Dinner at Zahav, event, no date. Alice is interested. Ben hasn't replied. 2 dates suggested.` | `button` | Owner: `Set date`, `Delete`. Participant: `Suggest a date`, `Leave plan` |
+| Needs-a-date row, no participants | 1. Row body | `Poconos trip, event, no date. Just you.` | `button` | `Set date`, `Delete` |
 | Date suggestion row | 1. Row body<br>2. `Works for me` toggle<br>3. `Use this date` (owner only) | 1. `Saturday 9 August, 7:00 PM, suggested by Alice, before the show. Works for you and Ben.`<br>2. `Works for me, on`<br>3. `Use this date` | `text`, `switch`, `button` | `Delete` on your own |
 | List member row | 1. Row body<br>2. Trailing control | 1. `Alice, member` / `Ben, invited, we emailed them`<br>2. `Remove Alice from this list` / `Leave this list` | `text`, `button` | — |
 | UP NEXT card | 1. Card body | `Up next. Pick up groceries, in 2 hours, 5:30 PM` | `button` | Same as the row |
@@ -605,7 +604,7 @@ Within forms and sheets:
 | `Esc` | Cancel, with the discard prompt if dirty |
 | `Tab` / `Shift + Tab` | Move through fields in visual order |
 | `Alt + 1`–`3` | On the global chooser: Task, Plan, List item |
-| `Alt + 1`–`5` | On the Plan-kind chooser: General, Meal, Watch, Event, Outing |
+| `Alt + 1`–`4` | On the Plan-kind chooser: General, Meal, Watch, Event |
 
 The shortcut sheet (`?`) lists every shortcut and is the discovery mechanism. Shortcuts are
 never the only way to do anything.

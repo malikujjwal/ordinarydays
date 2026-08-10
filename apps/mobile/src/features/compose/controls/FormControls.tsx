@@ -26,7 +26,7 @@ import {
 import { type ReminderOption, reminderOptions } from '@/features/compose/model/reminders';
 
 /**
- * The controls the six forms share (`activities.md` §3.4, P1-25).
+ * The controls the five forms share (`activities.md` §3.4, P1-25).
  *
  * "Common controls behave identically across types" is a rule, not an observation — so they
  * are one implementation each rather than six that agree today. The interlocks §3.4 states
@@ -377,7 +377,7 @@ export interface ReservationControlProps {
   onChange: (patch: Partial<DraftReservation>) => void;
 }
 
-/** The Outing disclosure group: name, time, party size, reference (`activities.md` §4.5). */
+/** The Event reservation disclosure group (`activities.md` §4.4). */
 export function ReservationControl({ value, onChange }: ReservationControlProps) {
   const theme = useTheme();
   return (
@@ -410,6 +410,56 @@ export function ReservationControl({ value, onChange }: ReservationControlProps)
         value={value.reference}
         onChangeText={(reference) => onChange({ reference })}
         maxLength={120}
+      />
+    </View>
+  );
+}
+
+export interface TicketsAndDetailsControlProps {
+  price: string;
+  ticketUrl: string;
+  organiser: string;
+  onChange: (patch: { price?: string; ticketUrl?: string; organiser?: string }) => void;
+  fieldErrors: Record<string, string>;
+}
+
+/** The Event tickets-and-details disclosure group (`activities.md` §4.4). */
+export function TicketsAndDetailsControl({
+  price,
+  ticketUrl,
+  organiser,
+  onChange,
+  fieldErrors,
+}: TicketsAndDetailsControlProps) {
+  const theme = useTheme();
+  return (
+    <View style={{ gap: theme.space[4] }} testID="compose-tickets-details">
+      <Text variant="footnoteStrong" color="textSecondary">
+        Tickets &amp; details
+      </Text>
+      <Field
+        label="Price"
+        value={price}
+        onChangeText={(nextPrice) => onChange({ price: nextPrice })}
+        keyboardType="number-pad"
+        placeholder="0.00"
+        testID="compose-price"
+        {...(fieldErrors.price === undefined ? {} : { error: fieldErrors.price })}
+      />
+      <Field
+        label="Ticket link"
+        value={ticketUrl}
+        onChangeText={(nextTicketUrl) => onChange({ ticketUrl: nextTicketUrl })}
+        keyboardType="url"
+        testID="compose-ticket-url"
+        {...(fieldErrors.ticketUrl === undefined ? {} : { error: fieldErrors.ticketUrl })}
+      />
+      <Field
+        label="Organiser"
+        value={organiser}
+        onChangeText={(nextOrganiser) => onChange({ organiser: nextOrganiser })}
+        maxLength={120}
+        testID="compose-organiser"
       />
     </View>
   );

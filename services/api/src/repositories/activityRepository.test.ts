@@ -209,8 +209,8 @@ describe('the index entry’s GSI1 keys', () => {
     await createActivity(
       ALICE,
       plan({
-        type: 'outing',
-        details: { kind: 'outing', placeName: 'Zahav' },
+        type: 'event',
+        details: { kind: 'event', organiser: 'Dr Patel' },
         location: { label: 'Zahav' },
         schedule: { ...schedule, time: '19:00', endTime: '21:00' },
       }),
@@ -218,7 +218,7 @@ describe('the index entry’s GSI1 keys', () => {
 
     expect(indexOf()).toMatchObject({
       activityId: ACT,
-      type: 'outing',
+      type: 'event',
       title: 'Buy milk',
       status: 'saved',
       time: '19:00',
@@ -227,7 +227,7 @@ describe('the index entry’s GSI1 keys', () => {
       participantAvatars: [],
       participantCount: 0,
       locationLabel: 'Zahav',
-      subtitle: 'Zahav',
+      subtitle: 'Dr Patel',
     });
   });
 

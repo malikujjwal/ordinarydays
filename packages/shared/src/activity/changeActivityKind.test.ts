@@ -15,7 +15,7 @@ import {
  * one thing worth checking.
  */
 
-const TYPES: ActivityType[] = ['task', 'meal', 'watch', 'event', 'outing', 'custom'];
+const TYPES: ActivityType[] = ['task', 'meal', 'watch', 'event', 'custom'];
 
 const targetFor = (type: ActivityType): ChangeTarget =>
   type === 'task' ? { objectKind: 'task', type: 'task' } : { objectKind: 'plan', type };
@@ -45,10 +45,6 @@ const fullDetails: Record<ActivityType, ActivityDetails> = {
     currency: 'USD',
     ticketUrl: 'https://example.com/tickets',
     organiser: 'The Barbican',
-  },
-  outing: {
-    kind: 'outing',
-    placeName: 'Luca',
     reservation: { name: 'Ada', time: '19:30', partySize: 4, reference: 'ABC123' },
   },
   custom: { kind: 'custom' },
@@ -72,14 +68,14 @@ const keys = (from: ActivityType, to: ActivityType) =>
   changeActivityKind(source(from), targetFor(to)).dropped.map((field) => field.key);
 
 /**
- * All 36 ordered pairs, generated from the type list rather than written out — so a seventh
+ * All 25 ordered pairs, generated from the type list rather than written out — so a sixth
  * activity type cannot be added without this failing until its row is considered.
  */
 const ALL_PAIRS = TYPES.flatMap((from) => TYPES.map((to) => [from, to] as const));
 
 describe('every ordered pair is covered', () => {
-  it('is 36 pairs, and the list is generated from the types themselves', () => {
-    expect(ALL_PAIRS).toHaveLength(36);
+  it('is 25 pairs, and the list is generated from the types themselves', () => {
+    expect(ALL_PAIRS).toHaveLength(25);
   });
 
   it.each(ALL_PAIRS)(
@@ -131,11 +127,11 @@ describe('changing a kind to itself', () => {
   });
 
   it('leaves an existing location and notes exactly as they were', () => {
-    const input = source('outing', {
+    const input = source('event', {
       notes: 'Ask for the terrace',
       location: { label: 'Home' },
     });
-    const result = changeActivityKind(input, targetFor('outing'));
+    const result = changeActivityKind(input, targetFor('event'));
 
     expect(result.notes).toBe('Ask for the terrace');
     expect(result.location).toEqual({ label: 'Home' });
@@ -179,7 +175,7 @@ describe('watch → any', () => {
   it('labels season and episode as one thing, the way a user reads them', () => {
     const [first] = changeActivityKind(
       source('watch'),
-      targetFor('outing'),
+      targetFor('event'),
     ).dropped.filter((field) => field.key === 'watch.seasonEpisode');
 
     expect(first?.label).toBe('Season and episode (S2 E4)');
@@ -234,9 +230,8 @@ describe('meal → any', () => {
 });
 
 /**
- * `event → any`: `description` is **carried** into notes for every target, so only the four
- * commerce fields are lost. The table gives `event → outing` its own row and then `event →
- * any other` with identical content, which is the same rule written twice.
+ * `event → any`: `description` is carried into notes; commerce and reservation fields are
+ * named destructive losses.
  */
 describe('event → any', () => {
   /**
@@ -245,11 +240,15 @@ describe('event → any', () => {
    * line, not two. The keys are confirmation rows, not a mirror of the stored shape.
    */
   it.each(TYPES.filter((type) => type !== 'event'))(
-    'drops price, ticket link and organiser for %s',
+    'drops tickets, organiser and populated reservation fields for %s',
     (to) => {
       expect(keys('event', to).sort()).toEqual([
         'event.organiser',
         'event.price',
+        'event.reservation.name',
+        'event.reservation.partySize',
+        'event.reservation.reference',
+        'event.reservation.time',
         'event.ticketUrl',
       ]);
     },
@@ -258,14 +257,14 @@ describe('event → any', () => {
   it('appends description to notes, separated by a blank line', () => {
     const withNotes = source('event', { notes: 'Bring the tickets' });
 
-    expect(changeActivityKind(withNotes, targetFor('outing')).notes).toBe(
+    expect(changeActivityKind(withNotes, targetFor('meal')).notes).toBe(
       'Bring the tickets\n\nDoors at seven',
     );
   });
 
   /** No leading blank line when there were no notes — "if `notes` is non-empty", read literally. */
   it('becomes the notes outright when there were none', () => {
-    expect(changeActivityKind(source('event'), targetFor('outing')).notes).toBe(
+    expect(changeActivityKind(source('event'), targetFor('meal')).notes).toBe(
       'Doors at seven',
     );
   });
@@ -286,75 +285,28 @@ describe('event → any', () => {
 
     expect(price?.label).toBe('Price (45.00 USD)');
   });
-});
+  it('names each populated reservation field in the confirmation payload', () => {
+    const labels = changeActivityKind(source('event'), targetFor('custom'))
+      .dropped.filter((field) => field.key.startsWith('event.reservation.'))
+      .map((field) => field.label);
 
-/** `outing → any`: the reservation folds into notes; the place name moves if it can. */
-describe('outing → any', () => {
-  it('moves placeName into an empty location label', () => {
-    expect(changeActivityKind(source('outing'), targetFor('event')).location).toEqual({
-      label: 'Luca',
-    });
-  });
-
-  it('reports no loss when placeName found a home', () => {
-    expect(keys('outing', 'event')).not.toContain('outing.placeName');
-  });
-
-  /**
-   * **The case the first implementation got wrong.** When the activity already has a
-   * location, `placeName` has nowhere to go — so it is a real loss and must be confirmed.
-   * §6.3 moves it "**only if** `location.label` is empty".
-   */
-  it('keeps an existing location and reports placeName as dropped', () => {
-    const located = source('outing', { location: { label: 'Home' } });
-    const result = changeActivityKind(located, targetFor('event'));
-
-    expect(result.location).toEqual({ label: 'Home' });
-    expect(result.dropped.map((field) => field.key)).toContain('outing.placeName');
-  });
-
-  it('treats an empty-string label as free', () => {
-    const blank = source('outing', { location: { label: '' } });
-
-    expect(changeActivityKind(blank, targetFor('event')).location?.label).toBe('Luca');
-  });
-
-  it('folds the reservation into notes as one formatted line', () => {
-    expect(changeActivityKind(source('outing'), targetFor('event')).notes).toBe(
-      'Reservation: Ada, 19:30, party of 4, ref ABC123',
-    );
-  });
-
-  it('omits the parts of a reservation that are not there', () => {
-    const partial = source('outing', {
-      details: { kind: 'outing', reservation: { time: '19:30' } },
-    });
-
-    expect(changeActivityKind(partial, targetFor('task')).notes).toBe(
-      'Reservation: 19:30',
-    );
-  });
-
-  it('appends the reservation after existing notes, separated by a blank line', () => {
-    const withNotes = source('outing', {
-      notes: 'Ask for the terrace',
-      details: { kind: 'outing', reservation: { name: 'Ada' } },
-    });
-
-    expect(changeActivityKind(withNotes, targetFor('event')).notes).toBe(
-      'Ask for the terrace\n\nReservation: Ada',
-    );
+    expect(labels).toEqual([
+      'Reservation name (Ada)',
+      'Reservation time (19:30)',
+      'Party size (4)',
+      'Reservation reference (ABC123)',
+    ]);
   });
 });
 
 /**
- * `any → watch` and `any → outing` seed a field from `title`.
+ * `any → watch` seeds its required field from `title`.
  *
  * The identity pair is excluded from both: seeding is what a *change into* a kind does, and
  * `watch → watch` keeps the `mediaTitle` the user already set rather than overwriting it with
  * the activity title. That case has its own block above.
  */
-describe('the two carries into a target', () => {
+describe('the carry into Watch', () => {
   it.each(TYPES.filter((type) => type !== 'watch'))(
     '%s → watch sets mediaTitle from the title',
     (from) => {
@@ -364,18 +316,6 @@ describe('the two carries into a target', () => {
       );
 
       expect(result.details).toMatchObject({ kind: 'watch', mediaTitle: 'Paddington' });
-    },
-  );
-
-  it.each(TYPES.filter((type) => type !== 'outing'))(
-    '%s → outing sets placeName from the title',
-    (from) => {
-      const result = changeActivityKind(
-        source(from, { title: 'Luca' }),
-        targetFor('outing'),
-      );
-
-      expect(result.details).toMatchObject({ kind: 'outing', placeName: 'Luca' });
     },
   );
 });
@@ -458,7 +398,7 @@ describe('Plan → Task blockers', () => {
   });
 
   /** A Plan-kind change is never blocked: nothing coordinated is lost by it. */
-  it.each(['meal', 'watch', 'event', 'outing', 'custom'] as const)(
+  it.each(['meal', 'watch', 'event', 'custom'] as const)(
     'never blocks a plan-kind change to %s, whatever the counts',
     (to) => {
       const busy = source('event', {
@@ -475,7 +415,7 @@ describe('Plan → Task blockers', () => {
   it('never blocks task → plan', () => {
     const task = source('task', { participantCount: 0, childCount: 0 });
 
-    expect(changeActivityKind(task, targetFor('outing')).blockers).toEqual([]);
+    expect(changeActivityKind(task, targetFor('event')).blockers).toEqual([]);
   });
 });
 
@@ -516,8 +456,8 @@ describe('blockerMessage', () => {
 
 /**
  * §6.3 point 8: **no conversion changes `status`, `completedAt` or `outcome`.** They are
- * absent from the result type, so a caller cannot pass them through by accident — an `event`
- * that was attended and becomes an `outing` stays completed with `outcome: 'attended'`
+ * absent from the result type, so a caller cannot pass them through by accident — an Event
+ * that changes kind stays completed with its historical `outcome: 'attended'`
  * because this function never had the chance to touch them.
  */
 describe('what the result deliberately does not carry', () => {
@@ -544,17 +484,17 @@ describe('the function is pure', () => {
   });
 
   it('does not mutate its input', () => {
-    const input = source('outing', { notes: 'Ask for the terrace' });
+    const input = source('event', { notes: 'Ask for the terrace' });
     const before = structuredClone(input);
 
-    changeActivityKind(input, targetFor('event'));
+    changeActivityKind(input, targetFor('meal'));
 
     expect(input).toEqual(before);
   });
 
   it('does not hand back a reference into the input', () => {
-    const input = source('outing');
-    const result = changeActivityKind(input, targetFor('event'));
+    const input = source('event', { location: { label: 'Luca' } });
+    const result = changeActivityKind(input, targetFor('meal'));
 
     expect(result.details).not.toBe(input.details);
     expect(result.location).not.toBe(input.location);

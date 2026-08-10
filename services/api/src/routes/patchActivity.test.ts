@@ -229,15 +229,15 @@ describe('who may patch what', () => {
         title: { title: 'Renamed' },
         schedule: { schedule: { date: '2026-09-01', timezone: 'UTC' } },
         location: { location: { label: 'Elsewhere' } },
-        objectKind: { objectKind: 'plan', type: 'outing' },
+        objectKind: { objectKind: 'plan', type: 'event' },
         type: { objectKind: 'plan', type: 'meal' },
       };
 
       ddbMock.on(GetCommand).resolves({
         Item: meta({
           objectKind: 'plan',
-          type: 'outing',
-          details: { kind: 'outing' },
+          type: 'event',
+          details: { kind: 'event' },
         }) as never,
       });
       ddbMock.on(QueryCommand).resolves({
@@ -258,8 +258,8 @@ describe('who may patch what', () => {
     ddbMock.on(GetCommand).resolves({
       Item: meta({
         objectKind: 'plan',
-        type: 'outing',
-        details: { kind: 'outing' },
+        type: 'event',
+        details: { kind: 'event' },
       }) as never,
     });
     ddbMock.on(QueryCommand).resolves({
@@ -399,7 +399,7 @@ describe('changing the object or Plan kind', () => {
     );
 
     const body = await (
-      await patch(createApp(), { objectKind: 'plan', type: 'outing' })
+      await patch(createApp(), { objectKind: 'plan', type: 'custom' })
     ).json();
 
     expect(body.data.status).toBe('completed');

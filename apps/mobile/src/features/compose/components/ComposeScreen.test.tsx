@@ -224,7 +224,7 @@ describe('Plan', () => {
     tap('Plan');
 
     expect(screen.getByRole('heading', { name: 'What kind of plan?' })).toBeDefined();
-    for (const label of ['General', 'Meal', 'Watch', 'Event', 'Outing']) {
+    for (const label of ['General', 'Meal', 'Watch', 'Event']) {
       expect(screen.getByRole('button', { name: label })).toBeDefined();
     }
     expect(screen.queryByLabelText('Title')).toBeNull();

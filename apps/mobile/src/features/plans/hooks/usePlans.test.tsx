@@ -15,7 +15,7 @@ import { usePlans } from './usePlans';
  */
 const row = (patch: Partial<ActivityListItem> = {}): ActivityListItem => ({
   activityId: 'act_01J0000000000000000000000A',
-  type: 'outing',
+  type: 'event',
   title: 'Dinner at Zahav',
   status: 'scheduled',
   isRecurring: false,

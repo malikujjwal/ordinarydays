@@ -103,7 +103,7 @@ export function useActivityActions(activityId: string): ActivityActions {
  *
  * Built from **P1-17's mapping**, not from the target alone, so the body carries the mapped
  * `details` — and the `notes` and `location` the mapping folded fields into, which is how
- * `event → outing` keeps its description and `outing → event` keeps its reservation line.
+ * Leaving Event carries its description into notes and names any reservation fields lost.
  *
  * `objectKind` and `type` always travel together: the schema rejects one without the other,
  * because "the server never chooses one from the other".

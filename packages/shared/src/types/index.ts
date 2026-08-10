@@ -17,8 +17,8 @@ export type {
   ActivityListItem,
   ActivityLocation,
   ActivitySchedule,
+  EventReservation,
   MealIngredient,
-  OutingReservation,
   PlanActivity,
   TaskActivity,
 } from './activity.js';

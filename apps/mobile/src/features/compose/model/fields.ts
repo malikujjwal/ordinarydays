@@ -1,7 +1,7 @@
 import type { ActivityType } from '@od/shared/types';
 
 /**
- * The six field tables from `activities.md` §4, as data (P1-25).
+ * The five field tables from `activities.md` §4, as data (P1-25).
  *
  * **The order is part of the spec, not a suggestion** (§3 rule 3), and a field absent from a
  * type's table does not appear, is not collapsed behind a disclosure and is not greyed out
@@ -32,9 +32,7 @@ export type FieldKey =
   | 'alsoAddTo'
   | 'location'
   | 'description'
-  | 'price'
-  | 'ticketUrl'
-  | 'organiser'
+  | 'ticketsAndDetails'
   | 'sourceImageLink'
   | 'reservation'
   | 'notes';
@@ -94,24 +92,12 @@ const EVENT: readonly FieldSpec[] = [
   field('time', 'Start time'),
   field('endTime', 'End time'),
   field('location', 'Location'),
-  field('description', 'Description'),
-  field('people', 'People'),
-  field('price', 'Price'),
-  field('ticketUrl', 'Ticket link'),
-  field('organiser', 'Organiser'),
-  field('sourceImageLink', 'Source image / link'),
-  field('reminder', 'Reminder'),
-  field('notes', 'Notes'),
-];
-
-const OUTING: readonly FieldSpec[] = [
-  field('title', 'Place'),
-  field('date', 'Date'),
-  field('time', 'Time'),
-  field('endTime', 'End time'),
-  field('location', 'Location'),
   field('people', 'People'),
   field('reservation', 'Reservation'),
+  field('ticketsAndDetails', 'Tickets & details'),
+  field('description', 'Description'),
+  field('sourceImageLink', 'Source image / link'),
+  field('reminder', 'Reminder'),
   field('notes', 'Notes'),
 ];
 
@@ -131,7 +117,6 @@ export const fieldsByType: Readonly<Record<ActivityType, readonly FieldSpec[]>> 
     meal: MEAL,
     watch: WATCH,
     event: EVENT,
-    outing: OUTING,
     custom: CUSTOM,
   });
 
@@ -151,7 +136,7 @@ export function isFieldVisible(key: FieldKey, mediaKind: 'movie' | 'show' | unde
 }
 
 /* -------------------------------------------------------------------------- */
-/*  The four derivations §4 specifies, and no fifth                            */
+/*  The three derivations §4 specifies, and no fourth                         */
 /* -------------------------------------------------------------------------- */
 
 export type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snack';
@@ -235,21 +220,4 @@ export function watchKind(
 ): 'movie' | 'show' {
   if (chosen !== undefined) return chosen;
   return season.trim() !== '' || episode.trim() !== '' ? 'show' : 'movie';
-}
-
-/**
- * An Outing keeps `title` and `details.placeName` identical (§4.5), and `location.label`
- * **pre-fills** from Place.
- *
- * The difference between the two matters. `placeName` is kept identical — it mirrors on every
- * keystroke. `location.label` only pre-fills: once the user has typed a label of their own,
- * the Place no longer overwrites it, because a venue and its address label are not always the
- * same words.
- */
-export function outingLocationLabel(
-  place: string,
-  currentLabel: string,
-  previousPlace: string,
-): string {
-  return currentLabel === '' || currentLabel === previousPlace ? place : currentLabel;
 }

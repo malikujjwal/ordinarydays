@@ -55,7 +55,7 @@ describe('the three target arms', () => {
     expect(parse({ objectKind: 'task', type: 'task' })).toBe(true);
   });
 
-  it.each(['meal', 'watch', 'event', 'outing', 'custom'])(
+  it.each(['meal', 'watch', 'event', 'custom'])(
     'accepts a Plan target of kind %s',
     (type) => {
       expect(parse({ objectKind: 'plan', type })).toBe(true);

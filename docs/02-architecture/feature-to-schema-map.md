@@ -85,8 +85,8 @@ The index entry decides where the thing shows up, and it is a single attribute:
 So "save it for later" versus "commit to a date" — the distinction the whole product turns
 on — is one attribute on one item. It is not a different entity, a different table, or a
 different code path. Row two is the same statement about a plan that exists before its date
-does: `Alice and I want to try Zahav` is a real, undated `outing` Plan because the user
-explicitly chose **Plan → Outing**. It is shared only because the user separately chose Alice;
+does: `Alice and I want to try Zahav` is a real, undated `event` Plan because the user
+explicitly chose **Plan → Event**. It is shared only because the user separately chose Alice;
 the server infers neither decision from Alice's name or the title.
 
 Scheduling something later is `POST /v1/activities/:id/schedule`, which rewrites the same
@@ -94,11 +94,11 @@ index entry into a different bucket. Nothing moves between tables.
 
 ---
 
-## 3. Six types, one record
+## 3. Five types, one record
 
 `type` plus a discriminated `details` sub-document (`data-model.md` §4.4).
 `task` is the Task target's type. Plans use `PlanType = Exclude<ActivityType, 'task'>`:
-General (`custom`), Meal, Watch, Event, or Outing. This keeps every Plan kind visible in the
+General (`custom`), Meal, Watch, Event. This keeps every Plan kind visible in the
 creation UI.
 
 | Type | What lives in `details` | Where the UI branches |
@@ -106,8 +106,7 @@ creation UI.
 | `task` | nothing | renders a checkbox |
 | `meal` | meal slot, ingredients | subtitle, ingredient→groceries action |
 | `watch` | media title, season, episode, service | subtitle `S2 E4`, progress action |
-| `event` | description, price, ticket URL | ticket link, poster |
-| `outing` | place name, reservation | reservation block |
+| `event` | description, price, ticket URL, organiser, reservation | tickets/details and reservation blocks |
 | `custom` | shortcut reference | generic |
 
 The branch is in the **row renderer and the creation form**, and nowhere else. The API
@@ -257,7 +256,7 @@ follow-up suggestion (`../01-product/plans-and-lists.md`) offers to advance the 
 A deleted Plan leaves the watchlist entry intact. Deleting the ListItem clears the Activity's
 `listId` / `listItemId` but leaves the Activity alive.
 
-The same three-write shape covers a `Bars to try` item becoming an Outing and a
+The same three-write shape covers a `Bars to try` item becoming an Event and a
 `Meals to try` item becoming a Meal. The request carries the type the caller confirmed; the
 server never derives it from behaviour, capabilities, template, or title. The ListItem title
 seeds the Plan title once, then they are independently editable so a list member cannot
@@ -450,11 +449,11 @@ so that if they sign up later, one query finds every guest record that belongs t
 The case the fourth bucket exists for: two people agree on an idea, nobody has picked a day,
 and the thing is real from the moment it is said.
 
-**Creation.** The user chose Plan, then `outing`: `Alice and I want to try Zahav`, no date,
+**Creation.** The user chose Plan, then `event`: `Alice and I want to try Zahav`, no date,
 one participant. Capture may fill the title but does not choose either target or Alice.
 
 ```
-ACT#act_zahav  | META            objectKind: "plan", type: "outing", status: "saved",
+ACT#act_zahav  | META            objectKind: "plan", type: "event", status: "saved",
                                  schedule: absent,
                                  participantCount: 1,
                                  visibility: "shared",

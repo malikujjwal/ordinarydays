@@ -12,8 +12,15 @@ import {
 import { fieldsByType } from '@/features/compose/model/fields';
 import { TypedFields, type TypedFieldsProps } from './TypedFields';
 
+vi.mock('expo-image-picker', () => ({
+  launchCameraAsync: vi.fn(),
+  launchImageLibraryAsync: vi.fn(),
+  requestCameraPermissionsAsync: vi.fn(),
+  requestMediaLibraryPermissionsAsync: vi.fn(),
+}));
+
 /**
- * The six forms, asserted against the six tables (P1-25).
+ * The five forms, asserted against the five tables (P1-25).
  *
  * The expectation is **derived from `fieldsByType`** on purpose, and that is not circular:
  * `fields.test.ts` pins that module against `activities.md` §4 with literal lists, so a field
@@ -38,6 +45,8 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
     reminderOffset: undefined,
     details: EMPTY_DETAILS,
     notes: '',
+    sourceUrl: undefined,
+    attachmentUri: undefined,
     today: TODAY,
     onDateChange: vi.fn(),
     onTimeChange: vi.fn(),
@@ -47,6 +56,9 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
     onReminderChange: vi.fn(),
     onDetailsChange: vi.fn(),
     onNotesChange: vi.fn(),
+    onSourceUrlChange: vi.fn(),
+    onAttach: vi.fn(),
+    onClearAttachment: vi.fn(),
     fieldErrors: {},
     ...overrides,
   };
@@ -57,8 +69,8 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
  * Which fields the renderer is expected to draw, given the state.
  *
  * `title` is the frame's, not the table's — `ComposeForm` renders it above this component for
- * every type. `sourceImageLink` is Event's name for the shared capture row, which renders in
- * the frame's trailer; both are recorded deviations rather than silent omissions.
+ * every type. `sourceImageLink` names the shared capture-row component rather than a visible
+ * field label, so its position is pinned by the field table and the renderer's map.
  * `endTime` appears only once a start time exists (§3.4), and the three Watch fields only when
  * Kind is Show (§4.3).
  */
@@ -86,14 +98,11 @@ function renderedLabels(labels: readonly string[]): string[] {
 }
 
 describe('every form renders its table, in order', () => {
-  it.each(['task', 'meal', 'watch', 'event', 'outing', 'custom'] as const)(
-    '%s',
-    (type) => {
-      mount(type);
-      const want = expected(type);
-      expect(renderedLabels(want)).toEqual(want);
-    },
-  );
+  it.each(['task', 'meal', 'watch', 'event', 'custom'] as const)('%s', (type) => {
+    mount(type);
+    const want = expected(type);
+    expect(renderedLabels(want)).toEqual(want);
+  });
 
   /** The negative half: a field from another type's table must not appear on this one. */
   it('gives a Task no People, Slot or Location row', () => {

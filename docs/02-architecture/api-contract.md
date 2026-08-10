@@ -357,8 +357,8 @@ type CreateActivityInput = ActivityCreateFields & (
 
 **There is no title-only Activity request and no server default.** Omitting `objectKind` or
 `type` returns `400 validation_failed`. Task requires `type: 'task'` and cannot carry direct
-participants. Plan requires one of the five visible Plan kinds — `custom` (General), `meal`,
-`watch`, `event`, or `outing` — and may be private or shared. There is no hidden
+participants. Plan requires one of the four visible Plan kinds — `custom` (General), `meal`,
+`watch`, `event` — and may be private or shared. There is no hidden
 `objectKind: 'plan', type: 'task'` combination. Dates, participant changes, and type changes
 never silently rewrite `objectKind`.
 

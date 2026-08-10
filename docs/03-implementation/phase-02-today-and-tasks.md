@@ -474,11 +474,11 @@ tab, and the storage looks correct while the product does not.
 | # | `recurrence` | `schedule.date` | `objectKind` | `type` (not an input) | Bucket |
 | --- | --- | --- | --- | --- | --- |
 | 1 | — | `2026-08-14` | `task` | `task` | `S` |
-| 2 | — | `2026-08-14` | `plan` | `outing` | `S` — a date beats everything below it |
+| 2 | — | `2026-08-14` | `plan` | `event` | `S` — a date beats everything below it |
 | 3 | — | — | `task` | `task` | `N` |
 | 4 | — | — | `plan` | `custom` | `P` |
 | 5 | — | — | `plan` | `meal` | `P` |
-| 6 | — | — | `plan` | `outing` | `P` |
+| 6 | — | — | `plan` | `event` | `P` |
 | 7 | — | — | `plan` | `watch` | `P` |
 | 8 | — | — | `plan` | `event` | `P` |
 | 9 | — | `2026-08-15` | `plan` | `meal` | `S` |
@@ -497,7 +497,7 @@ bucket moves and therefore that the index entry must be rewritten:
 | 16 | A date is cleared on a Plan | `S` → `P` |
 | 17 | `objectKind` explicitly changes Task → Plan while undated | `N` → `P` |
 | 18 | `objectKind` explicitly changes Plan → Task while undated | `P` → `N` |
-| 19 | Plan `type` changes `custom` → `outing` while undated | `P` → `P`, no rewrite needed |
+| 19 | Plan `type` changes `custom` → `event` while undated | `P` → `P`, no rewrite needed |
 | 20 | Participants are added to an undated Plan | `P` → `P`, no rewrite needed |
 | 21 | Participants are removed from an undated Plan | `P` → `P`, no rewrite needed |
 | 22 | `type` changes while dated | `S` → `S`, no rewrite needed |
@@ -712,7 +712,7 @@ and to the Zod schema in `packages/shared` **before** the client uses them.
 **Edge cases.**
 
 - Non-task types dated in the past never roll forward. Not meals, not watch sessions, not
-  events, not outings, not custom activities.
+  events, not custom activities.
 - **Recurring occurrences never roll forward.** A missed Monday gym is gone. Reviving it
   produces a growing pile of identical rows, which is the exact failure mode recurring tasks
   exist to avoid.
@@ -740,8 +740,8 @@ server-side, so the client never derives presentation from `type` with a switch 
 - `hasCheckbox = type === 'task'`, and nothing else, ever.
 - `subtitle` per the table in
   [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §4: parent plan
-  title for `task`; `Meal · <slot>`; `Watch · S<n> E<n>` or `mediaKind`; `location.label`
-  else `organiser` for `event`; `location.label` else `placeName` for `outing`; none for
+  title for `task`; `Meal · <slot>`; `Watch · S<n> E<n>` or `mediaKind`; `organiser`
+  else `location.label` for `event`; none for
   `custom`.
 - `isPast` per §8.1: `endTime` if present, else `time`, else the end of the local day.
 - `time` is the **effective** time after occurrence overrides — the snooze or reschedule
@@ -1178,7 +1178,7 @@ re-querying, it does not belong here.
 **Tests.** `partition.ts` unit tests over the worked example day at 15:10, at 17:31, and at
 23:59, asserting exact section membership each time. A render test asserting section order
 and that an empty section is absent from the tree. A test that an undated
-`{ objectKind: 'plan', type: 'outing' }`, seeded alongside the fixture, renders in no section
+`{ objectKind: 'plan', type: 'event' }`, seeded alongside the fixture, renders in no section
 on Today — asserted against the response, and separately by a grep test that `partition.ts`
 contains no comparison against `type` or `participantCount`.
 
@@ -1787,7 +1787,7 @@ out the undo handler locally; the suite must catch it).
     forward. A missed recurring occurrence does not roll forward.
 11. Six or more overdue tasks render as three rows plus a `+n more overdue` expander, and no
     badge or count appears anywhere else in the app.
-12. Only `task` rows have a checkbox. Tapping a `meal`, `watch`, `event`, `outing` or
+12. Only `task` rows have a checkbox. Tapping a `meal`, `watch`, `event` or
     `custom` row's leading marker does nothing and the marker is hidden from the screen
     reader.
 13. Tapping the body of any row opens detail and mutates nothing, on every row type, on both
@@ -1812,7 +1812,7 @@ out the undo handler locally; the suite must catch it).
 21. `deriveGsi1Bucket` passes all 25 matrix cases in P2-05 at 100% branch coverage, and is
     called from exactly one place in the codebase — asserted by a grep test that finds one
     caller and no second implementation of the rule.
-22. An undated `{ objectKind: 'plan', type: 'outing' }` has a `U#<u>#P` index entry, appears
+22. An undated `{ objectKind: 'plan', type: 'event' }` has a `U#<u>#P` index entry, appears
     in **no** section of any agenda response with any combination of `include` tokens, and no
     query against `U#<u>#P` occurs on any agenda path. Changing its presentation type leaves
     it in `#P`.

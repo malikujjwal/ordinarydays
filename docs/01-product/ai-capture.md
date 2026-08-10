@@ -17,14 +17,14 @@
 
 Three capabilities, one response shape, one review screen — all downstream of explicit
 intent. Before any request, the client already knows **Task**, **Plan**, or **List item**;
-for a Plan it also knows **General**, **Meal**, **Watch**, **Event**, or **Outing**; for a
+for a Plan it also knows **General**, **Meal**, **Watch**, **Event**; for a
 List item it knows the destination list.
 
 | Capability | Endpoint | Runs only after | Typical source |
 | --- | --- | --- | --- |
 | **Natural-language capture** | `POST /v1/capture/parse` | The matching form is selected | The user chooses **Plan → Watch**, then types `Watch Severance Friday at 8` |
 | **Image field extraction** | `POST /v1/capture/extract` | The matching form is selected | The user chooses **Plan → Event**, then photographs a poster |
-| **Link field extraction** | `POST /v1/capture/link` | The matching form is selected | The user chooses **Plan → Outing**, then pastes a restaurant page |
+| **Link field extraction** | `POST /v1/capture/link` | The matching form is selected | The user chooses **Plan → Event**, then pastes a restaurant page |
 
 All three return `ParsedCapture`. All three are **drafts**. None of them writes anything.
 
@@ -207,14 +207,15 @@ form changes the allow-list; it does not ask the model which form would fit.
 | Start time | `schedule.time` | |
 | End time | `schedule.endTime` | Only when the source states one. Never inferred from a typical duration. |
 | Location | `location.label`, `location.address` | Label is the venue name; address only if fully written on the source |
+| Reservation | `details.reservation.{name,time,partySize,reference}` | Only fields explicitly present on the source; the reservation name and time otherwise keep the form defaults |
 | Description | `details.description` | Trimmed to 1000 characters, with the tail dropped rather than summarised |
 | Price | `details.priceCents`, `details.currency` | Only when a single unambiguous price is stated. A range (`$25–$60`) or a qualifier (`from $25`) yields confidence `< 0.4` and lands in `Couldn't read`. |
 | Ticket / registration link | `details.ticketUrl` | Includes a URL printed as text; excludes a QR code, which is not decoded in v1 |
 | Organiser | `details.organiser` | |
 
 For Task, capture may return only Task fields. For a Plan it may return only common Activity
-fields plus fields belonging to the explicitly selected General, Meal, Watch, Event, or
-Outing form. For a ListItem it may return only title, note, and capabilities already
+fields plus fields belonging to the explicitly selected General, Meal, Watch, or Event
+form. For a ListItem it may return only title, note, and capabilities already
 supported by the selected destination list. Unsupported fields are discarded and never
 used to create another object.
 
@@ -278,7 +279,7 @@ Assume the user's timezone is `America/New_York` and "now" is **Wednesday 5 Augu
 | Task | `Gym at 6pm every weekday` | title `Gym`; time `18:00`; date `2026-08-05`; recurrence weekdays | The recurrence remains visible for review. |
 | Task | `Remind me to call Mum tomorrow at 9` | title `Call Mum`; date `2026-08-06`; time `09:00` | No reminder offset is extracted. The visible Reminder control stays `Off` or shows the user's saved default until they explicitly change it. |
 | Plan → Meal | `Chicken tacos for dinner Sunday` | title `Chicken tacos`; slot Dinner; date `2026-08-09`; slot-derived time `19:00`, flagged | Final action is `Save plan`; no ListItem is created. |
-| Plan → Outing | `Zahav Saturday 7pm with Ben and Priya` | title and place `Zahav`; date `2026-08-08`; time `19:00` | Ben and Priya are not resolved or added; People is explicit. |
+| Plan → Event | `Zahav Saturday 7pm with Ben and Priya` | title and location label `Zahav`; date `2026-08-08`; time `19:00` | Ben and Priya are not resolved or added; People is explicit. |
 | List item → Restaurants to try | `Zahav Saturday 7pm with Ben and Priya` | ListItem title `Zahav` and compatible place fields | No Plan, date, or participants. Final action is `Add to Restaurants to try`. |
 | Contextual `+ Add a prep task` | `Book flights for the New York trip` | title `Book flights for the New York trip` | `parentActivityId` comes only from the explicit plan context, never title matching. |
 
@@ -328,11 +329,11 @@ capture.
 | Plan → General; `Meeting at 5` | AM or PM | PM per §5.2, flagged at `0.6` with `Read as "5" — assumed 5:00 PM` |
 | Plan → Meal; `Lunch 12` | Noon or midnight | Noon, confidence `0.85`, not flagged |
 | Plan → Event; `Concert 08/09` | 8 September vs 9 August | Uses the user's locale order (`en-US` → 9 August), flagged at `0.5`, explanation names the chosen reading |
-| Plan → Outing; `Trip 14-16 Aug` | Range | `date` = `2026-08-14`, `endTime` unused. Multi-day plans are a single dated activity in v1. The second date is not stored anywhere and is not rendered by the app; it survives only inside whatever the user typed. Flagged, with the explanation `Read as starting 14 August`. |
+| Plan → Event; `Trip 14-16 Aug` | Range | `date` = `2026-08-14`, `endTime` unused. Multi-day plans are a single dated activity in v1. The second date is not stored anywhere and is not rendered by the app; it survives only inside whatever the user typed. Flagged, with the explanation `Read as starting 14 August`. |
 | Plan → Watch; `Severance S2E5 Friday` | Episode syntax | `season` `2`, `episode` `5`, both at `0.8`; title becomes `Severance` |
 | Task; `Gym every 3 days` | Recurrence interval | `{ freq: 'interval_days', interval: 3 }`, shown in the Repeat field for confirmation |
 | Task; `Call mum` | `mum` may be a relationship or name | No person lookup or participant suggestion. Title remains `Call mum`. |
-| Any selected form; `Zahav` | The word alone could describe several objects | No routing question exists: the selection remains exactly what the user chose. Only compatible title/place fields may fill. |
+| Any selected form; `Zahav` | The word alone could describe several objects | No routing question exists: the selection remains exactly what the user chose. Only compatible title/location fields may fill. |
 
 > **Decision:** a multi-day range creates one activity on the first day, not one activity
 > per day and not a new date-range field. Adding `schedule.endDate` to the model is a real

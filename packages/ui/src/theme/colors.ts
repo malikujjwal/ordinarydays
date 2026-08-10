@@ -126,7 +126,7 @@ export const colors: Record<ColorScheme, SemanticColors> = { light, dark };
  * Used for a row's type marker, a card's icon squircle and the detail header tint; never as
  * a row background.
  */
-export type ActivityTypeName = 'task' | 'meal' | 'watch' | 'event' | 'outing' | 'custom';
+export type ActivityTypeName = 'task' | 'meal' | 'watch' | 'event' | 'custom';
 
 export interface TypeAccent {
   /** The glyph and marker colour. */
@@ -140,8 +140,7 @@ export const typeAccents: Record<ColorScheme, Record<ActivityTypeName, TypeAccen
     task: { accent: '#6F6D63', surface: '#F1EEE5' },
     meal: { accent: '#8A6520', surface: '#F6F0E2' },
     watch: { accent: '#667747', surface: '#EDF0E2' },
-    event: { accent: '#965D78', surface: '#F9F1F5' },
-    outing: { accent: '#8C4A5E', surface: '#F9F1F5' },
+    event: { accent: '#8C4A5E', surface: '#F9F1F5' },
     /**
      * 4.4:1 — **large-glyph only**, as the design system marks it. It is used for a 16 pt
      * marker and a 24 pt squircle glyph, never for body text, so it is exempt from the 4.5:1
@@ -153,8 +152,7 @@ export const typeAccents: Record<ColorScheme, Record<ActivityTypeName, TypeAccen
     task: { accent: '#B0ADA2', surface: '#100F0D' },
     meal: { accent: '#E0B25A', surface: '#2A2317' },
     watch: { accent: '#9DBA6E', surface: '#232A1C' },
-    event: { accent: '#C9A3B7', surface: '#31242B' },
-    outing: { accent: '#D8A0BC', surface: '#31242B' },
+    event: { accent: '#D8A0BC', surface: '#31242B' },
     custom: { accent: '#A8A599', surface: '#100F0D' },
   },
 };
@@ -171,14 +169,7 @@ export function avatarTint(
   scheme: ColorScheme,
 ): { background: string; foreground: string } {
   const palette = typeAccents[scheme];
-  const names: ActivityTypeName[] = [
-    'event',
-    'watch',
-    'meal',
-    'outing',
-    'task',
-    'custom',
-  ];
+  const names: ActivityTypeName[] = ['event', 'watch', 'meal', 'task', 'custom'];
 
   let hash = 0;
   for (let i = 0; i < displayName.length; i += 1) {

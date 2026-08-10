@@ -174,7 +174,7 @@ export function centsToDraft(cents: number): string {
  * The draft's `details`, as the `ActivityDetails` union the request and P1-17's mapping speak.
  *
  * Fields the chosen type does not have are simply not read — the union is the filter, so a
- * Watch draft that once carried an organiser cannot leak it into an Outing's body.
+ * A Watch draft that once carried Event fields cannot leak them into another kind's body.
  */
 export function toActivityDetails<T extends ActivityType>(
   type: T,
@@ -239,6 +239,14 @@ function kindedDetails(
     }
     case 'event': {
       const priceCents = draftCents(details.price);
+      const { name, time, partySize, reference } = details.reservation;
+      const size = draftInteger(partySize);
+      const reservation = {
+        ...(trimmed(name) === undefined ? {} : { name: name.trim() }),
+        ...(trimmed(time) === undefined ? {} : { time: time.trim() }),
+        ...(size === undefined ? {} : { partySize: size }),
+        ...(trimmed(reference) === undefined ? {} : { reference: reference.trim() }),
+      };
       return {
         kind: 'event',
         ...(trimmed(details.description) === undefined
@@ -251,21 +259,6 @@ function kindedDetails(
         ...(trimmed(details.organiser) === undefined
           ? {}
           : { organiser: details.organiser.trim() }),
-      };
-    }
-    case 'outing': {
-      const { name, time, partySize, reference } = details.reservation;
-      const size = draftInteger(partySize);
-      const reservation = {
-        ...(trimmed(name) === undefined ? {} : { name: name.trim() }),
-        ...(trimmed(time) === undefined ? {} : { time: time.trim() }),
-        ...(size === undefined ? {} : { partySize: size }),
-        ...(trimmed(reference) === undefined ? {} : { reference: reference.trim() }),
-      };
-      return {
-        kind: 'outing',
-        // §4.5: `title` and `details.placeName` are kept identical.
-        placeName: title,
         ...(Object.keys(reservation).length === 0 ? {} : { reservation }),
       };
     }
@@ -314,10 +307,6 @@ export function fromActivityDetails(details: ActivityDetails): DraftDetails {
         price: details.priceCents === undefined ? '' : centsToDraft(details.priceCents),
         ticketUrl: details.ticketUrl ?? '',
         organiser: details.organiser ?? '',
-      };
-    case 'outing':
-      return {
-        ...next,
         reservation: {
           name: details.reservation?.name ?? '',
           time: details.reservation?.time ?? '',

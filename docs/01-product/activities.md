@@ -22,21 +22,20 @@ creation choice, persisted on the Activity as `objectKind: 'plan'`; Task is pers
 [`overview.md`](overview.md#31-four-concepts-connected-where-it-is-useful) §3.1 and is canonical in
 [`../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity`](../02-architecture/data-model.md#1-core-modelling-decision-there-is-only-one-schedulable-entity).
 
-### 1.1 The six stored types are explicit creation guides
+### 1.1 The five stored types are explicit creation guides
 
 | `type` | Guides creation of | Sets `details.kind` |
 | --- | --- | --- |
 | `task` | Something to accomplish | `task` |
 | `meal` | Something to eat or cook | `meal` |
 | `watch` | A movie, show, or episode | `watch` |
-| `event` | A concert, appointment, festival, ticketed thing | `event` |
-| `outing` | A restaurant, hike, coffee, shopping trip | `outing` |
+| `event` | A concert, appointment, restaurant, hike, coffee, festival, or shopping trip | `event` |
 | `custom` | **General** — a Plan that does not fit the guided kinds | `custom` |
 
 The global `+` first asks **Task**, **Plan**, or **List item**. Choosing Task fixes
 `objectKind: 'task'` and `type: 'task'`. Choosing Plan fixes `objectKind: 'plan'`, then
 requires one visible choice: **General**, **Meal**,
-**Watch**, **Event**, or **Outing**. General maps to `custom`; it is never an omitted value
+**Watch**, **Event**. General maps to `custom`; it is never an omitted value
 or a hidden default. The words entered afterward and any capture response cannot select or
 change either choice.
 
@@ -102,10 +101,10 @@ content. Each row determines the stored object before capture starts:
 | Choice | Next required choice | Result |
 | --- | --- | --- |
 | **Task** | None | Task form; every create request sends `objectKind: 'task'`, `type: 'task'`. |
-| **Plan** | **General / Meal / Watch / Event / Outing**, with none selected | The matching Plan form sends `objectKind: 'plan'`; General sends `type: 'custom'`. |
+| **Plan** | **General / Meal / Watch / Event**, with none selected | The matching Plan form sends `objectKind: 'plan'`; General sends `type: 'custom'`. |
 | **List item** | A destination list, unless a contextual list already fixed it | List-item form; its final button names that list. |
 
-The Plan-kind step asks `What kind of plan?` and lists the five kinds in the order above,
+The Plan-kind step asks `What kind of plan?` and lists the four kinds in the order above,
 with nothing selected:
 
 ```
@@ -118,7 +117,6 @@ with nothing selected:
 │  Meal                              › │
 │  Watch                             › │
 │  Event                             › │
-│  Outing                            › │
 └──────────────────────────────────────┘
 ```
 
@@ -246,7 +244,7 @@ Rules that apply to every type's form.
    They map one-to-one onto the `details[]` entries of a `validation_failed` error
    (see [`../02-architecture/api-contract.md#1-shape`](../02-architecture/api-contract.md#1-shape)).
 6. **Character limits:** `title` 1–200, `notes` 0–4000, any free-text sub-field
-   (`service`, `placeName`, `organiser`, ingredient `name`) 0–120.
+   (`service`, `organiser`, reservation fields, ingredient `name`) 0–120.
 
 > **Decision:** v1 has no location autocomplete, no geocoding and no map. `location.lat`,
 > `location.lng` and `location.mapUrl` exist in the model but are only populated by capture
@@ -336,11 +334,10 @@ second-object control, the final button reads, for example,
 | Start time | Time picker | No | `HH:mm`; requires a date | Empty | `schedule.time` |
 | End time | Time picker | No | After start; requires a start | Empty | `schedule.endTime` |
 | Location | Text label + optional address | No | Label 0–120, address 0–300 | Empty | `location.label`, `location.address` |
-| Description | Multi-line text | No | 0–4000 | Empty | `details.description` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
-| Price | Currency input, cents-integer | No | ≥ 0; stored as an integer number of minor units | Empty | `details.priceCents`, `details.currency` (from profile) |
-| Ticket link | Single-line URL | No | Valid absolute `http(s)` URL | Empty | `details.ticketUrl` |
-| Organiser | Single-line text | No | 0–120 | Empty | `details.organiser` |
+| Reservation | Disclosure group: name, time, party size, reference | No | Party size 1–99; reservation time `HH:mm` | Reservation name = user's display name; reservation time = `schedule.time` | `details.reservation.{name,time,partySize,reference}` |
+| Tickets & details | Disclosure group: Price, Ticket link, Organiser | No | Price ≥ 0 in integer minor units; ticket link is an absolute `http(s)` URL; organiser 0–120 | Empty; currency comes from profile | `details.priceCents`, `details.currency`, `details.ticketUrl`, `details.organiser` |
+| Description | Multi-line text | No | 0–4000 | Empty | `details.description` |
 | Source image / link | Attachment thumbnail + URL row | No | Image ≤ 10 MB, image MIME only | Populated by photo/link capture | `attachmentIds[]`, `sourceUrl` |
 | Reminder | Select | No | Requires a date | Explicitly saved default if set and a time exists; otherwise `Off` | `reminders[]` on input → your own `REM#` item |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
@@ -349,18 +346,9 @@ second-object control, the final button reads, for example,
 page, notes are private and never leave the owner's view. See
 [`sharing-and-people.md`](sharing-and-people.md) §4.4.
 
-### 4.5 Outing
+### 4.5 Retired Plan kind
 
-| Field | Control | Req. | Validation | Default | Maps to |
-| --- | --- | --- | --- | --- | --- |
-| Place | Single-line text | Yes | 1–200 | Text from the Add screen | `title` **and** `details.placeName` |
-| Date | Date picker | No | Valid date | Empty | `schedule.date` |
-| Time | Time picker | No | `HH:mm`; requires a date | Empty | `schedule.time` |
-| End time | Time picker | No | After start | Empty | `schedule.endTime` |
-| Location | Text label + optional address | No | Label 0–120, address 0–300 | Label pre-filled from Place | `location.label`, `location.address` |
-| People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
-| Reservation | Disclosure group: name, time, party size, reference | No | Party size 1–99; reservation time `HH:mm` | Reservation name = user's display name; reservation time = `schedule.time` | `details.reservation.{name,time,partySize,reference}` |
-| Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
+The former fifth Plan-kind form was merged into Event; this section number remains as a tombstone.
 
 ### 4.6 General (`custom`)
 
@@ -390,9 +378,6 @@ related-list link, and prep tasks where relevant. Every **Plan kind** additional
 Tasks never expose People, sharing, or expenses. If a to-do needs coordination, the user
 creates or explicitly changes it to **Plan → General**; the app never changes it because a
 name was typed.
-
-That an Outing's creation form does not show a Reminder field does not mean an Outing
-cannot have a reminder; it means the form stays short. Add it from the detail screen.
 
 ---
 
@@ -458,7 +443,6 @@ records; the label is presentation only.
 | `meal` | Had it | Didn't happen | `had_it` / `didnt_happen` |
 | `watch` | Watched | Didn't happen | `watched` / `didnt_happen` |
 | `event` | Attended | Didn't go | `attended` / `didnt_go` |
-| `outing` | Done | Didn't happen | `done` / `didnt_happen` |
 | `custom` | Done | Didn't happen | `done` / `didnt_happen` |
 
 Notes:
@@ -541,7 +525,7 @@ Activity. See [`overview.md`](overview.md#44-suggest-never-auto-create).
 ### 6.3 Changing object or Plan kind
 
 `objectKind` changes only through an explicit conversion action. A Plan's `type` is mutable
-among General (`custom`), Meal, Watch, Event, and Outing — see the rule in
+among General (`custom`), Meal, Watch, Event — see the rule in
 [`../02-architecture/data-model.md#41-activity`](../02-architecture/data-model.md#41-activity):
 "Changing type keeps `details` fields that still apply and drops the rest (log what was
 dropped)."
@@ -552,7 +536,7 @@ The user-facing contract:
    `Change to Task` on a Plan. Before first save, `Change` returns to the chooser because no
    object exists yet. Text, AI, adding a date, and adding or removing fields never invoke a
    conversion.
-2. **Task → Plan** opens the unselected **General / Meal / Watch / Event / Outing** chooser.
+2. **Task → Plan** opens the unselected **General / Meal / Watch / Event** chooser.
    The user must choose one; General is not assumed. Common fields are preserved, then the
    selected Plan form opens for review. No write occurs until `Save changes`.
 3. **Plan → Task** is available only when the Plan has zero participants, zero expenses,
@@ -573,12 +557,8 @@ The user-facing contract:
    | --- | --- | --- |
    | `watch` → any | — | `mediaTitle`, `mediaKind`, `season`, `episode`, `episodeTitle`, `service`. Any viewer-local `LNK#` pointer remains; changing Plan kind never mutates the source ListItem. |
    | `meal` → any | — | `mealSlot`, `recipeUrl`. `ingredients[]` is dropped, but any grocery items already created from it keep their `sourceActivityId` and their provenance label. |
-   | `event` → `outing` | `description` → `notes` (appended, separated by a blank line, if `notes` is non-empty) | `priceCents`, `currency`, `ticketUrl`, `organiser` |
-   | `event` → any other | `description` → `notes` (same append rule) | `priceCents`, `currency`, `ticketUrl`, `organiser` |
-   | `outing` → `event` | `placeName` → `location.label` if `location.label` is empty; `reservation.*` → `notes` as a single formatted line | `reservation` object |
-   | `outing` → any other | Same as above | `reservation` object |
+   | `event` → any other | `description` → `notes` (appended, separated by a blank line, if `notes` is non-empty) | `priceCents`, `currency`, `ticketUrl`, `organiser`, and each populated `reservation.{name,time,partySize,reference}` field. The destructive confirmation names those reservation fields and their values. |
    | any → `watch` | `title` → `details.mediaTitle` | — |
-   | any → `outing` | `title` → `details.placeName` | — |
    | Task → any Plan kind | All common Activity fields | No Task-specific details exist |
    | any Plan kind → Task | All common Activity fields | The source `details` payload beyond mappings above |
    | any Plan kind → `custom` (General) | — | The whole source `details` payload beyond the mappings above |
@@ -601,7 +581,7 @@ The user-facing contract:
    it names come from the mapping table in point 5:
 
    ```
-   Change Watch → Outing?
+   Change Watch → Event?
 
    This will remove:
      Season and episode (S2 E4)
@@ -619,9 +599,7 @@ The user-facing contract:
 8. An explicit Task → Plan write sets `objectKind: 'plan'` and the chosen Plan `type`; an
    allowed Plan → Task write sets `objectKind: 'task'`, `type: 'task'`. A Plan-kind-only
    change leaves `objectKind` unchanged. No conversion changes `status`, `completedAt`, or
-   `outcome`. An `event` that
-   was `attended` and is changed to `outing` stays completed with `outcome: 'attended'`,
-   and the detail screen renders the historical verb.
+   `outcome`; the detail screen continues to render the historical completion verb.
 
 ### 6.4 Deleting
 
@@ -725,7 +703,7 @@ React Native Web builds share one codebase, so these are web-only behaviours gua
 | `Cmd/Ctrl + Return` | Any selected creation form | Activate its visible named write button |
 | `Esc` | Any sheet or Add screen | Cancel, with the discard prompt if dirty |
 | `Alt + 1`–`3` | Global object chooser | Choose Task, Plan, or List item, in that order |
-| `Alt + 1`–`5` | Plan-kind chooser | Choose General, Meal, Watch, Event, or Outing, in that order |
+| `Alt + 1`–`4` | Plan-kind chooser | Choose General, Meal, Watch, Event, in that order |
 | `Cmd/Ctrl + V` | A selected creation form | If the clipboard holds a URL, switch to Link mode; if it holds an image, switch to Screenshot mode. The chooser never inspects the clipboard. |
 | `↑` / `↓` | Any row list | Move focus between rows |
 | `Space` | A focused task row | Toggle completion |

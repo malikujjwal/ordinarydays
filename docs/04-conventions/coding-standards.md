@@ -109,7 +109,7 @@ under `isolatedModules`. Use string literal unions, and a `const` object plus
 
 ```ts
 export const ACTIVITY_TYPES = [
-  'task', 'meal', 'watch', 'event', 'outing', 'custom',
+  'task', 'meal', 'watch', 'event', 'custom',
 ] as const satisfies readonly ActivityType[];
 ```
 
@@ -137,7 +137,7 @@ export function completionVerb(type: ActivityType): string {
     case 'meal':   return 'Had it';
     case 'watch':  return 'Watched';
     case 'event':  return 'Attended';
-    case 'outing': return 'Done';
+    case 'event': return 'Done';
     case 'custom': return 'Done';
     default:       return assertNever(type, 'ActivityType');
   }
@@ -161,7 +161,7 @@ export const ACTIVITY_TYPE_ICON = {
   meal:   'bowl',
   watch:  'play-rect',
   event:  'ticket',
-  outing: 'map-pin',
+  event: 'map-pin',
   custom: 'diamond',
 } as const satisfies Record<ActivityType, IconName>;
 ```

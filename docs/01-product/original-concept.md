@@ -21,7 +21,7 @@ The user-facing mental model stays very small:
 
 **Today · Plans · Lists**
 
-Everything else — meals, TV, events, outings, expenses, people, reminders — is built
+Everything else — meals, TV, events, expenses, people, reminders — is built
 around those three concepts.
 
 ---
@@ -41,7 +41,7 @@ exposing the appropriate fields and behavior.
 | Meal          | Something the user plans to eat/cook        |
 | Watch         | Movie, show, or episode                     |
 | Event         | Concert, appointment, festival, etc.        |
-| Outing        | Restaurant, hike, coffee, shopping, etc.    |
+| Event        | Restaurant, hike, coffee, shopping, etc.    |
 | General Plan  | Anything that does not fit the guided Plan kinds |
 
 There is deliberately **no category-management system**. A user can always choose
@@ -52,7 +52,7 @@ solo; coordinated work is a General or guided Plan.
 
 A prominent **Add** button should be available throughout the application. Global Add asks
 one plain-language question first: **Task / Plan / List item**. Plan then asks
-**General / Meal / Watch / Event / Outing**; List item asks for its destination list. None
+**General / Meal / Watch / Event**; List item asks for its destination list. None
 is selected or inferred, and General is a visible choice rather than a fallback.
 
 Only after that selection can the user type naturally, take a photo, upload a screenshot,
@@ -90,7 +90,7 @@ explicit `Also add a list item to <list name>` (off by default)
 
 **Event:** Title, Date/time, Location, Description, People, Source image/link
 
-**Outing:** Place, Date/time, People, Location, Reservation details, Notes
+**Event:** Place, Date/time, People, Location, Reservation details, Notes
 
 **General:** Title, Date, Optional time, People, Reminder, Repeat, Notes
 
@@ -123,7 +123,7 @@ ANYTIME
 
 > **Activity type determines behavior. Time determines where it appears on Today.**
 
-A Meal, Task, Watch activity, appointment, or outing can all occupy time.
+A Meal, Task, Watch activity, appointment, or event can all occupy time.
 
 ## 5. Tasks
 
@@ -161,7 +161,7 @@ plants).
 
 A Plan represents: *Something the user has decided is going to happen.* Plans may be
 personal or shared. Examples: food festival, dinner, dentist appointment, watch night,
-weekend trip, restaurant outing.
+weekend trip, restaurant event.
 
 Plans can contain: date/time, location, people, RSVPs, description, source image/link,
 preparation tasks, related lists, expenses, notes, updates.
@@ -332,7 +332,7 @@ Skipped, Cancelled. But completion language should feel natural to the activity.
 | Meal        | Had it / Cooked        |
 | Watch       | Watched                |
 | Event       | Attended               |
-| Outing      | Done                   |
+| Event      | Done                   |
 | General     | Done, when appropriate |
 
 ## 18. Passed plans
@@ -456,7 +456,7 @@ DISCOVER / REMEMBER
         ↓
 CHOOSE OBJECT      Task · Plan · List item
         ↓
-CHOOSE DETAIL      Plan: General / Meal / Watch / Event / Outing
+CHOOSE DETAIL      Plan: General / Meal / Watch / Event
                    List item: destination list
         ↓
 CAPTURE FIELDS     Type · Photo · Screenshot · Link

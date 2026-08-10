@@ -99,16 +99,16 @@ describe('kindChangeConfirmation', () => {
           service: 'Apple TV',
         },
       }),
-      { objectKind: 'plan', type: 'outing' },
+      { objectKind: 'plan', type: 'event' },
       1,
     );
 
-    expect(confirmation?.heading).toBe('Change Watch → Outing?');
+    expect(confirmation?.heading).toBe('Change Watch → Event?');
     expect(confirmation?.removesLead).toBe('This will remove:');
     expect(confirmation?.removes).toContain('Season and episode (S2 E4)');
     expect(confirmation?.removes).toContain('Streaming service (Apple TV)');
     expect(confirmation?.keeps).toBe('title, date, time and reminders.');
-    expect(confirmation?.confirmLabel).toBe('Change to Outing');
+    expect(confirmation?.confirmLabel).toBe('Change to Event');
   });
 
   /**

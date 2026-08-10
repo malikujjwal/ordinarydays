@@ -13,7 +13,7 @@ endpoints by
 
 A date, a phrase, and another person's name are not the distinction. A Plan is an Activity
 the user explicitly created as a Plan, after choosing **General**, **Meal**, **Watch**,
-**Event**, or **Outing**. A date changes its scheduling state, not its identity. The rule is stated once in
+**Event**. A date changes its scheduling state, not its identity. The rule is stated once in
 [`overview.md`](overview.md#31-four-concepts-connected-where-it-is-useful) §3.1.
 
 A Plan is still stored in the Activity entity, with `objectKind: 'plan'`; a Task uses
@@ -30,7 +30,7 @@ reach Today.
 | `schedule.date` absent | A Plan is `saved` in Plans → Needs a date. A Task is `saved` in Today's ANYTIME (§1.2). |
 | `schedule.time` present | It occupies a slot in Today's SCHEDULE rather than ANYTIME. |
 | `participants.length > 0` | Valid on `objectKind: 'plan'` only. `visibility` becomes `shared` after the user uses the People picker or another explicit sharing action. Tasks do not gain participants; coordinated work is **Plan → General** or another visible Plan kind. Typed names and capture never add participants. |
-| `type` | The explicit creation choice sets it: Task → `task`; Plan kinds General / Meal / Watch / Event / Outing → `custom` / `meal` / `watch` / `event` / `outing`. It changes which fields and completion verb render, while `objectKind` preserves Task versus Plan. |
+| `type` | The explicit creation choice sets it: Task → `task`; Plan kinds General / Meal / Watch / Event → `custom` / `meal` / `watch` / `event`. It changes which fields and completion verb render, while `objectKind` preserves Task versus Plan. |
 
 Plan intent therefore **does** appear in the data model as `objectKind: 'plan'`. Do not
 build a separate Plan entity or infer Plan-ness from another field: Tasks and Plans remain
@@ -44,7 +44,7 @@ that choice.
 
 | Route | Entry point | Pre-fills |
 | --- | --- | --- |
-| Manual Plan | Global `+` → **Plan** → **General / Meal / Watch / Event / Outing** → form | Date only if launched from a dated context, after the choices |
+| Manual Plan | Global `+` → **Plan** → **General / Meal / Watch / Event** → form | Date only if launched from a dated context, after the choices |
 | Manual Task | Global `+` → **Task** → form, or contextual `+ Add a task` | `objectKind: 'task'`, `type: 'task'`; compatible context such as date or parent plan |
 | Natural language | Choose Task or Plan and, for Plan, its kind → type text | Compatible fields from the reviewed parse; never object kind, Plan kind, or people ([`ai-capture.md`](ai-capture.md)) |
 | From a photo or screenshot | Choose Task or Plan and, for Plan, its kind → Camera / Photos | Compatible reviewed fields + the image as an attachment |
@@ -77,7 +77,7 @@ they were entered:
 | Explicit action | Text entered | Result |
 | --- | --- | --- |
 | Global `+` → **List item** → `Restaurants to try` | `Try Zahav` | One ListItem in `Restaurants to try`; no Activity. |
-| Global `+` → **Plan** → **Outing** | `Try Zahav` | One undated Outing Plan in **Needs a date**; no ListItem. |
+| Global `+` → **Plan** → **Event** | `Try Zahav` | One undated Event Plan in **Needs a date**; no ListItem. |
 | Global `+` → **List item** → `Movies to watch` | `Watch Severance` | One ListItem in `Movies to watch`; no Activity. |
 | Global `+` → **Plan** → **Watch** | `Watch Severance` | One undated Watch Plan in **Needs a date**; no ListItem. |
 | Global `+` → **Task** | `Watch Severance` | One Task in **ANYTIME**. The verb does not override the Task choice. |
@@ -134,11 +134,11 @@ somebody has suggested a date (§2.3).
 ```
 NEEDS A DATE
 
-  ◇  Dinner at Zahav                                Outing
+  ◇  Dinner at Zahav                                Event
      Alice interested · Ben hasn't replied                    ›
      2 dates suggested
 
-  ◇  Poconos trip                                   Outing
+  ◇  Poconos trip                                   Event
      Just you                                                 ›
 
   ◇  Severance with Alice                            Watch
@@ -295,7 +295,7 @@ Sections render in this fixed order and a section with nothing in it collapses t
 │  [ attachment image, if primaryAttachmentId ]           │
 │                                                         │
 │  New York Trip                                    (1)   │
-│  Outing · Shared with 3 people                          │
+│  Event · Shared with 3 people                          │
 │                                                         │
 │  ┌───────────────────────────────────────────────────┐  │
 │  │  Fri 14 Aug                                       │  │  (2)
@@ -679,7 +679,7 @@ Reading the table:
 - `checkable` and `supportsLocation` apply to `collection` only. `watch` uses
   `watchStatus` instead of a checkbox, so the two stored capability booleans are `false` for
   `watch` and `meals`. No template carries a Plan-kind default: every
-  `Plan this item` flow asks General / Meal / Watch / Event / Outing in the fixed order.
+  `Plan this item` flow asks General / Meal / Watch / Event in the fixed order.
 - `Watchlist`, `Movies to watch` and `TV shows` are three names for one behaviour, all
   eligible for the `watch` slot. A user with two of them is the case the default-slot rule
   exists for (§5.8).
@@ -936,8 +936,8 @@ is a **suggestion the user confirms** — this is the product-wide rule in
 Two worked cases.
 
 **Zahav.** `Restaurants to try` is checkable, so a checked item means *visited*. The user
-chooses `Plan this item` → **Outing** → **Just me**, schedules Zahav for Saturday, and
-completes it with `Done`. The item's state line becomes
+chooses `Plan this item` → **Event** → **Just me**, schedules Zahav for Saturday, and
+completes it with `Attended`. The item's state line becomes
 `Done Saturday`. It is **not** checked. One follow-up appears in the confirmation slot:
 
 ```
@@ -960,10 +960,10 @@ When it is not, say nothing.
 
 > **Decision — the implementable form of "evidence".** The
 > `Mark {item title} visited in {list name}?` follow-up is
-> offered when the source list is `checkable` **and** the linked Activity has the explicitly
-> chosen type `outing`. Going somewhere is the one case where doing the activity settles
-> the item. Every other Plan kind stays silent. This depends on what the user chose in
-> `Plan this item`, never on a list-name or template inference.
+> offered only when the linked Activity has the explicitly chosen kind `event` **and** it was
+> created through the bridge from a checkable list in the `places` slot. A manually linked
+> Event, an Event bridged from any other slot, and an Event from a non-checkable places list
+> are not evidence. Every other Plan kind stays silent.
 
 `watch` is the precedent, not the exception. Completing a session *offers* to move the
 item's progress on, and then, separately, *offers* to schedule the next episode. Neither
@@ -1145,9 +1145,13 @@ when the two are connected, not what is supposed to happen.
 The user-facing action is `Plan this item`, never a generic `Schedule`. Its flow is fixed:
 
 1. The item detail or row action opens the Plan-kind chooser with **General**, **Meal**,
-   **Watch**, **Event**, and **Outing** in that order. None is selected, highlighted,
+   **Watch**, **Event** in that order. None is selected, highlighted,
    recommended, or moved first. The list's title, template, behaviour, and item text do not
    choose a kind. General is available only as an explicit tap.
+
+The `places` template family records `event` as its default bridge kind. That default is
+schema metadata for the bridge and the visited-evidence rule; it does not bypass, preselect,
+or recommend a row in the explicit chooser above.
 2. On **every list, private or shared**, a required audience step follows the kind choice,
    asking exactly **Just me** or **Choose people**, with neither pre-selected. `Just me`
    makes the new Plan private and linked to the item. `Choose people` opens an empty People
@@ -1423,7 +1427,7 @@ are:
 ### 8.2 Scheduling a watch session
 
 From the watchlist item: `Plan this item` → the required **General / Meal / Watch / Event /
-Outing** chooser (§6). For this flow the user explicitly chooses **Watch**; the list does not
+Event** chooser (§6). For this flow the user explicitly chooses **Watch**; the list does not
 infer or pre-select it. Confirming eventually calls
 `POST /v1/lists/:id/items/:itemId/schedule` with the chosen type `watch`.
 
@@ -1544,7 +1548,7 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 
 | Step | User action | Writes |
 | --- | --- | --- |
-| 1 | Global `+` → **Plan** → **Outing** → `New York Trip`, **14 Aug**, location `Manhattan`; People picker → Alice + Ben; `Save plan` | `POST /v1/activities` → `act_20`, `objectKind: 'plan'`, `type: 'outing'`, `visibility: 'shared'`, two `PART#` rows, two invitee `IDX#` rows. The trip runs to the 16th; the activity carries its start date only (§2.4), so it is on Today on the 14th and not on the 15th or 16th. |
+| 1 | Global `+` → **Plan** → **Event** → `New York Trip`, **14 Aug**, location `Manhattan`; People picker → Alice + Ben; `Save plan` | `POST /v1/activities` → `act_20`, `objectKind: 'plan'`, `type: 'event'`, `visibility: 'shared'`, two `PART#` rows, two invitee `IDX#` rows. The trip runs to the 16th; the activity carries its start date only (§2.4), so it is on Today on the 14th and not on the 15th or 16th. |
 | 2 | Plan detail → PREP → `+ Add prep task` ×2: `Book hotel` (2 Aug), `Buy tickets` (8 Aug) | Two `POST /v1/activities` with `objectKind: 'task'`, `type: 'task'`, `parentActivityId: act_20`. `act_20.childCount` = 2. |
 | 3 | Plan detail → LISTS → `Add list` | The full fixed-order style catalogue opens with nothing selected (§4.1). |
 | 4 | Picks `Packing`, keeps the default title | `POST /v1/lists { title: 'Packing · New York Trip', templateKey: 'packing', sourceActivityId: 'act_20' }` → `behaviour: 'collection'`, `capabilities.checkable: true`, `slot: null` (forced for a plan-created list, §4.1) |
@@ -1572,4 +1576,4 @@ successful use of the product.
 | 5 | Six months of use | The list is opened 40 times, an item is tapped for its address, the maps app opens. **Zero activities exist.** |
 | 6 | What the app does about it | Nothing. No progress indicator, no "you haven't planned any of these", no archive prompt, no suggestion to schedule. The list is finished the day it is created. |
 | 7 | The user adds checkboxes later, to mark the ones they have been to this year | `⋯` → `List settings` → `Show checkboxes` on. Immediate, no confirmation, no type change, no data touched (§5.5). |
-| 8 | Later still, one item does become a Plan | Item → `Plan this item` → the user explicitly chooses **Outing** → `Just me` → `Save plan`. The list is unchanged by this; it was never waiting for it. |
+| 8 | Later still, one item does become a Plan | Item → `Plan this item` → the user explicitly chooses **Event** → `Just me` → `Save plan`. The list is unchanged by this; it was never waiting for it. |

@@ -556,7 +556,7 @@ the model is called.
 **Approach.** Parse the request with the shared discriminated union:
 
 ```ts
-type PlanType = 'custom' | 'meal' | 'watch' | 'event' | 'outing';
+type PlanType = 'custom' | 'meal' | 'watch' | 'event';
 
 type CreationTarget =
   | { objectKind: 'task'; type: 'task' }
@@ -974,7 +974,7 @@ against recorded responses in every PR and against the live model in the weekly 
 | Field kind | Match rule |
 | --- | --- |
 | `date`, `time`, `endTime`, `season`, `episode`, `priceCents`, `currency`, `mealSlot` | Exact |
-| `title`, `locationLabel`, `address`, `description`, `organiser`, `mediaTitle`, `placeName` | Normalised (lowercase, collapse whitespace, strip punctuation) then Sørensen–Dice bigram similarity ≥ 0.90 |
+| `title`, `locationLabel`, `address`, `description`, `organiser`, `mediaTitle` | Normalised (lowercase, collapse whitespace, strip punctuation) then Sørensen–Dice bigram similarity ≥ 0.90 |
 | `ticketUrl` | Exact after stripping a trailing slash and tracking parameters |
 
 Metrics, computed over the whole corpus:
@@ -1099,7 +1099,7 @@ offending fixtures.
 
 **Approach.** Global Add first presents the three explicit choices: `Task`, `Plan`, and
 `List item`. `Plan` then requires one visible kind — `General`, `Meal`, `Watch`, `Event` or
-`Outing` — which maps to `PlanType`; `List item` requires a destination list. Only after that
+`Event` — which maps to `PlanType`; `List item` requires a destination list. Only after that
 choice does the matching form exist and automatic text capture begin.
 Contextual entry points supply an equally explicit fixed target.
 

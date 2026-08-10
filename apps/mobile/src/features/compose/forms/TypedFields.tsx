@@ -1,6 +1,7 @@
 import type { ActivityType } from '@od/shared/types';
 import { Field } from '@od/ui';
 import { Fragment } from 'react';
+import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import {
   ComingSoonControl,
   DateControl,
@@ -11,6 +12,7 @@ import {
   ReminderControl,
   ReservationControl,
   SlotControl,
+  TicketsAndDetailsControl,
   TimeControl,
 } from '@/features/compose/controls/FormControls';
 import type {
@@ -29,17 +31,17 @@ import {
 } from '@/features/compose/model/fields';
 
 /**
- * The six creation forms (P1-25) — as one renderer over six tables, not six components.
+ * The five creation forms (P1-25) — as one renderer over five tables, not five components.
  *
- * `activities.md` §4 is six tables of fields in a fixed order, and §3 rules 1 and 3 say a
+ * `activities.md` §4 is five tables of fields in a fixed order, and §3 rules 1 and 3 say a
  * form renders exactly its table, in exactly that order. Rendering **from** `fieldsByType`
- * makes both of those structural: there is no place for a seventh field to be added to Meal
+ * makes both of those structural: there is no place for another field to be added to Meal
  * without adding a row to the table, and no place for Event's `End time` to drift above its
- * `Start time`. Six hand-written components would restate the tables in JSX, and a restatement
+ * `Start time`. Five hand-written components would restate the tables in JSX, and a restatement
  * is a thing that can disagree.
  *
- * The phase file names six files, `{Task,Meal,Watch,Event,Outing,Custom}Form.tsx`. This is the
- * deviation, recorded in the phase doc: same six forms, one renderer, and the fixture test it
+ * The phase file names one file per kind. This implementation keeps the same five forms in
+ * one renderer, and the fixture test it
  * asks for reads the same module the screen does.
  */
 export interface TypedFieldsProps {
@@ -50,6 +52,8 @@ export interface TypedFieldsProps {
   reminderOffset: number | undefined;
   details: DraftDetails;
   notes: string;
+  sourceUrl: string | undefined;
+  attachmentUri: string | undefined;
   /** The user's today, in their zone. Resolved at the route, never read from a clock here. */
   today: string;
   onDateChange: (date: string | undefined) => void;
@@ -64,6 +68,9 @@ export interface TypedFieldsProps {
   onReminderChange: (offsetMinutes: number | undefined) => void;
   onDetailsChange: (patch: Partial<DraftDetails>) => void;
   onNotesChange: (notes: string) => void;
+  onSourceUrlChange: (url: string) => void;
+  onAttach: (uri: string) => void;
+  onClearAttachment: () => void;
   fieldErrors: Record<string, string>;
 }
 
@@ -93,6 +100,15 @@ export function TypedFields(props: TypedFieldsProps) {
         .map((spec) => (
           <Fragment key={spec.key}>{renderField(spec, props, kind)}</Fragment>
         ))}
+      {specs.some((spec) => spec.key === 'sourceImageLink') ? null : (
+        <CaptureRow
+          sourceUrl={props.sourceUrl}
+          onSourceUrlChange={props.onSourceUrlChange}
+          attachmentUri={props.attachmentUri}
+          onAttach={props.onAttach}
+          onClearAttachment={props.onClearAttachment}
+        />
+      )}
     </>
   );
 }
@@ -325,52 +341,27 @@ function renderField(
         />
       );
 
-    case 'price':
+    case 'ticketsAndDetails':
       return (
-        <Field
-          label="Price"
-          value={details.price}
-          onChangeText={(price) => props.onDetailsChange({ price })}
-          keyboardType="number-pad"
-          placeholder="0.00"
-          testID="compose-price"
-          {...(fieldErrors.price === undefined ? {} : { error: fieldErrors.price })}
-        />
-      );
-
-    case 'ticketUrl':
-      return (
-        <Field
-          label="Ticket link"
-          value={details.ticketUrl}
-          onChangeText={(ticketUrl) => props.onDetailsChange({ ticketUrl })}
-          keyboardType="url"
-          testID="compose-ticket-url"
-          {...(fieldErrors.ticketUrl === undefined
-            ? {}
-            : { error: fieldErrors.ticketUrl })}
-        />
-      );
-
-    case 'organiser':
-      return (
-        <Field
-          label="Organiser"
-          value={details.organiser}
-          onChangeText={(organiser) => props.onDetailsChange({ organiser })}
-          maxLength={120}
-          testID="compose-organiser"
+        <TicketsAndDetailsControl
+          price={details.price}
+          ticketUrl={details.ticketUrl}
+          organiser={details.organiser}
+          onChange={props.onDetailsChange}
+          fieldErrors={fieldErrors}
         />
       );
 
     case 'sourceImageLink':
-      /**
-       * Event's `Source image / link` **is** the capture row every form carries
-       * (`activities.md` §2.4), not a twelfth control of its own. It renders in the form's
-       * shared trailer, which is the one place this renderer does not control the order —
-       * recorded as a deviation rather than duplicated here.
-       */
-      return null;
+      return (
+        <CaptureRow
+          sourceUrl={props.sourceUrl}
+          onSourceUrlChange={props.onSourceUrlChange}
+          attachmentUri={props.attachmentUri}
+          onAttach={props.onAttach}
+          onClearAttachment={props.onClearAttachment}
+        />
+      );
 
     case 'reservation':
       return (

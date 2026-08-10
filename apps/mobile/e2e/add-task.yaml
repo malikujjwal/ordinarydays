@@ -62,7 +62,7 @@ appId: app.ordinarydays.ios.local
 - assertVisible:
     id: 'compose-form'
 
-# A title that reads like an Outing or a Meal, saved as the Task the user actually chose.
+# A title that reads like an Event or a Meal, saved as the Task the user actually chose.
 - tapOn:
     id: 'compose-title'
 - inputText: 'Dinner at Zahav'

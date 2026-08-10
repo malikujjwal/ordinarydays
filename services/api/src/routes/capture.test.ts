@@ -92,7 +92,7 @@ describe('a well-formed request', () => {
   /** Every valid target reaches the stub unchanged — the stub judges none of them. */
   it.each([
     ['a task', { objectKind: 'task', type: 'task' }],
-    ['a plan', { objectKind: 'plan', type: 'outing' }],
+    ['a plan', { objectKind: 'plan', type: 'event' }],
     ['a list item', { objectKind: 'listItem', listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2' }],
   ])('reaches the 501 for %s', async (_why, creationTarget) => {
     const res = await post('parse', { ...VALID.parse, creationTarget });
@@ -123,7 +123,7 @@ describe('a malformed request is rejected before the stub', () => {
 
   it.each([
     ['half a target', { objectKind: 'plan' }],
-    ['an incompatible pair', { objectKind: 'task', type: 'outing' }],
+    ['an incompatible pair', { objectKind: 'task', type: 'event' }],
     ['a list item with no list', { objectKind: 'listItem' }],
     ['an unknown kind', { objectKind: 'note', type: 'task' }],
   ])('400s %s', async (_why, creationTarget) => {

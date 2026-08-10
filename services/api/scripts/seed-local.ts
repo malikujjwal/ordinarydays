@@ -197,8 +197,9 @@ function activities(): Activity[] {
     anActivity(4, {
       title: 'Dinner at Zahav',
       objectKind: 'plan',
-      type: 'outing',
-      details: { kind: 'outing', placeName: 'Zahav' },
+      type: 'event',
+      details: { kind: 'event', reservation: { name: 'Dev' } },
+      location: { label: 'Zahav' },
     }),
     anActivity(5, {
       title: 'Watch Severance',
@@ -234,8 +235,9 @@ function activities(): Activity[] {
     anActivity(11, {
       title: 'Coffee with Sam',
       objectKind: 'plan',
-      type: 'outing',
-      details: { kind: 'outing', placeName: 'Elixr' },
+      type: 'event',
+      details: { kind: 'event' },
+      location: { label: 'Elixr' },
       ...scheduled(day(0), '08:00'),
     }),
 
@@ -257,8 +259,9 @@ function activities(): Activity[] {
     anActivity(15, {
       title: 'Farmers market',
       objectKind: 'plan',
-      type: 'outing',
-      details: { kind: 'outing', placeName: 'Headhouse Square' },
+      type: 'event',
+      details: { kind: 'event' },
+      location: { label: 'Headhouse Square' },
       ...scheduled(weekend(), '10:00'),
     }),
     anActivity(16, { title: 'Change the car oil', ...scheduled(weekend()) }),
@@ -315,8 +318,9 @@ function activities(): Activity[] {
     anActivity(23, {
       title: 'Cancelled: rooftop drinks',
       objectKind: 'plan',
-      type: 'outing',
-      details: { kind: 'outing', placeName: 'Bok Bar' },
+      type: 'event',
+      details: { kind: 'event' },
+      location: { label: 'Bok Bar' },
       // `scheduled` sets `status: 'scheduled'`, so the cancellation comes **after** the
       // spread. A cancelled plan keeps its date — that is what makes it render as cancelled
       // on the day it was going to happen rather than vanishing.

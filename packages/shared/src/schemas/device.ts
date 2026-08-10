@@ -44,8 +44,8 @@ export const expoPushToken = z
 
 /**
  * A label for the install. Free text, so it takes the free-text bound rather than a number
- * of its own — {@link MAX_FREE_TEXT_LEN} is the same limit `service`, `placeName` and
- * `organiser` use (`activities.md` §3 rule 6).
+ * of its own — {@link MAX_FREE_TEXT_LEN} is the same limit `service` and `organiser` use
+ * (`activities.md` §3 rule 6).
  */
 export const deviceName = z.string().min(1).max(MAX_FREE_TEXT_LEN);
 

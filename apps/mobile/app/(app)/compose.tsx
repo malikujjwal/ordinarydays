@@ -1,6 +1,9 @@
+import { getMe } from '@od/shared/client';
+import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { useRouter } from 'expo-router';
 import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
+import { apiClient } from '@/lib/apiClient';
 
 /**
  * The Add flow, presented modally (P1-24).
@@ -21,12 +24,17 @@ import { ComposeScreen } from '@/features/compose/components/ComposeScreen';
  */
 export default function ComposeRoute() {
   const router = useRouter();
+  const profile = useQuery({
+    queryKey: ['me'],
+    queryFn: ({ signal }) => getMe(apiClient, signal),
+  });
 
   return (
     <ComposeScreen
       onClose={() => router.back()}
       today={format(new Date(), 'yyyy-MM-dd')}
       timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+      displayName={profile.data?.displayName ?? ''}
     />
   );
 }

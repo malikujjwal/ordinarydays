@@ -130,21 +130,14 @@ describe('the spread', () => {
     expect(counts.R).toBeUndefined();
   });
 
-  it('covers all five Plan kinds and Task', async () => {
+  it('covers all four Plan kinds and Task', async () => {
     const types = new Set(
       (await userRows())
         .filter((row) => row.entity === 'ActivityIndex')
         .map((row) => String(row.type)),
     );
 
-    expect([...types].sort()).toEqual([
-      'custom',
-      'event',
-      'meal',
-      'outing',
-      'task',
-      'watch',
-    ]);
+    expect([...types].sort()).toEqual(['custom', 'event', 'meal', 'task', 'watch']);
   });
 
   it('includes the rows that break layouts', async () => {

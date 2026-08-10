@@ -276,8 +276,7 @@ background.
 | `task` | `check-square` (a checkbox — tasks are the only type with one) | `#6F6D63` | `#B0ADA2` | 4.9:1 / 8.2:1 |
 | `meal` | `bowl` | `#8A6520` | `#E0B25A` | 5.0:1 / 9.4:1 |
 | `watch` | `play-rect` | `#667747` | `#9DBA6E` | 4.6:1 / 8.5:1 |
-| `event` | `ticket` | `#965D78` | `#C9A3B7` | 4.8:1 / 8.3:1 |
-| `outing` | `map-pin` | `#8C4A5E` | `#D8A0BC` | 6.1:1 / 8.5:1 |
+| `event` | `map-pin` | `#8C4A5E` | `#D8A0BC` | 6.1:1 / 8.5:1 |
 | `custom` | `diamond` | `#77756C` | `#A8A599` | 4.4:1 large-glyph only / 7.4:1 |
 
 Non-task rows render a small non-interactive marker in the type's accent — outlined, in
@@ -297,7 +296,6 @@ format per type, `·` as the separator. Omitted entirely when there is nothing t
 | `meal` | `Meal · <mealSlot>` when a slot is set, otherwise `Meal` | `Meal · Dinner` |
 | `watch` | `S<season> E<episode>` when both are set; else `<mediaKind>`; else `<service>` | `S2 E4` |
 | `event` | `<organiser>` if set, else `<locationLabel>` | `Dr Patel` |
-| `outing` | `<placeName>` if set, else `<locationLabel>` | `Zahav` |
 | `custom` | None | — |
 
 Any Plan with explicitly selected participants appends the avatar stack in the trailing

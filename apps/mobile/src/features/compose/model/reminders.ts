@@ -6,8 +6,8 @@
  * shows `On the day`, `1 day before`, `2 days before`, `Custom…`", where the item fires at
  * the user's all-day reminder hour instead.
  *
- * **Only three of the six forms show this control at all** — Task, Event and General. Meal,
- * Watch and Outing have no Reminder row in `activities.md` §4 and §2.1 says so outright, which
+ * **Only three of the five forms show this control at all** — Task, Event and General.
+ * Meal and Watch have no Reminder row in `activities.md` §4 and §2.1 says so outright, which
  * is also why the profile default does not apply at their creation.
  */
 export interface ReminderOption {

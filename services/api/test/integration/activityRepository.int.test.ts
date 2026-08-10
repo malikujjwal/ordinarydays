@@ -189,8 +189,8 @@ describe('bucket assignment', () => {
       anActivity({
         title: 'Dinner at Zahav',
         objectKind: 'plan',
-        type: 'outing',
-        details: { kind: 'outing' },
+        type: 'event',
+        details: { kind: 'event' },
       } as Partial<Activity>),
     );
 

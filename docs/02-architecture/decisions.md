@@ -1978,6 +1978,43 @@ applied once in the middleware, not per endpoint. When the loaded activity carri
 
 ---
 
+## ADR-052 — Merge the Outing Plan kind into Event
+
+**Status:** Accepted · **Date:** 2026-08-09
+
+**Context.** Event and Outing had identical scheduling, sharing, completion, list-bridge and
+detail behaviour. Their differentiating fields were thin and mutually optional: Event held
+ticket details, while Outing held a place name and reservation. In practice the place already
+lived in `location.label`, and either kind could represent the same dinner, appointment,
+festival, hike or reservation. The fifth chooser row imposed a decision without buying a
+meaningful behavioural boundary.
+
+**Decision.** Merge Outing into Event. The stored `outing` enum member and details-union arm
+are removed. Event keeps the `map-pin` glyph, takes the rosewood accent, and owns the combined
+ticket, organiser, description and reservation fields. `placeName` is retired in favour of
+`location.label`. Existing Phase-1 fixtures are retrofitted before any production migration
+is needed.
+
+**Consequences.**
+- Plans have four visible kinds: General, Meal, Watch and Event.
+- Leaving Event is destructive when ticket, organiser or reservation data is populated; the
+  confirmation names each reservation field that would be removed.
+- Event subtitles use organiser first, then the location label.
+- A completed Event is evidence for `Mark visited?` only when it was bridged from a checkable
+  list in the `places` slot.
+- The chooser loses one row and the data model loses one discriminator without losing any
+  field a user could previously record.
+
+**Alternatives rejected.**
+- *Keep both kinds and cross-populate their fields.* The forms become identical while the
+  chooser still asks the user to distinguish them.
+- *Keep Outing and retire Event.* Event is the broader everyday noun and already owns the
+  public description, ticket and organiser projection.
+- *Introduce a new umbrella kind.* A migration and a fifth label to solve the cost of a fifth
+  label.
+
+---
+
 ## Open questions
 
 Genuinely undecided. Each needs a decision before the phase named.

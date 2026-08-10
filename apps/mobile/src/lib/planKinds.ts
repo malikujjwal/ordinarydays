@@ -1,7 +1,7 @@
 import type { PlanType } from '@od/shared/types';
 
 /**
- * The five Plan kinds and the words the user sees for them (`activities.md` §2.2).
+ * The four Plan kinds and the words the user sees for them (`activities.md` §2.2).
  *
  * ## Why this is in `lib/` and not in a feature
  *
@@ -35,7 +35,6 @@ export const planKindChoices: readonly PlanKindChoice[] = Object.freeze([
   { value: 'meal', label: 'Meal' },
   { value: 'watch', label: 'Watch' },
   { value: 'event', label: 'Event' },
-  { value: 'outing', label: 'Outing' },
 ]);
 
 const labels = new Map(planKindChoices.map((c) => [c.value, c.label]));

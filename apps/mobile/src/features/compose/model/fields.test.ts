@@ -3,14 +3,13 @@ import {
   fieldsByType,
   isFieldVisible,
   MEAL_SLOTS,
-  outingLocationLabel,
   slotForTime,
   timeForSlot,
   watchKind,
 } from './fields';
 
 /**
- * The six tables in `activities.md` §4, pinned (P1-25).
+ * The five tables in `activities.md` §4, pinned (P1-25).
  *
  * These are the assertions the phase file asks for: *"a test that fails when a field is added,
  * removed or reordered"*. They are written as literal expected lists rather than derived from
@@ -70,26 +69,12 @@ describe('the field tables', () => {
       'time',
       'endTime',
       'location',
-      'description',
-      'people',
-      'price',
-      'ticketUrl',
-      'organiser',
-      'sourceImageLink',
-      'reminder',
-      'notes',
-    ]);
-  });
-
-  it('Outing renders §4.5, in order', () => {
-    expect(keysOf('outing')).toEqual([
-      'title',
-      'date',
-      'time',
-      'endTime',
-      'location',
       'people',
       'reservation',
+      'ticketsAndDetails',
+      'description',
+      'sourceImageLink',
+      'reminder',
       'notes',
     ]);
   });
@@ -112,7 +97,6 @@ describe('the field tables', () => {
     ['meal', 'Meal'],
     ['watch', 'Movie or show'],
     ['event', 'Title'],
-    ['outing', 'Place'],
     ['custom', 'Title'],
   ] as const)('%s calls its title row %s', (type, label) => {
     expect(fieldsByType[type][0]).toEqual({ key: 'title', label });
@@ -124,7 +108,7 @@ describe('the field tables', () => {
       fieldsByType[type].find((spec) => spec.key === 'time')?.label;
 
     expect(timeLabel('event')).toBe('Start time');
-    for (const type of ['task', 'meal', 'watch', 'outing', 'custom'] as const) {
+    for (const type of ['task', 'meal', 'watch', 'custom'] as const) {
       expect(timeLabel(type)).toBe('Time');
     }
   });
@@ -132,17 +116,17 @@ describe('the field tables', () => {
   /** §4.7: Tasks never expose People. A coordinated to-do is an explicit Plan → General. */
   it('gives a Task no People row, and every Plan kind one', () => {
     expect(keysOf('task')).not.toContain('people');
-    for (const type of ['meal', 'watch', 'event', 'outing', 'custom'] as const) {
+    for (const type of ['meal', 'watch', 'event', 'custom'] as const) {
       expect(keysOf(type)).toContain('people');
     }
   });
 
-  /** §2.1 of `notifications.md`: "The Meal, Watch and Outing forms show none." */
+  /** §2.1 of `notifications.md`: the Meal and Watch forms show none. */
   it('shows Reminder on Task, Event and General only', () => {
     for (const type of ['task', 'event', 'custom'] as const) {
       expect(keysOf(type)).toContain('reminder');
     }
-    for (const type of ['meal', 'watch', 'outing'] as const) {
+    for (const type of ['meal', 'watch'] as const) {
       expect(keysOf(type)).not.toContain('reminder');
     }
   });
@@ -244,23 +228,5 @@ describe('watch kind', () => {
 
   it('ignores whitespace', () => {
     expect(watchKind(undefined, '  ', ' ')).toBe('movie');
-  });
-});
-
-describe('outing location label', () => {
-  it('pre-fills from Place while the label is empty', () => {
-    expect(outingLocationLabel('Zahav', '', '')).toBe('Zahav');
-  });
-
-  /** It keeps tracking Place as long as the user has not typed a label of their own. */
-  it('keeps following Place while the label still mirrors it', () => {
-    expect(outingLocationLabel('Zahav Philly', 'Zahav', 'Zahav')).toBe('Zahav Philly');
-  });
-
-  /** Once the user has typed their own label, Place stops overwriting it. */
-  it('stops once the user has typed their own', () => {
-    expect(outingLocationLabel('Zahav Philly', '237 St James', 'Zahav')).toBe(
-      '237 St James',
-    );
   });
 });

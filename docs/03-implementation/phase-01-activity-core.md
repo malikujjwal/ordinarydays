@@ -7,7 +7,7 @@ repository layer exists — key construction, transactions, cursor pagination,
 upgrade-on-read — against DynamoDB Local, and the Activity is fully implemented behind it:
 create, read, patch with optimistic concurrency, delete with its cascade, duplicate, and the
 flat filtered list. The global `+` asks for an explicit `Task`, `Plan`, or `List item` target;
-choosing Plan then asks for `General`, `Meal`, `Watch`, `Event`, or `Outing`. The Task and five
+choosing Plan then asks for `General`, `Meal`, `Watch`, or `Event`. The Task and four
 Plan-kind forms work, writing one `POST /v1/activities` per save. The three
 `/v1/capture/*` endpoints return `501`
 from a handler the client is already written against, so Phase 8 changes no client code. A
@@ -88,8 +88,8 @@ No AWS access is required to complete this phase. No AWS resource is created by 
       `apps/mobile`. **Delivered by P0-20; verified, not rebuilt, in this phase.**
 - [ ] `pnpm seed:local` populating DynamoDB Local with the dev profile and realistic
       activities, idempotently.
-- [ ] The explicit global Add chooser (`Task`, `Plan`, `List item`), the five Plan-kind
-      choices, and the Task plus five Plan-kind forms with the exact fields, order, defaults
+- [ ] The explicit global Add chooser (`Task`, `Plan`, `List item`), the four Plan-kind
+      choices, and the Task plus four Plan-kind forms with the exact fields, order, defaults
       and validation from
       [`../01-product/activities.md`](../01-product/activities.md) §4.
 - [ ] The activity detail screen: read, inline edit with commit-on-blur, explicitly change
@@ -131,7 +131,7 @@ No AWS access is required to complete this phase. No AWS resource is created by 
 | P1-22 | `packages/ui` theme, primitives and token gallery | shared | P0-08, P1-31 | yes | L |
 | P1-23 | App shell: three tabs, header, FAB, placeholders | mobile | P0-19, P1-22, P1-31 | no | M |
 | P1-24 | The explicit Add chooser and target routing | mobile | P1-23, P1-20 | no | L |
-| P1-25 | Task and five Plan-kind creation forms | mobile | P1-24, P1-22, P1-31 | no | L |
+| P1-25 | Task and four Plan-kind creation forms | mobile | P1-24, P1-22, P1-31 | no | L |
 | P1-26 | Activity detail screen: read and inline edit | mobile | P1-25, P1-12 | no | L |
 | P1-27 | Change object/Plan kind, duplicate, delete in the UI | mobile | P1-26, P1-17 | no | M |
 | P1-28 | Repository integration-test harness on DynamoDB Local | ci | P1-09, P0-21 | yes | M |
@@ -1014,17 +1014,17 @@ chosen one visible Plan kind.
 `DroppedField` carries a stable key and a human label (`Season and episode (S2 E4)`) so the
 confirmation copy is generated, not hand-written per pair.
 
-**Edge cases.** `event → outing` appends `description` to `notes` separated by a blank line
-only when `notes` is non-empty. `outing → event` moves `placeName` into `location.label`
-**only if** `location.label` is empty. `any → watch` sets `details.mediaTitle` from `title`.
+**Edge cases.** Changing away from `event` appends `description` to `notes` separated by a
+blank line only when `notes` is non-empty; populated reservation fields are destructive
+losses named individually by the confirmation. `any → watch` sets `details.mediaTitle` from `title`.
 `task ↔ custom` drops no type-specific user data and therefore shows no destructive
 confirmation, but still requires the explicit target chooser and named save action.
 
-**Tests.** All 36 ordered type pairs, table-driven, asserting carried and dropped fields
+**Tests.** All 25 ordered type pairs, table-driven, asserting carried and dropped fields
 exactly. A test that the function is pure (same input twice, deep-equal output, input not
 mutated). A test that every pair in the canonical table has a case and no case exists that
 the table does not list. Plan → Task is blocked separately for each non-zero count and for
-all three together; Task → each of the five Plan types returns the selected target exactly.
+all three together; Task → each of the four Plan types returns the selected target exactly.
 
 ---
 
@@ -1174,7 +1174,7 @@ What it writes:
 | Item | Detail |
 | --- | --- |
 | `USER#usr_local_dev/PROFILE` | `displayName: 'Dev'`, `timezone: 'America/New_York'`, `currency: 'USD'`, `weekStartsOn: 0`, `defaultReminderOffset: -15`, `allDayReminderHour: 9`, quiet hours 22:00–07:00, `onboardingState: 'done'`. This dev fixture explicitly configures `-15` to exercise the saved-default path; real new profiles omit the field and ship Off. Every other profile field is present so no screen hits an undefined. |
-| ~24 activities | A mix of explicit Tasks and Plans across all five Plan kinds, using the builders from `packages/shared/src/testing/builders.ts` (`testing.md` §8.1). Every row supplies a valid `objectKind` + `type` pair so the seed and tests agree on the creation contract. |
+| ~24 activities | A mix of explicit Tasks and Plans across all four Plan kinds, using the builders from `packages/shared/src/testing/builders.ts` (`testing.md` §8.1). Every row supplies a valid `objectKind` + `type` pair so the seed and tests agree on the creation contract. |
 | Scheduling spread | Some undated Tasks in `#N`, some undated Plans in `#P`, and some scheduled yesterday, today, tomorrow, this weekend and three weeks out in `#S`. Phase 2's agenda and Plans work then have data on day one. |
 | Content spread | One activity with a 200-character title, one with 4000 characters of notes, one meal with 60 ingredient rows, one with a location label and address, one `cancelled`. These are the rows that break layouts, and they should exist before the layout does. |
 
@@ -1320,8 +1320,8 @@ screen contains three choices with these exact labels and order: `Task`, `Plan`,
 It has no title field, parser, recent destination or pre-selected row.
 
 - `Task` fixes `{ objectKind: 'task', type: 'task' }` and opens the Task form.
-- `Plan` opens a second required chooser: `General`, `Meal`, `Watch`, `Event`, `Outing`,
-  mapping respectively to `custom`, `meal`, `watch`, `event`, `outing`, then opens that form.
+- `Plan` opens a second required chooser: `General`, `Meal`, `Watch`, `Event`,
+  mapping respectively to `custom`, `meal`, `watch`, `event`, then opens that form.
 - `List item` is visible so the mental model is stable, but routes to the Phase 3 placeholder
   until lists exist. Phase 3 replaces that destination with an explicit list picker.
 
@@ -1371,14 +1371,14 @@ an explicit Plan-kind change applies P1-17's mapping in memory before any write.
 
 ---
 
-### P1-25 — Task and five Plan-kind creation forms
+### P1-25 — Task and four Plan-kind creation forms
 
 > **Completed 2026-08-09. Seven deviations, recorded rather than edited into the plan.**
 >
 > | # | What happened | Why |
 > | --- | --- | --- |
-> | 1 | **One renderer over six tables**, `forms/TypedFields.tsx`, instead of six `{Task,…}Form.tsx` files. | The tables live as data in `model/fields.ts` and the form renders *from* them, so "exactly the fields in §4, in the given order" is structural: there is nowhere for a seventh field to be added to Meal without adding a row to the table. Six components would restate the tables in JSX, and a restatement is a thing that can disagree — the exact failure the required test exists to catch. |
-> | 2 | **Event's `Source image / link` is the shared capture row**, in the form's trailer, not a twelfth inline control. | It *is* the Camera / Photos / Link row [`activities.md`](../01-product/activities.md) §2.4 puts on every form once the target is fixed, and P1-24 built it there. Two placements of one control would be worse than one out-of-order row; the field-order test names it frame-owned rather than skipping it silently. |
+> | 1 | **One renderer over five tables**, `forms/TypedFields.tsx`, instead of five `{Task,…}Form.tsx` files. | The tables live as data in `model/fields.ts` and the form renders *from* them, so "exactly the fields in §4, in the given order" is structural: there is nowhere for a sixth field table to be added without an explicit schema change. Five components would restate the tables in JSX, and a restatement is a thing that can disagree — the exact failure the required test exists to catch. |
+> | 2 | **`Source image / link` remains the shared capture row**, rendered at each form table's declared position. | It is the Camera / Photos / Link row [`activities.md`](../01-product/activities.md) §2.4 puts on every form once the target is fixed. The merged Event table places that shared control between Description and Reminder without duplicating its implementation. |
 > | 3 | **Reminder is chips, not a `Select`.** | [`design-system.md`](../04-conventions/design-system.md) §6 has no `Select` primitive, and adding one is a design-system decision rather than a form's — the conclusion P1-22 reached when its own file list named one. The lists are short enough: nine timed offsets, four untimed. |
 > | 4 | **`Custom…` is not offered** among the reminder offsets [`notifications.md`](../01-product/notifications.md) §3 lists. | It needs a numeric-offset entry surface no document specifies. The eight fixed offsets and `Off` are there; a `Custom…` chip that opened nothing would be worse than its absence. Flagged for P2-16, which owns the reminder row on plan detail. |
 > | 5 | **`People`, `Repeat` and `Related plan` render disabled with copy naming their phase** — the treatment this section already prescribes for the two list toggles. | Same reasoning, extended: hiding them means the layout changes when Phases 6, 2 and 3 land, and a user who cannot see that a Plan can have people has been told the product is smaller than it is. It matches P1-26's disabled sections. |
@@ -1388,7 +1388,7 @@ an explicit Plan-kind change applies P1-17's mapping in memory before any write.
 > The Playwright half of the Tests line — "fill and save one of each type on web" — is
 > **P1-29**, which owns the harness. Playwright is still not a dependency of this repository.
 
-**Files.** `apps/mobile/src/features/compose/forms/{Task,Meal,Watch,Event,Outing,Custom}
+**Files.** `apps/mobile/src/features/compose/forms/{Task,Meal,Watch,Event,Custom}
 Form.tsx`, plus shared controls in `apps/mobile/src/features/compose/controls/`.
 
 **Approach.** One form per type, rendering **exactly** the fields in
@@ -1412,14 +1412,12 @@ inference:
   and episode fields render only for `Show`. The separate `Also add a list item to…` control
   is **off in every context**. Phase 3 resolves and visibly names a destination only after the
   user turns it on; a date, title, Watch kind, or capture result never enables it.
-- **Outing:** `title` and `details.placeName` are kept identical; `location.label` pre-fills
-  from Place; the reservation disclosure defaults its name to the user's display name and its
-  time to `schedule.time`.
-- **Event:** `details.description` and `notes` are distinct — description is public on the
-  invite page, notes never leave the owner's view.
+- **Event:** the reservation disclosure defaults its name to the user's display name and its
+  time to `schedule.time`; the Tickets & details group holds Price, Ticket link, and Organiser.
+  `details.description` and `notes` are distinct — description is public on the invite page,
+  notes never leave the owner's view.
 
-Fields that do not appear on a form are still reachable from the detail screen (§4.7). An
-Outing having no Reminder field does not mean an Outing cannot have a reminder.
+Fields that do not appear on a form are still reachable from the detail screen (§4.7).
 
 Post-create side effects (`Add selected ingredients to Groceries`, `Also add a list item to
 <chosen list>`) are
@@ -1820,7 +1818,7 @@ in with Apple, token storage on iOS and web, the refresh flow with its single-fl
 7. Every route handler obtains its user ID from `c.get('userId')`. No handler, service or
    repository reads an `Authorization` header, a token, or a request header for identity.
 8. `POST /v1/activities` creates Task only from `{ objectKind: 'task', type: 'task' }` and
-   each of the five Plan types only from `{ objectKind: 'plan', type: PlanType }`; the created
+   each of the four Plan types only from `{ objectKind: 'plan', type: PlanType }`; the created
    item's `details.kind` equals its `type`, `ownerId` is `usr_local_dev`, and a missing or
    mismatched target returns `400` with a `details[]` entry naming the problem.
 9. Repeating a `POST /v1/activities` with the same `Idempotency-Key` returns the identical
@@ -1838,8 +1836,8 @@ in with Apple, token storage on iOS and web, the refresh flow with its single-fl
     `type` are Task while title, date, time and notes are unchanged. The same change with a
     participant, expense, or prep child is blocked and names that section.
 14. Global `+` renders exactly `Task`, `Plan`, `List item`; `Plan` then renders exactly
-    `General`, `Meal`, `Watch`, `Event`, `Outing`. No title, capture call or create call is
-    possible before that choice. Each of the six stored-type forms renders exactly the fields listed in
+    `General`, `Meal`, `Watch`, `Event`. No title, capture call or create call is
+    possible before that choice. Each of the five stored-type forms renders exactly the fields listed in
     [`../01-product/activities.md`](../01-product/activities.md) §4, in that order — asserted
     by a test that fails if a field is added, removed or reordered.
 15. Choosing a meal slot with no time set fills the time (dinner → 19:00); entering 12:00 with
@@ -1919,5 +1917,5 @@ in with Apple, token storage on iOS and web, the refresh flow with its single-fl
 | **`reminders[]` is re-added to `Activity`** because the input schema has a `reminders` field and the two look like they should be the same type | Nothing, in Phase 1 — there is one user. In Phase 6 it becomes a leak, and by then it is stored data | The input field and the stored item are deliberately different shapes (P1-06). Criterion 23's grep runs from this phase, when there is nothing to leak, which is the only time it is cheap to enforce. ADR-047. |
 | **The reminder filter is deferred to "when sharing exists"** | A `GET /v1/activities/:id` that returns every `REM#` row it read, shipping in Phase 1 and forgotten until a Phase 6 bug report | It is P1-10 rule 6 and criterion 24, written against two invented user IDs while there is only one real one — the same argument that puts the tenancy test in P1-09. Adding a filter to a shipped serialiser is how the one call site that matters gets missed. |
 | A target default or classifier is reintroduced in the schema, handler, client or capture path | The same words create different objects from different entry points, and List item / Plan / Task stops being a choice the user made | `objectKind`, `type`, and capture `creationTarget` are required; global and contextual routes set them explicitly. Contract tests reject missing or invalid pairs, and a grep/test forbids `.default('task')`, `suggestedType` and creation-time type inference. |
-| The six forms drift from the canonical field tables | The product quietly becomes six half-products | The fixture-driven render tests in P1-25 fail on any field addition, removal or reorder. |
+| The five forms drift from the canonical field tables | The product quietly becomes five half-products | The fixture-driven render tests in P1-25 fail on any field addition, removal or reorder. |
 | Apple Developer enrolment is not started until it is needed | Phase 4 blocks for several days on an administrative process | It is a prerequisite of this phase precisely because no task here needs it. Start it, then forget about it. |

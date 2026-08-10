@@ -314,7 +314,7 @@ describe('capture', () => {
     expect(() =>
       assertTargetEcho(
         { objectKind: 'plan', type: 'meal' },
-        { objectKind: 'plan', type: 'outing' },
+        { objectKind: 'plan', type: 'event' },
       ),
     ).toThrow();
   });

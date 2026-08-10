@@ -12,14 +12,14 @@ const activity = (patch: Partial<Activity>): Activity =>
     activityId: 'act_01J0000000000000000000000A',
     ownerId: 'usr_01J0000000000000000000000B',
     objectKind: 'plan',
-    type: 'outing',
+    type: 'event',
     status: 'saved',
     title: 'Zahav',
     participantCount: 0,
     childCount: 0,
     expenseTotalCents: 0,
     visibility: 'private',
-    details: { kind: 'outing' },
+    details: { kind: 'event' },
     icsSequence: 0,
     createdAt: '2026-08-08T10:00:00.000Z',
     updatedAt: '2026-08-08T10:00:00.000Z',
@@ -100,7 +100,7 @@ describe('subtitleFor', () => {
   });
 
   it('names the Plan kind and the share state', () => {
-    expect(subtitleFor(activity({}), 'Outing')).toBe('Outing · Just you');
+    expect(subtitleFor(activity({}), 'Event')).toBe('Event · Just you');
   });
 });
 

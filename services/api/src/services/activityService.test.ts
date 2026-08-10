@@ -182,14 +182,14 @@ describe('createActivity', () => {
     const asTask = await createActivity(USER, task({ title: 'Dinner with Sam' }), NOW);
     const asPlan = await createActivity(
       USER,
-      task({ objectKind: 'plan', type: 'outing', title: 'Dinner with Sam' }),
+      task({ objectKind: 'plan', type: 'event', title: 'Dinner with Sam' }),
       NOW,
     );
 
     expect(asTask.activity.objectKind).toBe('task');
     expect(asTask.activity.type).toBe('task');
     expect(asPlan.activity.objectKind).toBe('plan');
-    expect(asPlan.activity.type).toBe('outing');
+    expect(asPlan.activity.type).toBe('event');
   });
 
   it('derives the server-owned fields and takes none of them from the client', async () => {
@@ -311,7 +311,7 @@ describe('createActivity', () => {
         USER,
         task({
           objectKind: 'plan',
-          type: 'outing',
+          type: 'event',
           participants: [{ displayName: 'Sam' }],
         }),
         NOW,
@@ -327,7 +327,7 @@ describe('createActivity', () => {
   it('accepts an empty participants array, which asks for nothing', async () => {
     const { activity } = await createActivity(
       USER,
-      task({ objectKind: 'plan', type: 'outing', participants: [] }),
+      task({ objectKind: 'plan', type: 'event', participants: [] }),
       NOW,
     );
 
@@ -374,9 +374,9 @@ describe('the nesting cap', () => {
       ownerId: USER,
       status: 'saved',
       objectKind: 'plan',
-      type: 'outing',
+      type: 'event',
       title: 'Trip',
-      details: { kind: 'outing' },
+      details: { kind: 'event' },
       participantCount: 0,
       childCount: 0,
       expenseTotalCents: 0,
@@ -452,9 +452,9 @@ describe('projectDetail', () => {
     ownerId: 'usr_a',
     status: 'saved',
     objectKind: 'plan',
-    type: 'outing',
+    type: 'event',
     title: 'Dinner',
-    details: { kind: 'outing' },
+    details: { kind: 'event' },
     participantCount: 2,
     childCount: 0,
     expenseTotalCents: 0,
@@ -779,7 +779,7 @@ describe('patchActivity', () => {
     const result = await patchActivity(
       USER,
       PLAN,
-      { objectKind: 'plan', type: 'outing', notes: 'Doors at seven' },
+      { objectKind: 'plan', type: 'custom', notes: 'Doors at seven' },
       VERSION,
       LATER,
     );
@@ -793,7 +793,7 @@ describe('patchActivity', () => {
     const result = await patchActivity(
       USER,
       PLAN,
-      { objectKind: 'plan', type: 'outing' },
+      { objectKind: 'plan', type: 'custom' },
       VERSION,
       LATER,
     );

@@ -33,7 +33,6 @@ import {
   space,
   Text,
   ThemeProvider,
-  Ticket,
   TimePicker,
   Toast,
   type,
@@ -58,13 +57,12 @@ import { ScrollView, View } from 'react-native';
  * without touching a line of product code — that is the test of whether it stayed a gallery.
  */
 
-const TYPES = ['task', 'meal', 'watch', 'event', 'outing', 'custom'] as const;
+const TYPES = ['task', 'meal', 'watch', 'event', 'custom'] as const;
 const TYPE_ICONS = {
   task: Check,
   meal: Bowl,
   watch: PlayRect,
-  event: Ticket,
-  outing: MapPin,
+  event: MapPin,
   custom: Diamond,
 } as const;
 
@@ -231,7 +229,7 @@ function Gallery({ scheme }: { scheme: ColorScheme }) {
           <Row
             title="Dinner at Zahav"
             subtitle="Zahav"
-            accent="outing"
+            accent="event"
             onPress={() => {}}
             trailing={
               <AvatarStack
@@ -266,7 +264,7 @@ function Gallery({ scheme }: { scheme: ColorScheme }) {
       <Section title="Card + IconTile">
         <Card onPress={() => {}}>
           <View style={{ flexDirection: 'row', gap: space[4] }}>
-            <IconTile icon={Ticket} tint="event" />
+            <IconTile icon={MapPin} tint="event" />
             <View style={{ flex: 1 }}>
               <Text variant="heading" color="textDisplay">
                 Philadelphia Food Festival

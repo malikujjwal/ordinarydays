@@ -146,7 +146,7 @@ describe('back', () => {
 
   /**
    * "Back from a form returns to its chooser without losing compatible draft fields."
-   * In Phase 1 every collected field is common to all six types in `activities.md` §4, so
+   * In Phase 1 the common fields survive every one of the five stored types, so
    * P1-17's mapping is the identity here and nothing is dropped. P1-25 makes that non-trivial.
    */
   it('keeps title, notes and source URL across a target change', () => {
@@ -163,6 +163,40 @@ describe('back', () => {
     expect(draft().notes).toBe('use the blue pan');
     expect(draft().sourceUrl).toBe('https://example.com/recipe');
     expect(draft().target).toEqual({ objectKind: 'plan', type: 'event' });
+  });
+});
+
+describe('Event reservation defaults', () => {
+  it('pre-fills the reservation name from the profile when Event is chosen', () => {
+    draft().chooseObject('plan');
+    draft().choosePlanKind('event', 'Ada');
+
+    expect(draft().details.reservation.name).toBe('Ada');
+  });
+
+  it('tracks the Event start time until a distinct reservation time is entered', () => {
+    draft().chooseObject('plan');
+    draft().choosePlanKind('event');
+    draft().setTime('19:00');
+    expect(draft().details.reservation.time).toBe('19:00');
+
+    draft().setDetails({
+      reservation: { ...draft().details.reservation, time: '19:30' },
+    });
+    draft().setTime('20:00');
+    expect(draft().details.reservation.time).toBe('19:30');
+  });
+
+  it('clears a reservation time that was inherited when the date is cleared', () => {
+    draft().chooseObject('plan');
+    draft().choosePlanKind('event');
+    draft().setDate('2026-08-12');
+    draft().setTime('19:00');
+
+    draft().setDate(undefined);
+
+    expect(draft().schedule.time).toBeUndefined();
+    expect(draft().details.reservation.time).toBe('');
   });
 });
 
@@ -209,7 +243,7 @@ describe('the idempotency key', () => {
 describe('reset and open', () => {
   it('open clears the previous session so a chooser never inherits a target', () => {
     draft().chooseObject('plan');
-    draft().choosePlanKind('outing');
+    draft().choosePlanKind('event');
     draft().setTitle('Zahav');
 
     draft().open();

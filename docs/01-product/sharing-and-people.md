@@ -48,7 +48,7 @@ the public page (§4), **list sharing (§4a)**, guest→user linking (§5), and 
 
 | Surface | Affordance |
 | --- | --- |
-| Creation form (meal, watch, event, outing, custom) | The `People` field |
+| Creation form (meal, watch, event, custom) | The `People` field |
 | Plan detail | `Add people` in the PEOPLE section, and the `Share` action in the header |
 | Person view | `Plan something with Alice` — opens the explicit Plan-kind chooser, then the chosen Plan form with Alice pre-added because the action named her |
 
@@ -906,7 +906,7 @@ other anything?*, and *what are we keeping together?*
 | UPCOMING | Shared activities with a future date, ascending. Max 5, then `See all`. |
 | RECENT | Shared activities with a past date, descending, showing outcome and settlement state. Max 5, then `See all`. |
 | LISTS TOGETHER | Active, access-checked lists one of you explicitly shared with the other, with their item counts, ordered by `addedAt` descending. Two non-owner co-members do not become People automatically. The screen shows 5, then `See all`; the expanded view pages 20 at a time. Each row opens the list. Hidden entirely when there are none. |
-| `Plan something with Alice` | Opens the explicit Plan-kind chooser (**General / Meal / Watch / Event / Outing**), then the chosen Plan form with Alice pre-selected because the button named her. The title text never chooses the Plan kind or adds anyone else. |
+| `Plan something with Alice` | Opens the explicit Plan-kind chooser (**General / Meal / Watch / Event**), then the chosen Plan form with Alice pre-selected because the button named her. The title text never chooses the Plan kind or adds anyone else. |
 | `⋯` | Edit, Merge with another person, Delete. Delete is blocked with `409` while they participate in any non-completed activity **or have an invited/active shared-list membership**, and the UI names the blocking plans and lists. |
 
 `Nothing together yet` appears only when there are no shared Plans, no active shared Lists

@@ -12,7 +12,7 @@ import type {
 /**
  * The one schedulable entity (`data-model.md` §4.1, `CLAUDE.md` rule 1).
  *
- * Task, Meal, Watch, Event, Outing and Custom are a `type` field, not six tables. A "Plan" is
+ * Task, Meal, Watch, Event and Custom are a `type` field, not five tables. A "Plan" is
  * an Activity the user intends to make happen, with or without a date yet; "Today" is a
  * query, not storage.
  *
@@ -51,7 +51,7 @@ export interface MealIngredient {
   addedToListId?: string;
 }
 
-export interface OutingReservation {
+export interface EventReservation {
   name?: string;
   time?: Hhmm;
   partySize?: number;
@@ -91,11 +91,7 @@ export type ActivityDetails =
       currency?: string;
       ticketUrl?: string;
       organiser?: string;
-    }
-  | {
-      kind: 'outing';
-      placeName?: string;
-      reservation?: OutingReservation;
+      reservation?: EventReservation;
     }
   | { kind: 'custom'; shortcutId?: string };
 

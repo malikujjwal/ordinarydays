@@ -1055,7 +1055,7 @@ describe('the flat lists', () => {
     ).data;
 
     expect(await ids('filter=needs_date&type=meal')).toEqual([meal.activityId]);
-    expect(await ids('filter=needs_date&type=outing')).toEqual([]);
+    expect(await ids('filter=needs_date&type=event')).toEqual([]);
   });
 
   /** A cursor resumes where the previous page stopped, with no row seen twice or skipped. */

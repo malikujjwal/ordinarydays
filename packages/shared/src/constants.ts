@@ -33,7 +33,7 @@ export const MAX_ACTIVE_SERIES = 200;
 export const OVERDUE_WINDOW_DAYS = 30;
 
 /**
- * Characters in a free-text sub-field: `service`, `placeName`, `organiser`, ingredient
+ * Characters in a free-text sub-field: `service`, `organiser`, ingredient
  * `name`, reservation `name`/`reference` (`activities.md` §3 rule 6).
  */
 export const MAX_FREE_TEXT_LEN = 120;

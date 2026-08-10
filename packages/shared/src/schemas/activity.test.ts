@@ -48,13 +48,12 @@ describe('the stored Activity', () => {
     expect(activity.safeParse(task).success).toBe(true);
   });
 
-  it('accepts a Plan of each of the five visible kinds', () => {
+  it('accepts a Plan of each of the four visible kinds', () => {
     for (const [type, details] of [
       ['custom', { kind: 'custom' }],
       ['meal', { kind: 'meal' }],
       ['watch', { kind: 'watch', mediaTitle: 'Severance' }],
       ['event', { kind: 'event' }],
-      ['outing', { kind: 'outing' }],
     ] as const) {
       expect(
         activity.safeParse({ ...base, objectKind: 'plan', type, details }).success,
@@ -89,7 +88,7 @@ describe('the stored Activity', () => {
  * pair, not a sample: the point is that no combination slips through.
  */
 describe('details.kind must equal type', () => {
-  const kinds = ['task', 'meal', 'watch', 'event', 'outing', 'custom'] as const;
+  const kinds = ['task', 'meal', 'watch', 'event', 'custom'] as const;
   const detailsFor = (kind: (typeof kinds)[number]) =>
     kind === 'watch' ? { kind, mediaTitle: 'x' } : { kind };
 
@@ -187,7 +186,7 @@ describe('the creation target is explicit or the request fails', () => {
       createActivityInput.safeParse({
         title: 'Dinner',
         objectKind: 'plan',
-        type: 'outing',
+        type: 'event',
         participants: [{ displayName: 'Alice' }],
       }).success,
     ).toBe(true);

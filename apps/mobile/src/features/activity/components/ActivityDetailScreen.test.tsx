@@ -38,7 +38,7 @@ const plan = (patch: Record<string, unknown> = {}): Activity =>
     activityId: ID,
     ownerId: 'usr_01J0000000000000000000000B',
     objectKind: 'plan',
-    type: 'outing',
+    type: 'event',
     status: 'scheduled',
     title: 'Zahav',
     notes: 'Check-in is after 3 PM.',
@@ -52,7 +52,7 @@ const plan = (patch: Record<string, unknown> = {}): Activity =>
     childCount: 0,
     expenseTotalCents: 0,
     visibility: 'private',
-    details: { kind: 'outing', placeName: 'Zahav' },
+    details: { kind: 'event' },
     icsSequence: 0,
     createdAt: '2026-08-08T10:00:00.000Z',
     updatedAt: '2026-08-08T10:00:00.000Z',
@@ -591,12 +591,12 @@ describe('the ⋯ actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Change Plan kind' }));
     await waitFor(() => expect(screen.getByTestId('change-kind-sheet')).toBeDefined());
-    fireEvent.click(screen.getByRole('button', { name: 'Outing' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Event' }));
 
     await waitFor(() => expect(screen.getByTestId('kind-change-confirm')).toBeDefined());
-    expect(screen.getByText('Change Watch → Outing?')).toBeDefined();
+    expect(screen.getByText('Change Watch → Event?')).toBeDefined();
     expect(screen.getByText('Season and episode (S2 E4)')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Change to Outing' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Change to Event' })).toBeDefined();
     expect(sent).toHaveLength(1);
   });
 

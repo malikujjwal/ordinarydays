@@ -74,7 +74,7 @@ export interface ComposeDraftState {
 
   open: () => void;
   chooseObject: (choice: ObjectChoice) => void;
-  choosePlanKind: (type: PlanType) => void;
+  choosePlanKind: (type: PlanType, eventReservationName?: string) => void;
   back: () => void;
   setTitle: (title: string) => void;
   setNotes: (notes: string) => void;
@@ -176,17 +176,30 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    *
    * `changeActivityKind` is the same pure function the server runs for a real conversion, so
    * a draft and a stored Activity cannot disagree about which fields survive a Watch becoming
-   * an Outing. The counts it reads are all zero here by construction — a draft has no
+   * an Event. The counts it reads are all zero here by construction — a draft has no
    * participants, expenses or prep children — so it can never return a blocker, and the
    * `dropped` list it returns is the *reason* the Season field vanishes from the form rather
    * than lurking in the store.
    */
-  choosePlanKind: (type) => {
+  choosePlanKind: (type, eventReservationName) => {
     const { target, title, details } = get();
     const previousType = target?.objectKind === 'plan' ? target.type : 'task';
 
     if (previousType === type) {
-      set(edited({ step: 'form', target: { objectKind: 'plan', type } }));
+      set(
+        edited({
+          step: 'form',
+          target: { objectKind: 'plan', type },
+          ...(type === 'event' && details.reservation.name === '' && eventReservationName
+            ? {
+                details: {
+                  ...details,
+                  reservation: { ...details.reservation, name: eventReservationName },
+                },
+              }
+            : {}),
+        }),
+      );
       return;
     }
 
@@ -205,11 +218,20 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       { objectKind: 'plan', type },
     );
 
+    const mappedDetails = fromActivityDetails(mapped.details);
+    const nextDetails =
+      type === 'event' && mappedDetails.reservation.name === '' && eventReservationName
+        ? {
+            ...mappedDetails,
+            reservation: { ...mappedDetails.reservation, name: eventReservationName },
+          }
+        : mappedDetails;
+
     set(
       edited({
         step: 'form',
         target: { objectKind: 'plan', type },
-        details: fromActivityDetails(mapped.details),
+        details: nextDetails,
       }),
     );
   },
@@ -253,6 +275,17 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     set((state) =>
       edited({
         schedule: date === undefined ? EMPTY_SCHEDULE : { ...state.schedule, date },
+        ...(date === undefined &&
+        state.target?.objectKind === 'plan' &&
+        state.target.type === 'event' &&
+        state.details.reservation.time === state.schedule.time
+          ? {
+              details: {
+                ...state.details,
+                reservation: { ...state.details.reservation, time: '' },
+              },
+            }
+          : {}),
         ...(date === undefined ? { reminderOffset: undefined } : {}),
       }),
     ),
@@ -273,6 +306,20 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
           // An end time needs a start time (§3 rule 4).
           ...(time === undefined ? { endTime: undefined } : {}),
         },
+        ...(state.target?.objectKind === 'plan' && state.target.type === 'event'
+          ? {
+              details: {
+                ...state.details,
+                reservation: {
+                  ...state.details.reservation,
+                  ...(state.details.reservation.time === '' ||
+                  state.details.reservation.time === state.schedule.time
+                    ? { time: time ?? '' }
+                    : {}),
+                },
+              },
+            }
+          : {}),
         // The two pickers offer different lists; keep only an offset the new one shows.
         reminderOffset: reconcileReminder(state.reminderOffset, time !== undefined),
       }),

@@ -9,7 +9,6 @@ import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
-import { outingLocationLabel } from '@/features/compose/model/fields';
 import { canSave, successToast } from '@/features/compose/model/targets';
 import { hasContent, useComposeDraft } from '@/stores/composeDraft';
 import { useToast } from '@/stores/toast';
@@ -38,33 +37,22 @@ export interface ComposeScreenProps {
    */
   today: string;
   timezone: string;
+  /** Used only to pre-fill Event reservation name; an empty value leaves the field empty. */
+  displayName?: string;
 }
 
-export function ComposeScreen({ onClose, today, timezone }: ComposeScreenProps) {
+export function ComposeScreen({
+  onClose,
+  today,
+  timezone,
+  displayName = '',
+}: ComposeScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const draft = useComposeDraft();
   const showToast = useToast((s) => s.show);
   const create = useCreateActivity();
   const [discardOpen, setDiscardOpen] = useState(false);
-
-  /**
-   * An Outing's `Location` **pre-fills** from Place, and only pre-fills (`activities.md` §4.5).
-   *
-   * `details.placeName` is the other half of that rule and needs nothing here: it is derived
-   * from the title at submit time, so the two are identical by construction rather than by two
-   * setters agreeing. The label is different — once the user has typed one of their own, the
-   * Place stops overwriting it, because a venue and its address line are not always the same
-   * words.
-   */
-  function setTitleAndMirror(next: string) {
-    if (draft.target?.objectKind === 'plan' && draft.target.type === 'outing') {
-      draft.setLocation({
-        label: outingLocationLabel(next, draft.location.label, draft.title),
-      });
-    }
-    draft.setTitle(next);
-  }
 
   /** Closing with content asks first; closing an empty draft just closes (§2.2). */
   function requestClose() {
@@ -155,7 +143,11 @@ export function ComposeScreen({ onClose, today, timezone }: ComposeScreenProps) 
         {draft.step === 'object' ? (
           <ObjectChooser onChoose={draft.chooseObject} />
         ) : draft.step === 'planKind' ? (
-          <PlanKindChooser onChoose={draft.choosePlanKind} />
+          <PlanKindChooser
+            onChoose={(type) =>
+              draft.choosePlanKind(type, displayName.trim() || undefined)
+            }
+          />
         ) : draft.target === undefined || draft.target.objectKind === 'listItem' ? (
           // `form` with no Activity target is reachable by exactly one route: `List item`,
           // which has no destination to fix in Phase 1. The store leaves `target` undefined
@@ -180,6 +172,8 @@ export function ComposeScreen({ onClose, today, timezone }: ComposeScreenProps) 
                 reminderOffset={draft.reminderOffset}
                 details={draft.details}
                 notes={draft.notes}
+                sourceUrl={draft.sourceUrl}
+                attachmentUri={draft.attachmentUri}
                 today={today}
                 onDateChange={draft.setDate}
                 onTimeChange={draft.setTime}
@@ -189,14 +183,14 @@ export function ComposeScreen({ onClose, today, timezone }: ComposeScreenProps) 
                 onReminderChange={draft.setReminderOffset}
                 onDetailsChange={draft.setDetails}
                 onNotesChange={draft.setNotes}
+                onSourceUrlChange={draft.setSourceUrl}
+                onAttach={draft.attachImage}
+                onClearAttachment={draft.clearAttachment}
                 fieldErrors={create.fieldErrors}
               />
             }
             attachmentUri={draft.attachmentUri}
-            onTitleChange={setTitleAndMirror}
-            onSourceUrlChange={draft.setSourceUrl}
-            onAttach={draft.attachImage}
-            onClearAttachment={draft.clearAttachment}
+            onTitleChange={draft.setTitle}
             onChangeTarget={() => draft.back()}
             onSave={() => void save()}
             isSaving={create.isSaving}

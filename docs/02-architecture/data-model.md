@@ -8,8 +8,8 @@ in the same PR and explain the key design.
 
 ## 1. Core modelling decision: there is only one schedulable entity
 
-The product language has three nouns — **Today**, **Plans**, **Lists** — plus six activity
-types. That does **not** mean three or nine tables.
+The product language has three nouns — **Today**, **Plans**, **Lists** — plus five activity
+types. That does **not** mean three or eight tables.
 
 | Product word | What it actually is |
 | --- | --- |
@@ -18,7 +18,7 @@ types. That does **not** mean three or nine tables.
 | **Plan** | An Activity created with `objectKind: 'plan'`. It may be private or shared and **may not have a date yet**: "Dinner at Zahav, sometime" is a plan that needs a date. **Not a separate entity.** |
 | **Today** | A *query* over Activities for one date. Owns no data. |
 | **Lists** | A separate entity (`List` + `ListItem`) for things worth remembering. A list is a complete thing on its own; a ListItem may optionally *link* to an Activity, and most never do. Lists are shareable. |
-| **Activity type** | `task` / `meal` / `watch` / `event` / `outing` / `custom` in the `type` field, plus a type-specific `details` sub-document. Task uses `task`; Plan uses one of the other five visible kinds (General maps to `custom`). **Not six tables.** |
+| **Activity type** | `task` / `meal` / `watch` / `event` / `custom` in the `type` field, plus a type-specific `details` sub-document. Task uses `task`; Plan uses one of the other four visible kinds (General maps to `custom`). **Not five tables.** |
 
 > **The canonical rule, and the only one. A Plan is an Activity whose stored
 > `objectKind` is `plan`, selected explicitly by the user or a labelled contextual entry
@@ -35,7 +35,7 @@ types. That does **not** mean three or nine tables.
 
 The founding insight of the product is that meals, TV, expenses, lists, and people are not
 separate mini-apps — they all move through the same lifecycle. The storage model has to
-reflect that or the code will fragment into six half-products.
+reflect that or the code will fragment into five half-products.
 
 ---
 
@@ -370,7 +370,7 @@ interface Device {
 ### 4.1 Activity
 
 ```ts
-type ActivityType = 'task' | 'meal' | 'watch' | 'event' | 'outing' | 'custom';
+type ActivityType = 'task' | 'meal' | 'watch' | 'event' | 'custom';
 type ActivityObjectKind = 'task' | 'plan';
 type PlanType = Exclude<ActivityType, 'task'>;
 
@@ -454,7 +454,7 @@ type Activity = ActivityBase & (
   still be visible to the parent Plan's participants through the parent-authorisation rule
   without carrying its own participant rows.
 - `objectKind: 'plan'` requires `PlanType`: `custom` (the visible **General** kind), `meal`,
-  `watch`, `event`, or `outing`. It may have zero participants; private Plans are first-class
+  `watch`, `event`. It may have zero participants; private Plans are first-class
   Plans. There is no hidden task-flavoured Plan. Adding or removing participants changes
   `visibility` and access only; it never changes `objectKind`.
 - `objectKind` changes only when `PATCH /v1/activities/:id` explicitly carries it. No title,
@@ -608,9 +608,7 @@ type ActivityDetails =
       priceCents?: number;
       currency?: string;
       ticketUrl?: string;
-      organiser?: string; }
-  | { kind: 'outing';
-      placeName?: string;
+      organiser?: string;
       reservation?: { name?: string; time?: string; partySize?: number; reference?: string }; }
   | { kind: 'custom'; shortcutId?: string };
 ```

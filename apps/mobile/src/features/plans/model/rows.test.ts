@@ -4,7 +4,7 @@ import { rowLabel, rowState, rowSubtitle } from './rows';
 
 const item = (overrides: Partial<ActivityListItem> = {}): ActivityListItem => ({
   activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2',
-  type: 'outing',
+  type: 'event',
   title: 'Dinner at Zahav',
   status: 'scheduled',
   isRecurring: false,

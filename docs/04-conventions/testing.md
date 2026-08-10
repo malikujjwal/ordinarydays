@@ -179,7 +179,7 @@ Fixtures are **built per test**, never shared. See §8.
 ```ts
 const alice = aUser().build();
 const bob   = aUser().build();
-const plan  = anActivity({ ownerId: alice.userId, objectKind: 'plan', type: 'outing' })
+const plan  = anActivity({ ownerId: alice.userId, objectKind: 'plan', type: 'event' })
   .scheduledOn('2026-08-08', '19:00', 'America/New_York')
   .withParticipant(bob)
   .build();

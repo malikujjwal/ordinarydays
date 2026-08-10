@@ -65,15 +65,11 @@ describe('toActivityDetails', () => {
     expect(toActivityDetails('custom', EMPTY_DETAILS, 'x')).toEqual({ kind: 'custom' });
   });
 
-  /** §4.3 and §4.5: the two types that mirror the title into their own details. */
-  it('mirrors the title into mediaTitle and placeName', () => {
+  /** §4.3: Watch mirrors the title into its required media title. */
+  it('mirrors the title into mediaTitle', () => {
     expect(toActivityDetails('watch', EMPTY_DETAILS, 'Severance')).toEqual({
       kind: 'watch',
       mediaTitle: 'Severance',
-    });
-    expect(toActivityDetails('outing', EMPTY_DETAILS, 'Zahav')).toEqual({
-      kind: 'outing',
-      placeName: 'Zahav',
     });
   });
 
@@ -115,7 +111,7 @@ describe('toActivityDetails', () => {
   });
 
   it('omits an untouched reservation rather than sending an empty one', () => {
-    expect(toActivityDetails('outing', EMPTY_DETAILS, 'Zahav')).not.toHaveProperty(
+    expect(toActivityDetails('event', EMPTY_DETAILS, 'Zahav')).not.toHaveProperty(
       'reservation',
     );
   });
@@ -126,24 +122,20 @@ describe('toActivityDetails', () => {
       reservation: { name: 'Ujjwal', time: '19:30', partySize: '4', reference: '' },
     };
 
-    expect(toActivityDetails('outing', details, 'Zahav')).toEqual({
-      kind: 'outing',
-      placeName: 'Zahav',
+    expect(toActivityDetails('event', details, 'Zahav')).toEqual({
+      kind: 'event',
       reservation: { name: 'Ujjwal', time: '19:30', partySize: 4 },
     });
   });
 
   /**
    * The union is the filter. A Watch draft that carried an organiser cannot leak it into an
-   * Outing's body, because the Outing arm never reads that key.
+   * Meal's body, because the Meal arm never reads those keys.
    */
   it('reads only the keys the chosen type has', () => {
     const messy = { ...EMPTY_DETAILS, organiser: 'Dr Patel', service: 'Netflix' };
 
-    expect(toActivityDetails('outing', messy, 'Zahav')).toEqual({
-      kind: 'outing',
-      placeName: 'Zahav',
-    });
+    expect(toActivityDetails('meal', messy, 'Zahav')).toEqual({ kind: 'meal' });
   });
 });
 

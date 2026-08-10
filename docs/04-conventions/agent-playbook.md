@@ -179,7 +179,7 @@ ADR-045:
 
 So an undated plan is a plan, not a draft of one (`plans-and-lists.md` §1), and scheduling is
 `POST /v1/activities/:id/schedule` rewriting one index entry — not a conversion, a promotion,
-or a second entity. The six stored types are a required field, not six tables
+or a second entity. The five stored types are a required field, not five tables
 (`data-model.md` §1, `activities.md` §1). On create, that field comes only from the explicit
 **Task** choice or the explicit Plan-kind choice; a title, parser, model or server default
 must never supply it.
@@ -595,7 +595,7 @@ messages, and UI copy is what keeps a distributed set of agents building one pro
 | **Activity** | The single stored schedulable entity. Everything a user creates is one. Carries `type`, `status`, an optional `schedule`, and a type-specific `details` sub-document. There is no other schedulable entity. |
 | **Plan** | The user-facing word for an Activity the user intends to make happen, alone or with people. **A date is not what makes it one** — an undated plan sits in Plans → Needs a date. Not an entity, not a flag, not a table. |
 | **Needs a date** | The first stage of the Plans tab, served by the `#P` GSI1 bucket: Activities with explicit `objectKind: 'plan'` and no date. Sorted by `lastActivityAt` descending. It never reaches Today, never carries a badge or a count, and is never nudged (`plans-and-lists.md` §1.3.2). |
-| **Activity type** | One of `task`, `meal`, `watch`, `event`, `outing`, `custom`. It guides which fields the form shows, which verb completion uses, and whether a checkbox renders. It never restricts what can be done. |
+| **Activity type** | One of `task`, `meal`, `watch`, `event`, `custom`. It guides which fields the form shows, which verb completion uses, and whether a checkbox renders. It never restricts what can be done. |
 | **List** | An independent collection of things worth remembering. Carries one of three `ListBehaviour` values plus a `capabilities` record; there is no list `kind`. Separate from Activity and independent of it — a list that never produces an Activity is complete. **Shareable**, with 20 people total including the owner and pending invitations; only app users can edit. Its canonical row lives in its own `LIST#<l>` partition, never in the owner's. |
 | **List member** | A non-owner person on a shared list, stored at `LIST#<l>` / `MEMBER#<personId>` with fixed role `member`. `status` is `invited` or `active`; an invited member has no `userId`, `reciprocalPersonId` or list index entry and can read nothing. Its immutable `addedAt` is shared by the ListIndex and reciprocal `LLINK#` keys. The owner has no `MEMBER#` row: ownership is `List.ownerId` plus the owner's `ListIndex` pointer, and the API synthesises their first roster row. `memberCount` includes that owner, so pending invitations count toward the 20-person cap. |
 | **List index entry** | The `USER#<u>` / `LIST#<l>` pointer, one per **active** member. It is a near-pure pointer carrying `role` and `addedAt` and nothing else — no title, no counts — which is why renaming a shared list is one write and why the pointer's presence *is* the access check. Deliberately unlike an activity index entry, which must carry sortable display data. |

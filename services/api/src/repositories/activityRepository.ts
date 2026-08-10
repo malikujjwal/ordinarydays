@@ -210,9 +210,7 @@ function deriveSubtitle(activity: Activity, taskSubtitle?: string): string | und
       return mediaKind === undefined ? 'Watch' : `Watch · ${capitalise(mediaKind)}`;
     }
     case 'event':
-      return activity.location?.label ?? activity.details.organiser;
-    case 'outing':
-      return activity.location?.label ?? activity.details.placeName;
+      return activity.details.organiser ?? activity.location?.label;
     case 'custom':
       return undefined;
   }

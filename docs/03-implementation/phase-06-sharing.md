@@ -2529,7 +2529,7 @@ canonical in
 **Plan this item on a shared list.** Extend the Phase 3 item action without changing its
 name or adding a shortcut inferred from the list:
 
-1. `Plan this item` first presents **General / Meal / Watch / Event / Outing** in that fixed
+1. `Plan this item` first presents **General / Meal / Watch / Event** in that fixed
    order. None is selected, recommended, or reordered from the list's title, template,
    behaviour, item words, or typed details.
 2. After the user taps one, the matching Plan form opens. The item title and compatible
@@ -2641,7 +2641,7 @@ there is no watcher and no retroactive suggestion. If adding one member fails, t
 exists and the banner names the failure; a list that was not created because the fourth
 invite failed would be worse.
 
-**Tests.** The template catalogue starts unselected for Meal, Watch, Event, Outing and General
+**Tests.** The template catalogue starts unselected for Meal, Watch, Event and General
 Plans; changing the proposed title does not change selection; save is unavailable until a
 style is tapped; the request carries that exact `templateKey`; a missing key is `400` and
 writes no list. The share row is absent for a private plan and unticked for a shared one, on

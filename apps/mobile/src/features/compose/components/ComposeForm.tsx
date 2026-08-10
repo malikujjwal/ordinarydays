@@ -2,7 +2,6 @@ import type { CreationTarget } from '@od/shared/client';
 import { MAX_TITLE_LEN } from '@od/shared/constants';
 import { Button, Field, Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
-import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import {
   type CommonDraftFields,
   saveLabel,
@@ -14,8 +13,8 @@ import {
  *
  * **P1-25 replaces the middle of this component**, not its edges. The header, the capture
  * row, the error banner and the named write button are the parts P1-24 owns and are the same
- * on all six forms; what changes per type is the field list, which `activities.md` §4
- * specifies exactly and which arrives as `{Task,Meal,Watch,Event,Outing,Custom}Form`. Phase 1
+ * on all five forms; what changes per type is the field list, which `activities.md` §4
+ * specifies exactly and which arrives as a typed form renderer. Phase 1
  * renders the two fields common to every one of those tables — title and notes — so the flow
  * is complete end to end before the tables land.
  *
@@ -35,9 +34,6 @@ export interface ComposeFormProps {
   saveEnabled: boolean;
   attachmentUri: string | undefined;
   onTitleChange: (title: string) => void;
-  onSourceUrlChange: (url: string) => void;
-  onAttach: (uri: string) => void;
-  onClearAttachment: () => void;
   onChangeTarget: () => void;
   onSave: () => void;
   isSaving: boolean;
@@ -60,9 +56,6 @@ export function ComposeForm({
   saveEnabled,
   attachmentUri,
   onTitleChange,
-  onSourceUrlChange,
-  onAttach,
-  onClearAttachment,
   onChangeTarget,
   onSave,
   isSaving,
@@ -111,19 +104,11 @@ export function ComposeForm({
 
       {/**
        * P1-25's type-specific fields, in `activities.md` §4's order — **including `Notes`**,
-       * which is the last row of all six tables and so belongs to the table rather than to
-       * this frame. A slot, so the ordering lives in one renderer over the six tables
+       * which is the last row of all five tables and so belongs to the table rather than to
+       * this frame. A slot, so the ordering lives in one renderer over the five tables
        * (`forms/TypedFields.tsx`) instead of being restated here and drifting.
        */}
       {typedFields}
-
-      <CaptureRow
-        sourceUrl={fields.sourceUrl}
-        onSourceUrlChange={onSourceUrlChange}
-        attachmentUri={attachmentUri}
-        onAttach={onAttach}
-        onClearAttachment={onClearAttachment}
-      />
 
       {/**
        * §5.3's mutation-failure presentation: the form stays open with its draft intact and

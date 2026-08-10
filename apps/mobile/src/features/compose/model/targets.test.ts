@@ -38,13 +38,12 @@ describe('the object chooser', () => {
 });
 
 describe('the Plan-kind chooser', () => {
-  it('offers exactly General, Meal, Watch, Event, Outing, in that order', () => {
+  it('offers exactly General, Meal, Watch, Event, in that order', () => {
     expect(planKindChoices.map((c) => c.label)).toEqual([
       'General',
       'Meal',
       'Watch',
       'Event',
-      'Outing',
     ]);
   });
 
@@ -60,7 +59,6 @@ describe('the Plan-kind chooser', () => {
       'meal',
       'watch',
       'event',
-      'outing',
     ]);
     expect(planKindLabel('watch')).toBe('Watch');
   });
@@ -116,7 +114,7 @@ describe('the named write button', () => {
 describe('toCreateActivityInput', () => {
   /**
    * A whole draft from a few fields. P1-25 widened this function's input from the three
-   * common fields to the six tables' worth, so every case here states only what it is about
+   * common fields to the five tables' worth, so every case here states only what it is about
    * and inherits the empty rest — which is also what keeps a new field from silently
    * appearing in an assertion that was not written for it.
    */
@@ -184,15 +182,6 @@ describe('toCreateActivityInput', () => {
     expect(input?.details).toEqual({ kind: 'watch', mediaTitle: 'Severance' });
   });
 
-  it('starts an Outing placeName equal to the title', () => {
-    const input = toCreateActivityInput(
-      { objectKind: 'plan', type: 'outing' },
-      draft({ title: 'Zahav', notes: '' }),
-      ZONE,
-    );
-    expect(input?.details).toEqual({ kind: 'outing', placeName: 'Zahav' });
-  });
-
   it('omits notes and sourceUrl rather than sending empty strings', () => {
     const input = toCreateActivityInput(
       { objectKind: 'task', type: 'task' },
@@ -244,8 +233,8 @@ describe('successToast', () => {
       successToast({ objectKind: 'task', type: 'task' }, EMPTY_SCHEDULE, TODAY),
     ).toBe('Task · saved to Anytime');
     expect(
-      successToast({ objectKind: 'plan', type: 'outing' }, EMPTY_SCHEDULE, TODAY),
-    ).toBe('Outing plan · saved to Needs a date');
+      successToast({ objectKind: 'plan', type: 'event' }, EMPTY_SCHEDULE, TODAY),
+    ).toBe('Event plan · saved to Needs a date');
     expect(
       successToast({ objectKind: 'plan', type: 'custom' }, EMPTY_SCHEDULE, TODAY),
     ).toBe('General plan · saved to Needs a date');
@@ -260,7 +249,7 @@ describe('successToast', () => {
 });
 
 /**
- * The schedule, location and reminder the six forms collect (P1-25).
+ * The schedule, location and reminder the five forms collect (P1-25).
  *
  * Every case round-trips through `createActivityInput`, because the value of this function is
  * not that it builds an object — it is that the object it builds is one the server accepts.

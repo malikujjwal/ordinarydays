@@ -20,8 +20,8 @@ social network. The user-facing mental model is exactly three words: **Today · 
 
 ## The six rules that break the product if you get them wrong
 
-1. **There is one schedulable entity: `Activity`.** Task, Meal, Watch, Event, Outing and
-   Custom are a `type` field, not six tables. A "Plan" is an Activity the user intends to
+1. **There is one schedulable entity: `Activity`.** Task, Meal, Watch, Event and
+   Custom are a `type` field, not five tables. A "Plan" is an Activity the user intends to
    make happen, **with or without a date yet** — an undated one sits in Plans → Needs a
    date. "Today" is a query, not storage. If you are creating a `Plan` table or a `Meal`
    table, you have

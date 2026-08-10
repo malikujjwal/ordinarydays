@@ -381,7 +381,7 @@ const KIND_CHANGED = 'activity_kind_changed';
  * ## What a patch may not touch
  *
  * `status`, `completedAt` and `outcome` survive a kind change untouched (§6.3 point 8) — an
- * `event` that was attended and becomes an `outing` stays completed with
+ * an attended `event` that becomes another kind stays completed with
  * `outcome: 'attended'`. They are carried from the current row rather than recomputed,
  * except that clearing the schedule returns a non-terminal activity to `saved`.
  *
@@ -435,8 +435,8 @@ export async function patchActivity(
  *
  * ## Why the explicit patch wins over the kind change
  *
- * A conversion can produce `notes`, `location` and `details` of its own — an event's
- * description appended to notes, an outing's place name moved into the location label. If the
+ * A conversion can produce `notes`, `location` and `details` of its own — an Event's
+ * description is appended to notes when leaving the kind. If the
  * same request also names one of those fields, **the request wins outright**. The client has
  * already run the same mapping to render the confirmation, so the value it sends is the
  * post-change value the user just saw and approved; applying the append on top of it would

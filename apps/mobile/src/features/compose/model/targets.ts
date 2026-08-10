@@ -56,7 +56,7 @@ export const objectChoices: readonly Choice<ObjectChoice>[] = Object.freeze([
 ]);
 
 /**
- * `General`, `Meal`, `Watch`, `Event`, `Outing`, in order.
+ * `General`, `Meal`, `Watch`, `Event`, in order.
  *
  * Re-exported from `@/lib/planKinds` rather than defined here: the detail screen renders the
  * same labels, and a second feature importing this module is exactly what
@@ -202,8 +202,8 @@ export function toCreateActivityInput(
       type: target.type,
       /**
        * `details` mirrors the chosen type so the server's `details.kind === type` check has
-       * something to agree with. Watch and Outing are the two arms that mirror the title —
-       * `mediaTitle` and `placeName` — per `activities.md` §4.3 and §4.5.
+       * something to agree with. Watch mirrors its required `mediaTitle` from the title,
+       * per `activities.md` §4.3.
        */
       details: toActivityDetails(target.type, fields.details, title),
     };

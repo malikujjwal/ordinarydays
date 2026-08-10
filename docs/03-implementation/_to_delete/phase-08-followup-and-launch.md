@@ -132,7 +132,7 @@ issues the ListItem `PATCH`, copies the watched season and episode, and changes 
 
 Tapping `Create a Plan for S2 E6?` explicitly fixes the destination as **Plan**, then opens an unselected
 Plan-kind choice: **General**, **Meal**,
-**Watch**, **Event**, or **Outing**. Only after the user chooses **Watch** does the editor show
+**Watch**, **Event**. Only after the user chooses **Watch** does the editor show
 the next episode, service, and same-time-next-week values for review. Audience is also
 unselected: the user must choose **Just me** or **Choose people**. If they choose people, the
 previous Plan's participants may appear as unchecked suggestions but are never preselected.
@@ -456,7 +456,7 @@ target requests no network entitlement and no keychain group.
 **Approach.** The deep-link handler reads the group container, deletes the payload, retains it
 in a local draft, and opens Global Add with **Task**, **Plan**, and **List item** all unselected.
 The payload cannot start capture yet. The user first chooses the destination; **Plan** then
-requires an unselected **General / Meal / Watch / Event / Outing** choice, and **List item**
+requires an unselected **General / Meal / Watch / Event** choice, and **List item**
 requires an explicit destination list. Only then may the app call `POST /v1/capture/link`,
 `POST /v1/capture/parse`, or `POST /v1/capture/extract` with that immutable
 `CreationTarget`. Capture may suggest compatible, visible fields for review, but it never

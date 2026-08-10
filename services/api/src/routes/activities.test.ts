@@ -269,7 +269,7 @@ describe('what this endpoint refuses', () => {
   it('400s a Plan carrying participants, with the coming-soon message', async () => {
     const res = await post(createApp(), {
       objectKind: 'plan',
-      type: 'outing',
+      type: 'event',
       title: 'Dinner',
       participants: [{ displayName: 'Sam' }],
     });

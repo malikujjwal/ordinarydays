@@ -15,10 +15,10 @@
 /** What the user explicitly chose to create. Never inferred from words (`CLAUDE.md` rule 2). */
 export type ActivityObjectKind = 'task' | 'plan';
 
-/** The six stored types. A required field, not six tables (`data-model.md` §1). */
-export type ActivityType = 'task' | 'meal' | 'watch' | 'event' | 'outing' | 'custom';
+/** The five stored types. A required field, not five tables (`data-model.md` §1). */
+export type ActivityType = 'task' | 'meal' | 'watch' | 'event' | 'custom';
 
-/** The five kinds a Plan may present as. "General" maps to `custom`. */
+/** The four kinds a Plan may present as. "General" maps to `custom`. */
 export type PlanType = Exclude<ActivityType, 'task'>;
 
 export type ActivityStatus =

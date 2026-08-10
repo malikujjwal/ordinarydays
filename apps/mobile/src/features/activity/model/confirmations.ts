@@ -88,7 +88,7 @@ export function deleteConfirmation(
 }
 
 /**
- * `Change Watch → Outing?` — or nothing at all (`activities.md` §6.3 rule 6).
+ * `Change Watch → Event?` — or nothing at all (`activities.md` §6.3 rule 6).
  *
  * The dropped fields come from **P1-17's mapping**, the same pure function the server runs,
  * so the dialog cannot promise to keep something the write then drops. Their labels already

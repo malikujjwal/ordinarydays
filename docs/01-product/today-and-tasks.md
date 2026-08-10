@@ -241,7 +241,6 @@ be completed by a participant of its parent Plan through that explicit parent re
 | `meal` | Non-interactive diamond marker | — (marker is not a hit target; it is `accessibilityElementsHidden`) | Opens detail |
 | `watch` | Non-interactive diamond marker | — | Opens detail |
 | `event` | Non-interactive diamond marker | — | Opens detail |
-| `outing` | Non-interactive diamond marker | — | Opens detail |
 | `custom` | Non-interactive diamond marker | — | Opens detail |
 
 Non-task types are completed from three places and never from the row's leading control:
@@ -278,8 +277,7 @@ checklist, so any participant of the parent may tick it, whoever created it
 | `task` | Parent plan title, if any | `New York Trip` |
 | `meal` | `Meal` + slot if set | `Meal · Dinner` |
 | `watch` | `Watch` + `S<n> E<n>` if set, else `mediaKind` | `Watch · S2 E4` |
-| `event` | `location.label` if set, else `details.organiser` | `Union Transfer` |
-| `outing` | `location.label` if set, else `details.placeName` | `Zahav` |
+| `event` | `details.organiser` if set, else `location.label` | `Dr Patel` |
 | `custom` | none | |
 
 Trailing badges, in this order when present: recurrence glyph `↻`, snooze glyph, overdue
@@ -653,7 +651,7 @@ states one.
 > recurring series, has `status: 'scheduled'`, and has `schedule.date` strictly before
 > today, is **rolled forward onto Today** as an ANYTIME item (group 1), retaining its
 > original stored date. Nothing else rolls forward: not meals, not watch sessions, not
-> events, not outings, not custom activities, and not recurring occurrences.
+> events, not custom activities, and not recurring occurrences.
 
 Details:
 
@@ -710,7 +708,6 @@ and carries no badge, colour alarm, or count.
 | `meal` | `How did it go?` | `Had it` · `Didn't happen` |
 | `watch` | `How did it go?` | `Watched` · `Didn't happen` |
 | `event` | `How did it go?` | `Attended` · `Didn't go` |
-| `outing` | `How did it go?` | `Done` · `Didn't happen` |
 | `custom` | `Done?` | `Done` · `Didn't happen` |
 
 The same prompt appears at the top of the item's detail screen. Selecting the positive

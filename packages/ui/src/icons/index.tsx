@@ -93,18 +93,6 @@ export const PlayRect = ({ size, color }: IconProps) => (
 );
 
 /** `event`. */
-export const Ticket = ({ size, color }: IconProps) => (
-  <Frame size={size}>
-    <Path
-      d="M3.5 8.5V6.8c0-.7.6-1.3 1.3-1.3h14.4c.7 0 1.3.6 1.3 1.3v1.7a2.5 2.5 0 0 0 0 7v1.7c0 .7-.6 1.3-1.3 1.3H4.8c-.7 0-1.3-.6-1.3-1.3v-1.7a2.5 2.5 0 0 0 0-7z"
-      stroke={color}
-      {...stroke}
-    />
-    <Path d="M14 6.5v11" stroke={color} strokeWidth={1.5} strokeDasharray="2 2.5" />
-  </Frame>
-);
-
-/** `outing`. */
 export const MapPin = ({ size, color }: IconProps) => (
   <Frame size={size}>
     <Path
@@ -215,7 +203,6 @@ export const typeIcons = {
   task: CheckSquare,
   meal: Bowl,
   watch: PlayRect,
-  event: Ticket,
-  outing: MapPin,
+  event: MapPin,
   custom: Diamond,
 } as const;

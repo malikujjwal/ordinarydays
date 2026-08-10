@@ -709,8 +709,8 @@ never reach it, and nothing in the list model treats an item that does not as un
 
 `PlanType = Exclude<ActivityType, 'task'>`. `creationTarget` is required and `type` must be
 the Plan kind the user selected:
-`General → custom`, `Meal → meal`, `Watch → watch`, `Event → event`, or
-`Outing → outing`. The server never reads `behaviour`, `templateKey` or any capability to
+`General → custom`, `Meal → meal`, `Watch → watch`, or `Event → event`. The server never
+reads `behaviour`, `templateKey` or any capability to
 select or pre-select it. In this single-player phase only
 `audience: { mode: 'just_me' }` is accepted; the `selected_people` union shape is already in
 the shared schema but returns `validation_failed` with `Sharing is coming soon.` until Phase 6.
@@ -737,7 +737,7 @@ request. They are never grounds for choosing the kind.
 - The response is `{ activity, item, viewerLink }`; `viewerLink` belongs to the caller and no
   other viewer's pointer may be serialised.
 
-**Tests.** Integration: `Zahav` with explicit `creationTarget.type: 'outing'` and
+**Tests.** Integration: `Zahav` with explicit `creationTarget.type: 'event'` and
 `audience.mode: 'just_me'` produces exactly one new Activity, one index entry and one caller
 link while leaving the item byte-identical. Missing `creationTarget`, missing audience, a
 Plan target with no type, and `details.kind` that differs from the selected type each return
@@ -1489,7 +1489,7 @@ succeeds; the undo toast on an additive toggle reverts the change.
 ### P3-33 — The `Plan this item` kind-and-audience sheet
 
 **Approach.** One sheet, opened from the exact list-item action `Plan this item` or its swipe
-equivalent. Step one requires `General`, `Meal`, `Watch`, `Event`, or `Outing`; nothing is
+equivalent. Step one requires `General`, `Meal`, `Watch`, or `Event`; nothing is
 pre-selected from the list. Step two shows the chosen Plan-kind fields. Step three is a
 required audience step. In this personal phase it contains `Just me`, initially unselected,
 and the user must tap it; Phase 6 expands the same step to the final unselected `Just me` /
@@ -1505,7 +1505,7 @@ offered from the item and remain editable. A `watching` item at S2 E4 may offer 
 offer does not select Watch and does not exist in another kind's form. `audience.mode` can
 only become `just_me` in this phase, but only after the visible tap; it has no initial value.
 
-**Tests.** Playwright: open `Plan this item` on `Severance`, assert all five kinds and no
+**Tests.** Playwright: open `Plan this item` on `Severance`, assert all four kinds and no
 selection, choose `Watch`, edit the offered S2 E5 to S2 E6, assert `Save plan` remains blocked
 until `Just me` is tapped, then confirm and assert `creationTarget.type: 'watch'`,
 `audience.mode: 'just_me'` and S2 E6. Repeat on a watch list
@@ -1566,7 +1566,7 @@ day, Plans is a map.
 ```
 NEEDS A DATE
 
-  ◇  Dinner at Zahav                                Outing
+  ◇  Dinner at Zahav                                Event
      Alice interested · Ben hasn't replied                    ›
 ```
 
@@ -1683,7 +1683,7 @@ does not archive its lists. A list of things you own is not owned by the trip. A
 this way forces `slot: null` regardless of the selected template, so one Plan's list never
 becomes a standing destination without a later explicit settings change.
 
-**Tests.** Integration: creating an `outing` writes zero lists; `Add list` initially shows the
+**Tests.** Integration: creating an `event` writes zero lists; `Add list` initially shows the
 same full unselected catalogue as general `New list`; explicitly choosing and confirming `Packing`
 writes exactly one with `sourceActivityId` set, `behaviour: 'collection'` and `slot: null`;
 deleting the plan leaves the list with its items and `sourceActivityId` cleared. A test runs
@@ -1923,7 +1923,7 @@ list`; add three items, check one, reopen the app, and assert three items, one c
 Activities in the table and nothing on Today.
 
 A fifth, for the stage that did not exist before this phase: **a plan with no date.** Create
-`Poconos trip` as an `outing` with no date, assert it appears under Needs a date and on no
+`Poconos trip` as an `event` with no date, assert it appears under Needs a date and on no
 other screen — not Today, not Upcoming, not Anytime — then give it a Saturday and assert it
 moves to Upcoming, that its `#P` index entry is gone and a `#S` one exists, and that no badge
 or count appeared anywhere at any point.
@@ -1959,7 +1959,7 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
    with no selection, and enables `Create list` only after a style tap and a non-empty visible
    title. No `/v1/lists/suggest-template` route or title matcher exists.
 7. `Plan this item` for `Zahav` requires an explicit Plan kind and `Just me`. Confirming an
-   Outing creates exactly one Activity and one caller `LNK#` row while leaving exactly one
+   Event creates exactly one Activity and one caller `LNK#` row while leaving exactly one
    byte-identical ListItem; missing kind or audience writes nothing.
 8. The item stays in place. Only a response carrying the caller's `viewerLink` renders a
    state line, with no colour change, strike-through or reorder; tapping the title opens item
@@ -1995,7 +1995,7 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
     as its subtitle, and deleting the plan leaves it as an ordinary task with its schedule
     intact.
 21. Creating a prep task on a prep task returns `400`.
-22. Creating an `outing` writes zero lists; confirming `Packing` in the suggestion
+22. Creating an `event` writes zero lists; confirming `Packing` in the suggestion
     sheet writes exactly one, with `behaviour: 'collection'` and `slot: null`; deleting the
     plan leaves the list and its items with `sourceActivityId` cleared.
 23. A presigned upload URL rejects a different `Content-Type` than declared, rejects a body

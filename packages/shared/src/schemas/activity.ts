@@ -57,7 +57,7 @@ export const mealIngredient = z.object({
   addedToListId: ulidId('lst').optional(),
 });
 
-export const outingReservation = z.object({
+export const eventReservation = z.object({
   name: freeText.optional(),
   time: hhmm.optional(),
   partySize: z.number().int().positive().max(100).optional(),
@@ -94,11 +94,7 @@ export const activityDetails = z.discriminatedUnion('kind', [
     currency: z.string().length(3).optional(),
     ticketUrl: z.url().optional(),
     organiser: freeText.optional(),
-  }),
-  z.object({
-    kind: z.literal('outing'),
-    placeName: freeText.optional(),
-    reservation: outingReservation.optional(),
+    reservation: eventReservation.optional(),
   }),
   z.object({ kind: z.literal('custom'), shortcutId: ulidId('sct').optional() }),
 ]);
@@ -177,21 +173,14 @@ const activityBaseShape = {
   schemaVersion: z.literal(1),
 } as const;
 
-/** The five Plan kinds. `custom` is the visible **General**. */
-export const planType = z.enum(['meal', 'watch', 'event', 'outing', 'custom']);
+/** The four Plan kinds. `custom` is the visible **General**. */
+export const planType = z.enum(['meal', 'watch', 'event', 'custom']);
 
 /**
  * Every activity type, Task included. Named once here rather than spelled out at each use —
- * `patchActivityInput` and `activityListQuery` both need the full six.
+ * `patchActivityInput` and `activityListQuery` both need the full five.
  */
-export const activityType = z.enum([
-  'task',
-  'meal',
-  'watch',
-  'event',
-  'outing',
-  'custom',
-]);
+export const activityType = z.enum(['task', 'meal', 'watch', 'event', 'custom']);
 
 /**
  * The stored Activity.
@@ -375,7 +364,7 @@ export const patchActivityInput = z
     /** The only status a client may set. The rest are derived. */
     status: z.literal('cancelled').optional(),
     objectKind: z.enum(['task', 'plan']).optional(),
-    type: z.enum(['task', 'meal', 'watch', 'event', 'outing', 'custom']).optional(),
+    type: activityType.optional(),
   })
   .superRefine((value, ctx) => {
     if ((value.objectKind === undefined) !== (value.type === undefined)) {
@@ -400,7 +389,7 @@ export const patchActivityInput = z
     if (value.objectKind === 'plan' && value.type === 'task') {
       ctx.addIssue({
         code: 'custom',
-        message: 'A Plan must have one of the five Plan kinds, not "task"',
+        message: 'A Plan must have one of the four Plan kinds, not "task"',
         path: ['type'],
       });
     }
