@@ -390,7 +390,7 @@ export const rateLimit = (scope: string, subject: string, windowStart: string) =
  * GSI1 is populated **only on `ActivityIndex` items**, into exactly four buckets.
  *
  * Which bucket an activity lands in is decided by one pure function,
- * `deriveGsi1Bucket` — `packages/shared/src/activities/bucket.ts`, Phase 2. These builders
+ * `deriveGsi1Bucket` — `packages/shared/src/activity/bucket.ts`, Phase 2. These builders
  * assemble the keys once that answer exists; they do not decide it, and adding a fifth
  * builder here without a row in §3.5 is how a ghost bucket appears.
  *

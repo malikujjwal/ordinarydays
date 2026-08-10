@@ -1,3 +1,4 @@
+import { deriveGsi1Bucket } from '@od/shared/activity';
 import { TABLE } from '@od/shared/table';
 import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
@@ -78,36 +79,6 @@ const ENTITY = {
 const SCHEMA_VERSION = 1;
 
 /**
- * Which GSI1 feed an activity belongs in (`data-model.md` §3.5).
- *
- * **Transcribed, not derived, and the order is load-bearing — do not reorder it.** A
- * recurring series is `R` even when it has a date; a dated activity is `S` whatever its
- * object kind; and only then does Task-versus-Plan decide between `N` and `P`.
- *
- * `#P` and `#N` are separate buckets and there is no single "unscheduled" one. Both hold
- * undated activities and they mean opposite things: `#N` is *today, whenever* — a solo
- * errand — and `#P` is *someday, undecided* — a group plan with no date yet. Collapsing them
- * is the model's largest recorded product error, because it sent an undecided group plan to
- * Today's Anytime list.
- *
- * **`objectKind` is the test, not `type` or the participant count.** The user already said
- * whether this is a Task or a Plan; re-deriving that from anything else erases their answer.
- *
- * > **This function is replaced, not extended, in P2-05.** `data-model.md` §3.5 puts the
- * > canonical `deriveGsi1Bucket` in `packages/shared/src/activities/bucket.ts` with its own
- * > 25-case matrix, and `phase-02-today-and-tasks.md`'s prerequisites say Phase 1's inline
- * > logic is replaced by it. When that lands, delete this and import that — do not keep both.
- */
-export function deriveBucket(
-  activity: Pick<Activity, 'recurrence' | 'schedule' | 'objectKind'>,
-): Gsi1Bucket {
-  if (activity.recurrence) return 'R';
-  if (activity.schedule?.date) return 'S';
-  if (activity.objectKind === 'plan') return 'P';
-  return 'N';
-}
-
-/**
  * The `#S` sort key's date-time, as the user's local wall clock: `YYYY-MM-DDTHH:mm`.
  *
  * **No timezone arithmetic happens here, and none is needed.** `schedule.date` and
@@ -127,7 +98,7 @@ function gsi1KeysFor(
   userId: string,
   activity: Activity,
 ): { gsi1pk: string; gsi1sk: string } {
-  const bucket = deriveBucket(activity);
+  const bucket = deriveGsi1Bucket(activity);
   const id = activity.activityId;
 
   switch (bucket) {
@@ -144,7 +115,7 @@ function gsi1KeysFor(
     case 'S':
       /**
        * `schedule` is defined whenever the bucket is `S` — its `date` is what put it there —
-       * but the compiler cannot see that through {@link deriveBucket}, so the fallback is a
+       * but the compiler cannot see that through {@link deriveGsi1Bucket}, so the fallback is a
        * narrowing rather than an assertion. It is unreachable, and being unreachable is
        * cheaper to read than a non-null assertion that claims something the reader has to
        * verify for themselves.

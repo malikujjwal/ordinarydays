@@ -12,7 +12,7 @@
  * Nothing in this package imports React, React Native, an AWS SDK client, or `process.env`,
  * and nothing here builds a DynamoDB key (`tech-stack.md` §5.2).
  */
-export * from './activity/changeActivityKind.js';
+export * from './activity/index.js';
 export * from './constants.js';
 export * from './errors.js';
 export * from './schemas/index.js';

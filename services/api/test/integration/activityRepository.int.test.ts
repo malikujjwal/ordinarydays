@@ -282,6 +282,64 @@ describe('a bucket-changing write leaves exactly one index entry', () => {
     expect(await countAll(ALICE)).toBe(1);
     expect((await repo.listByBucket(ALICE, 'N')).items).toHaveLength(1);
   });
+
+  it('schedules an undated Plan from #P to #S with exactly one index entry', async () => {
+    const before = anActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+    } as Partial<Activity>);
+    await repo.createActivity(ALICE, before);
+
+    const after = {
+      ...before,
+      schedule: { date: '2026-08-15', timezone: 'UTC' },
+      updatedAt: '2026-08-08T11:00:00.000Z',
+    } as Activity;
+    await repo.patchActivity(ALICE, after, before.updatedAt, { previous: before });
+
+    expect(await countAll(ALICE)).toBe(1);
+    expect((await repo.listByBucket(ALICE, 'P')).items).toHaveLength(0);
+    expect((await repo.listByBucket(ALICE, 'S')).items).toHaveLength(1);
+  });
+
+  it('unschedules a Plan from #S to #P with exactly one index entry', async () => {
+    const before = anActivity({
+      objectKind: 'plan',
+      type: 'event',
+      details: { kind: 'event' },
+      schedule: { date: '2026-08-15', timezone: 'UTC' },
+    } as Partial<Activity>);
+    await repo.createActivity(ALICE, before);
+
+    const { schedule: _dropped, ...rest } = before;
+    const after = { ...rest, updatedAt: '2026-08-08T11:00:00.000Z' } as Activity;
+    await repo.patchActivity(ALICE, after, before.updatedAt, { previous: before });
+
+    expect(await countAll(ALICE)).toBe(1);
+    expect((await repo.listByBucket(ALICE, 'S')).items).toHaveLength(0);
+    expect((await repo.listByBucket(ALICE, 'P')).items).toHaveLength(1);
+  });
+
+  it('keeps an undated Plan in #P when only its presentation type changes', async () => {
+    const before = anActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+    } as Partial<Activity>);
+    await repo.createActivity(ALICE, before);
+
+    const after = {
+      ...before,
+      type: 'event',
+      details: { kind: 'event' },
+      updatedAt: '2026-08-08T11:00:00.000Z',
+    } as Activity;
+    await repo.patchActivity(ALICE, after, before.updatedAt, { previous: before });
+
+    expect(await countAll(ALICE)).toBe(1);
+    expect((await repo.listByBucket(ALICE, 'P')).items).toHaveLength(1);
+  });
 });
 
 describe('optimistic concurrency', () => {

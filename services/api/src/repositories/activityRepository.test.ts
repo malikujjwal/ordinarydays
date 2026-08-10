@@ -4,7 +4,6 @@ import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createActivity,
-  deriveBucket,
   localDateTime,
   newActivityId,
   newReminderId,
@@ -111,37 +110,6 @@ describe('id generation', () => {
 
     expect(ulidId('act').safeParse(newActivityId()).success).toBe(true);
     expect(ulidId('rem').safeParse(newReminderId()).success).toBe(true);
-  });
-});
-
-/**
- * `data-model.md` §3.5, transcribed. **Order matters** — each case here is a pair that would
- * come out differently if the conditions were reordered.
- */
-describe('bucket derivation', () => {
-  it('is R for a recurring series, even when it also has a date', () => {
-    expect(deriveBucket(activity({ recurrence: series, schedule }))).toBe('R');
-  });
-
-  it('is S for a dated activity, whatever its object kind', () => {
-    expect(deriveBucket(activity({ schedule }))).toBe('S');
-    expect(deriveBucket(plan({ schedule }))).toBe('S');
-  });
-
-  /**
-   * The pair that proves `#P` and `#N` are not collapsed. Same undated title, and the
-   * user's own Task-versus-Plan choice is the only thing separating them — which is the
-   * whole argument in §3.5: `#N` is *today, whenever*, `#P` is *someday, undecided*.
-   */
-  it('is N for an undated Task and P for an undated Plan', () => {
-    expect(deriveBucket(activity())).toBe('N');
-    expect(deriveBucket(plan())).toBe('P');
-  });
-
-  it('does not let participants or type decide — only objectKind', () => {
-    expect(deriveBucket(plan({ participantCount: 0 }))).toBe('P');
-    expect(deriveBucket(plan({ participantCount: 5 }))).toBe('P');
-    expect(deriveBucket(activity({ type: 'task' }))).toBe('N');
   });
 });
 

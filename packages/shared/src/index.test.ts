@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('exports map', () => {
   it('resolves every declared subpath', async () => {
-    const [root, schemas, types, table, client, constants, errors, recurrence] =
+    const [root, schemas, types, table, client, constants, errors, recurrence, activity] =
       await Promise.all([
         import('@od/shared'),
         import('@od/shared/schemas'),
@@ -25,6 +25,7 @@ describe('exports map', () => {
         import('@od/shared/constants'),
         import('@od/shared/errors'),
         import('@od/shared/recurrence'),
+        import('@od/shared/activity'),
       ]);
 
     expect(root.MAX_PARTICIPANTS).toBe(50);
@@ -36,6 +37,8 @@ describe('exports map', () => {
     expect(recurrence.describeRecurrence).toBeDefined();
     expect(recurrence.expandRecurrence).toBeDefined();
     expect(recurrence.toUtcInstant).toBeDefined();
+    expect(activity.deriveGsi1Bucket).toBeDefined();
+    expect(activity.changeActivityKind).toBeDefined();
     // `types` is types-only at runtime; importing it must still not throw.
     expect(types).toBeDefined();
   }, 10_000);
