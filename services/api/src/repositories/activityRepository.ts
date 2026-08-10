@@ -14,7 +14,6 @@ import {
   gsi1NeedsDate,
   gsi1Recurring,
   gsi1Scheduled,
-  occurrenceRange,
   participantPrefix,
   reminder as reminderKey,
 } from './keys.js';
@@ -535,26 +534,6 @@ export async function listByBucket(
     ...(options.ascending === undefined ? {} : { ascending: options.ascending }),
     keyAttributes: ['pk', 'sk', 'gsi1pk', 'gsi1sk'],
   });
-}
-
-/**
- * Occurrence overrides for a series in a date window (pattern 5).
- *
- * **Reads overrides; never materialises the series.** One Activity row holds the whole
- * recurrence and the agenda expands it at read time, merging these rows over the top
- * (`CLAUDE.md` rule 3). Nothing in this repository writes a future occurrence, and nothing
- * ever should.
- */
-export async function listOccurrences(
-  activityId: string,
-  from: string,
-  to: string,
-): Promise<StoredItem[]> {
-  const range = occurrenceRange(activityId, from, to);
-  return queryAll<StoredItem>(
-    { pk: range.pk },
-    { skBetween: [range.fromSk, range.toSk] },
-  );
 }
 
 /** A plan's prep-task pointers (pattern 16). */

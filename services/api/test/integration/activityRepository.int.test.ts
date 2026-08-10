@@ -485,30 +485,6 @@ describe('recurrence is one row, never materialised', () => {
     expect(await repo.getActivityPartition(subject.activityId)).toHaveLength(1);
     expect(await countIndexRows(ALICE)).toBe(1);
   });
-
-  it('reads occurrence overrides for a window without expanding anything', async () => {
-    const subject = anActivity();
-    await repo.createActivity(ALICE, subject);
-
-    for (const date of ['2026-07-31', '2026-08-05', '2026-09-01']) {
-      await base.putItem({
-        ...keys.occurrence(subject.activityId, date),
-        entity: 'Occurrence',
-        activityId: subject.activityId,
-        date,
-        status: 'completed',
-        schemaVersion: 1,
-      });
-    }
-
-    const august = await repo.listOccurrences(
-      subject.activityId,
-      '2026-08-01',
-      '2026-08-31',
-    );
-
-    expect(august.map((row) => row.date)).toEqual(['2026-08-05']);
-  });
 });
 
 async function countIndexRows(userId: string): Promise<number> {

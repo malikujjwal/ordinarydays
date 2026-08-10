@@ -8,10 +8,8 @@ import type { IsoDate } from '../schemas/common.js';
  * row must **never** mutate the parent `Recurrence` — that is a product requirement from the
  * concept and a required Phase 2 test case.
  *
- * **The shape ships in Phase 1; nothing reads or writes it until Phase 2.** The expansion
- * engine, the completion endpoints and the rows themselves are P2-01 onward. It is defined
- * here so the series and its overrides are described in one place, by one task, rather than
- * the override shape being invented alongside the engine that consumes it.
+ * The repository reads and writes only modified rows; the expansion engine emits the
+ * unmodified dates at read time and overlays these values.
  */
 
 export type OccurrenceStatus = 'completed' | 'skipped' | 'snoozed' | 'rescheduled';

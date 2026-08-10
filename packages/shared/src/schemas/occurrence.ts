@@ -4,8 +4,6 @@ import { hhmm, isoDate, ulidId } from './common.js';
 /**
  * An occurrence override (`data-model.md` §4.5). Interface in `../types/occurrence.ts`.
  *
- * Shape only in Phase 1 — nothing reads or writes these rows until Phase 2.
- *
  * Note what is **absent**: any participant identity. An `Occurrence` says *the thing
  * happened*, not *I attended*. Completion on a shared plan is global and owner-only, and
  * adding a `userId` here would change that product decision by accident.

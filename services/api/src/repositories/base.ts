@@ -1,4 +1,5 @@
 import {
+  BatchGetCommand,
   BatchWriteCommand,
   DeleteCommand,
   GetCommand,
@@ -34,6 +35,13 @@ import { type StoredItem, upgradeAll, upgradeOnRead } from './migrate.js';
 export interface Page<T> {
   items: T[];
   nextCursor?: string;
+  /** Present for `Select: COUNT` queries. */
+  count?: number;
+}
+
+export interface EqualityFilter {
+  readonly attribute: string;
+  readonly value: unknown;
 }
 
 export interface QueryOptions {
@@ -53,6 +61,9 @@ export interface QueryOptions {
    * it is what stops a cursor minted for one index being replayed against another.
    */
   readonly keyAttributes?: readonly string[];
+  /** Repository-owned equality filter; services never supply DynamoDB expressions. */
+  readonly filterEquals?: EqualityFilter;
+  readonly select?: 'COUNT';
 }
 
 /** `GetItem`, upgraded on read. `undefined` when the item is not there. */
@@ -193,6 +204,11 @@ export async function query<T extends StoredItem>(
     condition += ' AND #sk BETWEEN :from AND :to';
   }
 
+  if (options.filterEquals !== undefined) {
+    names['#filter'] = options.filterEquals.attribute;
+    values[':filter'] = options.filterEquals.value;
+  }
+
   const startKey = decodeCursor(options.cursor, options.keyAttributes ?? ['pk', 'sk']);
 
   const result = await ddb.send(
@@ -202,6 +218,10 @@ export async function query<T extends StoredItem>(
       KeyConditionExpression: condition,
       ExpressionAttributeNames: names,
       ExpressionAttributeValues: values,
+      ...(options.filterEquals === undefined
+        ? {}
+        : { FilterExpression: '#filter = :filter' }),
+      ...(options.select === undefined ? {} : { Select: options.select }),
       ...(options.ascending === false ? { ScanIndexForward: false } : {}),
       ...(options.limit === undefined ? {} : { Limit: options.limit }),
       ...(startKey === undefined ? {} : { ExclusiveStartKey: startKey }),
@@ -212,8 +232,31 @@ export async function query<T extends StoredItem>(
 
   return {
     items: upgradeAll((result.Items ?? []) as T[]),
+    ...(result.Count === undefined ? {} : { count: result.Count }),
     ...(nextCursor === undefined ? {} : { nextCursor }),
   };
+}
+
+/** Counts every matching row, following Query pagination internally. */
+export async function queryCount(
+  partition: { pk: string } | { gsi1pk: string },
+  options: Omit<QueryOptions, 'cursor' | 'limit' | 'select'> = {},
+): Promise<number> {
+  let total = 0;
+  let cursor: string | undefined;
+
+  do {
+    const page = await query<StoredItem>(partition, {
+      ...options,
+      select: 'COUNT',
+      ...(cursor === undefined ? {} : { cursor }),
+      keyAttributes: options.keyAttributes ?? ['pk', 'sk'],
+    });
+    total += page.count ?? 0;
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
+
+  return total;
 }
 
 /**
@@ -246,6 +289,43 @@ export async function queryAll<T extends StoredItem>(
 
 /** DynamoDB's `BatchWriteItem` limit. */
 export const MAX_BATCH_ITEMS = 25;
+
+/** DynamoDB's `BatchGetItem` key limit. */
+export const MAX_BATCH_GET_ITEMS = 100;
+
+/**
+ * Gets many items in chunks of 100, retrying the exact unprocessed keys with bounded
+ * exponential backoff. Returned order is DynamoDB's; entity repositories restore caller
+ * order when that is part of their contract.
+ */
+export async function batchGetItems<T extends StoredItem>(
+  keys: readonly PageKey[],
+): Promise<T[]> {
+  const items: T[] = [];
+
+  for (let start = 0; start < keys.length; start += MAX_BATCH_GET_ITEMS) {
+    let pending = keys.slice(start, start + MAX_BATCH_GET_ITEMS);
+
+    for (let attempt = 0; attempt < 5 && pending.length > 0; attempt += 1) {
+      if (attempt > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 2 ** (attempt - 1)));
+      }
+      const result = await ddb.send(
+        new BatchGetCommand({ RequestItems: { [TABLE_NAME]: { Keys: pending } } }),
+      );
+      items.push(...upgradeAll((result.Responses?.[TABLE_NAME] ?? []) as T[]));
+      pending = (result.UnprocessedKeys?.[TABLE_NAME]?.Keys ?? []) as PageKey[];
+    }
+
+    if (pending.length > 0) {
+      throw new Error(
+        `BatchGetItem left ${pending.length} keys unprocessed after 5 attempts.`,
+      );
+    }
+  }
+
+  return items;
+}
 
 /**
  * Deletes many keys in batches of 25.

@@ -1,4 +1,5 @@
 import {
+  BatchGetCommand,
   BatchWriteCommand,
   DeleteCommand,
   DynamoDBDocumentClient,
@@ -11,12 +12,14 @@ import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AppError } from '../lib/errors.js';
 import {
+  batchGetItems,
   deleteAll,
   deleteItem,
   getItem,
   putItem,
   query,
   queryAll,
+  queryCount,
   updateItem,
 } from './base.js';
 import { activityIndex, userProfile } from './keys.js';
@@ -145,6 +148,89 @@ describe('query builds the right command', () => {
 
     const page = await query({ pk: userProfile(ALICE).pk });
     expect(page.items).toHaveLength(1);
+  });
+
+  it('builds a repository-owned equality filter and COUNT selection', async () => {
+    ddbMock.on(QueryCommand).resolves({ Count: 2 });
+
+    expect(
+      await queryCount(
+        { pk: 'ACT#act_1' },
+        {
+          skPrefix: 'OCC#',
+          filterEquals: { attribute: 'status', value: 'completed' },
+        },
+      ),
+    ).toBe(2);
+
+    expect(lastQuery()).toMatchObject({
+      FilterExpression: '#filter = :filter',
+      Select: 'COUNT',
+      ExpressionAttributeNames: { '#filter': 'status' },
+      ExpressionAttributeValues: { ':filter': 'completed' },
+    });
+  });
+
+  it('adds counts across every Query page', async () => {
+    ddbMock
+      .on(QueryCommand)
+      .resolvesOnce({ Count: 2, LastEvaluatedKey: { pk: 'ACT#act_1', sk: 'OCC#2' } })
+      .resolvesOnce({ Count: 3 });
+
+    await expect(queryCount({ pk: 'ACT#act_1' }, { skPrefix: 'OCC#' })).resolves.toBe(5);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(2);
+  });
+});
+
+describe('batchGetItems', () => {
+  const keysFor = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      pk: 'ACT#act_1',
+      sk: `OCC#${index}`,
+    }));
+
+  it('sends nothing for empty input', async () => {
+    expect(await batchGetItems([])).toEqual([]);
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(0);
+  });
+
+  it('chunks at 100 keys and upgrades every response row', async () => {
+    ddbMock.on(BatchGetCommand).callsFake((input) => ({
+      Responses: {
+        'od-main-local': (input.RequestItems?.['od-main-local']?.Keys ?? []).map(
+          (key: Record<string, unknown>) => ({ ...key, schemaVersion: 1 }),
+        ),
+      },
+    }));
+
+    const rows = await batchGetItems(keysFor(250));
+
+    expect(rows).toHaveLength(250);
+    expect(rows.every((row) => row.schemaVersion === 1)).toBe(true);
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(3);
+  });
+
+  it('retries only unprocessed keys', async () => {
+    const key = { pk: 'ACT#act_1', sk: 'OCC#0' };
+    ddbMock
+      .on(BatchGetCommand)
+      .resolvesOnce({
+        UnprocessedKeys: { 'od-main-local': { Keys: [key] } },
+      })
+      .resolvesOnce({ Responses: { 'od-main-local': [{ ...key, schemaVersion: 1 }] } });
+
+    expect(await batchGetItems([key])).toHaveLength(1);
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(2);
+  });
+
+  it('fails after five unprocessed responses', async () => {
+    const key = { pk: 'ACT#act_1', sk: 'OCC#0' };
+    ddbMock.on(BatchGetCommand).resolves({
+      UnprocessedKeys: { 'od-main-local': { Keys: [key] } },
+    });
+
+    await expect(batchGetItems([key])).rejects.toThrow(/unprocessed after 5 attempts/);
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(5);
   });
 });
 
