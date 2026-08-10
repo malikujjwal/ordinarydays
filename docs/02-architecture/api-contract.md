@@ -28,7 +28,7 @@ survives warm invocations). Rejections return `401` with `code: "unauthenticated
 | Header | Direction | Purpose |
 | --- | --- | --- |
 | `X-Request-Id` | both | Correlation. Echoed in every log line and error body. |
-| `Idempotency-Key` | request | Required on all `POST` that create. UUID from the client. |
+| `Idempotency-Key` | request | Required on all `POST` that create and on the explicitly replay-protected `complete`, `uncomplete` and `skip` mutation routes. UUID from the client, allocated once when the logical mutation is enqueued and reused by every retry or offline replay. |
 | `X-Client-Timezone` | request | IANA tz. Used when the body omits one. |
 | `X-Client-Version` | request | `ios/1.4.0` or `web/1.4.0`. Enables server-side kill switches. |
 
@@ -307,9 +307,9 @@ Also:
 | `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. **Does not accept `schedule` or unschedule fields**; `POST .../schedule` is the single scheduling write path. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
 | `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7 and deletes every child Expense locator with its row. **The settlement guard and the Expense-locator half of the cascade arrive in Phase 7 (P7-08), not Phase 1 (P1-14)** — see the note below. |
 | `POST` | `/v1/activities/:id/schedule` | The **single schedule write path**: `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule is `{ date: null }`. Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies; a time-only change does not. The response includes `rsvpReset: true` only when it happened. Status is server-derived from schedule presence (unless terminal), and `icsSequence` increments once iff an exported schedule field changed. Shared `toUtcInstant` derives UTC values; the spring gap `2026-03-08 02:30 America/New_York` moves forward to `03:00`. With `occurrenceDate`, writes one series override and leaves META unchanged. |
-| `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. With `occurrenceDate` → writes an Occurrence, never touches the series. Plan completion is global and owner-only; ADR-051 allows a participant of the parent plan to complete a prep task. Without `occurrenceDate`, META and every denormalised ActivityIndex status change in one transaction. |
-| `POST` | `/v1/activities/:id/uncomplete` | Reverses the above under the same ADR-051 policy and transaction/occurrence split. |
-| `POST` | `/v1/activities/:id/skip` | `{ occurrenceDate? }`. Uses the same ADR-051 policy; without an occurrence, META plus every index status are one transaction. |
+| `POST` | `/v1/activities/:id/complete` | `{ occurrenceDate?, outcome? }`. Requires `Idempotency-Key`; replay returns the original `2xx`. With `occurrenceDate` → writes an Occurrence, never touches the series. Plan completion is global and owner-only; ADR-051 allows a participant of the parent plan to complete a prep task. Without `occurrenceDate`, META and every denormalised ActivityIndex status change in one transaction. |
+| `POST` | `/v1/activities/:id/uncomplete` | Requires `Idempotency-Key`; replay returns the original `2xx`. Reverses the above under the same ADR-051 policy and transaction/occurrence split. |
+| `POST` | `/v1/activities/:id/skip` | `{ occurrenceDate? }`. Requires `Idempotency-Key`; replay returns the original `2xx`. Uses the same ADR-051 policy; without an occurrence, META plus every index status are one transaction. |
 | `POST` | `/v1/activities/:id/snooze` | `{ occurrenceDate?, until }` — `until` is `HH:mm` (same day) or an ISO instant. Without `occurrenceDate`, writes one-off META snooze fields; with it, writes a series Occurrence override. |
 | `POST` | `/v1/activities/:id/unsnooze` | `{ occurrenceDate? }`. Compensating Undo operation: without `occurrenceDate`, deletes one-off META snooze fields; with it, deletes only a snoozed Occurrence row and cannot erase completion, skip or reschedule. Idempotent. |
 | `POST` | `/v1/activities/:id/duplicate` | |

@@ -438,12 +438,15 @@ expired session is how a client generates thousands of requests per minute.
    leaks a stranger's reminders.
 3. Clear the token store (Keychain entries on iOS; in-memory token and the refresh cookie
    on web, the latter via `POST /public/v1/auth/logout` which clears it with `Max-Age=0`).
-4. `queryClient.clear()` — remove every cached server response, including the persisted
+4. `apiClient.clearCache()` — remove the in-memory ETag/body pairs added in Phase 2. Their
+   keys are identity-scoped, but explicit clearing is still part of ending the session;
+   replacing a client instance is not an auth boundary.
+5. `queryClient.clear()` — remove every cached server response, including the persisted
    cache on disk. TanStack Query's persister must be purged explicitly; clearing the store
    in memory is not enough.
-5. Route to `(auth)/sign-in`.
+6. Route to `(auth)/sign-in`.
 
-Steps 3 and 4 run even if step 1 fails (offline sign-out must work). Step 1 is retried
+Steps 3 through 5 run even if step 1 fails (offline sign-out must work). Step 1 is retried
 opportunistically on next launch.
 
 ---

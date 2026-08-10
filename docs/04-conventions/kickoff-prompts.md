@@ -439,6 +439,11 @@ moved from P2-02 to their existing owner P2-08 rather than adding a forward depe
 the only dependency-column addition is P2-07 to P2-12. Numeric P2-01…P2-37 remains the
 dependency-valid run order.
 
+The fourth gate amendment preserves it as well: P2-10 owns the pure action-capability policy
+and P2-13 adds P2-10 as its only new dependency. The producer remains lower-numbered than both
+endpoint and offline-queue consumers, so the autonomous numeric run requires no pause or
+reordering.
+
 ```bash
 # from the repo root, on a clean integration branch (e.g. `phase-2` cut from main):
 node scripts/run-phase.mjs --range P2-01..P2-37 --pause-after P2-02,P2-11,P2-22

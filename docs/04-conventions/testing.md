@@ -464,8 +464,9 @@ site after `deploy-dev.yml` (`infrastructure.md` §7.2), and locally against
 | Reschedule from the time column | `reschedule.spec.ts` | U4 across the whole stack |
 | Keyboard-only pass over Today | `a11y-keyboard.spec.ts` | `interaction-contract.md` §7.2, §7.3 |
 
-Rules: no `waitForTimeout`; wait on a role or a network response. Each spec creates its own
-user via a fixture and deletes it in teardown. `E2E_BASE_URL` selects the target;
+Rules: no `waitForTimeout`; wait on a role or a network response. From Phase 4 onward, each
+spec creates its own user via a fixture and deletes it in teardown; the explicit pre-auth
+exception below governs Phases 1–3. `E2E_BASE_URL` selects the target;
 `--project=chromium` in CI, WebKit locally before a release.
 
 Locally the harness owns the whole stack: `global-setup.ts` seeds its **own** table
@@ -477,7 +478,8 @@ HTML file and an SPA-style fallback would serve the wrong page.
 
 **Per-user fixtures are Phase 4.** There is no sign-up to build a user with while `AUTH_MODE`
 is `local` and every request resolves as `usr_local_dev`; a spec isolates itself by creating
-its own uniquely-titled row instead, and asserts only on that.
+its own uniquely prefixed rows instead, asserts only on those rows and removes them in
+teardown. It never introduces a user-selecting header or dev-bypass identity mode.
 
 `axe-core` runs on every route a flow reaches, failing on `serious` and `critical` only —
 `definition-of-done.md` §5 item 11. The failure message names the selector and the measured
@@ -627,8 +629,10 @@ It is seeded from a **fixed random seed** so screenshots and E2E assertions are 
 idempotent (running twice produces the same state, not double the rows), and refuses to run
 against `prod`.
 
-E2E tests do **not** use the seed data. They create their own user and their own rows, so a
-seed change cannot break them and a parallel run cannot collide.
+E2E tests do **not** assert on seed data. Through Phase 3 they run as fixed
+`usr_local_dev`, create uniquely prefixed per-spec rows and delete those rows in teardown;
+they never add a user-selecting header. From Phase 4 onward they create their own user and
+their own rows. In both eras a seed change cannot break them and parallel runs cannot collide.
 
 ---
 

@@ -479,9 +479,11 @@ or the row will visibly flip back.
 
 **3. Offline mutation queue.** Mutations use `mutationKey` + a persisted mutation cache
 with `queryClient.resumePausedMutations()` on reconnect (`@react-native-community/netinfo`
-drives the online manager). Every creating `POST` carries a client-generated
-`Idempotency-Key` (`expo-crypto`'s `randomUUID`), generated once at `onMutate` time and
-reused on every retry — this is why the API's idempotency records exist.
+drives the online manager). Every creating `POST`, plus the explicitly replay-protected
+complete/uncomplete/skip mutations, carries a client-generated `Idempotency-Key`
+(`expo-crypto`'s `randomUUID`), generated once when the mutation is enqueued and stored in its
+variables before `mutationFn` runs. Every retry and process-death replay reuses it — this is
+why the API's idempotency records exist.
 
 Scope guard: we do not build a full local-first replica (no SQLite mirror, no CRDT). The
 agenda is a server-computed projection; reimplementing recurrence expansion against a

@@ -36,6 +36,14 @@ Anytime list. This is the phase where the product becomes usable daily.
 > the canonical worked-example fixture. Numeric order P2-01 through P2-37 remains
 > dependency-valid after removing the earlier forward references to P2-36.
 
+> **Fourth gate amendment — 2026-08-10.** A behaviour-only pass resolved the remaining
+> implementation ambiguities before scheduling: one pure action-capability policy now serves
+> both agenda projection and completion-route guards; completion mutations are idempotent and
+> resumable across process death; ETag cache identity and Phase 4 sign-out ownership are
+> explicit; Undo extends the Phase 1 toast singleton; and pre-auth E2E isolation keeps the
+> fixed local identity. P2-13 now depends on the lower-numbered P2-10 policy owner, so numeric
+> order P2-01 through P2-37 remains dependency-valid. Task sizes and phase totals are unchanged.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -109,7 +117,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-10 | `AgendaItem` projection: subtitle, checkbox, isPast | api | P2-08 | no | M |
 | P2-11 | `GET /v1/agenda` route, window cap, `ETag`, warnings | api | P2-08, P2-09, P2-10 | no | M |
 | P2-12 | Sole schedule write path and detail-UI migration | shared/api/mobile | P2-01, P2-05, P2-07, P1-10 | yes | L |
-| P2-13 | `POST /v1/activities/:id/complete` and `/uncomplete` | api | P2-05, P2-07, P1-10 | no | L |
+| P2-13 | `POST /v1/activities/:id/complete` and `/uncomplete` | api | P2-05, P2-07, P2-10, P1-10 | no | L |
 | P2-14 | `POST /v1/activities/:id/skip` | api | P2-13 | yes | S |
 | P2-15 | One-off and occurrence `snooze` / `unsnooze` | api | P2-13 | no | L |
 | P2-16 | Per-user reminders: items, endpoints, and the write paths | api | P2-08, P2-12 | yes | M |
@@ -760,12 +768,19 @@ implemented literally:
    overrides remain series-only.
 8. Merge the scheduled and expanded results and de-duplicate by `(activityId,
    occurrenceDate?)` after viewer-timezone conversion.
-9. When `include=reminders`, use the read-only `ReminderRepository` seam introduced here to
+9. **Action-context hydration:** before projection, materialise one already-hydrated
+   `ActionCapabilityContext` per distinct Activity: the canonical Activity, the caller's
+   relationship to it, and—when `parentActivityId` is present—whether the caller participates
+   in that parent plan. Resolve and de-duplicate this repository work at the assembly boundary;
+   repeated occurrences of one series reuse the same context. No projection call performs a
+   `GetItem`, participant query or `assertActivityAccess` call. P2-10 consumes these contexts
+   with the pure `deriveActionCapabilities` function.
+10. When `include=reminders`, use the read-only `ReminderRepository` seam introduced here to
    query `REM#<callerUserId>#` for each distinct Activity emitted in the bounded result,
    attach those rows to its AgendaItems, and never read another user's prefix. This is
    bounded fan-out behind one HTTP agenda request; P2-16 extends the
    same repository with management writes.
-10. Sort by effective viewer-local time and return per-day buckets.
+11. Sort by effective viewer-local time and return per-day buckets.
 
 P2-08 also amends the `ActivityIndex` writer/schema to project `schedule.timezone`.
 Every index row written from P2-08 onward carries it. Existing Phase 1 rows form a supported
@@ -802,6 +817,9 @@ on its ticker (P2-20).
 - Scheduled META hydration, series META hydration and occurrence override hydration must
   not be N-query loops. Each uses `BatchGetItem`, one request per 100 keys, with retry for
   unprocessed keys.
+- Capability derivation itself performs zero reads. Access-context hydration is de-duplicated
+  by Activity and parent-plan id before the projection loop; one recurring series with seven
+  emitted occurrences does not resolve its relationship seven times.
 - Sorting ties break on `activityId` ascending, which is a ULID and therefore creation
   order. This is deliberately *not* type priority and not alphabetical — a type ranking
   would be a hidden hierarchy of types.
@@ -893,6 +911,8 @@ completing a rolled-forward task leaves `schedule.date` untouched and sets `comp
 ### P2-10 — `AgendaItem` projection
 
 **Files.** `services/api/src/services/agendaProjection.ts`,
+`services/api/src/services/actionCapabilities.ts`,
+`services/api/src/services/actionCapabilities.test.ts`,
 `packages/shared/src/schemas/agenda.ts`,
 `packages/shared/src/types/agenda.ts`,
 and the reserved `packages/shared/src/{schemas,types}/index.ts` barrels.
@@ -913,15 +933,36 @@ server-side, so the client never derives presentation from `type` with a switch 
 - `occurrenceDate` is present **if and only if** the item came from a series expansion. The
   client must send it back on every occurrence-scoped call; omitting it targets the series
   and is a bug.
-- `capabilities: { complete, skip, snooze }` is server-derived for the authenticated caller
-  by the existing `authz.ts` policies at projection time. It captures owner-only plan
-  actions and the ADR-051 parent-participant prep-task exception without exposing `ownerId`
-  or asking the client to infer authority. Every AgendaItem carries all three booleans, and
-  the one agenda response remains sufficient to render its allowed actions.
+- `capabilities: { complete, skip, snooze }` comes from exactly one service-layer policy:
+  `deriveActionCapabilities(ctx)`, a **pure** function over an already-hydrated context. Its
+  input is the Activity, the authenticated caller's relationship to that Activity, and, for
+  a prep task, whether that caller participates in the parent plan. It imports no repository,
+  performs no I/O and never calls `assertActivityAccess`.
 
-**Tests.** Table-driven: one case per type asserting `hasCheckbox` and `subtitle`; owner,
-plan-participant, parent-plan-participant prep-task and stranger fixtures assert the exact
-three capability booleans from the existing policy; a snoozed
+```ts
+interface ActionCapabilityContext {
+  activity: Activity;
+  callerRole: 'owner' | 'participant' | 'none';
+  participatesInParent: boolean;
+}
+
+function deriveActionCapabilities(
+  ctx: ActionCapabilityContext,
+): { complete: boolean; skip: boolean; snooze: boolean };
+```
+
+The policy is literal: when `activity.parentActivityId` is present, the Activity owner or a
+participant of the parent plan may complete it; for every other Activity, only its owner may
+complete it. `skip` and `snooze` have the same verdict as `complete`. P2-10 calls the function
+once per projected item using P2-08's hydrated context; repeated occurrences reuse their
+Activity context, so capability projection adds **zero reads per AgendaItem**. P2-13 is the
+second consumer and the only endpoint-side consumer. The client receives the three booleans
+but never receives `ownerId` and never re-derives authority.
+
+**Tests.** Table-driven: one case per type asserting `hasCheckbox` and `subtitle`; the pure
+policy's owner, plan-participant, parent-plan-participant prep-task, direct-child-participant
+without parent participation and stranger cases assert the exact three booleans. A repository
+spy proves projecting any number of AgendaItems performs zero reads; a snoozed
 occurrence's `time` equals `snoozedUntil`; a rescheduled occurrence's equals `overrideTime`;
 `occurrenceDate` present only for series items; `isPast` at exactly the boundary minute for
 each of the three cases.
@@ -1019,15 +1060,15 @@ test and assert both the 03:00 local result and its UTC instant.
 
 **Approach.** `POST /v1/activities/:id/complete` with `{ occurrenceDate?, outcome? }`.
 P2-13 owns both typed client methods, including the compensating `/uncomplete` call used by
-Undo; later mobile tasks consume them rather than constructing request paths.
+Undo; each accepts and sends an `Idempotency-Key`, and later mobile tasks consume them rather
+than constructing request paths.
 
 **Plan completion is owner-only.** Completion is **global**: an `Occurrence` records that *the thing happened*,
 not that *somebody attended*, and it carries no participant identity by design
 ([`../02-architecture/data-model.md#45-occurrence`](../02-architecture/data-model.md#45-occurrence)
 §4.5, ADR-048). A participant calling `complete`, `uncomplete`, `skip` or `snooze` on a plan
 they can see gets **`403`** — not `404`, because they can already see it and hiding it would
-be a lie. The check is `assertActivityAccess(userId, activityId, 'owner')` in `authz.ts`
-(P1-10), not a branch in this service.
+be a lie.
 
 Enforce it now, in this phase, while there is one user and nothing to break. Phase 6 makes it
 reachable and walks it in the authorisation matrix (P6-28); it does not introduce it.
@@ -1042,11 +1083,32 @@ complete, uncomplete and edit a prep task, whoever created it**
 the hotel for a trip you are planning together, she ticks `Book hotel` whether or not she
 typed it.
 
-P2-13 **consumes the existing Phase 1 ADR-051 branch** in `authz.ts`; it does not build or
-rewrite it. That branch already makes `assertActivityAccess(..., 'write')` consult the
-parent's `PART#` rows for a child and already has service-level tests. This task adds only
-the endpoint-level completion/uncompletion coverage that proves the existing branch is
-wired to the new routes. Phase 6 later walks the same rule with a real participant (P6-28).
+**One policy, two consumers.** P2-13 consumes
+`deriveActionCapabilities(ctx)` from P2-10; it does not choose between
+`assertActivityAccess(..., 'owner')` and `assertActivityAccess(..., 'write')`. Those fixed
+levels cannot express “owner-only plan, parent-participant prep task” as one action rule.
+Completion-route authorisation is therefore a two-stage service decision:
+
+1. Resolve the Activity, the caller's relationship to it and, for a child, the caller's
+   participation in its parent through the repository. A caller with no relationship receives
+   `404` before any action verdict is exposed.
+2. Pass that already-hydrated context to the pure function and assert the requested
+   `complete`, `skip` or `snooze` boolean. A related caller whose boolean is false receives
+   `403`; no repository read occurs inside the pure function.
+
+P2-14 and P2-15 use this same guard for skip and snooze. The ordinary Phase 1
+`assertActivityAccess` API remains the owner/read/write guard for routes whose policy really
+is one of those levels; these action routes retire the single-level call rather than adding a
+service-side second implementation. Phase 6 later walks the same rule with a real participant
+(P6-28).
+
+**Replay identity.** `complete`, `uncomplete` and `skip` require an `Idempotency-Key`. The
+client allocates one key for each logical mutation when it is **enqueued**, outside
+`mutationFn`, and persists it in the mutation variables. A transport retry, an offline resume
+and a process-death replay reuse that exact key; replay returns the original stored `2xx`
+response and does not execute the write again. The route registry must put all three routes
+through the idempotency middleware even when the selected path updates rather than creates a
+row; P2-14 owns the skip client method and route wiring under this rule.
 
 Two paths, and their difference is the most important invariant in this phase:
 
@@ -1080,6 +1142,9 @@ something without claiming it happened.
   day leaves it. Both already exist. The feature and its cost are deferred in
   [`../00-open-decisions.md`](../00-open-decisions.md) item 31.
 - Completing an activity that is already completed is idempotent, not a `409`.
+- A second request with the same `Idempotency-Key` is a replay and returns the original `2xx`
+  body; a later intentional completion allocates a new key even if the target is already in
+  the requested state.
 - The completed row moves from SCHEDULE to EARLIER TODAY on the same screen without a
   refetch — that is client work (P2-23), but the response shape must give the client
   everything it needs to do it without one.
@@ -1106,6 +1171,11 @@ create the prep task completes it with `200`, and `uncomplete` reverses it; a st
 parent gets `404` on both. Both cases go through the same helper, so a fix that special-cases
 the endpoint fails them.
 
+Client and route tests allocate the key before invoking the mutation function, replay the
+same complete and uncomplete requests with that key, receive the byte-equivalent original
+`2xx` response and observe exactly one repository write. A resumed-mutation test in P2-33
+proves the persisted variable carries the same key after process death.
+
 ---
 
 ### P2-14 — `skip`
@@ -1116,12 +1186,15 @@ the endpoint fails them.
 
 **Approach.** `POST /v1/activities/:id/skip` with `{ occurrenceDate? }`, per
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#54-skip) §5.4. Skip
-says "not this one, and I do not want to be asked again". Authorisation comes from the
-ADR-051-aware policy established in P2-13: plan actions remain owner-only, while the
-parent-plan participant rule applies to prep tasks in middleware. An unauthorised
+says "not this one, and I do not want to be asked again". Authorisation comes from the pure
+ADR-051-aware policy and two-stage service guard established in P2-10/P2-13: plan actions
+remain owner-only, while the parent-plan participant rule applies to prep tasks. An unauthorised
 participant gets `403` with nothing written and a stranger gets `404`.
-P2-14 owns the typed skip client method; gesture and optimistic tasks call it rather than
-constructing the route locally.
+P2-14 owns the typed skip client method; it requires an `Idempotency-Key` allocated when the
+logical mutation is enqueued and carried in persisted variables. Gesture and optimistic tasks
+call it rather than constructing the route locally. The route is registered with the same
+idempotency middleware as complete/uncomplete; replay returns the original `2xx` and performs
+no second write.
 
 Two paths, on P2-13's exact pattern:
 
@@ -1156,7 +1229,8 @@ other dates expand unchanged; a non-recurring skip flips `META.status` and every
 the agenda response; skip then `uncomplete` restores `scheduled` / deletes the row; the
 skipped occurrence is emitted as `skipped_occurrence` and hidden by default in the agenda
 merge (P2-08); forced transaction cancellation changes no META or index row; a participant
-gets `403` with nothing written; a stranger gets `404`.
+gets `403` with nothing written; a stranger gets `404`; replaying the same
+`Idempotency-Key` returns the original `2xx` with exactly one repository write.
 
 ---
 
@@ -1178,8 +1252,9 @@ The storage target is determined only by `occurrenceDate`:
 
 This is the compensating operation required by interaction-contract §4.1: undo **deletes
 the snooze fields**, it does not reschedule to a guessed prior time. Occurrence overrides
-are series-only; a one-off must never manufacture an `OCC#` row. Both routes use the
-ADR-051-aware authorisation policy from P2-13; a snooze moves the item for every viewer.
+are series-only; a one-off must never manufacture an `OCC#` row. Both routes use the pure
+capability policy and two-stage service guard from P2-10/P2-13; a snooze moves the item for
+every viewer.
 
 The concept's own example is the acceptance test:
 
@@ -1359,13 +1434,23 @@ phase. Feature hooks are the only place `useQuery` appears and own their query k
 - The Plans tab (P2-32) calls the same hook with a multi-day window and no
   `include=anytime_unscheduled`; there is one hook, parameterised, not two.
 - **`ETag`/`If-None-Match` is transport-level and invisible to hooks.** The shared client
-  keeps an in-memory `{ etag, body }` pair per authenticated-user GET request identity: the
-  stable authenticated `userId` is part of the key alongside the request path/parameters.
+  keeps an in-memory `{ etag, body }` pair per authenticated-user GET request identity. Extend
+  the existing `AuthTokenProvider` seam with
+  `getIdentity(): Promise<string | undefined>` alongside `getToken()`. The Phase 2 local
+  provider presents `usr_local_dev`, and P4-22's real provider presents the authenticated app
+  `userId`. That identity is part of the key alongside the request path/parameters; a token
+  string itself is never a cache key. When identity is absent, the transport neither stores
+  nor reuses an authenticated response body.
   On a later GET it sends `If-None-Match`; `304` is a successful response resolved from the
   paired cached body, not an `ApiError`, schema failure or query error. A 304 without a
-  paired body retries once without the conditional header. The existing sign-out lifecycle
-  explicitly clears the ETag/body cache together with the Query cache; instance lifetime is
-  not an auth boundary.
+  paired body retries once without the conditional header. `HttpClient` exposes
+  `clearCache()`, which empties every ETag/body pair without replacing the client instance.
+
+  Phase 2 ships the identity-scoped mechanism and `clearCache()` but has no sign-out lifecycle
+  to wire yet. P4-27 owns calling `apiClient.clearCache()` in the real sign-out sequence beside
+  the Query/persisted-cache clear; P4-22 owns supplying the real identity through the same
+  provider seam. Instance lifetime is not an auth boundary, and Phase 2 must not imply that it
+  is one.
 
 **Tests.** Unit: the key helper produces distinct keys for distinct `include` sets and
 identical keys for identical inputs; a mounted hook for Today issues exactly one fetch
@@ -1374,7 +1459,9 @@ error state rather than partial data; crossing midnight (frozen clock advanced) 
 the new date. Transport tests prove `200` stores the ETag/body pair, the next `304` returns
 that body as success, no body parsing is attempted for 304, and hooks observe no distinction
 between cached-304 and fresh-200 results. Two user ids requesting the same path never share
-a pair, and sign-out empties every pair before the next identity can issue a request. The
+a pair; switching the provider's presented identity cannot retrieve the previous identity's
+body. A direct `clearCache()` test empties every pair. Real sign-out wiring is P4-27's test,
+not a Phase 2 acceptance path. The
 end-to-end single-request assertion is Playwright's, in P2-37.
 
 ---
@@ -1574,7 +1661,10 @@ reversing a mutation returns the original object deep-equal.
 
 ### P2-24 — The undo toast system
 
-**Files.** `apps/mobile/src/features/undo/**`, `packages/ui/src/Toast.tsx`.
+**Files.** `apps/mobile/src/features/undo/**`, the existing
+`apps/mobile/src/stores/toast.ts`, the existing
+`apps/mobile/src/features/shell/components/ToastHost.tsx`, and the existing
+`packages/ui/src/primitives/Feedback.tsx` Toast primitive and tests.
 
 **Approach.** The model in
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §4:
@@ -1587,6 +1677,15 @@ Undo is a compensating call, not a delayed commit. This keeps the app correct wh
 closed mid-window. One toast at a time; a new action replaces the visible toast and commits
 the previous one.
 
+**Extend the Phase 1 singleton; do not create a second toast state machine.** Undo is a new
+toast variant carried by the existing `useToast` one-visible-toast slot and rendered by the
+already-mounted `ToastHost`. Its action is `Undo`; its lifecycle adds the commit callback the
+current confirmation-only shape does not need. Showing a new toast commits the active undo
+before replacing it, timeout/dismiss commits it once, and pressing Undo runs the compensating
+action without also committing. Ordinary Phase 1 confirmation/error toasts continue through
+the same store and host, so an Undo and a save confirmation cannot overlap or bypass each
+other's replacement rule.
+
 Toasts announce with `accessibilityLiveRegion="polite"`, the `Undo` button is focusable and
 is inserted into the tab order immediately after the focused element for the window's
 duration.
@@ -1595,8 +1694,10 @@ duration.
 toast with `Retry` instead of `Undo`. Undo works offline — it is a local compensation plus a
 queued call.
 
-**Tests.** Unit: a second action commits the first; dismissing commits; undo restores sort
-position and scroll offset; a failed original produces a `Retry` toast. Playwright: complete
+**Tests.** Extend the existing store/host tests: a second ordinary or Undo toast commits the
+active Undo exactly once before replacement; timeout and dismiss commit exactly once; pressing
+Undo compensates and never commits; legacy confirmation/error toasts still use the same slot.
+Undo restores sort position and scroll offset; a failed original produces a `Retry` toast. Playwright: complete
 a task, press `Cmd+Z`, assert the row returns to its exact prior position.
 
 ---
@@ -1867,14 +1968,16 @@ A best-effort module-scope restore racing mounted hooks does not satisfy cold-st
 behaviour.
 
 Register stable mutation keys and default mutation functions on the shared `QueryClient` for
-**create, duplicate, delete and patch** before hydration calls
+**create, duplicate, delete, patch, complete, uncomplete and skip** before hydration calls
 `resumePausedMutations()`. A persisted mutation without a matching default is not resumable;
 component-local `mutationFn` closures are insufficient after process death.
 
 `mutationKeys.ts` owns the literal keys — `['activity', 'create']`,
-`['activity', 'duplicate']`, `['activity', 'delete']`, `['activity', 'patch']` — and hooks
+`['activity', 'duplicate']`, `['activity', 'delete']`, `['activity', 'patch']`,
+`['activity', 'complete']`, `['activity', 'uncomplete']` and `['activity', 'skip']` — and hooks
 import them rather than constructing lookalikes. Those keys are persistence identifiers;
-changing them is a stored-cache migration, not a refactor.
+changing them is a stored-cache migration, not a refactor. The three action defaults call the
+typed P2-13/P2-14 client methods; they do not reconstruct endpoint paths.
 
 **Retry ownership: the transport is the only retry layer.** P2-33 changes the shared
 `QueryClient` defaults to `retry: false` for both queries and mutations; the transport's
@@ -1887,12 +1990,14 @@ from `useCreateActivity`, `useActivity`'s PATCH mutation and `useActivityActions
 mutations inherit the queue's `networkMode: 'offlineFirst'` and global `retry: false`.
 Keep `useActivity`'s GET-query `networkMode: 'always'` / `retry: false` override and its
 comment: it is what makes the explicit `Try again` action issue a request rather than remain
-paused. Creating POSTs (create and duplicate) carry an
+paused. Replay-protected POSTs (create, duplicate, complete, uncomplete and skip) carry an
 `Idempotency-Key` generated **before** `mutationFn` runs — in the mutation variables/public
 action boundary — and the default function reuses that stored key on every retry and replay.
 Never generate a key inside `mutationFn`: resumed and retried calls must identify the same
 logical write. Patch and delete also have stable keys/default functions even though they do
-not use idempotency headers.
+not use idempotency headers. For completion, “before `mutationFn`” means the checkbox action
+allocates the key as it enqueues the optimistic mutation; a resumed default receives it from
+the persisted variables rather than minting another.
 
 **Platform difference, deliberate:** the mutation queue is **iOS only**. On web the
 persisted cache is enabled but the queue is disabled and the app warns on unload if the
@@ -1913,10 +2018,12 @@ P2-37's catalogue: airplane mode on, complete three tasks, kill the app, relaunc
 mode off, assert all three land exactly once (verified by item count, since the idempotency
 key should make a duplicate impossible even if the queue double-fires). P2-33 supplies its
 testable hooks and fixtures. Unit/integration tests dehydrate and rehydrate one create,
-duplicate, delete and patch mutation, then prove
+duplicate, delete, patch, complete, uncomplete and skip mutation, then prove
 each resolves through its registered default function. Create/duplicate tests spy on a
 transport retry and a resumed replay and assert the exact same `Idempotency-Key` is reused;
-grep tests inspect **mutation option objects only** and assert they no longer set
+complete/uncomplete/skip tests make the same assertion, and a completion replay returns the
+stored original `2xx` with one server-side write. Grep tests inspect **mutation option
+objects only** and assert they no longer set
 `networkMode: 'always'` or `retry: false`. A separate assertion pins the `useActivity`
 GET-query override so a broad grep-and-delete cannot remove it.
 
@@ -2055,8 +2162,12 @@ snooze-occurrence.yaml, up-next-ticker.yaml, offline-queue-relaunch.yaml}`. Wiri
 beyond the catalogue; E2E proves wiring, and the layers below already prove behaviour.
 
 **Web, Playwright** (§6.1's rules: wait on a role or a network response, never
-`waitForTimeout`; each spec creates its own user via a fixture and deletes it in teardown;
-never the seed data):
+`waitForTimeout`; never assert on seed data). The Phase 4 per-user-fixture rule does not exist
+yet: through Phase 3 every local request deliberately resolves as `usr_local_dev`. Each Phase 2
+spec therefore creates rows with a unique per-spec prefix, asserts only on those rows and
+deletes those rows in teardown. It never adds or sends `X-Dev-User`, another user-selecting
+header or a dev-bypass auth mode; the fixed local identity is a security boundary, not a test
+limitation to route around:
 
 - `complete-undo.spec.ts` — create a task through the UI, complete it from the checkbox,
   assert the network call fired **before** the toast appeared (network log — criterion
@@ -2146,7 +2257,8 @@ out the undo handler locally; the suite must catch it).
     restores the exact prior sort position.
 15. P2-37's `offline-queue-relaunch.yaml` flow completes three tasks with the device offline,
     kills the app and relaunches online, and observes exactly three server-side completions
-    with no duplicates.
+    with no duplicates. Each resumed completion runs through the stable `complete` mutation
+    default and reuses the `Idempotency-Key` stored when that mutation was enqueued.
 16. A 63-day agenda window returns `400 validation_failed`; a 62-day one returns `200`.
 17. An unresolved passed item shows its type's prompt today, and does not appear on Today
     tomorrow, carries no prompt in Plans, and is counted nowhere.
@@ -2182,7 +2294,10 @@ out the undo handler locally; the suite must catch it).
     item count and the same `META.updatedAt` after the attempt as before it. A stranger
     receives `404` from the same four. On a **prep task** of that plan, which they did not
     create, the same participant receives `200` from `complete` and `uncomplete`, and a
-    stranger to the parent receives `404`.
+    stranger to the parent receives `404`. The route guard and every projected
+    `capabilities` object receive their verdict from the same pure
+    `deriveActionCapabilities` function; projection performs zero authorization reads per
+    AgendaItem.
 27. `GET /v1/activities/:id/reminders` as user B, on an activity carrying two of user A's
     reminders, returns `[]`, and neither A's `offsetMinutes` nor A's reminder id appears
     anywhere in the serialised response. `POST`ing a fourth reminder as one user returns
@@ -2196,11 +2311,15 @@ out the undo handler locally; the suite must catch it).
     exactly once, and is filtered out of the adjacent response day.
 30. Non-occurrence complete, uncomplete and skip mutations write META plus every
     owner/participant `ActivityIndex.status` in one transaction; forced cancellation leaves
-    every row unchanged. Occurrence-scoped variants still leave META byte-identical.
+    every row unchanged. Occurrence-scoped variants still leave META byte-identical. All
+    three routes require an `Idempotency-Key`; replay returns the original `2xx` and performs
+    no second write.
 31. The shared HTTP client stores an ETag/body pair and resolves a later `304` as the cached
-    success value, transparently to `useAgenda`. Persisted create, duplicate, delete and
-    patch mutations resume through stable default functions, and a replay reuses the exact
-    original idempotency key.
+    success value, transparently to `useAgenda`; identities requesting the same URL cannot
+    read one another's cached body, and `clearCache()` empties every pair. Persisted create,
+    duplicate, delete, patch, complete, uncomplete and skip mutations resume through stable
+    default functions, and every replay-protected POST reuses the exact original idempotency
+    key.
 
 ## Out of scope for this phase
 

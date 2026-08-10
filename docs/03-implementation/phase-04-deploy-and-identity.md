@@ -897,9 +897,11 @@ Web holds the ID token in memory only and never sees the refresh token — that 
 this group gets a platform file.
 
 P4-22 replaces `nullTokenProvider` with a real `AuthTokenProvider` implementing the same
-interface `packages/shared/src/api-client` already consumes. The API client itself does not
-change: it asks for a token and sets `Authorization`. If the client needs modification beyond
-swapping the provider instance, the Phase 1 seam is being violated.
+interface the shared client already consumes. It supplies both the bearer token and
+`getIdentity()`'s stable authenticated app `userId` added by P2-18, derived from the verified
+`custom:app_user_id` claim rather than from the token string. The API client itself does not
+change: it asks the provider for those values. If it needs modification beyond swapping the
+provider instance, the seam is being violated.
 
 P4-23 is the part that is easy to get subtly wrong:
 
@@ -944,9 +946,11 @@ Details that are behaviour, not polish:
 
 Sign-out follows [`../02-architecture/auth.md`](../02-architecture/auth.md) §3.4 in order:
 `GlobalSignOut` (or `POST /public/v1/auth/logout` on web), clear the token store, then
-`queryClient.clear()` including the **persisted** cache on disk — TanStack Query's persister
-must be purged explicitly. Steps after the first run even if the first fails, because offline
-sign-out must work. Device unregistration is Phase 5, since there are no push tokens yet.
+`apiClient.clearCache()` for P2-18's ETag/body pairs, then `queryClient.clear()` including the
+**persisted** cache on disk — TanStack Query's persister must be purged explicitly. P4-27 owns
+this first real call to `clearCache()`; Phase 2 owns only the mechanism and cross-identity unit
+test. Steps after the first run even if the first fails, because offline sign-out must work.
+Device unregistration is Phase 5, since there are no push tokens yet.
 
 **The signed-out routing state.** One guard at the router root, reading one session state of
 `loading | signed-out | signed-in-onboarding | signed-in`. `loading` renders the splash and
@@ -958,7 +962,8 @@ came from is discarded, not left mounted behind a modal.
 **Tests.** Maestro: sign up with a fresh address, read the code from a test mailbox, confirm,
 land on onboarding. Playwright: the same on web, then reload the page and confirm the session
 survives via the refresh cookie. A test that a cold launch with a stored token never renders
-the sign-in screen.
+the sign-in screen. P4-27 seeds an ETag/body pair and persisted Query entry, signs out, and
+asserts both stores are empty before a second identity can mount a query.
 
 ---
 
