@@ -9,6 +9,7 @@ import {
   type CreateActivityInput,
   deletedActivity,
   type PatchActivityInput,
+  type SkipActivityInput,
   type UncompleteActivityInput,
 } from '../../schemas/activity.js';
 import { envelope } from '../../schemas/envelope.js';
@@ -235,6 +236,26 @@ export function uncompleteActivity(
     .request({
       method: 'POST',
       path: `/v1/activities/${activityId}/uncomplete`,
+      schema: activityCompletionResponse,
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
+}
+
+/** Skips an activity or one recurring occurrence. Retries replay byte-for-byte. */
+export function skipActivity(
+  client: HttpClient,
+  activityId: string,
+  input: SkipActivityInput,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<z.infer<typeof activityCompletionResult>> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/skip`,
       schema: activityCompletionResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },

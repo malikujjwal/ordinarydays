@@ -11,6 +11,7 @@ import {
   createActivityInput,
   deletedActivity,
   patchActivityInput,
+  skipActivityInput,
   uncompleteActivityInput,
 } from './schemas/activity.js';
 import { agendaData, agendaQuery } from './schemas/agenda.js';
@@ -571,6 +572,40 @@ registry.registerPath({
     },
     403: {
       description: 'A related participant who lacks completion authority.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or no relationship to it.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/skip',
+  summary: 'Skip an activity or recurring occurrence',
+  description:
+    'Requires an `Idempotency-Key` and uses the same authority and transaction split as ' +
+    'completion. Without `occurrenceDate`, activity META, every direct participant index ' +
+    'and a prep-task parent pointer change atomically. With `occurrenceDate`, exactly one ' +
+    'override becomes skipped and series META remains unchanged.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: skipActivityInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The skipped activity or occurrence.',
+      content: { 'application/json': { schema: activityCompletionResponse } },
+    },
+    400: {
+      description: 'Missing idempotency key or occurrence on a non-series.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A related participant who lacks skip authority.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {

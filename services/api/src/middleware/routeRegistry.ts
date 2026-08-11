@@ -107,6 +107,12 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
   },
   {
     method: 'POST',
+    pattern: '/v1/activities/:id/skip',
+    auth: 'authenticated',
+    mutates: true,
+  },
+  {
+    method: 'POST',
     pattern: '/v1/activities/:id/duplicate',
     auth: 'authenticated',
     mutates: true,

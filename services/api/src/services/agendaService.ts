@@ -178,12 +178,17 @@ export async function assembleAgenda(
 
   const raw: RawCandidate[] = [];
   for (const activity of scheduled) {
-    if (activity.status === 'cancelled' || activity.schedule === undefined) continue;
+    if (
+      activity.status === 'cancelled' ||
+      activity.status === 'skipped' ||
+      activity.schedule === undefined
+    )
+      continue;
     const index = scheduledIndex.get(activity.activityId);
     raw.push(oneOffCandidate(activity, index?.timezone));
   }
   for (const activity of anytime) {
-    if (activity.status === 'cancelled') continue;
+    if (activity.status === 'cancelled' || activity.status === 'skipped') continue;
     raw.push({
       activity,
       effectiveDate: input.from,
@@ -366,6 +371,7 @@ function expandSeries(
   for (const activity of series) {
     if (
       activity.status === 'cancelled' ||
+      activity.status === 'skipped' ||
       activity.recurrence === undefined ||
       activity.schedule === undefined
     )

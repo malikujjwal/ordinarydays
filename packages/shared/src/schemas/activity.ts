@@ -443,6 +443,11 @@ export const uncompleteActivityInput = z
   .strictObject({ occurrenceDate: isoDate.optional() })
   .meta({ id: 'UncompleteActivityInput' });
 
+/** Skip either the activity itself or one nominal recurring occurrence. */
+export const skipActivityInput = z
+  .strictObject({ occurrenceDate: isoDate.optional() })
+  .meta({ id: 'SkipActivityInput' });
+
 /** Canonical mutation result for complete and uncomplete. */
 export const activityCompletionResult = z
   .object({
@@ -455,6 +460,7 @@ export const activityCompletionResult = z
 
 export type CompleteActivityInput = z.infer<typeof completeActivityInput>;
 export type UncompleteActivityInput = z.infer<typeof uncompleteActivityInput>;
+export type SkipActivityInput = z.infer<typeof skipActivityInput>;
 export type ActivityCompletionResult = z.infer<typeof activityCompletionResult>;
 
 /**

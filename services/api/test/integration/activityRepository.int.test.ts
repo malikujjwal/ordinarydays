@@ -19,12 +19,14 @@ type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
 type Tx = typeof import('../../src/repositories/tx.js');
 type Completion = typeof import('../../src/services/completionService.js');
+type Agenda = typeof import('../../src/services/agendaService.js');
 
 let repo: Repo;
 let base: Base;
 let keys: Keys;
 let tx: Tx;
 let completion: Completion;
+let agenda: Agenda;
 
 /** Two invented users. Neither needs a profile — the keys are what is under test. */
 const ALICE = 'usr_int_repo_alice';
@@ -73,6 +75,7 @@ beforeAll(async () => {
   keys = await import('../../src/repositories/keys.js');
   tx = await import('../../src/repositories/tx.js');
   completion = await import('../../src/services/completionService.js');
+  agenda = await import('../../src/services/agendaService.js');
 });
 
 const receiptFor = (data: unknown): IdempotencyReceipt => ({
@@ -615,6 +618,144 @@ describe('P2-13 completion transactions', () => {
     expect((await repo.getActivityMeta(before.activityId))?.title).toBe('Buy oat milk');
     expect(await repo.listChildPointers(parent.activityId)).toEqual([
       expect.objectContaining({ title: 'Buy oat milk' }),
+    ]);
+  });
+});
+
+describe('P2-14 skip transactions', () => {
+  it('writes one skipped occurrence, preserves META, and leaves other dates unchanged', async () => {
+    const series = anActivity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      status: 'scheduled',
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00' }],
+      },
+    });
+    await repo.createActivity(ALICE, series);
+    const beforeMeta = await repo.getActivityMeta(series.activityId);
+    const beforeCount = (await repo.getActivityPartition(series.activityId)).length;
+
+    await completion.skipActivity(
+      ALICE,
+      series.activityId,
+      { occurrenceDate: '2026-08-11' },
+      '2026-08-11T12:00:00.000Z',
+      receiptFor,
+    );
+
+    expect(await repo.getActivityMeta(series.activityId)).toEqual(beforeMeta);
+    const partition = await repo.getActivityPartition(series.activityId);
+    expect(partition).toHaveLength(beforeCount + 1);
+    expect(partition).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sk: 'OCC#2026-08-11',
+          status: 'skipped',
+        }),
+      ]),
+    );
+
+    const assembled = await agenda.assembleAgenda({
+      userId: ALICE,
+      from: '2026-08-10',
+      to: '2026-08-12',
+      timezone: 'UTC',
+      now: '2026-08-11T12:00:00.000Z',
+    });
+    const rows = assembled.days.flatMap((day) => [
+      ...day.schedule,
+      ...day.anytime,
+      ...day.earlier,
+    ]);
+    expect(
+      rows
+        .map((row) => [row.occurrenceDate, row.status])
+        .sort(([left], [right]) => String(left).localeCompare(String(right))),
+    ).toEqual([
+      ['2026-08-10', 'scheduled'],
+      ['2026-08-11', 'skipped_occurrence'],
+      ['2026-08-12', 'scheduled'],
+    ]);
+
+    await completion.uncompleteActivity(
+      ALICE,
+      series.activityId,
+      { occurrenceDate: '2026-08-11' },
+      '2026-08-11T12:01:00.000Z',
+      receiptFor,
+    );
+    expect(
+      (await repo.getActivityPartition(series.activityId)).filter((row) =>
+        String(row.sk).startsWith('OCC#'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('atomically skips and restores META, index, and a prep-task parent pointer', async () => {
+    const parent = anActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+      title: 'Breakfast',
+    } as Partial<Activity>);
+    await repo.createActivity(ALICE, parent);
+    const child = anActivity({
+      parentActivityId: parent.activityId,
+      schedule: { date: '2026-08-11', timezone: 'UTC' },
+      status: 'scheduled',
+    });
+    await repo.createActivity(ALICE, child, { taskSubtitle: parent.title });
+
+    await completion.skipActivity(
+      ALICE,
+      child.activityId,
+      {},
+      '2026-08-11T12:00:00.000Z',
+      receiptFor,
+    );
+
+    expect(await repo.getActivityMeta(child.activityId)).toMatchObject({
+      status: 'skipped',
+    });
+    expect((await repo.listByBucket(ALICE, 'S')).items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ activityId: child.activityId, status: 'skipped' }),
+      ]),
+    );
+    expect(await repo.listChildPointers(parent.activityId)).toEqual([
+      expect.objectContaining({ childActivityId: child.activityId, status: 'skipped' }),
+    ]);
+
+    const hidden = await agenda.assembleAgenda({
+      userId: ALICE,
+      from: '2026-08-11',
+      to: '2026-08-11',
+      timezone: 'UTC',
+      now: '2026-08-11T12:00:00.000Z',
+    });
+    expect(
+      hidden.days.flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier]),
+    ).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          activity: expect.objectContaining({ activityId: child.activityId }),
+        }),
+      ]),
+    );
+
+    await completion.uncompleteActivity(
+      ALICE,
+      child.activityId,
+      {},
+      '2026-08-11T12:01:00.000Z',
+      receiptFor,
+    );
+    expect(await repo.getActivityMeta(child.activityId)).toMatchObject({
+      status: 'scheduled',
+    });
+    expect(await repo.listChildPointers(parent.activityId)).toEqual([
+      expect.objectContaining({ childActivityId: child.activityId, status: 'scheduled' }),
     ]);
   });
 });

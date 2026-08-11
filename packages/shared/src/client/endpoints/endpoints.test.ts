@@ -8,6 +8,7 @@ import {
   duplicateActivity,
   listActivities,
   scheduleActivity,
+  skipActivity,
   uncompleteActivity,
 } from './activities.js';
 import { getAgenda } from './agenda.js';
@@ -534,6 +535,7 @@ describe('the remaining activity endpoints', () => {
   it.each([
     ['complete', completeActivity, { outcome: 'done' }],
     ['uncomplete', uncompleteActivity, {}],
+    ['skip', skipActivity, { occurrenceDate: '2026-08-11' }],
   ] as const)(
     'sends %s with its body and required idempotency key',
     async (path, call, input) => {

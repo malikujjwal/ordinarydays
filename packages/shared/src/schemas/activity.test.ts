@@ -7,6 +7,7 @@ import {
   completeActivityInput,
   createActivityInput,
   patchActivityInput,
+  skipActivityInput,
   uncompleteActivityInput,
 } from './activity.js';
 
@@ -391,7 +392,7 @@ describe('patch', () => {
   });
 });
 
-describe('complete and uncomplete inputs', () => {
+describe('complete, uncomplete and skip inputs', () => {
   it('accepts the optional nominal date and a supported outcome', () => {
     expect(
       completeActivityInput.safeParse({
@@ -404,7 +405,14 @@ describe('complete and uncomplete inputs', () => {
   it.each([
     [completeActivityInput, { status: 'completed' }],
     [uncompleteActivityInput, { outcome: 'done' }],
+    [skipActivityInput, { status: 'skipped' }],
   ])('rejects fields owned by the server', (schema, value) => {
     expect(schema.safeParse(value).success).toBe(false);
+  });
+
+  it('accepts an optional nominal date for skip', () => {
+    expect(skipActivityInput.safeParse({ occurrenceDate: '2026-08-11' }).success).toBe(
+      true,
+    );
   });
 });

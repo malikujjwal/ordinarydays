@@ -71,12 +71,15 @@ interface SeedOptions {
 
 function seed(options: SeedOptions = {}) {
   let activity = options.activity ?? meta();
-  let receipt: Record<string, unknown> | undefined;
+  const receipts = new Map<string, Record<string, unknown>>();
 
   ddbMock.on(GetCommand).callsFake((input) => {
     const sk = String(input.Key?.sk ?? '');
     const pk = String(input.Key?.pk ?? '');
-    if (pk.startsWith('IDEM#')) return receipt === undefined ? {} : { Item: receipt };
+    if (pk.startsWith('IDEM#')) {
+      const receipt = receipts.get(pk);
+      return receipt === undefined ? {} : { Item: receipt };
+    }
     if (sk.startsWith('OCC#')) {
       return options.occurrence === undefined ? {} : { Item: options.occurrence };
     }
@@ -99,7 +102,7 @@ function seed(options: SeedOptions = {}) {
     for (const item of input.TransactItems ?? []) {
       const stored = item.Put?.Item as Record<string, unknown> | undefined;
       if (stored?.entity === 'Activity') activity = stored;
-      if (stored?.entity === 'Idempotency') receipt = stored;
+      if (stored?.entity === 'Idempotency') receipts.set(String(stored.pk), stored);
     }
     return {};
   });
@@ -118,7 +121,7 @@ const asUser = (userId: string) =>
 
 function post(
   app: ReturnType<typeof CreateApp>,
-  action: 'complete' | 'uncomplete',
+  action: 'complete' | 'uncomplete' | 'skip',
   body: unknown,
   key = KEY,
 ) {
@@ -398,6 +401,161 @@ describe('recurring occurrence isolation', () => {
   });
 });
 
+describe('P2-14 skip', () => {
+  it('atomically skips META and every direct index without completion fields', async () => {
+    seed({
+      activity: meta({
+        status: 'completed',
+        outcome: 'done',
+        completedAt: '2026-08-10T12:00:00.000Z',
+      }),
+      childParticipants: [{ userId: 'usr_participant' }],
+    });
+
+    const response = await post(createApp(), 'skip', {});
+    const body = await response.json();
+    const items = transactionItems();
+
+    expect(response.status).toBe(200);
+    expect(body.data.activity.status).toBe('skipped');
+    expect(body.data.activity).not.toHaveProperty('completedAt');
+    expect(body.data.activity).not.toHaveProperty('outcome');
+    expect(
+      items
+        .filter((item) => item.Put?.Item?.entity === 'ActivityIndex')
+        .map((item) => item.Put?.Item?.status),
+    ).toEqual(['skipped', 'skipped']);
+  });
+
+  it('skips then uncomplete restores scheduled with a new logical key', async () => {
+    seed();
+    const app = createApp();
+
+    await post(app, 'skip', {}, KEY);
+    const body = await (
+      await post(app, 'uncomplete', {}, '00000000-0000-4000-8000-000000000002')
+    ).json();
+
+    expect(body.data.activity.status).toBe('scheduled');
+  });
+
+  it('overwrites a completed occurrence with one skipped row and no completedAt', async () => {
+    seed({
+      activity: meta({
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+        },
+      }),
+      occurrence: {
+        activityId: ACT,
+        date: '2026-08-11',
+        status: 'completed',
+        completedAt: '2026-08-11T12:00:00.000Z',
+      },
+    });
+
+    const body = await (
+      await post(createApp(), 'skip', { occurrenceDate: '2026-08-11' })
+    ).json();
+    const stored = transactionItems()[0]?.Put?.Item;
+
+    expect(body.data.occurrence).toEqual({
+      activityId: ACT,
+      date: '2026-08-11',
+      status: 'skipped',
+    });
+    expect(stored).toMatchObject({
+      pk: `ACT#${ACT}`,
+      sk: 'OCC#2026-08-11',
+      status: 'skipped',
+    });
+    expect(stored).not.toHaveProperty('completedAt');
+  });
+
+  it('treats an already-skipped target as a successful receipt-only no-op', async () => {
+    const skipped = meta({ status: 'skipped' });
+    const state = seed({ activity: skipped });
+
+    const response = await post(createApp(), 'skip', {});
+
+    expect(response.status).toBe(200);
+    expect(state.currentActivity()).toEqual(skipped);
+    expect(transactionItems()).toHaveLength(1);
+    expect(transactionItems()[0]?.Put?.Item?.entity).toBe('Idempotency');
+  });
+
+  it('replays the original response and performs one domain transaction', async () => {
+    seed();
+    const app = createApp();
+
+    const first = await post(app, 'skip', {});
+    const firstBody = await first.text();
+    const replay = await post(app, 'skip', {});
+
+    expect(await replay.text()).toBe(firstBody);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(1);
+  });
+
+  it('rejects unknown body fields and an occurrence date on a non-series', async () => {
+    seed();
+
+    const unknown = await post(createApp(), 'skip', { outcome: 'done' });
+    const nonSeries = await post(
+      createApp(),
+      'skip',
+      { occurrenceDate: '2026-08-11' },
+      '00000000-0000-4000-8000-000000000002',
+    );
+
+    expect(unknown.status).toBe(400);
+    expect((await unknown.json()).error.details[0]).toMatchObject({
+      path: '',
+      message: expect.stringContaining('outcome'),
+    });
+    expect(nonSeries.status).toBe(400);
+    expect((await nonSeries.json()).error.details[0].path).toBe('occurrenceDate');
+  });
+
+  it('requires authentication and an Idempotency-Key', async () => {
+    seed();
+    const { AppError } = await import('../lib/errors.js');
+    const unauthenticated = createApp({
+      identityProvider: {
+        resolve: () =>
+          Promise.reject(new AppError('unauthenticated', 'Sign in required.')),
+      },
+    });
+
+    const noIdentity = await post(unauthenticated, 'skip', {});
+    const noKey = await post(createApp(), 'skip', {}, '');
+
+    expect(noIdentity.status).toBe(401);
+    expect(noKey.status).toBe(400);
+    expect((await noKey.json()).error.details[0].path).toBe('Idempotency-Key');
+  });
+
+  it('leaves all projected state unchanged when the transaction is cancelled', async () => {
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    const original = meta();
+    const state = seed({
+      activity: original,
+      childParticipants: [{ userId: 'usr_participant' }],
+    });
+    const cancellation = new TransactionCanceledException({
+      $metadata: {},
+      message: 'cancelled',
+      CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+    });
+    ddbMock.on(TransactWriteCommand).callsFake(() => Promise.reject(cancellation));
+
+    const response = await post(createApp(), 'skip', {});
+
+    expect(response.status).toBe(503);
+    expect(state.currentActivity()).toEqual(original);
+  });
+});
+
 describe('ADR-051 completion authority', () => {
   it('returns 403 to a direct plan participant and 404 to a stranger', async () => {
     seed({
@@ -447,5 +605,49 @@ describe('ADR-051 completion authority', () => {
     });
 
     expect((await post(asUser(DEV), 'complete', {})).status).toBe(403);
+  });
+
+  it('applies the same owner-only plan policy to skip without writing', async () => {
+    seed({
+      activity: meta({
+        ownerId: OWNER,
+        objectKind: 'plan',
+        type: 'custom',
+        details: { kind: 'custom' },
+      }),
+      childParticipants: [{ userId: DEV }],
+    });
+
+    expect((await post(asUser(DEV), 'skip', {})).status).toBe(403);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+
+    ddbMock.reset();
+    seed({
+      activity: meta({
+        ownerId: OWNER,
+        objectKind: 'plan',
+        type: 'custom',
+        details: { kind: 'custom' },
+      }),
+    });
+
+    expect((await post(asUser(DEV), 'skip', {})).status).toBe(404);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
+  it('lets a parent participant skip a prep task and updates its parent pointer', async () => {
+    seed({
+      activity: meta({ ownerId: OWNER, parentActivityId: PARENT }),
+      parent: parent(),
+      parentParticipants: [{ userId: DEV }],
+    });
+
+    const response = await post(asUser(DEV), 'skip', {});
+    const items = transactionItems();
+
+    expect(response.status).toBe(200);
+    expect(
+      items.find((item) => item.Update)?.Update?.ExpressionAttributeValues,
+    ).toMatchObject({ ':status': 'skipped' });
   });
 });

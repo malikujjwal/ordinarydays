@@ -1177,16 +1177,31 @@ describe('warnings and projection branches', () => {
       schedule: { date: '2026-08-06', timezone: 'UTC' },
     });
     const cancelledAnytime = activity({ status: 'cancelled' });
+    const skippedScheduled = activity({
+      activityId: 'act_00000000000000000000000007',
+      status: 'skipped',
+      schedule: { date: '2026-08-06', timezone: 'UTC' },
+    });
+    const skippedAnytime = activity({
+      activityId: 'act_00000000000000000000000008',
+      status: 'skipped',
+    });
     const subject = fixture({
-      activities: [series, cancelledScheduled, cancelledAnytime],
+      activities: [
+        series,
+        cancelledScheduled,
+        cancelledAnytime,
+        skippedScheduled,
+        skippedAnytime,
+      ],
       buckets: {
         R: [
           index(series),
           { activityId: 'act_00000000000000000000000999' },
           { activityId: 'not-a-valid-activity-id' },
         ],
-        S: [index(cancelledScheduled)],
-        N: [index(cancelledAnytime)],
+        S: [index(cancelledScheduled), index(skippedScheduled)],
+        N: [index(cancelledAnytime), index(skippedAnytime)],
       },
       seriesCursor: 'more',
       expanded: ['2026-08-06', '2026-08-06'],
@@ -1214,6 +1229,14 @@ describe('warnings and projection branches', () => {
         activityId: 'act_00000000000000000000000999',
         source: 'series',
       }),
+    );
+    expect(
+      result.days.flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier]),
+    ).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'cancelled' }),
+        expect.objectContaining({ status: 'skipped' }),
+      ]),
     );
     expect(subject.dependencies.warn).toHaveBeenCalledWith(
       'Agenda dropped an index row with an invalid activityId.',

@@ -2,6 +2,7 @@ import {
   type ActivityCompletionResult,
   activity as activitySchema,
   type CompleteActivityInput,
+  type SkipActivityInput,
   type UncompleteActivityInput,
 } from '@od/shared/schemas';
 import type { Activity, ActivityOutcome, Occurrence } from '@od/shared/types';
@@ -169,10 +170,73 @@ export async function uncompleteActivity(
   return result;
 }
 
+/** Skip an Activity META row, or exactly one occurrence override for a series. */
+export async function skipActivity(
+  userId: string,
+  activityId: string,
+  input: SkipActivityInput,
+  now: string,
+  receiptFor: ReceiptFor,
+): Promise<ActivityCompletionResult> {
+  const context = await resolveActionContext(userId, activityId, 'skip');
+  const { activity } = context;
+
+  if (input.occurrenceDate !== undefined) {
+    assertRecurring(activity);
+    const existing = await occurrenceRepository.get(activityId, input.occurrenceDate);
+    if (existing?.status === 'skipped') {
+      const result: ActivityCompletionResult = {
+        activity,
+        occurrenceDate: input.occurrenceDate,
+        occurrence: existing,
+      };
+      await commitReceipt(receiptFor(result), 'skipActivityOccurrence');
+      return result;
+    }
+
+    const occurrence: Occurrence = {
+      activityId,
+      date: input.occurrenceDate,
+      status: 'skipped',
+    };
+    const result: ActivityCompletionResult = {
+      activity,
+      occurrenceDate: input.occurrenceDate,
+      occurrence,
+    };
+    const tx = new TransactionBuilder('skipActivityOccurrence', 1);
+    await occurrenceRepository.put(occurrence, tx);
+    await commit(tx, receiptFor(result));
+    return result;
+  }
+
+  if (activity.status === 'cancelled' || activity.status === 'skipped') {
+    const result: ActivityCompletionResult = { activity };
+    await commitReceipt(receiptFor(result), 'skipActivity');
+    return result;
+  }
+
+  const next = withoutCompletionFields({
+    ...activity,
+    status: 'skipped',
+    updatedAt: now,
+  });
+  const result: ActivityCompletionResult = { activity: next };
+  await patchActivity(userId, next, activity.updatedAt, {
+    previous: activity,
+    indexedUserIds: context.indexedUserIds,
+    ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
+    ...(activity.parentActivityId === undefined ? {} : { updateChildPointer: true }),
+    idempotencyReceipt: receiptFor(result),
+  });
+  return result;
+}
+
 /** Hydrate relationships first; the policy verdict remains pure and reusable. */
 async function resolveActionContext(
   userId: string,
   activityId: string,
+  action: 'complete' | 'skip' = 'complete',
 ): Promise<ActionContext> {
   const storedActivity = await getActivityMeta(activityId);
   if (storedActivity === undefined) throw new AppError('not_found', NOT_FOUND);
@@ -206,7 +270,7 @@ async function resolveActionContext(
     ...(parent === undefined ? {} : { parentOwnerId: parent.ownerId }),
     participatesInParent,
   });
-  if (!capability.complete) throw new AppError('forbidden', OWNER_ONLY);
+  if (!capability[action]) throw new AppError('forbidden', OWNER_ONLY);
 
   const indexedUserIds = [
     ...new Set([
