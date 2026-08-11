@@ -69,7 +69,8 @@ Error (`4xx`/`5xx`):
 Error codes are a closed enum in `packages/shared/src/errors.ts`:
 `unauthenticated`, `forbidden`, `not_found`, `validation_failed`, `payload_too_large`,
 `conflict`, `rate_limited`, `series_limit_exceeded`, `participant_limit_exceeded`,
-`invite_expired`, `invite_revoked`, `not_implemented`, `upgrade_required`, `internal`.
+`reminder_limit_exceeded`, `invite_expired`, `invite_revoked`, `not_implemented`,
+`upgrade_required`, `internal`.
 
 > **Amended in P0-13.** `payload_too_large` (413) was added because `tech-stack.md` §4.2
 > requires `bodyLimit` to reject an oversized body with 413 and no code mapped to it.
@@ -490,7 +491,7 @@ rule and does not create direct participant rows.
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/v1/activities/:id/reminders` | **The caller's own reminders only.** Never anyone else's, on any plan, ever. |
-| `POST` | `/v1/activities/:id/reminders` | `{ offsetMinutes }`. Any participant, for themselves. Max 3 per user per activity. Creates a server-id row, so `Idempotency-Key` is required: replay returns the original 2xx response, while a new logical request at an existing offset returns the business-rule `409`. |
+| `POST` | `/v1/activities/:id/reminders` | `{ offsetMinutes }`. Any participant, for themselves. Max 3 per user per activity → `422 reminder_limit_exceeded`. Creates a server-id row, so `Idempotency-Key` is required: replay returns the original 2xx response, while a new logical request at an existing offset returns the business-rule `409`. |
 | `DELETE` | `/v1/activities/:id/reminders/:reminderId` | Only your own. |
 
 All three management routes require the Activity to have `schedule.date`; reminders on an

@@ -313,6 +313,52 @@ describe('recurrence on create', () => {
   });
 });
 
+describe('reminders on create', () => {
+  const base = { title: 'Gym', objectKind: 'task', type: 'task' } as const;
+
+  it('accepts minute precision with a timed proposed schedule', () => {
+    expect(
+      createActivityInput.safeParse({
+        ...base,
+        schedule: { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+        reminders: [{ offsetMinutes: -15 }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([0, -1440, -10080])(
+    'accepts date-only whole-day offset %i',
+    (offsetMinutes) => {
+      expect(
+        createActivityInput.safeParse({
+          ...base,
+          schedule: { date: '2026-08-12', timezone: 'UTC' },
+          reminders: [{ offsetMinutes }],
+        }).success,
+      ).toBe(true);
+    },
+  );
+
+  it.each([-15, -1439])('rejects date-only sub-day offset %i', (offsetMinutes) => {
+    expect(
+      createActivityInput.safeParse({
+        ...base,
+        schedule: { date: '2026-08-12', timezone: 'UTC' },
+        reminders: [{ offsetMinutes }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects reminders without a proposed schedule date', () => {
+    expect(
+      createActivityInput.safeParse({
+        ...base,
+        reminders: [{ offsetMinutes: 0 }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('server-derived timestamps on create', () => {
   it.each(['lastActivityAt', 'updatedAt', 'snoozedUntil'])(
     'rejects %s instead of accepting mass assignment',

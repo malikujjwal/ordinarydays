@@ -1,5 +1,14 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as root from '@od/shared';
+import * as activity from '@od/shared/activity';
+import * as client from '@od/shared/client';
+import * as constants from '@od/shared/constants';
+import * as errors from '@od/shared/errors';
+import * as recurrence from '@od/shared/recurrence';
+import * as schemas from '@od/shared/schemas';
+import * as table from '@od/shared/table';
+import * as types from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -14,23 +23,11 @@ import { describe, expect, it } from 'vitest';
  */
 
 describe('exports map', () => {
-  it('resolves every declared subpath', async () => {
-    const [root, schemas, types, table, client, constants, errors, recurrence, activity] =
-      await Promise.all([
-        import('@od/shared'),
-        import('@od/shared/schemas'),
-        import('@od/shared/types'),
-        import('@od/shared/table'),
-        import('@od/shared/client'),
-        import('@od/shared/constants'),
-        import('@od/shared/errors'),
-        import('@od/shared/recurrence'),
-        import('@od/shared/activity'),
-      ]);
-
+  it('resolves every declared subpath', () => {
     expect(root.MAX_PARTICIPANTS).toBe(50);
     expect(schemas.isoDate).toBeDefined();
     expect(schemas.agendaItem).toBeDefined();
+    expect(schemas.reminderInputForSchedule).toBeDefined();
     expect(table.TABLE.partitionKey).toBe('pk');
     expect(client.nullTokenProvider).toBeDefined();
     expect(client.getAgenda).toBeDefined();
@@ -44,6 +41,7 @@ describe('exports map', () => {
     expect(schemas.skipActivityInput).toBeDefined();
     expect(schemas.snoozeActivityInput).toBeDefined();
     expect(schemas.unsnoozeActivityInput).toBeDefined();
+    expect(client.createReminder).toBeDefined();
     expect(constants.MAX_AGENDA_DAYS).toBe(62);
     expect(errors.ERROR_CODES).toContain('validation_failed');
     expect(recurrence.describeRecurrence).toBeDefined();
@@ -53,7 +51,7 @@ describe('exports map', () => {
     expect(activity.deriveGsi1Bucket).toBeDefined();
     expect(activity.changeActivityKind).toBeDefined();
     expect(types.assertNever).toBeDefined();
-  }, 10_000);
+  });
 
   it('does not re-export the API client from the root barrel', async () => {
     const root = await import('@od/shared');

@@ -11,7 +11,7 @@ import {
 import { cents, cursor, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
 import { occurrence } from './occurrence.js';
 import { createRecurrence, recurrence } from './recurrence.js';
-import { reminder, reminderInput } from './reminder.js';
+import { reminder, reminderInput, reminderInputsForSchedule } from './reminder.js';
 
 /**
  * The Activity, its `details` union, and the create/patch inputs
@@ -297,6 +297,18 @@ export const createActivityInput = z
         message: 'Repeat needs a scheduled date.',
         path: ['recurrence'],
       });
+    }
+    if (value.reminders !== undefined) {
+      const result = reminderInputsForSchedule(value.schedule).safeParse(value.reminders);
+      if (!result.success) {
+        for (const issue of result.error.issues) {
+          ctx.addIssue({
+            code: 'custom',
+            message: issue.message,
+            path: ['reminders', ...issue.path],
+          });
+        }
+      }
     }
   })
   .meta({ id: 'CreateActivityInput' });

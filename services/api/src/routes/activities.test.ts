@@ -374,6 +374,7 @@ describe('reminders at creation', () => {
       objectKind: 'task',
       type: 'task',
       title: 'Gym',
+      schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
       reminders: [{ offsetMinutes: -15 }, { offsetMinutes: -60 }],
     });
 
@@ -390,6 +391,7 @@ describe('reminders at creation', () => {
       objectKind: 'task',
       type: 'task',
       title: 'Gym',
+      schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
       reminders: [{ offsetMinutes: -15 }],
     });
 

@@ -15,6 +15,7 @@ describe('ERROR_CODES', () => {
         'participant_limit_exceeded',
         'payload_too_large',
         'rate_limited',
+        'reminder_limit_exceeded',
         'series_limit_exceeded',
         'unauthenticated',
         'upgrade_required',

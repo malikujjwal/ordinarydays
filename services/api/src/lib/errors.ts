@@ -32,6 +32,7 @@ export const ERROR_STATUS = {
   payload_too_large: 413,
   conflict: 409,
   participant_limit_exceeded: 422,
+  reminder_limit_exceeded: 422,
   invite_expired: 410,
   invite_revoked: 410,
   rate_limited: 429,

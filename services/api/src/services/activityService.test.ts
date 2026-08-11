@@ -408,7 +408,10 @@ describe('reminders at creation', () => {
   it('writes them for the creator alone', async () => {
     const { reminders } = await createActivity(
       USER,
-      task({ reminders: [{ offsetMinutes: -15 }] }),
+      task({
+        schedule: { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+        reminders: [{ offsetMinutes: -15 }],
+      }),
       NOW,
     );
 
@@ -421,7 +424,14 @@ describe('reminders at creation', () => {
   });
 
   it('passes them to the repository so they land in the same transaction', async () => {
-    await createActivity(USER, task({ reminders: [{ offsetMinutes: -15 }] }), NOW);
+    await createActivity(
+      USER,
+      task({
+        schedule: { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+        reminders: [{ offsetMinutes: -15 }],
+      }),
+      NOW,
+    );
 
     expect(written()?.[2]?.reminders).toEqual([
       { reminderId: 'rem_01J8XKQ2M4N5P6R7S8T9V0W1X2', offsetMinutes: -15 },
@@ -432,6 +442,37 @@ describe('reminders at creation', () => {
     const { reminders } = await createActivity(USER, task(), NOW);
 
     expect(reminders).toEqual([]);
+  });
+
+  it('rejects an internal caller that supplies a reminder without a date', async () => {
+    await expect(
+      createActivity(USER, task({ reminders: [{ offsetMinutes: 0 }] }), NOW),
+    ).rejects.toMatchObject({ name: 'ZodError' });
+    expect(repository.createActivity).not.toHaveBeenCalled();
+  });
+
+  it('enforces the timed versus date-only split at the service boundary', async () => {
+    await expect(
+      createActivity(
+        USER,
+        task({
+          schedule: { date: '2026-08-12', timezone: 'UTC' },
+          reminders: [{ offsetMinutes: -15 }],
+        }),
+        NOW,
+      ),
+    ).rejects.toMatchObject({ name: 'ZodError' });
+
+    await expect(
+      createActivity(
+        USER,
+        task({
+          schedule: { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+          reminders: [{ offsetMinutes: -15 }],
+        }),
+        NOW,
+      ),
+    ).resolves.toMatchObject({ reminders: [{ offsetMinutes: -15 }] });
   });
 });
 

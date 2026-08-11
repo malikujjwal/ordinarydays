@@ -17,6 +17,7 @@ import type {
   SnoozeActivityInput,
   UnsnoozeActivityInput,
 } from '../../schemas/occurrence.js';
+import { deletedReminder, type ReminderInput, reminder } from '../../schemas/reminder.js';
 import {
   type ScheduleActivityInput,
   type ScheduleActivityResult,
@@ -24,6 +25,7 @@ import {
 } from '../../schemas/schedule.js';
 import type { Activity } from '../../types/activity.js';
 import type { ActivityDetail } from '../../types/activityDetail.js';
+import type { Reminder } from '../../types/reminder.js';
 import type { HttpClient } from '../http.js';
 
 /**
@@ -46,6 +48,9 @@ export const activityDetailResponse = envelope(activityDetail);
 export const activityCompletionResponse = envelope(activityCompletionResult);
 export const deletedActivityResponse = envelope(deletedActivity);
 export const scheduleActivityResponse = envelope(scheduleActivityResult);
+export const reminderResponse = envelope(reminder);
+export const reminderListResponse = envelope(reminder.array());
+export const deletedReminderResponse = envelope(deletedReminder);
 
 /** A list answers with an array **and** `meta.nextCursor`, so the whole envelope is returned. */
 export const activityListResponse = envelope(activityListItem.array());
@@ -97,6 +102,59 @@ export function getActivity(
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as ActivityDetail);
+}
+
+/** `GET /v1/activities/:id/reminders` — already scoped to the signed-in user. */
+export function listReminders(
+  client: HttpClient,
+  activityId: string,
+  signal?: AbortSignal,
+): Promise<Reminder[]> {
+  return client
+    .request({
+      method: 'GET',
+      path: `/v1/activities/${activityId}/reminders`,
+      schema: reminderListResponse,
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
+}
+
+/** Creating a server-id reminder requires one caller-generated key reused across retries. */
+export function createReminder(
+  client: HttpClient,
+  activityId: string,
+  input: ReminderInput,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<Reminder> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/reminders`,
+      schema: reminderResponse,
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
+}
+
+/** Deletes only the signed-in user's row; somebody else's opaque id resolves to `404`. */
+export function deleteReminder(
+  client: HttpClient,
+  activityId: string,
+  reminderId: string,
+  signal?: AbortSignal,
+): Promise<{ reminderId: string }> {
+  return client
+    .request({
+      method: 'DELETE',
+      path: `/v1/activities/${activityId}/reminders/${reminderId}`,
+      schema: deletedReminderResponse,
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
 }
 
 /**

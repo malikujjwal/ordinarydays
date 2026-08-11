@@ -4,6 +4,7 @@ import {
   completeActivityInput,
   createActivityInput,
   patchActivityInput,
+  reminderInput,
   scheduleActivityInput,
   skipActivityInput,
   snoozeActivityInput,
@@ -12,6 +13,13 @@ import {
 } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
+import {
+  createReminderHandler,
+  deleteReminderHandler,
+  listRemindersHandler,
+  REMINDER_PATH,
+  REMINDERS_PATH,
+} from '../handlers/activityReminders.js';
 import {
   COMPLETE_ACTIVITY_PATH,
   completeActivityHandler,
@@ -52,9 +60,10 @@ import {
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Twelve routes: the six Phase 1 activity routes, P2-12's sole schedule write path, P2-13's
- * complete and uncomplete actions, P2-14's skip action, and snooze/unsnooze. Other routes
- * are Phase 2, and the agenda that powers Today is its own endpoint. Each is
+ * Fifteen routes: the six Phase 1 activity routes, P2-12's sole schedule write path,
+ * P2-13's complete and uncomplete actions, P2-14's skip action, P2-15's snooze and
+ * unsnooze actions, and P2-16's three caller-owned reminder-management routes. The agenda
+ * that powers Today is its own endpoint. Each unavailable route is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
  *
@@ -117,6 +126,10 @@ const validateUnsnooze = zValidator('json', unsnoozeActivityInput, (result) => {
   if (!result.success) throw result.error;
 });
 
+const validateReminder = zValidator('json', reminderInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
 /**
  * Same hook, on the **query string** rather than the body.
  *
@@ -153,6 +166,11 @@ export const activities = new Hono<AppEnv>()
   .post(SCHEDULE_ACTIVITY_PATH, validateSchedule, (c) =>
     scheduleActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
+  .get(REMINDERS_PATH, listRemindersHandler)
+  .post(REMINDERS_PATH, validateReminder, (c) =>
+    createReminderHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
+  .delete(REMINDER_PATH, deleteReminderHandler)
   /**
    * No `If-Match`. A delete is not an edit racing another edit: the thing either exists and
    * goes, or it does not and the answer is `404`. Requiring a version would make a retry of a

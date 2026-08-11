@@ -294,8 +294,10 @@ it.each([
   [-721, -1440],
   [-2160, -2880],
   [-1440, -1440],
+  [-0, 0],
 ])('normalises reminder offset %i to %i', (input, expected) => {
   expect(normaliseReminderOffset(input)).toBe(expected);
+  if (expected === 0) expect(Object.is(normaliseReminderOffset(input), -0)).toBe(false);
 });
 
 it('advances a resumable reminder cleanup page from its last sort key', async () => {
@@ -303,6 +305,12 @@ it('advances a resumable reminder cleanup page from its last sort key', async ()
     rows: [
       { pk: `ACT#${ID}`, sk: 'REM#usr_a#rem_1', entity: 'Reminder', offsetMinutes: -720 },
       { pk: `ACT#${ID}`, sk: 'REM#usr_b#rem_2', entity: 'Reminder', offsetMinutes: -60 },
+      {
+        pk: `ACT#${ID}`,
+        sk: 'REM#usr_c#rem_3',
+        entity: 'Reminder',
+        offsetMinutes: -1440,
+      },
     ],
     complete: false,
   });
@@ -319,12 +327,13 @@ it('advances a resumable reminder cleanup page from its last sort key', async ()
       },
       { kind: 'normalise_untimed_reminders', complete: false },
     ),
-  ).resolves.toEqual({ cursor: 'REM#usr_b#rem_2', complete: false });
+  ).resolves.toEqual({ cursor: 'REM#usr_c#rem_3', complete: false });
   expect(mocks.writeScheduleCleanupBatch).toHaveBeenCalledWith(
     ID,
     [
       expect.objectContaining({ offsetMinutes: -1440 }),
       expect.objectContaining({ offsetMinutes: 0 }),
+      expect.objectContaining({ offsetMinutes: -1440 }),
     ],
     {},
   );

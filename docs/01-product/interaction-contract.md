@@ -429,6 +429,7 @@ Section-level empty states on Today are specified in
 | `403 forbidden` | `Only the person who made this plan can change that.` | — |
 | `404 not_found` | `This isn't here any more.` Navigate back. | — |
 | `422 participant_limit_exceeded` | Inline in the picker: `You can add up to 50 people to a plan.` | — |
+| `422 reminder_limit_exceeded` | Inline in the reminder picker: `You can add up to 3 reminders.` | — |
 | `422` on a sixth date suggestion | Inline in the suggestion sheet: `You can suggest up to 5 dates.` | — |
 | `429 rate_limited` | `Too many requests. Try again in <Retry-After>.` | Auto-retry once after the header's delay for `GET`s only |
 | `426 upgrade_required` | Blocking screen: `Update Ordinary Days to keep going.` | `Update` → `updateUrl` |

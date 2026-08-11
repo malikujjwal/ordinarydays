@@ -12,7 +12,10 @@ import type {
   CreateActivityInput,
   PatchActivityInput,
 } from '@od/shared/schemas';
-import { recurrence as recurrenceSchema } from '@od/shared/schemas';
+import {
+  recurrence as recurrenceSchema,
+  reminderInputsForSchedule,
+} from '@od/shared/schemas';
 import type {
   Activity,
   ActivityDetail,
@@ -287,6 +290,7 @@ export async function createActivity(
 
   const schedule = input.schedule === undefined ? undefined : toSchedule(input.schedule);
   const storedRecurrence = recurrenceForCreate(input.recurrence, schedule);
+  const reminderInputs = reminderInputsForSchedule(schedule).parse(input.reminders ?? []);
 
   const activity: Activity = {
     activityId: newActivityId(),
@@ -326,7 +330,7 @@ export async function createActivity(
    * later one by which one user's create writes a reminder for another — a joiner's comes
    * from their own saved default at join time (P6-13, ADR-047).
    */
-  const reminders: Reminder[] = (input.reminders ?? []).map((entry) => ({
+  const reminders: Reminder[] = reminderInputs.map((entry) => ({
     reminderId: newReminderId(),
     activityId: activity.activityId,
     userId,

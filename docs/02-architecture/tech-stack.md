@@ -645,6 +645,7 @@ export class AppError extends Error {
 | `payload_too_large` | 413 | Request body over 256 KB, rejected by `bodyLimit` before parsing | Added in P0-13 — see the note below |
 | `conflict` | 409 | `If-Match` mismatch, deleting a person still on an active activity | Includes current `updatedAt` |
 | `participant_limit_exceeded` | 422 | > 50 participants | — |
+| `reminder_limit_exceeded` | 422 | > 3 reminders for one user on one activity | — |
 | `series_limit_exceeded` | 200 | > 200 active series — returned as a `warnings[]` entry, not an error | Response still succeeds |
 | `invite_expired` | 410 | Invite past expiry | Public surface |
 | `invite_revoked` | 410 | `revoked: true` | Public surface |

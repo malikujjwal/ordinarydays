@@ -238,7 +238,11 @@ describe('a retried create', () => {
 describe('reminders at creation', () => {
   it('writes them into the activity’s own partition, for the creator alone', async () => {
     const { data } = await (
-      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }, { offsetMinutes: -60 }] })
+      await post({
+        ...TASK,
+        schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
+        reminders: [{ offsetMinutes: -15 }, { offsetMinutes: -60 }],
+      })
     ).json();
 
     const partition = await repo.getActivityPartition(data.activityId);
@@ -246,6 +250,14 @@ describe('reminders at creation', () => {
 
     expect(reminders).toHaveLength(2);
     expect(reminders.every((row) => row.userId === DEV)).toBe(true);
+  });
+
+  it('rejects reminders on an undated activity and writes nothing', async () => {
+    const res = await post({ ...TASK, reminders: [{ offsetMinutes: 0 }] });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe('validation_failed');
+    expect(await indexRows(DEV)).toHaveLength(0);
   });
 });
 
@@ -339,7 +351,11 @@ describe('reading one activity back', () => {
   it('returns a body the shared detail schema accepts', async () => {
     const { activityDetail } = await import('@od/shared/schemas');
     const { data } = await (
-      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }] })
+      await post({
+        ...TASK,
+        schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
+        reminders: [{ offsetMinutes: -15 }],
+      })
     ).json();
 
     const body = await (await read(data.activityId)).json();
@@ -349,7 +365,11 @@ describe('reading one activity back', () => {
 
   it('returns the caller’s reminders on it', async () => {
     const { data } = await (
-      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }, { offsetMinutes: -60 }] })
+      await post({
+        ...TASK,
+        schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
+        reminders: [{ offsetMinutes: -15 }, { offsetMinutes: -60 }],
+      })
     ).json();
 
     const body = await (await read(data.activityId)).json();
@@ -362,7 +382,11 @@ describe('reading one activity back', () => {
 
   it('leaks no storage attribute from the real stored rows', async () => {
     const { data } = await (
-      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }] })
+      await post({
+        ...TASK,
+        schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
+        reminders: [{ offsetMinutes: -15 }],
+      })
     ).json();
 
     const body = await (await read(data.activityId)).json();
@@ -382,7 +406,11 @@ describe('reading one activity back', () => {
    */
   it('returns only the caller’s reminders from a partition holding two users’', async () => {
     const { data } = await (
-      await post({ ...TASK, reminders: [{ offsetMinutes: -15 }] })
+      await post({
+        ...TASK,
+        schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
+        reminders: [{ offsetMinutes: -15 }],
+      })
     ).json();
 
     const theirReminder = 'rem_01J8XKQ2M4N5P6R7S8T9V0W1BB';
@@ -618,7 +646,7 @@ describe('converting a plan to a task', () => {
           type: 'watch',
           title: 'Severance',
           notes: 'Start from the beginning',
-          schedule: { date: '2026-08-15', timezone: 'UTC' },
+          schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
           reminders: [{ offsetMinutes: -15 }],
           details: {
             kind: 'watch',
@@ -749,6 +777,7 @@ describe('deleting an activity', () => {
       await (
         await post({
           ...TASK,
+          schedule: { date: '2026-08-15', time: '19:30', timezone: 'UTC' },
           reminders: [{ offsetMinutes: -15 }, { offsetMinutes: -60 }],
         })
       ).json()

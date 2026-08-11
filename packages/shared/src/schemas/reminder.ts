@@ -1,6 +1,18 @@
 import { z } from 'zod';
 import { ulidId, userId } from './common.js';
 
+/** The schedule fields that change which reminder offsets are meaningful. */
+export interface ReminderSchedule {
+  readonly date: string;
+  readonly time?: string | undefined;
+}
+
+const reminderOffsetMinutes = z
+  .number()
+  .int('A reminder offset is a whole number of minutes')
+  .min(-10080, 'A reminder cannot be more than a week before')
+  .max(0, 'A reminder cannot be after the start');
+
 /**
  * A per-user reminder (`data-model.md` §4.3). Interface in `../types/reminder.ts`.
  *
@@ -13,11 +25,7 @@ export const reminder = z
     reminderId: ulidId('rem'),
     activityId: ulidId('act'),
     userId,
-    offsetMinutes: z
-      .number()
-      .int('A reminder offset is a whole number of minutes')
-      .min(-10080, 'A reminder cannot be more than a week before')
-      .max(0, 'A reminder cannot be after the start'),
+    offsetMinutes: reminderOffsetMinutes,
     channel: z.literal('push'),
   })
   .meta({ id: 'Reminder' });
@@ -31,10 +39,47 @@ export const reminder = z
  */
 export const reminderInput = z
   .strictObject({
-    offsetMinutes: z
-      .number()
-      .int('A reminder offset is a whole number of minutes')
-      .min(-10080, 'A reminder cannot be more than a week before')
-      .max(0, 'A reminder cannot be after the start'),
+    offsetMinutes: reminderOffsetMinutes,
   })
+  .transform((value) => ({
+    offsetMinutes: Object.is(value.offsetMinutes, -0) ? 0 : value.offsetMinutes,
+  }))
   .meta({ id: 'ReminderInput' });
+
+export type ReminderInput = z.infer<typeof reminderInput>;
+
+/**
+ * The schedule-aware reminder input used at both public and internal service boundaries.
+ *
+ * A reminder needs a date. A timed activity accepts minute precision; a date-only activity
+ * has no instant to subtract minutes from, so only whole-day offsets are meaningful.
+ */
+export function reminderInputForSchedule(schedule: ReminderSchedule | undefined) {
+  return reminderInput.superRefine((value, ctx) => {
+    if (schedule === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['offsetMinutes'],
+        message: 'A reminder needs a scheduled date.',
+      });
+      return;
+    }
+    if (schedule.time === undefined && value.offsetMinutes % 1440 !== 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['offsetMinutes'],
+        message: 'A date-only reminder must be a whole number of days before.',
+      });
+    }
+  });
+}
+
+/** The create path validates the whole caller-owned reminder set against one schedule. */
+export function reminderInputsForSchedule(schedule: ReminderSchedule | undefined) {
+  return z.array(reminderInputForSchedule(schedule));
+}
+
+/** What a reminder deletion acknowledges in the standard response envelope. */
+export const deletedReminder = z
+  .object({ reminderId: ulidId('rem') })
+  .meta({ id: 'DeletedReminder' });

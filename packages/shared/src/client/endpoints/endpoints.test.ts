@@ -4,9 +4,12 @@ import { ApiError, createHttpClient, nullTokenProvider } from '../http.js';
 import {
   completeActivity,
   createActivity,
+  createReminder,
   deleteActivity,
+  deleteReminder,
   duplicateActivity,
   listActivities,
+  listReminders,
   scheduleActivity,
   skipActivity,
   snoozeActivity,
@@ -217,6 +220,60 @@ describe('createActivity', () => {
     expect((error as ApiError).details).toEqual([
       { path: 'title', message: 'A title is required' },
     ]);
+  });
+});
+
+describe('activity reminders', () => {
+  const reminder = {
+    reminderId: 'rem_01J0000000000000000000000A',
+    activityId: 'act_01J0000000000000000000000A',
+    userId: 'usr_01J0000000000000000000000B',
+    offsetMinutes: -15,
+    channel: 'push',
+  } as const;
+
+  it('lists the caller-scoped endpoint without accepting a user id', async () => {
+    const { client, calls } = makeClient([
+      { status: 200, body: { data: [reminder], meta: { requestId: REQUEST_ID } } },
+    ]);
+    await expect(listReminders(client, reminder.activityId)).resolves.toEqual([reminder]);
+    expect(calls[0]?.url).toBe(
+      `https://api.test/v1/activities/${reminder.activityId}/reminders`,
+    );
+  });
+
+  it('creates with the supplied offset and idempotency key', async () => {
+    const { client, calls } = makeClient([
+      { status: 201, body: { data: reminder, meta: { requestId: REQUEST_ID } } },
+    ]);
+    await createReminder(
+      client,
+      reminder.activityId,
+      { offsetMinutes: -15 },
+      'reminder-key',
+    );
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.headers['Idempotency-Key']).toBe('reminder-key');
+    expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({ offsetMinutes: -15 });
+  });
+
+  it('deletes by opaque reminder id and returns the acknowledgement', async () => {
+    const { client, calls } = makeClient([
+      {
+        status: 200,
+        body: {
+          data: { reminderId: reminder.reminderId },
+          meta: { requestId: REQUEST_ID },
+        },
+      },
+    ]);
+    await expect(
+      deleteReminder(client, reminder.activityId, reminder.reminderId),
+    ).resolves.toEqual({ reminderId: reminder.reminderId });
+    expect(calls[0]?.method).toBe('DELETE');
+    expect(calls[0]?.url).toBe(
+      `https://api.test/v1/activities/${reminder.activityId}/reminders/${reminder.reminderId}`,
+    );
   });
 });
 

@@ -24,6 +24,7 @@ export const ERROR_CODES = [
   'rate_limited',
   'series_limit_exceeded',
   'participant_limit_exceeded',
+  'reminder_limit_exceeded',
   'invite_expired',
   'invite_revoked',
   'not_implemented',

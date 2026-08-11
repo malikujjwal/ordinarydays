@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
 import type { Reminder } from '../types/reminder.js';
-import { reminder, reminderInput } from './reminder.js';
+import { reminder, reminderInput, reminderInputForSchedule } from './reminder.js';
 
 describe('the schema and the interface are the same shape', () => {
   it('Reminder is assignable both ways', () => {
@@ -71,6 +71,44 @@ describe('the reminder input', () => {
     expect(reminderInput.safeParse({ offsetMinutes: -15, channel: 'push' }).success).toBe(
       false,
     );
+  });
+
+  it('normalises negative zero to ordinary zero', () => {
+    const parsed = reminderInput.parse({ offsetMinutes: -0 });
+    expect(parsed.offsetMinutes).toBe(0);
+    expect(Object.is(parsed.offsetMinutes, -0)).toBe(false);
+  });
+});
+
+describe('schedule-aware reminder input', () => {
+  const timed = { date: '2026-08-12', time: '18:00' };
+  const dateOnly = { date: '2026-08-12' };
+
+  it('accepts a sub-day offset for a timed activity', () => {
+    expect(
+      reminderInputForSchedule(timed).safeParse({ offsetMinutes: -15 }).success,
+    ).toBe(true);
+  });
+
+  it.each([0, -1440, -10080])(
+    'accepts the whole-day date-only offset %i',
+    (offsetMinutes) => {
+      expect(
+        reminderInputForSchedule(dateOnly).safeParse({ offsetMinutes }).success,
+      ).toBe(true);
+    },
+  );
+
+  it.each([-15, -1439])('rejects date-only sub-day offset %i', (offsetMinutes) => {
+    expect(reminderInputForSchedule(dateOnly).safeParse({ offsetMinutes }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects every reminder on an undated activity', () => {
+    expect(
+      reminderInputForSchedule(undefined).safeParse({ offsetMinutes: 0 }).success,
+    ).toBe(false);
   });
 });
 

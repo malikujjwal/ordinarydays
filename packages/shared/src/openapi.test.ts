@@ -37,7 +37,7 @@ describe('the generated document', () => {
     // whose `GET` and `PATCH` share one path entry; **P1-08 added the two device paths** —
     // the `POST` collection and the `DELETE` on one id, separate because only one of them is
     // templated; **P2-11 added `/v1/agenda`**; **P1-11 added `/v1/activities`**; and
-    // **P1-12 added the detail path**.
+    // **P1-12 added the detail path**; **P2-16 added the reminder collection and item paths**.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
@@ -52,6 +52,8 @@ describe('the generated document', () => {
       '/v1/activities/{id}/skip',
       '/v1/activities/{id}/snooze',
       '/v1/activities/{id}/unsnooze',
+      '/v1/activities/{id}/reminders',
+      '/v1/activities/{id}/reminders/{reminderId}',
       '/v1/capture/parse',
       '/v1/capture/extract',
       '/v1/capture/link',
@@ -95,6 +97,7 @@ describe('the generated document', () => {
       'CreateActivityInput',
       'DeletedActivity',
       'DeletedDevice',
+      'DeletedReminder',
       'Device',
       'ErrorResponse',
       'HealthResponse',

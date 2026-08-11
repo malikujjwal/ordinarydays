@@ -71,6 +71,7 @@ function participantChange(
 
 /** Half-day ties move farther from zero, which is earlier for stored negative offsets. */
 export function normaliseReminderOffset(offsetMinutes: number): number {
+  if (offsetMinutes === 0) return 0;
   if (offsetMinutes % 1440 === 0) return offsetMinutes;
   const days = Math.floor(Math.abs(offsetMinutes) / 1440 + 0.5);
   return days === 0 ? 0 : Math.sign(offsetMinutes) * days * 1440;

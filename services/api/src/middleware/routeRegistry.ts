@@ -129,6 +129,18 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
     mutates: true,
   },
+  { method: 'GET', pattern: '/v1/activities/:id/reminders', auth: 'authenticated' },
+  {
+    method: 'POST',
+    pattern: '/v1/activities/:id/reminders',
+    auth: 'authenticated',
+    mutates: true,
+  },
+  {
+    method: 'DELETE',
+    pattern: '/v1/activities/:id/reminders/:reminderId',
+    auth: 'authenticated',
+  },
 
   /**
    * §2.11 Capture — stubs until Phase 8. **None of them mutates**: capture returns a draft

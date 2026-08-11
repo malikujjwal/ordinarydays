@@ -31,6 +31,7 @@ import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
 import { snoozeActivityInput, unsnoozeActivityInput } from './schemas/occurrence.js';
+import { deletedReminder, reminder, reminderInput } from './schemas/reminder.js';
 import { scheduleActivityInput, scheduleActivityResult } from './schemas/schedule.js';
 import { patchUserInput, user } from './schemas/user.js';
 
@@ -45,6 +46,9 @@ const activityDetailResponse = envelope(activityDetail);
 const scheduleActivityResponse = envelope(scheduleActivityResult);
 const activityCompletionResponse = envelope(activityCompletionResult);
 const deletedActivityResponse = envelope(deletedActivity);
+const reminderResponse = envelope(reminder);
+const reminderListResponse = envelope(z.array(reminder));
+const deletedReminderResponse = envelope(deletedReminder);
 
 /**
  * The list envelope. `data` is an array and `meta.nextCursor` is present only when there is
@@ -55,6 +59,7 @@ const agendaResponse = envelope(agendaData);
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
+const reminderId = ulidId('rem');
 
 /**
  * The OpenAPI document, generated from the **same Zod schemas both sides import**
@@ -675,6 +680,94 @@ registry.registerPath({
     },
     404: {
       description: 'No such activity, or no relationship to it.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/v1/activities/{id}/reminders',
+  summary: 'List the caller’s reminders for one activity',
+  description:
+    'Returns only rows under the signed-in user’s reminder prefix. The activity must have a ' +
+    'date; no response exposes another participant’s reminder id, offset, or count.',
+  tags: ['activities'],
+  request: { params: z.object({ id: activityId }) },
+  responses: {
+    200: {
+      description: 'The caller’s reminder rows, possibly empty.',
+      content: { 'application/json': { schema: reminderListResponse } },
+    },
+    400: {
+      description: 'The activity has no scheduled date.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or the caller is a stranger.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/reminders',
+  summary: 'Create one caller-owned reminder',
+  description:
+    'Any participant may create a reminder for themselves. Requires `Idempotency-Key`; a ' +
+    'same-key replay returns the original row, while a new request at the same offset is ' +
+    '`409`. The per-user, per-activity cap is three.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: reminderInput } } },
+  },
+  responses: {
+    201: {
+      description: 'The server-id reminder row created for the caller.',
+      content: { 'application/json': { schema: reminderResponse } },
+    },
+    400: {
+      description: 'Invalid offset, undated activity, or missing idempotency key.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or the caller is a stranger.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description: 'This caller already has a reminder at the requested offset.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    422: {
+      description: 'This caller already has three reminders on this activity.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/v1/activities/{id}/reminders/{reminderId}',
+  summary: 'Delete one caller-owned reminder',
+  description:
+    'The key is built under the signed-in user’s prefix. Another participant’s reminder id ' +
+    'therefore resolves to `404`, never `403`.',
+  tags: ['activities'],
+  request: { params: z.object({ id: activityId, reminderId }) },
+  responses: {
+    200: {
+      description: 'The reminder is gone. `data` names the id removed.',
+      content: { 'application/json': { schema: deletedReminderResponse } },
+    },
+    400: {
+      description: 'The activity has no scheduled date.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description:
+        'No such activity, no caller relationship, or no caller-owned reminder.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },
