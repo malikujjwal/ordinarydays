@@ -141,7 +141,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-14 | `POST /v1/activities/:id/skip` | api | P2-13 | yes | S |
 | P2-15 | One-off and occurrence `snooze` / `unsnooze` | api | P2-13 | no | L |
 | P2-16 | Per-user reminders: items, endpoints, and the write paths | api | P2-08, P2-12 | yes | M |
-| P2-17 | Series limit and window warnings | api | P2-08 | yes | S |
+| P2-17 | Series limit and window warnings — **complete by absorption (2026-08-11)** | api | P2-08 | yes | S |
 | P2-18 | Agenda client hook, ETag transport cache and query policy | shared/mobile | P2-11, P1-20 | no | L |
 | P2-19 | Today screen shell and the four sections | mobile | P2-18, P1-22 | no | L |
 | P2-20 | The UP NEXT card and the one-minute ticker | mobile | P2-19 | no | M |
@@ -168,6 +168,23 @@ table and skip the design discussion. P2-31's exact label is `+ Add a task`: it 
 global chooser because the context fixes `{ objectKind: 'task', type: 'task' }`, opens the
 Task form, and ends with `Save task`. It never accepts words first and never decides whether
 the result is a Task or Plan from those words.
+
+> **P2-17 completion by absorption — 2026-08-11.** The merged P2-08, P2-11 and agenda
+> review-fix work already satisfies this mechanical task, so no additional implementation is
+> required. The 200-active-series cap and `series_limit_exceeded` warning live in
+> `packages/shared/src/constants.ts` and `services/api/src/services/agendaService.ts`, pinned
+> by `paginates more than 200 dated items to exhaustion across a 62-day window` and
+> `warns on the series cap, missing META and duplicate expanded occurrences` in
+> `services/api/src/services/agendaService.test.ts`. The inclusive 62-day validation lives in
+> `packages/shared/src/schemas/agenda.ts` and is mounted by `services/api/src/routes/agenda.ts`,
+> pinned at both schema and route layers by `accepts a 62-day inclusive window and parses
+> combined include tokens`, `rejects a 63-day window, a reversed window and unknown fields`,
+> `accepts an inclusive 62-day window` and `400s a 63-day window before agenda reads`. The
+> client-visible `duplicate_occurrence:<activityId>` warning shape lives in
+> `packages/shared/src/types/agenda.ts` and `packages/shared/src/schemas/agenda.ts`, while its
+> deterministic first-row retention and emission live in
+> `services/api/src/services/agendaService.ts`; `accepts both warning forms and rejects an
+> unrecognised warning` and the service warning test above pin the contract and behaviour.
 
 ---
 
