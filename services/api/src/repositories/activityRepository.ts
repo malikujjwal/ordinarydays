@@ -1,8 +1,9 @@
 import { deriveGsi1Bucket } from '@od/shared/activity';
+import { activity as activitySchema } from '@od/shared/schemas';
 import { TABLE } from '@od/shared/table';
 import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
-import { deleteAll, getItem, type Page, query, queryAll } from './base.js';
+import { batchGetItems, deleteAll, getItem, type Page, query, queryAll } from './base.js';
 import {
   activityIndex,
   activityMeta,
@@ -148,6 +149,7 @@ export interface IndexProjection {
   title: string;
   status: Activity['status'];
   lastActivityAt: string;
+  timezone?: string;
   time?: string;
   endTime?: string;
   isRecurring: boolean;
@@ -204,6 +206,9 @@ function indexItem(
     title: activity.title,
     status: activity.status,
     lastActivityAt: activity.lastActivityAt,
+    ...(activity.schedule?.timezone === undefined
+      ? {}
+      : { timezone: activity.schedule.timezone }),
     ...(activity.schedule?.time === undefined ? {} : { time: activity.schedule.time }),
     ...(activity.schedule?.endTime === undefined
       ? {}
@@ -331,6 +336,15 @@ export async function getActivityPartition(activityId: string): Promise<StoredIt
 /** The `META` row alone, for the paths that do not need the whole partition. */
 export async function getActivityMeta(activityId: string): Promise<Activity | undefined> {
   return getItem<Activity & StoredItem>(activityMeta(activityId));
+}
+
+/** Batch-hydrates canonical META rows; missing rows are omitted. */
+export async function batchGetActivityMeta(
+  activityIds: readonly string[],
+): Promise<Activity[]> {
+  const uniqueIds = [...new Set(activityIds)];
+  const rows = await batchGetItems<StoredItem>(uniqueIds.map(activityMeta));
+  return rows.map((row) => activitySchema.parse(row) as Activity);
 }
 
 /**

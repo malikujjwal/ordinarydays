@@ -756,6 +756,18 @@
                 "type": "string",
                 "format": "date-time"
               },
+              "snoozedUntil": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                  },
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                ]
+              },
               "outcome": {
                 "type": "string",
                 "enum": [
@@ -1152,6 +1164,18 @@
               "completedAt": {
                 "type": "string",
                 "format": "date-time"
+              },
+              "snoozedUntil": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                  },
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                ]
               },
               "outcome": {
                 "type": "string",

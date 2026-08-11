@@ -164,6 +164,7 @@ const activityBaseShape = {
   visibility: z.enum(['private', 'shared']),
   details: activityDetails,
   completedAt: z.iso.datetime().optional(),
+  snoozedUntil: z.union([hhmm, z.iso.datetime()]).optional(),
   outcome: z
     .enum(['done', 'attended', 'watched', 'had_it', 'didnt_happen', 'didnt_go'])
     .optional(),

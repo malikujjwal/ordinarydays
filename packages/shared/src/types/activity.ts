@@ -126,6 +126,8 @@ export interface ActivityBase {
   details: ActivityDetails;
 
   completedAt?: string;
+  /** One-off snooze only; recurring snoozes live on Occurrence overrides. */
+  snoozedUntil?: string;
   outcome?: ActivityOutcome;
 
   /**

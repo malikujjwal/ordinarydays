@@ -36,6 +36,7 @@ export const GSI1_PROJECTED_ATTRIBUTES = [
   'type',
   'title',
   'status',
+  'timezone',
   'time',
   'endTime',
   'isRecurring',

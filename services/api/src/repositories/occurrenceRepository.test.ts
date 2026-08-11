@@ -74,6 +74,60 @@ describe('batchGetForPairs', () => {
   });
 });
 
+describe('batchGetAgendaRows', () => {
+  it('deduplicates mixed keys and normalises destination move markers', async () => {
+    const value = completed('2026-08-03');
+    ddbMock.on(BatchGetCommand).resolves({
+      Responses: {
+        'od-main-local': [
+          stored(value),
+          {
+            pk: `ACT#${ACTIVITY_ID}`,
+            sk: 'MOVE#2026-08-04',
+            entity: 'OccurrenceMoveMarker',
+            activityId: ACTIVITY_ID,
+            destinationDate: '2026-08-04',
+            movedFrom: ['2026-08-03', '2026-08-02', '2026-08-03'],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      repository.batchGetAgendaRows(
+        [
+          { activityId: ACTIVITY_ID, date: value.date },
+          { activityId: ACTIVITY_ID, date: value.date },
+        ],
+        [
+          { activityId: ACTIVITY_ID, date: '2026-08-04' },
+          { activityId: ACTIVITY_ID, date: '2026-08-04' },
+        ],
+      ),
+    ).resolves.toEqual({
+      occurrences: [value],
+      markers: [
+        {
+          activityId: ACTIVITY_ID,
+          destinationDate: '2026-08-04',
+          movedFrom: ['2026-08-02', '2026-08-03'],
+        },
+      ],
+    });
+
+    expect(ddbMock.commandCalls(BatchGetCommand)[0]?.args[0]?.input).toMatchObject({
+      RequestItems: {
+        'od-main-local': {
+          Keys: [
+            { pk: `ACT#${ACTIVITY_ID}`, sk: 'OCC#2026-08-03' },
+            { pk: `ACT#${ACTIVITY_ID}`, sk: 'MOVE#2026-08-04' },
+          ],
+        },
+      },
+    });
+  });
+});
+
 describe('queryWindow and countCompleted', () => {
   it('uses inclusive occurrence sort-key bounds', async () => {
     ddbMock.on(QueryCommand).resolves({ Items: [] });

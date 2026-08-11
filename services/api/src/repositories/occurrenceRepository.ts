@@ -8,13 +8,19 @@ import {
   queryAll,
   queryCount,
 } from './base.js';
-import { occurrence, occurrenceRange } from './keys.js';
+import { occurrence, occurrenceMoveMarker, occurrenceRange } from './keys.js';
 import type { StoredItem } from './migrate.js';
 
 const ENTITY = 'Occurrence';
 const SCHEMA_VERSION = 1;
 
 type Pair = Readonly<{ activityId: string; date: string }>;
+
+export interface OccurrenceMoveMarker {
+  readonly activityId: string;
+  readonly destinationDate: string;
+  readonly movedFrom: readonly string[];
+}
 
 const parseOccurrence = (item: unknown): Occurrence =>
   occurrenceSchema.parse(item) as Occurrence;
@@ -46,6 +52,48 @@ export async function batchGetForPairs(
   );
 
   return pairs.map((pair) => byPair.get(`${pair.activityId}\u0000${pair.date}`) ?? null);
+}
+
+/** First agenda pass: nominal overrides and destination move markers in one BatchGet. */
+export async function batchGetAgendaRows(
+  occurrencePairs: readonly Pair[],
+  markerPairs: readonly Pair[],
+): Promise<{
+  occurrences: Occurrence[];
+  markers: OccurrenceMoveMarker[];
+}> {
+  const requested = [
+    ...occurrencePairs.map((pair) => occurrence(pair.activityId, pair.date)),
+    ...markerPairs.map((pair) => occurrenceMoveMarker(pair.activityId, pair.date)),
+  ];
+  const keys = [
+    ...new Map(requested.map((key) => [`${key.pk}\u0000${key.sk}`, key])).values(),
+  ];
+  const rows = await batchGetItems<StoredItem>(keys);
+  const occurrences: Occurrence[] = [];
+  const markers: OccurrenceMoveMarker[] = [];
+
+  for (const row of rows) {
+    if (row.entity === ENTITY) {
+      occurrences.push(parseOccurrence(row));
+      continue;
+    }
+    if (
+      row.entity === 'OccurrenceMoveMarker' &&
+      typeof row.activityId === 'string' &&
+      typeof row.destinationDate === 'string' &&
+      Array.isArray(row.movedFrom) &&
+      row.movedFrom.every((date) => typeof date === 'string')
+    ) {
+      markers.push({
+        activityId: row.activityId,
+        destinationDate: row.destinationDate,
+        movedFrom: [...new Set(row.movedFrom)].sort(),
+      });
+    }
+  }
+
+  return { occurrences, markers };
 }
 
 /** Inclusive nominal-date window for one recurring series (access pattern 5). */

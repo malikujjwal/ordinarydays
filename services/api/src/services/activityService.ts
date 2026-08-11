@@ -1134,6 +1134,7 @@ function toActivity(row: StoredItem): Activity {
     expenseTotalCents: stored.expenseTotalCents,
     visibility: stored.visibility,
     ...(stored.completedAt === undefined ? {} : { completedAt: stored.completedAt }),
+    ...(stored.snoozedUntil === undefined ? {} : { snoozedUntil: stored.snoozedUntil }),
     ...(stored.outcome === undefined ? {} : { outcome: stored.outcome }),
     icsSequence: stored.icsSequence,
     createdAt: stored.createdAt,

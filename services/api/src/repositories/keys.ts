@@ -98,6 +98,12 @@ export const occurrenceRange = (activityId: string, from: string, to: string) =>
   toSk: `OCC#${to}`,
 });
 
+/** Destination pointer for one or more cross-day occurrence moves. */
+export const occurrenceMoveMarker = (activityId: string, date: string) => ({
+  pk: activityPk(activityId),
+  sk: `MOVE#${date}`,
+});
+
 /** Phase 3. */
 export const attachment = (activityId: string, attachmentId: string) => ({
   pk: activityPk(activityId),

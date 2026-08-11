@@ -49,6 +49,13 @@ describe('the stored Activity', () => {
     expect(activity.safeParse(task).success).toBe(true);
   });
 
+  it.each(['20:00', '2026-08-09T00:00:00.000Z'])(
+    'accepts server-derived snoozedUntil %s',
+    (snoozedUntil) => {
+      expect(activity.safeParse({ ...task, snoozedUntil }).success).toBe(true);
+    },
+  );
+
   it('accepts a Plan of each of the four visible kinds', () => {
     for (const [type, details] of [
       ['custom', { kind: 'custom' }],
@@ -304,7 +311,7 @@ describe('recurrence on create', () => {
 });
 
 describe('server-derived timestamps on create', () => {
-  it.each(['lastActivityAt', 'updatedAt'])(
+  it.each(['lastActivityAt', 'updatedAt', 'snoozedUntil'])(
     'rejects %s instead of accepting mass assignment',
     (field) => {
       expect(
@@ -320,11 +327,14 @@ describe('server-derived timestamps on create', () => {
 });
 
 describe('patch', () => {
-  it.each(['lastActivityAt', 'updatedAt'])('rejects server-derived %s', (field) => {
-    expect(
-      patchActivityInput.safeParse({ [field]: '2026-08-09T00:00:00.000Z' }).success,
-    ).toBe(false);
-  });
+  it.each(['lastActivityAt', 'updatedAt', 'snoozedUntil'])(
+    'rejects server-derived %s',
+    (field) => {
+      expect(
+        patchActivityInput.safeParse({ [field]: '2026-08-09T00:00:00.000Z' }).success,
+      ).toBe(false);
+    },
+  );
   it('accepts cancelled, the one status a client may set', () => {
     expect(patchActivityInput.safeParse({ status: 'cancelled' }).success).toBe(true);
   });

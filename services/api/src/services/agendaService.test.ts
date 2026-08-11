@@ -1,0 +1,861 @@
+import type { Activity, Recurrence } from '@od/shared/types';
+import { describe, expect, it, vi } from 'vitest';
+import type { StoredItem } from '../repositories/migrate.js';
+import { type AgendaDependencies, assembleAgenda } from './agendaService.js';
+
+const now = '2026-08-06T19:00:00.000Z'; // 15:00 New York
+let sequence = 0;
+
+function activity(overrides: Partial<Activity> = {}): Activity {
+  sequence += 1;
+  const stamp = `2026-08-0${Math.min(sequence, 9)}T10:00:00.000Z`;
+  return {
+    activityId: `act_${String(sequence).padStart(26, '0')}`,
+    ownerId: 'usr_alice',
+    objectKind: 'task' as const,
+    type: 'task' as const,
+    status: 'scheduled' as const,
+    title: `Activity ${sequence}`,
+    details: { kind: 'task' as const },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private' as const,
+    icsSequence: 0,
+    createdAt: stamp,
+    lastActivityAt: stamp,
+    updatedAt: stamp,
+    schemaVersion: 1 as const,
+    ...overrides,
+  } as Activity;
+}
+
+const index = (subject: Activity, extra: StoredItem = {}): StoredItem => ({
+  activityId: subject.activityId,
+  ...extra,
+});
+
+interface Fixture {
+  readonly activities: readonly Activity[];
+  readonly buckets?: Partial<Record<'S' | 'P' | 'N' | 'R', readonly StoredItem[]>>;
+  readonly seriesCursor?: string;
+  readonly occurrences?: Awaited<ReturnType<AgendaDependencies['batchAgendaRows']>>;
+  readonly moved?: Awaited<ReturnType<AgendaDependencies['batchOccurrences']>>;
+  readonly expanded?: readonly string[];
+  readonly participants?: Readonly<Record<string, readonly StoredItem[]>>;
+}
+
+function fixture(input: Fixture) {
+  const byId = new Map(input.activities.map((row) => [row.activityId, row]));
+  const calls: ('S' | 'P' | 'N' | 'R')[] = [];
+  const listReminders = vi.fn(async () => []);
+  const expand = vi.fn(() => [...(input.expanded ?? [])]);
+  const batchAgendaRows = vi.fn(
+    async () => input.occurrences ?? { occurrences: [], markers: [] },
+  );
+  const batchOccurrences = vi.fn(async () => [...(input.moved ?? [])]);
+  const dependencies: AgendaDependencies = {
+    listBucket: async (_userId, bucket) => {
+      calls.push(bucket);
+      return {
+        items: [...(input.buckets?.[bucket] ?? [])],
+        ...(bucket === 'R' && input.seriesCursor !== undefined
+          ? { nextCursor: input.seriesCursor }
+          : {}),
+      };
+    },
+    batchActivities: async (ids) =>
+      ids.flatMap((id) => {
+        const row = byId.get(id);
+        return row === undefined ? [] : [row];
+      }),
+    listParticipants: async (activityId) => [...(input.participants?.[activityId] ?? [])],
+    batchAgendaRows,
+    batchOccurrences,
+    listReminders,
+    expand,
+    warn: vi.fn(),
+  };
+  return {
+    dependencies,
+    calls,
+    expand,
+    listReminders,
+    batchAgendaRows,
+    batchOccurrences,
+  };
+}
+
+function emitted(result: Awaited<ReturnType<typeof assembleAgenda>>) {
+  return result.days.flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier]);
+}
+
+describe('hydration and bucket boundaries', () => {
+  it('hydrates a thin series row before one complete-recurrence expansion and never queries #P', async () => {
+    const recurrence: Recurrence = {
+      mode: 'fixed',
+      segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00' }],
+    };
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'America/New_York' },
+      recurrence,
+    });
+    const undated = activity({ status: 'saved' });
+    const subject = fixture({
+      activities: [series, undated],
+      buckets: { R: [index(series)], N: [index(undated)] },
+      expanded: ['2026-08-06'],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'America/New_York',
+        now,
+        includeAnytimeUnscheduled: true,
+      },
+      subject.dependencies,
+    );
+
+    expect(subject.calls).toEqual(['S', 'R', 'N']);
+    expect(subject.calls).not.toContain('P');
+    expect(subject.expand).toHaveBeenCalledWith(
+      recurrence,
+      '2026-08-04',
+      '2026-08-08',
+      'America/New_York',
+    );
+    expect(subject.batchAgendaRows).toHaveBeenCalledWith(
+      [{ activityId: series.activityId, date: '2026-08-06' }],
+      ['2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07', '2026-08-08'].map(
+        (date) => ({ activityId: series.activityId, date }),
+      ),
+    );
+    expect(result.days[0]?.schedule.map((row) => row.activity.activityId)).toContain(
+      series.activityId,
+    );
+    expect(result.days[0]?.anytime.map((row) => row.activity.activityId)).toContain(
+      undated.activityId,
+    );
+  });
+});
+
+describe('occurrence merge matrix', () => {
+  it('applies snoozed, completed, skipped and moved-in rows without changing the series', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00' }],
+      },
+    });
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-05', '2026-08-06', '2026-08-07'],
+      occurrences: {
+        occurrences: [
+          {
+            activityId: series.activityId,
+            date: '2026-08-05',
+            status: 'snoozed',
+            snoozedUntil: '20:00',
+          },
+          {
+            activityId: series.activityId,
+            date: '2026-08-06',
+            status: 'completed',
+            completedAt: now,
+          },
+          { activityId: series.activityId, date: '2026-08-07', status: 'skipped' },
+        ],
+        markers: [
+          {
+            activityId: series.activityId,
+            destinationDate: '2026-08-06',
+            movedFrom: ['2026-08-04'],
+          },
+        ],
+      },
+      moved: [
+        {
+          activityId: series.activityId,
+          date: '2026-08-04',
+          status: 'rescheduled',
+          overrideDate: '2026-08-06',
+          overrideTime: '08:00',
+        },
+      ],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-05',
+        to: '2026-08-07',
+        timezone: 'America/New_York',
+        now,
+        includeSkipped: true,
+      },
+      subject.dependencies,
+    );
+    const rows = result.days.flatMap((day) => [
+      ...day.schedule,
+      ...day.anytime,
+      ...day.earlier,
+    ]);
+
+    expect(rows.find((row) => row.occurrenceDate === '2026-08-05')?.time).toBe('20:00');
+    expect(rows.find((row) => row.occurrenceDate === '2026-08-06')?.status).toBe(
+      'completed_occurrence',
+    );
+    expect(rows.find((row) => row.occurrenceDate === '2026-08-07')?.status).toBe(
+      'skipped_occurrence',
+    );
+    const moved = rows.filter((row) => row.occurrenceDate === '2026-08-04');
+    expect(moved).toHaveLength(1);
+    expect(moved[0]).toMatchObject({ viewerDate: '2026-08-06', time: '08:00' });
+    expect(series.updatedAt).toBe(series.createdAt);
+  });
+});
+
+describe('transferred acceptance cases 25-28', () => {
+  it('[25] snoozes one daily occurrence without rewriting or re-anchoring the series', async () => {
+    const recurrence: Recurrence = {
+      mode: 'fixed',
+      segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00' }],
+    };
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence,
+    });
+    const before = structuredClone(series);
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-05', '2026-08-06', '2026-08-07'],
+      occurrences: {
+        occurrences: [
+          {
+            activityId: series.activityId,
+            date: '2026-08-06',
+            status: 'snoozed',
+            snoozedUntil: '20:00',
+          },
+        ],
+        markers: [],
+      },
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-05',
+        to: '2026-08-07',
+        timezone: 'UTC',
+        now: '2026-08-05T00:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+
+    expect(
+      emitted(result).map((row) => [row.occurrenceDate, row.time, row.isSnoozed]),
+    ).toEqual([
+      ['2026-08-05', '18:00', false],
+      ['2026-08-06', '20:00', true],
+      ['2026-08-07', '18:00', false],
+    ]);
+    expect(series).toEqual(before);
+  });
+
+  it('[26] completes one occurrence under its historical segment time without touching META', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '17:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [
+          { freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00' },
+          { freq: 'daily', effectiveFrom: '2026-08-06', time: '20:00' },
+        ],
+      },
+    });
+    const originalUpdatedAt = series.updatedAt;
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-05', '2026-08-06'],
+      occurrences: {
+        occurrences: [
+          {
+            activityId: series.activityId,
+            date: '2026-08-05',
+            status: 'completed',
+            completedAt: now,
+          },
+        ],
+        markers: [],
+      },
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-05',
+        to: '2026-08-06',
+        timezone: 'UTC',
+        now: '2026-08-07T00:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+    const rows = emitted(result);
+
+    expect(rows.find((row) => row.occurrenceDate === '2026-08-05')).toMatchObject({
+      status: 'completed_occurrence',
+      time: '18:00',
+    });
+    expect(rows.find((row) => row.occurrenceDate === '2026-08-06')?.time).toBe('20:00');
+    expect(series.updatedAt).toBe(originalUpdatedAt);
+  });
+
+  it('[27] hides a skipped occurrence by default and restores only it under Show skipped', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-05', '2026-08-06', '2026-08-07'],
+      occurrences: {
+        occurrences: [
+          { activityId: series.activityId, date: '2026-08-06', status: 'skipped' },
+        ],
+        markers: [],
+      },
+    });
+    const input = {
+      userId: 'usr_alice',
+      from: '2026-08-05',
+      to: '2026-08-07',
+      timezone: 'UTC',
+      now: '2026-08-05T00:00:00.000Z',
+    } as const;
+
+    const hidden = await assembleAgenda(input, subject.dependencies);
+    const shown = await assembleAgenda(
+      { ...input, includeSkipped: true },
+      subject.dependencies,
+    );
+
+    expect(emitted(hidden).map((row) => row.occurrenceDate)).toEqual([
+      '2026-08-05',
+      '2026-08-07',
+    ]);
+    expect(
+      emitted(shown).map((row) => [row.occurrenceDate, row.status, row.time]),
+    ).toEqual([
+      ['2026-08-05', 'scheduled', '18:00'],
+      ['2026-08-06', 'skipped_occurrence', '18:00'],
+      ['2026-08-07', 'scheduled', '18:00'],
+    ]);
+  });
+
+  it('[28] keeps a normal occurrence, two moved-in rows and one time override collision-free', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07'],
+      occurrences: {
+        occurrences: [
+          {
+            activityId: series.activityId,
+            date: '2026-08-04',
+            status: 'rescheduled',
+            overrideDate: '2026-08-06',
+            overrideTime: '08:00',
+          },
+          {
+            activityId: series.activityId,
+            date: '2026-08-05',
+            status: 'rescheduled',
+            overrideDate: '2026-08-06',
+            overrideTime: '09:00',
+          },
+          {
+            activityId: series.activityId,
+            date: '2026-08-07',
+            status: 'rescheduled',
+            overrideTime: '21:00',
+          },
+        ],
+        markers: [
+          {
+            activityId: series.activityId,
+            destinationDate: '2026-08-06',
+            movedFrom: ['2026-08-04', '2026-08-05'],
+          },
+        ],
+      },
+      moved: [
+        {
+          activityId: series.activityId,
+          date: '2026-08-04',
+          status: 'rescheduled',
+          overrideDate: '2026-08-06',
+          overrideTime: '08:00',
+        },
+        {
+          activityId: series.activityId,
+          date: '2026-08-05',
+          status: 'rescheduled',
+          overrideDate: '2026-08-06',
+          overrideTime: '09:00',
+        },
+      ],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-04',
+        to: '2026-08-07',
+        timezone: 'UTC',
+        now: '2026-08-04T00:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+
+    expect(result.days.find((day) => day.date === '2026-08-04')).toMatchObject({
+      schedule: [],
+      anytime: [],
+      earlier: [],
+    });
+    expect(result.days.find((day) => day.date === '2026-08-05')).toMatchObject({
+      schedule: [],
+      anytime: [],
+      earlier: [],
+    });
+    expect(
+      emitted(result)
+        .filter((row) => row.viewerDate === '2026-08-06')
+        .map((row) => [row.occurrenceDate, row.time]),
+    ).toEqual([
+      ['2026-08-04', '08:00'],
+      ['2026-08-05', '09:00'],
+      ['2026-08-06', '18:00'],
+    ]);
+    expect(emitted(result).find((row) => row.occurrenceDate === '2026-08-07')?.time).toBe(
+      '21:00',
+    );
+  });
+
+  it('moves an ISO-snoozed source across days and emits it from its marker exactly once', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    const moved = {
+      activityId: series.activityId,
+      date: '2026-08-05' as const,
+      status: 'snoozed' as const,
+      snoozedUntil: '2026-08-07T01:00:00.000Z',
+    };
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-05', '2026-08-06'],
+      occurrences: {
+        occurrences: [moved],
+        markers: [
+          {
+            activityId: series.activityId,
+            destinationDate: '2026-08-07',
+            movedFrom: ['2026-08-05'],
+          },
+        ],
+      },
+      moved: [moved],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-05',
+        to: '2026-08-07',
+        timezone: 'UTC',
+        now: '2026-08-05T00:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+
+    const source = emitted(result).filter((row) => row.occurrenceDate === '2026-08-05');
+    expect(source).toHaveLength(1);
+    expect(source[0]).toMatchObject({
+      viewerDate: '2026-08-07',
+      time: '01:00',
+      isSnoozed: true,
+      movedFromDate: '2026-08-05',
+    });
+    expect(subject.batchOccurrences).toHaveBeenCalledWith([
+      { activityId: series.activityId, date: '2026-08-05' },
+    ]);
+  });
+});
+
+describe('timezone widening and mixed-generation rows', () => {
+  it('[30] 2026-01-01 23:30 UTC−12 becomes 2026-01-03 UTC+14 for a scheduled row', async () => {
+    const oneOff = activity({
+      schedule: { date: '2026-01-01', time: '23:30', timezone: 'Etc/GMT+12' },
+    });
+    const subject = fixture({
+      activities: [oneOff],
+      // No projected timezone: prove the hydrated META fallback.
+      buckets: { S: [index(oneOff)] },
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-01-03',
+        to: '2026-01-03',
+        timezone: 'Pacific/Kiritimati',
+        now: '2026-01-02T00:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+
+    expect(result.days[0]?.schedule).toHaveLength(1);
+    expect(result.days[0]?.schedule[0]).toMatchObject({
+      viewerDate: '2026-01-03',
+      time: '01:30',
+    });
+  });
+
+  it('[30] uses projected timezone and legacy META fallback identically across New York → Tokyo midnight', async () => {
+    const oneOff = activity({
+      schedule: { date: '2026-08-06', time: '22:00', timezone: 'America/New_York' },
+    });
+    const run = async (projected: boolean) => {
+      const subject = fixture({
+        activities: [oneOff],
+        buckets: {
+          S: [index(oneOff, projected ? { timezone: 'America/New_York' } : {})],
+        },
+      });
+      return assembleAgenda(
+        {
+          userId: 'usr_alice',
+          from: '2026-08-07',
+          to: '2026-08-07',
+          timezone: 'Asia/Tokyo',
+          now: '2026-08-06T00:00:00.000Z',
+        },
+        subject.dependencies,
+      );
+    };
+
+    const projected = await run(true);
+    const legacy = await run(false);
+    expect(projected.days[0]?.schedule[0]?.time).toBe('11:00');
+    expect(legacy.days[0]?.schedule[0]?.time).toBe('11:00');
+  });
+
+  it('[29] keeps 18:00 New York as the stored truth when viewed from London', async () => {
+    const oneOff = activity({
+      schedule: { date: '2026-08-06', time: '18:00', timezone: 'America/New_York' },
+    });
+    const run = async (projected: boolean) => {
+      const subject = fixture({
+        activities: [oneOff],
+        buckets: {
+          S: [index(oneOff, projected ? { timezone: 'America/New_York' } : {})],
+        },
+      });
+      return assembleAgenda(
+        {
+          userId: 'usr_alice',
+          from: '2026-08-06',
+          to: '2026-08-06',
+          timezone: 'Europe/London',
+          now: '2026-08-06T12:00:00.000Z',
+        },
+        subject.dependencies,
+      );
+    };
+
+    const projected = emitted(await run(true));
+    const legacy = emitted(await run(false));
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toMatchObject({ viewerDate: '2026-08-06', time: '23:00' });
+    expect(legacy).toHaveLength(1);
+    expect(legacy[0]).toMatchObject({ viewerDate: '2026-08-06', time: '23:00' });
+    expect(oneOff.schedule?.time).toBe('18:00');
+    expect(oneOff.schedule?.timezone).toBe('America/New_York');
+  });
+
+  it('[30] widens series expansion by two days for the UTC−12 to UTC+14 jump', async () => {
+    const series = activity({
+      schedule: { date: '2026-01-01', time: '23:30', timezone: 'Etc/GMT+12' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-01-01' }],
+      },
+    });
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-01-01'],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-01-03',
+        to: '2026-01-03',
+        timezone: 'Pacific/Kiritimati',
+        now: '2026-01-02T00:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+
+    expect(subject.expand).toHaveBeenCalledWith(
+      series.recurrence,
+      '2026-01-01',
+      '2026-01-05',
+      'Etc/GMT+12',
+    );
+    expect(emitted(result)).toHaveLength(1);
+    expect(emitted(result)[0]).toMatchObject({
+      occurrenceDate: '2026-01-01',
+      viewerDate: '2026-01-03',
+      time: '01:30',
+    });
+  });
+
+  it('New York → Tokyo cross-midnight override enters the viewer window', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-06', time: '23:30', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-06' }],
+      },
+    });
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-06'],
+      occurrences: {
+        occurrences: [
+          {
+            activityId: series.activityId,
+            date: '2026-08-06',
+            status: 'rescheduled',
+            overrideTime: '08:00',
+          },
+        ],
+        markers: [],
+      },
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'Asia/Tokyo',
+        now: '2026-08-05T00:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+
+    expect(emitted(result)).toHaveLength(1);
+    expect(emitted(result)[0]).toMatchObject({
+      occurrenceDate: '2026-08-06',
+      viewerDate: '2026-08-06',
+      time: '21:00',
+    });
+  });
+});
+
+describe('bounded fan-out', () => {
+  it('reuses one action context and one reminder read across repeated occurrences', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-05', '2026-08-06', '2026-08-07'],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-05',
+        to: '2026-08-07',
+        timezone: 'UTC',
+        now,
+        includeReminders: true,
+      },
+      subject.dependencies,
+    );
+    const rows = result.days.flatMap((day) => [...day.schedule, ...day.earlier]);
+
+    expect(subject.listReminders).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.actionContext).toBe(rows[1]?.actionContext);
+  });
+
+  it('hydrates parent access once and distinguishes a participant child from its owned parent', async () => {
+    const parent = activity({ ownerId: 'usr_alice' });
+    const child = activity({
+      ownerId: 'usr_bob',
+      parentActivityId: parent.activityId,
+      schedule: { date: '2026-08-06', time: '18:00', timezone: 'UTC' },
+    });
+    const subject = fixture({
+      activities: [parent, child],
+      buckets: { S: [index(child)] },
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'UTC',
+        now,
+      },
+      subject.dependencies,
+    );
+
+    const candidate = result.days.flatMap((day) => [
+      ...day.schedule,
+      ...day.anytime,
+      ...day.earlier,
+    ])[0];
+    expect(candidate?.actionContext).toMatchObject({
+      callerRole: 'participant',
+      parentOwnerId: 'usr_alice',
+      participatesInParent: true,
+    });
+  });
+});
+
+describe('warnings and projection branches', () => {
+  it('warns on the series cap, missing META and duplicate expanded occurrences', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    const cancelledScheduled = activity({
+      status: 'cancelled',
+      schedule: { date: '2026-08-06', timezone: 'UTC' },
+    });
+    const cancelledAnytime = activity({ status: 'cancelled' });
+    const subject = fixture({
+      activities: [series, cancelledScheduled, cancelledAnytime],
+      buckets: {
+        R: [index(series), { activityId: 'act_missing' }],
+        S: [index(cancelledScheduled)],
+        N: [index(cancelledAnytime)],
+      },
+      seriesCursor: 'more',
+      expanded: ['2026-08-06', '2026-08-06'],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'UTC',
+        now,
+        includeAnytimeUnscheduled: true,
+      },
+      subject.dependencies,
+    );
+
+    expect(result.warnings).toEqual([
+      'series_limit_exceeded',
+      `duplicate_occurrence:${series.activityId}`,
+    ]);
+    expect(subject.dependencies.warn).toHaveBeenCalledWith(
+      'Agenda dropped a missing META row.',
+      expect.objectContaining({ activityId: 'act_missing', source: 'series' }),
+    );
+    expect(
+      result.days.flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier]),
+    ).toHaveLength(1);
+  });
+
+  it('projects absolute snoozes, untimed rows and converted end times', async () => {
+    const absoluteSnooze = activity({
+      snoozedUntil: '2026-08-06T20:30:00.000Z',
+      schedule: { date: '2026-08-06', time: '09:00', timezone: 'UTC' },
+    });
+    const untimed = activity({ schedule: { date: '2026-08-06', timezone: 'UTC' } });
+    const ranged = activity({
+      schedule: {
+        date: '2026-08-06',
+        time: '16:00',
+        endTime: '17:00',
+        timezone: 'America/New_York',
+      },
+    });
+    const subject = fixture({
+      activities: [absoluteSnooze, untimed, ranged],
+      buckets: {
+        S: [index(absoluteSnooze), index(untimed), index(ranged)],
+      },
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'UTC',
+        now,
+      },
+      subject.dependencies,
+    );
+    const rows = result.days.flatMap((day) => [
+      ...day.schedule,
+      ...day.anytime,
+      ...day.earlier,
+    ]);
+
+    expect(
+      rows.find((row) => row.activity.activityId === absoluteSnooze.activityId),
+    ).toMatchObject({ time: '20:30', isSnoozed: true });
+    expect(
+      rows.find((row) => row.activity.activityId === untimed.activityId)?.time,
+    ).toBeUndefined();
+    expect(
+      rows.find((row) => row.activity.activityId === ranged.activityId)?.endTime,
+    ).toBe('21:00');
+  });
+});

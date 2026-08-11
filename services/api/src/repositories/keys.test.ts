@@ -30,6 +30,11 @@ describe('§3.1 the activity partition', () => {
       keys.occurrence(ACT, '2026-08-08'),
       { pk: `ACT#${ACT}`, sk: 'OCC#2026-08-08' },
     ],
+    [
+      'occurrenceMoveMarker',
+      keys.occurrenceMoveMarker(ACT, '2026-08-09'),
+      { pk: `ACT#${ACT}`, sk: 'MOVE#2026-08-09' },
+    ],
     ['attachment', keys.attachment(ACT, 'att_1'), { pk: `ACT#${ACT}`, sk: 'ATT#att_1' }],
     [
       'childPointer',

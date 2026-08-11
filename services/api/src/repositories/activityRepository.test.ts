@@ -246,6 +246,7 @@ describe('the index entry’s GSI1 keys', () => {
       type: 'event',
       title: 'Buy milk',
       status: 'saved',
+      timezone: 'America/New_York',
       time: '19:00',
       endTime: '21:00',
       isRecurring: false,
