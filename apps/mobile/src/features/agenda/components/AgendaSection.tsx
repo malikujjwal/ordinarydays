@@ -1,35 +1,38 @@
 import type { AgendaItem } from '@od/shared/types';
-import { formatWallTime, Row, SectionHeader, useTheme } from '@od/ui';
+import { SectionHeader, useTheme } from '@od/ui';
 import type { ReactNode } from 'react';
 import { View } from 'react-native';
+import { AgendaRow } from './AgendaRow';
 
 export interface AgendaSectionProps {
   title: string;
   items: readonly AgendaItem[];
   footer?: ReactNode;
   testID: string;
+  showTime?: boolean;
+  onOpen: (item: AgendaItem) => void;
 }
 
-/** P2-19's section shell. P2-21 replaces the provisional Row body with AgendaRow. */
-export function AgendaSection({ title, items, footer, testID }: AgendaSectionProps) {
+/** A section shell around the one shared AgendaRow implementation. */
+export function AgendaSection({
+  title,
+  items,
+  footer,
+  testID,
+  showTime = false,
+  onOpen,
+}: AgendaSectionProps) {
   const theme = useTheme();
 
   return (
     <View testID={testID} style={{ gap: theme.space[2] }}>
       <SectionHeader title={title} />
       {items.map((item) => (
-        <Row
+        <AgendaRow
           key={`${item.activityId}:${item.occurrenceDate ?? ''}`}
-          title={item.title}
-          {...(item.time === undefined ? {} : { subtitle: formatWallTime(item.time) })}
-          accent={item.type}
-          dimmed={
-            item.isPast ||
-            item.status === 'completed' ||
-            item.status === 'completed_occurrence'
-          }
-          struck={item.status === 'completed' || item.status === 'completed_occurrence'}
-          testID={`agenda-row-${item.activityId}`}
+          item={item}
+          showTime={showTime}
+          onOpen={onOpen}
         />
       ))}
       {footer}

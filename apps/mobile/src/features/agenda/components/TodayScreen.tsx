@@ -14,6 +14,7 @@ import { AgendaSection } from './AgendaSection';
 
 export interface TodayScreenProps {
   onOpenAnytime: () => void;
+  onOpenAgendaItem: (item: AgendaItem) => void;
   /** P2-20 replaces this edge reading with its foreground-aware minute ticker. */
   now?: Date;
   /** Test seam for the viewer-zone minute; P2-20 supplies it from the shared clock. */
@@ -47,6 +48,7 @@ function errorDetails(error: unknown): { message: string; requestId?: string } {
 /** Today is a disposable projection: one agenda response, four locally derived sections. */
 export function TodayScreen({
   onOpenAnytime,
+  onOpenAgendaItem,
   now = new Date(),
   currentMinute = minuteAt(now),
 }: TodayScreenProps) {
@@ -99,13 +101,20 @@ export function TodayScreen({
         contentContainerStyle={{ gap: theme.space[8], paddingBottom: theme.space[8] }}
       >
         {sections.upNext.length === 0 ? null : (
-          <AgendaSection title="Up next" items={sections.upNext} testID="today-up-next" />
+          <AgendaSection
+            title="Up next"
+            items={sections.upNext}
+            testID="today-up-next"
+            onOpen={onOpenAgendaItem}
+          />
         )}
         {sections.schedule.length === 0 ? null : (
           <AgendaSection
             title="Schedule"
             items={sections.schedule}
             testID="today-schedule"
+            showTime
+            onOpen={onOpenAgendaItem}
           />
         )}
         {anytime.items.length === 0 ? null : (
@@ -113,6 +122,7 @@ export function TodayScreen({
             title="Anytime"
             items={anytime.items}
             testID="today-anytime"
+            onOpen={onOpenAgendaItem}
             footer={
               anytime.savedCount > TODAY_ANYTIME_SAVED_LIMIT ? (
                 <Button
@@ -131,6 +141,8 @@ export function TodayScreen({
             title="Earlier today"
             items={earlier}
             testID="today-earlier"
+            showTime
+            onOpen={onOpenAgendaItem}
             footer={
               !showAllEarlier &&
               sections.earlier.length > TODAY_EARLIER_COLLAPSED_LIMIT ? (

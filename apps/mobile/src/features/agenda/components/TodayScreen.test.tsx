@@ -80,6 +80,7 @@ describe('TodayScreen', () => {
     const first = mount(
       <TodayScreen
         onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
         currentMinute="15:10"
         now={new Date('2026-08-06T15:10:00Z')}
       />,
@@ -100,6 +101,7 @@ describe('TodayScreen', () => {
     const second = mount(
       <TodayScreen
         onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
         currentMinute="15:10"
         now={new Date('2026-08-07T15:10:00Z')}
       />,
@@ -121,13 +123,14 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onOpenAnytime={onOpenAnytime}
+        onOpenAgendaItem={() => {}}
         currentMinute="15:10"
         now={new Date('2026-08-06T15:10:00Z')}
       />,
     );
 
     await waitFor(() => expect(screen.getByTestId('today-anytime')).toBeDefined());
-    expect(screen.getAllByTestId(/^agenda-row-/)).toHaveLength(20);
+    expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(20);
     fireEvent.click(screen.getByRole('button', { name: 'See all (25)' }));
     expect(onOpenAnytime).toHaveBeenCalledOnce();
   });
@@ -144,14 +147,15 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
         currentMinute="15:10"
         now={new Date('2026-08-06T15:10:00Z')}
       />,
     );
 
     await waitFor(() => expect(screen.getByTestId('today-earlier')).toBeDefined());
-    expect(screen.getAllByTestId(/^agenda-row-/)).toHaveLength(10);
+    expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(10);
     fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
-    expect(screen.getAllByTestId(/^agenda-row-/)).toHaveLength(12);
+    expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(12);
   });
 });
