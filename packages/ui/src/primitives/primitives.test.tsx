@@ -93,7 +93,9 @@ describe('every primitive renders', () => {
 
   it('Chip', () => {
     wrap(<Chip label="From screenshot" />);
-    expect(screen.getByLabelText('From screenshot')).toBeDefined();
+    const chip = screen.getByText('From screenshot');
+    expect(chip).toBeDefined();
+    expect(chip.closest('[aria-label]')).toBeNull();
   });
 
   it('Avatar and AvatarStack', () => {

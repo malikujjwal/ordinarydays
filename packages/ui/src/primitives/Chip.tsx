@@ -1,4 +1,4 @@
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import type { IconProps } from '../icons/index';
 import { useTheme } from '../theme/index';
 import { Text, type TextColor } from './Text';
@@ -71,7 +71,12 @@ export function Chip({
 
   if (onPress === undefined) {
     return (
-      <View testID={testID} accessible accessibilityLabel={label}>
+      <View
+        testID={testID}
+        {...(Platform.OS === 'web'
+          ? {}
+          : { accessible: true, accessibilityLabel: label })}
+      >
         {body}
       </View>
     );

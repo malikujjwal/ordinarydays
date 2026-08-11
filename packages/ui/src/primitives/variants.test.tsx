@@ -51,7 +51,7 @@ describe.each(schemes)('%s scheme renders every variant', (scheme) => {
     'Chip %s',
     (tone) => {
       wrap(<Chip label="Overdue" tone={tone} />, scheme);
-      expect(screen.getByLabelText('Overdue')).toBeDefined();
+      expect(screen.getByText('Overdue')).toBeDefined();
     },
   );
 

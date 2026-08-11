@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import {
   AccessibilityInfo,
@@ -79,6 +80,10 @@ export interface Theme {
 
 const ThemeContext = createContext<Theme | undefined>(undefined);
 
+const subscribeToHydration = () => () => {};
+const clientSnapshot = () => true;
+const serverSnapshot = () => false;
+
 export interface ThemeProviderProps {
   children: ReactNode;
   /** Overrides the system scheme. The gallery renders both side by side with this. */
@@ -92,7 +97,14 @@ export interface ThemeProviderProps {
 
 export function ThemeProvider({ children, scheme, serifFamily }: ThemeProviderProps) {
   const system = useSystemColorScheme();
-  const active: ColorScheme = scheme ?? (system === 'dark' ? 'dark' : 'light');
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    clientSnapshot,
+    serverSnapshot,
+  );
+  const systemScheme: ColorScheme =
+    Platform.OS === 'web' && !hydrated ? 'light' : system === 'dark' ? 'dark' : 'light';
+  const active: ColorScheme = scheme ?? systemScheme;
 
   const value = useMemo<Theme>(() => {
     const palette = colors[active];
