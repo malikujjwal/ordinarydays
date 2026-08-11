@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { projectAgendaItem } from './agendaProjection.js';
 import type { AgendaCandidate } from './agendaService.js';
 
-const clock = { now: '2026-08-06T19:00:00.000Z', timezone: 'America/New_York' };
+const clock = {
+  now: '2026-08-06T19:00:00.000Z',
+  timezone: 'America/New_York',
+  today: '2026-08-06',
+};
 
 function activity(overrides: Partial<Activity> = {}): Activity {
   return {
@@ -170,13 +174,19 @@ describe('AgendaItem presentation', () => {
 });
 
 describe('occurrence fields', () => {
-  it('uses the effective snooze and reschedule times', () => {
+  it('uses the effective snooze and reschedule times and preserves a changed original', () => {
     const subject = activity();
 
     expect(
-      projectAgendaItem(candidate(subject, { time: '20:00', isSnoozed: true }), clock)
-        .time,
-    ).toBe('20:00');
+      projectAgendaItem(
+        candidate(subject, {
+          time: '20:00',
+          originalTime: '18:00',
+          isSnoozed: true,
+        }),
+        clock,
+      ),
+    ).toMatchObject({ time: '20:00', originalTime: '18:00' });
     expect(projectAgendaItem(candidate(subject, { time: '08:30' }), clock).time).toBe(
       '08:30',
     );
@@ -195,6 +205,27 @@ describe('occurrence fields', () => {
     ).toHaveProperty('occurrenceDate', '2026-08-06');
     expect(projectAgendaItem(candidate(activity()), clock)).not.toHaveProperty(
       'occurrenceDate',
+    );
+  });
+
+  it('authors recurrence copy from the request-window date', () => {
+    const series = activity({
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+        endDate: '2027-08-31',
+      },
+    });
+
+    expect(projectAgendaItem(candidate(series), clock).recurrenceDescription).toBe(
+      'Daily until 31 Aug 2027',
+    );
+    expect(
+      projectAgendaItem(candidate(series), { ...clock, today: '2027-01-01' })
+        .recurrenceDescription,
+    ).toBe('Daily until 31 Aug');
+    expect(projectAgendaItem(candidate(activity()), clock)).not.toHaveProperty(
+      'recurrenceDescription',
     );
   });
 });
@@ -217,6 +248,7 @@ describe('isPast', () => {
       clock: {
         now: '2026-08-06T04:00:00.000Z',
         timezone: 'America/New_York',
+        today: '2026-08-06',
       },
     },
   ])('becomes past at exactly the $name boundary', (testCase) => {

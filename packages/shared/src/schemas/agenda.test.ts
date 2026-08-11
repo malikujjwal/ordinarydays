@@ -34,6 +34,19 @@ describe('AgendaItem contract', () => {
     ).toBe(true);
   });
 
+  it('accepts server-authored recurrence and changed-snooze presentation fields', () => {
+    expect(
+      agendaItem.safeParse({
+        ...subject,
+        isRecurring: true,
+        recurrenceDescription: 'Weekdays',
+        isSnoozed: true,
+        originalTime: '18:00',
+        time: '20:00',
+      }).success,
+    ).toBe(true);
+  });
+
   it('rejects a malformed overdue date', () => {
     expect(agendaItem.safeParse({ ...subject, overdueFromDate: 'Tuesday' }).success).toBe(
       false,

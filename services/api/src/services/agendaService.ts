@@ -55,6 +55,7 @@ export interface AgendaCandidate {
   readonly time?: string;
   readonly endTime?: string;
   readonly isSnoozed: boolean;
+  readonly originalTime?: string;
   readonly movedFromDate?: string;
   readonly overdueFromDate?: string;
   readonly reminders?: readonly Reminder[];
@@ -288,6 +289,8 @@ interface RawCandidate {
   readonly effectiveTime?: string;
   readonly effectiveInstant?: string;
   readonly sourceTimezone?: string;
+  readonly originalDate?: string;
+  readonly originalTime?: string;
   readonly endTime?: string;
   readonly isSnoozed: boolean;
   readonly movedFromDate?: string;
@@ -416,6 +419,9 @@ function oneOffCandidate(activity: Activity, projectedTimezone: unknown): RawCan
         ? {}
         : { effectiveTime }),
     sourceTimezone: parsedTimezone.success ? parsedTimezone.data : schedule.timezone,
+    ...(snooze === undefined || schedule.time === undefined
+      ? {}
+      : { originalDate: schedule.date, originalTime: schedule.time }),
     ...(schedule.endTime === undefined ? {} : { endTime: schedule.endTime }),
     isSnoozed: snooze !== undefined,
     ...(activity.completedAt === undefined ? {} : { completedAt: activity.completedAt }),
@@ -443,6 +449,9 @@ function mergeNominal(
     effectiveDate: entry.date,
     ...(effectiveTime === undefined ? {} : { effectiveTime }),
     sourceTimezone: entry.activity.schedule?.timezone ?? 'UTC',
+    ...(override?.status !== 'snoozed' || entry.time === undefined
+      ? {}
+      : { originalDate: entry.date, originalTime: entry.time }),
     ...(entry.activity.schedule?.endTime === undefined
       ? {}
       : { endTime: entry.activity.schedule.endTime }),
@@ -468,6 +477,7 @@ function movedCandidates(
         override.snoozedUntil ??
         override.overrideTime ??
         timeForDate(activity, sourceDate);
+      const originalTime = timeForDate(activity, sourceDate);
       result.push({
         activity,
         occurrenceDate: sourceDate,
@@ -480,6 +490,9 @@ function movedCandidates(
             ? {}
             : { effectiveTime }),
         sourceTimezone: activity.schedule?.timezone ?? 'UTC',
+        ...(override.status !== 'snoozed' || originalTime === undefined
+          ? {}
+          : { originalDate: sourceDate, originalTime }),
         isSnoozed: override.status === 'snoozed',
         movedFromDate: sourceDate,
         ...(override.completedAt === undefined
@@ -503,6 +516,8 @@ function toViewerCandidate(
 ): UnhydratedAgendaCandidate {
   if (candidate.effectiveInstant !== undefined) {
     const instant = new Date(candidate.effectiveInstant);
+    const time = formatInTimeZone(instant, viewerTimezone, WALL_TIME);
+    const originalTime = viewerOriginalTime(candidate, viewerTimezone, time);
     return {
       activity: candidate.activity,
       ...(candidate.occurrenceDate === undefined
@@ -510,7 +525,8 @@ function toViewerCandidate(
         : { occurrenceDate: candidate.occurrenceDate }),
       status: candidate.status,
       viewerDate: formatInTimeZone(instant, viewerTimezone, WALL_DATE),
-      time: formatInTimeZone(instant, viewerTimezone, WALL_TIME),
+      time,
+      ...(originalTime === undefined ? {} : { originalTime }),
       isSnoozed: candidate.isSnoozed,
       ...(candidate.completedAt === undefined
         ? {}
@@ -542,6 +558,8 @@ function toViewerCandidate(
     candidate.effectiveTime,
     candidate.sourceTimezone ?? 'UTC',
   );
+  const time = formatInTimeZone(instant, viewerTimezone, WALL_TIME);
+  const originalTime = viewerOriginalTime(candidate, viewerTimezone, time);
   const viewerEndTime =
     candidate.endTime === undefined
       ? undefined
@@ -561,7 +579,8 @@ function toViewerCandidate(
       : { occurrenceDate: candidate.occurrenceDate }),
     status: candidate.status,
     viewerDate: formatInTimeZone(instant, viewerTimezone, WALL_DATE),
-    time: formatInTimeZone(instant, viewerTimezone, WALL_TIME),
+    time,
+    ...(originalTime === undefined ? {} : { originalTime }),
     ...(viewerEndTime === undefined ? {} : { endTime: viewerEndTime }),
     isSnoozed: candidate.isSnoozed,
     ...(candidate.completedAt === undefined
@@ -571,6 +590,21 @@ function toViewerCandidate(
       ? {}
       : { movedFromDate: candidate.movedFromDate }),
   };
+}
+
+function viewerOriginalTime(
+  candidate: RawCandidate,
+  viewerTimezone: string,
+  effectiveTime: string,
+): string | undefined {
+  if (candidate.originalTime === undefined) return undefined;
+  const originalInstant = toUtcInstant(
+    candidate.originalDate ?? candidate.effectiveDate,
+    candidate.originalTime,
+    candidate.sourceTimezone ?? 'UTC',
+  );
+  const originalTime = formatInTimeZone(originalInstant, viewerTimezone, WALL_TIME);
+  return originalTime === effectiveTime ? undefined : originalTime;
 }
 
 function dedupe(

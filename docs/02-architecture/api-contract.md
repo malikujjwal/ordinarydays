@@ -201,7 +201,9 @@ interface AgendaItem {
   time?: string;              // HH:mm effective time (after snooze override)
   endTime?: string;
   isRecurring: boolean;
+  recurrenceDescription?: string; // server-authored; present when isRecurring
   isSnoozed: boolean;
+  originalTime?: string;      // HH:mm before snooze; present only when the time changed
   hasCheckbox: boolean;       // true iff type === 'task'
   capabilities: {
     complete: boolean;
@@ -224,6 +226,13 @@ parent-participant access or any other authorisation rule. For a prep task, the 
 context includes the parent Plan's `ownerId`: the child owner, parent owner or parent
 participant may act. This preserves inherited parent-owner access when somebody else created
 the child.
+
+The server also authors the row's recurrence and snooze presentation. For a recurring item,
+`recurrenceDescription` is computed with `describeRecurrence` against the request window's
+`from` date in the requested `tz`, never the server wall-clock, so the same window has stable
+presentation and a deterministic ETag. When a snooze changes the displayed time,
+`originalTime` is the viewer-timezone projection of the schedule time or recurrence segment
+in force for that occurrence. Clients render both fields verbatim and do not derive them.
 
 Additional `AgendaItem` field:
 

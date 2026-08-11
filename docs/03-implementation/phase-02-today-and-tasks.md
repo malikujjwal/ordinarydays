@@ -1030,6 +1030,15 @@ completing a rolled-forward task leaves `schedule.date` untouched and sets `comp
 
 ### P2-10 — `AgendaItem` projection
 
+> **Implementation deviation — 2026-08-11 (founder ruling).** The projection additionally
+> owns `recurrenceDescription?: string` and `originalTime?: string` so P2-21 does not derive
+> row presentation on the client. Recurrence copy is produced by `describeRecurrence` using
+> the request window's `from` date in the requested timezone, not server wall-clock time,
+> which keeps it deterministic for a given window and ETag. `originalTime` is present only
+> when a snooze changes the displayed time and comes from the schedule time or recurrence
+> segment in force for that occurrence. This small prerequisite fix and its contract updates
+> execute before P2-21 without a new task ID.
+
 **Files.** `services/api/src/services/agendaProjection.ts`,
 `services/api/src/services/actionCapabilities.ts`,
 `services/api/src/services/actionCapabilities.test.ts`,
@@ -1825,6 +1834,13 @@ one updates the other in a single render pass.
 
 ### P2-21 — Agenda row components and affordances by type
 
+> **Implementation deviation — 2026-08-11 (founder ruling).** P2-21 consumes the new
+> server-authored `recurrenceDescription` and `originalTime` fields verbatim; it performs no
+> client-side recurrence or original-time derivation. In the tests below, the former snooze
+> snapshot is replaced by focused assertions for the exact rendered text
+> `6:00 PM → 8:00 PM`, badge order per §4, de-emphasis styling on the original time, and the
+> accessibility label. This follows `testing.md` §2.3 and the definition of done.
+
 **Files.** `apps/mobile/src/features/agenda/components/{AgendaRow.tsx, RowLeading.tsx,
 RowBadges.tsx}`, built from `packages/ui` primitives (P1-22).
 
@@ -1883,8 +1899,9 @@ navigate; the marker has no role and fires nothing. The subtitle is rendered ver
 feed a fixture whose subtitle contradicts its `type` and assert it renders anyway, proving
 no client-side re-derivation. Badge order matches §4 with all five present. A grep test
 asserts the leading-control decision reads `hasCheckbox` and that no `type` comparison
-feeds it, mirroring P2-19's grep in spirit. Snapshot of the snoozed time treatment.
-Largest accessibility size reflow.
+feeds it, mirroring P2-19's grep in spirit. Focused snooze assertions pin the exact rendered
+text `6:00 PM → 8:00 PM`, badge order per §4, de-emphasis styling on the original time, and
+the accessibility label. Largest accessibility size reflow.
 
 ---
 
