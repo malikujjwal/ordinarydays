@@ -22,6 +22,8 @@ export interface AgendaParticipantAvatar {
 export interface AgendaItem {
   activityId: string;
   occurrenceDate?: string;
+  /** Present exactly when this row is a prep task belonging to a parent plan. */
+  parentActivityId?: string;
   type: ActivityType;
   title: string;
   status: AgendaItemStatus;

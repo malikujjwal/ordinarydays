@@ -47,6 +47,18 @@ describe('AgendaItem contract', () => {
     ).toBe(true);
   });
 
+  it('accepts a server-authored prep-task parent and rejects a malformed parent id', () => {
+    expect(
+      agendaItem.safeParse({
+        ...subject,
+        parentActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+      }).success,
+    ).toBe(true);
+    expect(
+      agendaItem.safeParse({ ...subject, parentActivityId: 'act_parent' }).success,
+    ).toBe(false);
+  });
+
   it('rejects a malformed overdue date', () => {
     expect(agendaItem.safeParse({ ...subject, overdueFromDate: 'Tuesday' }).success).toBe(
       false,

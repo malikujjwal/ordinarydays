@@ -29,6 +29,9 @@ export function projectAgendaItem(
     ...(candidate.occurrenceDate === undefined
       ? {}
       : { occurrenceDate: candidate.occurrenceDate }),
+    ...(activity.parentActivityId === undefined
+      ? {}
+      : { parentActivityId: activity.parentActivityId }),
     type: activity.type,
     title: activity.title,
     status: candidate.status,

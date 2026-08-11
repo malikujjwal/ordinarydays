@@ -437,6 +437,10 @@
             "type": "string",
             "format": "date"
           },
+          "parentActivityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
           "type": {
             "type": "string",
             "enum": [

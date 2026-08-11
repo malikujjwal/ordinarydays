@@ -1030,6 +1030,12 @@ completing a rolled-forward task leaves `schedule.date` untouched and sets `comp
 
 ### P2-10 — `AgendaItem` projection
 
+> **Projection amendment — 2026-08-11 (founder ruling).** `AgendaItem` additionally carries
+> server-authored `parentActivityId?: string`, present exactly when the source Activity is a
+> prep task and absent otherwise. P2-22 uses its presence only to choose the prep-task
+> gesture set and its value only as the `Open plan` target; authorisation remains entirely
+> in `capabilities`. The additive payload change rotates agenda ETags once on deploy.
+
 > **Implementation deviation — 2026-08-11 (founder ruling).** The projection additionally
 > owns `recurrenceDescription?: string` and `originalTime?: string` so P2-21 does not derive
 > row presentation on the client. Recurrence copy is produced by `describeRecurrence` using
@@ -1906,6 +1912,10 @@ the accessibility label. Largest accessibility size reflow.
 ---
 
 ### P2-22 — Swipe actions and the gesture table
+
+> **Gesture discriminator amendment — 2026-08-11 (founder ruling).** The server-authored
+> `AgendaItem.parentActivityId` is the prep-task gesture-table discriminator and `Open plan`
+> target. It is never used to reconstruct authorisation; `capabilities` remain authoritative.
 
 **Files.** `apps/mobile/src/features/agenda/components/SwipeableRow.tsx`,
 `apps/mobile/package.json`, `pnpm-lock.yaml`.

@@ -195,6 +195,7 @@ Each entry is an **AgendaItem**, a trimmed projection — not the full Activity:
 interface AgendaItem {
   activityId: string;
   occurrenceDate?: string;    // present iff this came from a recurring series
+  parentActivityId?: string;  // present iff the source Activity is a prep task
   type: ActivityType;
   title: string;
   status: ActivityStatus | 'completed_occurrence' | 'skipped_occurrence';
@@ -233,6 +234,10 @@ The server also authors the row's recurrence and snooze presentation. For a recu
 presentation and a deterministic ETag. When a snooze changes the displayed time,
 `originalTime` is the viewer-timezone projection of the schedule time or recurrence segment
 in force for that occurrence. Clients render both fields verbatim and do not derive them.
+
+For a prep task, `parentActivityId` is copied from the source Activity so the client can
+select the prep-task gesture set and open the parent Plan. It is absent on every other row.
+It is not an authorisation input: the client consumes only `capabilities` for that purpose.
 
 Additional `AgendaItem` field:
 

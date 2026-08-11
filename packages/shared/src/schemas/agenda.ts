@@ -30,6 +30,7 @@ export const agendaItem = z
   .strictObject({
     activityId: ulidId('act'),
     occurrenceDate: isoDate.optional(),
+    parentActivityId: ulidId('act').optional(),
     type: activityType,
     title: z.string().min(1).max(MAX_TITLE_LEN),
     status: agendaItemStatus,

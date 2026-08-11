@@ -52,6 +52,19 @@ function candidate(
 }
 
 describe('AgendaItem presentation', () => {
+  it('projects the parent id only for a seeded prep task', () => {
+    const parentActivityId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+    const prepTask = activity({ parentActivityId });
+
+    expect(projectAgendaItem(candidate(prepTask), clock)).toHaveProperty(
+      'parentActivityId',
+      parentActivityId,
+    );
+    expect(projectAgendaItem(candidate(activity()), clock)).not.toHaveProperty(
+      'parentActivityId',
+    );
+  });
+
   it.each([
     {
       name: 'task',
