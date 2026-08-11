@@ -37,9 +37,13 @@ describe('exports map', () => {
     expect(client.completeActivity).toBeDefined();
     expect(client.uncompleteActivity).toBeDefined();
     expect(client.skipActivity).toBeDefined();
+    expect(client.snoozeActivity).toBeDefined();
+    expect(client.unsnoozeActivity).toBeDefined();
     expect(schemas.completeActivityInput).toBeDefined();
     expect(schemas.uncompleteActivityInput).toBeDefined();
     expect(schemas.skipActivityInput).toBeDefined();
+    expect(schemas.snoozeActivityInput).toBeDefined();
+    expect(schemas.unsnoozeActivityInput).toBeDefined();
     expect(constants.MAX_AGENDA_DAYS).toBe(62);
     expect(errors.ERROR_CODES).toContain('validation_failed');
     expect(recurrence.describeRecurrence).toBeDefined();

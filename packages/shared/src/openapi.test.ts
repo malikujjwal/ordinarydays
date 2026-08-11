@@ -50,6 +50,8 @@ describe('the generated document', () => {
       '/v1/activities/{id}/complete',
       '/v1/activities/{id}/uncomplete',
       '/v1/activities/{id}/skip',
+      '/v1/activities/{id}/snooze',
+      '/v1/activities/{id}/unsnooze',
       '/v1/capture/parse',
       '/v1/capture/extract',
       '/v1/capture/link',
@@ -106,7 +108,9 @@ describe('the generated document', () => {
       'ScheduleActivityInput',
       'ScheduleActivityResult',
       'SkipActivityInput',
+      'SnoozeActivityInput',
       'UncompleteActivityInput',
+      'UnsnoozeActivityInput',
       'User',
     ]);
   });

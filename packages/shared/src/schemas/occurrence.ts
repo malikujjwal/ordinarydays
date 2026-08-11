@@ -41,3 +41,19 @@ export const occurrenceMoveMarker = z.object({
   destinationDate: isoDate,
   movedFrom: z.array(isoDate),
 });
+
+/** Snooze either a one-off activity or one nominal recurring occurrence. */
+export const snoozeActivityInput = z
+  .strictObject({
+    occurrenceDate: isoDate.optional(),
+    until: hhmmOrInstant,
+  })
+  .meta({ id: 'SnoozeActivityInput' });
+
+/** Remove only snooze state; other occurrence overrides are left intact. */
+export const unsnoozeActivityInput = z
+  .strictObject({ occurrenceDate: isoDate.optional() })
+  .meta({ id: 'UnsnoozeActivityInput' });
+
+export type SnoozeActivityInput = z.infer<typeof snoozeActivityInput>;
+export type UnsnoozeActivityInput = z.infer<typeof unsnoozeActivityInput>;

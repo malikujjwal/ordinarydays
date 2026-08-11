@@ -367,6 +367,22 @@ export async function getActivityMeta(activityId: string): Promise<Activity | un
   return getItem<Activity & StoredItem>(activityMeta(activityId));
 }
 
+/** Adds a META-only Activity replacement to an action transaction. */
+export function putActivityMeta(
+  next: Activity,
+  expectedUpdatedAt: string,
+  transaction: TransactionBuilder,
+): void {
+  transaction.add({
+    Put: {
+      Item: stamp(ENTITY.activity, next, { ...activityMeta(next.activityId), ...next }),
+      ConditionExpression: '#updatedAt = :expected',
+      ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: { ':expected': expectedUpdatedAt },
+    },
+  });
+}
+
 /** Batch-hydrates canonical META rows; missing rows are omitted. */
 export async function batchGetActivityMeta(
   activityIds: readonly string[],

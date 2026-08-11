@@ -30,6 +30,7 @@ import {
 import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
+import { snoozeActivityInput, unsnoozeActivityInput } from './schemas/occurrence.js';
 import { scheduleActivityInput, scheduleActivityResult } from './schemas/schedule.js';
 import { patchUserInput, user } from './schemas/user.js';
 
@@ -606,6 +607,70 @@ registry.registerPath({
     },
     403: {
       description: 'A related participant who lacks skip authority.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or no relationship to it.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/snooze',
+  summary: 'Snooze an activity or recurring occurrence',
+  description:
+    'Requires an `Idempotency-Key`. A wall time keeps the item on its nominal date; an ISO ' +
+    'instant may move a recurring occurrence to another local date, at most 60 calendar days away.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: snoozeActivityInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The snoozed activity or occurrence.',
+      content: { 'application/json': { schema: activityCompletionResponse } },
+    },
+    400: {
+      description: 'Invalid target, time, range, or missing idempotency key.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A related participant who lacks snooze authority.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or no relationship to it.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/unsnooze',
+  summary: 'Remove activity or occurrence snooze state',
+  description:
+    'Requires an `Idempotency-Key`. Deletes only snooze state and never erases completion, ' +
+    'skip or reschedule state. Cross-day move-marker references are updated atomically.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: unsnoozeActivityInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The restored activity or nominal recurring occurrence date.',
+      content: { 'application/json': { schema: activityCompletionResponse } },
+    },
+    400: {
+      description: 'Invalid target or missing idempotency key.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A related participant who lacks snooze authority.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {

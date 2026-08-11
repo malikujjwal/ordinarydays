@@ -3298,6 +3298,41 @@
         },
         "additionalProperties": false
       },
+      "SnoozeActivityInput": {
+        "type": "object",
+        "properties": {
+          "occurrenceDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          }
+        },
+        "required": [
+          "until"
+        ],
+        "additionalProperties": false
+      },
+      "UnsnoozeActivityInput": {
+        "type": "object",
+        "properties": {
+          "occurrenceDate": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
       "CaptureParseInput": {
         "type": "object",
         "properties": {
@@ -4884,6 +4919,202 @@
           },
           "403": {
             "description": "A related participant who lacks skip authority.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or no relationship to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/activities/{id}/snooze": {
+      "post": {
+        "summary": "Snooze an activity or recurring occurrence",
+        "description": "Requires an `Idempotency-Key`. A wall time keeps the item on its nominal date; an ISO instant may move a recurring occurrence to another local date, at most 60 calendar days away.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnoozeActivityInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The snoozed activity or occurrence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ActivityCompletionResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid target, time, range, or missing idempotency key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A related participant who lacks snooze authority.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or no relationship to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/activities/{id}/unsnooze": {
+      "post": {
+        "summary": "Remove activity or occurrence snooze state",
+        "description": "Requires an `Idempotency-Key`. Deletes only snooze state and never erases completion, skip or reschedule state. Cross-day move-marker references are updated atomically.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnsnoozeActivityInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The restored activity or nominal recurring occurrence date.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ActivityCompletionResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid target or missing idempotency key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A related participant who lacks snooze authority.",
             "content": {
               "application/json": {
                 "schema": {

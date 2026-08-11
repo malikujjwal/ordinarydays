@@ -26,6 +26,8 @@ export interface OccurrenceMoveMarker {
   readonly activityId: string;
   readonly destinationDate: string;
   readonly movedFrom: readonly string[];
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
 }
 
 function parseOccurrence(value: unknown): Occurrence {
@@ -38,23 +40,6 @@ function parseOccurrence(value: unknown): Occurrence {
 export async function get(activityId: string, date: string): Promise<Occurrence | null> {
   const item = await getItem<StoredItem>(occurrence(activityId, date));
   return item === undefined ? null : parseOccurrence(item);
-}
-
-export async function getMoveMarker(
-  activityId: string,
-  destinationDate: string,
-): Promise<OccurrenceMoveMarker | null> {
-  const row = await getItem<StoredItem>(
-    occurrenceMoveMarker(activityId, destinationDate),
-  );
-  const parsed = occurrenceMoveMarkerSchema.safeParse(row);
-  return parsed.success
-    ? {
-        activityId: parsed.data.activityId,
-        destinationDate: parsed.data.destinationDate,
-        movedFrom: [...new Set(parsed.data.movedFrom)].sort(),
-      }
-    : null;
 }
 
 /**
@@ -104,17 +89,83 @@ export async function batchGetAgendaRows(
       continue;
     }
     if (row.entity === 'OccurrenceMoveMarker') {
-      const marker = occurrenceMoveMarkerSchema.safeParse(row);
-      if (!marker.success) continue;
-      markers.push({
-        activityId: marker.data.activityId,
-        destinationDate: marker.data.destinationDate,
-        movedFrom: [...new Set(marker.data.movedFrom)].sort(),
-      });
+      const marker = parseMoveMarker(row);
+      if (marker !== null) markers.push(marker);
     }
   }
 
   return { occurrences, markers };
+}
+
+function parseMoveMarker(value: unknown): OccurrenceMoveMarker | null {
+  const marker = occurrenceMoveMarkerSchema.safeParse(value);
+  if (!marker.success) return null;
+  const stored = value as StoredItem;
+  return {
+    activityId: marker.data.activityId,
+    destinationDate: marker.data.destinationDate,
+    movedFrom: [...new Set(marker.data.movedFrom)].sort(),
+    ...(typeof stored.createdAt === 'string' ? { createdAt: stored.createdAt } : {}),
+    ...(typeof stored.updatedAt === 'string' ? { updatedAt: stored.updatedAt } : {}),
+  };
+}
+
+/** Reads one destination marker so a version-checked update cannot lose another move. */
+export async function getMoveMarker(
+  activityId: string,
+  destinationDate: string,
+): Promise<OccurrenceMoveMarker | null> {
+  const item = await getItem<StoredItem>(
+    occurrenceMoveMarker(activityId, destinationDate),
+  );
+  return item === undefined ? null : parseMoveMarker(item);
+}
+
+/** Replaces a destination marker while checking the version observed by the service. */
+export function putMoveMarker(
+  value: OccurrenceMoveMarker,
+  previous: OccurrenceMoveMarker | null,
+  now: string,
+  transaction: TransactionBuilder,
+): void {
+  const key = occurrenceMoveMarker(value.activityId, value.destinationDate);
+  transaction.add({
+    Put: {
+      Item: {
+        ...key,
+        entity: 'OccurrenceMoveMarker',
+        activityId: value.activityId,
+        destinationDate: value.destinationDate,
+        movedFrom: [...new Set(value.movedFrom)].sort(),
+        createdAt: previous?.createdAt ?? now,
+        updatedAt: now,
+        schemaVersion: SCHEMA_VERSION,
+      },
+      ConditionExpression:
+        previous === null ? 'attribute_not_exists(pk)' : '#updatedAt = :expected',
+      ...(previous === null
+        ? {}
+        : {
+            ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
+            ExpressionAttributeValues: { ':expected': previous.updatedAt },
+          }),
+    },
+  });
+}
+
+/** Deletes the marker only if no concurrent writer changed the observed reference set. */
+export function deleteMoveMarker(
+  value: OccurrenceMoveMarker,
+  transaction: TransactionBuilder,
+): void {
+  transaction.add({
+    Delete: {
+      Key: occurrenceMoveMarker(value.activityId, value.destinationDate),
+      ConditionExpression: '#updatedAt = :expected',
+      ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
+      ExpressionAttributeValues: { ':expected': value.updatedAt },
+    },
+  });
 }
 
 /** Inclusive nominal-date window for one recurring series (access pattern 5). */

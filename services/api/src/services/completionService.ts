@@ -1,17 +1,28 @@
+import { toUtcInstant } from '@od/shared/recurrence';
 import {
   type ActivityCompletionResult,
   activity as activitySchema,
   type CompleteActivityInput,
   type SkipActivityInput,
+  type SnoozeActivityInput,
   type UncompleteActivityInput,
+  type UnsnoozeActivityInput,
 } from '@od/shared/schemas';
-import type { Activity, ActivityOutcome, Occurrence } from '@od/shared/types';
+import type {
+  Activity,
+  ActivityOutcome,
+  ActivitySchedule,
+  Occurrence,
+} from '@od/shared/types';
+import { differenceInCalendarDays, parseISO } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import {
   getActivityMeta,
   listParticipants,
   patchActivity,
+  putActivityMeta,
 } from '../repositories/activityRepository.js';
 import { receiptItem } from '../repositories/idempotencyRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
@@ -23,6 +34,12 @@ const NOT_FOUND = 'Activity not found.';
 const OWNER_ONLY = 'Only the person who created this can change it.';
 const OUTCOME_MISMATCH = 'That outcome does not match this activity type.';
 const OCCURRENCE_NEEDS_SERIES = 'occurrenceDate requires a recurring activity.';
+const SERIES_NEEDS_OCCURRENCE = 'occurrenceDate is required for a recurring activity.';
+const TIMED_ONLY = 'Only a timed activity can be snoozed.';
+const SNOOZE_PAST = 'Snooze time must not be earlier than the current time.';
+const SNOOZE_RANGE = 'A snoozed occurrence must stay within 60 calendar days.';
+const ONE_OFF_SAME_DAY = 'Use schedule to move a one-off activity to another day.';
+const WALL_DATE = 'yyyy-MM-dd';
 
 type ReceiptFor = (data: unknown) => IdempotencyReceipt;
 
@@ -232,11 +249,113 @@ export async function skipActivity(
   return result;
 }
 
+/** Snooze a one-off META row or exactly one recurring occurrence. */
+export async function snoozeActivity(
+  userId: string,
+  activityId: string,
+  input: SnoozeActivityInput,
+  now: string,
+  receiptFor: ReceiptFor,
+): Promise<ActivityCompletionResult> {
+  const context = await resolveActionContext(userId, activityId, 'snooze');
+  const { activity } = context;
+  const schedule = timedSchedule(activity);
+  const occurrenceDate = resolveSnoozeTarget(activity, input.occurrenceDate);
+  const destinationDate = validateSnoozeUntil(
+    activity,
+    occurrenceDate ?? schedule.date,
+    input.until,
+    now,
+  );
+
+  if (occurrenceDate === undefined) {
+    if (destinationDate !== schedule.date) validation('until', ONE_OFF_SAME_DAY);
+    const next: Activity = { ...activity, snoozedUntil: input.until, updatedAt: now };
+    const result: ActivityCompletionResult = { activity: next };
+    const tx = new TransactionBuilder('snoozeActivity', 1);
+    putActivityMeta(next, activity.updatedAt, tx);
+    await commit(tx, receiptFor(result));
+    return result;
+  }
+
+  const existing = await occurrenceRepository.get(activityId, occurrenceDate);
+  const occurrence: Occurrence = {
+    activityId,
+    date: occurrenceDate,
+    status: 'snoozed',
+    snoozedUntil: input.until,
+  };
+  const result: ActivityCompletionResult = { activity, occurrenceDate, occurrence };
+  const tx = new TransactionBuilder('snoozeActivityOccurrence', 1);
+  await occurrenceRepository.put(occurrence, tx);
+  await appendMarkerChanges(
+    activity,
+    occurrenceDate,
+    markerDestination(activity, occurrenceDate, existing?.snoozedUntil),
+    destinationDate === occurrenceDate ? undefined : destinationDate,
+    now,
+    tx,
+  );
+  await commit(tx, receiptFor(result));
+  return result;
+}
+
+/** Remove only snooze state; completion, skip and reschedule overrides survive. */
+export async function unsnoozeActivity(
+  userId: string,
+  activityId: string,
+  input: UnsnoozeActivityInput,
+  now: string,
+  receiptFor: ReceiptFor,
+): Promise<ActivityCompletionResult> {
+  const { activity } = await resolveActionContext(userId, activityId, 'snooze');
+  const occurrenceDate = resolveSnoozeTarget(activity, input.occurrenceDate);
+
+  if (occurrenceDate === undefined) {
+    if (activity.snoozedUntil === undefined) {
+      const result: ActivityCompletionResult = { activity };
+      await commitReceipt(receiptFor(result), 'unsnoozeActivity');
+      return result;
+    }
+    const next: Activity = { ...activity, updatedAt: now };
+    delete next.snoozedUntil;
+    const result: ActivityCompletionResult = { activity: next };
+    const tx = new TransactionBuilder('unsnoozeActivity', 1);
+    putActivityMeta(next, activity.updatedAt, tx);
+    await commit(tx, receiptFor(result));
+    return result;
+  }
+
+  const existing = await occurrenceRepository.get(activityId, occurrenceDate);
+  const baseResult: ActivityCompletionResult = { activity, occurrenceDate };
+  if (existing?.status !== 'snoozed') {
+    const result: ActivityCompletionResult = {
+      ...baseResult,
+      ...(existing === null ? {} : { occurrence: existing }),
+    };
+    await commitReceipt(receiptFor(result), 'unsnoozeActivityOccurrence');
+    return result;
+  }
+
+  const tx = new TransactionBuilder('unsnoozeActivityOccurrence', 1);
+  await occurrenceRepository.delete(activityId, occurrenceDate, tx);
+  await appendMarkerChanges(
+    activity,
+    occurrenceDate,
+    markerDestination(activity, occurrenceDate, existing.snoozedUntil),
+    undefined,
+    now,
+    tx,
+  );
+  await commit(tx, receiptFor(baseResult));
+  return baseResult;
+}
+
 /** Hydrate relationships first; the policy verdict remains pure and reusable. */
 async function resolveActionContext(
   userId: string,
   activityId: string,
-  action: 'complete' | 'skip' = 'complete',
+  action: 'complete' | 'skip' | 'snooze' = 'complete',
 ): Promise<ActionContext> {
   const storedActivity = await getActivityMeta(activityId);
   if (storedActivity === undefined) throw new AppError('not_found', NOT_FOUND);
@@ -281,6 +400,113 @@ async function resolveActionContext(
     ]),
   ];
   return { activity, ...(parent === undefined ? {} : { parent }), indexedUserIds };
+}
+
+function resolveSnoozeTarget(
+  activity: Activity,
+  requested: string | undefined,
+): string | undefined {
+  timedSchedule(activity);
+  if (requested !== undefined) {
+    assertRecurring(activity);
+    return requested;
+  }
+  if (activity.recurrence !== undefined)
+    validation('occurrenceDate', SERIES_NEEDS_OCCURRENCE);
+  return undefined;
+}
+
+function validateSnoozeUntil(
+  activity: Activity,
+  occurrenceDate: string,
+  until: string,
+  now: string,
+): string {
+  const timezone = timedSchedule(activity).timezone;
+  const instant = until.includes('T')
+    ? until
+    : toUtcInstant(occurrenceDate, until, timezone);
+  if (Date.parse(instant) < Date.parse(now)) validation('until', SNOOZE_PAST);
+  const destinationDate = until.includes('T')
+    ? formatInTimeZone(new Date(until), timezone, WALL_DATE)
+    : occurrenceDate;
+  const distance = Math.abs(
+    differenceInCalendarDays(parseISO(destinationDate), parseISO(occurrenceDate)),
+  );
+  if (distance > 60) validation('until', SNOOZE_RANGE);
+  return destinationDate;
+}
+
+function markerDestination(
+  activity: Activity,
+  occurrenceDate: string,
+  until: string | undefined,
+): string | undefined {
+  if (until?.includes('T') !== true) return undefined;
+  const destination = formatInTimeZone(
+    new Date(until),
+    timedSchedule(activity).timezone,
+    WALL_DATE,
+  );
+  return destination === occurrenceDate ? undefined : destination;
+}
+
+async function appendMarkerChanges(
+  activity: Activity,
+  occurrenceDate: string,
+  oldDestination: string | undefined,
+  newDestination: string | undefined,
+  now: string,
+  tx: TransactionBuilder,
+): Promise<void> {
+  const destinations = [...new Set([oldDestination, newDestination].filter(isString))];
+  const markers = await Promise.all(
+    destinations.map((date) =>
+      occurrenceRepository.getMoveMarker(activity.activityId, date),
+    ),
+  );
+
+  destinations.forEach((destination, index) => {
+    const previous = markers[index] ?? null;
+    const movedFrom = new Set(previous?.movedFrom ?? []);
+    if (destination === oldDestination) movedFrom.delete(occurrenceDate);
+    if (destination === newDestination) movedFrom.add(occurrenceDate);
+    const next = [...movedFrom].sort();
+    if (previous === null && next.length === 0) return;
+    if (next.length === 0) {
+      if (previous !== null) occurrenceRepository.deleteMoveMarker(previous, tx);
+      return;
+    }
+    if (
+      previous !== null &&
+      previous.movedFrom.length === next.length &&
+      previous.movedFrom.every((value, itemIndex) => value === next[itemIndex])
+    ) {
+      return;
+    }
+    occurrenceRepository.putMoveMarker(
+      { activityId: activity.activityId, destinationDate: destination, movedFrom: next },
+      previous,
+      now,
+      tx,
+    );
+  });
+}
+
+function isString(value: string | undefined): value is string {
+  return value !== undefined;
+}
+
+function timedSchedule(activity: Activity): ActivitySchedule & { time: string } {
+  const schedule = activity.schedule;
+  if (schedule === undefined) validation('until', TIMED_ONLY);
+  const time = schedule.time;
+  if (time === undefined) validation('until', TIMED_ONLY);
+  return { ...schedule, time };
+}
+
+function validation(path: string, message: string): never {
+  throw new AppError('validation_failed', message, [{ path, message }]);
 }
 
 function hasUser(rows: readonly StoredItem[], userId: string): boolean {

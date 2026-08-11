@@ -13,6 +13,10 @@ import {
   type UncompleteActivityInput,
 } from '../../schemas/activity.js';
 import { envelope } from '../../schemas/envelope.js';
+import type {
+  SnoozeActivityInput,
+  UnsnoozeActivityInput,
+} from '../../schemas/occurrence.js';
 import {
   type ScheduleActivityInput,
   type ScheduleActivityResult,
@@ -256,6 +260,46 @@ export function skipActivity(
     .request({
       method: 'POST',
       path: `/v1/activities/${activityId}/skip`,
+      schema: activityCompletionResponse,
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
+}
+
+/** Snoozes a timed activity or one recurring occurrence. */
+export function snoozeActivity(
+  client: HttpClient,
+  activityId: string,
+  input: SnoozeActivityInput,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<z.infer<typeof activityCompletionResult>> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/snooze`,
+      schema: activityCompletionResponse,
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
+}
+
+/** Removes only snooze state; retries replay byte-for-byte. */
+export function unsnoozeActivity(
+  client: HttpClient,
+  activityId: string,
+  input: UnsnoozeActivityInput,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<z.infer<typeof activityCompletionResult>> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/unsnooze`,
       schema: activityCompletionResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },

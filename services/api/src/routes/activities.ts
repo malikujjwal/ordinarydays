@@ -6,7 +6,9 @@ import {
   patchActivityInput,
   scheduleActivityInput,
   skipActivityInput,
+  snoozeActivityInput,
   uncompleteActivityInput,
+  unsnoozeActivityInput,
 } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
@@ -35,22 +37,30 @@ import {
 } from '../handlers/scheduleActivity.js';
 import { SKIP_ACTIVITY_PATH, skipActivityHandler } from '../handlers/skipActivity.js';
 import {
+  SNOOZE_ACTIVITY_PATH,
+  snoozeActivityHandler,
+} from '../handlers/snoozeActivity.js';
+import {
   UNCOMPLETE_ACTIVITY_PATH,
   uncompleteActivityHandler,
 } from '../handlers/uncompleteActivity.js';
+import {
+  UNSNOOZE_ACTIVITY_PATH,
+  unsnoozeActivityHandler,
+} from '../handlers/unsnoozeActivity.js';
 
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Ten routes: the six Phase 1 activity routes, P2-12's sole schedule write path, P2-13's
- * complete and uncomplete actions, and P2-14's skip action. The remaining occurrence routes
+ * Twelve routes: the six Phase 1 activity routes, P2-12's sole schedule write path, P2-13's
+ * complete and uncomplete actions, P2-14's skip action, and snooze/unsnooze. Other routes
  * are Phase 2, and the agenda that powers Today is its own endpoint. Each is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
  *
  * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise (P1-30).
- * Creating, duplicating, scheduling, completing, uncompleting and skipping require an
- * `Idempotency-Key`; `PATCH` remains guarded by `If-Match` optimistic concurrency.
+ * Creating, duplicating, scheduling, completing, uncompleting, skipping, snoozing and
+ * unsnoozing require an `Idempotency-Key`; `PATCH` remains guarded by `If-Match`.
  */
 
 /**
@@ -96,6 +106,14 @@ const validateUncomplete = zValidator('json', uncompleteActivityInput, (result) 
 });
 
 const validateSkip = zValidator('json', skipActivityInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+const validateSnooze = zValidator('json', snoozeActivityInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+const validateUnsnooze = zValidator('json', unsnoozeActivityInput, (result) => {
   if (!result.success) throw result.error;
 });
 
@@ -150,6 +168,12 @@ export const activities = new Hono<AppEnv>()
   )
   .post(SKIP_ACTIVITY_PATH, validateSkip, (c) =>
     skipActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
+  .post(SNOOZE_ACTIVITY_PATH, validateSnooze, (c) =>
+    snoozeActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
+  .post(UNSNOOZE_ACTIVITY_PATH, validateUnsnooze, (c) =>
+    unsnoozeActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   /**
    * Mounted after `/:id`, and the order does not matter to Hono — `/:id/duplicate` has more

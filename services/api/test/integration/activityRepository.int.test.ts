@@ -760,6 +760,121 @@ describe('P2-14 skip transactions', () => {
   });
 });
 
+describe('P2-15 snooze transactions', () => {
+  it('stores a one-off snooze on META and never creates an occurrence row', async () => {
+    const activity = anActivity({
+      schedule: { date: '2026-08-11', time: '18:00', timezone: 'UTC' },
+      status: 'scheduled',
+    });
+    await repo.createActivity(ALICE, activity);
+
+    await completion.snoozeActivity(
+      ALICE,
+      activity.activityId,
+      { until: '20:00' },
+      '2026-08-11T12:00:00.000Z',
+      receiptFor,
+    );
+
+    expect(await repo.getActivityMeta(activity.activityId)).toMatchObject({
+      status: 'scheduled',
+      snoozedUntil: '20:00',
+    });
+    expect(
+      (await repo.getActivityPartition(activity.activityId)).filter((row) =>
+        String(row.sk).startsWith('OCC#'),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('stores a same-day override while leaving series META byte-identical', async () => {
+    const series = anActivity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      status: 'scheduled',
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    await repo.createActivity(ALICE, series);
+    const before = await repo.getActivityMeta(series.activityId);
+
+    await completion.snoozeActivity(
+      ALICE,
+      series.activityId,
+      { occurrenceDate: '2026-08-11', until: '20:00' },
+      '2026-08-11T12:00:00.000Z',
+      receiptFor,
+    );
+
+    expect(await repo.getActivityMeta(series.activityId)).toEqual(before);
+    expect(
+      (await repo.getActivityPartition(series.activityId)).filter((row) =>
+        String(row.sk).startsWith('OCC#'),
+      ),
+    ).toEqual([expect.objectContaining({ status: 'snoozed', snoozedUntil: '20:00' })]);
+  });
+
+  it('commits two source overrides and a shared marker, then removes only one reference', async () => {
+    const series = anActivity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      status: 'scheduled',
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    await repo.createActivity(ALICE, series);
+    await completion.snoozeActivity(
+      ALICE,
+      series.activityId,
+      { occurrenceDate: '2026-08-11', until: '2026-08-13T18:00:00.000Z' },
+      '2026-08-11T12:00:00.000Z',
+      receiptFor,
+    );
+    await completion.snoozeActivity(
+      ALICE,
+      series.activityId,
+      { occurrenceDate: '2026-08-12', until: '2026-08-13T20:00:00.000Z' },
+      '2026-08-11T12:01:00.000Z',
+      receiptFor,
+    );
+
+    expect(await repo.getActivityPartition(series.activityId)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sk: 'OCC#2026-08-11', status: 'snoozed' }),
+        expect.objectContaining({ sk: 'OCC#2026-08-12', status: 'snoozed' }),
+        expect.objectContaining({
+          sk: 'MOVE#2026-08-13',
+          movedFrom: ['2026-08-11', '2026-08-12'],
+        }),
+      ]),
+    );
+
+    await completion.unsnoozeActivity(
+      ALICE,
+      series.activityId,
+      { occurrenceDate: '2026-08-11' },
+      '2026-08-11T12:02:00.000Z',
+      receiptFor,
+    );
+
+    const rows = await repo.getActivityPartition(series.activityId);
+    expect(rows).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ sk: 'OCC#2026-08-11' })]),
+    );
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sk: 'OCC#2026-08-12', status: 'snoozed' }),
+        expect.objectContaining({
+          sk: 'MOVE#2026-08-13',
+          movedFrom: ['2026-08-12'],
+        }),
+      ]),
+    );
+  });
+});
+
 describe('delete', () => {
   it('removes every item under ACT#<id>, reminders included, plus the index entry', async () => {
     const subject = anActivity();

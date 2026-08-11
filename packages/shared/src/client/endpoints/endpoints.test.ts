@@ -9,7 +9,9 @@ import {
   listActivities,
   scheduleActivity,
   skipActivity,
+  snoozeActivity,
   uncompleteActivity,
+  unsnoozeActivity,
 } from './activities.js';
 import { getAgenda } from './agenda.js';
 import {
@@ -551,6 +553,32 @@ describe('the remaining activity endpoints', () => {
       );
       expect(calls[0]?.headers['Idempotency-Key']).toBe(key);
       expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual(input);
+    },
+  );
+
+  it.each(['snooze', 'unsnooze'] as const)(
+    'sends %s with its body and required idempotency key',
+    async (path) => {
+      const response = { ...CREATED, data: { activity: CREATED.data } };
+      const { client, calls } = makeClient([{ status: 200, body: response }]);
+      const key = '00000000-0000-4000-8000-000000000001';
+      let expectedInput: Record<string, string>;
+
+      if (path === 'snooze') {
+        const input = { until: '20:00' };
+        expectedInput = input;
+        await snoozeActivity(client, 'act_01J0000000000000000000000A', input, key);
+      } else {
+        const input = {};
+        expectedInput = input;
+        await unsnoozeActivity(client, 'act_01J0000000000000000000000A', input, key);
+      }
+
+      expect(calls[0]?.url).toBe(
+        `https://api.test/v1/activities/act_01J0000000000000000000000A/${path}`,
+      );
+      expect(calls[0]?.headers['Idempotency-Key']).toBe(key);
+      expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual(expectedInput);
     },
   );
 

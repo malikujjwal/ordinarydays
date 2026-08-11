@@ -1,11 +1,35 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
 import type { Occurrence } from '../types/occurrence.js';
-import { occurrence } from './occurrence.js';
+import { occurrence, snoozeActivityInput, unsnoozeActivityInput } from './occurrence.js';
 
 describe('the schema and the interface are the same shape', () => {
   it('Occurrence is assignable both ways', () => {
     expectTypeOf<z.infer<typeof occurrence>>().toEqualTypeOf<Occurrence>();
+  });
+});
+
+describe('snooze mutation inputs', () => {
+  it.each([
+    { until: '20:00' },
+    { occurrenceDate: '2026-08-08', until: '2026-08-09T20:00:00.000Z' },
+  ])('accepts an HH:mm or ISO instant target', (input) => {
+    expect(snoozeActivityInput.safeParse(input).success).toBe(true);
+  });
+
+  it.each([{}, { until: '25:00' }, { until: '20:00', status: 'snoozed' }])(
+    'rejects missing, malformed, or undeclared fields',
+    (input) => {
+      expect(snoozeActivityInput.safeParse(input).success).toBe(false);
+    },
+  );
+
+  it('keeps unsnooze strict and occurrenceDate optional', () => {
+    expect(unsnoozeActivityInput.safeParse({}).success).toBe(true);
+    expect(
+      unsnoozeActivityInput.safeParse({ occurrenceDate: '2026-08-08' }).success,
+    ).toBe(true);
+    expect(unsnoozeActivityInput.safeParse({ until: '20:00' }).success).toBe(false);
   });
 });
 
