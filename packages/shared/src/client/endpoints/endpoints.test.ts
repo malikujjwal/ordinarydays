@@ -7,6 +7,7 @@ import {
   duplicateActivity,
   listActivities,
 } from './activities.js';
+import { getAgenda } from './agenda.js';
 import {
   assertTargetEcho,
   type CreationTarget,
@@ -210,6 +211,53 @@ describe('createActivity', () => {
     expect((error as ApiError).details).toEqual([
       { path: 'title', message: 'A title is required' },
     ]);
+  });
+});
+
+describe('getAgenda', () => {
+  it('serialises the complete window and returns the stable data payload', async () => {
+    const body = {
+      data: {
+        days: [{ date: '2026-08-06', schedule: [], anytime: [], earlier: [] }],
+        warnings: [],
+      },
+      meta: { requestId: REQUEST_ID },
+    };
+    const { client, calls } = makeClient([{ status: 200, body }]);
+
+    const data = await getAgenda(client, {
+      from: '2026-08-06',
+      to: '2026-08-07',
+      tz: 'America/New_York',
+      include: 'anytime_unscheduled,overdue,reminders',
+    });
+
+    expect(calls[0]?.method).toBe('GET');
+    expect(calls[0]?.url).toBe(
+      'https://api.test/v1/agenda?from=2026-08-06&to=2026-08-07&tz=America%2FNew_York&include=anytime_unscheduled%2Coverdue%2Creminders',
+    );
+    expect(data).toEqual(body.data);
+  });
+
+  it('omits include instead of serialising undefined', async () => {
+    const body = {
+      data: {
+        days: [{ date: '2026-08-06', schedule: [], anytime: [], earlier: [] }],
+        warnings: [],
+      },
+      meta: { requestId: REQUEST_ID },
+    };
+    const { client, calls } = makeClient([{ status: 200, body }]);
+
+    await getAgenda(client, {
+      from: '2026-08-06',
+      to: '2026-08-06',
+      tz: 'UTC',
+    });
+
+    expect(calls[0]?.url).toBe(
+      'https://api.test/v1/agenda?from=2026-08-06&to=2026-08-06&tz=UTC',
+    );
   });
 });
 

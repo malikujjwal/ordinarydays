@@ -357,6 +357,254 @@
           "deviceId"
         ]
       },
+      "AgendaData": {
+        "type": "object",
+        "properties": {
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "upNext": {
+                  "$ref": "#/components/schemas/AgendaItem"
+                },
+                "schedule": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgendaItem"
+                  }
+                },
+                "anytime": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgendaItem"
+                  }
+                },
+                "earlier": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgendaItem"
+                  }
+                }
+              },
+              "required": [
+                "date",
+                "schedule",
+                "anytime",
+                "earlier"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 62
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "series_limit_exceeded"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "pattern": "^duplicate_occurrence:.*$"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "days",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "AgendaItem": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "occurrenceDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "task",
+              "meal",
+              "watch",
+              "event",
+              "custom"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "saved",
+              "scheduled",
+              "completed",
+              "skipped",
+              "cancelled",
+              "completed_occurrence",
+              "skipped_occurrence"
+            ]
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "endTime": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "isRecurring": {
+            "type": "boolean"
+          },
+          "isSnoozed": {
+            "type": "boolean"
+          },
+          "hasCheckbox": {
+            "type": "boolean"
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "complete": {
+                "type": "boolean"
+              },
+              "skip": {
+                "type": "boolean"
+              },
+              "snooze": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "complete",
+              "skip",
+              "snooze"
+            ],
+            "additionalProperties": false
+          },
+          "participantAvatars": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "personId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                },
+                "displayName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "avatarUrl": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "required": [
+                "personId",
+                "displayName"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "participantCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "locationLabel": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "subtitle": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "isPast": {
+            "type": "boolean"
+          },
+          "reminders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reminder"
+            }
+          },
+          "overdueFromDate": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "activityId",
+          "type",
+          "title",
+          "status",
+          "isRecurring",
+          "isSnoozed",
+          "hasCheckbox",
+          "capabilities",
+          "participantAvatars",
+          "participantCount",
+          "isPast"
+        ],
+        "additionalProperties": false
+      },
+      "Reminder": {
+        "type": "object",
+        "properties": {
+          "reminderId": {
+            "type": "string",
+            "pattern": "^rem_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "userId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 40,
+            "pattern": "^usr_[A-Za-z0-9_-]+$"
+          },
+          "offsetMinutes": {
+            "type": "integer",
+            "minimum": -10080,
+            "maximum": 0
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "push"
+            ]
+          }
+        },
+        "required": [
+          "reminderId",
+          "activityId",
+          "userId",
+          "offsetMinutes",
+          "channel"
+        ]
+      },
       "ActivityListItem": {
         "type": "object",
         "properties": {
@@ -2568,43 +2816,6 @@
           "reminders"
         ]
       },
-      "Reminder": {
-        "type": "object",
-        "properties": {
-          "reminderId": {
-            "type": "string",
-            "pattern": "^rem_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-          },
-          "activityId": {
-            "type": "string",
-            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-          },
-          "userId": {
-            "type": "string",
-            "minLength": 5,
-            "maxLength": 40,
-            "pattern": "^usr_[A-Za-z0-9_-]+$"
-          },
-          "offsetMinutes": {
-            "type": "integer",
-            "minimum": -10080,
-            "maximum": 0
-          },
-          "channel": {
-            "type": "string",
-            "enum": [
-              "push"
-            ]
-          }
-        },
-        "required": [
-          "reminderId",
-          "activityId",
-          "userId",
-          "offsetMinutes",
-          "channel"
-        ]
-      },
       "PatchActivityInput": {
         "type": "object",
         "properties": {
@@ -3529,6 +3740,107 @@
           },
           "404": {
             "description": "This user has no such device — whether the id was never theirs or the row is already gone. A retried sign-out `DELETE` lands here, and for that caller `404` means \"already gone\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agenda": {
+      "get": {
+        "summary": "The complete agenda for a caller-local date window",
+        "description": "Hydrates one-off and recurring activities, applies occurrence overrides, converts effective instants into `tz`, and returns the trimmed caller-specific rows Today and Plans render. The inclusive window is capped at 62 days. `include` accepts the distinct comma-separated tokens `anytime_unscheduled`, `overdue`, and `reminders`; reminder rows are always scoped to the authenticated caller. Responses carry a strong `ETag` over `data` only and `Cache-Control: private, max-age=60`; a matching `If-None-Match` returns `304` with no body.",
+        "tags": [
+          "agenda"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 64,
+              "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
+            },
+            "required": true,
+            "name": "tz",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "include",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every projected day plus any bounded-read warnings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AgendaData"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The caller already holds this exact data payload."
+          },
+          "400": {
+            "description": "A malformed date or timezone, an invalid include token, or a window over 62 days.",
             "content": {
               "application/json": {
                 "schema": {

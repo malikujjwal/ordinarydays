@@ -10,6 +10,7 @@ import {
   deletedActivity,
   patchActivityInput,
 } from './schemas/activity.js';
+import { agendaData, agendaQuery } from './schemas/agenda.js';
 import {
   captureExtractInput,
   captureLinkInput,
@@ -42,6 +43,7 @@ const deletedActivityResponse = envelope(deletedActivity);
  * another page — the shape `api-contract.md` §1 gives for every list response.
  */
 const activityListResponse = envelope(z.array(activityListItem));
+const agendaResponse = envelope(agendaData);
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
@@ -212,6 +214,34 @@ registry.registerPath({
         'This user has no such device — whether the id was never theirs or the row is ' +
         'already gone. A retried sign-out `DELETE` lands here, and for that caller `404` ' +
         'means "already gone".',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/v1/agenda',
+  summary: 'The complete agenda for a caller-local date window',
+  description:
+    'Hydrates one-off and recurring activities, applies occurrence overrides, converts ' +
+    'effective instants into `tz`, and returns the trimmed caller-specific rows Today and ' +
+    'Plans render. The inclusive window is capped at 62 days. `include` accepts the distinct ' +
+    'comma-separated tokens `anytime_unscheduled`, `overdue`, and `reminders`; reminder rows ' +
+    'are always scoped to the authenticated caller. Responses carry a strong `ETag` over ' +
+    '`data` only and `Cache-Control: private, max-age=60`; a matching `If-None-Match` returns ' +
+    '`304` with no body.',
+  tags: ['agenda'],
+  request: { query: agendaQuery },
+  responses: {
+    200: {
+      description: 'Every projected day plus any bounded-read warnings.',
+      content: { 'application/json': { schema: agendaResponse } },
+    },
+    304: { description: 'The caller already holds this exact data payload.' },
+    400: {
+      description:
+        'A malformed date or timezone, an invalid include token, or a window over 62 days.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

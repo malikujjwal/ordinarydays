@@ -42,3 +42,19 @@ export interface AgendaItem {
 }
 
 export type AgendaIncludeToken = 'anytime_unscheduled' | 'overdue' | 'reminders';
+
+export type AgendaWarning = 'series_limit_exceeded' | `duplicate_occurrence:${string}`;
+
+export interface AgendaDay {
+  date: string;
+  upNext?: AgendaItem;
+  schedule: AgendaItem[];
+  anytime: AgendaItem[];
+  earlier: AgendaItem[];
+}
+
+/** The stable payload hashed for `GET /v1/agenda`'s ETag. */
+export interface AgendaData {
+  days: AgendaDay[];
+  warnings: AgendaWarning[];
+}

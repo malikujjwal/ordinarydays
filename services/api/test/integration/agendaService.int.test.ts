@@ -1,6 +1,8 @@
 import { expandRecurrence } from '@od/shared/recurrence';
+import { agendaData } from '@od/shared/schemas';
 import type { Activity } from '@od/shared/types';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { authedHeaders, withUser } from '../helpers/auth.js';
 import { useTestTable } from './harness.js';
 
 useTestTable();
@@ -233,6 +235,27 @@ describe('the worked-example day', () => {
     ).toEqual([expect.objectContaining({ userId: 'usr_alice', offsetMinutes: -15 })]);
     expect(JSON.stringify(result)).not.toContain('usr_bob');
     expect(JSON.stringify(result)).not.toContain('Dinner at Zahav');
+
+    const response = await withUser('usr_alice').fetch(
+      new Request(
+        'http://localhost/v1/agenda?from=2026-08-06&to=2026-08-06&tz=America%2FNew_York&include=anytime_unscheduled,reminders',
+        { headers: authedHeaders() },
+      ),
+    );
+    const body = await response.json();
+    const parsed = agendaData.parse(body.data);
+    const projectedRows = parsed.days.flatMap((projectedDay) => [
+      ...projectedDay.schedule,
+      ...projectedDay.anytime,
+      ...projectedDay.earlier,
+    ]);
+
+    expect(response.status).toBe(200);
+    expect(parsed.days).toHaveLength(1);
+    expect(
+      projectedRows.find((row) => row.activityId === groceries.activityId)?.reminders,
+    ).toEqual([expect.objectContaining({ userId: 'usr_alice', offsetMinutes: -15 })]);
+    expect(JSON.stringify(body)).not.toContain('usr_bob');
   });
 });
 

@@ -26,10 +26,13 @@ export type {
 export type { ActivityDetail } from './activityDetail.js';
 export type {
   AgendaCapabilities,
+  AgendaData,
+  AgendaDay,
   AgendaIncludeToken,
   AgendaItem,
   AgendaItemStatus,
   AgendaParticipantAvatar,
+  AgendaWarning,
 } from './agenda.js';
 export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type { Occurrence, OccurrenceStatus } from './occurrence.js';

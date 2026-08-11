@@ -2,6 +2,7 @@ import { expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
 import type {
   Activity,
   AgendaParticipantAvatar,
+  AgendaWarning,
   Occurrence,
   RecurrenceSegment,
   Reminder,
@@ -74,7 +75,7 @@ export interface AgendaAssemblyDay {
 
 export interface AgendaAssembly {
   readonly days: readonly AgendaAssemblyDay[];
-  readonly warnings: readonly string[];
+  readonly warnings: readonly AgendaWarning[];
 }
 
 export interface AssembleAgendaInput {
@@ -121,7 +122,7 @@ export async function assembleAgenda(
   const widenedFrom = addWallDays(input.from, -2);
   const widenedTo = addWallDays(input.to, 2);
   const today = formatInTimeZone(new Date(input.now), input.timezone, WALL_DATE);
-  const warnings: string[] = [];
+  const warnings: AgendaWarning[] = [];
 
   const [scheduledPage, seriesPage, anytimePage, overdue] = await Promise.all([
     dependencies.listBucket(input.userId, 'S', {
@@ -515,7 +516,7 @@ function toViewerCandidate(
 
 function dedupe(
   candidates: readonly UnhydratedAgendaCandidate[],
-  warnings: string[],
+  warnings: AgendaWarning[],
 ): UnhydratedAgendaCandidate[] {
   const seen = new Map<string, UnhydratedAgendaCandidate>();
   for (const candidate of [...candidates].sort(compareCandidates)) {

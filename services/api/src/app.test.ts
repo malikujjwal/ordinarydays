@@ -100,11 +100,11 @@ describe('the error envelope', () => {
   // A path the contract describes but this build has not implemented is not the same thing
   // as a path that does not exist.
   //
-  // The example is `/v1/agenda` — `api-contract.md` §2.2, owned by Phase 2. It was
-  // `/v1/activities` until **P1-16 mounted that**, at which point this asserted a 501 from a
+  // The example is `/v1/plans` — `api-contract.md` §2.2a, owned by Phase 3. It was
+  // `/v1/agenda` until **P2-11 mounted that**, at which point this asserted a 501 from a
   // route that answers 200. Pick a path a later phase owns, not merely one not built yet.
   it('returns 501 for a contract path this build has not built', async () => {
-    const res = await req('/v1/agenda');
+    const res = await req('/v1/plans');
     expect(res.status).toBe(501);
     expect((await res.json()).error.code).toBe('not_implemented');
   });
