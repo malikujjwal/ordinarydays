@@ -3,26 +3,23 @@ import {
   TODAY_ANYTIME_SAVED_LIMIT,
   TODAY_EARLIER_COLLAPSED_LIMIT,
 } from '@od/shared/constants';
+import { fixedClock, toWallTime } from '@od/shared/time';
 import type { AgendaData, AgendaItem } from '@od/shared/types';
 import { Button, EmptyState, Skeleton, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { TabScreen } from '@/components/TabScreen';
 import { useAgenda } from '@/features/agenda/hooks/useAgenda';
+import { useMinuteTicker } from '@/features/agenda/hooks/useMinuteTicker';
 import { agendaItemsForDay, partitionAgenda } from '@/features/agenda/model/partition';
+import { selectUpNext, toUpNextSelection } from '@/features/agenda/model/upNext';
 import { AgendaSection } from './AgendaSection';
+import { UpNextCard } from './UpNextCard';
 
 export interface TodayScreenProps {
   onOpenAnytime: () => void;
   onOpenAgendaItem: (item: AgendaItem) => void;
-  /** P2-20 replaces this edge reading with its foreground-aware minute ticker. */
-  now?: Date;
-  /** Test seam for the viewer-zone minute; P2-20 supplies it from the shared clock. */
-  currentMinute?: string;
-}
-
-function minuteAt(date: Date): string {
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
 }
 
 function cappedAnytime(items: readonly AgendaItem[]): {
@@ -49,11 +46,11 @@ function errorDetails(error: unknown): { message: string; requestId?: string } {
 export function TodayScreen({
   onOpenAnytime,
   onOpenAgendaItem,
-  now = new Date(),
-  currentMinute = minuteAt(now),
+  onToggleComplete,
 }: TodayScreenProps) {
   const theme = useTheme();
-  const agenda = useAgenda({ now });
+  const tick = useMinuteTicker();
+  const agenda = useAgenda({ now: tick.instant });
   const [showAllEarlier, setShowAllEarlier] = useState(false);
 
   if (agenda.status === 'pending') {
@@ -85,10 +82,16 @@ export function TodayScreen({
   // keys explicitly carry `undefined`; contain that exact-optional assertion at the edge.
   const data = agenda.data as AgendaData;
   const day = data.days[0];
-  const sections = partitionAgenda(
-    day === undefined ? [] : agendaItemsForDay(day),
-    currentMinute,
-  );
+  const currentMinute = toWallTime(tick.instant, agenda.timezone);
+  const items = day === undefined ? [] : agendaItemsForDay(day);
+  const sections = partitionAgenda(items, currentMinute);
+  const snapshotClock = fixedClock(tick.instant);
+  const localUpNext = selectUpNext(items, snapshotClock, agenda.timezone);
+  const initialUpNext =
+    day?.upNext === undefined
+      ? undefined
+      : toUpNextSelection(day.upNext, snapshotClock, agenda.timezone);
+  const upNext = tick.revision === 0 ? (initialUpNext ?? localUpNext) : localUpNext;
   const anytime = cappedAnytime(sections.anytime);
   const earlier = showAllEarlier
     ? sections.earlier
@@ -100,12 +103,11 @@ export function TodayScreen({
         testID="today-agenda"
         contentContainerStyle={{ gap: theme.space[8], paddingBottom: theme.space[8] }}
       >
-        {sections.upNext.length === 0 ? null : (
-          <AgendaSection
-            title="Up next"
-            items={sections.upNext}
-            testID="today-up-next"
+        {upNext === undefined ? null : (
+          <UpNextCard
+            selection={upNext}
             onOpen={onOpenAgendaItem}
+            {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
           />
         )}
         {sections.schedule.length === 0 ? null : (
@@ -115,6 +117,7 @@ export function TodayScreen({
             testID="today-schedule"
             showTime
             onOpen={onOpenAgendaItem}
+            {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
           />
         )}
         {anytime.items.length === 0 ? null : (
@@ -123,6 +126,7 @@ export function TodayScreen({
             items={anytime.items}
             testID="today-anytime"
             onOpen={onOpenAgendaItem}
+            {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
             footer={
               anytime.savedCount > TODAY_ANYTIME_SAVED_LIMIT ? (
                 <Button
@@ -143,6 +147,7 @@ export function TodayScreen({
             testID="today-earlier"
             showTime
             onOpen={onOpenAgendaItem}
+            {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
             footer={
               !showAllEarlier &&
               sections.earlier.length > TODAY_EARLIER_COLLAPSED_LIMIT ? (

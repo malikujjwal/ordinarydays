@@ -24,6 +24,11 @@
       "react-native": "./src/table/index.ts",
       "default": "./dist/table/index.js"
     },
+    "./time": {
+      "types": "./dist/time/index.d.ts",
+      "react-native": "./src/time/index.ts",
+      "default": "./dist/time/index.js"
+    },
     "./client": {
       "types": "./dist/client/index.d.ts",
       "react-native": "./src/client/index.ts",

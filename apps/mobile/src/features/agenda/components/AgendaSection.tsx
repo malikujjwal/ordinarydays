@@ -11,6 +11,7 @@ export interface AgendaSectionProps {
   testID: string;
   showTime?: boolean;
   onOpen: (item: AgendaItem) => void;
+  onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
 }
 
 /** A section shell around the one shared AgendaRow implementation. */
@@ -21,6 +22,7 @@ export function AgendaSection({
   testID,
   showTime = false,
   onOpen,
+  onToggleComplete,
 }: AgendaSectionProps) {
   const theme = useTheme();
 
@@ -33,6 +35,7 @@ export function AgendaSection({
           item={item}
           showTime={showTime}
           onOpen={onOpen}
+          {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
         />
       ))}
       {footer}

@@ -1,3 +1,4 @@
+import type { Instant } from '@od/shared/time';
 import type { User } from '@od/shared/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -95,7 +96,7 @@ describe('useAgenda', () => {
     const { wrapper } = testClient();
 
     const { result } = renderHook(
-      () => useAgenda({ now: new Date('2026-08-06T16:00:00.000Z') }),
+      () => useAgenda({ now: '2026-08-06T16:00:00.000Z' as Instant }),
       { wrapper },
     );
 
@@ -109,14 +110,14 @@ describe('useAgenda', () => {
   });
 
   it('falls back to the device timezone without fetching the unloaded profile', async () => {
-    const instant = new Date('2026-08-06T16:00:00.000Z');
+    const instant = '2026-08-06T16:00:00.000Z' as Instant;
     const deviceTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const deviceDate = new Intl.DateTimeFormat('en-CA', {
       timeZone: deviceTimezone,
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-    }).format(instant);
+    }).format(new Date(instant));
     const { calls } = stubFetch({ status: 200, body: agendaBody(deviceDate) });
     const { wrapper } = emptyTestClient();
 
@@ -137,7 +138,7 @@ describe('useAgenda', () => {
     const { wrapper } = testClient();
 
     const { result } = renderHook(
-      () => useAgenda({ now: new Date('2026-08-06T16:00:00.000Z') }),
+      () => useAgenda({ now: '2026-08-06T16:00:00.000Z' as Instant }),
       { wrapper },
     );
 
@@ -153,15 +154,15 @@ describe('useAgenda', () => {
     );
     const { queryClient, wrapper } = testClient('UTC');
     const { result, rerender } = renderHook(
-      ({ now }: { now: Date }) => useAgenda({ now }),
+      ({ now }: { now: Instant }) => useAgenda({ now }),
       {
-        initialProps: { now: new Date('2026-08-06T23:59:00.000Z') },
+        initialProps: { now: '2026-08-06T23:59:00.000Z' as Instant },
         wrapper,
       },
     );
     await waitFor(() => expect(result.current.data?.days[0]?.date).toBe('2026-08-06'));
 
-    rerender({ now: new Date('2026-08-07T00:00:00.000Z') });
+    rerender({ now: '2026-08-07T00:00:00.000Z' as Instant });
 
     await waitFor(() => expect(result.current.data?.days[0]?.date).toBe('2026-08-07'));
     expect(calls).toHaveLength(2);
@@ -187,7 +188,7 @@ describe('useAgenda', () => {
     );
     const { wrapper } = testClient();
     const { result } = renderHook(
-      () => useAgenda({ now: new Date('2026-08-06T16:00:00.000Z') }),
+      () => useAgenda({ now: '2026-08-06T16:00:00.000Z' as Instant }),
       { wrapper },
     );
     await waitFor(() => expect(result.current.status).toBe('success'));
@@ -217,7 +218,7 @@ describe('useAgenda', () => {
     );
     const { wrapper } = testClient();
     const mounted = renderHook(
-      () => useAgenda({ now: new Date('2026-08-06T16:00:00.000Z') }),
+      () => useAgenda({ now: '2026-08-06T16:00:00.000Z' as Instant }),
       { wrapper },
     );
     await waitFor(() => expect(mounted.result.current.status).toBe('success'));

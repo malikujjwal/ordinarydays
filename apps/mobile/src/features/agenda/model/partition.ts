@@ -1,4 +1,6 @@
+import type { WallTime } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
+import { selectUpNextAtMinute } from './upNext';
 
 /** The four fixed Today sections. UP NEXT deliberately duplicates the first schedule row. */
 export interface TodaySections {
@@ -99,9 +101,10 @@ export function partitionAgenda(
     )
     .sort(compareEarlier)
     .map(({ item }) => item);
+  const upNext = selectUpNextAtMinute(schedule, currentMinute as WallTime);
 
   return {
-    upNext: schedule.slice(0, 1),
+    upNext: upNext === undefined ? [] : [upNext],
     schedule,
     anytime,
     earlier,

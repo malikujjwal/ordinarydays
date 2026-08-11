@@ -113,6 +113,7 @@ describe('partitionAgenda', () => {
     );
 
     expect(titles(result.schedule)).toEqual(['Workshop']);
+    expect(titles(result.upNext)).toEqual([]);
     expect(titles(result.anytime)).toEqual([]);
     expect(titles(result.earlier)).toEqual([]);
   });

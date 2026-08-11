@@ -17,4 +17,5 @@ export * from './constants.js';
 export * from './errors.js';
 export * from './schemas/index.js';
 export * from './table/index.js';
+export * from './time/index.js';
 export * from './types/index.js';

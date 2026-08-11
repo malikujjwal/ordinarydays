@@ -6,6 +6,7 @@ import Head from 'expo-router/head';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ClockProvider } from '@/hooks/useClock';
 import { useSerifFamily } from '@/lib/fonts';
 import { queryClient } from '@/lib/queryClient';
 
@@ -53,13 +54,15 @@ export default function RootLayout() {
         <title>{APP_NAME}</title>
       </Head>
       <SafeAreaProvider>
-        <ThemeProvider {...(serifFamily === undefined ? {} : { serifFamily })}>
-          <QueryClientProvider client={queryClient}>
-            {/* Headerless: every screen owns its own chrome (`interaction-contract.md`). */}
-            <Stack screenOptions={{ headerShown: false }} />
-            <StatusBar style="auto" />
-          </QueryClientProvider>
-        </ThemeProvider>
+        <ClockProvider>
+          <ThemeProvider {...(serifFamily === undefined ? {} : { serifFamily })}>
+            <QueryClientProvider client={queryClient}>
+              {/* Headerless: every screen owns its own chrome (`interaction-contract.md`). */}
+              <Stack screenOptions={{ headerShown: false }} />
+              <StatusBar style="auto" />
+            </QueryClientProvider>
+          </ThemeProvider>
+        </ClockProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

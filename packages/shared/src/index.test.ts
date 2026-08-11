@@ -8,6 +8,7 @@ import * as errors from '@od/shared/errors';
 import * as recurrence from '@od/shared/recurrence';
 import * as schemas from '@od/shared/schemas';
 import * as table from '@od/shared/table';
+import * as time from '@od/shared/time';
 import * as types from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 
@@ -29,6 +30,8 @@ describe('exports map', () => {
     expect(schemas.agendaItem).toBeDefined();
     expect(schemas.reminderInputForSchedule).toBeDefined();
     expect(table.TABLE.partitionKey).toBe('pk');
+    expect(time.fixedClock).toBeDefined();
+    expect(time.toWallTime).toBeDefined();
     expect(client.nullTokenProvider).toBeDefined();
     expect(client.localTokenProvider).toBeDefined();
     expect(client.getAgenda).toBeDefined();

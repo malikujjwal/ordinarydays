@@ -1,10 +1,12 @@
+import { fixedClock, type Instant } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ClockProvider } from '@/hooks/useClock';
 import { TodayScreen } from './TodayScreen';
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -24,12 +26,13 @@ const row = (index: number, patch: Partial<AgendaItem> = {}): AgendaItem => ({
   ...patch,
 });
 
-function response(items: AgendaItem[]) {
+function response(items: AgendaItem[], upNext?: AgendaItem) {
   return {
     data: {
       days: [
         {
           date: '2026-08-06',
+          ...(upNext === undefined ? {} : { upNext }),
           schedule: items.filter((item) => item.time !== undefined),
           anytime: items.filter((item) => item.time === undefined),
           earlier: [],
@@ -53,22 +56,46 @@ function stubFetch(body: unknown) {
   );
 }
 
-function mount(ui: ReactNode) {
+function createClient() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, networkMode: 'always' } },
   });
-  return render(
+  client.setQueryData(['me'], { timezone: 'UTC' });
+  return client;
+}
+
+function mount(ui: ReactNode, client = createClient()) {
+  const mounted = render(
     <SafeAreaProvider>
-      <ThemeProvider scheme="light">
-        <QueryClientProvider client={client}>{ui}</QueryClientProvider>
-      </ThemeProvider>
+      <ClockProvider clock={fixedClock('2026-08-06T15:10:00.000Z' as Instant)}>
+        <ThemeProvider scheme="light">
+          <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+        </ThemeProvider>
+      </ClockProvider>
     </SafeAreaProvider>,
   );
+  return { ...mounted, client };
 }
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('TodayScreen', () => {
+  it('uses the server UP NEXT row for the initial paint', async () => {
+    const serverUpNext = row(1, { title: 'Server snapshot', time: '15:00' });
+    stubFetch(
+      response(
+        [serverUpNext, row(2, { title: 'Local next', time: '15:30' })],
+        serverUpNext,
+      ),
+    );
+    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+
+    await waitFor(() => expect(screen.getByTestId('up-next-card')).toBeDefined());
+    expect(
+      within(screen.getByTestId('up-next-card')).getByText('Server snapshot'),
+    ).toBeDefined();
+  });
+
   it('renders non-empty sections in fixed order and omits an empty section', async () => {
     stubFetch(
       response([
@@ -78,12 +105,7 @@ describe('TodayScreen', () => {
       ]),
     );
     const first = mount(
-      <TodayScreen
-        onOpenAnytime={() => {}}
-        onOpenAgendaItem={() => {}}
-        currentMinute="15:10"
-        now={new Date('2026-08-06T15:10:00Z')}
-      />,
+      <TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />,
     );
 
     await waitFor(() => expect(screen.getByTestId('today-agenda')).toBeDefined());
@@ -99,12 +121,7 @@ describe('TodayScreen', () => {
     first.unmount();
     stubFetch(response([row(4, { title: 'Only anytime' })]));
     const second = mount(
-      <TodayScreen
-        onOpenAnytime={() => {}}
-        onOpenAgendaItem={() => {}}
-        currentMinute="15:10"
-        now={new Date('2026-08-07T15:10:00Z')}
-      />,
+      <TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />,
     );
     await waitFor(() => expect(screen.getByText('Only anytime')).toBeDefined());
     expect(screen.queryByRole('heading', { name: 'Schedule' })).toBeNull();
@@ -120,14 +137,7 @@ describe('TodayScreen', () => {
       }),
     );
     stubFetch(response(saved));
-    mount(
-      <TodayScreen
-        onOpenAnytime={onOpenAnytime}
-        onOpenAgendaItem={() => {}}
-        currentMinute="15:10"
-        now={new Date('2026-08-06T15:10:00Z')}
-      />,
-    );
+    mount(<TodayScreen onOpenAnytime={onOpenAnytime} onOpenAgendaItem={() => {}} />);
 
     await waitFor(() => expect(screen.getByTestId('today-anytime')).toBeDefined());
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(20);
@@ -144,18 +154,65 @@ describe('TodayScreen', () => {
       }),
     );
     stubFetch(response(passed));
-    mount(
-      <TodayScreen
-        onOpenAnytime={() => {}}
-        onOpenAgendaItem={() => {}}
-        currentMinute="15:10"
-        now={new Date('2026-08-06T15:10:00Z')}
-      />,
-    );
+    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
 
     await waitFor(() => expect(screen.getByTestId('today-earlier')).toBeDefined());
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(10);
     fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(12);
+  });
+
+  it('updates the UP NEXT and SCHEDULE duplicate from one completion action', async () => {
+    stubFetch(
+      response([
+        row(1, { title: 'First task', time: '15:30' }),
+        row(2, { title: 'Second task', time: '16:00' }),
+      ]),
+    );
+    const client = createClient();
+    const onToggleComplete = (changed: AgendaItem, checked: boolean) => {
+      client.setQueriesData({ queryKey: ['agenda'] }, (cached: unknown) => {
+        const data = cached as { days?: Array<{ schedule?: AgendaItem[] }> } | undefined;
+        if (data?.days?.[0]?.schedule === undefined) return cached;
+        return {
+          ...data,
+          days: data.days.map((day) => ({
+            ...day,
+            schedule: day.schedule?.map((item) =>
+              item.activityId === changed.activityId
+                ? { ...item, status: checked ? 'completed' : 'scheduled' }
+                : item,
+            ),
+          })),
+        };
+      });
+    };
+    mount(
+      <TodayScreen
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+        onToggleComplete={onToggleComplete}
+      />,
+      client,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole('checkbox', { name: 'First task, not completed' }),
+      ).toHaveLength(2),
+    );
+    fireEvent.click(
+      screen.getAllByRole('checkbox', {
+        name: 'First task, not completed',
+      })[0] as Element,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('First task')).toHaveLength(1);
+      expect(screen.getAllByText('Second task')).toHaveLength(2);
+      expect(
+        screen.getByRole('checkbox', { name: 'First task, completed' }),
+      ).toBeDefined();
+    });
   });
 });
