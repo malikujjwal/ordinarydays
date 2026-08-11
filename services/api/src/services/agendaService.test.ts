@@ -437,7 +437,7 @@ describe('transferred acceptance cases 25-28', () => {
       segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00' }],
     };
     const series = activity({
-      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      schedule: { date: '2026-08-01', time: '17:00', timezone: 'UTC' },
       recurrence,
     });
     const before = structuredClone(series);
@@ -470,11 +470,16 @@ describe('transferred acceptance cases 25-28', () => {
     );
 
     expect(
-      emitted(result).map((row) => [row.occurrenceDate, row.time, row.isSnoozed]),
+      emitted(result).map((row) => [
+        row.occurrenceDate,
+        row.time,
+        row.originalTime,
+        row.isSnoozed,
+      ]),
     ).toEqual([
-      ['2026-08-05', '18:00', false],
-      ['2026-08-06', '20:00', true],
-      ['2026-08-07', '18:00', false],
+      ['2026-08-05', '18:00', undefined, false],
+      ['2026-08-06', '20:00', '18:00', true],
+      ['2026-08-07', '18:00', undefined, false],
     ]);
     expect(series).toEqual(before);
   });
@@ -1086,7 +1091,11 @@ describe('bounded fan-out', () => {
     const candidates = emitted(result);
     const readsBeforeProjection = subject.batchActivities.mock.calls.length;
 
-    const projected = projectAgendaItems(candidates, { now, timezone: 'UTC' });
+    const projected = projectAgendaItems(candidates, {
+      now,
+      timezone: 'UTC',
+      today: '2026-08-05',
+    });
 
     expect(subject.batchActivities).toHaveBeenCalledTimes(readsBeforeProjection);
     expect(projected).toHaveLength(3);
@@ -1286,7 +1295,7 @@ describe('warnings and projection branches', () => {
 
     expect(
       rows.find((row) => row.activity.activityId === absoluteSnooze.activityId),
-    ).toMatchObject({ time: '20:30', isSnoozed: true });
+    ).toMatchObject({ time: '20:30', originalTime: '09:00', isSnoozed: true });
     expect(
       rows.find((row) => row.activity.activityId === untimed.activityId)?.time,
     ).toBeUndefined();

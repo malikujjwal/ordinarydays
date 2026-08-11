@@ -1,4 +1,5 @@
 import { assertNever } from '@od/shared';
+import { describeRecurrence } from '@od/shared/recurrence';
 import type { AgendaItem } from '@od/shared/types';
 import { formatInTimeZone } from 'date-fns-tz';
 import { deriveActionCapabilities } from './actionCapabilities.js';
@@ -10,6 +11,8 @@ const WALL_TIME = 'HH:mm';
 export interface AgendaProjectionClock {
   readonly now: string;
   readonly timezone: string;
+  /** Request-window reference date used for deterministic recurrence copy. */
+  readonly today: string;
 }
 
 /** Builds the trimmed, caller-specific API row from an already-hydrated agenda candidate. */
@@ -32,7 +35,13 @@ export function projectAgendaItem(
     ...(candidate.time === undefined ? {} : { time: candidate.time }),
     ...(candidate.endTime === undefined ? {} : { endTime: candidate.endTime }),
     isRecurring: activity.recurrence !== undefined,
+    ...(activity.recurrence === undefined
+      ? {}
+      : { recurrenceDescription: describeRecurrence(activity.recurrence, clock.today) }),
     isSnoozed: candidate.isSnoozed,
+    ...(candidate.originalTime === undefined
+      ? {}
+      : { originalTime: candidate.originalTime }),
     hasCheckbox: activity.type === 'task',
     capabilities: deriveActionCapabilities(candidate.actionContext),
     participantAvatars: candidate.participantAvatars.map((avatar) => ({ ...avatar })),

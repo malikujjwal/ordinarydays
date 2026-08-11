@@ -22,7 +22,7 @@ export async function getAgenda(
     includeOverdue: include.has('overdue'),
     includeReminders: include.has('reminders'),
   });
-  const clock = { now, timezone: query.tz };
+  const clock = { now, timezone: query.tz, today: query.from };
 
   return {
     days: assembly.days.map(

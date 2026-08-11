@@ -28,7 +28,11 @@ export interface AgendaItem {
   time?: string;
   endTime?: string;
   isRecurring: boolean;
+  /** Server-authored recurrence copy, present only for recurring items. */
+  recurrenceDescription?: string;
   isSnoozed: boolean;
+  /** Effective pre-snooze HH:mm, present only when snoozing changed the time. */
+  originalTime?: string;
   hasCheckbox: boolean;
   capabilities: AgendaCapabilities;
   participantAvatars: AgendaParticipantAvatar[];

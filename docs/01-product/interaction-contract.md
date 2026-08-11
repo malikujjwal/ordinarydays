@@ -216,7 +216,6 @@ row does not move under the finger.
 | Meal | Open plan detail | — (no checkbox) | `Had it` | Had it | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | Watch | Open plan detail | — | `Watched` | Watched | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | Event | Open plan detail | — | `Attended` | Attended | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
-| Event | Open plan detail | — | `Done` | Done | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | General | Open plan detail | — | `Done` | Done | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | Prep task (on Today) | Open task detail | Complete | `Complete` | Complete | `Open plan` · `Reschedule` · `Delete` | Opens the parent plan | Preview + `⋯` menu |
 | Any row with a pending RSVP | Open plan detail | — | `Going` | Sets RSVP going | `Maybe` · `Decline` | Sets RSVP maybe | Preview + `⋯` menu |
