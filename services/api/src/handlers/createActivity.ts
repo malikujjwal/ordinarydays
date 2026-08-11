@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { requireUserId } from '../middleware/identity.js';
 import { createActivity } from '../services/activityService.js';
+import { idempotentJson } from './idempotentResponse.js';
 
 /**
  * `POST /v1/activities` (`api-contract.md` §2.3).
@@ -27,7 +28,7 @@ import { createActivity } from '../services/activityService.js';
  * saved the target the user selected, rather than trusting that it did. That is a cheap
  * check against the failure mode the whole explicit-intent contract exists to prevent.
  *
- * The registry entry carries `creates`, so `idempotency` (chain position 10) requires an
+ * The registry entry carries `mutates: true`, so `idempotency` (chain position 10) requires an
  * `Idempotency-Key` and replays the stored response on a retry — which matters here more
  * than on most creates: mobile networks retry, and without the key a timed-out request that
  * actually succeeded leaves the user with two identical activities and no way to tell which
@@ -38,8 +39,6 @@ export async function createActivityHandler(
   input: CreateActivityInput,
   now: string,
 ): Promise<Response> {
-  const { activity } = await createActivity(requireUserId(c), input, now);
-
   /**
    * Returned directly rather than through a `toActivity` projection, unlike `toUser` and
    * `toDevice`. Those two serialise a row the **repository read**, which carries `pk`, `sk`,
@@ -48,11 +47,7 @@ export async function createActivityHandler(
    * strip. The route test asserts that — if this ever starts returning what was read, the
    * assertion fails rather than the leak shipping.
    */
-  return c.json(
-    {
-      data: activity,
-      meta: { requestId: c.get('requestId') },
-    },
-    201,
+  return idempotentJson(c, 201, async (receiptFor) =>
+    createActivity(requireUserId(c), input, now, (result) => receiptFor(result.activity)),
   );
 }

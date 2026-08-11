@@ -209,6 +209,17 @@ describe('§3.4 the lookup partitions', () => {
     );
   });
 
+  it('keys durable cleanup under its Activity and scopes the work to user and key', () => {
+    expect(keys.cleanup(ACT, USR, 'e1c-key')).toEqual({
+      pk: `ACT#${ACT}`,
+      sk: `CLEANUP#${USR}#e1c-key`,
+    });
+    expect(keys.cleanupPrefix(ACT)).toEqual({
+      pk: `ACT#${ACT}`,
+      skPrefix: 'CLEANUP#',
+    });
+  });
+
   /** An email lookup that depended on typed casing would fail to match the same person. */
   it.each([['Ujjwal@Example.com'], ['UJJWAL@EXAMPLE.COM'], ['ujjwal@example.com']])(
     'lower-cases %s',

@@ -12,6 +12,7 @@ import type { Occurrence } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import * as repository from './occurrenceRepository.js';
+import { TransactionBuilder } from './tx.js';
 
 const ddbMock = mockClient(DynamoDBDocumentClient);
 const ACTIVITY_ID = 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA';
@@ -178,6 +179,28 @@ describe('writes', () => {
       pk: `ACT#${ACTIVITY_ID}`,
       sk: 'OCC#2026-08-08',
     });
+  });
+
+  it('adds put/delete items to a shared transaction without sending them itself', async () => {
+    const transaction = new TransactionBuilder('occurrenceMutation');
+
+    await repository.put(completed(), transaction);
+    await repository.delete(ACTIVITY_ID, '2026-08-08', transaction);
+
+    expect(transaction.build()).toEqual([
+      {
+        Put: {
+          Item: expect.objectContaining({
+            pk: `ACT#${ACTIVITY_ID}`,
+            sk: 'OCC#2026-08-08',
+            entity: 'Occurrence',
+          }),
+        },
+      },
+      { Delete: { Key: { pk: `ACT#${ACTIVITY_ID}`, sk: 'OCC#2026-08-08' } } },
+    ]);
+    expect(ddbMock.commandCalls(PutCommand)).toHaveLength(0);
+    expect(ddbMock.commandCalls(DeleteCommand)).toHaveLength(0);
   });
 });
 

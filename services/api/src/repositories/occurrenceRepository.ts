@@ -13,6 +13,7 @@ import {
 } from './base.js';
 import { occurrence, occurrenceMoveMarker, occurrenceRange } from './keys.js';
 import type { StoredItem } from './migrate.js';
+import type { TransactionBuilder } from './tx.js';
 
 const ENTITY = 'Occurrence';
 const SCHEMA_VERSION = 1;
@@ -112,20 +113,36 @@ export async function queryWindow(
 }
 
 /** Upserts exactly one override row and cannot touch the series META item. */
-export async function put(value: Occurrence): Promise<void> {
+export async function put(
+  value: Occurrence,
+  transaction?: TransactionBuilder,
+): Promise<void> {
   const now = new Date().toISOString();
-  await putItem({
+  const item = {
     ...occurrence(value.activityId, value.date),
     entity: ENTITY,
     ...value,
     createdAt: now,
     updatedAt: now,
     schemaVersion: SCHEMA_VERSION,
-  });
+  };
+  if (transaction !== undefined) {
+    transaction.add({ Put: { Item: item } });
+    return;
+  }
+  await putItem(item);
 }
 
 /** Removing an override restores the implicit scheduled state. */
-async function deleteOccurrence(activityId: string, date: string): Promise<void> {
+async function deleteOccurrence(
+  activityId: string,
+  date: string,
+  transaction?: TransactionBuilder,
+): Promise<void> {
+  if (transaction !== undefined) {
+    transaction.add({ Delete: { Key: occurrence(activityId, date) } });
+    return;
+  }
   await deleteItem(occurrence(activityId, date));
 }
 

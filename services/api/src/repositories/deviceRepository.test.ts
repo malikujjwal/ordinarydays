@@ -1,4 +1,8 @@
-import { DeleteCommand, DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DeleteCommand,
+  DynamoDBDocumentClient,
+  TransactWriteCommand,
+} from '@aws-sdk/lib-dynamodb';
 import type { Device } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -6,7 +10,8 @@ import { deleteDevice, newDeviceId, putDevice } from './deviceRepository.js';
 
 const ddbMock = mockClient(DynamoDBDocumentClient);
 
-const sentPut = () => ddbMock.commandCalls(PutCommand)[0]?.args[0].input;
+const sentPut = () =>
+  ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[0]?.Put;
 const sentDelete = () => ddbMock.commandCalls(DeleteCommand)[0]?.args[0].input;
 
 const device = (overrides: Partial<Device> = {}): Device => ({
@@ -21,7 +26,7 @@ const device = (overrides: Partial<Device> = {}): Device => ({
 
 beforeEach(() => {
   ddbMock.reset();
-  ddbMock.on(PutCommand).resolves({});
+  ddbMock.on(TransactWriteCommand).resolves({});
   ddbMock.on(DeleteCommand).resolves({});
 });
 

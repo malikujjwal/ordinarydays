@@ -226,6 +226,7 @@ describe('what the copy deliberately drops', () => {
     expect(items.map((entry) => entry.Put?.Item?.entity).sort()).toEqual([
       'Activity',
       'ActivityIndex',
+      'Idempotency',
     ]);
   });
 
@@ -314,7 +315,7 @@ describe('who may duplicate', () => {
 });
 
 /**
- * The registry entry carries `creates`. A retried duplicate is precisely the request where
+ * The registry entry carries `mutates: true`. A retried duplicate is precisely the request where
  * "it worked but I did not hear back" produces two identical activities.
  */
 describe('the Idempotency-Key', () => {

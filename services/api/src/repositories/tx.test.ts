@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../lib/errors.js';
-import { assertWithinLimit, MAX_TRANSACT_ITEMS } from './tx.js';
+import { assertWithinLimit, MAX_TRANSACT_ITEMS, TransactionBuilder } from './tx.js';
 
 /**
  * The limit check is unit-tested here; the send path is exercised against DynamoDB Local in
@@ -49,5 +49,26 @@ describe('the transaction item cap', () => {
   it('is checkable before send, so a fan-out can switch to batching', () => {
     expect(() => assertWithinLimit(103, 'rescheduleWithRsvpReset')).toThrow();
     expect(() => assertWithinLimit(45 * 2 + 3, 'rescheduleWithRsvpReset')).not.toThrow();
+  });
+});
+
+describe('reserved receipt capacity', () => {
+  it('rejects a 100th domain item when one receipt slot is reserved', () => {
+    const builder = new TransactionBuilder('singlePhase', 1);
+    expect(() =>
+      builder.add(...Array.from({ length: 100 }, () => ({ Put: { Item: {} } }))),
+    ).toThrow(AppError);
+  });
+
+  it('accepts 99 domain items plus the one reserved receipt', () => {
+    const builder = new TransactionBuilder('singlePhase', 1);
+    builder.add(...Array.from({ length: 99 }, () => ({ Put: { Item: {} } })));
+    builder.addReserved({ Put: { Item: { entity: 'Idempotency' } } });
+    expect(builder.build()).toHaveLength(100);
+  });
+
+  it('requires both reserved items for a multi-phase mutation', () => {
+    const builder = new TransactionBuilder('multiPhase', 2).add({ Put: { Item: {} } });
+    expect(() => builder.addReserved({ Put: { Item: {} } })).toThrow(AppError);
   });
 });

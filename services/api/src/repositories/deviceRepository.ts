@@ -1,8 +1,11 @@
 import type { Device } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
-import { deleteItem, putItem } from './base.js';
+import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
+import { deleteItem } from './base.js';
+import { receiptItem } from './idempotencyRepository.js';
 import { device as deviceKey } from './keys.js';
 import type { StoredItem } from './migrate.js';
+import { TransactionBuilder, transactWrite } from './tx.js';
 
 /**
  * The only place a push device is written to or removed from DynamoDB —
@@ -51,7 +54,11 @@ export function newDeviceId(): string {
  * that rather than trusting it. A failure here is a bug in id generation, not a user error,
  * and it should surface as one instead of silently overwriting a row.
  */
-export async function putDevice(userId: string, device: Device): Promise<void> {
+export async function putDevice(
+  userId: string,
+  device: Device,
+  idempotencyReceipt?: IdempotencyReceipt,
+): Promise<void> {
   const item: StoredItem = {
     ...deviceKey(userId, device.deviceId),
     entity: ENTITY,
@@ -64,7 +71,20 @@ export async function putDevice(userId: string, device: Device): Promise<void> {
     schemaVersion: SCHEMA_VERSION,
   };
 
-  await putItem(item, { expression: 'attribute_not_exists(pk)' });
+  const builder = new TransactionBuilder(
+    'putDevice',
+    idempotencyReceipt === undefined ? 0 : 1,
+  ).add({ Put: { Item: item, ConditionExpression: 'attribute_not_exists(pk)' } });
+  const receiptIndex = builder.length;
+  if (idempotencyReceipt !== undefined)
+    builder.addReserved(receiptItem(idempotencyReceipt));
+  await transactWrite(builder.build(), {
+    operation: 'putDevice',
+    onConditionFailed: (index) =>
+      idempotencyReceipt !== undefined && index === receiptIndex
+        ? new IdempotencyRaceError()
+        : undefined,
+  });
 }
 
 /**

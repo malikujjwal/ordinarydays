@@ -27,6 +27,7 @@ import type {
 } from '@od/shared/types';
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
+import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import type { Logger } from '../lib/logger.js';
 import {
   deleteActivity as deleteActivityRows,
@@ -280,6 +281,7 @@ export async function createActivity(
   userId: string,
   input: CreateActivityInput,
   now: string,
+  receiptFor?: (result: CreateResult) => IdempotencyReceipt,
 ): Promise<CreateResult> {
   if (input.objectKind === 'plan' && (input.participants?.length ?? 0) > 0) {
     throw new AppError('validation_failed', SHARING_SOON, [
@@ -340,14 +342,16 @@ export async function createActivity(
     channel: 'push',
   }));
 
+  const result = { activity, reminders };
   await putActivity(userId, activity, {
     reminders: reminders.map((row) => ({
       reminderId: row.reminderId,
       offsetMinutes: row.offsetMinutes,
     })),
+    ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(result) }),
   });
 
-  return { activity, reminders };
+  return result;
 }
 
 /** The stale-edit answer, and the one place its copy lives. */
@@ -886,6 +890,7 @@ export async function duplicateActivity(
   userId: string,
   activityId: string,
   now: string,
+  receiptFor?: (activity: Activity) => IdempotencyReceipt,
 ): Promise<Activity> {
   const { activity: source } = await assertActivityAccess(userId, activityId, 'read');
 
@@ -913,7 +918,9 @@ export async function duplicateActivity(
   } as Activity;
 
   // No `reminders` option: the copy has no schedule to offset one from.
-  await putActivity(userId, copy);
+  await putActivity(userId, copy, {
+    ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(copy) }),
+  });
 
   return copy;
 }

@@ -233,7 +233,7 @@ describe('PATCH /v1/me', () => {
     expect((await res.json()).error.code).toBe('not_found');
   });
 
-  /** `PATCH` is idempotent by nature, so it carries no `creates` flag and needs no key. */
+  /** `PATCH` is idempotent by nature and is not a POST, so it needs no key. */
   it('needs no Idempotency-Key', async () => {
     ddbMock.on(UpdateCommand).resolves({ Attributes: profileOf(DEV) });
 

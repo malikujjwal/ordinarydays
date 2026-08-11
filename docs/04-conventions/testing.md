@@ -368,8 +368,8 @@ One test file per resource, and for **every** endpoint in `api-contract.md` §2,
 3. Invalid body — `400 validation_failed` with a `details[]` entry naming the field.
 4. Not the caller's resource — `404 not_found`, never `403` (`api-contract.md` §3).
 
-Creating `POST`s add a fifth: the same `Idempotency-Key` twice returns the stored response
-with `200` and writes once.
+Mutating `POST`s add a fifth: the same `Idempotency-Key` twice returns the original stored
+status and body unchanged (`201` remains `201`) and performs exactly one domain write.
 
 Any route the authorisation matrix marks **owner-only** adds a sixth: a *participant* — who
 can see the activity — gets `403`, not `404`, **and nothing is written**. Assert the second

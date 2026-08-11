@@ -5,7 +5,9 @@ import { TABLE } from '@od/shared/table';
 import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
+import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import { batchGetItems, deleteAll, getItem, type Page, query, queryAll } from './base.js';
+import { receiptItem } from './idempotencyRepository.js';
 import {
   activityIndex,
   activityMeta,
@@ -21,7 +23,7 @@ import {
   reminder as reminderKey,
 } from './keys.js';
 import type { StoredItem } from './migrate.js';
-import { type TransactItem, transactWrite } from './tx.js';
+import { type TransactItem, TransactionBuilder, transactWrite } from './tx.js';
 
 /**
  * The only place an Activity is read from or written to DynamoDB.
@@ -264,6 +266,8 @@ export interface CreateOptions {
   readonly taskSubtitle?: string;
   /** Title and status for the `SUB#` pointer, when this activity has a parent. */
   readonly childPointerRank?: string;
+  /** Successful HTTP receipt attached to this domain transaction (P2-38). */
+  readonly idempotencyReceipt?: IdempotencyReceipt;
 }
 
 /**
@@ -324,7 +328,21 @@ export async function createActivity(
     });
   }
 
-  await transactWrite(items, { operation: 'createActivity' });
+  const builder = new TransactionBuilder(
+    'createActivity',
+    options.idempotencyReceipt === undefined ? 0 : 1,
+  ).add(...items);
+  const receiptIndex = builder.length;
+  if (options.idempotencyReceipt !== undefined) {
+    builder.addReserved(receiptItem(options.idempotencyReceipt));
+  }
+  await transactWrite(builder.build(), {
+    operation: 'createActivity',
+    onConditionFailed: (index) =>
+      options.idempotencyReceipt !== undefined && index === receiptIndex
+        ? new IdempotencyRaceError()
+        : undefined,
+  });
 }
 
 /**

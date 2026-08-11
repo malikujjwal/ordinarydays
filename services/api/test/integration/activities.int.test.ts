@@ -200,7 +200,7 @@ describe('the target is the caller’s, never inferred', () => {
  * (`api-contract.md` §1, P1-04).
  */
 describe('a retried create', () => {
-  it('returns the first response with 200, and creates nothing new', async () => {
+  it('returns the original 201 response, and creates nothing new', async () => {
     const key = crypto.randomUUID();
 
     const first = await post(TASK, { key });
@@ -210,7 +210,7 @@ describe('a retried create', () => {
     const retryBody = await retry.json();
 
     expect(first.status).toBe(201);
-    expect(retry.status).toBe(200);
+    expect(retry.status).toBe(201);
     expect(retryBody.data.activityId).toBe(firstBody.data.activityId);
     expect(await indexRows(DEV)).toHaveLength(1);
   });
@@ -220,6 +220,18 @@ describe('a retried create', () => {
     await post(TASK, { key: crypto.randomUUID() });
 
     expect(await indexRows(DEV)).toHaveLength(2);
+  });
+
+  it('returns two identical 201 responses but commits once when first attempts race', async () => {
+    const key = crypto.randomUUID();
+
+    const [first, second] = await Promise.all([post(TASK, { key }), post(TASK, { key })]);
+    const [firstBody, secondBody] = await Promise.all([first.text(), second.text()]);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(secondBody).toBe(firstBody);
+    expect(await indexRows(DEV)).toHaveLength(1);
   });
 });
 
@@ -945,7 +957,7 @@ describe('duplicating an activity', () => {
     const first = await (await send()).json();
     const retry = await send();
 
-    expect(retry.status).toBe(200);
+    expect(retry.status).toBe(201);
     expect((await retry.json()).data.activityId).toBe(first.data.activityId);
     // The original plus exactly one copy.
     expect(await indexRows(DEV)).toHaveLength(2);

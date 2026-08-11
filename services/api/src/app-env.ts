@@ -25,5 +25,9 @@ export interface AppEnv {
      */
     routeAuth: RouteAuth;
     userId?: string;
+    /** Set by idempotency before a mutating POST reaches its handler. */
+    idempotencyKey?: string;
+    idempotencyRoute?: string;
+    idempotencyNowMs?: number;
   };
 }

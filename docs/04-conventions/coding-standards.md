@@ -689,16 +689,17 @@ call that lacks an `Idempotency-Key`.
 
 ### 6.5 Idempotency
 
-Every creating `POST`, and every mutation POST explicitly named replay-protected by
+Every mutating `POST` explicitly named replay-protected by
 `api-contract.md` §1, carries a client-generated `Idempotency-Key`. Two rules follow, and both
 are commonly got wrong:
 
 1. **The key is generated once when the mutation is enqueued, outside `mutationFn`, and reused
    on every retry** — including retries that happen after an app restart, which is why it is
    persisted with the queued mutation variables (`tech-stack.md` §3.4).
-2. **The server stores the response body, not just a marker.** A repeat returns the stored
-   response with `200`, so the client gets the same `activityId` it would have got the first
-   time. A marker-only implementation returns an empty success and the client loses the ID.
+2. **The server stores the original response status and body, not just a marker.** A repeat
+   returns both unchanged (`201` remains `201`), so the client gets exactly the response and
+   `activityId` it would have got the first time. A marker-only implementation returns an
+   empty success and the client loses the ID.
 
 ---
 

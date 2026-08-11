@@ -378,6 +378,18 @@ export const idempotency = (userId: string, key: string) => ({
   sk: META,
 });
 
+/** Durable remaining work attached to a successful multi-phase mutation (P2-38). */
+export const cleanup = (activityId: string, userId: string, idempotencyKey: string) => ({
+  pk: `ACT#${activityId}`,
+  sk: `CLEANUP#${userId}#${idempotencyKey}`,
+});
+
+/** Outstanding cleanup for an Activity, drained before its next mutation. */
+export const cleanupPrefix = (activityId: string) => ({
+  pk: `ACT#${activityId}`,
+  skPrefix: 'CLEANUP#',
+});
+
 /**
  * A fixed-window rate-limit counter, `ttl` set to the window end. P1-03 writes these.
  *

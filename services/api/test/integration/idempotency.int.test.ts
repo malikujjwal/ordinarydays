@@ -1,183 +1,190 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { useTestTable } from './harness.js';
 
-/**
- * The idempotency record against a real DynamoDB Local (P1-04).
- *
- * The unit suite proves the middleware builds the right commands and branches the right way.
- * What it cannot prove is the one property the whole design rests on: that
- * `attribute_not_exists(pk)` **actually rejects the second writer**. A mock returns whatever
- * it was told to; only the database can answer whether two concurrent claims on one key
- * produce exactly one winner. That is the race a duplicate create would come through, so it
- * is asserted here or nowhere (`testing.md` §4.2).
- */
 useTestTable();
 
-type Repo = typeof import('../../src/repositories/idempotencyRepository.js');
 type Base = typeof import('../../src/repositories/base.js');
-type Keys = typeof import('../../src/repositories/keys.js');
+type Idempotency = typeof import('../../src/repositories/idempotencyRepository.js');
+type Tx = typeof import('../../src/repositories/tx.js');
+type Cleanup = typeof import('../../src/services/idempotencyCleanupService.js');
 
-let repo: Repo;
 let base: Base;
-let keys: Keys;
+let idem: Idempotency;
+let tx: Tx;
+let cleanup: Cleanup;
 
 const USER = 'usr_int_idem';
-const OTHER_USER = 'usr_int_idem_other';
-const NOW = Date.UTC(2026, 7, 9, 12, 0, 0);
-
-/**
- * A fresh UUID-shaped key per test.
- *
- * A plain counter is enough now that the table is this file's alone and empty at the start of
- * every test. It was not before: an idempotency record lives in its own partition,
- * `IDEM#<userId>#<key>` rather than under `USER#<userId>`, so no partition sweep could reach
- * it — the first version of this file passed once and then failed on every later run with
- * `reserved` coming back `in-flight`, and was fixed by mixing the clock into every key and
- * deleting each one in an `afterEach`. P1-28's table-per-file made both unnecessary.
- */
-let counter = 0;
-const nextKey = () => {
-  counter += 1;
-  return `9f8e7d6c-8b86-d011-b42d-${String(counter).padStart(12, '0')}`;
-};
+const KEY = '9f8e7d6c-8b86-d011-b42d-000000000001';
+const CREATED_AT = '2026-08-09T12:00:00.000Z';
+const receipt = (key = KEY, body = '{"data":{"id":"act_1"}}') => ({
+  userId: USER,
+  key,
+  route: 'POST /v1/things',
+  status: 201,
+  body,
+  ttl: 1_786_363_200,
+  createdAt: CREATED_AT,
+});
 
 beforeAll(async () => {
-  repo = await import('../../src/repositories/idempotencyRepository.js');
   base = await import('../../src/repositories/base.js');
-  keys = await import('../../src/repositories/keys.js');
+  idem = await import('../../src/repositories/idempotencyRepository.js');
+  tx = await import('../../src/repositories/tx.js');
+  cleanup = await import('../../src/services/idempotencyCleanupService.js');
 });
 
-describe('claiming a key', () => {
-  it('reserves a key nobody holds', async () => {
-    const result = await repo.reserve(USER, nextKey(), 'POST /v1/things', NOW);
-    expect(result.kind).toBe('reserved');
-  });
+describe('transaction-attached receipts', () => {
+  it('survives a lost response and replays the original 201/body with one domain row', async () => {
+    const builder = new tx.TransactionBuilder('crashFixture', 1)
+      .add({ Put: { Item: { pk: 'TEST#domain', sk: 'META', writes: 1 } } })
+      .addReserved(idem.receiptItem(receipt()));
+    await tx.transactWrite(builder.build(), { operation: 'crashFixture' });
 
-  /**
-   * P1-04 asks for this pinned by a test rather than by intent. A bare `IDEM#<key>` would
-   * let one user's client-generated key return another user's stored response — a security
-   * defect, not a shorthand (`data-model.md` §3.4).
-   */
-  it('writes the record at IDEM#<userId>#<key>, literally', async () => {
-    const key = nextKey();
-    await repo.reserve(USER, key, 'POST /v1/things', NOW);
-
-    const item = await base.getItem<{ pk: string; sk: string }>({
-      pk: `IDEM#${USER}#${key}`,
-      sk: 'META',
+    const replay = await idem.loadReceipt(USER, KEY);
+    expect(replay).toMatchObject({ status: 201, body: '{"data":{"id":"act_1"}}' });
+    expect(await base.getItem({ pk: 'TEST#domain', sk: 'META' })).toMatchObject({
+      writes: 1,
     });
-
-    expect(item).toBeDefined();
-    expect(item?.pk).toBe(`IDEM#usr_int_idem#${key}`);
   });
 
-  it('stores a ttl 24 hours out', async () => {
-    const key = nextKey();
-    await repo.reserve(USER, key, 'POST /v1/things', NOW);
+  it('allows exactly one same-key transaction to commit and stores no in-flight state', async () => {
+    const run = async (suffix: string) => {
+      const builder = new tx.TransactionBuilder(`race-${suffix}`, 1)
+        .add({ Put: { Item: { pk: `TEST#race#${suffix}`, sk: 'META' } } })
+        .addReserved(idem.receiptItem(receipt(KEY, `{"data":{"id":"${suffix}"}}`)));
+      return tx.transactWrite(builder.build(), { operation: `race-${suffix}` });
+    };
 
-    const item = await base.getItem<{ ttl: number }>(keys.idempotency(USER, key));
-    expect(item?.ttl).toBe(Math.floor(NOW / 1000) + 24 * 60 * 60);
-  });
-
-  /**
-   * The same key for two different users must not collide. This is the assertion that would
-   * fail if the partition were ever narrowed to `IDEM#<key>`.
-   */
-  it('does not collide across users holding the same key', async () => {
-    const key = nextKey();
-
-    const mine = await repo.reserve(USER, key, 'POST /v1/things', NOW);
-    const theirs = await repo.reserve(OTHER_USER, key, 'POST /v1/things', NOW);
-
-    expect(mine.kind).toBe('reserved');
-    expect(theirs.kind).toBe('reserved');
-  });
-});
-
-describe('a second claim on a held key', () => {
-  it('reports in-flight while the first request has stored no response', async () => {
-    const key = nextKey();
-    await repo.reserve(USER, key, 'POST /v1/things', NOW);
-
-    const second = await repo.reserve(USER, key, 'POST /v1/things', NOW);
-
-    expect(second.kind).toBe('in-flight');
-  });
-
-  it('reports a replay once the first request has completed', async () => {
-    const key = nextKey();
-    await repo.reserve(USER, key, 'POST /v1/things', NOW);
-    await repo.complete(USER, key, 201, '{"data":{"id":"act_1"}}');
-
-    const second = await repo.reserve(USER, key, 'POST /v1/things', NOW);
-
-    expect(second.kind).toBe('replay');
-    expect(second.kind === 'replay' && second.record.body).toBe(
-      '{"data":{"id":"act_1"}}',
-    );
-    expect(second.kind === 'replay' && second.record.status).toBe(201);
-  });
-
-  /**
-   * **The test this file exists for.** Two claims raced against the real database: the
-   * conditional write must produce exactly one winner. A mock cannot answer this — it would
-   * report whatever it was configured to report.
-   */
-  it('yields exactly one winner when two claims race', async () => {
-    const key = nextKey();
-
-    const results = await Promise.all([
-      repo.reserve(USER, key, 'POST /v1/things', NOW),
-      repo.reserve(USER, key, 'POST /v1/things', NOW),
+    const settled = await Promise.allSettled([run('a'), run('b')]);
+    expect(settled.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rows = await Promise.all([
+      base.getItem({ pk: 'TEST#race#a', sk: 'META' }),
+      base.getItem({ pk: 'TEST#race#b', sk: 'META' }),
     ]);
-
-    expect(results.filter((r) => r.kind === 'reserved')).toHaveLength(1);
-    expect(results.filter((r) => r.kind !== 'reserved')).toHaveLength(1);
+    expect(rows.filter(Boolean)).toHaveLength(1);
+    const stored = await idem.loadReceipt(USER, KEY);
+    expect(stored?.body).toMatch(/^\{"data":\{"id":"[ab]"\}\}$/);
+    expect(stored?.status).toBe(201);
   });
 
-  it('yields one winner out of five', async () => {
-    const key = nextKey();
+  it('cancellation leaves neither domain data nor a success receipt', async () => {
+    await base.putItem({
+      pk: 'TEST#guard',
+      sk: 'META',
+      entity: 'Guard',
+      createdAt: CREATED_AT,
+      updatedAt: CREATED_AT,
+      schemaVersion: 1,
+    });
+    const key = '9f8e7d6c-8b86-d011-b42d-000000000002';
+    const builder = new tx.TransactionBuilder('cancelFixture', 1)
+      .add({
+        Put: {
+          Item: { pk: 'TEST#guard', sk: 'META' },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      })
+      .addReserved(idem.receiptItem(receipt(key)));
 
-    const results = await Promise.all(
-      Array.from({ length: 5 }, () => repo.reserve(USER, key, 'POST /v1/things', NOW)),
-    );
-
-    expect(results.filter((r) => r.kind === 'reserved')).toHaveLength(1);
+    await expect(
+      tx.transactWrite(builder.build(), { operation: 'cancelFixture' }),
+    ).rejects.toBeDefined();
+    expect(await idem.loadReceipt(USER, key)).toBeUndefined();
   });
 });
 
-describe('completing and releasing', () => {
-  /** The 24 hours run from when the key was first seen, not from when the handler finished. */
-  it('preserves the reservation ttl when attaching the response', async () => {
-    const key = nextKey();
-    await repo.reserve(USER, key, 'POST /v1/things', NOW);
-    await repo.complete(USER, key, 201, '{"data":1}');
+describe('durable multi-phase cleanup', () => {
+  const cleanupKey = '9f8e7d6c-8b86-d011-b42d-000000000003';
+  const ref = { activityId: 'act_cleanup', userId: USER, idempotencyKey: cleanupKey };
 
-    const item = await base.getItem<{ ttl: number; body: string }>(
-      keys.idempotency(USER, key),
+  async function commitAbandonedWork() {
+    const work = {
+      ...ref,
+      phases: [{ kind: 'delete_reminders' as const, complete: false }],
+      createdAt: CREATED_AT,
+      updatedAt: CREATED_AT,
+      schemaVersion: 1 as const,
+    };
+    const attachedReceipt = { ...receipt(cleanupKey), cleanupRef: ref };
+    const builder = new tx.TransactionBuilder('cleanupFixture', 2)
+      .add({
+        Put: { Item: { pk: 'ACT#act_cleanup', sk: 'TEST#main', state: 'committed' } },
+      })
+      .addReserved(idem.receiptItem(attachedReceipt), idem.cleanupItem(work));
+    await tx.transactWrite(builder.build(), { operation: 'cleanupFixture' });
+  }
+
+  it('commits receipt and work before a crash, then replay drains idempotently', async () => {
+    await commitAbandonedWork();
+    expect((await idem.loadReceipt(USER, cleanupKey))?.cleanupRef).toEqual(ref);
+    expect(await idem.loadCleanup(ref)).toBeDefined();
+    let effects = 0;
+    const execute = async () => {
+      effects += 1;
+      return { complete: true };
+    };
+
+    await cleanup.drainCleanup(ref, execute, () => '2026-08-09T12:00:01.000Z');
+    await cleanup.drainCleanup(ref, execute, () => '2026-08-09T12:00:02.000Z');
+
+    expect(effects).toBe(1);
+    expect(await idem.loadCleanup(ref)).toBeUndefined();
+  });
+
+  it('the next same-Activity mutation drains abandoned work', async () => {
+    await commitAbandonedWork();
+    let effects = 0;
+    await cleanup.drainActivityCleanup(
+      'act_cleanup',
+      async () => {
+        effects += 1;
+        return { complete: true };
+      },
+      () => '2026-08-09T12:00:03.000Z',
     );
-    expect(item?.ttl).toBe(Math.floor(NOW / 1000) + 24 * 60 * 60);
-    expect(item?.body).toBe('{"data":1}');
+
+    expect(effects).toBe(1);
+    expect(await idem.loadCleanup(ref)).toBeUndefined();
   });
 
-  /**
-   * Without the release, a failed request would hold the key for 24 hours and the client's
-   * retry — the entire reason it sent a key — would be refused until tomorrow.
-   */
-  it('frees the key so a retry can claim it again', async () => {
-    const key = nextKey();
-    await repo.reserve(USER, key, 'POST /v1/things', NOW);
-    await repo.release(USER, key);
+  it('a cancelled main transaction stores neither receipt nor cleanup work', async () => {
+    const key = '9f8e7d6c-8b86-d011-b42d-000000000004';
+    const cancelledRef = {
+      activityId: 'act_cancelled',
+      userId: USER,
+      idempotencyKey: key,
+    };
+    await base.putItem({
+      pk: 'ACT#act_cancelled',
+      sk: 'TEST#guard',
+      entity: 'Guard',
+      createdAt: CREATED_AT,
+      updatedAt: CREATED_AT,
+      schemaVersion: 1,
+    });
+    const work = {
+      ...cancelledRef,
+      phases: [{ kind: 'reset_rsvp' as const, complete: false }],
+      createdAt: CREATED_AT,
+      updatedAt: CREATED_AT,
+      schemaVersion: 1 as const,
+    };
+    const builder = new tx.TransactionBuilder('cancelCleanupFixture', 2)
+      .add({
+        Put: {
+          Item: { pk: 'ACT#act_cancelled', sk: 'TEST#guard' },
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      })
+      .addReserved(
+        idem.receiptItem({ ...receipt(key), cleanupRef: cancelledRef }),
+        idem.cleanupItem(work),
+      );
 
-    const retry = await repo.reserve(USER, key, 'POST /v1/things', NOW);
-    expect(retry.kind).toBe('reserved');
-  });
-
-  it('leaves nothing behind after a release', async () => {
-    const key = nextKey();
-    await repo.reserve(USER, key, 'POST /v1/things', NOW);
-    await repo.release(USER, key);
-
-    expect(await base.getItem(keys.idempotency(USER, key))).toBeUndefined();
+    await expect(
+      tx.transactWrite(builder.build(), { operation: 'cancelCleanupFixture' }),
+    ).rejects.toBeDefined();
+    expect(await idem.loadReceipt(USER, key)).toBeUndefined();
+    expect(await idem.loadCleanup(cancelledRef)).toBeUndefined();
   });
 });

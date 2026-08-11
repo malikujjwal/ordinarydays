@@ -152,7 +152,7 @@ describe('creating a task', () => {
       transacted()
         .map((entry) => entry.Put?.Item?.entity)
         .sort(),
-    ).toEqual(['Activity', 'ActivityIndex']);
+    ).toEqual(['Activity', 'ActivityIndex', 'Idempotency']);
   });
 
   it('writes to the partition of whoever identity resolved', async () => {
@@ -394,12 +394,12 @@ describe('reminders at creation', () => {
     });
 
     expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(1);
-    expect(transacted()).toHaveLength(3);
+    expect(transacted()).toHaveLength(4);
   });
 });
 
 /**
- * The registry entry carries `creates`, so `idempotency` requires the header. This is the
+ * The registry entry carries `mutates: true`, so `idempotency` requires the header. This is the
  * assertion that the flag is set: without it the middleware skips the route and the request
  * would succeed.
  */

@@ -29,13 +29,13 @@ export type RouteAuth =
 /** The verbs this API uses. `ALL` is how Hono records a middleware, never a route. */
 export type RouteMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
-export interface RouteEntry {
+interface RouteEntryBase {
   readonly method: RouteMethod;
   /** The Hono path, verbatim — `/v1/activities/:id`, not a regex and not a prefix. */
   readonly pattern: string;
   readonly auth: RouteAuth;
   /**
-   * Whether this route **creates**, and therefore requires an `Idempotency-Key` (P1-04).
+   * Legacy P1-04 note: this classification is now the required `mutates` field on every POST.
    *
    * `api-contract.md` §1 requires the header on "all `POST` that create", which the method
    * alone cannot answer: `POST /v1/activities/:id/complete`, `/skip` and `/snooze` are
@@ -44,11 +44,18 @@ export interface RouteEntry {
    * completion or let every duplicate through — so the route states it, in the same place
    * and for the same reason it states whether it needs an identity.
    *
-   * Absent means false. Only creating routes carry the flag, so the registry reads as a
-   * list of the exceptional ones rather than a column of `false`.
+   * P2-38 broadens replay protection to every mutating POST and requires read-only POSTs to
+   * opt out explicitly, so omission cannot silently bypass the middleware.
    */
-  readonly creates?: true;
 }
+
+/** Every POST is explicitly classified so a new mutation cannot silently bypass replay. */
+export type RouteEntry =
+  | (RouteEntryBase & { readonly method: 'POST'; readonly mutates: boolean })
+  | (RouteEntryBase & {
+      readonly method: Exclude<RouteMethod, 'POST'>;
+      readonly mutates?: never;
+    });
 
 /**
  * Every route this build mounts, and whether it needs an identity.
@@ -69,7 +76,7 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
   // §2.1 Me
   { method: 'GET', pattern: '/v1/me', auth: 'authenticated' },
   { method: 'PATCH', pattern: '/v1/me', auth: 'authenticated' },
-  { method: 'POST', pattern: '/v1/me/devices', auth: 'authenticated', creates: true },
+  { method: 'POST', pattern: '/v1/me/devices', auth: 'authenticated', mutates: true },
   { method: 'DELETE', pattern: '/v1/me/devices/:deviceId', auth: 'authenticated' },
 
   // §2.2 Agenda
@@ -77,7 +84,7 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
 
   // §2.2 Flat activity lists, and §2.3 Activities
   { method: 'GET', pattern: '/v1/activities', auth: 'authenticated' },
-  { method: 'POST', pattern: '/v1/activities', auth: 'authenticated', creates: true },
+  { method: 'POST', pattern: '/v1/activities', auth: 'authenticated', mutates: true },
   { method: 'GET', pattern: '/v1/activities/:id', auth: 'authenticated' },
   { method: 'PATCH', pattern: '/v1/activities/:id', auth: 'authenticated' },
   { method: 'DELETE', pattern: '/v1/activities/:id', auth: 'authenticated' },
@@ -85,17 +92,22 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     method: 'POST',
     pattern: '/v1/activities/:id/duplicate',
     auth: 'authenticated',
-    creates: true,
+    mutates: true,
   },
 
   /**
-   * §2.11 Capture — stubs until Phase 8. **None of them `creates`**: capture returns a draft
+   * §2.11 Capture — stubs until Phase 8. **None of them mutates**: capture returns a draft
    * for the user to confirm and writes nothing, so there is no duplicate for an
    * `Idempotency-Key` to prevent (`agent-playbook.md` §6.12).
    */
-  { method: 'POST', pattern: '/v1/capture/parse', auth: 'authenticated' },
-  { method: 'POST', pattern: '/v1/capture/extract', auth: 'authenticated' },
-  { method: 'POST', pattern: '/v1/capture/link', auth: 'authenticated' },
+  { method: 'POST', pattern: '/v1/capture/parse', auth: 'authenticated', mutates: false },
+  {
+    method: 'POST',
+    pattern: '/v1/capture/extract',
+    auth: 'authenticated',
+    mutates: false,
+  },
+  { method: 'POST', pattern: '/v1/capture/link', auth: 'authenticated', mutates: false },
 
   // §2.1a Health
   { method: 'GET', pattern: '/v1/health', auth: 'unauthenticated-private' },

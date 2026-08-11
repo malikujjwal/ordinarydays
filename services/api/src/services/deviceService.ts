@@ -1,5 +1,6 @@
 import type { Device, RegisterDeviceInput } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
+import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import type { Logger } from '../lib/logger.js';
 import {
   deleteDevice,
@@ -41,6 +42,7 @@ export async function registerDevice(
   userId: string,
   input: RegisterDeviceInput,
   now: string,
+  receiptFor?: (device: Device) => IdempotencyReceipt,
 ): Promise<Device> {
   const device: Device = {
     deviceId: newDeviceId(),
@@ -52,7 +54,7 @@ export async function registerDevice(
     schemaVersion: 1,
   };
 
-  await putDevice(userId, device);
+  await putDevice(userId, device, receiptFor?.(device));
 
   return device;
 }

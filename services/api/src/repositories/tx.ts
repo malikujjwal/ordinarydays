@@ -60,7 +60,64 @@ interface WriteOptions {
    * in `items`, so a repository can say "the index entry already existed" rather than
    * leaving the handler to guess which of five items tripped.
    */
-  readonly onConditionFailed?: (index: number) => AppError | undefined;
+  readonly onConditionFailed?: (index: number) => Error | undefined;
+}
+
+/**
+ * Composes a domain transaction while reserving capacity for middleware-owned receipt and
+ * cleanup items. Repositories add their domain items first; the service fills the reserved
+ * slots only after it has precomputed the successful HTTP response.
+ */
+export class TransactionBuilder {
+  readonly #items: TransactItem[] = [];
+  #reservedFilled = false;
+
+  constructor(
+    readonly operation: string,
+    readonly reservedSlots = 0,
+  ) {
+    assertWithinLimit(reservedSlots, operation);
+  }
+
+  add(...items: readonly TransactItem[]): this {
+    assertWithinLimit(
+      this.#items.length + items.length + this.reservedSlots,
+      this.operation,
+    );
+    this.#items.push(...items);
+    return this;
+  }
+
+  /** Adds the receipt/cleanup items that consumed the capacity reserved at construction. */
+  addReserved(...items: readonly TransactItem[]): this {
+    if (this.#reservedFilled || items.length !== this.reservedSlots) {
+      throw new AppError('internal', 'An unexpected error occurred.', [
+        {
+          path: this.operation,
+          message: `${this.operation} reserved ${this.reservedSlots} transaction slots but supplied ${items.length}.`,
+        },
+      ]);
+    }
+    this.#items.push(...items);
+    this.#reservedFilled = true;
+    return this;
+  }
+
+  get length(): number {
+    return this.#items.length;
+  }
+
+  build(): readonly TransactItem[] {
+    if (this.reservedSlots > 0 && !this.#reservedFilled) {
+      throw new AppError('internal', 'An unexpected error occurred.', [
+        {
+          path: this.operation,
+          message: `${this.operation} did not supply its ${this.reservedSlots} reserved transaction items.`,
+        },
+      ]);
+    }
+    return [...this.#items];
+  }
 }
 
 /**

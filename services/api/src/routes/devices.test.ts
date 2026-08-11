@@ -1,4 +1,8 @@
-import { DeleteCommand, DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DeleteCommand,
+  DynamoDBDocumentClient,
+  TransactWriteCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,12 +32,13 @@ const DEVICE = 'dev_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 
 beforeEach(async () => {
   ddbMock.reset();
+  ddbMock.on(TransactWriteCommand).resolves({});
   vi.resetModules();
   createApp = (await import('../app.js')).createApp;
 });
 
 /**
- * The device write, picked out of every `PutCommand` the request sent.
+ * The device write, picked out of the domain + receipt transaction.
  *
  * `/v1/me/devices` is authenticated **and** creating, so two middlewares write before the
  * handler does: `rateLimit` bumps a `RATE#` counter and `idempotency` reserves an `IDEM#`
@@ -42,9 +47,10 @@ beforeEach(async () => {
  */
 const devicePuts = () =>
   ddbMock
-    .commandCalls(PutCommand)
-    .map((call) => call.args[0].input)
-    .filter((input) => String(input.Item?.sk).startsWith('DEVICE#'));
+    .commandCalls(TransactWriteCommand)
+    .flatMap((call) => call.args[0].input.TransactItems ?? [])
+    .flatMap((item) => (item.Put === undefined ? [] : [item.Put]))
+    .filter((put) => String(put.Item?.sk).startsWith('DEVICE#'));
 
 const deviceDeletes = () =>
   ddbMock
@@ -170,7 +176,7 @@ describe('POST /v1/me/devices', () => {
   });
 
   /**
-   * The route's registry entry carries `creates`, so `idempotency` requires the header. This
+   * The route's registry entry carries `mutates: true`, so `idempotency` requires the header. This
    * is the assertion that the flag is actually set: without it the middleware skips the route
    * and this request would succeed.
    */
