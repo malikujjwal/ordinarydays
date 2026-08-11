@@ -761,6 +761,9 @@ the injected `fetch` in `client/http.ts`.
   `react-native-reanimated`, `react-native-gesture-handler`) are upgraded **only** via
   `npx expo install --fix` after an SDK bump. Their versions are dictated by the SDK, not
   by us. `npx expo-doctor` runs in CI and fails on a mismatch.
+- Security-only transitive patch floors live in root `package.json#pnpm.overrides`; they add
+  no direct dependency and are removed once every parent resolves a safe version without the
+  override. The 2026-08-11 audit baseline floors are `minimatch@9.0.7` and `postcss@8.5.18`.
 - Node is pinned in `.nvmrc`, `package.json#engines`, and the CDK Lambda runtime
   (`Runtime.NODEJS_22_X`). All three must agree; a CI check asserts it.
 - Dependency updates arrive as grouped Dependabot PRs weekly (patch/minor grouped, major

@@ -364,6 +364,11 @@ count, and its licence. Exact version, `--frozen-lockfile`, no lifecycle scripts
 explicitly approved in `pnpm.onlyBuiltDependencies`. `pnpm audit --audit-level=high` is green.
 The best supply-chain defence is a small tree, and every addition is measured against that.
 
+> **Known accepted advisories (2026-08-11):** `image-size`
+> `GHSA-w3rx-r6r6-pgpr` / `GHSA-5p2g-fcmc-qvqq` — build-time only (Metro asset handling),
+> DoS class, no patched release; re-check each nightly-audit design review and drop this note
+> when Metro ships a fix.
+
 ---
 
 ## 13. Per-phase definition of done
@@ -435,6 +440,11 @@ a line does not apply.
 - [ ] No security trigger touched — **or** the §12.2 checklist is completed below
 - [ ] No new dependency — **or** the §12.3 justification is included below
 - [ ] `gitleaks` and `pnpm audit --audit-level=high` are green
+
+> **Known accepted advisories (2026-08-11):** `image-size`
+> `GHSA-w3rx-r6r6-pgpr` / `GHSA-5p2g-fcmc-qvqq` — build-time only (Metro asset handling),
+> DoS class, no patched release; re-check each nightly-audit design review and drop this note
+> when Metro ships a fix.
 
 ## UI (delete if not a UI change)
 - [ ] Hit targets ≥ 44×44 with ≥ 8 pt separation
