@@ -448,6 +448,9 @@ function recurrenceForPatch(
   now: string,
 ): Recurrence | null | undefined {
   if (patch.recurrence === undefined) {
+    if (patch.schedule === null && current.recurrence !== undefined) {
+      recurrenceFailure(RECURRENCE_NEEDS_DATE);
+    }
     if (patch.editedFromDate !== undefined) {
       recurrenceFailure(EDIT_DATE_NEEDS_APPEND, 'editedFromDate');
     }

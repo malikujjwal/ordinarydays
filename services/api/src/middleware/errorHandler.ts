@@ -1,4 +1,5 @@
 import type { AppErrorBody, ErrorCode, ErrorDetail } from '@od/shared/errors';
+import { RecurrenceValidationError } from '@od/shared/recurrence';
 import type { Context } from 'hono';
 import { ZodError } from 'zod';
 import type { AppEnv } from '../app-env.js';
@@ -16,9 +17,12 @@ import { AppError, INTERNAL_ERROR_MESSAGE, statusFor } from '../lib/errors.js';
 const DDB_ERROR_MAP: Record<string, ErrorCode> = {
   ConditionalCheckFailedException: 'conflict',
   TransactionCanceledException: 'conflict',
-  ProvisionedThroughputExceededException: 'rate_limited',
-  RequestLimitExceeded: 'rate_limited',
 };
+
+const THROUGHPUT_ERRORS = new Set([
+  'ProvisionedThroughputExceededException',
+  'RequestLimitExceeded',
+]);
 
 function zodDetails(error: ZodError): ErrorDetail[] {
   return error.issues.map((issue) => ({
@@ -32,6 +36,7 @@ function classify(err: Error): {
   message: string;
   details?: ErrorDetail[];
   retryAfterSeconds?: number;
+  status?: 503;
 } {
   if (err instanceof AppError) {
     return {
@@ -52,6 +57,19 @@ function classify(err: Error): {
     };
   }
 
+  if (err instanceof RecurrenceValidationError) {
+    return { code: err.code, message: err.message };
+  }
+
+  if (THROUGHPUT_ERRORS.has(err.name)) {
+    return {
+      code: 'internal',
+      message: INTERNAL_ERROR_MESSAGE,
+      retryAfterSeconds: 1,
+      status: 503,
+    };
+  }
+
   const mapped = DDB_ERROR_MAP[err.name];
   if (mapped !== undefined) {
     return { code: mapped, message: 'The request could not be completed.' };
@@ -63,8 +81,14 @@ function classify(err: Error): {
 }
 
 export function errorHandler(err: Error, c: Context<AppEnv>): Response {
-  const { code, message, details, retryAfterSeconds } = classify(err);
-  const status = statusFor(code);
+  const {
+    code,
+    message,
+    details,
+    retryAfterSeconds,
+    status: statusOverride,
+  } = classify(err);
+  const status = statusOverride ?? statusFor(code);
   const requestId = c.get('requestId') ?? 'req_unknown';
 
   // Every 5xx logs with the stack; every 4xx logs without one (`tech-stack.md` §4.4).
@@ -90,5 +114,5 @@ export function errorHandler(err: Error, c: Context<AppEnv>): Response {
     c.header('WWW-Authenticate', 'Bearer');
   }
 
-  return c.json(body, status as 400);
+  return c.json(body, status);
 }

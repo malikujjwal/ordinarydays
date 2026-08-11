@@ -759,8 +759,9 @@ repository is the per-participant-completion defect from the risk table arriving
   (P2-15), and the row holds one current state, not a history.
 - The activity-delete cascade (P1-14) already removes `OCC#` rows with the partition;
   nothing here duplicates that.
-- No method takes a status filter except `countCompleted`; hiding skipped occurrences is a
-  merge rule in P2-08 and a client toggle in P2-35, never a storage-level filter.
+- No method takes a status filter except `countCompleted`; skipped occurrences remain in the
+  agenda payload and P2-35 hides or shows them client-side, never via a storage-level or
+  agenda-service filter.
 
 **Tests.** Integration against DynamoDB Local: put/get round-trip preserves every field;
 `batchGetForPairs` with 250 pairs issues three `BatchGetItem` calls (client spy) and
@@ -791,6 +792,12 @@ timezone handling is a hydrated read fallback, not a schema migration.
 **Approach.** The amended hydration-and-expansion algorithm in
 [`../02-architecture/data-model.md#6-recurrence-expansion-algorithm`](../02-architecture/data-model.md#6-recurrence-expansion-algorithm),
 implemented literally:
+
+> **Skipped-occurrence clarification — 2026-08-10.** P2-08 always includes
+> `skipped_occurrence` rows in the server payload. No Phase 2 server task consumes an
+> `includeSkipped` input. “Hidden by default” in the older step 7 and case 27 wording is a
+> P2-35 client-presentation rule: that device-local toggle filters or reveals the already
+> returned row without refetching or changing storage.
 
 1. Widen the scheduled query two calendar days on each side:
    `Query GSI1 U#<u>#S BETWEEN <from-2d>T00:00 AND <to+2d>T23:59`. The full IANA span is
@@ -1418,8 +1425,9 @@ other dates expand unchanged; a non-recurring skip flips `META.status` and every
 `ActivityIndex.status` in one transaction and the item leaves
 the agenda response; skip then `uncomplete` restores `scheduled` / deletes the row; the
 prep-task variant rewrites and restores the parent `SUB#` status in those same transactions;
-skipped occurrence is emitted as `skipped_occurrence` and hidden by default in the agenda
-merge (P2-08); forced transaction cancellation changes no META or index row; a participant
+skipped occurrence is emitted as `skipped_occurrence` in the agenda payload and hidden by
+default by P2-35's client-presentation filter, per the P2-08 clarification; forced transaction
+cancellation changes no META or index row; a participant
 gets `403` with nothing written; a stranger gets `404`; replaying the same
 `Idempotency-Key` returns the original `2xx` with exactly one repository write.
 
@@ -1595,6 +1603,12 @@ Today renders `days[0]`; the second day remains part of the same response. P2-34
 background refresh is cadence-driven and is not started by rendering Today. Any feature
 requiring a second request to render Today is rejected. That is success criterion S2 and it
 is asserted by a Playwright network-count assertion, not by review.
+
+> **Implementation deviation — 2026-08-10 (owner: P2-19).** P2-11 cannot mount the Today
+> screen that does not yet exist, so its cold-open Playwright network-count assertion is
+> deferred to P2-19, the first task that owns the Today screen shell and mounted agenda path.
+> P2-11 retains the route, ETag and integration coverage; P2-19 must assert exactly one
+> Today-owned agenda request on cold open before it may merge.
 
 **Tests.** A 63-day window `400`s; a 62-day one succeeds. `If-None-Match` with the current
 `ETag` returns `304` with no body. The named test **`ETag ignores requestId`** builds two

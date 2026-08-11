@@ -1,8 +1,10 @@
+import { assertNever } from '@od/shared';
 import { deriveGsi1Bucket } from '@od/shared/activity';
 import { activity as activitySchema } from '@od/shared/schemas';
 import { TABLE } from '@od/shared/table';
 import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
+import { z } from 'zod';
 import { batchGetItems, deleteAll, getItem, type Page, query, queryAll } from './base.js';
 import {
   activityIndex,
@@ -77,6 +79,7 @@ const ENTITY = {
 } as const;
 
 const SCHEMA_VERSION = 1;
+const storedItemKey = z.object({ pk: z.string(), sk: z.string() });
 
 /**
  * The `#S` sort key's date-time, as the user's local wall clock: `YYYY-MM-DDTHH:mm`.
@@ -132,6 +135,8 @@ function gsi1KeysFor(
       return gsi1NeedsDate(userId, activity.lastActivityAt, id);
     case 'N':
       return gsi1Anytime(userId, activity.createdAt, id);
+    default:
+      return assertNever(bucket, 'Gsi1Bucket');
   }
 }
 
@@ -185,6 +190,8 @@ function deriveSubtitle(activity: Activity, taskSubtitle?: string): string | und
       return activity.details.organiser ?? activity.location?.label;
     case 'custom':
       return undefined;
+    default:
+      return assertNever(activity.details, 'ActivityDetails');
   }
 }
 
@@ -344,7 +351,13 @@ export async function batchGetActivityMeta(
 ): Promise<Activity[]> {
   const uniqueIds = [...new Set(activityIds)];
   const rows = await batchGetItems<StoredItem>(uniqueIds.map(activityMeta));
-  return rows.map((row) => activitySchema.parse(row) as Activity);
+  return rows.map(parseActivity);
+}
+
+function parseActivity(value: unknown): Activity {
+  const parsed = activitySchema.parse(value);
+  // Zod models optional keys as value | undefined; exactOptionalPropertyTypes models absence.
+  return parsed as Activity;
 }
 
 /**
@@ -451,7 +464,7 @@ export function touchLastActivity(
   indexedUserIds: readonly string[],
   tx: TransactItem[],
 ): Activity {
-  const touched = { ...activity, lastActivityAt: at } as Activity;
+  const touched: Activity = { ...activity, lastActivityAt: at };
 
   tx.push({
     Put: {
@@ -506,10 +519,7 @@ export async function deleteActivity(
   const indexedUserIds = options.indexedUserIds ?? [];
   const partition = options.partition ?? (await getActivityPartition(activityId));
 
-  const keys = partition.map((item) => ({
-    pk: item.pk as string,
-    sk: item.sk as string,
-  }));
+  const keys = partition.map((item) => storedItemKey.parse(item));
 
   for (const indexedUserId of new Set([userId, ...indexedUserIds])) {
     keys.push(activityIndex(indexedUserId, activityId));

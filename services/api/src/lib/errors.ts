@@ -24,7 +24,7 @@ export class AppError extends Error {
  * `warnings[]` entry on a successful response (`tech-stack.md` §4.4), so it must never
  * reach this table. A lookup for it is a bug at the call site.
  */
-export const ERROR_STATUS: Record<Exclude<ErrorCode, 'series_limit_exceeded'>, number> = {
+export const ERROR_STATUS = {
   unauthenticated: 401,
   forbidden: 403,
   not_found: 404,
@@ -38,7 +38,7 @@ export const ERROR_STATUS: Record<Exclude<ErrorCode, 'series_limit_exceeded'>, n
   not_implemented: 501,
   upgrade_required: 426,
   internal: 500,
-};
+} as const satisfies Record<Exclude<ErrorCode, 'series_limit_exceeded'>, number>;
 
 /**
  * The literal string a 500 always returns. Never the exception text: an exception message
@@ -47,7 +47,7 @@ export const ERROR_STATUS: Record<Exclude<ErrorCode, 'series_limit_exceeded'>, n
  */
 export const INTERNAL_ERROR_MESSAGE = 'An unexpected error occurred.';
 
-export function statusFor(code: ErrorCode): number {
+export function statusFor(code: ErrorCode) {
   if (code === 'series_limit_exceeded') return 200;
   return ERROR_STATUS[code];
 }

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { addDays, format, getDay, parseISO } from 'date-fns';
+import { getDay, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import fc from 'fast-check';
 import { describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,7 @@ import type {
   RecurrenceSegment,
   Weekday,
 } from '../types/recurrence.js';
-import { toUtcInstant } from './calendar.js';
+import { addWallDays as addIsoDays, toUtcInstant } from './calendar.js';
 import { RecurrenceValidationError } from './error.js';
 import { expandRecurrence } from './expand.js';
 
@@ -33,10 +33,6 @@ function expand(
   timezone = DEFAULT_TIMEZONE,
 ): string[] {
   return expandRecurrence(rec, from, to, timezone);
-}
-
-function addIsoDays(value: string, amount: number): string {
-  return format(addDays(parseISO(`${value}T12:00:00`), amount), 'yyyy-MM-dd');
 }
 
 const goldenFixtureSchema = z

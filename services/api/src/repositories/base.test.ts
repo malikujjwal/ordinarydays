@@ -12,6 +12,7 @@ import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AppError } from '../lib/errors.js';
 import {
+  batchGetBackoffMs,
   batchGetItems,
   deleteAll,
   deleteItem,
@@ -194,6 +195,13 @@ describe('batchGetItems', () => {
     expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(0);
   });
 
+  it('uses full jitter below the exponential ceiling', () => {
+    expect(batchGetBackoffMs(0, () => 0)).toBe(0);
+    expect(batchGetBackoffMs(0, () => 0.5)).toBe(12);
+    expect(batchGetBackoffMs(3, () => 0.5)).toBe(100);
+    expect(batchGetBackoffMs(20, () => 0.999)).toBeLessThan(1_000);
+  });
+
   it('chunks at 100 keys and upgrades every response row', async () => {
     ddbMock.on(BatchGetCommand).callsFake((input) => ({
       Responses: {
@@ -229,7 +237,11 @@ describe('batchGetItems', () => {
       UnprocessedKeys: { 'od-main-local': { Keys: [key] } },
     });
 
-    await expect(batchGetItems([key])).rejects.toThrow(/unprocessed after 5 attempts/);
+    const promise = batchGetItems([key]);
+    await expect(promise).rejects.toThrow(/unprocessed after 5 attempts/);
+    await expect(promise).rejects.toMatchObject({
+      name: 'ProvisionedThroughputExceededException',
+    });
     expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(5);
   });
 });

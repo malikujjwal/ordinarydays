@@ -72,10 +72,13 @@ In practice `@hono/zod-validator` does this, and a handler receives an already-n
 value. The rule matters for the places the validator does not cover: DynamoDB reads, the
 API client's responses, and anything read from storage on the client.
 
-Type assertions (`as X`) are permitted in exactly three places: narrowing a `const`
-assertion, satisfying a library's generic that cannot be inferred, and inside a repository's
+Type assertions (`as X`) are permitted in exactly four places: narrowing a `const`
+assertion, satisfying a library's generic that cannot be inferred, inside a repository's
 upgrade-on-read function where the raw item's shape has just been checked by a
-`schemaVersion` branch. Everywhere else, `as` is a reviewer's question.
+`schemaVersion` branch, and immediately beside a `schema.parse` of the same value at a
+repository read boundary when Zod's optional-property output conflicts only with
+`exactOptionalPropertyTypes` absence semantics. That fourth use requires an adjacent comment
+naming the modality gap. Everywhere else, `as` is a reviewer's question.
 
 ### 1.3 Discriminated unions, not optional-field soup
 
@@ -539,6 +542,13 @@ untestable, and every agenda test would depend on the day it ran.
 All user-facing formatting is `date-fns` with `formatInTimeZone`, in the user's profile
 timezone unless the activity carries its own. No manual string slicing of a date, no
 `toLocaleDateString` without an explicit locale and zone, no month-name arrays.
+
+> **P2-03 deterministic recurrence-description exemption — 2026-08-10.**
+> `packages/shared/src/recurrence/describe.ts` keeps its fixed English `MONTH_NAMES` table.
+> Recurrence descriptions are canonical product copy whose output must be byte-identical
+> across runtimes, ambient locales and timezones; delegating those names to host locale data
+> would undo P2-03's determinism decision. This is the sole month-name-array exemption and
+> does not permit hand-formatted calendar dates elsewhere.
 
 ---
 

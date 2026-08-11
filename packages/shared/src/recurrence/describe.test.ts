@@ -369,4 +369,17 @@ describe('describeRecurrence', () => {
       ).toBe(`Every year on 1 ${name}`);
     }
   });
+
+  it('rejects an invalid hand-constructed end-date month', () => {
+    expect(() =>
+      describeRecurrence(
+        {
+          mode: 'fixed',
+          segments: [{ freq: 'daily', effectiveFrom: '2026-01-01' }],
+          endDate: '2026-13-01',
+        },
+        TODAY,
+      ),
+    ).toThrow('Month must be from 1 to 12.');
+  });
 });

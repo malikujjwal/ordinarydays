@@ -1,3 +1,4 @@
+import { assertNever } from '@od/shared';
 import type { AgendaItem } from '@od/shared/types';
 import { formatInTimeZone } from 'date-fns-tz';
 import { deriveActionCapabilities } from './actionCapabilities.js';
@@ -78,6 +79,8 @@ function deriveSubtitle(
       return activity.details.organiser ?? activity.location?.label;
     case 'custom':
       return undefined;
+    default:
+      return assertNever(activity.details, 'ActivityDetails');
   }
 }
 

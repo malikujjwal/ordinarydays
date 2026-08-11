@@ -34,3 +34,10 @@ export const occurrence = z
     completedAt: z.iso.datetime().optional(),
   })
   .meta({ id: 'Occurrence' });
+
+/** Internal marker stored when one nominal occurrence moves to another wall date. */
+export const occurrenceMoveMarker = z.object({
+  activityId: ulidId('act'),
+  destinationDate: isoDate,
+  movedFrom: z.array(isoDate),
+});

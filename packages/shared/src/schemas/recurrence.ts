@@ -183,10 +183,10 @@ export const createRecurrence = recurrence
     message: 'A new recurrence must contain exactly one segment.',
     path: ['segments'],
   })
-  .transform(
-    (value): CreateRecurrence => ({
-      ...value,
-      // The refinement immediately above proves this element exists and is the only one.
-      segments: [value.segments[0] as RecurrenceSegment],
-    }),
-  );
+  .transform((value): CreateRecurrence => {
+    const segment = value.segments[0];
+    if (segment === undefined) {
+      throw new Error('createRecurrence refinement admitted an empty segment list.');
+    }
+    return { ...value, segments: [segment] };
+  });

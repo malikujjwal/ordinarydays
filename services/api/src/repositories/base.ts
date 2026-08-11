@@ -293,6 +293,19 @@ export const MAX_BATCH_ITEMS = 25;
 /** DynamoDB's `BatchGetItem` key limit. */
 export const MAX_BATCH_GET_ITEMS = 100;
 
+const MAX_BATCH_GET_ATTEMPTS = 5;
+const BATCH_GET_BACKOFF_BASE_MS = 25;
+const BATCH_GET_BACKOFF_CAP_MS = 1_000;
+
+/** Full-jitter delay in [0, exponential ceiling), injectable for a deterministic test. */
+export function batchGetBackoffMs(attempt: number, random = Math.random): number {
+  const ceiling = Math.min(
+    BATCH_GET_BACKOFF_CAP_MS,
+    BATCH_GET_BACKOFF_BASE_MS * 2 ** attempt,
+  );
+  return Math.floor(random() * ceiling);
+}
+
 /**
  * Gets many items in chunks of 100, retrying the exact unprocessed keys with bounded
  * exponential backoff. Returned order is DynamoDB's; entity repositories restore caller
@@ -306,9 +319,15 @@ export async function batchGetItems<T extends StoredItem>(
   for (let start = 0; start < keys.length; start += MAX_BATCH_GET_ITEMS) {
     let pending = keys.slice(start, start + MAX_BATCH_GET_ITEMS);
 
-    for (let attempt = 0; attempt < 5 && pending.length > 0; attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < MAX_BATCH_GET_ATTEMPTS && pending.length > 0;
+      attempt += 1
+    ) {
       if (attempt > 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 2 ** (attempt - 1)));
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, batchGetBackoffMs(attempt - 1)),
+        );
       }
       const result = await ddb.send(
         new BatchGetCommand({ RequestItems: { [TABLE_NAME]: { Keys: pending } } }),
@@ -318,9 +337,12 @@ export async function batchGetItems<T extends StoredItem>(
     }
 
     if (pending.length > 0) {
-      throw new Error(
-        `BatchGetItem left ${pending.length} keys unprocessed after 5 attempts.`,
+      const error = new Error(
+        `BatchGetItem left ${pending.length} keys unprocessed after ${MAX_BATCH_GET_ATTEMPTS} attempts.`,
       );
+      // Deliberately impersonate the AWS throttle name so the central handler returns retryable 503.
+      error.name = 'ProvisionedThroughputExceededException';
+      throw error;
     }
   }
 

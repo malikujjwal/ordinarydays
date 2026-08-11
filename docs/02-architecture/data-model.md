@@ -1176,6 +1176,7 @@ before writing the code.
 | 4b | Every reminder on an activity, for scheduling | Same query; the scheduler keeps all `REM#` rows and fans out per user |
 | 4c | Outstanding durable cleanup for an Activity | `Query` `pk = ACT#<a>`, `sk begins_with CLEANUP#` before a new mutation; idempotent replay instead follows the receipt's exact cleanup reference. Internal only, never serialised. |
 | 5 | Occurrence overrides and moved-in markers for a series window | Exact-key `BatchGetItem`: `OCC#<nominalDate>` for emitted nominal dates and `MOVE#<destinationDate>` for every calendar date in the timezone-widened request window. A bounded second `BatchGetItem` hydrates the source `OCC#<movedFrom>` rows named by returned markers. Never use one Query per series. |
+| 5a | Completed occurrence count for whole-series delete confirmation | `Query pk = ACT#<a>`, `sk begins_with OCC#`, repository-owned `status = completed` filter, `Select: COUNT`, paged to exhaustion. The consumer is the `Delete whole series` confirmation copy; no denormalised counter is stored. |
 | 6 | User profile | `GetItem` `USER#<u>` / `PROFILE` |
 | 7 | Lists for a user | Paged `Query` `pk = USER#<u>`, `sk begins_with LIST#` (50 pointers per API page), then one `BatchGetItem` for that page's `LIST#<l>` / `META` rows. The 100 cap is on owned-list creation, not incoming memberships. |
 | 7b | Members of a list | `GetItem` `LIST#<l>` / `META`, get the owner's `USER#<ownerId>` / `LIST#<l>` pointer and profile, then `Query` `pk = LIST#<l>`, `sk begins_with MEMBER#`. Prepend the synthesised owner DTO; the query itself returns non-owners only. |
@@ -1246,7 +1247,7 @@ expandAgenda(userId, fromDate, toDate, tz):
   7. for each (series, date):
        t = time of the segment in force for date (falling back to schedule.time)
         if override.overrideDate          -> source emits nothing at its nominal date
-       if override.status == 'skipped'   -> emit as SKIPPED (hidden by default)
+       if override.status == 'skipped'   -> emit as SKIPPED (hidden by default — client presentation, P2-35)
        if override.status == 'completed' -> emit as COMPLETED
        if override.status == 'snoozed'   -> emit at override.snoozedUntil
        else                               -> emit at t
@@ -1273,6 +1274,8 @@ Constraints:
   locks this order.
 
 - Window is capped at **62 days**. Reject wider requests with `400`.
+- `#S` and optional `#N` queries are paged to exhaustion. Only `#R` is capped; it returns
+  `series_limit_exceeded` when another page exists.
 - Segments per series are capped at **20** (`validation_failed` on append beyond it),
   bounding expansion cost per series; the 62-day window and 200-series limits are unchanged.
 - Scheduled META hydration (step 2), series META hydration (step 4), marker discovery and
@@ -1280,6 +1283,10 @@ Constraints:
   retried. If a user has > 200
   active series, hydrate only the bounded set and return a `series_limit_exceeded` warning
   in the response rather than timing out.
+- If assembly encounters the same `(activityId, occurrenceDate?)` twice, it retains the
+  deterministic first candidate and returns `duplicate_occurrence:<activityId>`. This warns
+  about a storage or override-merge invariant breach; it is not a client reconciliation
+  mechanism and does not turn the successful agenda response into an error.
 - `after_completion` mode (Phase 9+): next occurrence = last completion date + interval.
   If never completed, use the active segment's `effectiveFrom`. It produces **at most one** future occurrence — do
   not project a series into the future for completion-relative recurrence.

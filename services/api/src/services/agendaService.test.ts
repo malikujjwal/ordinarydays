@@ -49,11 +49,16 @@ interface Fixture {
   readonly moved?: Awaited<ReturnType<AgendaDependencies['batchOccurrences']>>;
   readonly expanded?: readonly string[];
   readonly participants?: Readonly<Record<string, readonly StoredItem[]>>;
+  readonly bucketPageSize?: number;
 }
 
 function fixture(input: Fixture) {
   const byId = new Map(input.activities.map((row) => [row.activityId, row]));
   const calls: ('S' | 'P' | 'N' | 'R')[] = [];
+  const bucketCalls: {
+    bucket: 'S' | 'P' | 'N' | 'R';
+    options: Parameters<AgendaDependencies['listBucket']>[2];
+  }[] = [];
   const listReminders = vi.fn(async () => []);
   const expand = vi.fn(() => [...(input.expanded ?? [])]);
   const listOverdue = vi.fn(async () => [...(input.overdue ?? [])]);
@@ -68,10 +73,21 @@ function fixture(input: Fixture) {
     }),
   );
   const dependencies: AgendaDependencies = {
-    listBucket: async (_userId, bucket) => {
+    listBucket: async (_userId, bucket, options = {}) => {
       calls.push(bucket);
+      bucketCalls.push({ bucket, options });
+      const rows = [...(input.buckets?.[bucket] ?? [])];
+      const pageSize = input.bucketPageSize;
+      if (pageSize !== undefined && bucket !== 'R') {
+        const start = options.cursor === undefined ? 0 : Number(options.cursor);
+        const end = start + pageSize;
+        return {
+          items: rows.slice(start, end),
+          ...(end < rows.length ? { nextCursor: String(end) } : {}),
+        };
+      }
       return {
-        items: [...(input.buckets?.[bucket] ?? [])],
+        items: rows,
         ...(bucket === 'R' && input.seriesCursor !== undefined
           ? { nextCursor: input.seriesCursor }
           : {}),
@@ -89,6 +105,7 @@ function fixture(input: Fixture) {
   return {
     dependencies,
     calls,
+    bucketCalls,
     expand,
     listReminders,
     listOverdue,
@@ -152,6 +169,187 @@ describe('hydration and bucket boundaries', () => {
       undated.activityId,
     );
   });
+
+  it('paginates more than 200 dated items to exhaustion across a 62-day window', async () => {
+    const dated = Array.from({ length: 205 }, () =>
+      activity({
+        schedule: { date: '2026-08-06', time: '18:00', timezone: 'UTC' },
+      }),
+    );
+    const subject = fixture({
+      activities: dated,
+      buckets: { S: dated.map((row) => index(row)) },
+      bucketPageSize: 73,
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-01',
+        to: '2026-10-01',
+        timezone: 'UTC',
+        now: '2026-08-01T00:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+
+    expect(emitted(result)).toHaveLength(205);
+    expect(subject.calls.filter((bucket) => bucket === 'S')).toHaveLength(3);
+    expect(
+      subject.bucketCalls
+        .filter(({ bucket }) => bucket === 'S')
+        .map(({ options }) => options),
+    ).toEqual([
+      { between: ['2026-07-30T00:00', '2026-10-03T23:59'] },
+      {
+        between: ['2026-07-30T00:00', '2026-10-03T23:59'],
+        cursor: '73',
+      },
+      {
+        between: ['2026-07-30T00:00', '2026-10-03T23:59'],
+        cursor: '146',
+      },
+    ]);
+    expect(subject.bucketCalls.find(({ bucket }) => bucket === 'R')?.options).toEqual({
+      limit: 200,
+    });
+  });
+});
+
+describe('today-and-tasks section 3.1 ordering', () => {
+  it('orders all sections by the specified keys despite contradictory seed order', async () => {
+    const series = activity({
+      title: 'Series',
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00' }],
+      },
+    });
+    const scheduleB = activity({
+      title: 'Schedule B',
+      schedule: { date: '2026-08-06', time: '18:00', timezone: 'UTC' },
+    });
+    const scheduleA = activity({
+      title: 'Schedule A',
+      schedule: { date: '2026-08-06', time: '18:00', timezone: 'UTC' },
+    });
+    const completedAt14 = activity({
+      title: 'Completed at 14',
+      status: 'completed',
+      completedAt: '2026-08-06T14:00:00.000Z',
+      schedule: { date: '2026-08-06', timezone: 'UTC' },
+    });
+    const timedAt12 = activity({
+      title: 'Timed at 12',
+      schedule: { date: '2026-08-06', time: '12:00', timezone: 'UTC' },
+    });
+    const completedAt13 = activity({
+      title: 'Completed at 13',
+      status: 'completed',
+      completedAt: '2026-08-06T13:00:00.000Z',
+      schedule: { date: '2026-08-06', timezone: 'UTC' },
+    });
+    const untimedToday = activity({
+      title: 'Untimed today',
+      schedule: { date: '2026-08-06', timezone: 'UTC' },
+    });
+    const undatedOld = activity({ status: 'saved', title: 'Undated old' });
+    const undatedNew = activity({ status: 'saved', title: 'Undated new' });
+    const overdue = activity({
+      title: 'Overdue',
+      schedule: { date: '2026-08-04', timezone: 'UTC' },
+    });
+    const all = [
+      series,
+      scheduleB,
+      scheduleA,
+      completedAt14,
+      timedAt12,
+      completedAt13,
+      untimedToday,
+      undatedOld,
+      undatedNew,
+      overdue,
+    ];
+    const subject = fixture({
+      activities: all,
+      buckets: {
+        // Each seed list deliberately disagrees with at least one required output key.
+        R: [index(series)],
+        S: [
+          index(scheduleA),
+          index(scheduleB),
+          index(timedAt12),
+          index(completedAt13),
+          index(completedAt14),
+          index(untimedToday),
+        ],
+        N: [index(undatedOld), index(undatedNew)],
+      },
+      overdue: [index(overdue)],
+      expanded: ['2026-08-06'],
+      occurrences: {
+        occurrences: [],
+        markers: [
+          {
+            activityId: series.activityId,
+            destinationDate: '2026-08-06',
+            movedFrom: ['2026-08-05', '2026-08-04'],
+          },
+        ],
+      },
+      moved: [
+        {
+          activityId: series.activityId,
+          date: '2026-08-05',
+          status: 'rescheduled',
+          overrideDate: '2026-08-06',
+          overrideTime: '18:00',
+        },
+        {
+          activityId: series.activityId,
+          date: '2026-08-04',
+          status: 'rescheduled',
+          overrideDate: '2026-08-06',
+          overrideTime: '18:00',
+        },
+      ],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'UTC',
+        now: '2026-08-06T15:00:00.000Z',
+        includeAnytimeUnscheduled: true,
+        includeOverdue: true,
+      },
+      subject.dependencies,
+    );
+    const day = result.days[0];
+
+    expect(day?.schedule.map((row) => [row.activity.title, row.occurrenceDate])).toEqual([
+      ['Series', '2026-08-04'],
+      ['Series', '2026-08-05'],
+      ['Series', '2026-08-06'],
+      ['Schedule B', undefined],
+      ['Schedule A', undefined],
+    ]);
+    expect(day?.earlier.map((row) => row.activity.title)).toEqual([
+      'Completed at 14',
+      'Completed at 13',
+      'Timed at 12',
+    ]);
+    expect(day?.anytime.map((row) => row.activity.title)).toEqual([
+      'Overdue',
+      'Untimed today',
+      'Undated new',
+      'Undated old',
+    ]);
+  });
 });
 
 describe('occurrence merge matrix', () => {
@@ -209,7 +407,6 @@ describe('occurrence merge matrix', () => {
         to: '2026-08-07',
         timezone: 'America/New_York',
         now,
-        includeSkipped: true,
       },
       subject.dependencies,
     );
@@ -331,7 +528,7 @@ describe('transferred acceptance cases 25-28', () => {
     expect(series.updatedAt).toBe(originalUpdatedAt);
   });
 
-  it('[27] hides a skipped occurrence by default and restores only it under Show skipped', async () => {
+  it('[27] emits skipped occurrences so P2-35 can hide or show them client-side', async () => {
     const series = activity({
       schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
       recurrence: {
@@ -358,18 +555,9 @@ describe('transferred acceptance cases 25-28', () => {
       now: '2026-08-05T00:00:00.000Z',
     } as const;
 
-    const hidden = await assembleAgenda(input, subject.dependencies);
-    const shown = await assembleAgenda(
-      { ...input, includeSkipped: true },
-      subject.dependencies,
-    );
-
-    expect(emitted(hidden).map((row) => row.occurrenceDate)).toEqual([
-      '2026-08-05',
-      '2026-08-07',
-    ]);
+    const result = await assembleAgenda(input, subject.dependencies);
     expect(
-      emitted(shown).map((row) => [row.occurrenceDate, row.status, row.time]),
+      emitted(result).map((row) => [row.occurrenceDate, row.status, row.time]),
     ).toEqual([
       ['2026-08-05', 'scheduled', '18:00'],
       ['2026-08-06', 'skipped_occurrence', '18:00'],
@@ -813,6 +1001,56 @@ describe('overdue roll-forward', () => {
 });
 
 describe('bounded fan-out', () => {
+  it('caps reminder and parent-participant fan-outs at ten concurrent reads', async () => {
+    const parents = Array.from({ length: 25 }, () => activity());
+    const children = parents.map((parent) =>
+      activity({
+        parentActivityId: parent.activityId,
+        schedule: { date: '2026-08-06', time: '18:00', timezone: 'UTC' },
+      }),
+    );
+    const subject = fixture({
+      activities: [...parents, ...children],
+      buckets: { S: [...children].reverse().map((row) => index(row)) },
+    });
+    let activeParticipants = 0;
+    let maxParticipants = 0;
+    let activeReminders = 0;
+    let maxReminders = 0;
+    const dependencies: AgendaDependencies = {
+      ...subject.dependencies,
+      listParticipants: async () => {
+        activeParticipants += 1;
+        maxParticipants = Math.max(maxParticipants, activeParticipants);
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+        activeParticipants -= 1;
+        return [];
+      },
+      listReminders: async () => {
+        activeReminders += 1;
+        maxReminders = Math.max(maxReminders, activeReminders);
+        await new Promise<void>((resolve) => queueMicrotask(resolve));
+        activeReminders -= 1;
+        return [];
+      },
+    };
+
+    await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'UTC',
+        now,
+        includeReminders: true,
+      },
+      dependencies,
+    );
+
+    expect(maxParticipants).toBe(10);
+    expect(maxReminders).toBe(10);
+  });
+
   it('adds zero reads while projecting any number of AgendaItems', async () => {
     const series = activity({
       schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
@@ -942,7 +1180,11 @@ describe('warnings and projection branches', () => {
     const subject = fixture({
       activities: [series, cancelledScheduled, cancelledAnytime],
       buckets: {
-        R: [index(series), { activityId: 'act_missing' }],
+        R: [
+          index(series),
+          { activityId: 'act_00000000000000000000000999' },
+          { activityId: 'not-a-valid-activity-id' },
+        ],
         S: [index(cancelledScheduled)],
         N: [index(cancelledAnytime)],
       },
@@ -968,7 +1210,14 @@ describe('warnings and projection branches', () => {
     ]);
     expect(subject.dependencies.warn).toHaveBeenCalledWith(
       'Agenda dropped a missing META row.',
-      expect.objectContaining({ activityId: 'act_missing', source: 'series' }),
+      expect.objectContaining({
+        activityId: 'act_00000000000000000000000999',
+        source: 'series',
+      }),
+    );
+    expect(subject.dependencies.warn).toHaveBeenCalledWith(
+      'Agenda dropped an index row with an invalid activityId.',
+      { source: 'series' },
     );
     expect(
       result.days.flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier]),

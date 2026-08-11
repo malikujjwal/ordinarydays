@@ -34,6 +34,7 @@ export type {
   AgendaParticipantAvatar,
   AgendaWarning,
 } from './agenda.js';
+export { assertNever } from './assert.js';
 export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type { Occurrence, OccurrenceStatus } from './occurrence.js';
 export type {

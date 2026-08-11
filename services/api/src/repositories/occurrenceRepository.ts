@@ -1,4 +1,7 @@
-import { occurrence as occurrenceSchema } from '@od/shared/schemas';
+import {
+  occurrenceMoveMarker as occurrenceMoveMarkerSchema,
+  occurrence as occurrenceSchema,
+} from '@od/shared/schemas';
 import type { Occurrence } from '@od/shared/types';
 import {
   batchGetItems,
@@ -22,8 +25,11 @@ export interface OccurrenceMoveMarker {
   readonly movedFrom: readonly string[];
 }
 
-const parseOccurrence = (item: unknown): Occurrence =>
-  occurrenceSchema.parse(item) as Occurrence;
+function parseOccurrence(value: unknown): Occurrence {
+  const parsed = occurrenceSchema.parse(value);
+  // Zod models optional keys as value | undefined; exactOptionalPropertyTypes models absence.
+  return parsed as Occurrence;
+}
 
 /** The sole DynamoDB owner of `ACT#<id>` / `OCC#<nominal-date>` rows. */
 export async function get(activityId: string, date: string): Promise<Occurrence | null> {
@@ -44,12 +50,11 @@ export async function batchGetForPairs(
   const rows = await batchGetItems<StoredItem>(
     [...unique.values()].map((pair) => occurrence(pair.activityId, pair.date)),
   );
-  const byPair = new Map(
-    rows.map((row) => {
-      const parsed = parseOccurrence(row);
-      return [`${parsed.activityId}\u0000${parsed.date}`, parsed] as const;
-    }),
-  );
+  const byPair = new Map<string, Occurrence>();
+  for (const row of rows) {
+    const parsed = parseOccurrence(row);
+    byPair.set(`${parsed.activityId}\u0000${parsed.date}`, parsed);
+  }
 
   return pairs.map((pair) => byPair.get(`${pair.activityId}\u0000${pair.date}`) ?? null);
 }
@@ -78,17 +83,13 @@ export async function batchGetAgendaRows(
       occurrences.push(parseOccurrence(row));
       continue;
     }
-    if (
-      row.entity === 'OccurrenceMoveMarker' &&
-      typeof row.activityId === 'string' &&
-      typeof row.destinationDate === 'string' &&
-      Array.isArray(row.movedFrom) &&
-      row.movedFrom.every((date) => typeof date === 'string')
-    ) {
+    if (row.entity === 'OccurrenceMoveMarker') {
+      const marker = occurrenceMoveMarkerSchema.safeParse(row);
+      if (!marker.success) continue;
       markers.push({
-        activityId: row.activityId,
-        destinationDate: row.destinationDate,
-        movedFrom: [...new Set(row.movedFrom)].sort(),
+        activityId: marker.data.activityId,
+        destinationDate: marker.data.destinationDate,
+        movedFrom: [...new Set(marker.data.movedFrom)].sort(),
       });
     }
   }
@@ -130,7 +131,9 @@ async function deleteOccurrence(activityId: string, date: string): Promise<void>
 
 export { deleteOccurrence as delete };
 
-/** Real stored completion count for whole-series deletion copy. */
+/**
+ * Real stored completion count consumed by the whole-series delete-confirmation copy.
+ */
 export async function countCompleted(activityId: string): Promise<number> {
   const prefix = occurrenceRange(activityId, '', '');
   return queryCount(

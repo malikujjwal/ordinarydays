@@ -1,3 +1,4 @@
+import { assertNever } from '../types/assert.js';
 import type { Recurrence, RecurrenceSegment } from '../types/recurrence.js';
 import { addWallDays } from './calendar.js';
 import { RecurrenceValidationError } from './error.js';
@@ -30,7 +31,11 @@ function ruleDates(segment: RecurrenceSegment, window: RuleWindow): string[] {
         'Custom recurrence is not available until Phase 9.',
       );
     default:
-      throw new RecurrenceValidationError('Unsupported recurrence frequency.');
+      return assertNever(
+        segment.freq,
+        'RecurrenceFreq',
+        () => new RecurrenceValidationError('Unsupported recurrence frequency.'),
+      );
   }
 }
 

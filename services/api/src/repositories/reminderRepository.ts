@@ -14,5 +14,5 @@ export async function listForUser(
     { pk: prefix.pk },
     { skPrefix: prefix.skPrefix },
   );
-  return rows.map((row) => reminderSchema.parse(row) as Reminder);
+  return rows.map((row) => reminderSchema.parse(row));
 }

@@ -1,9 +1,5 @@
-import type {
-  MonthNumber,
-  Recurrence,
-  RecurrenceSegment,
-  Weekday,
-} from '../types/recurrence.js';
+import { assertNever } from '../types/assert.js';
+import type { Recurrence, RecurrenceSegment, Weekday } from '../types/recurrence.js';
 import { wallDateParts } from './calendar.js';
 import { RecurrenceValidationError } from './error.js';
 
@@ -27,20 +23,29 @@ const MONDAY_FIRST_ORDER: Record<Weekday, number> = {
   6: 6,
 };
 
-const MONTH_NAMES: Record<MonthNumber, string> = {
-  1: 'January',
-  2: 'February',
-  3: 'March',
-  4: 'April',
-  5: 'May',
-  6: 'June',
-  7: 'July',
-  8: 'August',
-  9: 'September',
-  10: 'October',
-  11: 'November',
-  12: 'December',
-};
+const MONTH_NAMES = [
+  undefined,
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+] as const;
+
+function monthName(month: number): string {
+  const name = MONTH_NAMES[month];
+  if (name === undefined) {
+    throw new RecurrenceValidationError('Month must be from 1 to 12.');
+  }
+  return name;
+}
 
 function ordinal(value: number): string {
   const lastTwo = value % 100;
@@ -57,25 +62,33 @@ function ordinal(value: number): string {
   }
 }
 
-function joinEnglish(values: string[]): string {
-  if (values.length === 1) return values[0] as string;
-  return `${values.slice(0, -1).join(', ')} and ${values.at(-1) as string}`;
+function joinEnglish(first: string, rest: string[]): string {
+  if (rest.length === 0) return first;
+  return rest.reduce(
+    (label, value, index) =>
+      index === rest.length - 1 ? `${label} and ${value}` : `${label}, ${value}`,
+    first,
+  );
 }
 
 function weeklyLabel(segment: RecurrenceSegment): string {
   const weekdays = [...new Set(segment.byWeekday ?? [])].sort(
     (a, b) => MONDAY_FIRST_ORDER[a] - MONDAY_FIRST_ORDER[b],
   );
-  if (weekdays.length === 0) {
-    throw new RecurrenceValidationError(
-      'Weekly recurrence requires at least one weekday.',
-    );
-  }
   const interval = segment.interval ?? 1;
   if (interval < 1) {
     throw new RecurrenceValidationError('Weekly recurrence interval must be positive.');
   }
-  const days = joinEnglish(weekdays.map((weekday) => WEEKDAY_NAMES[weekday]));
+  const [firstWeekday, ...otherWeekdays] = weekdays;
+  if (firstWeekday === undefined) {
+    throw new RecurrenceValidationError(
+      'Weekly recurrence requires at least one weekday.',
+    );
+  }
+  const days = joinEnglish(
+    WEEKDAY_NAMES[firstWeekday],
+    otherWeekdays.map((weekday) => WEEKDAY_NAMES[weekday]),
+  );
   return interval === 1 ? `Weekly on ${days}` : `Every ${interval} weeks on ${days}`;
 }
 
@@ -93,9 +106,9 @@ function yearlyLabel(segment: RecurrenceSegment): string {
     );
   }
   const anchor = wallDateParts(segment.effectiveFrom);
-  const month = segment.byMonth?.[0] ?? (anchor.month as MonthNumber);
+  const month = segment.byMonth?.[0] ?? anchor.month;
   const monthDay = segment.byMonthDay?.[0] ?? anchor.day;
-  return `Every year on ${monthDay} ${MONTH_NAMES[month]}`;
+  return `Every year on ${monthDay} ${monthName(month)}`;
 }
 
 function intervalDaysLabel(segment: RecurrenceSegment): string {
@@ -127,7 +140,11 @@ function ruleLabel(segment: RecurrenceSegment): string {
         'Custom recurrence is not available until Phase 9.',
       );
     default:
-      throw new RecurrenceValidationError('Unsupported recurrence frequency.');
+      return assertNever(
+        segment.freq,
+        'RecurrenceFreq',
+        () => new RecurrenceValidationError('Unsupported recurrence frequency.'),
+      );
   }
 }
 
@@ -135,7 +152,7 @@ function withEnds(label: string, rec: Recurrence, today: string): string {
   if (rec.endDate !== undefined) {
     const end = wallDateParts(rec.endDate);
     const todayYear = wallDateParts(today).year;
-    const month = MONTH_NAMES[end.month as MonthNumber].slice(0, 3);
+    const month = monthName(end.month).slice(0, 3);
     const year = end.year === todayYear ? '' : ` ${end.year}`;
     return `${label} until ${end.day} ${month}${year}`;
   }

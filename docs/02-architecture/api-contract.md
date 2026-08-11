@@ -76,6 +76,10 @@ Error codes are a closed enum in `packages/shared/src/errors.ts`:
 > `not_implemented` (501) and `upgrade_required` (426) were already in `tech-stack.md` §4.4
 > but missing from this sentence.
 
+Any endpoint may return `503 internal` with `Retry-After` when storage pressure remains after
+bounded retries. The response still uses the standard safe error envelope and never exposes
+the underlying table, key or provider message.
+
 ### Pagination
 
 Cursor-based only. `?limit=` (default 50, max 200) and `?cursor=` (opaque base64 of the
@@ -247,6 +251,15 @@ reminder offset without being triggered or awaited by Today.
 
 Agenda **never** returns activities in the `#P` (Needs a date) bucket. An undecided group
 plan is not a thing you have to do today.
+
+Agenda warnings are successful-response diagnostics, not error codes:
+
+- `series_limit_exceeded` means only the first `MAX_ACTIVE_SERIES` `#R` rows were expanded;
+  `#S` and `#N` are never capped and are paged to exhaustion.
+- `duplicate_occurrence:<activityId>` means two assembled candidates had the same
+  `(activityId, occurrenceDate?)`; the deterministic first candidate was retained and the
+  duplicate was dropped. This is a storage/merge invariant warning and clients must not try
+  to reconcile the rows themselves.
 
 ### 2.2a Plans
 

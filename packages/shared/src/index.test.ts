@@ -38,11 +38,11 @@ describe('exports map', () => {
     expect(errors.ERROR_CODES).toContain('validation_failed');
     expect(recurrence.describeRecurrence).toBeDefined();
     expect(recurrence.expandRecurrence).toBeDefined();
+    expect(recurrence.addWallDays).toBeDefined();
     expect(recurrence.toUtcInstant).toBeDefined();
     expect(activity.deriveGsi1Bucket).toBeDefined();
     expect(activity.changeActivityKind).toBeDefined();
-    // `types` is types-only at runtime; importing it must still not throw.
-    expect(types).toBeDefined();
+    expect(types.assertNever).toBeDefined();
   }, 10_000);
 
   it('does not re-export the API client from the root barrel', async () => {

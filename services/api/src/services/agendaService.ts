@@ -1,4 +1,6 @@
-import { expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
+import { MAX_ACTIVE_SERIES, OVERDUE_WINDOW_DAYS } from '@od/shared/constants';
+import { addWallDays, expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
+import { agendaParticipantAvatar, ianaTimezone, ulidId } from '@od/shared/schemas';
 import type {
   Activity,
   AgendaParticipantAvatar,
@@ -7,7 +9,6 @@ import type {
   RecurrenceSegment,
   Reminder,
 } from '@od/shared/types';
-import { addDays, format, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { logger } from '../lib/logger.js';
 import {
@@ -25,9 +26,10 @@ import {
 import { listForUser as listRemindersForUser } from '../repositories/reminderRepository.js';
 import type { ActionCapabilityContext } from './actionCapabilities.js';
 
-const SERIES_LIMIT = 200;
 const WALL_DATE = 'yyyy-MM-dd';
 const WALL_TIME = 'HH:mm';
+const FAN_OUT_CONCURRENCY = 10;
+const activityIdSchema = ulidId('act');
 const RESOLVED = new Set([
   'completed',
   'completed_occurrence',
@@ -56,6 +58,7 @@ export interface AgendaCandidate {
   readonly movedFromDate?: string;
   readonly overdueFromDate?: string;
   readonly reminders?: readonly Reminder[];
+  readonly completedAt?: string;
   readonly participantAvatars: readonly AgendaParticipantAvatar[];
   readonly actionContext: AgendaActionContext;
 }
@@ -87,7 +90,6 @@ export interface AssembleAgendaInput {
   readonly includeAnytimeUnscheduled?: boolean;
   readonly includeOverdue?: boolean;
   readonly includeReminders?: boolean;
-  readonly includeSkipped?: boolean;
 }
 
 export interface AgendaDependencies {
@@ -124,15 +126,19 @@ export async function assembleAgenda(
   const today = formatInTimeZone(new Date(input.now), input.timezone, WALL_DATE);
   const warnings: AgendaWarning[] = [];
 
-  const [scheduledPage, seriesPage, anytimePage, overdue] = await Promise.all([
-    dependencies.listBucket(input.userId, 'S', {
-      between: [`${widenedFrom}T00:00`, `${widenedTo}T23:59`],
-      limit: 200,
-    }),
-    dependencies.listBucket(input.userId, 'R', { limit: SERIES_LIMIT }),
+  const [scheduledRows, seriesPage, anytimeRows, overdue] = await Promise.all([
+    listBucketToExhaustion(
+      input.userId,
+      'S',
+      {
+        between: [`${widenedFrom}T00:00`, `${widenedTo}T23:59`],
+      },
+      dependencies,
+    ),
+    dependencies.listBucket(input.userId, 'R', { limit: MAX_ACTIVE_SERIES }),
     input.includeAnytimeUnscheduled === true
-      ? dependencies.listBucket(input.userId, 'N', { ascending: false, limit: 200 })
-      : Promise.resolve({ items: [] }),
+      ? listBucketToExhaustion(input.userId, 'N', { ascending: false }, dependencies)
+      : Promise.resolve([]),
     input.includeOverdue === true
       ? rollForwardOverdue(input.userId, today, dependencies)
       : Promise.resolve([]),
@@ -140,9 +146,9 @@ export async function assembleAgenda(
 
   if (seriesPage.nextCursor !== undefined) warnings.push('series_limit_exceeded');
 
-  const scheduledIndex = indexByActivity(scheduledPage.items);
-  const seriesIndex = indexByActivity(seriesPage.items);
-  const anytimeIndex = indexByActivity(anytimePage.items);
+  const scheduledIndex = indexByActivity(scheduledRows, dependencies, 'scheduled');
+  const seriesIndex = indexByActivity(seriesPage.items, dependencies, 'series');
+  const anytimeIndex = indexByActivity(anytimeRows, dependencies, 'anytime');
   const presentationIndex = new Map([...scheduledIndex, ...seriesIndex, ...anytimeIndex]);
   const [scheduled, series, anytime] = await Promise.all([
     hydrateSelected(scheduledIndex, dependencies, 'scheduled'),
@@ -197,10 +203,6 @@ export async function assembleAgenda(
     .filter(
       (candidate) =>
         candidate.viewerDate >= input.from && candidate.viewerDate <= input.to,
-    )
-    .filter(
-      (candidate) =>
-        input.includeSkipped === true || candidate.status !== 'skipped_occurrence',
     );
   const deduped = dedupe([...converted, ...overdue], warnings);
   const contexts = await hydrateActionContexts(input.userId, deduped, dependencies);
@@ -220,7 +222,7 @@ export async function assembleAgenda(
       actionContext: contexts.get(candidate.activity.activityId) ?? {
         activity: candidate.activity,
         callerId: input.userId,
-        callerRole: 'none' as const,
+        callerRole: 'none',
         participatesInParent: false,
       },
     };
@@ -238,9 +240,13 @@ export async function rollForwardOverdue(
   today: string,
   dependencies: AgendaDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<UnhydratedAgendaCandidate[]> {
-  const from = addWallDays(today, -30);
+  const from = addWallDays(today, -OVERDUE_WINDOW_DAYS);
   const to = addWallDays(today, -1);
-  const index = indexByActivity(await dependencies.listOverdue(userId, from, to));
+  const index = indexByActivity(
+    await dependencies.listOverdue(userId, from, to),
+    dependencies,
+    'overdue',
+  );
   const hydrated = await hydrateSelected(index, dependencies, 'overdue');
 
   return hydrated.flatMap((activity) => {
@@ -260,6 +266,9 @@ export async function rollForwardOverdue(
         status: activity.status,
         viewerDate: today,
         isSnoozed: false,
+        ...(activity.completedAt === undefined
+          ? {}
+          : { completedAt: activity.completedAt }),
         overdueFromDate: activity.schedule.date,
       },
     ];
@@ -277,6 +286,7 @@ interface RawCandidate {
   readonly endTime?: string;
   readonly isSnoozed: boolean;
   readonly movedFromDate?: string;
+  readonly completedAt?: string;
 }
 
 interface ExpandedNominal {
@@ -285,22 +295,51 @@ interface ExpandedNominal {
   readonly time?: string;
 }
 
-function addWallDays(value: string, amount: number): string {
-  return format(addDays(parseISO(`${value}T12:00:00`), amount), WALL_DATE);
-}
-
 function wallDates(from: string, to: string): string[] {
   const dates: string[] = [];
   for (let date = from; date <= to; date = addWallDays(date, 1)) dates.push(date);
   return dates;
 }
 
-function indexByActivity(rows: readonly StoredItem[]): Map<string, StoredItem> {
-  return new Map(
-    rows
-      .filter((row) => typeof row.activityId === 'string')
-      .map((row) => [String(row.activityId), row]),
-  );
+function indexByActivity(
+  rows: readonly StoredItem[],
+  dependencies: AgendaDependencies,
+  source: string,
+): Map<string, StoredItem> {
+  const indexed = new Map<string, StoredItem>();
+  for (const row of rows) {
+    const activityId = activityIdSchema.safeParse(row.activityId);
+    if (activityId.success) {
+      indexed.set(activityId.data, row);
+    } else {
+      dependencies.warn('Agenda dropped an index row with an invalid activityId.', {
+        source,
+      });
+    }
+  }
+  return indexed;
+}
+
+type Bucket = Parameters<AgendaDependencies['listBucket']>[1];
+type BucketOptions = NonNullable<Parameters<AgendaDependencies['listBucket']>[2]>;
+
+async function listBucketToExhaustion(
+  userId: string,
+  bucket: Bucket,
+  options: Omit<BucketOptions, 'cursor' | 'limit'>,
+  dependencies: AgendaDependencies,
+): Promise<StoredItem[]> {
+  const items: StoredItem[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await dependencies.listBucket(userId, bucket, {
+      ...options,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
+  return items;
 }
 
 async function hydrateSelected(
@@ -360,6 +399,7 @@ function oneOffCandidate(activity: Activity, projectedTimezone: unknown): RawCan
   if (schedule === undefined) throw new Error('Scheduled agenda row had no schedule.');
   const snooze = activity.snoozedUntil;
   const effectiveTime = snooze ?? schedule.time;
+  const parsedTimezone = ianaTimezone.safeParse(projectedTimezone);
   return {
     activity,
     status: activity.status,
@@ -369,10 +409,10 @@ function oneOffCandidate(activity: Activity, projectedTimezone: unknown): RawCan
       : effectiveTime === undefined
         ? {}
         : { effectiveTime }),
-    sourceTimezone:
-      typeof projectedTimezone === 'string' ? projectedTimezone : schedule.timezone,
+    sourceTimezone: parsedTimezone.success ? parsedTimezone.data : schedule.timezone,
     ...(schedule.endTime === undefined ? {} : { endTime: schedule.endTime }),
     isSnoozed: snooze !== undefined,
+    ...(activity.completedAt === undefined ? {} : { completedAt: activity.completedAt }),
   };
 }
 
@@ -401,6 +441,7 @@ function mergeNominal(
       ? {}
       : { endTime: entry.activity.schedule.endTime }),
     isSnoozed: override?.status === 'snoozed',
+    ...(override?.completedAt === undefined ? {} : { completedAt: override.completedAt }),
   };
 }
 
@@ -435,6 +476,9 @@ function movedCandidates(
         sourceTimezone: activity.schedule?.timezone ?? 'UTC',
         isSnoozed: override.status === 'snoozed',
         movedFromDate: sourceDate,
+        ...(override.completedAt === undefined
+          ? {}
+          : { completedAt: override.completedAt }),
       });
     }
   }
@@ -462,6 +506,9 @@ function toViewerCandidate(
       viewerDate: formatInTimeZone(instant, viewerTimezone, WALL_DATE),
       time: formatInTimeZone(instant, viewerTimezone, WALL_TIME),
       isSnoozed: candidate.isSnoozed,
+      ...(candidate.completedAt === undefined
+        ? {}
+        : { completedAt: candidate.completedAt }),
       ...(candidate.movedFromDate === undefined
         ? {}
         : { movedFromDate: candidate.movedFromDate }),
@@ -476,6 +523,9 @@ function toViewerCandidate(
       status: candidate.status,
       viewerDate: candidate.effectiveDate,
       isSnoozed: candidate.isSnoozed,
+      ...(candidate.completedAt === undefined
+        ? {}
+        : { completedAt: candidate.completedAt }),
       ...(candidate.movedFromDate === undefined
         ? {}
         : { movedFromDate: candidate.movedFromDate }),
@@ -508,6 +558,9 @@ function toViewerCandidate(
     time: formatInTimeZone(instant, viewerTimezone, WALL_TIME),
     ...(viewerEndTime === undefined ? {} : { endTime: viewerEndTime }),
     isSnoozed: candidate.isSnoozed,
+    ...(candidate.completedAt === undefined
+      ? {}
+      : { completedAt: candidate.completedAt }),
     ...(candidate.movedFromDate === undefined
       ? {}
       : { movedFromDate: candidate.movedFromDate }),
@@ -519,7 +572,7 @@ function dedupe(
   warnings: AgendaWarning[],
 ): UnhydratedAgendaCandidate[] {
   const seen = new Map<string, UnhydratedAgendaCandidate>();
-  for (const candidate of [...candidates].sort(compareCandidates)) {
+  for (const candidate of [...candidates].sort(compareDedupe)) {
     const key = pairKey(candidate.activity.activityId, candidate.occurrenceDate ?? '');
     if (seen.has(key)) {
       warnings.push(`duplicate_occurrence:${candidate.activity.activityId}`);
@@ -543,45 +596,45 @@ async function hydrateActionContexts(
       [...activities.values()].flatMap((activity) => activity.parentActivityId ?? []),
     ),
   ];
-  const parents = new Map(
-    (await dependencies.batchActivities(parentIds)).map((parent) => [
-      parent.activityId,
-      parent,
-    ]),
-  );
+  const parents = new Map<string, Activity>();
+  for (const parent of await dependencies.batchActivities(parentIds)) {
+    parents.set(parent.activityId, parent);
+  }
   const participation = new Map<string, boolean>();
-  await Promise.all(
-    parentIds.map(async (parentId) => {
+  const participationRows = await mapWithConcurrency(
+    parentIds,
+    FAN_OUT_CONCURRENCY,
+    async (parentId) => {
       const rows = await dependencies.listParticipants(parentId);
-      participation.set(
+      return {
         parentId,
-        rows.some((row) => row.userId === userId),
-      );
-    }),
+        participates: rows.some((row) => row.userId === userId),
+      };
+    },
   );
+  for (const row of participationRows) {
+    participation.set(row.parentId, row.participates);
+  }
 
-  return new Map(
-    [...activities.values()].map((activity) => {
-      const parent =
-        activity.parentActivityId === undefined
-          ? undefined
-          : parents.get(activity.parentActivityId);
-      return [
-        activity.activityId,
-        {
-          activity,
-          callerId: userId,
-          callerRole:
-            activity.ownerId === userId ? ('owner' as const) : ('participant' as const),
-          ...(parent === undefined ? {} : { parentOwnerId: parent.ownerId }),
-          ...(parent === undefined ? {} : { parentTitle: parent.title }),
-          participatesInParent:
-            parent !== undefined &&
-            (parent.ownerId === userId || participation.get(parent.activityId) === true),
-        },
-      ];
-    }),
-  );
+  const contexts = new Map<string, AgendaActionContext>();
+  for (const activity of activities.values()) {
+    const parent =
+      activity.parentActivityId === undefined
+        ? undefined
+        : parents.get(activity.parentActivityId);
+    const context: AgendaActionContext = {
+      activity,
+      callerId: userId,
+      callerRole: activity.ownerId === userId ? 'owner' : 'participant',
+      ...(parent === undefined ? {} : { parentOwnerId: parent.ownerId }),
+      ...(parent === undefined ? {} : { parentTitle: parent.title }),
+      participatesInParent:
+        parent !== undefined &&
+        (parent.ownerId === userId || participation.get(parent.activityId) === true),
+    };
+    contexts.set(activity.activityId, context);
+  }
+  return contexts;
 }
 
 async function hydrateReminders(
@@ -590,14 +643,27 @@ async function hydrateReminders(
   dependencies: AgendaDependencies,
 ): Promise<Map<string, readonly Reminder[]>> {
   const ids = [...new Set(candidates.map((row) => row.activity.activityId))];
-  return new Map(
-    await Promise.all(
-      ids.map(
-        async (activityId) =>
-          [activityId, await dependencies.listReminders(activityId, userId)] as const,
-      ),
-    ),
-  );
+  const rows = await mapWithConcurrency(ids, FAN_OUT_CONCURRENCY, async (activityId) => ({
+    activityId,
+    reminders: await dependencies.listReminders(activityId, userId),
+  }));
+  const reminders = new Map<string, readonly Reminder[]>();
+  for (const row of rows) reminders.set(row.activityId, row.reminders);
+  return reminders;
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let start = 0; start < values.length; start += concurrency) {
+    results.push(
+      ...(await Promise.all(values.slice(start, start + concurrency).map(mapper))),
+    );
+  }
+  return results;
 }
 
 function projectedParticipantAvatars(
@@ -605,28 +671,12 @@ function projectedParticipantAvatars(
 ): AgendaParticipantAvatar[] {
   if (!Array.isArray(item?.participantAvatars)) return [];
   return item.participantAvatars.flatMap((value) => {
-    if (
-      typeof value !== 'object' ||
-      value === null ||
-      !('personId' in value) ||
-      typeof value.personId !== 'string' ||
-      !('displayName' in value) ||
-      typeof value.displayName !== 'string'
-    ) {
-      return [];
-    }
-    const avatarUrl =
-      'avatarUrl' in value && typeof value.avatarUrl === 'string'
-        ? value.avatarUrl
-        : undefined;
-    return [
-      {
-        personId: value.personId,
-        displayName: value.displayName,
-        ...(avatarUrl === undefined ? {} : { avatarUrl }),
-      },
-    ];
+    return isAgendaParticipantAvatar(value) ? [value] : [];
   });
+}
+
+function isAgendaParticipantAvatar(value: unknown): value is AgendaParticipantAvatar {
+  return agendaParticipantAvatar.safeParse(value).success;
 }
 
 function partitionDays(
@@ -637,7 +687,7 @@ function partitionDays(
   const nowTime = formatInTimeZone(new Date(input.now), input.timezone, WALL_TIME);
   return wallDates(input.from, input.to).map((date) => {
     const rows = candidates.filter((row) => row.viewerDate === date);
-    const timed = rows.filter((row) => row.time !== undefined).sort(compareCandidates);
+    const timed = rows.filter((row) => row.time !== undefined);
     const resolved = rows.filter((row) => RESOLVED.has(row.status));
     const earlier =
       date === nowDate
@@ -647,9 +697,7 @@ function partitionDays(
               (row) =>
                 !RESOLVED.has(row.status) && (row.endTime ?? row.time ?? '') < nowTime,
             ),
-          ]
-            .sort(compareCandidates)
-            .reverse()
+          ].sort((left, right) => compareEarlier(left, right, input.timezone))
         : [];
     const schedule =
       date === nowDate
@@ -658,6 +706,7 @@ function partitionDays(
               !RESOLVED.has(row.status) && (row.endTime ?? row.time ?? '') >= nowTime,
           )
         : timed;
+    schedule.sort(compareSchedule);
     const anytime = rows
       .filter(
         (row) =>
@@ -676,22 +725,63 @@ function partitionDays(
 }
 
 function compareAnytime(left: AgendaCandidate, right: AgendaCandidate): number {
-  const leftGroup = left.overdueFromDate === undefined ? 1 : 0;
-  const rightGroup = right.overdueFromDate === undefined ? 1 : 0;
+  const leftGroup = anytimeGroup(left);
+  const rightGroup = anytimeGroup(right);
+  if (leftGroup !== rightGroup) return leftGroup - rightGroup;
+  if (leftGroup === 0) {
+    return (
+      (left.overdueFromDate ?? '').localeCompare(right.overdueFromDate ?? '') ||
+      left.activity.activityId.localeCompare(right.activity.activityId)
+    );
+  }
+  if (leftGroup === 1) {
+    return left.activity.activityId.localeCompare(right.activity.activityId);
+  }
   return (
-    leftGroup - rightGroup ||
-    (left.overdueFromDate ?? '').localeCompare(right.overdueFromDate ?? '') ||
-    compareCandidates(left, right)
+    right.activity.createdAt.localeCompare(left.activity.createdAt) ||
+    right.activity.activityId.localeCompare(left.activity.activityId)
   );
 }
 
-function compareCandidates(
-  left: Pick<AgendaCandidate, 'activity' | 'time' | 'viewerDate'>,
-  right: Pick<AgendaCandidate, 'activity' | 'time' | 'viewerDate'>,
+function anytimeGroup(candidate: AgendaCandidate): number {
+  if (candidate.overdueFromDate !== undefined) return 0;
+  return candidate.activity.schedule === undefined ? 2 : 1;
+}
+
+function compareSchedule(left: AgendaCandidate, right: AgendaCandidate): number {
+  return (
+    (left.time ?? '').localeCompare(right.time ?? '') ||
+    left.activity.activityId.localeCompare(right.activity.activityId) ||
+    (left.occurrenceDate ?? '').localeCompare(right.occurrenceDate ?? '')
+  );
+}
+
+function compareEarlier(
+  left: AgendaCandidate,
+  right: AgendaCandidate,
+  timezone: string,
+): number {
+  return (
+    effectiveStart(right, timezone).localeCompare(effectiveStart(left, timezone)) ||
+    right.activity.activityId.localeCompare(left.activity.activityId)
+  );
+}
+
+function effectiveStart(candidate: AgendaCandidate, timezone: string): string {
+  if (candidate.time !== undefined) return candidate.time;
+  return candidate.completedAt === undefined
+    ? ''
+    : formatInTimeZone(new Date(candidate.completedAt), timezone, WALL_TIME);
+}
+
+function compareDedupe(
+  left: Pick<AgendaCandidate, 'activity' | 'time' | 'viewerDate' | 'occurrenceDate'>,
+  right: Pick<AgendaCandidate, 'activity' | 'time' | 'viewerDate' | 'occurrenceDate'>,
 ): number {
   return (
     left.viewerDate.localeCompare(right.viewerDate) ||
     (left.time ?? '').localeCompare(right.time ?? '') ||
-    left.activity.activityId.localeCompare(right.activity.activityId)
+    left.activity.activityId.localeCompare(right.activity.activityId) ||
+    (left.occurrenceDate ?? '').localeCompare(right.occurrenceDate ?? '')
   );
 }
