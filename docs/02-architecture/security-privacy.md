@@ -453,6 +453,15 @@ The mechanics are in `infrastructure.md` §5. The rules:
 | Runtime patching | Lambda's `nodejs22.x` managed runtime is patched by AWS. We do not pin a container image, so there is nothing to rebuild for a runtime CVE. |
 | Secret scanning | GitHub secret scanning and push protection enabled on the repository, in addition to `gitleaks`. |
 
+### 7.1 Temporary audit exceptions
+
+| Review by | Advisories | Package and path | Accepted risk | Removal trigger |
+| --- | --- | --- | --- | --- |
+| 2026-09-10 | `GHSA-5p2g-fcmc-qvqq`, `GHSA-w3rx-r6r6-pgpr` | `image-size@1.2.1`, transitively through the Expo/Metro build toolchain | Malformed JXL, HEIF, or ICNS input can hang a developer or CI build. Metro is not deployed as a production service and builds consume repository-controlled assets. Both advisories have no patched release as of 2026-08-11. | Remove the exception when a compatible Expo/Metro release resolves both advisories, or reassess and renew explicitly by the review date. |
+
+Exceptions are advisory-specific; the high-severity audit gate remains enabled for every
+other finding. Expo-managed packages continue to move only as an SDK-aligned set.
+
 ---
 
 ## 8. Privacy compliance
