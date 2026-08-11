@@ -1655,15 +1655,22 @@ phase. Feature hooks are the only place `useQuery` appears and own their query k
 - **One key helper.** `agendaKey(from, to, tz, include)` in `keys.ts` is the only
   constructor of agenda query keys, used by this hook, by every `onMutate` in P2-23, and by
   invalidation in P2-24. The key includes **every** parameter that changes the response;
-  omitting `include` would make Today (all three tokens) and the Plans window (neither) collide
-  in one cache entry, and the bug would look like phantom rows.
+  omitting `include` would make Today (`anytime_unscheduled,overdue`) and the Plans window
+  (neither) collide in one cache entry, and the bug would look like phantom rows.
 - **Today's call is the single request** from
   [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#1-what-today-is)
-  §1: `from = today`, `to = tomorrow`, all three `include` tokens, one fetch. Today renders
-  the first day; P2-34 does not consume this hook and owns a separate cadence-driven request.
-  The hook exposes the whole response;
+  §1: `from = today`, `to = today`, `include=anytime_unscheduled,overdue`, one fetch.
+  P2-34 does not consume this hook and owns a separate cadence-driven request. The hook
+  exposes the whole response;
   sectioning is `partition.ts` (P2-19). No per-section fetches, ever — that is
   success criterion S2.
+
+  > **Today request correction — 2026-08-11.** The earlier `to=tomorrow` and
+  > `include=reminders` wording in P2-11/P2-18 is the pre-amendment design. Under the
+  > document hierarchy, [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md)
+  > owns Today behaviour: no Today-screen path fetches beyond today or hydrates reminders.
+  > Reminder hydration belongs only to P2-34's independent eight-day background request,
+  > as settled by the gate-5 amendment.
 - **`tz` is the profile timezone** (transferred matrix case 29, now owned by P2-08 —
   `../01-product/today-and-tasks.md` §6.6): read from the cached `me` query, falling back
   to the device timezone before the profile has ever loaded (decision recorded here —
@@ -2330,10 +2337,15 @@ scheduled local notifications owned by the app and re-schedules from that respon
 not consume `useAgenda`, piggyback on a Today render or issue per-Activity reminder-detail
 requests. The eight inclusive dates cover the seven-day maximum negative offset.
 
-Today still requests `include=anytime_unscheduled,overdue,reminders` once and renders from that
-one response. The scheduler's cadence is independent: mounting or refreshing Today neither
-starts nor awaits its background request, preserving P2-11/P2-18/P2-37's screen-owned
-one-request rule.
+Today requests `from=today&to=today&include=anytime_unscheduled,overdue` once and renders from
+that one response. The scheduler's cadence is independent: mounting or refreshing Today
+neither starts nor awaits its background request, preserving P2-11/P2-18/P2-37's
+screen-owned one-request rule.
+
+> **Reminder hydration correction — 2026-08-11.** The earlier statement that Today also
+> requested `include=reminders` is the retired pre-amendment design. Only this P2-34
+> background/startup request hydrates reminders, over its eight inclusive dates; Today never
+> starts, awaits, consumes or duplicates it.
 
 **The device only ever sees its own user's reminders**, because that is all the API returns
 (P2-16, P1-10 rule 6). There is therefore no filtering to do here and none to write — if this
@@ -2519,11 +2531,15 @@ out the undo handler locally; the suite must catch it).
     writes nominal `OCC#` + destination `MOVE#` atomically and renders exactly once; 60 days
     from nominal is accepted, 61 is `validation_failed`, and undo removes both references.
 6. A cold open of Today issues **exactly one** data request, with
-    `from=today`, `to=tomorrow` and
-    `include=anytime_unscheduled,overdue,reminders`; Today renders the first day and that
-    response includes only the caller's reminder rows for both days. This is asserted by a
-    Playwright network-count assertion (success criterion S2). It does not trigger or await
-    P2-34's independently-cadenced background refresh.
+    `from=today`, `to=today` and
+    `include=anytime_unscheduled,overdue`; Today renders that one-day response. This is
+    asserted by a Playwright network-count assertion (success criterion S2). It does not
+    trigger or await P2-34's independently-cadenced background refresh.
+
+   > **Today success-criterion correction — 2026-08-11.** The former `to=tomorrow` and
+   > `include=reminders` wording was the retired pre-amendment design. No Today-screen path
+   > fetches beyond today or hydrates reminders; only P2-34's separate eight-day background
+   > request does so.
 7. Loading the worked example day from
    [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §9 as a fixture at
    local time 15:10 produces the exact screen in §9.3: the same nine rows, in the same

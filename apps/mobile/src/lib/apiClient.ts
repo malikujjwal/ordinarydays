@@ -1,5 +1,5 @@
 import type { HttpClientConfig } from '@od/shared/client';
-import { createHttpClient, nullTokenProvider } from '@od/shared/client';
+import { createHttpClient, localTokenProvider } from '@od/shared/client';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
@@ -78,8 +78,9 @@ export const apiBaseUrl = resolveApiBaseUrl();
 /**
  * The injected dependencies the shared client takes.
  *
- * `nullTokenProvider` yields nothing, so no `Authorization` header is sent at all. Phase 4
- * swaps in the Cognito provider here and no call site changes — that seam is the reason the
+ * `localTokenProvider` yields no bearer token, so no `Authorization` header is sent, while
+ * presenting the fixed `usr_local_dev` app identity that the local API uses. Phase 4 swaps
+ * in the Cognito provider here and no call site changes — that seam is the reason the
  * provider is a parameter from the first commit rather than a later refactor.
  */
 export const httpClientConfig: HttpClientConfig = {
@@ -97,7 +98,7 @@ export const httpClientConfig: HttpClientConfig = {
    * real one is the one line no test covers.
    */
   fetch: (input, init) => globalThis.fetch(input, init),
-  tokenProvider: nullTokenProvider,
+  tokenProvider: localTokenProvider,
   // The device's zone, resolved per call site rather than stored: a user who flies
   // somewhere should not have to reinstall to see the right day.
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,

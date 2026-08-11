@@ -42,7 +42,9 @@ function stubFetch(
   >,
 ) {
   const calls: Call[] = [];
+  const textCalls: number[] = [];
   const fetch: FetchLike = (url, init) => {
+    const callIndex = calls.length;
     calls.push({
       url,
       method: init?.method,
@@ -59,18 +61,22 @@ function stubFetch(
       status: outcome.status,
       headers: { get: (name: string) => headers[name] ?? null },
       json: () => Promise.resolve(outcome.body),
-      text: () =>
-        Promise.resolve(outcome.body === undefined ? '' : JSON.stringify(outcome.body)),
+      text: () => {
+        textCalls.push(callIndex);
+        return Promise.resolve(
+          outcome.body === undefined ? '' : JSON.stringify(outcome.body),
+        );
+      },
     });
   };
-  return { fetch, calls };
+  return { fetch, calls, textCalls };
 }
 
 function makeClient(
   outcomes: Parameters<typeof stubFetch>[0],
   overrides: Partial<HttpClientConfig> = {},
 ) {
-  const { fetch, calls } = stubFetch(outcomes);
+  const { fetch, calls, textCalls } = stubFetch(outcomes);
   const warnings: ClientWarning[] = [];
   const client = createHttpClient({
     baseUrl: 'https://api.test',
@@ -85,7 +91,7 @@ function makeClient(
     onWarning: (w) => warnings.push(w),
     ...overrides,
   });
-  return { client, calls, warnings };
+  return { client, calls, textCalls, warnings };
 }
 
 const health = () => ({
@@ -122,7 +128,10 @@ describe('headers', () => {
 
   it('sends a bearer token when the provider has one', async () => {
     const { client, calls } = makeClient([{ status: 200, body: HEALTH_BODY }], {
-      tokenProvider: { getToken: () => Promise.resolve('tok_123') },
+      tokenProvider: {
+        getToken: () => Promise.resolve('tok_123'),
+        getIdentity: () => Promise.resolve('usr_a'),
+      },
     });
 
     await client.request(health());
@@ -132,7 +141,10 @@ describe('headers', () => {
 
   it('treats an empty-string token as no token', async () => {
     const { client, calls } = makeClient([{ status: 200, body: HEALTH_BODY }], {
-      tokenProvider: { getToken: () => Promise.resolve('') },
+      tokenProvider: {
+        getToken: () => Promise.resolve(''),
+        getIdentity: () => Promise.resolve('usr_a'),
+      },
     });
 
     await client.request(health());
@@ -157,7 +169,7 @@ describe('headers', () => {
   it('calls getToken exactly once per request', async () => {
     const getToken = vi.fn(() => Promise.resolve('tok_123'));
     const { client } = makeClient([{ status: 200, body: HEALTH_BODY }], {
-      tokenProvider: { getToken },
+      tokenProvider: { getToken, getIdentity: () => Promise.resolve('usr_a') },
     });
 
     await client.request(health());
@@ -172,7 +184,9 @@ describe('headers', () => {
         { status: 500, body: undefined },
         { status: 200, body: HEALTH_BODY },
       ],
-      { tokenProvider: { getToken } },
+      {
+        tokenProvider: { getToken, getIdentity: () => Promise.resolve('usr_a') },
+      },
     );
 
     await client.request(health());
@@ -211,6 +225,123 @@ describe('the envelope', () => {
     await client.request(health());
 
     expect(calls[0]?.url).toBe('https://api.test/v1/health');
+  });
+});
+
+describe('identity-scoped conditional GETs', () => {
+  const withIdentity = (getIdentity: () => Promise<string | undefined>) => ({
+    getToken: () => Promise.resolve('tok_123'),
+    getIdentity,
+  });
+
+  it('stores a 200 ETag/body pair and resolves the next 304 from it', async () => {
+    const { client, calls, textCalls } = makeClient(
+      [
+        { status: 200, body: HEALTH_BODY, headers: { ETag: '"agenda-a"' } },
+        { status: 304 },
+      ],
+      { tokenProvider: withIdentity(() => Promise.resolve('usr_a')) },
+    );
+
+    const fresh = await client.request(health());
+    const notModified = await client.request(health());
+
+    expect(notModified).toEqual(fresh);
+    expect(calls[1]?.headers['If-None-Match']).toBe('"agenda-a"');
+    // Only the 200 had bytes to parse. The 304 path never calls response.text/json.
+    expect(textCalls).toEqual([0]);
+  });
+
+  it('retries one bare 304 without a conditional header when no body is paired', async () => {
+    const { client, calls } = makeClient(
+      [
+        { status: 304 },
+        { status: 200, body: HEALTH_BODY, headers: { ETag: '"agenda-a"' } },
+      ],
+      { tokenProvider: withIdentity(() => Promise.resolve('usr_a')) },
+    );
+
+    await expect(client.request(health())).resolves.toEqual(HEALTH_BODY);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.headers).not.toHaveProperty('If-None-Match');
+    expect(calls[1]?.headers).not.toHaveProperty('If-None-Match');
+  });
+
+  it("never reuses one user identity's body for another identity", async () => {
+    let identity = 'usr_a';
+    const otherBody = {
+      data: { ...HEALTH_BODY.data, sha: 'other-user' },
+      meta: HEALTH_BODY.meta,
+    };
+    const { client, calls } = makeClient(
+      [
+        { status: 200, body: HEALTH_BODY, headers: { ETag: '"agenda-a"' } },
+        { status: 304 },
+        { status: 200, body: otherBody, headers: { ETag: '"agenda-b"' } },
+        { status: 304 },
+      ],
+      { tokenProvider: withIdentity(() => Promise.resolve(identity)) },
+    );
+
+    await client.request(health());
+    identity = 'usr_b';
+    const secondUserFresh = await client.request(health());
+    const secondUserCached = await client.request(health());
+
+    expect(secondUserFresh.data.sha).toBe('other-user');
+    expect(secondUserCached.data.sha).toBe('other-user');
+    expect(calls[1]?.headers).not.toHaveProperty('If-None-Match');
+    expect(calls[2]?.headers).not.toHaveProperty('If-None-Match');
+    expect(calls[3]?.headers['If-None-Match']).toBe('"agenda-b"');
+  });
+
+  it('clearCache empties every identity pair on the existing client', async () => {
+    let identity = 'usr_a';
+    const replacementA = {
+      data: { ...HEALTH_BODY.data, sha: 'after-clear' },
+      meta: HEALTH_BODY.meta,
+    };
+    const replacementB = {
+      data: { ...HEALTH_BODY.data, sha: 'other-after-clear' },
+      meta: HEALTH_BODY.meta,
+    };
+    const { client, calls } = makeClient(
+      [
+        { status: 200, body: HEALTH_BODY, headers: { ETag: '"agenda-a"' } },
+        { status: 200, body: HEALTH_BODY, headers: { ETag: '"agenda-b"' } },
+        { status: 304 },
+        { status: 200, body: replacementA, headers: { ETag: '"agenda-a2"' } },
+        { status: 304 },
+        { status: 200, body: replacementB, headers: { ETag: '"agenda-b2"' } },
+      ],
+      { tokenProvider: withIdentity(() => Promise.resolve(identity)) },
+    );
+
+    await client.request(health());
+    identity = 'usr_b';
+    await client.request(health());
+    client.clearCache();
+    identity = 'usr_a';
+    const resultA = await client.request(health());
+    identity = 'usr_b';
+    const resultB = await client.request(health());
+
+    expect(resultA.data.sha).toBe('after-clear');
+    expect(resultB.data.sha).toBe('other-after-clear');
+    expect(calls[2]?.headers).not.toHaveProperty('If-None-Match');
+    expect(calls[4]?.headers).not.toHaveProperty('If-None-Match');
+  });
+
+  it('does not store or reuse authenticated bodies without an identity', async () => {
+    const { client, calls } = makeClient([
+      { status: 200, body: HEALTH_BODY, headers: { ETag: '"agenda-a"' } },
+      { status: 200, body: HEALTH_BODY, headers: { ETag: '"agenda-a"' } },
+    ]);
+
+    await client.request(health());
+    await client.request(health());
+
+    expect(calls[1]?.headers).not.toHaveProperty('If-None-Match');
   });
 });
 

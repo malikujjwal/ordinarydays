@@ -41,11 +41,20 @@ export type FetchLike = (
  */
 export interface AuthTokenProvider {
   getToken(): Promise<string | undefined>;
+  /** Stable app user id for authenticated-response cache isolation; never the token itself. */
+  getIdentity(): Promise<string | undefined>;
 }
 
 /** A provider for the signed-out case and for Phase 0, where there is no auth yet. */
 export const nullTokenProvider: AuthTokenProvider = {
   getToken: () => Promise.resolve(undefined),
+  getIdentity: () => Promise.resolve(undefined),
+};
+
+/** Phase 2's local identity seam: authenticated locally, but still without a bearer token. */
+export const localTokenProvider: AuthTokenProvider = {
+  getToken: () => Promise.resolve(undefined),
+  getIdentity: () => Promise.resolve('usr_local_dev'),
 };
 
 /** What the client reports when it does something the caller should know about but survive. */
@@ -196,6 +205,13 @@ export interface RequestOptions<S extends z.ZodType> {
 
 export interface HttpClient {
   request<S extends z.ZodType>(options: RequestOptions<S>): Promise<z.infer<S>>;
+  /** Drops every conditional-GET body/ETag pair without replacing this client instance. */
+  clearCache(): void;
+}
+
+interface CachedGetResponse {
+  etag: string;
+  body: unknown;
 }
 
 /**
@@ -251,62 +267,18 @@ function toApiError(
 export function createHttpClient(config: HttpClientConfig): HttpClient {
   const sleep = config.sleep ?? realSleep;
   const newRequestId = config.newRequestId ?? defaultRequestId;
+  const getCache = new Map<string, CachedGetResponse>();
   const warn =
     config.onWarning ??
     ((warning: ClientWarning) => {
       console.warn(`[od] ${warning.message}`, warning);
     });
 
-  async function send<S extends z.ZodType>(
+  function parseResponse<S extends z.ZodType>(
     options: RequestOptions<S>,
+    body: unknown,
     requestId: string,
-    token: string | undefined,
-  ): Promise<z.infer<S>> {
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-      'X-Request-Id': requestId,
-      'X-Client-Timezone': config.timezone,
-      'X-Client-Version': config.clientVersion,
-      ...options.headers,
-    };
-    // No header at all when there is no token. An empty bearer reads as a server fault.
-    if (token !== undefined && token !== '') headers.Authorization = `Bearer ${token}`;
-    if (options.body !== undefined) {
-      headers['Content-Type'] = 'application/json; charset=utf-8';
-    }
-
-    let response: Awaited<ReturnType<FetchLike>>;
-    try {
-      response = await config.fetch(`${config.baseUrl}${options.path}`, {
-        method: options.method,
-        headers,
-        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-      });
-    } catch (cause) {
-      // An abort is the caller's own decision and must surface as itself, not as a network
-      // fault the client will then retry three times.
-      if (cause instanceof Error && cause.name === 'AbortError') throw cause;
-      throw new NetworkError('The request could not be sent.', cause);
-    }
-
-    const raw = await response.text();
-    let body: unknown;
-    try {
-      body = raw === '' ? undefined : JSON.parse(raw);
-    } catch {
-      body = undefined;
-    }
-
-    if (!response.ok) {
-      throw toApiError(
-        response.status,
-        body,
-        requestId,
-        parseRetryAfter(response.headers.get('Retry-After')),
-      );
-    }
-
+  ): z.infer<S> {
     const parsed = options.schema.safeParse(body);
     if (parsed.success) return parsed.data as z.infer<S>;
 
@@ -336,7 +308,104 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
     return body as z.infer<S>;
   }
 
+  async function send<S extends z.ZodType>(
+    options: RequestOptions<S>,
+    requestId: string,
+    token: string | undefined,
+    identity: string | undefined,
+  ): Promise<z.infer<S>> {
+    const baseHeaders: Record<string, string> = {
+      Accept: 'application/json',
+      'X-Request-Id': requestId,
+      'X-Client-Timezone': config.timezone,
+      'X-Client-Version': config.clientVersion,
+      ...options.headers,
+    };
+    // No header at all when there is no token. An empty bearer reads as a server fault.
+    if (token !== undefined && token !== '')
+      baseHeaders.Authorization = `Bearer ${token}`;
+    if (options.body !== undefined) {
+      baseHeaders['Content-Type'] = 'application/json; charset=utf-8';
+    }
+
+    const cacheKey =
+      options.method === 'GET' && identity !== undefined
+        ? JSON.stringify([identity, options.path])
+        : undefined;
+    const cached = cacheKey === undefined ? undefined : getCache.get(cacheKey);
+
+    const fetchOnce = async (conditional: CachedGetResponse | undefined) => {
+      const headers = { ...baseHeaders };
+      // Conditional GET ownership stays here. In particular, the one recovery request after
+      // an unpaired 304 must be unconditional even if a caller supplied the header manually.
+      for (const name of Object.keys(headers)) {
+        if (name.toLowerCase() === 'if-none-match') delete headers[name];
+      }
+      if (conditional !== undefined) headers['If-None-Match'] = conditional.etag;
+
+      try {
+        return await config.fetch(`${config.baseUrl}${options.path}`, {
+          method: options.method,
+          headers,
+          ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+        });
+      } catch (cause) {
+        // An abort is the caller's own decision and must surface as itself, not as a network
+        // fault the client will then retry three times.
+        if (cause instanceof Error && cause.name === 'AbortError') throw cause;
+        throw new NetworkError('The request could not be sent.', cause);
+      }
+    };
+
+    let response = await fetchOnce(cached);
+
+    if (response.status === 304) {
+      const paired = cacheKey === undefined ? undefined : getCache.get(cacheKey);
+      if (paired !== undefined && paired === cached) {
+        // A 304 has no body by definition. Re-validate the paired body, but never ask the
+        // response to parse bytes that do not exist.
+        return parseResponse(options, paired.body, requestId);
+      }
+
+      // A proxy may answer 304 after the in-memory pair was cleared. Retry exactly once
+      // without a condition so the response is self-contained again.
+      response = await fetchOnce(undefined);
+      if (response.status === 304) {
+        throw toApiError(response.status, undefined, requestId);
+      }
+    }
+
+    const raw = await response.text();
+    let body: unknown;
+    try {
+      body = raw === '' ? undefined : JSON.parse(raw);
+    } catch {
+      body = undefined;
+    }
+
+    if (!response.ok) {
+      throw toApiError(
+        response.status,
+        body,
+        requestId,
+        parseRetryAfter(response.headers.get('Retry-After')),
+      );
+    }
+
+    const parsed = parseResponse(options, body, requestId);
+
+    if (cacheKey !== undefined) {
+      const etag = response.headers.get('ETag');
+      if (etag === null || etag === '') getCache.delete(cacheKey);
+      else getCache.set(cacheKey, { etag, body: parsed });
+    }
+
+    return parsed;
+  }
+
   return {
+    clearCache: () => getCache.clear(),
     async request<S extends z.ZodType>(options: RequestOptions<S>): Promise<z.infer<S>> {
       // One id for the whole call, reused across retries, because the server honours an
       // inbound `X-Request-Id` — so a retry and its original correlate in the logs rather
@@ -359,12 +428,15 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
        * did do is make the number of provider calls depend on transport luck, which is the
        * last thing a seam with a single-flight refresh behind it should expose.
        */
-      const token = await config.tokenProvider.getToken();
+      const [token, identity] = await Promise.all([
+        config.tokenProvider.getToken(),
+        config.tokenProvider.getIdentity(),
+      ]);
 
       let attempt = 0;
       for (;;) {
         try {
-          return await send(options, requestId, token);
+          return await send(options, requestId, token, identity);
         } catch (error) {
           if (!retryable || attempt >= MAX_RETRIES || !isRetryable(error)) throw error;
           await sleep(backoffDelayMs(attempt));

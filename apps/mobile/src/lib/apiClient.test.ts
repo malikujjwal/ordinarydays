@@ -87,9 +87,12 @@ describe('resolveApiBaseUrl', () => {
 });
 
 describe('httpClientConfig', () => {
-  it('sends no Authorization header, because nullTokenProvider yields nothing', async () => {
+  it('uses the local identity without inventing a bearer token', async () => {
     const { httpClientConfig } = await load(localConfig());
     await expect(httpClientConfig.tokenProvider.getToken()).resolves.toBeUndefined();
+    await expect(httpClientConfig.tokenProvider.getIdentity()).resolves.toBe(
+      'usr_local_dev',
+    );
   });
 
   it('reports the platform and version in X-Client-Version', async () => {

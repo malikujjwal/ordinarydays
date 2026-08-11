@@ -30,6 +30,7 @@ describe('exports map', () => {
     expect(schemas.reminderInputForSchedule).toBeDefined();
     expect(table.TABLE.partitionKey).toBe('pk');
     expect(client.nullTokenProvider).toBeDefined();
+    expect(client.localTokenProvider).toBeDefined();
     expect(client.getAgenda).toBeDefined();
     expect(client.completeActivity).toBeDefined();
     expect(client.uncompleteActivity).toBeDefined();
@@ -56,6 +57,7 @@ describe('exports map', () => {
   it('does not re-export the API client from the root barrel', async () => {
     const root = await import('@od/shared');
     expect(root).not.toHaveProperty('nullTokenProvider');
+    expect(root).not.toHaveProperty('localTokenProvider');
   });
 });
 
