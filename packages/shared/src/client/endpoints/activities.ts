@@ -2,11 +2,14 @@ import type { z } from 'zod';
 import {
   type ActivityListQuery,
   activity,
+  activityCompletionResult,
   activityDetail,
   activityListItem,
+  type CompleteActivityInput,
   type CreateActivityInput,
   deletedActivity,
   type PatchActivityInput,
+  type UncompleteActivityInput,
 } from '../../schemas/activity.js';
 import { envelope } from '../../schemas/envelope.js';
 import type { Activity } from '../../types/activity.js';
@@ -30,6 +33,7 @@ import type { HttpClient } from '../http.js';
 
 export const activityResponse = envelope(activity);
 export const activityDetailResponse = envelope(activityDetail);
+export const activityCompletionResponse = envelope(activityCompletionResult);
 export const deletedActivityResponse = envelope(deletedActivity);
 
 /** A list answers with an array **and** `meta.nextCursor`, so the whole envelope is returned. */
@@ -171,6 +175,46 @@ export function duplicateActivity(
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as Activity);
+}
+
+/** Completes an activity or one recurring occurrence. Retries replay byte-for-byte. */
+export function completeActivity(
+  client: HttpClient,
+  activityId: string,
+  input: CompleteActivityInput,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<z.infer<typeof activityCompletionResult>> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/complete`,
+      schema: activityCompletionResponse,
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
+}
+
+/** Reverses completion/skipping for an activity or one recurring occurrence. */
+export function uncompleteActivity(
+  client: HttpClient,
+  activityId: string,
+  input: UncompleteActivityInput,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<z.infer<typeof activityCompletionResult>> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/uncomplete`,
+      schema: activityCompletionResponse,
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
 }
 
 /**

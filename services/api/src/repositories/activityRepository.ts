@@ -404,6 +404,8 @@ export interface PatchOptions extends CreateOptions {
   readonly previous: Activity;
   /** Owner plus every participating app user. Phase 6 supplies more than one. */
   readonly indexedUserIds?: readonly string[];
+  /** Keep the parent's denormalised `SUB#` title/status in the same transaction. */
+  readonly updateChildPointer?: boolean;
 }
 
 /**
@@ -465,7 +467,40 @@ export async function patchActivity(
     items.push({ Put: { Item: indexItem(indexedUserId, next, options.taskSubtitle) } });
   }
 
-  await transactWrite(items, { operation: 'patchActivity' });
+  if (options.updateChildPointer === true && next.parentActivityId !== undefined) {
+    items.push({
+      Update: {
+        Key: childPointer(next.parentActivityId, next.activityId),
+        UpdateExpression:
+          'SET #title = :title, #status = :status, #updatedAt = :updatedAt',
+        ConditionExpression: 'attribute_exists(pk)',
+        ExpressionAttributeNames: {
+          '#title': 'title',
+          '#status': 'status',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':title': next.title,
+          ':status': next.status,
+          ':updatedAt': next.updatedAt,
+        },
+      },
+    });
+  }
+
+  const builder = new TransactionBuilder(
+    'patchActivity',
+    options.idempotencyReceipt === undefined ? 0 : 1,
+  ).add(...items);
+  if (options.idempotencyReceipt !== undefined) {
+    builder.addReserved(receiptItem(options.idempotencyReceipt));
+  }
+
+  await transactWrite(builder.build(), {
+    operation: 'patchActivity',
+    onConditionFailed: () =>
+      options.idempotencyReceipt === undefined ? undefined : new IdempotencyRaceError(),
+  });
 }
 
 /**

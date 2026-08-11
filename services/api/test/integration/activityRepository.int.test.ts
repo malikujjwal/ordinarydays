@@ -1,5 +1,6 @@
 import type { Activity } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
+import type { IdempotencyReceipt } from '../../src/lib/idempotency.js';
 import { useTestTable } from './harness.js';
 
 /**
@@ -17,11 +18,13 @@ type Repo = typeof import('../../src/repositories/activityRepository.js');
 type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
 type Tx = typeof import('../../src/repositories/tx.js');
+type Completion = typeof import('../../src/services/completionService.js');
 
 let repo: Repo;
 let base: Base;
 let keys: Keys;
 let tx: Tx;
+let completion: Completion;
 
 /** Two invented users. Neither needs a profile — the keys are what is under test. */
 const ALICE = 'usr_int_repo_alice';
@@ -69,6 +72,17 @@ beforeAll(async () => {
   base = await import('../../src/repositories/base.js');
   keys = await import('../../src/repositories/keys.js');
   tx = await import('../../src/repositories/tx.js');
+  completion = await import('../../src/services/completionService.js');
+});
+
+const receiptFor = (data: unknown): IdempotencyReceipt => ({
+  userId: ALICE,
+  key: crypto.randomUUID(),
+  route: 'POST /v1/activities/:id/complete',
+  status: 200,
+  body: JSON.stringify({ data, meta: { requestId: 'req_integration' } }),
+  ttl: 2_000_000_000,
+  createdAt: '2026-08-11T12:00:00.000Z',
 });
 
 describe('create and read back', () => {
@@ -408,6 +422,111 @@ describe('optimistic concurrency', () => {
     ).rejects.toMatchObject({ code: 'conflict' });
 
     expect((await repo.getActivityMeta(before.activityId))?.title).toBe('Buy milk');
+  });
+});
+
+describe('P2-13 completion transactions', () => {
+  it('commits child META, owner index and parent SUB status together', async () => {
+    const parent = anActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+      title: 'Breakfast',
+    } as Partial<Activity>);
+    await repo.createActivity(ALICE, parent);
+    const child = anActivity({
+      parentActivityId: parent.activityId,
+      schedule: { date: '2026-08-11', timezone: 'UTC' },
+      status: 'scheduled',
+    });
+    await repo.createActivity(ALICE, child, { taskSubtitle: parent.title });
+
+    await completion.completeActivity(
+      ALICE,
+      child.activityId,
+      {},
+      '2026-08-11T12:00:00.000Z',
+      receiptFor,
+    );
+
+    expect(await repo.getActivityMeta(child.activityId)).toMatchObject({
+      status: 'completed',
+      outcome: 'done',
+      completedAt: '2026-08-11T12:00:00.000Z',
+    });
+    expect((await repo.listByBucket(ALICE, 'S')).items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ activityId: child.activityId, status: 'completed' }),
+      ]),
+    );
+    expect(await repo.listChildPointers(parent.activityId)).toEqual([
+      expect.objectContaining({
+        childActivityId: child.activityId,
+        status: 'completed',
+      }),
+    ]);
+  });
+
+  it('writes one occurrence row while leaving series META byte-identical', async () => {
+    const series = anActivity({
+      schedule: { date: '2026-08-01', timezone: 'UTC' },
+      status: 'scheduled',
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    await repo.createActivity(ALICE, series);
+    const before = await repo.getActivityMeta(series.activityId);
+
+    await completion.completeActivity(
+      ALICE,
+      series.activityId,
+      { occurrenceDate: '2026-08-11' },
+      '2026-08-11T12:00:00.000Z',
+      receiptFor,
+    );
+
+    expect(await repo.getActivityMeta(series.activityId)).toEqual(before);
+    expect(
+      (await repo.getActivityPartition(series.activityId)).filter((row) =>
+        String(row.sk).startsWith('OCC#'),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        sk: 'OCC#2026-08-11',
+        status: 'completed',
+        completedAt: '2026-08-11T12:00:00.000Z',
+      }),
+    ]);
+  });
+
+  it('persists a prep-task title and parent SUB repair together', async () => {
+    const parent = anActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+      title: 'Breakfast',
+    } as Partial<Activity>);
+    await repo.createActivity(ALICE, parent);
+    const before = anActivity({ parentActivityId: parent.activityId });
+    await repo.createActivity(ALICE, before, { taskSubtitle: parent.title });
+    const after = {
+      ...before,
+      title: 'Buy oat milk',
+      updatedAt: '2026-08-11T12:00:00.000Z',
+    };
+
+    await repo.patchActivity(ALICE, after, before.updatedAt, {
+      previous: before,
+      taskSubtitle: parent.title,
+      updateChildPointer: true,
+    });
+
+    expect((await repo.getActivityMeta(before.activityId))?.title).toBe('Buy oat milk');
+    expect(await repo.listChildPointers(parent.activityId)).toEqual([
+      expect.objectContaining({ title: 'Buy oat milk' }),
+    ]);
   });
 });
 

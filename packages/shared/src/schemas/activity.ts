@@ -9,6 +9,7 @@ import {
   MAX_TITLE_LEN,
 } from '../constants.js';
 import { cents, cursor, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
+import { occurrence } from './occurrence.js';
 import { createRecurrence, recurrence } from './recurrence.js';
 import { reminder, reminderInput } from './reminder.js';
 
@@ -144,6 +145,15 @@ function checkDetailsMatchType(
   }
 }
 
+export const activityOutcome = z.enum([
+  'done',
+  'attended',
+  'watched',
+  'had_it',
+  'didnt_happen',
+  'didnt_go',
+]);
+
 const activityBaseShape = {
   activityId: ulidId('act'),
   ownerId: userId,
@@ -165,9 +175,7 @@ const activityBaseShape = {
   details: activityDetails,
   completedAt: z.iso.datetime().optional(),
   snoozedUntil: z.union([hhmm, z.iso.datetime()]).optional(),
-  outcome: z
-    .enum(['done', 'attended', 'watched', 'had_it', 'didnt_happen', 'didnt_go'])
-    .optional(),
+  outcome: activityOutcome.optional(),
   icsSequence: z.number().int().nonnegative(),
   createdAt: z.string().min(1),
   lastActivityAt: z.string().min(1),
@@ -440,6 +448,33 @@ export const patchActivityInput = z
  * lose the pairing, which is the one thing this input exists to guarantee.
  */
 export type PatchActivityInput = z.infer<typeof patchActivityInput>;
+
+/** Complete either the activity itself or one nominal recurring occurrence. */
+export const completeActivityInput = z
+  .strictObject({
+    occurrenceDate: isoDate.optional(),
+    outcome: activityOutcome.optional(),
+  })
+  .meta({ id: 'CompleteActivityInput' });
+
+/** Reverse completion/skipping for the activity or one nominal recurring occurrence. */
+export const uncompleteActivityInput = z
+  .strictObject({ occurrenceDate: isoDate.optional() })
+  .meta({ id: 'UncompleteActivityInput' });
+
+/** Canonical mutation result for complete and uncomplete. */
+export const activityCompletionResult = z
+  .object({
+    activity,
+    occurrenceDate: isoDate.optional(),
+    occurrence: occurrence.optional(),
+    outcome: activityOutcome.optional(),
+  })
+  .meta({ id: 'ActivityCompletionResult' });
+
+export type CompleteActivityInput = z.infer<typeof completeActivityInput>;
+export type UncompleteActivityInput = z.infer<typeof uncompleteActivityInput>;
+export type ActivityCompletionResult = z.infer<typeof activityCompletionResult>;
 
 /**
  * What a `DELETE` acknowledges: the id that is now gone.

@@ -573,9 +573,21 @@ export async function patchActivity(
 
   const change = applyKindChange(current, patch, log);
   const next = merge(current, patch, change, now);
+  const parent =
+    next.parentActivityId !== undefined
+      ? await getActivityMeta(next.parentActivityId)
+      : undefined;
+  const updatesExistingChildPointer =
+    current.parentActivityId !== undefined &&
+    current.parentActivityId === next.parentActivityId &&
+    current.title !== next.title;
 
   try {
-    await putPatch(userId, next, ifMatch, { previous: current });
+    await putPatch(userId, next, ifMatch, {
+      previous: current,
+      ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
+      ...(updatesExistingChildPointer ? { updateChildPointer: true } : {}),
+    });
   } catch (error) {
     if (error instanceof AppError && error.code === 'conflict') {
       const fresh = await getActivityMeta(activityId);

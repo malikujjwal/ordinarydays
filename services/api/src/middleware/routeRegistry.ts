@@ -38,11 +38,10 @@ interface RouteEntryBase {
    * Legacy P1-04 note: this classification is now the required `mutates` field on every POST.
    *
    * `api-contract.md` §1 requires the header on "all `POST` that create", which the method
-   * alone cannot answer: `POST /v1/activities/:id/complete`, `/skip` and `/snooze` are
-   * naturally idempotent and take no key (`phase-02-today-and-tasks.md` §P2-09), while
-   * `/duplicate` does create and takes one. Deriving it from the verb would 400 every
-   * completion or let every duplicate through — so the route states it, in the same place
-   * and for the same reason it states whether it needs an identity.
+   * alone cannot answer: capture POSTs are read-only, while completion and duplicate POSTs
+   * mutate and require replay protection. Deriving it from the verb would require keys on
+   * capture or let mutations through — so the route states it in the same place and for
+   * the same reason it states whether it needs an identity.
    *
    * P2-38 broadens replay protection to every mutating POST and requires read-only POSTs to
    * opt out explicitly, so omission cannot silently bypass the middleware.
@@ -88,6 +87,18 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
   { method: 'GET', pattern: '/v1/activities/:id', auth: 'authenticated' },
   { method: 'PATCH', pattern: '/v1/activities/:id', auth: 'authenticated' },
   { method: 'DELETE', pattern: '/v1/activities/:id', auth: 'authenticated' },
+  {
+    method: 'POST',
+    pattern: '/v1/activities/:id/complete',
+    auth: 'authenticated',
+    mutates: true,
+  },
+  {
+    method: 'POST',
+    pattern: '/v1/activities/:id/uncomplete',
+    auth: 'authenticated',
+    mutates: true,
+  },
   {
     method: 'POST',
     pattern: '/v1/activities/:id/duplicate',

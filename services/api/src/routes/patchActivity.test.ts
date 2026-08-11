@@ -537,3 +537,37 @@ describe('what a patch may not set', () => {
     expect(body.data.status).toBe('cancelled');
   });
 });
+
+describe('prep-task child pointer repair', () => {
+  it('updates the parent SUB title in the same transaction as the child PATCH', async () => {
+    const parentId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+    const child = meta({ parentActivityId: parentId });
+    const parentRow = meta({
+      pk: `ACT#${parentId}`,
+      activityId: parentId,
+      objectKind: 'plan',
+      type: 'custom',
+      title: 'Breakfast',
+      details: { kind: 'custom' },
+    });
+    ddbMock
+      .on(GetCommand)
+      .callsFake((input) =>
+        input.Key?.pk === `ACT#${parentId}` ? { Item: parentRow } : { Item: child },
+      );
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+    ddbMock.on(TransactWriteCommand).resolves({});
+
+    const response = await patch(createApp(), { title: 'Buy oat milk' });
+    const items =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0]?.input.TransactItems;
+    const pointer = items?.find((item) => item.Update?.Key?.sk === `SUB#${ACT}`)?.Update;
+
+    expect(response.status).toBe(200);
+    expect(pointer).toMatchObject({
+      Key: { pk: `ACT#${parentId}`, sk: `SUB#${ACT}` },
+      ExpressionAttributeValues: { ':title': 'Buy oat milk' },
+    });
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(1);
+  });
+});
