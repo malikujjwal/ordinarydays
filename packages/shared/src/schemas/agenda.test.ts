@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
-import type { AgendaIncludeToken, AgendaItem } from '../types/agenda.js';
+import type { AgendaIncludeToken, AgendaItem } from '../types/index.js';
 import { agendaIncludeToken, agendaItem } from './agenda.js';
 
 const subject = {
@@ -32,6 +32,21 @@ describe('AgendaItem contract', () => {
     expect(agendaItem.safeParse({ ...subject, overdueFromDate: 'Tuesday' }).success).toBe(
       false,
     );
+  });
+
+  it('rejects unknown fields and overlong presentation text', () => {
+    expect(agendaItem.safeParse({ ...subject, ownerId: 'usr_owner' }).success).toBe(
+      false,
+    );
+    expect(agendaItem.safeParse({ ...subject, title: 'x'.repeat(201) }).success).toBe(
+      false,
+    );
+    expect(
+      agendaItem.safeParse({
+        ...subject,
+        capabilities: { complete: true, skip: true, snooze: true, delete: true },
+      }).success,
+    ).toBe(false);
   });
 });
 

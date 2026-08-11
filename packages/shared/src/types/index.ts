@@ -24,6 +24,13 @@ export type {
 } from './activity.js';
 /** Its own file so ADR-047's guard on `activity.ts` stays tight — see the note there. */
 export type { ActivityDetail } from './activityDetail.js';
+export type {
+  AgendaCapabilities,
+  AgendaIncludeToken,
+  AgendaItem,
+  AgendaItemStatus,
+  AgendaParticipantAvatar,
+} from './agenda.js';
 export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type { Occurrence, OccurrenceStatus } from './occurrence.js';
 export type {

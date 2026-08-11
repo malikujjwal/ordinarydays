@@ -30,6 +30,7 @@ describe('exports map', () => {
 
     expect(root.MAX_PARTICIPANTS).toBe(50);
     expect(schemas.isoDate).toBeDefined();
+    expect(schemas.agendaItem).toBeDefined();
     expect(table.TABLE.partitionKey).toBe('pk');
     expect(client.nullTokenProvider).toBeDefined();
     expect(constants.MAX_AGENDA_DAYS).toBe(62);

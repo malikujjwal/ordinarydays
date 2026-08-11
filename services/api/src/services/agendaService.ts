@@ -1,5 +1,11 @@
 import { expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
-import type { Activity, Occurrence, RecurrenceSegment, Reminder } from '@od/shared/types';
+import type {
+  Activity,
+  AgendaParticipantAvatar,
+  Occurrence,
+  RecurrenceSegment,
+  Reminder,
+} from '@od/shared/types';
 import { addDays, format, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { logger } from '../lib/logger.js';
@@ -16,6 +22,7 @@ import {
   type OccurrenceMoveMarker,
 } from '../repositories/occurrenceRepository.js';
 import { listForUser as listRemindersForUser } from '../repositories/reminderRepository.js';
+import type { ActionCapabilityContext } from './actionCapabilities.js';
 
 const SERIES_LIMIT = 200;
 const WALL_DATE = 'yyyy-MM-dd';
@@ -33,12 +40,8 @@ export type AgendaCandidateStatus =
   | 'completed_occurrence'
   | 'skipped_occurrence';
 
-export interface AgendaActionContext {
-  readonly activity: Activity;
-  readonly callerId: string;
-  readonly callerRole: 'owner' | 'participant' | 'none';
-  readonly parentOwnerId?: string;
-  readonly participatesInParent: boolean;
+export interface AgendaActionContext extends ActionCapabilityContext {
+  readonly parentTitle?: string;
 }
 
 export interface AgendaCandidate {
@@ -52,8 +55,14 @@ export interface AgendaCandidate {
   readonly movedFromDate?: string;
   readonly overdueFromDate?: string;
   readonly reminders?: readonly Reminder[];
+  readonly participantAvatars: readonly AgendaParticipantAvatar[];
   readonly actionContext: AgendaActionContext;
 }
+
+type UnhydratedAgendaCandidate = Omit<
+  AgendaCandidate,
+  'actionContext' | 'participantAvatars' | 'reminders'
+>;
 
 export interface AgendaAssemblyDay {
   readonly date: string;
@@ -133,6 +142,7 @@ export async function assembleAgenda(
   const scheduledIndex = indexByActivity(scheduledPage.items);
   const seriesIndex = indexByActivity(seriesPage.items);
   const anytimeIndex = indexByActivity(anytimePage.items);
+  const presentationIndex = new Map([...scheduledIndex, ...seriesIndex, ...anytimeIndex]);
   const [scheduled, series, anytime] = await Promise.all([
     hydrateSelected(scheduledIndex, dependencies, 'scheduled'),
     hydrateSelected(seriesIndex, dependencies, 'series'),
@@ -203,6 +213,9 @@ export async function assembleAgenda(
     return {
       ...candidate,
       ...(ownReminders === undefined ? {} : { reminders: ownReminders }),
+      participantAvatars: projectedParticipantAvatars(
+        presentationIndex.get(candidate.activity.activityId),
+      ),
       actionContext: contexts.get(candidate.activity.activityId) ?? {
         activity: candidate.activity,
         callerId: input.userId,
@@ -223,7 +236,7 @@ export async function rollForwardOverdue(
   userId: string,
   today: string,
   dependencies: AgendaDependencies = DEFAULT_DEPENDENCIES,
-): Promise<Omit<AgendaCandidate, 'actionContext' | 'reminders'>[]> {
+): Promise<UnhydratedAgendaCandidate[]> {
   const from = addWallDays(today, -30);
   const to = addWallDays(today, -1);
   const index = indexByActivity(await dependencies.listOverdue(userId, from, to));
@@ -436,7 +449,7 @@ const pairKey = (activityId: string, date: string) => `${activityId}\u0000${date
 function toViewerCandidate(
   candidate: RawCandidate,
   viewerTimezone: string,
-): Omit<AgendaCandidate, 'actionContext' | 'reminders'> {
+): UnhydratedAgendaCandidate {
   if (candidate.effectiveInstant !== undefined) {
     const instant = new Date(candidate.effectiveInstant);
     return {
@@ -501,10 +514,10 @@ function toViewerCandidate(
 }
 
 function dedupe(
-  candidates: readonly Omit<AgendaCandidate, 'actionContext' | 'reminders'>[],
+  candidates: readonly UnhydratedAgendaCandidate[],
   warnings: string[],
-): Omit<AgendaCandidate, 'actionContext' | 'reminders'>[] {
-  const seen = new Map<string, Omit<AgendaCandidate, 'actionContext' | 'reminders'>>();
+): UnhydratedAgendaCandidate[] {
+  const seen = new Map<string, UnhydratedAgendaCandidate>();
   for (const candidate of [...candidates].sort(compareCandidates)) {
     const key = pairKey(candidate.activity.activityId, candidate.occurrenceDate ?? '');
     if (seen.has(key)) {
@@ -518,7 +531,7 @@ function dedupe(
 
 async function hydrateActionContexts(
   userId: string,
-  candidates: readonly Omit<AgendaCandidate, 'actionContext' | 'reminders'>[],
+  candidates: readonly UnhydratedAgendaCandidate[],
   dependencies: AgendaDependencies,
 ): Promise<Map<string, AgendaActionContext>> {
   const activities = new Map(
@@ -560,6 +573,7 @@ async function hydrateActionContexts(
           callerRole:
             activity.ownerId === userId ? ('owner' as const) : ('participant' as const),
           ...(parent === undefined ? {} : { parentOwnerId: parent.ownerId }),
+          ...(parent === undefined ? {} : { parentTitle: parent.title }),
           participatesInParent:
             parent !== undefined &&
             (parent.ownerId === userId || participation.get(parent.activityId) === true),
@@ -571,7 +585,7 @@ async function hydrateActionContexts(
 
 async function hydrateReminders(
   userId: string,
-  candidates: readonly Omit<AgendaCandidate, 'actionContext' | 'reminders'>[],
+  candidates: readonly UnhydratedAgendaCandidate[],
   dependencies: AgendaDependencies,
 ): Promise<Map<string, readonly Reminder[]>> {
   const ids = [...new Set(candidates.map((row) => row.activity.activityId))];
@@ -583,6 +597,35 @@ async function hydrateReminders(
       ),
     ),
   );
+}
+
+function projectedParticipantAvatars(
+  item: StoredItem | undefined,
+): AgendaParticipantAvatar[] {
+  if (!Array.isArray(item?.participantAvatars)) return [];
+  return item.participantAvatars.flatMap((value) => {
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      !('personId' in value) ||
+      typeof value.personId !== 'string' ||
+      !('displayName' in value) ||
+      typeof value.displayName !== 'string'
+    ) {
+      return [];
+    }
+    const avatarUrl =
+      'avatarUrl' in value && typeof value.avatarUrl === 'string'
+        ? value.avatarUrl
+        : undefined;
+    return [
+      {
+        personId: value.personId,
+        displayName: value.displayName,
+        ...(avatarUrl === undefined ? {} : { avatarUrl }),
+      },
+    ];
+  });
 }
 
 function partitionDays(

@@ -1,6 +1,7 @@
 import type { Activity, Recurrence } from '@od/shared/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { StoredItem } from '../repositories/migrate.js';
+import { projectAgendaItems } from './agendaProjection.js';
 import {
   type AgendaDependencies,
   assembleAgenda,
@@ -60,6 +61,12 @@ function fixture(input: Fixture) {
     async () => input.occurrences ?? { occurrences: [], markers: [] },
   );
   const batchOccurrences = vi.fn(async () => [...(input.moved ?? [])]);
+  const batchActivities = vi.fn(async (ids: readonly string[]) =>
+    ids.flatMap((id) => {
+      const row = byId.get(id);
+      return row === undefined ? [] : [row];
+    }),
+  );
   const dependencies: AgendaDependencies = {
     listBucket: async (_userId, bucket) => {
       calls.push(bucket);
@@ -71,11 +78,7 @@ function fixture(input: Fixture) {
       };
     },
     listOverdue,
-    batchActivities: async (ids) =>
-      ids.flatMap((id) => {
-        const row = byId.get(id);
-        return row === undefined ? [] : [row];
-      }),
+    batchActivities,
     listParticipants: async (activityId) => [...(input.participants?.[activityId] ?? [])],
     batchAgendaRows,
     batchOccurrences,
@@ -91,6 +94,7 @@ function fixture(input: Fixture) {
     listOverdue,
     batchAgendaRows,
     batchOccurrences,
+    batchActivities,
   };
 }
 
@@ -809,6 +813,50 @@ describe('overdue roll-forward', () => {
 });
 
 describe('bounded fan-out', () => {
+  it('adds zero reads while projecting any number of AgendaItems', async () => {
+    const series = activity({
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    const subject = fixture({
+      activities: [series],
+      buckets: {
+        R: [
+          index(series, {
+            participantAvatars: [
+              { personId: 'psn_alice', displayName: 'Alice' },
+              { personId: 42, displayName: 'Invalid' },
+            ],
+          }),
+        ],
+      },
+      expanded: ['2026-08-05', '2026-08-06', '2026-08-07'],
+    });
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-05',
+        to: '2026-08-07',
+        timezone: 'UTC',
+        now,
+      },
+      subject.dependencies,
+    );
+    const candidates = emitted(result);
+    const readsBeforeProjection = subject.batchActivities.mock.calls.length;
+
+    const projected = projectAgendaItems(candidates, { now, timezone: 'UTC' });
+
+    expect(subject.batchActivities).toHaveBeenCalledTimes(readsBeforeProjection);
+    expect(projected).toHaveLength(3);
+    expect(projected[0]?.participantAvatars).toEqual([
+      { personId: 'psn_alice', displayName: 'Alice' },
+    ]);
+  });
+
   it('reuses one action context and one reminder read across repeated occurrences', async () => {
     const series = activity({
       schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
