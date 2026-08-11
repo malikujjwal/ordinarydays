@@ -182,6 +182,19 @@ recurring series contributes one row per date in the window. A plan completed be
 date stays in Upcoming until the date passes and renders with its outcome verb in the
 trailing slot, exactly as a Past row does.
 
+> **Presentation amendment (2026-08-11, P2-32) — compress interior gaps and keep month
+> context.** Upcoming renders a single quiet line for each consecutive run of empty calendar
+> days **between** two dates that contain entries in the loaded window. One empty day reads
+> `Aug 20 · nothing planned`; a longer run reads `Aug 20 – 24 · nothing planned`, using the
+> same abbreviated month/day vocabulary as the surrounding date headings. The list renders
+> no gap before its first dated entry and none after its last dated entry. Tapping a gap line
+> opens the schedule date picker pre-set to the gap's first day and does nothing else: it
+> does not create, schedule, or move an Activity. This is another application of
+> **suggest, never auto-create**. Upcoming also renders month headers over its date groups;
+> the current month header stays pinned while scrolling until the next month header replaces
+> it. A persistent week strip and a direct-manipulation date scrubber remain out of scope and
+> are parked in [`../00-open-decisions.md`](../00-open-decisions.md) deferred item #52.
+
 **Past.** The same row, de-emphasised, with its outcome verb in the trailing slot when it
 has one. **No resolution prompt and no styling that implies fault** — an unresolved past
 plan renders plainly and is never counted anywhere

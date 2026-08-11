@@ -2220,6 +2220,15 @@ TODAY. The no-mutation and 30-day-window guarantees are P2-09's integration test
 
 ### P2-32 — The Plans tab: date-range agenda
 
+> **Amended 2026-08-11 — compress empty dates and keep the month visible.** Between the
+> first and last dates that contain entries in the loaded Upcoming window, replace each
+> consecutive run of empty calendar days with one quiet line: `Aug 20 · nothing planned`
+> for one day or `Aug 20 – 24 · nothing planned` for a longer run. Render no gap before the
+> first dated entry or after the last. The line uses `footnote` / `textSecondary`; tapping
+> it only opens the schedule date picker pre-set to the run's first day, with no Activity
+> write. Month headers remain sticky while scrolling and are replaced by the next month.
+> This amendment does not add the week strip or date scrubber parked in deferred item #52.
+
 **Approach.** The same `GET /v1/agenda` the Today screen uses, with a wider window and
 **without** `include=anytime_unscheduled`. Items are grouped under date headings and rendered
 with the row components from P2-21, so there is one row component in the product.
@@ -2239,7 +2248,12 @@ date only, here and on Today.
 **Tests.** A network assertion that the Plans request omits `include=anytime_unscheduled`; a
 render test over a seven-day fixture asserting one row per series per date; a test that an
 undated shared plan appears nowhere on this screen in Phase 2, since the endpoint that
-surfaces it does not exist yet.
+surfaces it does not exist yet. Add render tests for the exact single-day and multi-day gap
+copy, including the collapse of several consecutive empty dates into one line; prove that
+empty dates before the first and after the last dated entry do not render. Tapping a gap
+line opens the schedule date picker pre-set to its first day, with the schedule transport
+call count unchanged. A scroll test crossing a month boundary proves that the current month
+header is sticky and that the next month replaces it.
 
 ---
 

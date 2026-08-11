@@ -455,6 +455,16 @@ header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutat
 > plans; the product keeps its three stages and shows pending invitations with badges
 > within them, per `sharing-and-people.md` §3.1.)
 
+> **P2-32 presentation amendment (2026-08-11).** In Upcoming, each interior run of dates
+> with no entries is one uncarded, quiet line: `Aug 20 · nothing planned` for one day or
+> `Aug 20 – 24 · nothing planned` for a longer run. Its text is `footnote` / `textSecondary`;
+> because the line opens the schedule date picker, its full-width hit area remains at least
+> 44 pt and exposes button semantics even though its visual treatment is subdued. Month
+> headers use the existing `SectionHeader` treatment and stick to the scroll edge until the
+> next month replaces them. The precise interior-only rendering and no-write tap behavior
+> are canonical in `plans-and-lists.md` §1.3. The week-strip and date-scrubber concepts are
+> still deferred as open-decisions item #52.
+
 ```
  ┌───────────────────────────────────────────────────────┐  radius.lg · e2
  │ [squircle]  Philadelphia Food Festival                │  IconTile · heading, textDisplay
