@@ -47,6 +47,8 @@ describe('the generated document', () => {
       '/v1/activities/{id}',
       '/v1/activities/{id}/schedule',
       '/v1/activities/{id}/duplicate',
+      '/v1/activities/{id}/complete',
+      '/v1/activities/{id}/uncomplete',
       '/v1/capture/parse',
       '/v1/capture/extract',
       '/v1/capture/link',
@@ -78,6 +80,7 @@ describe('the generated document', () => {
   it('names its schemas as components instead of inlining them', () => {
     expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual([
       'Activity',
+      'ActivityCompletionResult',
       'ActivityDetail',
       'ActivityListItem',
       'AgendaData',
@@ -85,12 +88,14 @@ describe('the generated document', () => {
       'CaptureExtractInput',
       'CaptureLinkInput',
       'CaptureParseInput',
+      'CompleteActivityInput',
       'CreateActivityInput',
       'DeletedActivity',
       'DeletedDevice',
       'Device',
       'ErrorResponse',
       'HealthResponse',
+      'Occurrence',
       'PatchActivityInput',
       'PatchUserInput',
       'Recurrence',
@@ -99,6 +104,7 @@ describe('the generated document', () => {
       'ReminderInput',
       'ScheduleActivityInput',
       'ScheduleActivityResult',
+      'UncompleteActivityInput',
       'User',
     ]);
   });

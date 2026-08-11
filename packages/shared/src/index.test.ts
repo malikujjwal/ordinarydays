@@ -34,6 +34,10 @@ describe('exports map', () => {
     expect(table.TABLE.partitionKey).toBe('pk');
     expect(client.nullTokenProvider).toBeDefined();
     expect(client.getAgenda).toBeDefined();
+    expect(client.completeActivity).toBeDefined();
+    expect(client.uncompleteActivity).toBeDefined();
+    expect(schemas.completeActivityInput).toBeDefined();
+    expect(schemas.uncompleteActivityInput).toBeDefined();
     expect(constants.MAX_AGENDA_DAYS).toBe(62);
     expect(errors.ERROR_CODES).toContain('validation_failed');
     expect(recurrence.describeRecurrence).toBeDefined();

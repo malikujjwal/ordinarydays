@@ -1,12 +1,18 @@
 import { zValidator } from '@hono/zod-validator';
 import {
   activityListQuery,
+  completeActivityInput,
   createActivityInput,
   patchActivityInput,
   scheduleActivityInput,
+  uncompleteActivityInput,
 } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
+import {
+  COMPLETE_ACTIVITY_PATH,
+  completeActivityHandler,
+} from '../handlers/completeActivity.js';
 import { createActivityHandler } from '../handlers/createActivity.js';
 import {
   DELETE_ACTIVITY_PATH,
@@ -26,21 +32,23 @@ import {
   SCHEDULE_ACTIVITY_PATH,
   scheduleActivityHandler,
 } from '../handlers/scheduleActivity.js';
+import {
+  UNCOMPLETE_ACTIVITY_PATH,
+  uncompleteActivityHandler,
+} from '../handlers/uncompleteActivity.js';
 
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Seven routes: the complete Phase 1 activity surface plus P2-12's sole schedule write path.
- * The flat list (P1-16), create (P1-11), detail read (P1-12), partial update (P1-13), delete
- * (P1-14), duplicate (P1-15), and schedule/reschedule/unschedule (P2-12) live here.
- * Completion and the remaining occurrence routes are Phase 2, and the agenda that powers
- * Today is its own endpoint. Each is
+ * Nine routes: the six Phase 1 activity routes, P2-12's sole schedule write path, and P2-13's
+ * complete and uncomplete actions. The remaining occurrence routes are Phase 2, and the agenda
+ * that powers Today is its own endpoint. Each is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
  *
  * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise (P1-30).
- * Both creating and scheduling POSTs take an `Idempotency-Key`; `PATCH` is guarded by
- * `If-Match` instead.
+ * Creating, duplicating, scheduling, completing and uncompleting require an
+ * `Idempotency-Key`; `PATCH` remains guarded by `If-Match` optimistic concurrency.
  */
 
 /**
@@ -74,6 +82,14 @@ const validatePatch = zValidator('json', patchActivityInput, (result) => {
 });
 
 const validateSchedule = zValidator('json', scheduleActivityInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+const validateComplete = zValidator('json', completeActivityInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+const validateUncomplete = zValidator('json', uncompleteActivityInput, (result) => {
   if (!result.success) throw result.error;
 });
 
@@ -120,6 +136,12 @@ export const activities = new Hono<AppEnv>()
    * the idempotence P1-14 asks for.
    */
   .delete(DELETE_ACTIVITY_PATH, deleteActivityHandler)
+  .post(COMPLETE_ACTIVITY_PATH, validateComplete, (c) =>
+    completeActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
+  .post(UNCOMPLETE_ACTIVITY_PATH, validateUncomplete, (c) =>
+    uncompleteActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
   /**
    * Mounted after `/:id`, and the order does not matter to Hono — `/:id/duplicate` has more
    * segments, so it cannot be shadowed by the bare `/:id` routes above. Kept last to match

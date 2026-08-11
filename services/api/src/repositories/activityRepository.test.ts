@@ -430,6 +430,27 @@ describe('patch', () => {
 
     expect(puts.map((item) => item?.pk)).toEqual([`USER#${ALICE}`, 'USER#usr_b']);
   });
+
+  it('repairs the parent SUB pointer in the same transaction as a child title change', async () => {
+    const parentActivityId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+    const previous = activity({ parentActivityId });
+    await patchActivity(
+      ALICE,
+      activity({ parentActivityId, title: 'Buy oat milk' }),
+      previous.updatedAt,
+      { previous, taskSubtitle: 'Breakfast', updateChildPointer: true },
+    );
+
+    expect(verbs()).toEqual(['Put', 'Put', 'Update']);
+    expect(sentItems()[2]?.Update).toMatchObject({
+      Key: { pk: `ACT#${parentActivityId}`, sk: `SUB#${ACT}` },
+      ConditionExpression: 'attribute_exists(pk)',
+      ExpressionAttributeValues: {
+        ':title': 'Buy oat milk',
+        ':status': 'saved',
+      },
+    });
+  });
 });
 
 describe('schedule transaction composition', () => {

@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { FetchLike, HttpClientConfig } from '../http.js';
 import { ApiError, createHttpClient, nullTokenProvider } from '../http.js';
 import {
+  completeActivity,
   createActivity,
   deleteActivity,
   duplicateActivity,
   listActivities,
   scheduleActivity,
+  uncompleteActivity,
 } from './activities.js';
 import { getAgenda } from './agenda.js';
 import {
@@ -445,11 +447,11 @@ describe('the me endpoints', () => {
     const device = await registerDevice(
       client,
       { expoPushToken: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]', platform: 'ios' },
-      'e6f2b0a4-0f3f-4f9e-9c1a-0d8f2a3b4c5d',
+      '00000000-0000-4000-8000-000000000001',
     );
 
     expect(calls[0]?.headers['Idempotency-Key']).toBe(
-      'e6f2b0a4-0f3f-4f9e-9c1a-0d8f2a3b4c5d',
+      '00000000-0000-4000-8000-000000000001',
     );
     // The only way the caller can ever remove this registration.
     expect(device.deviceId).toBe('dev_01J0000000000000000000000A');
@@ -515,7 +517,7 @@ describe('the remaining activity endpoints', () => {
     await duplicateActivity(
       client,
       'act_01J0000000000000000000000A',
-      'e6f2b0a4-0f3f-4f9e-9c1a-0d8f2a3b4c5d',
+      '00000000-0000-4000-8000-000000000001',
     );
 
     expect(calls[0]?.method).toBe('POST');
@@ -523,11 +525,32 @@ describe('the remaining activity endpoints', () => {
       'https://api.test/v1/activities/act_01J0000000000000000000000A/duplicate',
     );
     expect(calls[0]?.headers['Idempotency-Key']).toBe(
-      'e6f2b0a4-0f3f-4f9e-9c1a-0d8f2a3b4c5d',
+      '00000000-0000-4000-8000-000000000001',
     );
     // There is nothing to send, and accepting fields would be a second create path.
     expect(calls[0]?.body).toBeUndefined();
   });
+
+  it.each([
+    ['complete', completeActivity, { outcome: 'done' }],
+    ['uncomplete', uncompleteActivity, {}],
+  ] as const)(
+    'sends %s with its body and required idempotency key',
+    async (path, call, input) => {
+      const response = { ...CREATED, data: { activity: CREATED.data } };
+      const { client, calls } = makeClient([{ status: 200, body: response }]);
+      const key = '00000000-0000-4000-8000-000000000001';
+
+      await call(client, 'act_01J0000000000000000000000A', input, key);
+
+      expect(calls[0]?.method).toBe('POST');
+      expect(calls[0]?.url).toBe(
+        `https://api.test/v1/activities/act_01J0000000000000000000000A/${path}`,
+      );
+      expect(calls[0]?.headers['Idempotency-Key']).toBe(key);
+      expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual(input);
+    },
+  );
 
   const PAGE = {
     data: [

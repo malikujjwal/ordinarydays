@@ -3,12 +3,15 @@ import type { OpenAPIObject } from 'openapi3-ts/oas31';
 import { z } from 'zod';
 import {
   activity,
+  activityCompletionResult,
   activityDetail,
   activityListItem,
   activityListQuery,
+  completeActivityInput,
   createActivityInput,
   deletedActivity,
   patchActivityInput,
+  uncompleteActivityInput,
 } from './schemas/activity.js';
 import { agendaData, agendaQuery } from './schemas/agenda.js';
 import {
@@ -38,6 +41,7 @@ const deletedDeviceResponse = envelope(deletedDevice);
 const activityResponse = envelope(activity);
 const activityDetailResponse = envelope(activityDetail);
 const scheduleActivityResponse = envelope(scheduleActivityResult);
+const activityCompletionResponse = envelope(activityCompletionResult);
 const deletedActivityResponse = envelope(deletedActivity);
 
 /**
@@ -504,6 +508,73 @@ registry.registerPath({
     },
     404: {
       description: 'No such activity, or none this caller has any relationship to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/complete',
+  summary: 'Complete an activity or recurring occurrence',
+  description:
+    'Requires an `Idempotency-Key`. Without `occurrenceDate`, updates META, every direct ' +
+    'participant index and a prep-task parent pointer atomically. With `occurrenceDate`, ' +
+    'writes exactly one occurrence override and leaves series META unchanged. Plan completion ' +
+    'is owner-only; a prep task may also be completed by its parent plan owner or participant.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: completeActivityInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The completed activity or occurrence.',
+      content: { 'application/json': { schema: activityCompletionResponse } },
+    },
+    400: {
+      description:
+        'Missing idempotency key, invalid outcome, or occurrence on a non-series.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A related participant who lacks completion authority.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or no relationship to it.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/uncomplete',
+  summary: 'Reverse activity or occurrence completion',
+  description:
+    'Requires an `Idempotency-Key` and applies the same authority and transaction split as ' +
+    'completion. One-off state returns to scheduled or saved; occurrence state is deleted.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: uncompleteActivityInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The restored activity, or the series and nominal occurrence date.',
+      content: { 'application/json': { schema: activityCompletionResponse } },
+    },
+    400: {
+      description: 'Missing idempotency key or occurrence on a non-series.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A related participant who lacks completion authority.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or no relationship to it.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

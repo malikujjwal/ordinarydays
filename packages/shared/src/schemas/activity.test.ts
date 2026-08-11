@@ -4,8 +4,10 @@ import type { Activity, ActivityDetails } from '../types/activity.js';
 import {
   activity,
   type activityDetails,
+  completeActivityInput,
   createActivityInput,
   patchActivityInput,
+  uncompleteActivityInput,
 } from './activity.js';
 
 /**
@@ -386,5 +388,23 @@ describe('patch', () => {
     ['recurrence removal', { recurrence: null, editedFromDate: '2026-08-10' }],
   ])('rejects editedFromDate with %s', (_name, patch) => {
     expect(patchActivityInput.safeParse(patch).success).toBe(false);
+  });
+});
+
+describe('complete and uncomplete inputs', () => {
+  it('accepts the optional nominal date and a supported outcome', () => {
+    expect(
+      completeActivityInput.safeParse({
+        occurrenceDate: '2026-08-11',
+        outcome: 'attended',
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    [completeActivityInput, { status: 'completed' }],
+    [uncompleteActivityInput, { outcome: 'done' }],
+  ])('rejects fields owned by the server', (schema, value) => {
+    expect(schema.safeParse(value).success).toBe(false);
   });
 });
