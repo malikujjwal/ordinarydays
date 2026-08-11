@@ -1,9 +1,14 @@
-import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  QueryCommand,
+  TransactWriteCommand,
+} from '@aws-sdk/lib-dynamodb';
 import type { Activity } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createActivity,
+  listOverdueTaskCandidates,
   localDateTime,
   newActivityId,
   newReminderId,
@@ -423,5 +428,38 @@ describe('patch', () => {
       .filter((item) => (item?.sk as string)?.startsWith('IDX#'));
 
     expect(puts.map((item) => item?.pk)).toEqual([`USER#${ALICE}`, 'USER#usr_b']);
+  });
+});
+
+describe('overdue task window', () => {
+  it('queries only the bounded #S range and retains exactly eligible index rows', async () => {
+    const eligible = {
+      activityId: ACT,
+      type: 'task',
+      status: 'scheduled',
+      isRecurring: false,
+    };
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        eligible,
+        { ...eligible, activityId: 'act_event', type: 'event' },
+        { ...eligible, activityId: 'act_done', status: 'completed' },
+        { ...eligible, activityId: 'act_series', isRecurring: true },
+      ],
+    });
+
+    await expect(
+      listOverdueTaskCandidates(ALICE, '2026-07-07', '2026-08-05'),
+    ).resolves.toEqual([eligible]);
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0]?.input).toMatchObject({
+      IndexName: 'GSI1',
+      KeyConditionExpression: '#pk = :pk AND #sk BETWEEN :from AND :to',
+      ExpressionAttributeValues: {
+        ':pk': `U#${ALICE}#S`,
+        ':from': '2026-07-07T00:00',
+        ':to': '2026-08-05T23:59',
+      },
+    });
   });
 });

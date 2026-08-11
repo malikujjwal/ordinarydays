@@ -170,6 +170,7 @@ describe('the worked-example day', () => {
           queried.push(args[1]);
           return activities.listByBucket(...args);
         },
+        listOverdue: activities.listOverdueTaskCandidates,
         batchActivities: activities.batchGetActivityMeta,
         listParticipants: activities.listParticipants,
         batchAgendaRows: occurrences.batchGetAgendaRows,
@@ -194,6 +195,7 @@ describe('the worked-example day', () => {
           baselineQueried.push(args[1]);
           return activities.listByBucket(...args);
         },
+        listOverdue: activities.listOverdueTaskCandidates,
         batchActivities: activities.batchGetActivityMeta,
         listParticipants: activities.listParticipants,
         batchAgendaRows: occurrences.batchGetAgendaRows,
@@ -231,5 +233,93 @@ describe('the worked-example day', () => {
     ).toEqual([expect.objectContaining({ userId: 'usr_alice', offsetMinutes: -15 })]);
     expect(JSON.stringify(result)).not.toContain('usr_bob');
     expect(JSON.stringify(result)).not.toContain('Dinner at Zahav');
+  });
+});
+
+describe('overdue roll-forward', () => {
+  it('rolls only the bounded task forward and completion preserves its stored date', async () => {
+    const overdue = subject({
+      title: 'Call apartment office',
+      schedule: { date: '2026-08-04', timezone: 'America/New_York' },
+    });
+    const tooOld = subject({
+      title: 'Forgotten task',
+      schedule: { date: '2026-06-27', timezone: 'America/New_York' },
+    });
+    const event = subject({
+      objectKind: 'plan',
+      type: 'event',
+      title: 'Past event',
+      details: { kind: 'event' },
+      schedule: { date: '2026-08-05', timezone: 'America/New_York' },
+    });
+    const recurring = subject({
+      title: 'Daily task',
+      schedule: { date: '2026-08-01', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    for (const row of [overdue, tooOld, event, recurring]) {
+      await activities.createActivity('usr_alice', row);
+    }
+
+    const result = await agenda.assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'America/New_York',
+        now: '2026-08-06T16:00:00.000Z',
+        includeOverdue: true,
+      },
+      {
+        listBucket: activities.listByBucket,
+        listOverdue: activities.listOverdueTaskCandidates,
+        batchActivities: activities.batchGetActivityMeta,
+        listParticipants: activities.listParticipants,
+        batchAgendaRows: occurrences.batchGetAgendaRows,
+        batchOccurrences: occurrences.batchGetForPairs,
+        listReminders: reminders.listForUser,
+        expand: expandRecurrence,
+        warn: vi.fn(),
+      },
+    );
+
+    const overdueItems = result.days[0]?.anytime.filter(
+      (item) => item.overdueFromDate !== undefined,
+    );
+    expect(overdueItems).toEqual([
+      expect.objectContaining({
+        activity: expect.objectContaining({ activityId: overdue.activityId }),
+        overdueFromDate: '2026-08-04',
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain(tooOld.activityId);
+    expect(JSON.stringify(result)).not.toContain(event.activityId);
+    expect(result.days[0]?.anytime).toContainEqual(
+      expect.objectContaining({
+        activity: expect.objectContaining({ activityId: recurring.activityId }),
+        occurrenceDate: '2026-08-06',
+      }),
+    );
+    expect((await activities.getActivityMeta(overdue.activityId))?.schedule?.date).toBe(
+      '2026-08-04',
+    );
+
+    const completedAt = '2026-08-06T16:05:00.000Z';
+    await activities.patchActivity(
+      'usr_alice',
+      { ...overdue, status: 'completed', completedAt, updatedAt: completedAt },
+      overdue.updatedAt,
+      { previous: overdue },
+    );
+    const stored = await activities.getActivityMeta(overdue.activityId);
+    expect(stored).toMatchObject({
+      status: 'completed',
+      completedAt,
+      schedule: { date: '2026-08-04' },
+    });
   });
 });

@@ -1,7 +1,11 @@
 import type { Activity, Recurrence } from '@od/shared/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { StoredItem } from '../repositories/migrate.js';
-import { type AgendaDependencies, assembleAgenda } from './agendaService.js';
+import {
+  type AgendaDependencies,
+  assembleAgenda,
+  rollForwardOverdue,
+} from './agendaService.js';
 
 const now = '2026-08-06T19:00:00.000Z'; // 15:00 New York
 let sequence = 0;
@@ -39,6 +43,7 @@ interface Fixture {
   readonly activities: readonly Activity[];
   readonly buckets?: Partial<Record<'S' | 'P' | 'N' | 'R', readonly StoredItem[]>>;
   readonly seriesCursor?: string;
+  readonly overdue?: readonly StoredItem[];
   readonly occurrences?: Awaited<ReturnType<AgendaDependencies['batchAgendaRows']>>;
   readonly moved?: Awaited<ReturnType<AgendaDependencies['batchOccurrences']>>;
   readonly expanded?: readonly string[];
@@ -50,6 +55,7 @@ function fixture(input: Fixture) {
   const calls: ('S' | 'P' | 'N' | 'R')[] = [];
   const listReminders = vi.fn(async () => []);
   const expand = vi.fn(() => [...(input.expanded ?? [])]);
+  const listOverdue = vi.fn(async () => [...(input.overdue ?? [])]);
   const batchAgendaRows = vi.fn(
     async () => input.occurrences ?? { occurrences: [], markers: [] },
   );
@@ -64,6 +70,7 @@ function fixture(input: Fixture) {
           : {}),
       };
     },
+    listOverdue,
     batchActivities: async (ids) =>
       ids.flatMap((id) => {
         const row = byId.get(id);
@@ -81,6 +88,7 @@ function fixture(input: Fixture) {
     calls,
     expand,
     listReminders,
+    listOverdue,
     batchAgendaRows,
     batchOccurrences,
   };
@@ -689,6 +697,114 @@ describe('timezone widening and mixed-generation rows', () => {
       viewerDate: '2026-08-06',
       time: '21:00',
     });
+  });
+});
+
+describe('overdue roll-forward', () => {
+  it('emits only eligible 30-day tasks onto Today, oldest first, without mutating them', async () => {
+    const cutoff = activity({
+      title: 'At the cutoff',
+      schedule: { date: '2026-07-07', timezone: 'UTC' },
+    });
+    const recent = activity({
+      title: 'Call apartment office',
+      schedule: { date: '2026-08-04', timezone: 'UTC' },
+    });
+    const tooOld = activity({ schedule: { date: '2026-07-06', timezone: 'UTC' } });
+    const event = activity({
+      type: 'event',
+      objectKind: 'plan',
+      details: { kind: 'event' },
+      schedule: { date: '2026-08-05', timezone: 'UTC' },
+    });
+    const recurring = activity({
+      schedule: { date: '2026-08-05', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-05' }],
+      },
+    });
+    const completed = activity({
+      status: 'completed',
+      completedAt: now,
+      schedule: { date: '2026-08-05', timezone: 'UTC' },
+    });
+    const anytime = activity({ status: 'saved', title: 'Ordinary Anytime task' });
+    const subjects = [cutoff, recent, tooOld, event, recurring, completed];
+    const before = structuredClone(subjects);
+    const subject = fixture({
+      activities: [...subjects, anytime],
+      overdue: subjects.map((row) => index(row)),
+      buckets: { N: [index(anytime)] },
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'UTC',
+        now: '2026-08-06T12:00:00.000Z',
+        includeAnytimeUnscheduled: true,
+        includeOverdue: true,
+      },
+      subject.dependencies,
+    );
+
+    expect(subject.listOverdue).toHaveBeenCalledWith(
+      'usr_alice',
+      '2026-07-07',
+      '2026-08-05',
+    );
+    expect(
+      result.days[0]?.anytime.map((row) => [row.activity.title, row.overdueFromDate]),
+    ).toEqual([
+      ['At the cutoff', '2026-07-07'],
+      ['Call apartment office', '2026-08-04'],
+      ['Ordinary Anytime task', undefined],
+    ]);
+    expect(subjects).toEqual(before);
+  });
+
+  it('does not perform the overdue query when the include token is absent', async () => {
+    const overdue = activity({ schedule: { date: '2026-08-04', timezone: 'UTC' } });
+    const subject = fixture({
+      activities: [overdue],
+      overdue: [index(overdue)],
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'UTC',
+        now: '2026-08-06T12:00:00.000Z',
+      },
+      subject.dependencies,
+    );
+
+    expect(subject.listOverdue).not.toHaveBeenCalled();
+    expect(emitted(result)).toEqual([]);
+  });
+
+  it('exports the separate roll-forward function with original dates intact', async () => {
+    const overdue = activity({ schedule: { date: '2026-08-04', timezone: 'UTC' } });
+    const subject = fixture({
+      activities: [overdue],
+      overdue: [index(overdue)],
+    });
+
+    await expect(
+      rollForwardOverdue('usr_alice', '2026-08-06', subject.dependencies),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        activity: overdue,
+        viewerDate: '2026-08-06',
+        overdueFromDate: '2026-08-04',
+      }),
+    ]);
+    expect(overdue.schedule?.date).toBe('2026-08-04');
   });
 });
 

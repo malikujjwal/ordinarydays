@@ -6,6 +6,7 @@ import { logger } from '../lib/logger.js';
 import {
   batchGetActivityMeta,
   listByBucket,
+  listOverdueTaskCandidates,
   listParticipants,
 } from '../repositories/activityRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
@@ -49,6 +50,7 @@ export interface AgendaCandidate {
   readonly endTime?: string;
   readonly isSnoozed: boolean;
   readonly movedFromDate?: string;
+  readonly overdueFromDate?: string;
   readonly reminders?: readonly Reminder[];
   readonly actionContext: AgendaActionContext;
 }
@@ -73,12 +75,14 @@ export interface AssembleAgendaInput {
   readonly timezone: string;
   readonly now: string;
   readonly includeAnytimeUnscheduled?: boolean;
+  readonly includeOverdue?: boolean;
   readonly includeReminders?: boolean;
   readonly includeSkipped?: boolean;
 }
 
 export interface AgendaDependencies {
   readonly listBucket: typeof listByBucket;
+  readonly listOverdue: typeof listOverdueTaskCandidates;
   readonly batchActivities: typeof batchGetActivityMeta;
   readonly listParticipants: typeof listParticipants;
   readonly batchAgendaRows: typeof batchGetAgendaRows;
@@ -90,6 +94,7 @@ export interface AgendaDependencies {
 
 const DEFAULT_DEPENDENCIES: AgendaDependencies = {
   listBucket: listByBucket,
+  listOverdue: listOverdueTaskCandidates,
   batchActivities: batchGetActivityMeta,
   listParticipants,
   batchAgendaRows: batchGetAgendaRows,
@@ -106,9 +111,10 @@ export async function assembleAgenda(
 ): Promise<AgendaAssembly> {
   const widenedFrom = addWallDays(input.from, -2);
   const widenedTo = addWallDays(input.to, 2);
+  const today = formatInTimeZone(new Date(input.now), input.timezone, WALL_DATE);
   const warnings: string[] = [];
 
-  const [scheduledPage, seriesPage, anytimePage] = await Promise.all([
+  const [scheduledPage, seriesPage, anytimePage, overdue] = await Promise.all([
     dependencies.listBucket(input.userId, 'S', {
       between: [`${widenedFrom}T00:00`, `${widenedTo}T23:59`],
       limit: 200,
@@ -117,6 +123,9 @@ export async function assembleAgenda(
     input.includeAnytimeUnscheduled === true
       ? dependencies.listBucket(input.userId, 'N', { ascending: false, limit: 200 })
       : Promise.resolve({ items: [] }),
+    input.includeOverdue === true
+      ? rollForwardOverdue(input.userId, today, dependencies)
+      : Promise.resolve([]),
   ]);
 
   if (seriesPage.nextCursor !== undefined) warnings.push('series_limit_exceeded');
@@ -182,7 +191,7 @@ export async function assembleAgenda(
       (candidate) =>
         input.includeSkipped === true || candidate.status !== 'skipped_occurrence',
     );
-  const deduped = dedupe(converted, warnings);
+  const deduped = dedupe([...converted, ...overdue], warnings);
   const contexts = await hydrateActionContexts(input.userId, deduped, dependencies);
   const reminders =
     input.includeReminders === true
@@ -204,6 +213,43 @@ export async function assembleAgenda(
   });
 
   return { days: partitionDays(input, complete), warnings };
+}
+
+/**
+ * Hydrates eligible index rows and projects them onto Today without changing stored dates.
+ * The caller merges these rows before action-context and reminder fan-out.
+ */
+export async function rollForwardOverdue(
+  userId: string,
+  today: string,
+  dependencies: AgendaDependencies = DEFAULT_DEPENDENCIES,
+): Promise<Omit<AgendaCandidate, 'actionContext' | 'reminders'>[]> {
+  const from = addWallDays(today, -30);
+  const to = addWallDays(today, -1);
+  const index = indexByActivity(await dependencies.listOverdue(userId, from, to));
+  const hydrated = await hydrateSelected(index, dependencies, 'overdue');
+
+  return hydrated.flatMap((activity) => {
+    if (
+      activity.type !== 'task' ||
+      activity.status !== 'scheduled' ||
+      activity.recurrence !== undefined ||
+      activity.schedule === undefined ||
+      activity.schedule.date < from ||
+      activity.schedule.date > to
+    ) {
+      return [];
+    }
+    return [
+      {
+        activity,
+        status: activity.status,
+        viewerDate: today,
+        isSnoozed: false,
+        overdueFromDate: activity.schedule.date,
+      },
+    ];
+  });
 }
 
 interface RawCandidate {
@@ -573,7 +619,7 @@ function partitionDays(
         (row) =>
           row.time === undefined && (date !== nowDate || !RESOLVED.has(row.status)),
       )
-      .sort(compareCandidates);
+      .sort(compareAnytime);
     const upNext = schedule.find((row) => !RESOLVED.has(row.status));
     return {
       date,
@@ -583,6 +629,16 @@ function partitionDays(
       earlier,
     };
   });
+}
+
+function compareAnytime(left: AgendaCandidate, right: AgendaCandidate): number {
+  const leftGroup = left.overdueFromDate === undefined ? 1 : 0;
+  const rightGroup = right.overdueFromDate === undefined ? 1 : 0;
+  return (
+    leftGroup - rightGroup ||
+    (left.overdueFromDate ?? '').localeCompare(right.overdueFromDate ?? '') ||
+    compareCandidates(left, right)
+  );
 }
 
 function compareCandidates(

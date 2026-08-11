@@ -550,6 +550,29 @@ export async function listByBucket(
   });
 }
 
+/**
+ * Reads the bounded scheduled-index window that may roll forward onto Today.
+ *
+ * The repository owns all three index predicates so the agenda service cannot accidentally
+ * revive a non-task, a terminal task, or a recurring series after a refactor.
+ */
+export async function listOverdueTaskCandidates(
+  userId: string,
+  from: string,
+  to: string,
+): Promise<StoredItem[]> {
+  const rows = await queryAll<StoredItem>(gsi1BucketKey(userId, 'S'), {
+    indexName: TABLE.indexes[0].name,
+    skBetween: [`${from}T00:00`, `${to}T23:59`],
+    keyAttributes: ['pk', 'sk', 'gsi1pk', 'gsi1sk'],
+  });
+
+  return rows.filter(
+    (row) =>
+      row.type === 'task' && row.status === 'scheduled' && row.isRecurring === false,
+  );
+}
+
 /** A plan's prep-task pointers (pattern 16). */
 export async function listChildPointers(activityId: string): Promise<StoredItem[]> {
   const prefix = childPointerPrefix(activityId);
