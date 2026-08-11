@@ -68,6 +68,18 @@ Anytime list. This is the phase where the product becomes usable daily.
 > swipe, optimistic-action and undo foundations exist, and before later UI work. The screen
 > is not a fourth tab: three-tabs-only governs tab destinations, not pushed screens.
 
+> **P2-20 clock and row ownership amendment — 2026-08-11.** P2-20 owns the
+> missing shared `Clock` contract and mobile clock-provider seam required by
+> `docs/04-conventions/coding-standards.md` §4.3, including the shared package
+> export-map and export-contract test work implied by
+> `docs/04-conventions/repo-structure.md`. P2-20 executes after P2-21 and
+> consumes P2-21's canonical `AgendaRow` completion affordance for its duplicate
+> UP NEXT/SCHEDULE render test; it must not introduce a second row or completion
+> implementation. Its lane is `shared/mobile` and its dependencies are P2-19 and
+> P2-21. This amendment supersedes the older P2-20 lane/dependency entries and
+> resolves the previously unowned clock seam and the P2-20/P2-21 row-ownership
+> conflict.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -151,7 +163,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-17 | Series limit and window warnings — **complete by absorption (2026-08-11)** | api | P2-08 | yes | S |
 | P2-18 | Agenda client hook, ETag transport cache and query policy | shared/mobile | P2-11, P1-20 | no | L |
 | P2-19 | Today screen shell and the four sections | mobile | P2-18, P1-22 | no | L |
-| P2-20 | The UP NEXT card and the one-minute ticker | mobile | P2-19 | no | M |
+| P2-20 | The UP NEXT card and the one-minute ticker | shared/mobile | P2-19, P2-21 | no | M |
 | P2-21 | Agenda row components and affordances by type | mobile | P2-19 | no | L |
 | P2-22 | Swipe actions and the gesture table | mobile | P2-21 | no | L |
 | P2-23 | Optimistic mutation model functions | shared/mobile | P2-12, P2-13, P2-14, P2-15 | no | L |
@@ -1781,6 +1793,13 @@ contains no comparison against `type` or `participantCount`.
 ---
 
 ### P2-20 — The UP NEXT card and the ticker
+
+**Files.** `packages/shared/src/time/clock.ts`,
+`packages/shared/src/time/index.ts`, `packages/shared/package.json`,
+`packages/shared/src/index.test.ts`, `apps/mobile/src/hooks/useClock.tsx`,
+`apps/mobile/app/_layout.tsx`, and the selector, ticker hook, UP NEXT component,
+integration, and colocated tests under `apps/mobile/src/features/agenda/**`.
+This inventory is a minimum; the repository-structure checklists still apply.
 
 **Approach.** UP NEXT is the first item in SCHEDULE order whose **effective start time** is
 ≥ the current local minute and whose status is not completed, skipped, cancelled, or their
