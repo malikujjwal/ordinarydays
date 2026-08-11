@@ -1,3 +1,4 @@
+import { formatInTimeZone } from 'date-fns-tz';
 import { describe, expect, it } from 'vitest';
 import {
   addWallDays,
@@ -44,9 +45,11 @@ describe('toUtcInstant', () => {
     );
   });
 
-  it('moves a missing spring-forward time to the first valid minute', () => {
-    expect(toUtcInstant('2026-03-08', '02:30', 'America/New_York')).toBe(
-      '2026-03-08T07:00:00.000Z',
+  it('spring gap forwards 2026-03-08 02:30 America/New_York to 03:00', () => {
+    const instant = toUtcInstant('2026-03-08', '02:30', 'America/New_York');
+    expect(instant).toBe('2026-03-08T07:00:00.000Z');
+    expect(formatInTimeZone(new Date(instant), 'America/New_York', 'HH:mm')).toBe(
+      '03:00',
     );
   });
 

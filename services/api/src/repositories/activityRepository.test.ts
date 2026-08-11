@@ -14,6 +14,7 @@ import {
   newReminderId,
   patchActivity,
   touchLastActivity,
+  writeSchedule,
 } from './activityRepository.js';
 import type { TransactItem } from './tx.js';
 
@@ -428,6 +429,79 @@ describe('patch', () => {
       .filter((item) => (item?.sk as string)?.startsWith('IDX#'));
 
     expect(puts.map((item) => item?.pk)).toEqual([`USER#${ALICE}`, 'USER#usr_b']);
+  });
+});
+
+describe('schedule transaction composition', () => {
+  const receipt = {
+    userId: ALICE,
+    key: '11111111-1111-4111-8111-111111111111',
+    route: 'POST /v1/activities/:id/schedule',
+    status: 200,
+    body: '{"data":{}}',
+    ttl: 1,
+    createdAt: '2026-08-11T12:00:00.000Z',
+  };
+
+  it('writes META, every index, RSVP rows, parent status and receipt together', async () => {
+    const previous = activity({ parentActivityId: 'act_parent' });
+    const next = activity({
+      parentActivityId: 'act_parent',
+      status: 'scheduled',
+      schedule,
+      updatedAt: '2026-08-11T12:00:00.000Z',
+    });
+    await writeSchedule(next, {
+      previous,
+      indexedUserIds: [ALICE, 'usr_b'],
+      participantRows: [
+        { pk: `ACT#${ACT}`, sk: 'PART#psn_b', entity: 'Participant', rsvp: 'pending' },
+      ],
+      idempotencyReceipt: receipt,
+    });
+
+    const items = sentItems();
+    expect(items.filter((entry) => entry.Put?.Item?.entity === 'Activity')).toHaveLength(
+      1,
+    );
+    expect(
+      items.filter((entry) => entry.Put?.Item?.entity === 'ActivityIndex'),
+    ).toHaveLength(2);
+    expect(
+      items.filter((entry) => entry.Put?.Item?.entity === 'Participant'),
+    ).toHaveLength(1);
+    expect(
+      items.filter((entry) => entry.Put?.Item?.entity === 'Idempotency'),
+    ).toHaveLength(1);
+    expect(items.some((entry) => 'Update' in entry)).toBe(true);
+  });
+
+  it('commits durable cleanup in the same transaction as the receipt', async () => {
+    const previous = activity({ status: 'scheduled', schedule });
+    await writeSchedule(activity(), {
+      previous,
+      indexedUserIds: [ALICE],
+      idempotencyReceipt: {
+        ...receipt,
+        cleanupRef: { activityId: ACT, userId: ALICE, idempotencyKey: receipt.key },
+      },
+      cleanupWork: {
+        activityId: ACT,
+        userId: ALICE,
+        idempotencyKey: receipt.key,
+        phases: [{ kind: 'delete_reminders', complete: false }],
+        createdAt: receipt.createdAt,
+        updatedAt: receipt.createdAt,
+        schemaVersion: 1,
+      },
+    });
+
+    expect(
+      sentItems().filter((entry) => entry.Put?.Item?.entity === 'CleanupWork'),
+    ).toHaveLength(1);
+    expect(
+      sentItems().filter((entry) => entry.Put?.Item?.entity === 'Idempotency'),
+    ).toHaveLength(1);
   });
 });
 

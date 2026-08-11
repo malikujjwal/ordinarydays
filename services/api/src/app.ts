@@ -4,7 +4,7 @@ import { AppError } from './lib/errors.js';
 import { bodyLimitMiddleware } from './middleware/bodyLimit.js';
 import { corsMiddleware } from './middleware/cors.js';
 import { errorHandler } from './middleware/errorHandler.js';
-import { idempotency } from './middleware/idempotency.js';
+import { createIdempotency } from './middleware/idempotency.js';
 import {
   createIdentity,
   type IdentityProvider,
@@ -20,6 +20,7 @@ import { agenda } from './routes/agenda.js';
 import { capture } from './routes/capture.js';
 import { health } from './routes/health.js';
 import { me } from './routes/me.js';
+import { drainScheduleCleanup } from './services/scheduleService.js';
 
 /**
  * Builds the Hono app.
@@ -87,7 +88,7 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
   app.use('*', rateLimit);
   // Position 10. After `rateLimit` by design, and it acts only on routes whose registry
   // entry says they create — so nothing in Phase 1 reaches its DynamoDB calls.
-  app.use('*', idempotency);
+  app.use('*', createIdempotency({ drainCleanup: drainScheduleCleanup }));
 
   app.route('/v1/me', me);
   app.route('/v1/agenda', agenda);

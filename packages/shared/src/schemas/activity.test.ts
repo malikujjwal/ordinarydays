@@ -346,8 +346,13 @@ describe('patch', () => {
     },
   );
 
-  it('accepts schedule: null, which is the unschedule path', () => {
-    expect(patchActivityInput.safeParse({ schedule: null }).success).toBe(true);
+  it('rejects schedule and unschedule fields because POST /schedule is the sole path', () => {
+    expect(patchActivityInput.safeParse({ schedule: null }).success).toBe(false);
+    expect(
+      patchActivityInput.safeParse({
+        schedule: { date: '2026-08-10', timezone: 'UTC' },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects objectKind without type, so the server never picks a Plan kind', () => {

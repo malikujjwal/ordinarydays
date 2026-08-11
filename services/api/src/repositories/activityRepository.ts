@@ -5,9 +5,13 @@ import { TABLE } from '@od/shared/table';
 import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
-import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
+import {
+  type CleanupWork,
+  IdempotencyRaceError,
+  type IdempotencyReceipt,
+} from '../lib/idempotency.js';
 import { batchGetItems, deleteAll, getItem, type Page, query, queryAll } from './base.js';
-import { receiptItem } from './idempotencyRepository.js';
+import { cleanupItem, receiptItem } from './idempotencyRepository.js';
 import {
   activityIndex,
   activityMeta,
@@ -466,6 +470,116 @@ export async function patchActivity(
   }
 
   await transactWrite(items, { operation: 'patchActivity' });
+}
+
+export interface ScheduleWriteOptions {
+  readonly previous: Activity;
+  readonly indexedUserIds: readonly string[];
+  readonly participantRows?: readonly StoredItem[];
+  readonly taskSubtitle?: string;
+  readonly idempotencyReceipt: IdempotencyReceipt;
+  readonly cleanupWork?: CleanupWork;
+  readonly rsvpResetPending?: boolean;
+}
+
+/** Atomically rewrites schedule state and every transaction-coupled projection. */
+export async function writeSchedule(
+  next: Activity,
+  options: ScheduleWriteOptions,
+): Promise<void> {
+  const items: TransactItem[] = [
+    {
+      Put: {
+        Item: stamp(ENTITY.activity, next, {
+          ...activityMeta(next.activityId),
+          ...next,
+          ...(options.rsvpResetPending === true ? { rsvpResetPending: true } : {}),
+        }),
+        ConditionExpression: '#updatedAt = :expected',
+        ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
+        ExpressionAttributeValues: { ':expected': options.previous.updatedAt },
+      },
+    },
+  ];
+
+  for (const indexedUserId of new Set(options.indexedUserIds)) {
+    items.push({ Put: { Item: indexItem(indexedUserId, next, options.taskSubtitle) } });
+  }
+  for (const row of options.participantRows ?? []) {
+    items.push({ Put: { Item: { ...row, updatedAt: next.updatedAt } } });
+  }
+  if (next.parentActivityId !== undefined && next.status !== options.previous.status) {
+    items.push({
+      Update: {
+        Key: childPointer(next.parentActivityId, next.activityId),
+        UpdateExpression: 'SET #status = :status, #updatedAt = :updatedAt',
+        ExpressionAttributeNames: { '#status': 'status', '#updatedAt': 'updatedAt' },
+        ExpressionAttributeValues: {
+          ':status': next.status,
+          ':updatedAt': next.updatedAt,
+        },
+      },
+    });
+  }
+
+  const reserved = options.cleanupWork === undefined ? 1 : 2;
+  const builder = new TransactionBuilder('writeSchedule', reserved).add(...items);
+  const receiptIndex = builder.length;
+  builder.addReserved(
+    receiptItem(options.idempotencyReceipt),
+    ...(options.cleanupWork === undefined ? [] : [cleanupItem(options.cleanupWork)]),
+  );
+  await transactWrite(builder.build(), {
+    operation: 'writeSchedule',
+    onConditionFailed: (index) =>
+      index === receiptIndex ? new IdempotencyRaceError() : undefined,
+  });
+}
+
+export type ScheduleCleanupKind =
+  | 'delete_reminders'
+  | 'normalise_untimed_reminders'
+  | 'reset_rsvp';
+
+/** One deterministic cleanup page; the cursor is the last processed sort key. */
+export async function listScheduleCleanupBatch(
+  activityId: string,
+  kind: ScheduleCleanupKind,
+  cursor?: string,
+): Promise<{ rows: StoredItem[]; complete: boolean }> {
+  const partition = await getActivityPartition(activityId);
+  const entity = kind === 'reset_rsvp' ? 'Participant' : 'Reminder';
+  const candidates = partition
+    .filter(
+      (row) =>
+        row.entity === entity &&
+        typeof row.sk === 'string' &&
+        (cursor === undefined || row.sk > cursor),
+    )
+    .sort((left, right) => String(left.sk).localeCompare(String(right.sk)));
+  return { rows: candidates.slice(0, 25), complete: candidates.length <= 25 };
+}
+
+/** Applies one already-decided cleanup page; rows retain their repository-owned keys. */
+export async function writeScheduleCleanupBatch(
+  activityId: string,
+  rows: readonly StoredItem[],
+  options: { readonly deleteRows?: boolean; readonly clearRsvpPending?: boolean },
+): Promise<void> {
+  const items: TransactItem[] = rows.map((row) =>
+    options.deleteRows === true
+      ? { Delete: { Key: storedItemKey.parse(row) } }
+      : { Put: { Item: row } },
+  );
+  if (options.clearRsvpPending === true) {
+    items.push({
+      Update: {
+        Key: activityMeta(activityId),
+        UpdateExpression: 'REMOVE rsvpResetPending',
+      },
+    });
+  }
+  await transactWrite(items, { operation: 'writeScheduleCleanupBatch' });
 }
 
 /**

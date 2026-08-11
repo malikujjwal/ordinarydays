@@ -87,6 +87,12 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
   { method: 'POST', pattern: '/v1/activities', auth: 'authenticated', mutates: true },
   { method: 'GET', pattern: '/v1/activities/:id', auth: 'authenticated' },
   { method: 'PATCH', pattern: '/v1/activities/:id', auth: 'authenticated' },
+  {
+    method: 'POST',
+    pattern: '/v1/activities/:id/schedule',
+    auth: 'authenticated',
+    mutates: true,
+  },
   { method: 'DELETE', pattern: '/v1/activities/:id', auth: 'authenticated' },
   {
     method: 'POST',

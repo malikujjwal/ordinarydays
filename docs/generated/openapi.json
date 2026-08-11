@@ -2828,42 +2828,6 @@
             "type": "string",
             "maxLength": 4000
           },
-          "schedule": {
-            "type": [
-              "object",
-              "null"
-            ],
-            "properties": {
-              "date": {
-                "type": "string",
-                "format": "date"
-              },
-              "time": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
-              },
-              "endTime": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
-              },
-              "timezone": {
-                "type": "string",
-                "minLength": 3,
-                "maxLength": 64,
-                "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
-              }
-            },
-            "required": [
-              "date",
-              "timezone"
-            ]
-          },
           "recurrence": {
             "allOf": [
               {
@@ -3142,6 +3106,63 @@
             ]
           }
         },
+        "additionalProperties": false
+      },
+      "ScheduleActivityResult": {
+        "type": "object",
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/Activity"
+          },
+          "rsvpReset": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "reminderOffsetsNormalized": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "activity"
+        ]
+      },
+      "ScheduleActivityInput": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "endTime": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 64,
+            "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
+          },
+          "occurrenceDate": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "date"
+        ],
         "additionalProperties": false
       },
       "DeletedActivity": {
@@ -4183,7 +4204,7 @@
             }
           },
           "403": {
-            "description": "A participant reaching for a field only the owner may change — title, schedule, place, or the object or Plan kind.",
+            "description": "A participant reaching for a field only the owner may change — title, place, or the object or Plan kind.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4281,6 +4302,104 @@
           },
           "404": {
             "description": "No such activity, or none this caller has any relationship to — and the answer a repeated delete gets once the first has succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/activities/{id}/schedule": {
+      "post": {
+        "summary": "Schedule, reschedule or unschedule an activity",
+        "description": "The sole schedule write path. Requires `Idempotency-Key`; `{ date: null }` unschedules. With `occurrenceDate`, changes only that emitted recurring occurrence and leaves the series META row unchanged.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleActivityInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The committed activity state and any non-disclosing reset flags.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ScheduleActivityResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid schedule, timezone, recurrence occurrence, or missing key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A participant attempted the owner-only schedule action.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or the caller is a stranger.",
             "content": {
               "application/json": {
                 "schema": {

@@ -9,6 +9,11 @@ import {
   type PatchActivityInput,
 } from '../../schemas/activity.js';
 import { envelope } from '../../schemas/envelope.js';
+import {
+  type ScheduleActivityInput,
+  type ScheduleActivityResult,
+  scheduleActivityResult,
+} from '../../schemas/schedule.js';
 import type { Activity } from '../../types/activity.js';
 import type { ActivityDetail } from '../../types/activityDetail.js';
 import type { HttpClient } from '../http.js';
@@ -31,6 +36,7 @@ import type { HttpClient } from '../http.js';
 export const activityResponse = envelope(activity);
 export const activityDetailResponse = envelope(activityDetail);
 export const deletedActivityResponse = envelope(deletedActivity);
+export const scheduleActivityResponse = envelope(scheduleActivityResult);
 
 /** A list answers with an array **and** `meta.nextCursor`, so the whole envelope is returned. */
 export const activityListResponse = envelope(activityListItem.array());
@@ -115,6 +121,26 @@ export function patchActivity(
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as Activity);
+}
+
+/** `POST /v1/activities/:id/schedule`, the only schedule write path. */
+export function scheduleActivity(
+  client: HttpClient,
+  activityId: string,
+  input: ScheduleActivityInput,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ScheduleActivityResult> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/schedule`,
+      schema: scheduleActivityResponse,
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
 }
 
 /**

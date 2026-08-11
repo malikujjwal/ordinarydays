@@ -431,9 +431,8 @@ describe('reading one activity back', () => {
  * `PATCH /v1/activities/:id` (P1-13), against the real table.
  *
  * The unit suite proves the right transaction is composed. What only a table proves is that
- * the condition on `updatedAt` actually cancels a stale write, that a bucket-changing patch
- * leaves **one** index entry rather than two, and that a kind change leaves the reminder rows
- * in the partition alone.
+ * the condition on `updatedAt` actually cancels a stale write and that a kind change leaves
+ * the reminder rows in the partition alone. Schedule moves use the dedicated POST below.
  */
 describe('patching an activity', () => {
   const patch = (
@@ -453,6 +452,15 @@ describe('patching an activity', () => {
     );
 
   const created = async (body: unknown = TASK) => (await (await post(body)).json()).data;
+
+  const schedule = (id: string, body: unknown, userId?: string) =>
+    withUser(userId).fetch(
+      new Request(`http://localhost/v1/activities/${id}/schedule`, {
+        method: 'POST',
+        headers: authedHeaders({ idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify(body),
+      }),
+    );
 
   it('applies the change and bumps updatedAt', async () => {
     const activity = await created();
@@ -556,37 +564,40 @@ describe('patching an activity', () => {
     });
   });
 
-  /** One index entry after the move, not two — the whole-item re-put from P1-09. */
-  it('moves a task to #N when the date is cleared, and leaves one index entry', async () => {
+  it('rejects schedule on PATCH, leaving the sole POST path', async () => {
+    const activity = await created();
+    const res = await patch(
+      activity.activityId,
+      { schedule: { date: '2026-08-15', timezone: 'UTC' } },
+      { ifMatch: activity.updatedAt },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  /** One index entry after the POST move, not two — the whole-item re-put from P1-09. */
+  it('POST /schedule moves a task to #N when cleared and leaves one index entry', async () => {
     const activity = await created({
       ...TASK,
       schedule: { date: '2026-08-15', timezone: 'America/New_York' },
     });
     expect(activity.status).toBe('scheduled');
 
-    const body = await (
-      await patch(
-        activity.activityId,
-        { schedule: null },
-        { ifMatch: activity.updatedAt },
-      )
-    ).json();
+    const body = await (await schedule(activity.activityId, { date: null })).json();
 
-    expect(body.data.status).toBe('saved');
+    expect(body.data.activity.status).toBe('saved');
 
     const rows = await indexRows(DEV);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.gsi1pk).toBe(`U#${DEV}#N`);
   });
 
-  it('moves an undated task to #S when a date is added', async () => {
+  it('POST /schedule moves an undated task to #S when a date is added', async () => {
     const activity = await created();
 
-    await patch(
-      activity.activityId,
-      { schedule: { date: '2026-08-15', timezone: 'UTC' } },
-      { ifMatch: activity.updatedAt },
-    );
+    const body = await (
+      await schedule(activity.activityId, { date: '2026-08-15', timezone: 'UTC' })
+    ).json();
+    expect(body.data.activity.status).toBe('scheduled');
 
     const rows = await indexRows(DEV);
     expect(rows).toHaveLength(1);

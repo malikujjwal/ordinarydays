@@ -3,6 +3,7 @@ import {
   occurrence as occurrenceSchema,
 } from '@od/shared/schemas';
 import type { Occurrence } from '@od/shared/types';
+import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import {
   batchGetItems,
   deleteItem,
@@ -11,9 +12,10 @@ import {
   queryAll,
   queryCount,
 } from './base.js';
+import { receiptItem } from './idempotencyRepository.js';
 import { occurrence, occurrenceMoveMarker, occurrenceRange } from './keys.js';
 import type { StoredItem } from './migrate.js';
-import type { TransactionBuilder } from './tx.js';
+import { TransactionBuilder, transactWrite } from './tx.js';
 
 const ENTITY = 'Occurrence';
 const SCHEMA_VERSION = 1;
@@ -36,6 +38,23 @@ function parseOccurrence(value: unknown): Occurrence {
 export async function get(activityId: string, date: string): Promise<Occurrence | null> {
   const item = await getItem<StoredItem>(occurrence(activityId, date));
   return item === undefined ? null : parseOccurrence(item);
+}
+
+export async function getMoveMarker(
+  activityId: string,
+  destinationDate: string,
+): Promise<OccurrenceMoveMarker | null> {
+  const row = await getItem<StoredItem>(
+    occurrenceMoveMarker(activityId, destinationDate),
+  );
+  const parsed = occurrenceMoveMarkerSchema.safeParse(row);
+  return parsed.success
+    ? {
+        activityId: parsed.data.activityId,
+        destinationDate: parsed.data.destinationDate,
+        movedFrom: [...new Set(parsed.data.movedFrom)].sort(),
+      }
+    : null;
 }
 
 /**
@@ -147,6 +166,104 @@ async function deleteOccurrence(
 }
 
 export { deleteOccurrence as delete };
+
+export interface OccurrenceScheduleWrite {
+  readonly activityId: string;
+  readonly sourceDate: string;
+  readonly value: Occurrence | null;
+  readonly oldDestination?: string;
+  readonly oldMarker?: OccurrenceMoveMarker | null;
+  readonly newDestination?: string;
+  readonly newMarker?: OccurrenceMoveMarker | null;
+  readonly receipt: IdempotencyReceipt;
+  readonly now: string;
+}
+
+/** Writes the nominal override, marker replacement/removal, and receipt in one transaction. */
+export async function writeOccurrenceSchedule(
+  input: OccurrenceScheduleWrite,
+): Promise<void> {
+  const builder = new TransactionBuilder('writeOccurrenceSchedule', 1);
+  if (input.value === null) {
+    builder.add({ Delete: { Key: occurrence(input.activityId, input.sourceDate) } });
+  } else {
+    builder.add({
+      Put: {
+        Item: {
+          ...occurrence(input.activityId, input.sourceDate),
+          entity: ENTITY,
+          ...input.value,
+          createdAt: input.now,
+          updatedAt: input.now,
+          schemaVersion: SCHEMA_VERSION,
+        },
+      },
+    });
+  }
+
+  if (
+    input.oldDestination !== undefined &&
+    input.oldDestination !== input.newDestination
+  ) {
+    const remaining = (input.oldMarker?.movedFrom ?? []).filter(
+      (date) => date !== input.sourceDate,
+    );
+    builder.add(
+      remaining.length === 0
+        ? {
+            Delete: { Key: occurrenceMoveMarker(input.activityId, input.oldDestination) },
+          }
+        : {
+            Put: {
+              Item: markerItem(
+                input.activityId,
+                input.oldDestination,
+                remaining,
+                input.now,
+              ),
+            },
+          },
+    );
+  }
+
+  if (input.newDestination !== undefined) {
+    const movedFrom = [
+      ...(input.newMarker?.movedFrom ?? []).filter((date) => date !== input.sourceDate),
+      input.sourceDate,
+    ].sort();
+    builder.add({
+      Put: {
+        Item: markerItem(input.activityId, input.newDestination, movedFrom, input.now),
+      },
+    });
+  }
+
+  const receiptIndex = builder.length;
+  builder.addReserved(receiptItem(input.receipt));
+  await transactWrite(builder.build(), {
+    operation: 'writeOccurrenceSchedule',
+    onConditionFailed: (index) =>
+      index === receiptIndex ? new IdempotencyRaceError() : undefined,
+  });
+}
+
+function markerItem(
+  activityId: string,
+  destinationDate: string,
+  movedFrom: readonly string[],
+  now: string,
+): StoredItem {
+  return {
+    ...occurrenceMoveMarker(activityId, destinationDate),
+    entity: 'OccurrenceMoveMarker',
+    activityId,
+    destinationDate,
+    movedFrom: [...new Set(movedFrom)].sort(),
+    createdAt: now,
+    updatedAt: now,
+    schemaVersion: SCHEMA_VERSION,
+  };
+}
 
 /**
  * Real stored completion count consumed by the whole-series delete-confirmation copy.

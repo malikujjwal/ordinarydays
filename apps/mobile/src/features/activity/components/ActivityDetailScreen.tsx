@@ -213,19 +213,20 @@ export function ActivityDetailScreen({
             today={today}
             value={activity.schedule?.date}
             onChoose={(date) =>
-              void detail.patch({
-                schedule: {
-                  date,
-                  timezone:
-                    activity.schedule?.timezone ??
-                    Intl.DateTimeFormat().resolvedOptions().timeZone,
-                  ...(activity.schedule?.time === undefined
-                    ? {}
-                    : { time: activity.schedule.time }),
-                },
+              void detail.schedule({
+                date,
+                timezone:
+                  activity.schedule?.timezone ??
+                  Intl.DateTimeFormat().resolvedOptions().timeZone,
+                ...(activity.schedule?.time === undefined
+                  ? {}
+                  : { time: activity.schedule.time }),
+                ...(activity.schedule?.endTime === undefined
+                  ? {}
+                  : { endTime: activity.schedule.endTime }),
               })
             }
-            onClear={() => void detail.patch({ schedule: null })}
+            onClear={() => void detail.schedule({ date: null })}
           />
           <OverflowMenu
             open={menuOpen}

@@ -26,6 +26,7 @@ import {
 import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
+import { scheduleActivityInput, scheduleActivityResult } from './schemas/schedule.js';
 import { patchUserInput, user } from './schemas/user.js';
 
 /** `GET`/`PATCH /v1/me` both answer with the profile inside the standard envelope. */
@@ -36,6 +37,7 @@ const deletedDeviceResponse = envelope(deletedDevice);
 
 const activityResponse = envelope(activity);
 const activityDetailResponse = envelope(activityDetail);
+const scheduleActivityResponse = envelope(scheduleActivityResult);
 const deletedActivityResponse = envelope(deletedActivity);
 
 /**
@@ -391,8 +393,8 @@ registry.registerPath({
     },
     403: {
       description:
-        'A participant reaching for a field only the owner may change — title, schedule, ' +
-        'place, or the object or Plan kind.',
+        'A participant reaching for a field only the owner may change — title, place, ' +
+        'or the object or Plan kind.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {
@@ -403,6 +405,39 @@ registry.registerPath({
       description:
         'A stale `If-Match`, or a Plan → Task conversion the plan’s own participants, ' +
         'expenses or prep tasks block.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/schedule',
+  summary: 'Schedule, reschedule or unschedule an activity',
+  description:
+    'The sole schedule write path. Requires `Idempotency-Key`; `{ date: null }` ' +
+    'unschedules. With `occurrenceDate`, changes only that emitted recurring occurrence ' +
+    'and leaves the series META row unchanged.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: scheduleActivityInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The committed activity state and any non-disclosing reset flags.',
+      content: { 'application/json': { schema: scheduleActivityResponse } },
+    },
+    400: {
+      description: 'Invalid schedule, timezone, recurrence occurrence, or missing key.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A participant attempted the owner-only schedule action.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or the caller is a stranger.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

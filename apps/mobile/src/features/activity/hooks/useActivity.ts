@@ -1,7 +1,13 @@
-import { ApiError, getActivity, patchActivity } from '@od/shared/client';
-import type { PatchActivityInput } from '@od/shared/schemas';
+import {
+  ApiError,
+  getActivity,
+  patchActivity,
+  scheduleActivity,
+} from '@od/shared/client';
+import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import type { Activity, ActivityDetail } from '@od/shared/types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { randomUUID } from 'expo-crypto';
 import { useState } from 'react';
 import {
   CONFLICT_MESSAGE,
@@ -31,6 +37,8 @@ export interface ActivityDetailView {
   isSaving: boolean;
   /** Commits one field. Returns once the write has settled, so a blur can await it. */
   patch: (input: PatchActivityInput) => Promise<void>;
+  /** Sole scheduling mutation; its enqueue-time key is persisted with mutation variables. */
+  schedule: (input: ScheduleActivityInput) => Promise<void>;
   /** The conflict banner, present only after a 409. Dismissed by `acknowledgeConflict`. */
   conflict?: { message: string; dropped?: string };
   acknowledgeConflict: () => void;
@@ -127,18 +135,47 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
     networkMode: 'always',
   });
 
+  const scheduleMutation = useMutation({
+    mutationFn: ({
+      input,
+      idempotencyKey,
+    }: {
+      input: ScheduleActivityInput;
+      idempotencyKey: string;
+    }) => scheduleActivity(apiClient, activityId, input, idempotencyKey),
+    onSuccess: (result) => {
+      const activity = result.activity as Activity;
+      setEditError(undefined);
+      queryClient.setQueryData<ActivityDetail>(
+        activityKey(activityId),
+        (previous: ActivityDetail | undefined) =>
+          previous === undefined ? previous : { ...previous, activity },
+      );
+    },
+    onError: (error: unknown) => setEditError(describe(error).message),
+    retry: false,
+    networkMode: 'always',
+  });
+
   const failure = query.error === null ? undefined : describe(query.error);
 
   return {
     status: query.status,
     refetch: () => void query.refetch(),
-    isSaving: mutation.isPending,
+    isSaving: mutation.isPending || scheduleMutation.isPending,
     patch: async (input) => {
       try {
         await mutation.mutateAsync(input);
       } catch {
         // Handled: the message is already on `editError` and rendered inline. Rethrowing
         // would surface an unhandled rejection for a failure the UI has fully absorbed.
+      }
+    },
+    schedule: async (input) => {
+      try {
+        await scheduleMutation.mutateAsync({ input, idempotencyKey: randomUUID() });
+      } catch {
+        // The inline error state owns the failure; the enqueue-time key stays in variables.
       }
     },
     acknowledgeConflict: () => setConflict(undefined),

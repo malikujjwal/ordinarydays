@@ -85,12 +85,6 @@ const written = () => {
   return items.find((entry) => entry.Put?.Item?.entity === 'Activity')?.Put;
 };
 
-const indexEntry = () => {
-  const items = (ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0]?.input
-    .TransactItems ?? []) as Array<{ Put?: { Item?: Record<string, unknown> } }>;
-  return items.find((entry) => entry.Put?.Item?.entity === 'ActivityIndex')?.Put?.Item;
-};
-
 describe('an ordinary patch', () => {
   it.each(['lastActivityAt', 'updatedAt'])(
     '400s client-supplied server-derived %s',
@@ -238,12 +232,11 @@ describe('who may patch what', () => {
    * A participant may not rename or reschedule somebody else's plan — refused in `authz.ts`,
    * and `403` rather than `404` because they can already see it.
    */
-  it.each(['title', 'schedule', 'location', 'objectKind', 'type'])(
+  it.each(['title', 'location', 'objectKind', 'type'])(
     '403s a participant patching %s',
     async (field) => {
       const bodies: Record<string, unknown> = {
         title: { title: 'Renamed' },
-        schedule: { schedule: { date: '2026-09-01', timezone: 'UTC' } },
         location: { location: { label: 'Elsewhere' } },
         objectKind: { objectKind: 'plan', type: 'event' },
         type: { objectKind: 'plan', type: 'meal' },
@@ -270,6 +263,14 @@ describe('who may patch what', () => {
     },
   );
 
+  it('400s a schedule PATCH because POST /schedule is the sole path', async () => {
+    const res = await patch(asUser('usr_participant'), {
+      schedule: { date: '2026-09-01', timezone: 'UTC' },
+    });
+    expect(res.status).toBe(400);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
   it('lets a participant patch a field that is not restricted', async () => {
     ddbMock.on(GetCommand).resolves({
       Item: meta({
@@ -288,83 +289,6 @@ describe('who may patch what', () => {
     const res = await patch(asUser('usr_participant'), { notes: 'Running late' });
 
     expect(res.status).toBe(200);
-  });
-});
-
-/**
- * A patch that adds or clears a date moves the activity between GSI1 buckets, so the index
- * entry is rewritten as a whole item in the same transaction (P1-09).
- */
-describe('a schedule change moves the bucket', () => {
-  it('sets status to scheduled and puts the entry in #S', async () => {
-    seed();
-
-    const body = await (
-      await patch(createApp(), {
-        schedule: { date: '2026-08-15', time: '19:30', timezone: 'America/New_York' },
-      })
-    ).json();
-
-    expect(body.data.status).toBe('scheduled');
-    expect(body.data.schedule.scheduledAtUtc).toBe('2026-08-15T23:30:00.000Z');
-    expect(indexEntry()?.gsi1pk).toBe(`U#${DEV}#S`);
-  });
-
-  /** `schedule: null` is the unschedule path, and it returns a Task to Anytime. */
-  it('clearing the date sets status to saved and moves a task to #N', async () => {
-    seed(
-      meta({
-        status: 'scheduled',
-        schedule: { date: '2026-08-15', timezone: 'America/New_York' },
-      }),
-    );
-
-    const body = await (await patch(createApp(), { schedule: null })).json();
-
-    expect(body.data.status).toBe('saved');
-    expect(body.data).not.toHaveProperty('schedule');
-    expect(indexEntry()?.gsi1pk).toBe(`U#${DEV}#N`);
-  });
-
-  /** An undated **plan** goes to Needs a date, not Anytime — the same clear, a different bucket. */
-  it('clearing the date on a plan moves it to #P', async () => {
-    seed(
-      meta({
-        objectKind: 'plan',
-        type: 'custom',
-        details: { kind: 'custom' },
-        status: 'scheduled',
-        schedule: { date: '2026-08-15', timezone: 'UTC' },
-      }),
-    );
-
-    await patch(createApp(), { schedule: null });
-
-    expect(indexEntry()?.gsi1pk).toBe(`U#${DEV}#P`);
-  });
-
-  /** `time: null` clears the time and keeps the date — a timed activity becomes all-day. */
-  it('clearing just the time leaves the date and derives no instant', async () => {
-    seed(
-      meta({
-        status: 'scheduled',
-        schedule: {
-          date: '2026-08-15',
-          time: '19:30',
-          timezone: 'UTC',
-          scheduledAtUtc: '2026-08-15T19:30:00.000Z',
-        },
-      }),
-    );
-
-    const body = await (
-      await patch(createApp(), {
-        schedule: { date: '2026-08-15', time: null, timezone: 'UTC' },
-      })
-    ).json();
-
-    expect(body.data.schedule).toEqual({ date: '2026-08-15', timezone: 'UTC' });
-    expect(body.data.status).toBe('scheduled');
   });
 });
 

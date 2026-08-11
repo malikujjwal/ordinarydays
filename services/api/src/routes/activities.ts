@@ -3,6 +3,7 @@ import {
   activityListQuery,
   createActivityInput,
   patchActivityInput,
+  scheduleActivityInput,
 } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
@@ -21,21 +22,25 @@ import {
   listActivitiesHandler,
 } from '../handlers/listActivities.js';
 import { PATCH_ACTIVITY_PATH, patchActivityHandler } from '../handlers/patchActivity.js';
+import {
+  SCHEDULE_ACTIVITY_PATH,
+  scheduleActivityHandler,
+} from '../handlers/scheduleActivity.js';
 
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Six routes, and with P1-16's list the whole Phase 1 activity surface: the flat list
- * (P1-16), the create (P1-11), the detail read (P1-12), the partial update (P1-13), the
- * delete (P1-14) and the duplicate (P1-15). The scheduling, completion and occurrence routes
- * are Phase 2, and the agenda that powers Today is its own endpoint. Each is
+ * Seven routes: the complete Phase 1 activity surface plus P2-12's sole schedule write path.
+ * The flat list (P1-16), create (P1-11), detail read (P1-12), partial update (P1-13), delete
+ * (P1-14), duplicate (P1-15), and schedule/reschedule/unschedule (P2-12) live here.
+ * Completion and the remaining occurrence routes are Phase 2, and the agenda that powers
+ * Today is its own endpoint. Each is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
  *
  * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise (P1-30).
- * Only the `POST` `creates`, so only it takes an `Idempotency-Key` — `PATCH` is guarded by
- * `If-Match` instead, which is a stronger promise: a retry of the *same* edit succeeds once
- * and then `409`s, rather than being replayed from a stored response.
+ * Both creating and scheduling POSTs take an `Idempotency-Key`; `PATCH` is guarded by
+ * `If-Match` instead.
  */
 
 /**
@@ -65,6 +70,10 @@ const validateCreate = zValidator('json', createActivityInput, (result) => {
  * downstream.
  */
 const validatePatch = zValidator('json', patchActivityInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+const validateSchedule = zValidator('json', scheduleActivityInput, (result) => {
   if (!result.success) throw result.error;
 });
 
@@ -100,6 +109,9 @@ export const activities = new Hono<AppEnv>()
   .get(GET_ACTIVITY_PATH, getActivityHandler)
   .patch(PATCH_ACTIVITY_PATH, validatePatch, (c) =>
     patchActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
+  .post(SCHEDULE_ACTIVITY_PATH, validateSchedule, (c) =>
+    scheduleActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   /**
    * No `If-Match`. A delete is not an edit racing another edit: the thing either exists and

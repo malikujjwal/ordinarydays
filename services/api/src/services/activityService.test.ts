@@ -965,19 +965,6 @@ describe('patchActivity', () => {
     ]);
   });
 
-  it('rejects clearing the schedule while stored recurrence remains', async () => {
-    seed(recurring());
-
-    await expect(
-      patchActivity(USER, PLAN, { schedule: null }, VERSION, LATER),
-    ).rejects.toMatchObject({
-      code: 'validation_failed',
-      message: 'Repeat needs a scheduled date.',
-    });
-
-    expect(repository.patchActivity).not.toHaveBeenCalled();
-  });
-
   it('appends one segment at a valid emitted editedFromDate', async () => {
     seed(recurring());
 

@@ -6,6 +6,7 @@ import {
   deleteActivity,
   duplicateActivity,
   listActivities,
+  scheduleActivity,
 } from './activities.js';
 import { getAgenda } from './agenda.js';
 import {
@@ -471,6 +472,30 @@ describe('the me endpoints', () => {
 });
 
 describe('the remaining activity endpoints', () => {
+  it('schedules with a required idempotency key', async () => {
+    const body = { data: { activity: CREATED.data }, meta: CREATED.meta };
+    const { client, calls } = makeClient([{ status: 200, body }]);
+
+    await scheduleActivity(
+      client,
+      'act_01J0000000000000000000000A',
+      { date: '2026-08-12', timezone: 'UTC' },
+      'e6f2b0a4-0f3f-4f9e-9c1a-0d8f2a3b4c5d',
+    );
+
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.url).toBe(
+      'https://api.test/v1/activities/act_01J0000000000000000000000A/schedule',
+    );
+    expect(calls[0]?.headers['Idempotency-Key']).toBe(
+      'e6f2b0a4-0f3f-4f9e-9c1a-0d8f2a3b4c5d',
+    );
+    expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({
+      date: '2026-08-12',
+      timezone: 'UTC',
+    });
+  });
+
   it('deletes by id and reports what went', async () => {
     const body = {
       data: { activityId: 'act_01J0000000000000000000000A' },

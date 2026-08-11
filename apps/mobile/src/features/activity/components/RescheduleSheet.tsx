@@ -112,6 +112,10 @@ export function RescheduleSheet({
           </Text>
         </View>
       )}
+      <Text variant="footnote" color="textSecondary">
+        Removing a time keeps reminders and moves sub-day reminders to the nearest whole
+        day.
+      </Text>
     </Sheet>
   );
 }

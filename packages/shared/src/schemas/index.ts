@@ -16,4 +16,5 @@ export * from './health.js';
 export * from './occurrence.js';
 export * from './recurrence.js';
 export * from './reminder.js';
+export * from './schedule.js';
 export * from './user.js';

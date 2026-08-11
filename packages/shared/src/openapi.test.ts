@@ -45,6 +45,7 @@ describe('the generated document', () => {
       '/v1/agenda',
       '/v1/activities',
       '/v1/activities/{id}',
+      '/v1/activities/{id}/schedule',
       '/v1/activities/{id}/duplicate',
       '/v1/capture/parse',
       '/v1/capture/extract',
@@ -96,6 +97,8 @@ describe('the generated document', () => {
       'RegisterDeviceInput',
       'Reminder',
       'ReminderInput',
+      'ScheduleActivityInput',
+      'ScheduleActivityResult',
       'User',
     ]);
   });

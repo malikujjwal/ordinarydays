@@ -276,10 +276,13 @@ describe('U4 — tapping a date opens the reschedule sheet', () => {
     expect(sent.filter((s) => s.method !== 'GET')).toHaveLength(0);
   });
 
-  it('patches the schedule when a quick chip is chosen', async () => {
+  it('posts to the sole schedule path when a quick chip is chosen', async () => {
     stubFetch(
       { status: 200, body: detailBody(plan()) },
-      { status: 200, body: { data: plan(), meta: { requestId: 'req_test' } } },
+      {
+        status: 200,
+        body: { data: { activity: plan() }, meta: { requestId: 'req_test' } },
+      },
     );
     mount();
     await loaded();
@@ -287,12 +290,34 @@ describe('U4 — tapping a date opens the reschedule sheet', () => {
     fireEvent.click(screen.getByTestId('when-where-date'));
     fireEvent.click(screen.getByTestId('quick-date-tomorrow'));
 
-    await waitFor(() => expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(1));
-    const patch = sent.find((s) => s.method === 'PATCH');
-    expect(
-      (patch?.body as { schedule?: { date: string } } | undefined)?.schedule?.date,
-    ).toBe('2026-08-13');
-    expect(patch?.headers['If-Match']).toBe('2026-08-08T10:00:00.000Z');
+    await waitFor(() => expect(sent.filter((s) => s.method === 'POST')).toHaveLength(1));
+    const schedule = sent.find((s) => s.method === 'POST');
+    expect((schedule?.body as { date?: string } | undefined)?.date).toBe('2026-08-13');
+    expect(schedule?.url).toMatch(new RegExp(`/v1/activities/${ID}/schedule$`));
+    expect(schedule?.headers['Idempotency-Key']).toBe('idem-test-key');
+    expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(0);
+  });
+
+  it('clears through POST /schedule and never PATCH', async () => {
+    stubFetch(
+      { status: 200, body: detailBody(plan()) },
+      {
+        status: 200,
+        body: {
+          data: { activity: plan({ schedule: undefined, status: 'saved' }) },
+          meta: { requestId: 'req_test' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('when-where-date'));
+    fireEvent.click(screen.getByTestId('reschedule-clear'));
+
+    await waitFor(() => expect(sent.filter((s) => s.method === 'POST')).toHaveLength(1));
+    expect(sent.find((s) => s.method === 'POST')?.body).toEqual({ date: null });
+    expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(0);
   });
 });
 

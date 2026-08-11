@@ -7,6 +7,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { Occurrence } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
@@ -158,6 +159,46 @@ describe('queryWindow and countCompleted', () => {
 });
 
 describe('writes', () => {
+  it('atomically writes a cross-day source, collision-safe marker and receipt', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await repository.writeOccurrenceSchedule({
+      activityId: ACTIVITY_ID,
+      sourceDate: '2026-08-08',
+      value: {
+        activityId: ACTIVITY_ID,
+        date: '2026-08-08',
+        status: 'rescheduled',
+        overrideDate: '2026-08-09',
+      },
+      newDestination: '2026-08-09',
+      newMarker: {
+        activityId: ACTIVITY_ID,
+        destinationDate: '2026-08-09',
+        movedFrom: ['2026-08-07'],
+      },
+      receipt: {
+        userId: 'usr_a',
+        key: '11111111-1111-4111-8111-111111111111',
+        route: 'POST /v1/activities/:id/schedule',
+        status: 200,
+        body: '{"data":{}}',
+        ttl: 1,
+        createdAt: '2026-08-08T15:00:00.000Z',
+      },
+      now: '2026-08-08T15:00:00.000Z',
+    });
+
+    const items =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems ?? [];
+    expect(items.map((item) => item.Put?.Item?.sk)).toEqual([
+      'OCC#2026-08-08',
+      'MOVE#2026-08-09',
+      'META',
+    ]);
+    expect(items[1]?.Put?.Item?.movedFrom).toEqual(['2026-08-07', '2026-08-08']);
+    expect(items.some((item) => item.Put?.Item?.entity === 'Activity')).toBe(false);
+  });
+
   it('puts one OCC domain item and no META item', async () => {
     ddbMock.on(PutCommand).resolves({});
     await repository.put(completed());

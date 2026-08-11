@@ -352,9 +352,9 @@ export const activityDetail = z
  *
  * - **`status` is accepted only as `cancelled`.** Every other value is derived server-side,
  *   so a client cannot mark something completed by patching a field.
- * - **`schedule: null` is the unschedule path**, and is meaningfully different from absent.
- *   `null` clears the schedule and returns the activity to `saved`; `undefined` means "leave
- *   it alone". `exactOptionalPropertyTypes` is on precisely so those cannot be confused.
+ * Schedule is deliberately absent. `POST /v1/activities/:id/schedule` is the only write path
+ * for schedule fields and unscheduling, so a PATCH carrying `schedule` is rejected by this
+ * strict schema rather than temporarily supporting two paths.
  *
  * A cross-object change must carry a complete valid target pair — `objectKind` alone never
  * lets the server choose a type — so both are optional here but validated together.
@@ -363,15 +363,6 @@ export const patchActivityInput = z
   .strictObject({
     title: title.optional(),
     notes: z.string().max(MAX_NOTES_LEN).optional(),
-    schedule: z
-      .object({
-        date: isoDate,
-        time: hhmm.nullable().optional(),
-        endTime: hhmm.nullable().optional(),
-        timezone: ianaTimezone,
-      })
-      .nullable()
-      .optional(),
     recurrence: recurrence.nullable().optional(),
     editedFromDate: isoDate.optional(),
     location: activityLocation.nullable().optional(),
@@ -412,16 +403,6 @@ export const patchActivityInput = z
     }
     if (value.details !== undefined && value.type !== undefined) {
       checkDetailsMatchType({ type: value.type, details: value.details }, ctx);
-    }
-    if (value.schedule !== undefined && value.schedule !== null) {
-      checkSchedule(
-        {
-          date: value.schedule.date,
-          time: value.schedule.time ?? undefined,
-          endTime: value.schedule.endTime ?? undefined,
-        },
-        ctx,
-      );
     }
     if (value.editedFromDate !== undefined && value.recurrence == null) {
       ctx.addIssue({

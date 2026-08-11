@@ -378,6 +378,95 @@ describe('a bucket-changing write leaves exactly one index entry', () => {
   });
 });
 
+describe('schedule transaction', () => {
+  it('moves META and every user index with its receipt in one real transaction', async () => {
+    const before = anActivity();
+    await repo.createActivity(ALICE, before);
+    const after = {
+      ...before,
+      status: 'scheduled',
+      schedule: { date: '2026-08-15', timezone: 'UTC' },
+      icsSequence: 1,
+      updatedAt: '2026-08-08T11:00:00.000Z',
+    } as Activity;
+    const receipt = {
+      userId: ALICE,
+      key: '11111111-1111-4111-8111-111111111111',
+      route: 'POST /v1/activities/:id/schedule',
+      status: 200,
+      body: '{"data":{}}',
+      ttl: 1,
+      createdAt: after.updatedAt,
+    };
+
+    await repo.writeSchedule(after, {
+      previous: before,
+      indexedUserIds: [ALICE, BEN],
+      idempotencyReceipt: receipt,
+    });
+
+    expect(await repo.getActivityMeta(before.activityId)).toMatchObject({
+      status: 'scheduled',
+      schedule: { date: '2026-08-15', timezone: 'UTC' },
+      icsSequence: 1,
+    });
+    expect((await repo.listByBucket(ALICE, 'S')).items).toHaveLength(1);
+    expect((await repo.listByBucket(BEN, 'S')).items).toHaveLength(1);
+    expect(await base.getItem(keys.idempotency(ALICE, receipt.key))).toMatchObject({
+      entity: 'Idempotency',
+      body: receipt.body,
+    });
+  });
+
+  it('persists unschedule cleanup with the cleared META and successful receipt', async () => {
+    const before = anActivity({
+      status: 'scheduled',
+      schedule: { date: '2026-08-15', timezone: 'UTC' },
+    });
+    await repo.createActivity(ALICE, before);
+    const { schedule: _schedule, ...withoutSchedule } = before;
+    const after = {
+      ...withoutSchedule,
+      status: 'saved',
+      updatedAt: '2026-08-08T11:00:00.000Z',
+    } as Activity;
+    const idempotencyKey = '22222222-2222-4222-8222-222222222222';
+    const ref = { activityId: before.activityId, userId: ALICE, idempotencyKey };
+    const receipt = {
+      userId: ALICE,
+      key: idempotencyKey,
+      route: 'POST /v1/activities/:id/schedule',
+      status: 200,
+      body: '{"data":{}}',
+      ttl: 1,
+      createdAt: after.updatedAt,
+      cleanupRef: ref,
+    };
+
+    await repo.writeSchedule(after, {
+      previous: before,
+      indexedUserIds: [ALICE],
+      idempotencyReceipt: receipt,
+      cleanupWork: {
+        ...ref,
+        phases: [{ kind: 'delete_reminders', complete: false }],
+        createdAt: after.updatedAt,
+        updatedAt: after.updatedAt,
+        schemaVersion: 1,
+      },
+    });
+
+    expect(await repo.getActivityMeta(before.activityId)).not.toHaveProperty('schedule');
+    expect((await repo.listByBucket(ALICE, 'N')).items).toHaveLength(1);
+    expect(
+      await base.getItem(keys.cleanup(before.activityId, ALICE, idempotencyKey)),
+    ).toMatchObject({
+      entity: 'CleanupWork',
+      phases: [{ kind: 'delete_reminders', complete: false }],
+    });
+  });
+});
+
 describe('optimistic concurrency', () => {
   it('accepts the updatedAt the caller read', async () => {
     const before = anActivity();

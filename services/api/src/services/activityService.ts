@@ -6,7 +6,7 @@ import {
   changeActivityKind,
 } from '@od/shared';
 import { MAX_TITLE_LEN } from '@od/shared/constants';
-import { expandRecurrence } from '@od/shared/recurrence';
+import { expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
 import type {
   ActivityListQuery,
   CreateActivityInput,
@@ -25,7 +25,7 @@ import type {
   RecurrenceSegment,
   Reminder,
 } from '@od/shared/types';
-import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
+import { formatInTimeZone } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import type { Logger } from '../lib/logger.js';
@@ -126,20 +126,12 @@ export function deriveScheduleInstants(
 ): Pick<ActivitySchedule, 'scheduledAtUtc' | 'endAtUtc'> {
   if (schedule.time === undefined) return {};
 
-  const startsAt = fromZonedTime(
-    `${schedule.date}T${schedule.time}:00`,
-    schedule.timezone,
-  );
-
   return {
-    scheduledAtUtc: startsAt.toISOString(),
+    scheduledAtUtc: toUtcInstant(schedule.date, schedule.time, schedule.timezone),
     ...(schedule.endTime === undefined
       ? {}
       : {
-          endAtUtc: fromZonedTime(
-            `${schedule.date}T${schedule.endTime}:00`,
-            schedule.timezone,
-          ).toISOString(),
+          endAtUtc: toUtcInstant(schedule.date, schedule.endTime, schedule.timezone),
         }),
   };
 }
@@ -452,9 +444,6 @@ function recurrenceForPatch(
   now: string,
 ): Recurrence | null | undefined {
   if (patch.recurrence === undefined) {
-    if (patch.schedule === null && current.recurrence !== undefined) {
-      recurrenceFailure(RECURRENCE_NEEDS_DATE);
-    }
     if (patch.editedFromDate !== undefined) {
       recurrenceFailure(EDIT_DATE_NEEDS_APPEND, 'editedFromDate');
     }
@@ -632,25 +621,12 @@ function merge(
    * keeping the date, which is how a timed activity becomes all-day. `toSchedule` derives the
    * instants from whatever survives, so an all-day result correctly has none.
    */
-  const schedule =
-    patch.schedule === undefined
-      ? base.schedule
-      : patch.schedule === null
-        ? undefined
-        : toSchedule({
-            date: patch.schedule.date,
-            timezone: patch.schedule.timezone,
-            ...(patch.schedule.time == null ? {} : { time: patch.schedule.time }),
-            ...(patch.schedule.endTime == null
-              ? {}
-              : { endTime: patch.schedule.endTime }),
-          });
+  const schedule = base.schedule;
   const recurrenceUpdate = recurrenceForPatch(current, patch, schedule, now);
 
   const next: Record<string, unknown> = {
     ...base,
     ...pick(patch, 'title', 'notes', 'details'),
-    ...(schedule === undefined ? {} : { schedule }),
     ...(recurrenceUpdate == null ? {} : { recurrence: recurrenceUpdate }),
     ...nullable(patch, 'location', 'sourceUrl', 'parentActivityId'),
     /**
@@ -658,13 +634,10 @@ function merge(
      * an activity with no date is `saved`. `cancelled` from the client and the two terminal
      * statuses survive, which is what `deriveStatus` already encodes.
      */
-    status: terminal(base.status)
-      ? base.status
-      : deriveStatus(schedule, patch.status ?? undefined),
+    status: terminal(base.status) ? base.status : (patch.status ?? base.status),
     updatedAt: now,
   };
 
-  if (schedule === undefined) delete next.schedule;
   if (recurrenceUpdate === null) delete next.recurrence;
   for (const field of ['location', 'sourceUrl', 'parentActivityId'] as const) {
     if (patch[field] === null) delete next[field];

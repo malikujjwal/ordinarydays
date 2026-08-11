@@ -147,13 +147,7 @@ export async function assertActivityAccess(
  * adding a restriction the contract does not name is the same class of decision as dropping
  * one it does.
  */
-const PARTICIPANT_MAY_NOT_PATCH = [
-  'title',
-  'schedule',
-  'location',
-  'objectKind',
-  'type',
-] as const;
+const PARTICIPANT_MAY_NOT_PATCH = ['title', 'location', 'objectKind', 'type'] as const;
 
 const PARTICIPANT_REFUSED =
   'Only the person who created this plan can change its title, date or place.';
