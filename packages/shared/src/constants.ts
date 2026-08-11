@@ -32,6 +32,12 @@ export const MAX_ACTIVE_SERIES = 200;
 /** How far back `include=overdue` rolls incomplete tasks forward. */
 export const OVERDUE_WINDOW_DAYS = 30;
 
+/** Undated saved tasks rendered inline under Today's bounded ANYTIME section. */
+export const TODAY_ANYTIME_SAVED_LIMIT = 20;
+
+/** Rows rendered before Today's EARLIER TODAY section offers its local expander. */
+export const TODAY_EARLIER_COLLAPSED_LIMIT = 10;
+
 /**
  * Characters in a free-text sub-field: `service`, `organiser`, ingredient
  * `name`, reservation `name`/`reference` (`activities.md` §3 rule 6).

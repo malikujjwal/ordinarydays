@@ -9,6 +9,8 @@ import {
   MAX_TITLE_LEN,
   MAX_UPLOAD_BYTES,
   OVERDUE_WINDOW_DAYS,
+  TODAY_ANYTIME_SAVED_LIMIT,
+  TODAY_EARLIER_COLLAPSED_LIMIT,
 } from './constants.js';
 
 /**
@@ -28,6 +30,8 @@ describe('the limits both sides of the wire enforce', () => {
     ['MAX_REMINDERS_PER_USER_PER_ACTIVITY', MAX_REMINDERS_PER_USER_PER_ACTIVITY, 3],
     ['MAX_ACTIVE_SERIES', MAX_ACTIVE_SERIES, 200],
     ['OVERDUE_WINDOW_DAYS', OVERDUE_WINDOW_DAYS, 30],
+    ['TODAY_ANYTIME_SAVED_LIMIT', TODAY_ANYTIME_SAVED_LIMIT, 20],
+    ['TODAY_EARLIER_COLLAPSED_LIMIT', TODAY_EARLIER_COLLAPSED_LIMIT, 10],
     ['MAX_UPLOAD_BYTES', MAX_UPLOAD_BYTES, 10 * 1024 * 1024],
   ])('%s is %i', (_name, actual, expected) => {
     expect(actual).toBe(expected);

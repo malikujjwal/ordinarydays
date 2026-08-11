@@ -62,6 +62,12 @@ Anytime list. This is the phase where the product becomes usable daily.
 > discovered during implementation, but must not redesign the planned scope; that is the
 > phase-docs-are-living rule applied to a plan that has passed its final gate.
 
+> **Anytime pushed-screen amendment — 2026-08-11.** P2-39 adds the minimal paginated
+> **Anytime** screen at M size, taking Phase 2 to **39 tasks / 101 AWU**. P2-19 registers
+> and loading-stubs its pushed route; P2-39 executes immediately after P2-24, once AgendaRow,
+> swipe, optimistic-action and undo foundations exist, and before later UI work. The screen
+> is not a fourth tab: three-tabs-only governs tab destinations, not pushed screens.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -93,7 +99,8 @@ Anytime list. This is the phase where the product becomes usable daily.
       `updatedAt`, sorting the `#P` bucket and never touching `If-Match`.
 - [ ] `GET /v1/agenda` with `?from`, `?to`, `?tz`, and the `include` tokens
       `anytime_unscheduled`, `overdue` and `reminders`; window capped at 62 days; `ETag`;
-      `warnings[]`. Today receives its own reminder rows in this same request.
+      `warnings[]`. Today uses only `anytime_unscheduled,overdue` for its one-day request;
+      `reminders` is reserved for P2-34's independent eight-day background request.
 - [ ] `AgendaItem` projection with server-set `hasCheckbox`, `subtitle`, `isPast`,
       `occurrenceDate` and `overdueFromDate`.
 - [ ] `complete`, `uncomplete`, `skip`, `snooze`, `unsnooze` and `schedule` endpoints, with
@@ -149,6 +156,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-22 | Swipe actions and the gesture table | mobile | P2-21 | no | L |
 | P2-23 | Optimistic mutation model functions | shared/mobile | P2-12, P2-13, P2-14, P2-15 | no | L |
 | P2-24 | The undo toast system | mobile | P2-23 | no | M |
+| **P2-39** | **The pushed Anytime screen (execute immediately after P2-24)** | mobile | P1-16, P2-19, P2-21, P2-22, P2-24 | no | M |
 | P2-25 | The snooze sheet | mobile | P2-12, P2-15, P2-22, P2-24 | yes | M |
 | P2-26 | Extend the reschedule sheet, including the series two-option case | mobile | P2-04, P2-12, P2-22 | yes | M |
 | P2-27 | The repeat sheet | mobile | P2-03, P2-04 | yes | M |
@@ -1613,13 +1621,19 @@ payload only**; volatile envelope metadata such as `meta.requestId` never partic
 **Edge cases.** Today issues **exactly one** request:
 
 ```
-GET /v1/agenda?from=<today>&to=<tomorrow>&tz=<tz>&include=anytime_unscheduled,overdue,reminders
+GET /v1/agenda?from=<today>&to=<today>&tz=<tz>&include=anytime_unscheduled,overdue
 ```
 
-Today renders `days[0]`; the second day remains part of the same response. P2-34's independent
-background refresh is cadence-driven and is not started by rendering Today. Any feature
-requiring a second request to render Today is rejected. That is success criterion S2 and it
-is asserted by a Playwright network-count assertion, not by review.
+Today renders that one-day response. P2-34's independent eight-day reminder refresh is
+cadence-driven and is not started by rendering Today. Any feature requiring a second request
+to render Today is rejected. That is success criterion S2 and it is asserted by a Playwright
+network-count assertion, not by review.
+
+> **Today request ruling — 2026-08-11.** The product-owned request above is the merged
+> P2-18 behaviour: `from=today`, `to=today`, and only
+> `include=anytime_unscheduled,overdue`. The earlier `to=tomorrow` / `include=reminders`
+> variant was pre-amendment residue. Reminder hydration belongs only to P2-34's separate
+> eight-day background request; no Today-screen path starts, awaits or consumes it.
 
 > **Implementation deviation — 2026-08-10 (owner: P2-19).** P2-11 cannot mount the Today
 > screen that does not yet exist, so its cold-open Playwright network-count assertion is
@@ -1737,7 +1751,10 @@ The two must agree — that is what the shared sort keys buy.
 ANYTIME has three groups under **one** heading with no sub-headings, in order: overdue
 rolled-forward (oldest original date first), dated-but-untimed today, then undated saved
 items newest-created first. Group 3 is capped at **20 rows** with a `See all (47)` footer
-opening `GET /v1/activities?filter=saved`.
+that pushes the P2-39 **Anytime** route. P2-19 registers that route and stubs its screen with
+the standard five-row loading state; it does not fetch the saved list. The pushed screen,
+not an in-place expansion, owns `GET /v1/activities?filter=saved` when P2-39 completes it.
+Three-tabs-only governs tab destinations, not pushed screens.
 
 **Group 3 is the `#N` bucket and nothing else** — explicitly chosen, undated Task
 activities. An undated Plan is in `#P` and belongs to Plans → Needs a date, regardless of
@@ -1953,6 +1970,34 @@ active Undo exactly once before replacement; timeout and dismiss commit exactly 
 Undo compensates and never commits; legacy confirmation/error toasts still use the same slot.
 Undo restores sort position and scroll offset; a failed original produces a `Retry` toast. Playwright: complete
 a task, press `Cmd+Z`, assert the row returns to its exact prior position.
+
+---
+
+### P2-39 — The pushed Anytime screen *(execute immediately after P2-24)*
+
+**Files.** `apps/mobile/app/(app)/anytime.tsx`,
+`apps/mobile/src/features/agenda/{components/AnytimeScreen.tsx,hooks/useAnytime.ts}` and
+their tests. P2-19 already registers the route and provides the standard loading-state stub;
+this task replaces that stub with the completed screen.
+
+**What to build.** A pushed screen reached only from Today's `See all (n)` ANYTIME footer.
+Its serif display title is `Anytime`. Render a paginated AgendaRow list backed by the
+existing `GET /v1/activities?filter=saved` client from P1-16, in §3.1 group-3 order
+(`createdAt` descending, then `activityId` descending). Fetch the next page automatically
+at 80% scroll depth and render the standard single skeleton row while paginating.
+
+Rows use the shared P2-21 AgendaRow, P2-22 gestures and accessibility actions, and P2-24
+optimistic actions plus six-second undo without inventing a second interaction model. Use
+design-system tokens only. The §5.2 empty state is heading `No anytime tasks`, guidance
+`Add a task without choosing a date.`, and no action.
+
+**Bounds.** No search, filters, grouping, tab destination or in-place expansion on Today.
+Back returns to Today. Three-tabs-only governs tabs, not pushed screens.
+
+**Tests.** Route and header render; initial five-row skeleton; exact empty copy; pagination
+at 80%; request is exactly `filter=saved`; rows preserve server order; row gestures,
+accessibility actions and undo use the shared implementations; no search, filter or group
+controls render.
 
 ---
 
@@ -2407,9 +2452,9 @@ against the spec.
   `effectiveFrom` 2026-01-05 — with no occurrence row for 6 August.
 - **Frozen clock**: Thursday 6 August 2026, 15:10 `America/New_York`, via the injected
   clock, never real time.
-- **The single Today request from §9.2**, `from=2026-08-06`, `to=2026-08-07`, all three
-  `include` tokens. Seed one caller-owned dated
-  reminder and assert it arrives in that response. Assert:
+- **The single Today request from §9.2**, `from=2026-08-06`, `to=2026-08-06`, with
+  `include=anytime_unscheduled,overdue`. Reminder hydration is outside this fixture and
+  belongs to P2-34's separate eight-day background request. Assert:
   - the exact section membership and order of all nine rows per §9.3/§9.4 — `upNext` is
     Pick up groceries; `schedule` is C, D, E, F ascending; `anytime` is H (with
     `overdueFromDate: '2026-08-04'`), then G, then I (subtitle `New York Trip`);

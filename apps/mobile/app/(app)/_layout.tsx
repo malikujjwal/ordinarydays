@@ -25,6 +25,7 @@ export default function AppLayout() {
     <View style={{ flex: 1 }}>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="anytime" />
         <Stack.Screen
           name="compose"
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}

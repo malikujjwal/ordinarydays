@@ -138,9 +138,17 @@ owns that distinction. The product statement of the rule is
 > screen that says it is becomes a list of things to feel bad about (§8.3).
 
 > **Decision:** group 3 is capped at **20 rows** on Today, with a `See all (47)` footer that
-> opens `GET /v1/activities?filter=saved`. Without a cap, a user with a large Inbox has a
-> Today screen that is mostly not about today. The cap is a client-side render limit; the
-> response still carries what the page size returned.
+> pushes the **Anytime** screen. That screen pages through
+> `GET /v1/activities?filter=saved`; Today never expands the remaining rows in place.
+> Without a cap, a user with a large Inbox has a Today screen that is mostly not about
+> today. The cap is a client-side render limit; the response still carries what the page
+> size returned.
+
+> **Anytime route ruling — 2026-08-11.** The footer uses a pushed screen because hundreds
+> of inline rows would destroy Today's bounded read. The product still has exactly three
+> tabs: the three-tabs-only rule governs tab destinations, not screens pushed from them.
+> P2-19 registers the route with the standard loading-state stub; P2-39 completes the
+> paginated screen after the shared AgendaRow, swipe and undo foundations land in P2-24.
 
 ### 2.4 EARLIER TODAY
 

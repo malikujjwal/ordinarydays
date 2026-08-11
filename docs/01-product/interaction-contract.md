@@ -193,6 +193,7 @@ invoke conversion.
 | `⋯` | 44 × 44 pt | |
 | Swipe action button | Full row height, ≥ 72 pt wide | |
 | Global `+` | 56 × 56 pt | Accessible label `Add`; always opens Task / Plan / List item, never a preselected form |
+| Today's `See all (n)` ANYTIME footer | Full row width, min height 44 pt | Pushes the **Anytime** screen; never expands rows in place. This is a pushed route, not a fourth tab. |
 
 Adjacent hit targets are separated by at least 8 pt of non-interactive space.
 
@@ -209,6 +210,7 @@ row does not move under the finger.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Task, timed | Open task detail | Complete | `Complete` | Complete | `Snooze` · `Reschedule` · `Delete` | Snooze sheet | Preview + `⋯` menu |
 | Task, untimed (Anytime) | Open task detail | Complete | `Complete` | Complete | `Schedule` · `Delete` | Schedule sheet | Preview + `⋯` menu |
+| Task, untimed (pushed Anytime screen) | Open task detail | Complete | `Complete` | Complete | `Schedule` · `Delete` | Schedule sheet | Preview + `⋯` menu |
 | Task, overdue (rolled forward) | Open task detail | Complete | `Complete` | Complete | `Do today` · `Reschedule` · `Delete` | Sets `schedule.date` to today | Preview + `⋯` menu |
 | Task, recurring occurrence | Open task detail (series) | Complete **this occurrence** | `Complete` | Complete this occurrence | `Snooze` · `Skip` · `Edit series` | Snooze sheet | Preview + `⋯` menu |
 | Meal | Open plan detail | — (no checkbox) | `Had it` | Had it | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
@@ -239,6 +241,11 @@ Additional taps available on these rows:
 | `How did it go?` chip | Resolution sheet ([`today-and-tasks.md`](today-and-tasks.md#82-resolution-prompts)) |
 | Overdue date chip | Reschedule sheet, pre-set to today |
 | `+n more overdue` | Expands in place |
+
+The pushed **Anytime** route uses the same AgendaRow actions, swipe gestures,
+accessibility actions and undo policy as an untimed Today row. Only Today's group-3
+footer navigates to it; back returns to the same bounded Today list. The three-tabs-only
+rule applies to the tab bar, so this pushed screen does not add a tab.
 
 ### 3.2 List rows
 
@@ -398,6 +405,7 @@ and `turn into` are banned from empty-state copy for exactly that reason
 | Screen | Heading | Guidance | Action |
 | --- | --- | --- | --- |
 | Today, nothing at all | `Nothing planned today` | `Add something you want to do, or check your Lists.` | `Add` |
+| Anytime, no saved tasks | `No anytime tasks` | `Add a task without choosing a date.` | — |
 | Plans → Needs a date, empty | `Nothing without a date` | `Plans you've started but not scheduled show up here.` | — |
 | Plans → Upcoming, empty | `No upcoming plans` | `Anything with a date shows up here.` | `Add` |
 | Plans → Past, empty | `Nothing here` | `Plans that have happened show up here.` | — |

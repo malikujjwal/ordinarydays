@@ -44,6 +44,8 @@ describe('exports map', () => {
     expect(schemas.unsnoozeActivityInput).toBeDefined();
     expect(client.createReminder).toBeDefined();
     expect(constants.MAX_AGENDA_DAYS).toBe(62);
+    expect(constants.TODAY_ANYTIME_SAVED_LIMIT).toBe(20);
+    expect(constants.TODAY_EARLIER_COLLAPSED_LIMIT).toBe(10);
     expect(errors.ERROR_CODES).toContain('validation_failed');
     expect(recurrence.describeRecurrence).toBeDefined();
     expect(recurrence.expandRecurrence).toBeDefined();

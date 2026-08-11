@@ -238,13 +238,18 @@ Query parameters:
 | --- | --- |
 | `include=anytime_unscheduled` | Merges the undated Anytime bucket into the first day. Today uses this; a multi-day Plans view does not. |
 | `include=overdue` | Rolls incomplete, non-recurring **tasks** with a date in the past forward onto the first day, each carrying `overdueFromDate`. Capped at 30 days back. Never applies to recurring occurrences or non-task types. See `../01-product/today-and-tasks.md` §7. |
-| `include=reminders` | Attaches the authenticated caller's own `REM#<userId>#` rows to the AgendaItems emitted for the requested window. Never returns another user's row. Today uses it in its one screen request; local notification scheduling independently makes one eight-day agenda request on its background cadence. |
+| `include=reminders` | Attaches the authenticated caller's own `REM#<userId>#` rows to the AgendaItems emitted for the requested window. Never returns another user's row. Reserved for the local notification scheduler's independent eight-day background request; the Today screen does not request it. |
 
-Tokens may be combined: Today requests `from=today&to=tomorrow`, renders `days[0]`, and uses
-`?include=anytime_unscheduled,overdue,reminders` in exactly one screen-owned request. The
-notification scheduler does not derive from that response: on its independent cadence it
-issues one `from=today&to=today+7d&include=reminders` request, covering the seven-day maximum
-reminder offset without being triggered or awaited by Today.
+Tokens may be combined. Today requests `from=today&to=today` with
+`?include=anytime_unscheduled,overdue` in exactly one screen-owned request. The notification
+scheduler does not derive from that response: on its independent cadence it issues one
+`from=today&to=today+7d&include=reminders` request, covering the seven-day maximum reminder
+offset without being triggered or awaited by Today.
+
+> **Today request ruling — 2026-08-11.** The former `to=tomorrow` and
+> `include=reminders` Today variant was pre-amendment residue. Product behaviour is the
+> one-day, two-token request above. `include=reminders` remains part of the endpoint contract
+> solely for P2-34's separately-cadenced scheduler request.
 - Window capped at 62 days → `400 validation_failed`.
 - Response is cacheable client-side for 60 s; server sends `ETag`, computed from a canonical
   serialisation of `data` only. Volatile envelope metadata such as `meta.requestId` is excluded,
