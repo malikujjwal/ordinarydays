@@ -7,7 +7,15 @@ import {
 } from '@od/shared/constants';
 import { fixedClock, toWallDate, toWallTime } from '@od/shared/time';
 import type { ActivityOutcome, AgendaData, AgendaItem } from '@od/shared/types';
-import { Button, EmptyState, Skeleton, useMotion, useTheme } from '@od/ui';
+import {
+  Button,
+  EmptyState,
+  SectionHeader,
+  Skeleton,
+  Text,
+  useMotion,
+  useTheme,
+} from '@od/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
@@ -25,6 +33,7 @@ import { SnoozeSheet } from './SnoozeSheet';
 import { UpNextCard } from './UpNextCard';
 
 export interface TodayScreenProps {
+  onAdd: () => void;
   onOpenAnytime: () => void;
   onOpenAgendaItem: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
@@ -91,6 +100,7 @@ function errorDetails(error: unknown): { message: string; requestId?: string } {
 
 /** Today is a disposable projection: one agenda response, four locally derived sections. */
 export function TodayScreen({
+  onAdd,
   onOpenAnytime,
   onOpenAgendaItem,
   onToggleComplete,
@@ -283,6 +293,33 @@ export function TodayScreen({
   const earlier = showAllEarlier
     ? projectedEarlier
     : projectedEarlier.slice(0, TODAY_EARLIER_COLLAPSED_LIMIT);
+  const isFullyEmpty = items.length === 0;
+  const hasOnlyUndatedTasks =
+    schedule.length === 0 &&
+    projectedEarlier.length === 0 &&
+    sections.anytime.length > 0 &&
+    sections.anytime.every((item) => item.status === 'saved');
+  const showEmptySchedule =
+    schedule.length === 0 && sections.anytime.length > 0 && projectedEarlier.length > 0;
+  const isAllCompleted =
+    activeCompletionTransitions.length === 0 &&
+    items.length > 0 &&
+    items.every(
+      (item) => item.status === 'completed' || item.status === 'completed_occurrence',
+    );
+
+  if (isFullyEmpty) {
+    return (
+      <TabScreen title="Today" testID="today-screen">
+        <EmptyState
+          heading="Nothing planned today"
+          body="Add something you want to do, or check your Lists."
+          action={{ label: 'Add', onPress: onAdd }}
+          testID="today-empty"
+        />
+      </TabScreen>
+    );
+  }
 
   return (
     <TabScreen title="Today" testID="today-screen">
@@ -295,6 +332,16 @@ export function TodayScreen({
         scrollEventThrottle={16}
         contentContainerStyle={{ gap: theme.space[8], paddingBottom: theme.space[8] }}
       >
+        {hasOnlyUndatedTasks ? (
+          <Text variant="subhead" color="textSecondary" testID="today-unscheduled-note">
+            Nothing scheduled today.
+          </Text>
+        ) : null}
+        {isAllCompleted ? (
+          <Text variant="subhead" color="textSecondary" testID="today-all-done-note">
+            All done for today.
+          </Text>
+        ) : null}
         {upNext === undefined ? null : (
           <UpNextCard
             selection={upNext}
@@ -304,7 +351,18 @@ export function TodayScreen({
             onAction={effectiveAgendaAction}
           />
         )}
-        {schedule.length === 0 ? null : (
+        {schedule.length === 0 && showEmptySchedule ? (
+          <View testID="today-schedule" style={{ gap: theme.space[2] }}>
+            <SectionHeader title="Schedule" />
+            <View
+              style={{ minHeight: theme.layout.rowMinHeight, justifyContent: 'center' }}
+            >
+              <Text variant="body" color="textSecondary">
+                Nothing left scheduled today.
+              </Text>
+            </View>
+          </View>
+        ) : schedule.length === 0 ? null : (
           <AgendaSection
             title="Schedule"
             items={schedule}

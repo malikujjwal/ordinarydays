@@ -130,7 +130,13 @@ describe('TodayScreen', () => {
         serverUpNext,
       ),
     );
-    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
 
     await waitFor(() => expect(screen.getByTestId('up-next-card')).toBeDefined());
     expect(
@@ -147,7 +153,11 @@ describe('TodayScreen', () => {
       ]),
     );
     const first = mount(
-      <TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />,
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
     );
 
     await waitFor(() => expect(screen.getByTestId('today-agenda')).toBeDefined());
@@ -163,11 +173,105 @@ describe('TodayScreen', () => {
     first.unmount();
     stubFetch(response([row(4, { title: 'Only anytime' })]));
     const second = mount(
-      <TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />,
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
     );
     await waitFor(() => expect(screen.getByText('Only anytime')).toBeDefined());
     expect(screen.queryByRole('heading', { name: 'Schedule' })).toBeNull();
     second.unmount();
+  });
+
+  it('shows the fully empty Today state with one global Add action', async () => {
+    const onAdd = vi.fn();
+    stubFetch(response([]));
+    mount(
+      <TodayScreen onAdd={onAdd} onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('today-empty')).toBeDefined());
+    expect(screen.getByText('Nothing planned today')).toBeDefined();
+    expect(
+      screen.getByText('Add something you want to do, or check your Lists.'),
+    ).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'Schedule' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Anytime' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Earlier today' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open Lists' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add something' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(onAdd).toHaveBeenCalledOnce();
+  });
+
+  it('notes an otherwise empty day above undated tasks', async () => {
+    stubFetch(response([row(1, { title: 'File the form', status: 'saved' })]));
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('today-unscheduled-note')).toBeDefined(),
+    );
+    expect(screen.getByText('Nothing scheduled today.')).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Anytime' })).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'Schedule' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Earlier today' })).toBeNull();
+  });
+
+  it('renders the empty Schedule row when Anytime and Earlier today remain', async () => {
+    stubFetch(
+      response([
+        row(1, { title: 'File the form', status: 'saved' }),
+        row(2, { title: 'Morning call', time: '10:00', isPast: true }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('today-schedule')).toBeDefined());
+    expect(screen.getByRole('heading', { name: 'Schedule' })).toBeDefined();
+    expect(screen.getByText('Nothing left scheduled today.')).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Anytime' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Earlier today' })).toBeDefined();
+    expect(screen.queryByText('Nothing scheduled today.')).toBeNull();
+  });
+
+  it('shows the all-completed note above Earlier today', async () => {
+    stubFetch(
+      response([
+        row(1, {
+          title: 'Finished task',
+          status: 'completed',
+          time: '10:00',
+          isPast: true,
+        }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('today-all-done-note')).toBeDefined());
+    expect(screen.getByText('All done for today.')).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Earlier today' })).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'Schedule' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Anytime' })).toBeNull();
   });
 
   it('caps saved rows at 20 and routes the exact total through See all', async () => {
@@ -179,7 +283,13 @@ describe('TodayScreen', () => {
       }),
     );
     stubFetch(response(saved));
-    mount(<TodayScreen onOpenAnytime={onOpenAnytime} onOpenAgendaItem={() => {}} />);
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={onOpenAnytime}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
 
     await waitFor(() => expect(screen.getByTestId('today-anytime')).toBeDefined());
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(20);
@@ -196,7 +306,13 @@ describe('TodayScreen', () => {
       }),
     );
     stubFetch(response(passed));
-    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
 
     await waitFor(() => expect(screen.getByTestId('today-earlier')).toBeDefined());
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(10);
@@ -214,7 +330,13 @@ describe('TodayScreen', () => {
     );
     const transport = vi.fn(() => Promise.resolve(okResponse(response(overdue))));
     vi.stubGlobal('fetch', transport);
-    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={onOpenAgendaItem} />);
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={onOpenAgendaItem}
+      />,
+    );
 
     await waitFor(() => expect(screen.getByTestId('today-anytime')).toBeDefined());
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(3);
@@ -261,7 +383,13 @@ describe('TodayScreen', () => {
         okResponse(String(input).includes('/agenda') ? agendaBody : detailBody),
       ),
     );
-    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
 
     await waitFor(() =>
       expect(
@@ -305,6 +433,7 @@ describe('TodayScreen', () => {
     });
     mount(
       <TodayScreen
+        onAdd={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
         onToggleComplete={onToggleComplete}
@@ -341,6 +470,7 @@ describe('TodayScreen', () => {
     );
     mount(
       <TodayScreen
+        onAdd={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
         onResolvePassed={onResolvePassed}
@@ -392,6 +522,7 @@ describe('TodayScreen', () => {
     });
     mount(
       <TodayScreen
+        onAdd={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
         onToggleComplete={onToggleComplete}
@@ -460,6 +591,7 @@ describe('TodayScreen', () => {
     });
     mount(
       <TodayScreen
+        onAdd={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
         onToggleComplete={onToggleComplete}
@@ -485,7 +617,13 @@ describe('TodayScreen', () => {
 
   it('opens the snooze sheet from the shared timed-row action', async () => {
     stubFetch(response([row(1, { title: 'Call the dentist', time: '15:30' })]));
-    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
 
     await waitFor(() => expect(screen.getAllByText('Call the dentist')).toHaveLength(2));
     fireEvent.pointerEnter(screen.getAllByTestId(/^swipeable-row-/)[0] as Element);
@@ -522,7 +660,13 @@ describe('TodayScreen', () => {
         okResponse(url.includes('/agenda') ? agendaBody : detailBody),
       );
     });
-    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
 
     await waitFor(() =>
       expect(
