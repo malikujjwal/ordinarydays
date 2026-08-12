@@ -49,6 +49,8 @@ describe('exports map', () => {
     expect(constants.MAX_AGENDA_DAYS).toBe(62);
     expect(constants.TODAY_ANYTIME_SAVED_LIMIT).toBe(20);
     expect(constants.TODAY_EARLIER_COLLAPSED_LIMIT).toBe(10);
+    expect(constants.TODAY_OVERDUE_COLLAPSE_THRESHOLD).toBe(5);
+    expect(constants.TODAY_OVERDUE_COLLAPSED_LIMIT).toBe(3);
     expect(errors.ERROR_CODES).toContain('validation_failed');
     expect(recurrence.describeRecurrence).toBeDefined();
     expect(recurrence.expandRecurrence).toBeDefined();

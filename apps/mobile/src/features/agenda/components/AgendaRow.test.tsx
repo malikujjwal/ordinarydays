@@ -183,6 +183,7 @@ describe('RowBadges', () => {
         originalTime="18:00"
         effectiveTime="20:00"
         overdueFromDate="2026-08-04"
+        today="2026-08-06"
         participantAvatars={[
           { personId: 'per_1', displayName: 'Alice' },
           { personId: 'per_2', displayName: 'Ben' },
@@ -222,6 +223,34 @@ describe('RowBadges', () => {
     colorProbe.style.color = colors.light.textDisabled;
     expect(badge.textContent).toBe('6:00 PM → 8:00 PM');
     expect(original.style.color).toBe(colorProbe.style.color);
+  });
+
+  it('renders the compact overdue date with its full label and warning tokens', () => {
+    const onOpenOverdue = vi.fn();
+    mount(
+      <RowBadges
+        overdueFromDate="2026-08-05"
+        today="2026-08-06"
+        participantAvatars={[]}
+        onOpenOverdue={onOpenOverdue}
+      />,
+    );
+
+    const chip = screen.getByRole('button', {
+      name: 'Overdue from Wednesday 5 August',
+    });
+    const label = screen.getByText('Yesterday');
+    const foreground = document.createElement('span');
+    const background = document.createElement('span');
+    foreground.style.color = colors.light.warning;
+    background.style.backgroundColor = colors.light.warningSurface;
+
+    expect(label.style.color).toBe(foreground.style.color);
+    expect(label.parentElement?.style.backgroundColor).toBe(
+      background.style.backgroundColor,
+    );
+    fireEvent.click(chip);
+    expect(onOpenOverdue).toHaveBeenCalledOnce();
   });
 });
 

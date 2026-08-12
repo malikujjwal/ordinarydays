@@ -204,6 +204,128 @@ describe('TodayScreen', () => {
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(12);
   });
 
+  it('collapses six overdue rows to three and expands in place without I/O or navigation', async () => {
+    const onOpenAgendaItem = vi.fn();
+    const overdue = Array.from({ length: 6 }, (_, index) =>
+      row(index, {
+        title: `Overdue ${index + 1}`,
+        overdueFromDate: `2026-${index < 1 ? '07-31' : `08-0${index}`}`,
+      }),
+    );
+    const transport = vi.fn(() => Promise.resolve(okResponse(response(overdue))));
+    vi.stubGlobal('fetch', transport);
+    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={onOpenAgendaItem} />);
+
+    await waitFor(() => expect(screen.getByTestId('today-anytime')).toBeDefined());
+    expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(3);
+    expect(screen.getByText('+3 more overdue')).toBeDefined();
+    const collapse = screen.getByRole('button', { name: '3 more overdue' });
+    expect(collapse.getAttribute('aria-expanded')).toBe('false');
+    const transportCalls = transport.mock.calls.length;
+
+    fireEvent.click(collapse);
+
+    expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(6);
+    expect(onOpenAgendaItem).not.toHaveBeenCalled();
+    expect(transport).toHaveBeenCalledTimes(transportCalls);
+    expect(
+      screen
+        .getByRole('button', { name: '3 more overdue' })
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
+  it('opens an overdue chip in the shared reschedule sheet pre-set to today', async () => {
+    const overdue = row(1, {
+      title: 'File the return',
+      overdueFromDate: '2026-08-04',
+    });
+    const { recurrence: _recurrence, ...activity } = recurringActivity(
+      overdue.activityId,
+    );
+    const agendaBody = response([overdue]);
+    const detailBody = {
+      data: {
+        activity: {
+          ...activity,
+          title: overdue.title,
+          schedule: { date: '2026-08-04', timezone: 'UTC' },
+        },
+        capabilities: { complete: true, skip: false, snooze: true },
+        reminders: [],
+      },
+      meta: { requestId: 'req_overdue_detail' },
+    };
+    vi.stubGlobal('fetch', (input: RequestInfo | URL) =>
+      Promise.resolve(
+        okResponse(String(input).includes('/agenda') ? agendaBody : detailBody),
+      ),
+    );
+    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Overdue from Tuesday 4 August' }),
+      ).toBeDefined(),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Overdue from Tuesday 4 August' }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('reschedule-occurrence-editor')).toBeDefined(),
+    );
+    expect(
+      screen.getByRole('button', { name: 'Today' }).getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
+  it('removes a completed overdue row without projecting it into Earlier today', async () => {
+    vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
+    const overdue = row(1, {
+      title: 'Old paperwork',
+      overdueFromDate: '2026-08-04',
+    });
+    stubFetch(response([overdue]));
+    const client = createClient();
+    const onToggleComplete = vi.fn((changed: AgendaItem) => {
+      client.setQueriesData({ queryKey: ['agenda'] }, (cached: unknown) => {
+        const data = cached as { days?: Array<{ anytime?: AgendaItem[] }> } | undefined;
+        if (data?.days?.[0]?.anytime === undefined) return cached;
+        return {
+          ...data,
+          days: data.days.map((day) => ({
+            ...day,
+            anytime: day.anytime?.filter(
+              (item) => item.activityId !== changed.activityId,
+            ),
+          })),
+        };
+      });
+    });
+    mount(
+      <TodayScreen
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+        onToggleComplete={onToggleComplete}
+      />,
+      client,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('checkbox', { name: 'Old paperwork, not completed' }),
+      ).toBeDefined(),
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Old paperwork, not completed' }),
+    );
+
+    await waitFor(() => expect(screen.queryByText('Old paperwork')).toBeNull());
+    expect(screen.queryByTestId('today-anytime')).toBeNull();
+    expect(screen.queryByTestId('today-earlier')).toBeNull();
+  });
+
   it('opens the neutral passed-item chooser and returns the exact selected outcome', async () => {
     const onResolvePassed = vi.fn();
     stubFetch(

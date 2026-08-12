@@ -74,4 +74,42 @@ describe('applyCompletion', () => {
       }),
     ).toEqual(cached);
   });
+
+  it('removes a completed rolled-forward task without inserting it into Earlier today', () => {
+    const { time: _time, ...untimedFirst } = first;
+    const overdue: AgendaItem = {
+      ...untimedFirst,
+      overdueFromDate: '2026-08-04',
+    };
+    const data: AgendaData = {
+      days: [
+        {
+          date: '2026-08-11',
+          schedule: [],
+          anytime: [overdue],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    };
+
+    expect(
+      applyCompletion(data, {
+        activityId: overdue.activityId,
+        completed: true,
+        today: '2026-08-11',
+        currentMinute: '15:00',
+      }),
+    ).toEqual({
+      days: [
+        {
+          date: '2026-08-11',
+          schedule: [],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    });
+  });
 });

@@ -38,6 +38,12 @@ export const TODAY_ANYTIME_SAVED_LIMIT = 20;
 /** Rows rendered before Today's EARLIER TODAY section offers its local expander. */
 export const TODAY_EARLIER_COLLAPSED_LIMIT = 10;
 
+/** Rolled-forward tasks required before Today's ANYTIME overdue group collapses. */
+export const TODAY_OVERDUE_COLLAPSE_THRESHOLD = 5;
+
+/** Rolled-forward tasks retained when Today's overdue group is collapsed. */
+export const TODAY_OVERDUE_COLLAPSED_LIMIT = 3;
+
 /**
  * Characters in a free-text sub-field: `service`, `organiser`, ingredient
  * `name`, reservation `name`/`reference` (`activities.md` §3 rule 6).

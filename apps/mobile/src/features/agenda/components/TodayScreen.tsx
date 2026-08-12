@@ -2,6 +2,8 @@ import { ApiError } from '@od/shared/client';
 import {
   TODAY_ANYTIME_SAVED_LIMIT,
   TODAY_EARLIER_COLLAPSED_LIMIT,
+  TODAY_OVERDUE_COLLAPSE_THRESHOLD,
+  TODAY_OVERDUE_COLLAPSED_LIMIT,
 } from '@od/shared/constants';
 import { fixedClock, toWallDate, toWallTime } from '@od/shared/time';
 import type { ActivityOutcome, AgendaData, AgendaItem } from '@od/shared/types';
@@ -18,6 +20,7 @@ import { agendaItemsForDay, partitionAgenda } from '@/features/agenda/model/part
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { selectUpNext, toUpNextSelection } from '@/features/agenda/model/upNext';
 import { AgendaSection, agendaItemKey } from './AgendaSection';
+import { OverdueCollapse } from './OverdueCollapse';
 import { SnoozeSheet } from './SnoozeSheet';
 import { UpNextCard } from './UpNextCard';
 
@@ -99,6 +102,7 @@ export function TodayScreen({
   const tick = useMinuteTicker();
   const agenda = useAgenda({ now: tick.instant });
   const [showAllEarlier, setShowAllEarlier] = useState(false);
+  const [showAllOverdue, setShowAllOverdue] = useState(false);
   const [snoozeItem, setSnoozeItem] = useState<AgendaItem>();
   const [rescheduleItem, setRescheduleItem] = useState<AgendaItem>();
   const [resolutionItem, setResolutionItem] = useState<AgendaItem>();
@@ -255,6 +259,17 @@ export function TodayScreen({
   const anytime = cappedAnytime(
     withCompletionTransitions(sections.anytime, activeCompletionTransitions, 'anytime'),
   );
+  const overdue = anytime.items.filter((item) => item.overdueFromDate !== undefined);
+  const currentAnytime = anytime.items.filter(
+    (item) => item.overdueFromDate === undefined,
+  );
+  const collapsesOverdue = overdue.length > TODAY_OVERDUE_COLLAPSE_THRESHOLD;
+  const visibleOverdue =
+    collapsesOverdue && !showAllOverdue
+      ? overdue.slice(0, TODAY_OVERDUE_COLLAPSED_LIMIT)
+      : overdue;
+  const visibleAnytime = [...visibleOverdue, ...currentAnytime];
+  const hiddenOverdueCount = Math.max(overdue.length - TODAY_OVERDUE_COLLAPSED_LIMIT, 0);
   const projectedEarlier = sections.earlier.filter(
     (item) => !completionTransitionKeys.has(agendaItemKey(item)),
   );
@@ -303,17 +318,29 @@ export function TodayScreen({
             onCompletionTransitionFinished={finishCompletionTransition}
           />
         )}
-        {anytime.items.length === 0 ? null : (
+        {visibleAnytime.length === 0 ? null : (
           <AgendaSection
             title="Anytime"
-            items={anytime.items}
+            items={visibleAnytime}
             testID="today-anytime"
             onOpen={onOpenAgendaItem}
             onOpenReschedule={setRescheduleItem}
+            onOpenOverdue={setRescheduleItem}
             onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
             completionTransitionKeys={completionTransitionKeys}
             onCompletionTransitionFinished={finishCompletionTransition}
+            interstitialAfterIndex={visibleOverdue.length - 1}
+            interstitial={
+              collapsesOverdue ? (
+                <OverdueCollapse
+                  hiddenCount={hiddenOverdueCount}
+                  expanded={showAllOverdue}
+                  onToggle={() => setShowAllOverdue((expanded) => !expanded)}
+                />
+              ) : null
+            }
+            today={today}
             footer={
               anytime.savedCount > TODAY_ANYTIME_SAVED_LIMIT ? (
                 <Button

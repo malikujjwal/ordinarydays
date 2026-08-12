@@ -1,19 +1,14 @@
 import type { AgendaParticipantAvatar } from '@od/shared/types';
-import {
-  AvatarStack,
-  Chip,
-  formatWallDate,
-  formatWallTime,
-  Text,
-  useTheme,
-} from '@od/ui';
+import { AvatarStack, Chip, formatWallTime, Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
+import { OverdueChip } from './OverdueChip';
 
 export interface RowBadgesProps {
   recurrenceDescription?: string;
   originalTime?: string;
   effectiveTime?: string;
   overdueFromDate?: string;
+  today?: string;
   participantAvatars: readonly AgendaParticipantAvatar[];
   /** Phase 6 supplies this projection value; the slot intentionally renders empty today. */
   pendingRsvpLabel?: string;
@@ -26,6 +21,7 @@ export function RowBadges({
   originalTime,
   effectiveTime,
   overdueFromDate,
+  today,
   participantAvatars,
   pendingRsvpLabel,
   onOpenOverdue,
@@ -34,10 +30,7 @@ export function RowBadges({
   const original = originalTime === undefined ? undefined : formatWallTime(originalTime);
   const effective =
     effectiveTime === undefined ? undefined : formatWallTime(effectiveTime);
-  const overdue =
-    overdueFromDate === undefined
-      ? undefined
-      : `Was due ${formatWallDate(overdueFromDate)}`;
+  const hasOverdue = overdueFromDate !== undefined && today !== undefined;
   const people = participantAvatars.map(({ displayName, avatarUrl }) => ({
     displayName,
     ...(avatarUrl === undefined ? {} : { imageUrl: avatarUrl }),
@@ -46,7 +39,7 @@ export function RowBadges({
   if (
     recurrenceDescription === undefined &&
     (original === undefined || effective === undefined) &&
-    overdue === undefined &&
+    !hasOverdue &&
     people.length === 0 &&
     pendingRsvpLabel === undefined
   ) {
@@ -88,12 +81,11 @@ export function RowBadges({
           </Text>
         </View>
       )}
-      {overdue === undefined ? null : (
-        <Chip
-          label={overdue}
-          tone="warning"
+      {!hasOverdue ? null : (
+        <OverdueChip
+          overdueFromDate={overdueFromDate}
+          today={today}
           {...(onOpenOverdue === undefined ? {} : { onPress: onOpenOverdue })}
-          testID="agenda-badge-overdue"
         />
       )}
       {people.length === 0 ? null : (

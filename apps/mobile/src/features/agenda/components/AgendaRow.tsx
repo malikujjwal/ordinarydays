@@ -11,6 +11,7 @@ import { RowLeading } from './RowLeading';
 
 export interface AgendaRowProps {
   item: AgendaItem;
+  today?: string;
   showTime?: boolean;
   onOpen: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
@@ -64,6 +65,7 @@ function bodyLabel(item: AgendaItem, checked: boolean): string {
 /** The shared agenda row body; gestures and optimistic state are added by their owning tasks. */
 export function AgendaRow({
   item,
+  today,
   showTime = false,
   onOpen,
   onToggleComplete,
@@ -143,6 +145,7 @@ export function AgendaRow({
           {...(item.overdueFromDate === undefined
             ? {}
             : { overdueFromDate: item.overdueFromDate })}
+          {...(today === undefined ? {} : { today })}
           participantAvatars={item.participantAvatars}
           {...(onOpenOverdue === undefined
             ? {}
