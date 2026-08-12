@@ -80,6 +80,21 @@ Anytime list. This is the phase where the product becomes usable daily.
 > resolves the previously unowned clock seam and the P2-20/P2-21 row-ownership
 > conflict.
 
+> **P2-24 completion-transition amendment — 2026-08-11.** A checked Today row first renders
+> checked and struck in its source position, holds for `motion.duration.fast`, then fades over
+> `motion.duration.base` before the existing optimistic projection is revealed in EARLIER
+> TODAY. The network request still starts immediately and the transition never animates a row
+> travelling through the screen. `useMotion()` and Reanimated's system Reduce Motion setting
+> remove the hold and fade when requested. A rolled-forward overdue row acknowledges the check
+> the same way, then leaves Today per P2-29 rather than entering EARLIER TODAY.
+
+> **Post-Phase-2 cache follow-up — 2026-08-11.** After every Phase 2 task and gate is complete,
+> fix the known same-device Plans → Today cache gap: a successful create, schedule or relevant
+> activity edit must invalidate every affected agenda window as well as the activity-list and
+> detail keys. Do not rely on the 60-second stale time, app foregrounding or future polling to
+> reflect the user's own write. This follow-up is deliberately not part of P2-24 or any
+> remaining Phase 2 implementation task.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -1977,6 +1992,14 @@ reversing a mutation returns the original object deep-equal.
 ---
 
 ### P2-24 — The undo toast system
+
+> **Amended 2026-08-11 — acknowledge the check before relocating the row.** Today preserves
+> the completed row in its source position for the product-owned `fast` hold and `base` fade,
+> while the completion request and optimistic cache projection still happen immediately. The
+> transition is presentation state only: it may temporarily mask the projected EARLIER TODAY
+> copy, but it must not delay, fork or reimplement `applyCompletion`. Reduce Motion releases
+> the projection immediately. Tests assert the completed accessible state is visible in the
+> source section before release and that the mutation callback is invoked synchronously.
 
 **Files.** `apps/mobile/src/features/undo/**`, the existing
 `apps/mobile/src/stores/toast.ts`, the existing

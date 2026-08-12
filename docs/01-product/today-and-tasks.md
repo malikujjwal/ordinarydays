@@ -183,6 +183,16 @@ completion time for the second — so the most recent is at the top.
 > a time column keeps the timeline readable. §2.5's `All done for today` line is now
 > literally true: EARLIER TODAY carries every completed row.
 
+> **Presentation amendment — show completion before relocation (2026-08-11).** On Today,
+> checking a task first checks and strikes the row in its current position. It holds for the
+> `fast` motion duration, fades out over `base`, and only then appears in EARLIER TODAY in its
+> canonical position. The completion request and optimistic completed state still happen
+> immediately; the at-most-300 ms delay belongs only to the section relocation. The row never
+> travels down the screen. With Reduce Motion enabled, the hold and insert/remove animation
+> are removed and the completed row relocates immediately. A rolled-forward overdue row uses
+> the same checked-then-fade acknowledgement but leaves Today instead of entering EARLIER
+> TODAY, as specified in §7.6.
+
 ### 2.5 Empty states
 
 Each section has one empty state. Empty-state copy is plain and does not congratulate the

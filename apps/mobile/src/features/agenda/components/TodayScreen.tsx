@@ -5,8 +5,8 @@ import {
 } from '@od/shared/constants';
 import { fixedClock, toWallDate, toWallTime } from '@od/shared/time';
 import type { AgendaData, AgendaItem } from '@od/shared/types';
-import { Button, EmptyState, Skeleton, useTheme } from '@od/ui';
-import { useRef, useState } from 'react';
+import { Button, EmptyState, Skeleton, useMotion, useTheme } from '@od/ui';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { TabScreen } from '@/components/TabScreen';
 import { useAgenda } from '@/features/agenda/hooks/useAgenda';
@@ -15,7 +15,7 @@ import { useMinuteTicker } from '@/features/agenda/hooks/useMinuteTicker';
 import { agendaItemsForDay, partitionAgenda } from '@/features/agenda/model/partition';
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { selectUpNext, toUpNextSelection } from '@/features/agenda/model/upNext';
-import { AgendaSection } from './AgendaSection';
+import { AgendaSection, agendaItemKey } from './AgendaSection';
 import { SnoozeSheet } from './SnoozeSheet';
 import { UpNextCard } from './UpNextCard';
 
@@ -24,6 +24,43 @@ export interface TodayScreenProps {
   onOpenAgendaItem: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onAgendaAction?: (item: AgendaItem, action: AgendaSwipeAction) => void;
+}
+
+type CompletionSource = 'schedule' | 'anytime';
+
+interface CompletionTransitionState {
+  key: string;
+  item: AgendaItem;
+  source: CompletionSource;
+  sourceIndex: number;
+}
+
+function completedItem(item: AgendaItem): AgendaItem {
+  return {
+    ...item,
+    status: item.isRecurring ? 'completed_occurrence' : 'completed',
+  };
+}
+
+function withCompletionTransitions(
+  items: readonly AgendaItem[],
+  transitions: readonly CompletionTransitionState[],
+  source: CompletionSource,
+): AgendaItem[] {
+  const result = [...items];
+  const matching = transitions
+    .filter((transition) => transition.source === source)
+    .sort((left, right) => left.sourceIndex - right.sourceIndex);
+
+  for (const transition of matching) {
+    const existing = result.findIndex(
+      (candidate) => agendaItemKey(candidate) === transition.key,
+    );
+    if (existing >= 0) result[existing] = transition.item;
+    else
+      result.splice(Math.min(transition.sourceIndex, result.length), 0, transition.item);
+  }
+  return result;
 }
 
 function cappedAnytime(items: readonly AgendaItem[]): {
@@ -54,10 +91,30 @@ export function TodayScreen({
   onAgendaAction,
 }: TodayScreenProps) {
   const theme = useTheme();
+  const motion = useMotion();
   const tick = useMinuteTicker();
   const agenda = useAgenda({ now: tick.instant });
   const [showAllEarlier, setShowAllEarlier] = useState(false);
   const [snoozeItem, setSnoozeItem] = useState<AgendaItem>();
+  const [completionTransitions, setCompletionTransitions] = useState<
+    CompletionTransitionState[]
+  >([]);
+  const completionTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const finishCompletionTransition = useCallback((transitionKey: string) => {
+    const timer = completionTimers.current.get(transitionKey);
+    if (timer !== undefined) clearTimeout(timer);
+    completionTimers.current.delete(transitionKey);
+    setCompletionTransitions((current) =>
+      current.filter(({ key }) => key !== transitionKey),
+    );
+  }, []);
+  useEffect(
+    () => () => {
+      for (const timer of completionTimers.current.values()) clearTimeout(timer);
+      completionTimers.current.clear();
+    },
+    [],
+  );
   const scrollView = useRef<ScrollView>(null);
   const scrollOffset = useRef(0);
   const currentMinute = toWallTime(tick.instant, agenda.timezone);
@@ -73,17 +130,6 @@ export function TodayScreen({
     },
   });
   const effectiveToggleComplete = onToggleComplete ?? activityActions.toggleComplete;
-  const effectiveAgendaAction = (item: AgendaItem, action: AgendaSwipeAction) => {
-    if (onAgendaAction !== undefined) {
-      onAgendaAction(item, action);
-      return;
-    }
-    if (action.name === 'snooze') {
-      if (item.capabilities.snooze) setSnoozeItem(item);
-      return;
-    }
-    activityActions.onAgendaAction(item, action);
-  };
 
   if (agenda.status === 'pending') {
     return (
@@ -116,6 +162,87 @@ export function TodayScreen({
   const day = data.days[0];
   const items = day === undefined ? [] : agendaItemsForDay(day);
   const sections = partitionAgenda(items, currentMinute);
+  const activeCompletionTransitions = completionTransitions.filter((transition) => {
+    const sourceItems =
+      transition.source === 'schedule' ? sections.schedule : sections.anytime;
+    return !sourceItems.some((item) => agendaItemKey(item) === transition.key);
+  });
+  const completionTransitionKeys = new Set(
+    activeCompletionTransitions.map(({ key }) => key),
+  );
+  const beginCompletionTransition = (item: AgendaItem, commit: () => void): void => {
+    const key = agendaItemKey(item);
+    const scheduleIndex = sections.schedule.findIndex(
+      (candidate) => agendaItemKey(candidate) === key,
+    );
+    const anytimeIndex = sections.anytime.findIndex(
+      (candidate) => agendaItemKey(candidate) === key,
+    );
+
+    if (scheduleIndex >= 0 || anytimeIndex >= 0) {
+      finishCompletionTransition(key);
+      setCompletionTransitions((current) => [
+        ...current.filter((transition) => transition.key !== key),
+        {
+          key,
+          item: completedItem(item),
+          source: scheduleIndex >= 0 ? 'schedule' : 'anytime',
+          sourceIndex: scheduleIndex >= 0 ? scheduleIndex : anytimeIndex,
+        },
+      ]);
+      const duration = motion.duration.fast + motion.duration.base;
+      if (duration > 0) {
+        completionTimers.current.set(
+          key,
+          setTimeout(() => finishCompletionTransition(key), duration),
+        );
+      }
+    }
+    commit();
+    if (motion.duration.fast + motion.duration.base === 0) {
+      finishCompletionTransition(key);
+    }
+  };
+  const handleToggleComplete = (item: AgendaItem, checked: boolean) => {
+    const key = agendaItemKey(item);
+    if (!checked) {
+      finishCompletionTransition(key);
+      effectiveToggleComplete(item, false);
+      return;
+    }
+    beginCompletionTransition(item, () => effectiveToggleComplete(item, true));
+  };
+  const effectiveAgendaAction = (item: AgendaItem, action: AgendaSwipeAction) => {
+    const delegate = () => {
+      if (onAgendaAction !== undefined) onAgendaAction(item, action);
+      else activityActions.onAgendaAction(item, action);
+    };
+    if (action.name === 'complete') {
+      beginCompletionTransition(item, delegate);
+      return;
+    }
+    if (action.name === 'undo' || action.name === 'undoSkip') {
+      finishCompletionTransition(agendaItemKey(item));
+      delegate();
+      return;
+    }
+    if (onAgendaAction === undefined && action.name === 'snooze') {
+      if (item.capabilities.snooze) setSnoozeItem(item);
+      return;
+    }
+    delegate();
+  };
+  const schedule = withCompletionTransitions(
+    sections.schedule,
+    activeCompletionTransitions,
+    'schedule',
+  );
+  const anytime = cappedAnytime(
+    withCompletionTransitions(sections.anytime, activeCompletionTransitions, 'anytime'),
+  );
+  const projectedEarlier = sections.earlier.filter(
+    (item) => !completionTransitionKeys.has(agendaItemKey(item)),
+  );
   const snapshotClock = fixedClock(tick.instant);
   const localUpNext = selectUpNext(items, snapshotClock, agenda.timezone);
   const initialUpNext =
@@ -123,10 +250,9 @@ export function TodayScreen({
       ? undefined
       : toUpNextSelection(day.upNext, snapshotClock, agenda.timezone);
   const upNext = tick.revision === 0 ? (initialUpNext ?? localUpNext) : localUpNext;
-  const anytime = cappedAnytime(sections.anytime);
   const earlier = showAllEarlier
-    ? sections.earlier
-    : sections.earlier.slice(0, TODAY_EARLIER_COLLAPSED_LIMIT);
+    ? projectedEarlier
+    : projectedEarlier.slice(0, TODAY_EARLIER_COLLAPSED_LIMIT);
 
   return (
     <TabScreen title="Today" testID="today-screen">
@@ -143,19 +269,21 @@ export function TodayScreen({
           <UpNextCard
             selection={upNext}
             onOpen={onOpenAgendaItem}
-            onToggleComplete={effectiveToggleComplete}
+            onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
           />
         )}
-        {sections.schedule.length === 0 ? null : (
+        {schedule.length === 0 ? null : (
           <AgendaSection
             title="Schedule"
-            items={sections.schedule}
+            items={schedule}
             testID="today-schedule"
             showTime
             onOpen={onOpenAgendaItem}
-            onToggleComplete={effectiveToggleComplete}
+            onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
+            completionTransitionKeys={completionTransitionKeys}
+            onCompletionTransitionFinished={finishCompletionTransition}
           />
         )}
         {anytime.items.length === 0 ? null : (
@@ -164,8 +292,10 @@ export function TodayScreen({
             items={anytime.items}
             testID="today-anytime"
             onOpen={onOpenAgendaItem}
-            onToggleComplete={effectiveToggleComplete}
+            onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
+            completionTransitionKeys={completionTransitionKeys}
+            onCompletionTransitionFinished={finishCompletionTransition}
             footer={
               anytime.savedCount > TODAY_ANYTIME_SAVED_LIMIT ? (
                 <Button
@@ -186,7 +316,7 @@ export function TodayScreen({
             testID="today-earlier"
             showTime
             onOpen={onOpenAgendaItem}
-            onToggleComplete={effectiveToggleComplete}
+            onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
             footer={
               !showAllEarlier &&

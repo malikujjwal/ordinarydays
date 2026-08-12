@@ -4,6 +4,7 @@ import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { AccessibilityInfo } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
@@ -79,7 +80,10 @@ function mount(ui: ReactNode, client = createClient()) {
   return { ...mounted, client };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('TodayScreen', () => {
   it('uses the server UP NEXT row for the initial paint', async () => {
@@ -164,7 +168,8 @@ describe('TodayScreen', () => {
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(12);
   });
 
-  it('updates the UP NEXT and SCHEDULE duplicate from one completion action', async () => {
+  it('strikes a completed row in place before revealing its Earlier today projection', async () => {
+    vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
     stubFetch(
       response([
         row(1, { title: 'First task', time: '15:30' }),
@@ -172,7 +177,7 @@ describe('TodayScreen', () => {
       ]),
     );
     const client = createClient();
-    const onToggleComplete = (changed: AgendaItem, checked: boolean) => {
+    const onToggleComplete = vi.fn((changed: AgendaItem, checked: boolean) => {
       client.setQueriesData({ queryKey: ['agenda'] }, (cached: unknown) => {
         const data = cached as { days?: Array<{ schedule?: AgendaItem[] }> } | undefined;
         if (data?.days?.[0]?.schedule === undefined) return cached;
@@ -188,7 +193,7 @@ describe('TodayScreen', () => {
           })),
         };
       });
-    };
+    });
     mount(
       <TodayScreen
         onOpenAnytime={() => {}}
@@ -209,13 +214,77 @@ describe('TodayScreen', () => {
       })[0] as Element,
     );
 
-    await waitFor(() => {
-      expect(screen.getAllByText('First task')).toHaveLength(1);
-      expect(screen.getAllByText('Second task')).toHaveLength(2);
-      expect(
-        screen.getByRole('checkbox', { name: 'First task, completed' }),
-      ).toBeDefined();
+    expect(onToggleComplete).toHaveBeenCalledOnce();
+    expect(onToggleComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'First task' }),
+      true,
+    );
+    expect(
+      within(screen.getByTestId('today-schedule')).getByRole('checkbox', {
+        name: 'First task, completed',
+      }),
+    ).toBeDefined();
+    expect(screen.getByTestId('completion-transition-row')).toBeDefined();
+    expect(screen.queryByTestId('today-earlier')).toBeNull();
+
+    await waitFor(
+      () => expect(screen.queryByTestId('completion-transition-row')).toBeNull(),
+      { timeout: 1_000 },
+    );
+    expect(
+      within(screen.getByTestId('today-earlier')).getByRole('checkbox', {
+        name: 'First task, completed',
+      }),
+    ).toBeDefined();
+    expect(screen.getAllByText('Second task')).toHaveLength(2);
+  });
+
+  it('removes the completion hold when Reduce Motion is enabled', async () => {
+    const reduceMotion = vi
+      .spyOn(AccessibilityInfo, 'isReduceMotionEnabled')
+      .mockResolvedValue(true);
+    stubFetch(response([row(1, { title: 'Quiet transition', time: '15:30' })]));
+    const client = createClient();
+    const onToggleComplete = vi.fn((changed: AgendaItem, checked: boolean) => {
+      client.setQueriesData({ queryKey: ['agenda'] }, (cached: unknown) => {
+        const data = cached as { days?: Array<{ schedule?: AgendaItem[] }> } | undefined;
+        if (data?.days?.[0]?.schedule === undefined) return cached;
+        return {
+          ...data,
+          days: data.days.map((day) => ({
+            ...day,
+            schedule: day.schedule?.map((item) =>
+              item.activityId === changed.activityId
+                ? { ...item, status: checked ? 'completed' : 'scheduled' }
+                : item,
+            ),
+          })),
+        };
+      });
     });
+    mount(
+      <TodayScreen
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+        onToggleComplete={onToggleComplete}
+      />,
+      client,
+    );
+
+    await waitFor(() => expect(reduceMotion).toHaveBeenCalled());
+    fireEvent.click(
+      screen.getAllByRole('checkbox', {
+        name: 'Quiet transition, not completed',
+      })[0] as Element,
+    );
+
+    expect(onToggleComplete).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('completion-transition-row')).toBeNull();
+    expect(
+      within(screen.getByTestId('today-earlier')).getByRole('checkbox', {
+        name: 'Quiet transition, completed',
+      }),
+    ).toBeDefined();
   });
 
   it('opens the snooze sheet from the shared timed-row action', async () => {

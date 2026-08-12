@@ -197,6 +197,7 @@ export const motion = {
 | Press feedback (opacity/scale) | `fast` | `standard` |
 | Checkbox check | spring | — |
 | Row insert / remove | `base` | `decelerate` in, `accelerate` out |
+| Today completion relocation | `fast` checked/struck hold, then `base` fade out | `accelerate` out; no travel animation |
 | Toast in / out | `base` | `decelerate` / `accelerate` |
 | Sheet present / dismiss | `slow` | `decelerate` / `accelerate` |
 | Screen transition | platform default, capped at `max` | platform |
@@ -417,6 +418,10 @@ hairline connector, content to the right:
 - EARLIER TODAY rows are `dimmed`; completed rows additionally `struck` with the olive
   check in the marker column. The section header carries `2 done ⌃` as its collapse
   affordance.
+- A completion first renders checked and struck where the row was. After the `fast` hold it
+  fades over `base`, then the ordinary projection places it in EARLIER TODAY. Do not animate
+  the row travelling through the intervening screen; Reduce Motion removes the hold and
+  insert/remove transition.
 - Overdue rows: a `warning` Chip in the time rail showing the original date.
 - Vertical: `space[5]` top and bottom per row → 56 pt minimum; separator is the connector
   line, not a horizontal rule.
