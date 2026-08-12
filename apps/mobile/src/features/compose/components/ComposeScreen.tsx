@@ -93,6 +93,7 @@ export function ComposeScreen({
         schedule: draft.schedule,
         location: draft.location,
         reminderOffset: draft.reminderOffset,
+        ...(draft.recurrence === undefined ? {} : { recurrence: draft.recurrence }),
         details: draft.details,
       },
       timezone,
@@ -183,6 +184,9 @@ export function ComposeScreen({
                 schedule={draft.schedule}
                 location={draft.location}
                 reminderOffset={draft.reminderOffset}
+                {...(draft.recurrence === undefined
+                  ? {}
+                  : { recurrence: draft.recurrence })}
                 details={draft.details}
                 notes={draft.notes}
                 sourceUrl={draft.sourceUrl}
@@ -194,6 +198,7 @@ export function ComposeScreen({
                 onEndTimeChange={draft.setEndTime}
                 onLocationChange={draft.setLocation}
                 onReminderChange={draft.setReminderOffset}
+                onRecurrenceChange={draft.setRecurrence}
                 onDetailsChange={draft.setDetails}
                 onNotesChange={draft.setNotes}
                 onSourceUrlChange={draft.setSourceUrl}

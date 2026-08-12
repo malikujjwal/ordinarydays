@@ -112,7 +112,29 @@ describe('reading an activity you own', () => {
 
     const body = await (await get(createApp())).json();
 
-    expect(Object.keys(body.data).sort()).toEqual(['activity', 'reminders']);
+    expect(Object.keys(body.data).sort()).toEqual([
+      'activity',
+      'completedOccurrenceCount',
+      'reminders',
+    ]);
+  });
+
+  it('returns the real stored completion count without another round trip', async () => {
+    seed([
+      meta(),
+      {
+        pk: `ACT#${ACT}`,
+        sk: 'OCC#2026-08-01',
+        entity: 'Occurrence',
+        status: 'completed',
+      },
+      { pk: `ACT#${ACT}`, sk: 'OCC#2026-08-02', entity: 'Occurrence', status: 'skipped' },
+    ]);
+
+    const body = await (await get(createApp())).json();
+
+    expect(body.data.completedOccurrenceCount).toBe(1);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1);
   });
 
   it('returns an empty reminders array when there are none', async () => {

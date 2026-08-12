@@ -1106,6 +1106,9 @@ export function projectDetail(partition: StoredItem[], userId: string): Activity
     reminders: partition
       .filter((row) => isReminderRow(row) && row.userId === userId)
       .map(toReminder),
+    completedOccurrenceCount: partition.filter(
+      (row) => row.entity === 'Occurrence' && row.status === 'completed',
+    ).length,
   };
 }
 

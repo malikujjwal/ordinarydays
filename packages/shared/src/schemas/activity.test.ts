@@ -1,8 +1,10 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
 import type { Activity, ActivityDetails } from '../types/activity.js';
+import type { ActivityDetail } from '../types/activityDetail.js';
 import {
   activity,
+  activityDetail,
   type activityDetails,
   completeActivityInput,
   createActivityInput,
@@ -27,6 +29,10 @@ describe('the schema and the interface are the same shape', () => {
   it('ActivityDetails is assignable both ways', () => {
     expectTypeOf<z.infer<typeof activityDetails>>().toEqualTypeOf<ActivityDetails>();
   });
+
+  it('ActivityDetail is assignable both ways', () => {
+    expectTypeOf<z.infer<typeof activityDetail>>().toEqualTypeOf<ActivityDetail>();
+  });
 });
 
 const base = {
@@ -46,6 +52,28 @@ const base = {
 } as const;
 
 const task = { ...base, objectKind: 'task', type: 'task', details: { kind: 'task' } };
+
+describe('the activity detail projection', () => {
+  it('accepts a nonnegative stored-completion count', () => {
+    expect(
+      activityDetail.safeParse({
+        activity: task,
+        reminders: [],
+        completedOccurrenceCount: 40,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([-1, 1.5, '2'])('rejects invalid stored-completion count %s', (count) => {
+    expect(
+      activityDetail.safeParse({
+        activity: task,
+        reminders: [],
+        completedOccurrenceCount: count,
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe('the stored Activity', () => {
   it('accepts a minimal Task', () => {

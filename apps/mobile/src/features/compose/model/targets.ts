@@ -1,5 +1,6 @@
 import type { CreationTarget } from '@od/shared/client';
-import type { CreateActivityInput } from '@od/shared/schemas';
+import { type CreateActivityInput, createRecurrence } from '@od/shared/schemas';
+import type { Recurrence } from '@od/shared/types';
 import { format, parseISO } from 'date-fns';
 import {
   type DraftDetails,
@@ -115,6 +116,7 @@ export interface DraftFields extends CommonDraftFields {
   location: DraftLocation;
   /** `undefined` is `Off`: no `REM#` row is written (`notifications.md` §2.1). */
   reminderOffset: number | undefined;
+  recurrence?: Recurrence;
   details: DraftDetails;
 }
 
@@ -175,6 +177,11 @@ export function toCreateActivityInput(
       ? undefined
       : [{ offsetMinutes: fields.reminderOffset }];
 
+  const recurrence =
+    fields.recurrence === undefined || schedule === undefined
+      ? undefined
+      : createRecurrence.parse(fields.recurrence);
+
   const common = {
     title,
     ...(notes === '' ? {} : { notes }),
@@ -184,6 +191,7 @@ export function toCreateActivityInput(
     ...(schedule === undefined ? {} : { schedule }),
     ...(location === undefined ? {} : { location }),
     ...(reminders === undefined ? {} : { reminders }),
+    ...(recurrence === undefined ? {} : { recurrence }),
   };
 
   if (target.objectKind === 'task') {

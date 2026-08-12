@@ -1,6 +1,7 @@
-import type { ActivityType } from '@od/shared/types';
+import type { ActivityType, Recurrence } from '@od/shared/types';
 import { Field } from '@od/ui';
 import { Fragment } from 'react';
+import { RepeatControl } from '@/components/RepeatControl';
 import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import {
   ComingSoonControl,
@@ -50,6 +51,7 @@ export interface TypedFieldsProps {
   schedule: DraftSchedule;
   location: DraftLocation;
   reminderOffset: number | undefined;
+  recurrence?: Recurrence;
   details: DraftDetails;
   notes: string;
   sourceUrl: string | undefined;
@@ -66,6 +68,7 @@ export interface TypedFieldsProps {
   onEndTimeChange: (endTime: string | undefined) => void;
   onLocationChange: (patch: Partial<DraftLocation>) => void;
   onReminderChange: (offsetMinutes: number | undefined) => void;
+  onRecurrenceChange?: (recurrence: Recurrence | undefined) => void;
   onDetailsChange: (patch: Partial<DraftDetails>) => void;
   onNotesChange: (notes: string) => void;
   onSourceUrlChange: (url: string) => void;
@@ -77,7 +80,6 @@ export interface TypedFieldsProps {
 /** The copy each deferred field carries, naming what fills it rather than going quiet. */
 const COMING_SOON = {
   people: 'Adding people arrives in Phase 6.',
-  repeat: 'Repeating activities arrive in Phase 2.',
   relatedPlan: 'Linking to a plan arrives in Phase 3.',
   lists: 'Lists are coming soon.',
 } as const;
@@ -182,10 +184,11 @@ function renderField(
 
     case 'repeat':
       return (
-        <ComingSoonControl
-          label="Repeat"
-          hint={COMING_SOON.repeat}
-          testID="compose-repeat"
+        <RepeatControl
+          date={schedule.date}
+          value={props.recurrence}
+          today={props.today}
+          onChange={(recurrence) => props.onRecurrenceChange?.(recurrence)}
         />
       );
 

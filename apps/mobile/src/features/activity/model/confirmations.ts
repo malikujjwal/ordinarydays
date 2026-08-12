@@ -88,6 +88,31 @@ export function deleteConfirmation(
 }
 
 /**
+ * Removing recurrence hides stored occurrence history even though the Activity remains.
+ * The count is the same partition-derived completed-row count used by whole-series delete.
+ */
+export function removeRecurrenceConfirmation(
+  activity: Pick<Activity, 'title'>,
+  completedOccurrenceCount: number,
+): Confirmation | undefined {
+  if (completedOccurrenceCount === 0) return undefined;
+
+  return {
+    heading: `Stop repeating "${activity.title}"?`,
+    removesLead: 'This removes:',
+    removes: [
+      `the repeat rule and ${plural(
+        completedOccurrenceCount,
+        'past completion',
+        'past completions',
+      )} from view.`,
+    ],
+    keeps: 'the activity. End series instead to keep its past completions visible.',
+    confirmLabel: 'Stop repeating',
+  };
+}
+
+/**
  * `Change Watch → Event?` — or nothing at all (`activities.md` §6.3 rule 6).
  *
  * The dropped fields come from **P1-17's mapping**, the same pure function the server runs,

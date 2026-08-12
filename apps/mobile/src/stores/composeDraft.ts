@@ -1,6 +1,6 @@
 import { changeActivityKind } from '@od/shared';
 import type { CreationTarget } from '@od/shared/client';
-import type { PlanType } from '@od/shared/types';
+import type { PlanType, Recurrence } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { create } from 'zustand';
 import {
@@ -76,6 +76,7 @@ export interface ComposeDraftState {
   location: DraftLocation;
   /** `undefined` is `Off`. Only Task, Event and General show the control at all. */
   reminderOffset: number | undefined;
+  recurrence: Recurrence | undefined;
   details: DraftDetails;
 
   open: () => void;
@@ -94,6 +95,7 @@ export interface ComposeDraftState {
   setEndTime: (endTime: string | undefined) => void;
   setLocation: (patch: Partial<DraftLocation>) => void;
   setReminderOffset: (offsetMinutes: number | undefined) => void;
+  setRecurrence: (recurrence: Recurrence | undefined) => void;
   setDetails: (patch: Partial<DraftDetails>) => void;
   /** Returns the key for this attempt, generating one if the draft has changed since the last. */
   takeIdempotencyKey: () => string;
@@ -111,6 +113,7 @@ const EMPTY = {
   schedule: EMPTY_SCHEDULE,
   location: EMPTY_LOCATION,
   reminderOffset: undefined,
+  recurrence: undefined,
   details: EMPTY_DETAILS,
 } satisfies Omit<
   ComposeDraftState,
@@ -129,6 +132,7 @@ const EMPTY = {
   | 'setEndTime'
   | 'setLocation'
   | 'setReminderOffset'
+  | 'setRecurrence'
   | 'setDetails'
   | 'takeIdempotencyKey'
   | 'reset'
@@ -300,7 +304,9 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
               },
             }
           : {}),
-        ...(date === undefined ? { reminderOffset: undefined } : {}),
+        ...(date === undefined
+          ? { reminderOffset: undefined, recurrence: undefined }
+          : {}),
       }),
     ),
 
@@ -367,6 +373,8 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     set((state) => edited({ location: { ...state.location, ...patch } })),
 
   setReminderOffset: (reminderOffset) => set(edited({ reminderOffset })),
+
+  setRecurrence: (recurrence) => set(edited({ recurrence })),
 
   setDetails: (patch) =>
     set((state) => edited({ details: { ...state.details, ...patch } })),

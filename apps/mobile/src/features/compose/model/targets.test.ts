@@ -1,4 +1,5 @@
 import { createActivityInput } from '@od/shared/schemas';
+import type { Recurrence } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 import { EMPTY_DETAILS, EMPTY_LOCATION, EMPTY_SCHEDULE } from './draft';
 import {
@@ -203,6 +204,39 @@ describe('toCreateActivityInput', () => {
       sourceUrl: 'https://example.com/a',
     });
     expect(createActivityInput.safeParse(input).success).toBe(true);
+  });
+
+  it('writes one validated recurrence segment only when a schedule date exists', () => {
+    const recurring: Recurrence = {
+      mode: 'fixed',
+      segments: [
+        {
+          freq: 'weekly',
+          interval: 1,
+          byWeekday: [3],
+          effectiveFrom: '2026-08-12',
+        },
+      ],
+    };
+    const input = toCreateActivityInput(
+      { objectKind: 'task', type: 'task' },
+      draft({
+        title: 'Gym',
+        schedule: { ...EMPTY_SCHEDULE, date: '2026-08-12' },
+        recurrence: recurring,
+      }),
+      ZONE,
+    );
+
+    expect(input?.recurrence).toEqual(recurring);
+    expect(createActivityInput.safeParse(input).success).toBe(true);
+    expect(
+      toCreateActivityInput(
+        { objectKind: 'task', type: 'task' },
+        draft({ title: 'Gym', recurrence: recurring }),
+        ZONE,
+      ),
+    ).not.toHaveProperty('recurrence');
   });
 
   /** A List item is not an Activity and does not go to `POST /v1/activities` at all. */

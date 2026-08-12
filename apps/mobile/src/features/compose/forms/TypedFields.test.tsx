@@ -185,7 +185,6 @@ describe('fields whose behaviour is a later phase', () => {
    */
   it.each([
     ['compose-people', 'meal', 'Adding people arrives in Phase 6.'],
-    ['compose-repeat', 'task', 'Repeating activities arrive in Phase 2.'],
     ['compose-related-plan', 'task', 'Linking to a plan arrives in Phase 3.'],
     ['compose-alsoAddTo', 'watch', 'Lists are coming soon.'],
     ['compose-addIngredientsTo', 'meal', 'Lists are coming soon.'],
@@ -197,6 +196,25 @@ describe('fields whose behaviour is a later phase', () => {
 });
 
 describe('the interlocks in §3.4', () => {
+  it('disables Repeat until a date is set and enables it when dated', () => {
+    const { unmount } = mount('task');
+    expect(screen.getByText('Add a date to repeat this.')).toBeDefined();
+    expect(screen.getByTestId('compose-repeat').getAttribute('aria-disabled')).toBe(
+      'true',
+    );
+    unmount();
+
+    mount('task', {
+      schedule: {
+        date: '2026-08-15',
+        time: undefined,
+        endTime: undefined,
+        timeFromSlot: false,
+      },
+    });
+    expect(screen.getByTestId('compose-repeat').getAttribute('aria-disabled')).toBeNull();
+  });
+
   it('disables Time until a date is set, and says why', () => {
     const { unmount } = mount('task');
     expect(screen.getAllByText('Pick a date first.').length).toBeGreaterThan(0);

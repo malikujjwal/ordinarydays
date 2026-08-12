@@ -37,4 +37,6 @@ export interface ActivityDetail {
    */
   reminders: Reminder[];
   activity: Activity;
+  /** Real stored completed-occurrence rows used by destructive recurrence confirmations. */
+  completedOccurrenceCount?: number;
 }

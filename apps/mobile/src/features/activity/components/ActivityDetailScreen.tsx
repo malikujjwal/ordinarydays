@@ -1,4 +1,5 @@
 import type { ChangeTarget } from '@od/shared';
+import { describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, PlanType } from '@od/shared/types';
 import {
@@ -20,6 +21,7 @@ import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet'
 import { ComingSoonSection } from '@/features/activity/components/ComingSoonSection';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
+import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
 import { useActivityDetail } from '@/features/activity/hooks/useActivity';
@@ -90,6 +92,7 @@ export function ActivityDetailScreen({
   const detail = useActivityDetail(activityId);
   const actions = useActivityActions(activityId);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [repeatOpen, setRepeatOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [kindSheet, setKindSheet] = useState<'planKind' | 'toPlan' | undefined>(
     undefined,
@@ -200,6 +203,7 @@ export function ActivityDetailScreen({
               detail={detail}
               today={today}
               onOpenReschedule={() => setRescheduleOpen(true)}
+              onOpenRepeat={() => setRepeatOpen(true)}
             />
           )}
         </View>
@@ -217,6 +221,23 @@ export function ActivityDetailScreen({
             busy={detail.isSaving}
             {...(detail.editError === undefined ? {} : { error: detail.editError })}
           />
+          {activity.schedule === undefined ? null : (
+            <RepeatSheet
+              open={repeatOpen}
+              onClose={() => setRepeatOpen(false)}
+              anchorDate={
+                activity.recurrence === undefined ? activity.schedule.date : today
+              }
+              {...(activity.recurrence === undefined
+                ? {}
+                : { value: activity.recurrence })}
+              activityForConfirmation={{ title: activity.title }}
+              completedOccurrenceCount={detail.detail?.completedOccurrenceCount ?? 0}
+              onCommit={(recurrence) => detail.patch({ recurrence: recurrence ?? null })}
+              busy={detail.isSaving}
+              {...(detail.editError === undefined ? {} : { error: detail.editError })}
+            />
+          )}
           <OverflowMenu
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
@@ -285,9 +306,16 @@ interface LoadedProps {
   detail: ReturnType<typeof useActivityDetail>;
   today: WallDate;
   onOpenReschedule: () => void;
+  onOpenRepeat: () => void;
 }
 
-function Loaded({ activity, detail, today, onOpenReschedule }: LoadedProps) {
+function Loaded({
+  activity,
+  detail,
+  today,
+  onOpenReschedule,
+  onOpenRepeat,
+}: LoadedProps) {
   const theme = useTheme();
   const sections = sectionsFor(activity);
 
@@ -371,8 +399,17 @@ function Loaded({ activity, detail, today, onOpenReschedule }: LoadedProps) {
               schedule={activity.schedule}
               location={activity.location}
               reminders={detail.detail?.reminders ?? []}
+              {...(activity.schedule === undefined
+                ? {}
+                : {
+                    recurrenceDescription:
+                      activity.recurrence === undefined
+                        ? 'Never'
+                        : describeRecurrence(activity.recurrence, today),
+                  })}
               today={today}
               onPressDate={onOpenReschedule}
+              onPressRepeat={onOpenRepeat}
               onPressAddress={undefined}
             />
           );

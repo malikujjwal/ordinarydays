@@ -33,8 +33,10 @@ export interface WhenWhereBlockProps {
   schedule: { date: string; time?: string; endTime?: string } | undefined;
   location: { label: string; address?: string } | undefined;
   reminders: Reminder[];
+  recurrenceDescription?: string;
   today: WallDate;
   onPressDate: () => void;
+  onPressRepeat?: () => void;
   onPressAddress: (() => void) | undefined;
 }
 
@@ -42,8 +44,10 @@ export function WhenWhereBlock({
   schedule,
   location,
   reminders,
+  recurrenceDescription,
   today,
   onPressDate,
+  onPressRepeat,
   onPressAddress,
 }: WhenWhereBlockProps) {
   const theme = useTheme();
@@ -63,6 +67,20 @@ export function WhenWhereBlock({
             {formatSchedule(schedule, today)}
           </Text>
         </Touchable>
+
+        {recurrenceDescription === undefined ? null : (
+          <Touchable
+            square={false}
+            accessibilityRole="button"
+            accessibilityLabel={`${recurrenceDescription}, change repeat`}
+            onPress={onPressRepeat}
+            testID="when-where-repeat"
+          >
+            <Text variant="body" color="textSecondary">
+              {recurrenceDescription}
+            </Text>
+          </Touchable>
+        )}
 
         {location === undefined || location.label === '' ? null : (
           <Touchable

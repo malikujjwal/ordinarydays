@@ -199,6 +199,19 @@ describe('Event reservation defaults', () => {
     expect(draft().schedule.time).toBeUndefined();
     expect(draft().details.reservation.time).toBe('');
   });
+
+  it('clears recurrence with its required date', () => {
+    draft().chooseObject('task');
+    draft().setDate('2026-08-12');
+    draft().setRecurrence({
+      mode: 'fixed',
+      segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-12' }],
+    });
+
+    draft().setDate(undefined);
+
+    expect(draft().recurrence).toBeUndefined();
+  });
 });
 
 describe('the idempotency key', () => {

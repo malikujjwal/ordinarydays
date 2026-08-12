@@ -362,6 +362,8 @@ export const activityDetail = z
     activity,
     /** The caller's own. Never anybody else's — see above. */
     reminders: z.array(reminder),
+    /** Additive Phase 2 projection; absent only in an older cached response. */
+    completedOccurrenceCount: z.number().int().nonnegative().optional(),
   })
   .meta({ id: 'ActivityDetail' });
 

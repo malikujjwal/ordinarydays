@@ -632,6 +632,33 @@ describe('projectDetail', () => {
     expect(projectDetail(partition, 'usr_c').reminders).toEqual([]);
   });
 
+  it('derives the real completed-occurrence count from the partition already read', () => {
+    const occurrences: StoredItem[] = [
+      {
+        pk: `ACT#${PLAN}`,
+        sk: 'OCC#2026-08-01',
+        entity: 'Occurrence',
+        status: 'completed',
+      },
+      {
+        pk: `ACT#${PLAN}`,
+        sk: 'OCC#2026-08-02',
+        entity: 'Occurrence',
+        status: 'skipped',
+      },
+      {
+        pk: `ACT#${PLAN}`,
+        sk: 'OCC#2026-08-03',
+        entity: 'Occurrence',
+        status: 'completed',
+      },
+    ];
+
+    expect(
+      projectDetail([...partition, ...occurrences], 'usr_a').completedOccurrenceCount,
+    ).toBe(2);
+  });
+
   it('never leaks the storage attributes', () => {
     const detail = projectDetail(partition, 'usr_a');
 
