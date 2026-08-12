@@ -104,6 +104,14 @@ Anytime list. This is the phase where the product becomes usable daily.
 > tokens. P2-40 must preserve the 4.5:1 text and 3:1 control-boundary gates; it may not lower
 > either threshold to make the palette pass.
 
+> **Founder-approved light-mode palette amendment — 2026-08-12 (newer than the dark-mode
+> note).** P2-40 also replaces the light palette with the founder's reviewed warm-paper and
+> dusty-plum values. The supplied muted, border and accent roles are preserved exactly but
+> constrained semantically where contrast requires it: readable hints and required control
+> boundaries use secondary `#6E675F`; muted `#978F84`, border `#D3C9BC` and accent
+> `#8B6374` never become low-contrast readable text or the sole required control indicator.
+> Task size, dependencies and the existing accessibility thresholds are unchanged.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -206,7 +214,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-35 | `Show skipped` device-local toggle | mobile | P2-21 | yes | S |
 | P2-36 | Worked-example-day integration fixture and test | ci | P2-04, P2-08, P2-11, P2-13, P2-19, P2-23 | no | M |
 | P2-37 | E2E: Today flows on web and iOS | ci | P2-20, P2-24, P2-25, P2-26, P2-28, P2-29, P2-31, P2-33 | no | M |
-| P2-40 | Founder-approved dark-mode palette | shared/mobile | P1-22, P2-37 | no | M |
+| P2-40 | Founder-approved light- and dark-mode palettes | shared/mobile | P1-22, P2-37 | no | M |
 
 P2-17, P2-30, P2-31 and P2-35 are mechanical; follow the canonical sections named in the
 table and skip the design discussion. P2-31's exact label is `+ Add a task`: it bypasses the
@@ -2672,17 +2680,16 @@ out the undo handler locally; the suite must catch it).
 
 ---
 
-### P2-40 — Founder-approved dark-mode palette
+### P2-40 — Founder-approved light- and dark-mode palettes
 
 **Files.** `packages/ui/src/theme/{colors.ts,contrast.test.ts,elevation.ts}`,
-`packages/ui/src/primitives/{Button.tsx,Card.tsx,Field.tsx,SelectField.tsx,
+`packages/ui/src/primitives/{Button.tsx,Card.tsx,Chip.tsx,Field.tsx,SelectField.tsx,
 SelectField.web.tsx,pickerSurface.web.tsx,Text.tsx}`,
-`apps/mobile/app/(app)/gallery.tsx`, and every existing dark-mode token test or primitive
+`apps/mobile/app/(app)/gallery.tsx`, and every existing theme-token test or primitive
 consumer whose semantic role changes under the mapping below. This inventory is a minimum;
 the export-contract and repository-structure rules remain implicit.
 
-**What to build.** Replace only the dark-mode palette. Light mode stays byte-identical.
-Implement the 2026-08-12 canonical mapping in
+**What to build.** Replace both theme palettes. Implement the 2026-08-12 canonical mapping in
 [`../04-conventions/design-system.md`](../04-conventions/design-system.md) §5.1 and §5.2:
 
 | Founder palette role | Value | Semantic use |
@@ -2709,27 +2716,50 @@ The dark Event accent uses `accentDeep` on `accentSurface`; Task and Custom use
 disabled label) retain their existing dark values unless a contrast assertion requires an
 equivalent value already present in this table. No new raw colour may be invented.
 
-**Accessibility rule.** `accent` and `accentDeep` are not body-text colours on
-`surfaceRaised`, and `accent` is not paired with a normal-size label on a filled control.
-Dark primary filled controls use the accessible accent treatment with a dark inverse label;
-accent-surface chips and text actions use `textPrimary` or `textSecondary` according to their
+| Founder light role | Value | Semantic use |
+| --- | --- | --- |
+| App background | `#F1EDE5` | `surface` |
+| Sheet / main surface | `#F8F5EF` | `surfaceRaised` |
+| Elevated surface | `#FCFAF6` | `surfaceRaised2` and `surfaceOverlay` |
+| Input background | `#F0EBE3` | `surfaceInput` |
+| Secondary surface | `#ECE7DE` | `surfaceSunken` |
+| Divider | `#E1DAD0` | decorative `border` |
+| Border | `#D3C9BC` | new decorative `borderSubtle` for inputs/chips; never the sole control boundary |
+| Primary text | `#292621` | `textDisplay` and `textPrimary` |
+| Secondary text | `#6E675F` | `textSecondary`, readable `textMuted`, `borderStrong` and light Task/Custom accents |
+| Muted text | `#978F84` | `textDisabled` and nonessential decoration only; hints/placeholders use readable `textMuted` |
+| Accent | `#8B6374` | `accent`: fills, icons, progress and decoration; never body text on `surface` |
+| Accent pressed | `#795565` | `accentDeep` and `focusRing`; readable accent text and pressed states |
+| Accent surface | `#EEE3E7` | `accentSurface` |
+| Accent subtle | `#C7AAB6` | decorative `accentBorder`, never a control-boundary substitute |
+| Button text | `#FFFDF9` | light `textInverse` on filled controls |
+
+Unlisted light safety/status semantics (`danger`, `scrim`, sage/ochre and the Meal, Watch and
+Event type accents) retain their existing values. The exact supplied low-contrast values
+remain in the theme but may not be promoted into readable or required-boundary roles.
+
+**Accessibility rule.** Dark `accent` and `accentDeep` are not body-text colours on
+`surfaceRaised`; light `accent` is not body text on `surface`. Light primary filled controls
+may use `accent` with light `textInverse`; dark primary filled controls use the accessible
+`accentDeep` treatment with a dark inverse label. Accent-surface chips and text actions use
+`textPrimary` or `textSecondary` according to their
 content hierarchy. `textMuted` is readable tertiary content and must not be conflated with
 `textDisabled`; audit existing non-disabled `textDisabled` uses and migrate them. Keep the
 visible role, label, underline or control shape that communicates interactivity without
 relying on colour alone.
 
-**Scope guard.** Do not change light-mode values, spacing, typography, radius, elevation
-levels, motion, screen layout, component anatomy, user-facing copy or interaction behaviour.
+**Scope guard.** Do not change spacing, typography, radius, elevation levels, motion, screen
+layout, component anatomy, user-facing copy or interaction behaviour.
 Do not redesign the Task or Plan detail screens in this task. Add no dependency.
 
 **Tests and visual proof.** Extend the contrast matrix to cover `surfaceInput`, `textMuted`,
 accent-surface labels, filled-control labels, `accentBorder`'s decorative-only status, and
-every type accent on its tint and the page. Assert every hexadecimal value above exactly and
-assert the complete light palette is unchanged. Render the token gallery in dark mode and
-visually inspect every primitive state, then screenshot dark Today, a Task detail, a Plan
-detail and an open sheet at 390 px; repeat at 1280 px wherever the layout differs. Include a
-light token-gallery screenshot as the regression proof. No contrast test or threshold may be
-removed or weakened.
+every type accent on its tint and the page. Assert every hexadecimal value above exactly in
+both schemes, including the semantic restrictions on `borderSubtle`, light `textDisabled`
+and light `accent`. Render the token gallery in both modes and visually inspect every
+primitive state, then screenshot Today, a Task detail, a Plan detail and an open sheet in
+both modes at 390 px; repeat at 1280 px wherever the layout differs. No contrast test or
+threshold may be removed or weakened.
 
 ## Acceptance criteria
 
@@ -2869,13 +2899,14 @@ removed or weakened.
     Its multi-phase variant crashes after main state + receipt + `CLEANUP#` commit but before
     cleanup: replay drains that work before returning, and a next same-Activity mutation can
     drain the same abandoned work idempotently.
-33. P2-40's dark palette equals every founder-supplied value in its task table; light values
-    are byte-identical to their pre-task fixture. The automated matrix passes at 4.5:1 for
+33. P2-40's light and dark palettes equal every founder-supplied value in its task tables.
+    The automated matrix passes at 4.5:1 for
     readable text and 3:1 for controls/type graphics across every surface on which each token
-    is actually rendered. No body text uses `accent` or `accentDeep` on `surfaceRaised`, no
-    normal-size filled-control label is paired with `accent`, and the dark token-gallery,
-    Today, Task-detail, Plan-detail and sheet screenshots show the approved palette without
-    a raw component-level hex value.
+    is actually rendered. Neither light muted text nor either scheme's accent is used where
+    it misses readable-text contrast; `borderSubtle` and `accentBorder` are never the sole
+    required control indicator. No normal-size filled-control label misses 4.5:1, and the
+    light/dark token-gallery, Today, Task-detail, Plan-detail and sheet screenshots show the
+    approved palettes without a raw component-level hex value.
 
 ## Out of scope for this phase
 
