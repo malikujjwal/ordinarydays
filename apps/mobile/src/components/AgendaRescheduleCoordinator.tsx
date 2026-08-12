@@ -19,17 +19,11 @@ export function AgendaRescheduleCoordinator({
 }: AgendaRescheduleCoordinatorProps) {
   const detail = useActivityDetail(item.activityId);
 
-  if (detail.status === 'pending') {
-    return (
-      <Sheet open onClose={onClose} title="When?" testID="reschedule-loading">
+  return (
+    <Sheet open onClose={onClose} title="When?" testID="reschedule-sheet">
+      {detail.status === 'pending' ? (
         <Skeleton shape="row" count={3} />
-      </Sheet>
-    );
-  }
-
-  if (detail.status === 'error' || detail.detail === undefined) {
-    return (
-      <Sheet open onClose={onClose} title="When?" testID="reschedule-load-error">
+      ) : detail.status === 'error' || detail.detail === undefined ? (
         <View>
           <EmptyState
             heading={detail.message ?? "Couldn't load this."}
@@ -37,25 +31,24 @@ export function AgendaRescheduleCoordinator({
             action={{ label: 'Try again', onPress: detail.refetch }}
           />
         </View>
-      </Sheet>
-    );
-  }
-
-  return (
-    <RescheduleSheet
-      open
-      onClose={onClose}
-      today={today}
-      activity={detail.detail.activity}
-      {...(item.occurrenceDate === undefined
-        ? {}
-        : { occurrenceDate: item.occurrenceDate })}
-      renderedDate={today}
-      {...(item.time === undefined ? {} : { renderedTime: item.time })}
-      onSchedule={detail.schedule}
-      onPatch={detail.patch}
-      busy={detail.isSaving}
-      {...(detail.editError === undefined ? {} : { error: detail.editError })}
-    />
+      ) : (
+        <RescheduleSheet
+          open
+          embedded
+          onClose={onClose}
+          today={today}
+          activity={detail.detail.activity}
+          {...(item.occurrenceDate === undefined
+            ? {}
+            : { occurrenceDate: item.occurrenceDate })}
+          renderedDate={today}
+          {...(item.time === undefined ? {} : { renderedTime: item.time })}
+          onSchedule={detail.schedule}
+          onPatch={detail.patch}
+          busy={detail.isSaving}
+          {...(detail.editError === undefined ? {} : { error: detail.editError })}
+        />
+      )}
+    </Sheet>
   );
 }

@@ -15,6 +15,8 @@ type SeriesScope = 'occurrence' | 'future';
 export interface RescheduleSheetProps {
   open: boolean;
   onClose: () => void;
+  /** Renders only the editor when a coordinator already owns the stable outer sheet. */
+  embedded?: boolean;
   /** The user's today, in their zone. Injected so chips and detail edits are deterministic. */
   today: WallDate;
   activity: Activity;
@@ -67,6 +69,7 @@ function appendedSegment(
 export function RescheduleSheet({
   open,
   onClose,
+  embedded = false,
   today,
   activity,
   occurrenceDate,
@@ -171,135 +174,148 @@ export function RescheduleSheet({
       />
     );
 
-  return (
+  const editor = (
     <>
-      <Sheet open={open} onClose={onClose} title="When?" testID="reschedule-sheet">
-        {recurring && occurrenceDate !== undefined && effectiveScope === undefined ? (
-          <View style={{ gap: theme.space[3] }} testID="reschedule-scope">
-            <Button
-              label="This occurrence only"
-              variant="secondary"
-              fullWidth
-              onPress={() => setScope('occurrence')}
-              testID="reschedule-this-occurrence"
-            />
-            <Button
-              label="All future occurrences"
-              variant="secondary"
-              fullWidth
-              onPress={() => setScope('future')}
-              testID="reschedule-all-future"
-            />
-          </View>
-        ) : effectiveScope === 'future' ? (
-          <View style={{ gap: theme.space[5] }} testID="reschedule-future-editor">
-            <Text variant="subhead" color="textSecondary">
-              Future dates keep their repeat pattern. Change the time from this point on.
-            </Text>
-            <TimePicker
-              label="Time"
-              value={pickedTime}
-              onChange={setPickedTime}
-              onConfirm={(value) => void commitFuture(value)}
-              openAt={initialTime ?? '09:00'}
-              minuteInterval={5}
-              allowClear={false}
-              testID="reschedule-time-picker"
-            />
-            {seriesLimit ? (
-              <View style={{ gap: theme.space[2] }} testID="reschedule-series-limit">
-                <Text accessibilityRole="alert" color="danger" numberOfLines={0}>
-                  This series already has 20 schedule changes. End this series and start a
-                  new one to keep its history intact.
-                </Text>
-                <Text variant="subhead" color="textSecondary">
-                  Use End series from the activity menu, then create a new series.
-                </Text>
-              </View>
-            ) : error === undefined ? null : (
-              <Text accessibilityRole="alert" color="danger">
-                {error}
+      {recurring && occurrenceDate !== undefined && effectiveScope === undefined ? (
+        <View style={{ gap: theme.space[3] }} testID="reschedule-scope">
+          <Button
+            label="This occurrence only"
+            variant="secondary"
+            fullWidth
+            onPress={() => setScope('occurrence')}
+            testID="reschedule-this-occurrence"
+          />
+          <Button
+            label="All future occurrences"
+            variant="secondary"
+            fullWidth
+            onPress={() => setScope('future')}
+            testID="reschedule-all-future"
+          />
+        </View>
+      ) : effectiveScope === 'future' ? (
+        <View style={{ gap: theme.space[5] }} testID="reschedule-future-editor">
+          <Text variant="subhead" color="textSecondary">
+            Future dates keep their repeat pattern. Change the time from this point on.
+          </Text>
+          <TimePicker
+            label="Time"
+            value={pickedTime}
+            onChange={setPickedTime}
+            onConfirm={(value) => void commitFuture(value)}
+            openAt={initialTime ?? '09:00'}
+            minuteInterval={5}
+            allowClear={false}
+            presentation="inline"
+            testID="reschedule-time-picker"
+          />
+          {seriesLimit ? (
+            <View style={{ gap: theme.space[2] }} testID="reschedule-series-limit">
+              <Text accessibilityRole="alert" color="danger" numberOfLines={0}>
+                This series already has 20 schedule changes. End this series and start a
+                new one to keep its history intact.
               </Text>
-            )}
-          </View>
-        ) : (
-          <View style={{ gap: theme.space[5] }} testID="reschedule-occurrence-editor">
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] }}>
-              {quickDates(today).map((chip) => (
-                <Chip
-                  key={chip.key}
-                  label={chip.label}
-                  onPress={() => choose(chip)}
-                  selected={chip.date !== undefined && chip.date === initialDate}
-                  testID={`quick-date-${chip.key}`}
-                />
-              ))}
+              <Text variant="subhead" color="textSecondary">
+                Use End series from the activity menu, then create a new series.
+              </Text>
             </View>
-
-            {picking ? (
-              <View style={{ gap: theme.space[3] }}>
-                <Field
-                  label="Date"
-                  value={typed}
-                  onChangeText={setTyped}
-                  placeholder="YYYY-MM-DD"
-                  hint="v1 has no calendar grid — type the date."
-                  testID="reschedule-date-input"
-                />
-                <Button
-                  label="Set date"
-                  loading={busy}
-                  onPress={commitTyped}
-                  testID="reschedule-commit"
-                />
-              </View>
-            ) : null}
-
-            <TimePicker
-              label="Time"
-              value={pickedTime}
-              onChange={(value) => {
-                setPickedTime(value);
-                if (value === null) void commitOccurrence(initialDate, null);
-              }}
-              onConfirm={(value) => void commitOccurrence(initialDate, value)}
-              openAt={initialTime ?? '09:00'}
-              minuteInterval={5}
-              allowClear={!recurring}
-              testID="reschedule-time-picker"
-            />
-
-            {clearDateButton}
-            {pickedTime !== null ? null : (
-              <Text variant="footnote" color="textSecondary">
-                Removing a time keeps reminders and moves sub-day reminders to the nearest
-                whole day.
-              </Text>
-            )}
-            {error === undefined ? null : (
-              <Text accessibilityRole="alert" color="danger">
-                {error}
-              </Text>
-            )}
+          ) : error === undefined ? null : (
+            <Text accessibilityRole="alert" color="danger">
+              {error}
+            </Text>
+          )}
+        </View>
+      ) : (
+        <View style={{ gap: theme.space[5] }} testID="reschedule-occurrence-editor">
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] }}>
+            {quickDates(today).map((chip) => (
+              <Chip
+                key={chip.key}
+                label={chip.label}
+                onPress={() => choose(chip)}
+                selected={chip.date !== undefined && chip.date === initialDate}
+                testID={`quick-date-${chip.key}`}
+              />
+            ))}
           </View>
-        )}
-      </Sheet>
 
-      <ConfirmDialog
-        open={clearConfirmation}
-        confirmation={{
-          heading: `Remove the date from “${activity.title}”?`,
-          removesLead:
-            'This takes it off everyone’s day and moves it back to Needs a date.',
-          removes: [],
-          keeps: 'the plan, everyone on it, and their replies.',
-          confirmLabel: 'Remove the date',
-        }}
-        busy={busy}
-        onCancel={() => setClearConfirmation(false)}
-        onConfirm={() => void clearDate()}
-        testID="reschedule-clear-confirmation"
-      />
+          {picking ? (
+            <View style={{ gap: theme.space[3] }}>
+              <Field
+                label="Date"
+                value={typed}
+                onChangeText={setTyped}
+                placeholder="YYYY-MM-DD"
+                hint="v1 has no calendar grid — type the date."
+                testID="reschedule-date-input"
+              />
+              <Button
+                label="Set date"
+                loading={busy}
+                onPress={commitTyped}
+                testID="reschedule-commit"
+              />
+            </View>
+          ) : null}
+
+          <TimePicker
+            label="Time"
+            value={pickedTime}
+            onChange={(value) => {
+              setPickedTime(value);
+              if (value === null) void commitOccurrence(initialDate, null);
+            }}
+            onConfirm={(value) => void commitOccurrence(initialDate, value)}
+            openAt={initialTime ?? '09:00'}
+            minuteInterval={5}
+            allowClear={!recurring}
+            presentation="inline"
+            testID="reschedule-time-picker"
+          />
+
+          {clearDateButton}
+          {pickedTime !== null ? null : (
+            <Text variant="footnote" color="textSecondary">
+              Removing a time keeps reminders and moves sub-day reminders to the nearest
+              whole day.
+            </Text>
+          )}
+          {error === undefined ? null : (
+            <Text accessibilityRole="alert" color="danger">
+              {error}
+            </Text>
+          )}
+        </View>
+      )}
     </>
+  );
+
+  const content = clearConfirmation ? (
+    <ConfirmDialog
+      open
+      embedded
+      confirmation={{
+        heading: `Remove the date from “${activity.title}”?`,
+        removesLead:
+          'This takes it off everyone’s day and moves it back to Needs a date.',
+        removes: [],
+        keeps: 'the plan, everyone on it, and their replies.',
+        confirmLabel: 'Remove the date',
+      }}
+      busy={busy}
+      onCancel={() => setClearConfirmation(false)}
+      onConfirm={() => void clearDate()}
+      testID="reschedule-clear-confirmation"
+    />
+  ) : (
+    editor
+  );
+
+  if (embedded) return content;
+
+  return (
+    <Sheet open={open} onClose={onClose} title="When?" testID="reschedule-sheet">
+      {content}
+    </Sheet>
   );
 }

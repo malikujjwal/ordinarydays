@@ -107,6 +107,16 @@ describe('RescheduleSheet', () => {
     );
   });
 
+  it('keeps the time wheel inside the one reschedule sheet', () => {
+    mount(activity());
+
+    fireEvent.click(screen.getByRole('button', { name: '9:00 AM' }));
+
+    expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDefined();
+    expect(screen.getByLabelText('Time')).toBeDefined();
+  });
+
   it('appends one all-future segment with editedFromDate outside recurrence', async () => {
     const { onPatch, onSchedule } = mount(recurring(), { occurrenceDate: TODAY });
 
@@ -172,6 +182,7 @@ describe('RescheduleSheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear the date' }));
 
     expect(onSchedule).not.toHaveBeenCalled();
+    expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);
     expect(
       screen.getByText(
         'This takes it off everyone’s day and moves it back to Needs a date.',

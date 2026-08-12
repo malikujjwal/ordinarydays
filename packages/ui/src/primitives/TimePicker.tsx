@@ -44,6 +44,8 @@ export interface TimePickerProps {
    * user who agreed with the wheel's opening position had no way to say so.
    */
   openAt?: WallTime;
+  /** Keeps the wheel inside a sheet that is already open, avoiding a nested native modal. */
+  presentation?: 'sheet' | 'inline';
   disabled?: boolean;
   testID?: string;
 }
@@ -57,11 +59,19 @@ export function TimePicker({
   minuteInterval = 5,
   allowClear = true,
   openAt = '09:00',
+  presentation = 'sheet',
   disabled = false,
   testID,
 }: TimePickerProps) {
   const theme = useTheme();
   const [wheelOpen, setWheelOpen] = useState(false);
+
+  const confirm = () => {
+    const committed = value ?? openAt;
+    if (value === null) onChange(committed);
+    onConfirm?.(committed);
+    setWheelOpen(false);
+  };
 
   return (
     <View testID={testID} style={{ gap: theme.space[2] }}>
@@ -97,15 +107,30 @@ export function TimePicker({
         ) : null}
       </View>
 
-      <Sheet open={wheelOpen} onClose={() => setWheelOpen(false)} title={label}>
-        <TimeSurface
-          label={label}
-          value={value}
-          minuteInterval={minuteInterval}
-          fallback={openAt}
-          onChange={onChange}
-        />
-        {/*
+      {presentation === 'inline' ? (
+        wheelOpen ? (
+          <View style={{ gap: theme.space[3] }}>
+            <TimeSurface
+              label={label}
+              value={value}
+              minuteInterval={minuteInterval}
+              fallback={openAt}
+              onChange={onChange}
+            />
+            <Button label="Done" onPress={confirm} />
+            <Button label="Cancel" variant="ghost" onPress={() => setWheelOpen(false)} />
+          </View>
+        ) : null
+      ) : (
+        <Sheet open={wheelOpen} onClose={() => setWheelOpen(false)} title={label}>
+          <TimeSurface
+            label={label}
+            value={value}
+            minuteInterval={minuteInterval}
+            fallback={openAt}
+            onChange={onChange}
+          />
+          {/*
           **`Done` commits what the wheel is showing.**
 
           The wheel renders `value ?? openAt`, so with nothing set it displays a real time the
@@ -117,16 +142,9 @@ export function TimePicker({
           only closes — so the two exits mean different things, which is what makes committing
           here safe: `Done` is the only path that writes.
         */}
-        <Button
-          label="Done"
-          onPress={() => {
-            const committed = value ?? openAt;
-            if (value === null) onChange(committed);
-            onConfirm?.(committed);
-            setWheelOpen(false);
-          }}
-        />
-      </Sheet>
+          <Button label="Done" onPress={confirm} />
+        </Sheet>
+      )}
     </View>
   );
 }

@@ -196,6 +196,23 @@ describe('TimePicker', () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith('19:30');
   });
 
+  it('can keep the wheel inline when its caller already owns a sheet', () => {
+    const onChange = vi.fn();
+    wrap(
+      <TimePicker label="Time" value={null} onChange={onChange} presentation="inline" />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set a time' }));
+
+    expect(screen.getByLabelText('Time')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByLabelText('Time')).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   /**
    * Reported from a device: open the wheel, agree with the time it is already showing, tap
    * `Done`, and no time was set. The wheel renders `value ?? openAt`, and `onChange` fires

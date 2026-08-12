@@ -24,6 +24,8 @@ export interface ConfirmDialogProps {
   confirmation: Confirmation;
   onCancel: () => void;
   onConfirm: () => void;
+  /** Renders the confirmation inside a sheet that is already open. */
+  embedded?: boolean;
   /** True while the write is in flight; the primary button shows its own spinner. */
   busy?: boolean;
   testID?: string;
@@ -34,14 +36,15 @@ export function ConfirmDialog({
   confirmation,
   onCancel,
   onConfirm,
+  embedded = false,
   busy = false,
   testID = 'confirm-dialog',
 }: ConfirmDialogProps) {
   const theme = useTheme();
   const { heading, removesLead, removes, keeps, confirmLabel } = confirmation;
 
-  return (
-    <Sheet open={open} onClose={onCancel} dismissible={false} testID={testID}>
+  const content = (
+    <View testID={embedded ? testID : undefined} style={{ gap: theme.space[5] }}>
       <Text variant="heading" color="textDisplay" accessibilityRole="header">
         {heading}
       </Text>
@@ -90,6 +93,14 @@ export function ConfirmDialog({
           testID="confirm-accept"
         />
       </View>
+    </View>
+  );
+
+  if (embedded) return open ? content : null;
+
+  return (
+    <Sheet open={open} onClose={onCancel} dismissible={false} testID={testID}>
+      {content}
     </Sheet>
   );
 }
