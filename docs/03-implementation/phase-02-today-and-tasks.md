@@ -2532,6 +2532,14 @@ supports it, otherwise an E2E-only Expo test hook grants the equivalent permissi
 is compiled/enabled only for the test profile and is not a product permission prompt. Manual
 verification then advances the simulator clock and observes both timed and all-day delivery.
 
+> **Founder-approved native-verification deferral — 2026-08-12.** P2-34 may merge from the
+> Windows implementation environment after its automated computation, adapter, cadence,
+> permission-no-prompt, web-no-op, Today-isolation and iOS-bundle gates pass. The named
+> simulator setup step and the manual timed/all-day delivery observation remain explicitly
+> **unverified**, not waived. Run them on macOS and record the evidence before the first
+> TestFlight submission. This verification-only follow-up does not move P2-34 defects into
+> P2-37 and does not block P2-35 through P2-40, none of which depends on P2-34.
+
 ---
 
 ### P2-36 — Worked-example-day integration fixture and test

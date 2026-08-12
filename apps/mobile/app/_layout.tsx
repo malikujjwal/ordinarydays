@@ -8,6 +8,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { installLocalReminderScheduler } from '@/features/reminders/localSchedule';
 import { SyncStatusBanner } from '@/features/shell/components/SyncStatusBanner';
 import { ClockProvider } from '@/hooks/useClock';
 import { useSerifFamily } from '@/lib/fonts';
@@ -45,11 +46,13 @@ function HydrationGate({ children }: { children: ReactNode }) {
     let active = true;
     let stopPersistence: (() => void) | undefined;
     let stopOnlineManager: (() => void) | undefined;
+    let stopLocalReminders: (() => void) | undefined;
 
     void restorePersistedClient(queryClient).then(() => {
       if (!active) return;
       stopPersistence = subscribeToPersistence(queryClient);
       stopOnlineManager = installOnlineManager(queryClient);
+      stopLocalReminders = installLocalReminderScheduler();
       setReady(true);
     });
 
@@ -57,6 +60,7 @@ function HydrationGate({ children }: { children: ReactNode }) {
       active = false;
       stopPersistence?.();
       stopOnlineManager?.();
+      stopLocalReminders?.();
     };
   }, []);
 

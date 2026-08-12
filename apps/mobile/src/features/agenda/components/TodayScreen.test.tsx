@@ -122,6 +122,27 @@ afterEach(() => {
 });
 
 describe('TodayScreen', () => {
+  it('cold-renders from one Today agenda request and never requests reminders', async () => {
+    const transport = vi.fn((_url: string) => Promise.resolve(okResponse(response([]))));
+    vi.stubGlobal('fetch', transport);
+
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('today-empty')).toBeDefined());
+    expect(transport).toHaveBeenCalledOnce();
+    expect(String(transport.mock.calls[0]?.[0])).toContain(
+      'include=anytime_unscheduled%2Coverdue',
+    );
+    expect(String(transport.mock.calls[0]?.[0])).not.toContain('reminders');
+  });
+
   it('uses the server UP NEXT row for the initial paint', async () => {
     const serverUpNext = row(1, { title: 'Server snapshot', time: '15:00' });
     stubFetch(
