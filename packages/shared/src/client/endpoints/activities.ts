@@ -26,7 +26,7 @@ import {
 import type { Activity } from '../../types/activity.js';
 import type { ActivityDetail } from '../../types/activityDetail.js';
 import type { Reminder } from '../../types/reminder.js';
-import type { HttpClient } from '../http.js';
+import { ApiError, type HttpClient } from '../http.js';
 
 /**
  * The Activity endpoint functions (`api-contract.md` §2.3).
@@ -190,6 +190,103 @@ export function patchActivity(
     .then((response) => response.data as Activity);
 }
 
+/**
+ * Reconciles only a PATCH that this client previously enqueued.
+ *
+ * A lost success response leaves the persisted `If-Match` stale. On replay, a 409 is success
+ * only when the freshly-read canonical Activity contains every intended value. A genuinely
+ * different value remains a conflict for the sync banner to surface.
+ */
+export async function patchActivityForReplay(
+  client: HttpClient,
+  activityId: string,
+  input: PatchActivityInput,
+  ifMatch: string,
+  signal?: AbortSignal,
+): Promise<Activity> {
+  try {
+    return await patchActivity(client, activityId, input, ifMatch, signal);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 409) throw error;
+
+    const fresh = await getActivity(client, activityId, signal);
+    if (!activityContainsPatch(fresh.activity, input)) throw error;
+    return fresh.activity;
+  }
+}
+
+function activityContainsPatch(activity: Activity, input: PatchActivityInput): boolean {
+  for (const field of Object.keys(input) as Array<keyof PatchActivityInput>) {
+    if (field === 'editedFromDate') {
+      const active = activity.recurrence?.segments.at(-1);
+      if (active?.effectiveFrom !== input.editedFromDate) return false;
+      continue;
+    }
+    if (field === 'recurrence') {
+      if (input.recurrence === null) {
+        if (activity.recurrence !== undefined) return false;
+        continue;
+      }
+      if (input.recurrence === undefined) continue;
+      if (!sameValue(activity.recurrence, canonicalRecurrence(activity, input)))
+        return false;
+      continue;
+    }
+
+    const intended = input[field];
+    const actual = activity[field as keyof Activity];
+    if (intended === null) {
+      if (actual !== undefined) return false;
+    } else if (!sameValue(actual, intended)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function canonicalRecurrence(
+  activity: Activity,
+  input: PatchActivityInput,
+): NonNullable<PatchActivityInput['recurrence']> {
+  const supplied = input.recurrence;
+  if (supplied == null) throw new Error('A recurrence comparison requires recurrence.');
+  const segments = supplied.segments.map((segment, index) => {
+    if (index !== supplied.segments.length - 1) return segment;
+    const effectiveFrom = input.editedFromDate ?? segment.effectiveFrom;
+    const time = segment.time ?? activity.schedule?.time;
+    const endTime = segment.endTime ?? activity.schedule?.endTime;
+    return {
+      ...segment,
+      effectiveFrom,
+      ...(time === undefined ? {} : { time }),
+      ...(endTime === undefined ? {} : { endTime }),
+    };
+  });
+  return { ...supplied, segments };
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null) return false;
+  if (typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length)
+      return false;
+    return left.every((value, index) => sameValue(value, right[index]));
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] && sameValue(leftRecord[key], rightRecord[key]),
+    )
+  );
+}
+
 /** `POST /v1/activities/:id/schedule`, the only schedule write path. */
 export function scheduleActivity(
   client: HttpClient,
@@ -235,6 +332,20 @@ export function deleteActivity(
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
+}
+
+/** A 404 is success only for replay of this client's own already-requested delete. */
+export async function deleteActivityForReplay(
+  client: HttpClient,
+  activityId: string,
+  signal?: AbortSignal,
+): Promise<{ activityId: string }> {
+  try {
+    return await deleteActivity(client, activityId, signal);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { activityId };
+    throw error;
+  }
 }
 
 /**

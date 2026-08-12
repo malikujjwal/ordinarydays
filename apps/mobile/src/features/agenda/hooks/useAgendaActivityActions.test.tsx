@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { useToast } from '@/stores/toast';
 import { useAgendaActivityActions } from './useAgendaActivityActions';
 
@@ -57,6 +58,7 @@ function setup(restoreScrollOffset = vi.fn()) {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: false, networkMode: 'always' } },
   });
+  registerActivityMutationDefaults(client);
   const key = ['agenda', '2026-08-11'];
   const anytimeKey = ['activities', 'saved'];
   client.setQueryData(key, cached);

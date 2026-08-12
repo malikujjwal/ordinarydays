@@ -29,6 +29,9 @@ export const MAX_REMINDERS_PER_USER_PER_ACTIVITY = 3;
 /** Active recurring series per user. Exceeding this is a warning, not an error. */
 export const MAX_ACTIVE_SERIES = 200;
 
+/** Paused iOS writes retained in the process-death mutation queue. */
+export const MAX_OFFLINE_MUTATIONS = 200;
+
 /** How far back `include=overdue` rolls incomplete tasks forward. */
 export const OVERDUE_WINDOW_DAYS = 30;
 

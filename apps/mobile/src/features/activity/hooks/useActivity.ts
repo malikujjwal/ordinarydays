@@ -2,7 +2,7 @@ import {
   ApiError,
   getActivity,
   patchActivity,
-  scheduleActivity,
+  type scheduleActivity,
 } from '@od/shared/client';
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import type { Activity, ActivityDetail } from '@od/shared/types';
@@ -15,6 +15,12 @@ import {
   resolveConflict,
 } from '@/features/activity/model/conflict';
 import { apiClient } from '@/lib/apiClient';
+import {
+  type PatchActivityVariables,
+  patchChangeNames,
+  type ScheduleActivityVariables,
+} from '@/lib/mutationDefaults';
+import { activityMutationKeys } from '@/lib/mutationKeys';
 
 /**
  * The activity detail read and its in-place edits (P1-26).
@@ -79,18 +85,14 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
     retry: false,
   });
 
-  const mutation = useMutation({
-    mutationFn: async (input: PatchActivityInput) => {
+  const mutation = useMutation<Activity, Error, PatchActivityVariables>({
+    mutationKey: activityMutationKeys.patch,
+    mutationFn: async ({ input, ifMatch }) => {
       const current = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
       if (current === undefined) throw new Error('No activity loaded to patch.');
 
       try {
-        return await patchActivity(
-          apiClient,
-          activityId,
-          input,
-          current.activity.updatedAt,
-        );
+        return await patchActivity(apiClient, activityId, input, ifMatch);
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 409) throw error;
 
@@ -131,18 +133,14 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
       );
     },
     onError: (error: unknown) => setEditError(describe(error).message),
-    retry: false,
-    networkMode: 'always',
   });
 
-  const scheduleMutation = useMutation({
-    mutationFn: ({
-      input,
-      idempotencyKey,
-    }: {
-      input: ScheduleActivityInput;
-      idempotencyKey: string;
-    }) => scheduleActivity(apiClient, activityId, input, idempotencyKey),
+  const scheduleMutation = useMutation<
+    Awaited<ReturnType<typeof scheduleActivity>>,
+    Error,
+    ScheduleActivityVariables
+  >({
+    mutationKey: activityMutationKeys.schedule,
     onSuccess: (result) => {
       const activity = result.activity as Activity;
       setEditError(undefined);
@@ -153,8 +151,6 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
       );
     },
     onError: (error: unknown) => setEditError(describe(error).message),
-    retry: false,
-    networkMode: 'always',
   });
 
   const failure = query.error === null ? undefined : describe(query.error);
@@ -165,7 +161,14 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
     isSaving: mutation.isPending || scheduleMutation.isPending,
     patch: async (input) => {
       try {
-        await mutation.mutateAsync(input);
+        const current = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+        if (current === undefined) return false;
+        await mutation.mutateAsync({
+          activityId,
+          input,
+          ifMatch: current.activity.updatedAt,
+          changeNames: patchChangeNames(input),
+        });
         return true;
       } catch {
         // Handled: the message is already on `editError` and rendered inline. Rethrowing
@@ -175,7 +178,11 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
     },
     schedule: async (input) => {
       try {
-        await scheduleMutation.mutateAsync({ input, idempotencyKey: randomUUID() });
+        await scheduleMutation.mutateAsync({
+          activityId,
+          input,
+          idempotencyKey: randomUUID(),
+        });
         return true;
       } catch {
         // The inline error state owns the failure; the enqueue-time key stays in variables.

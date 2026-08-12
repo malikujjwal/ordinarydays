@@ -1,16 +1,16 @@
 import { type ChangeTarget, changeActivityKind } from '@od/shared';
-import {
-  ApiError,
-  completeActivity,
-  deleteActivity,
-  duplicateActivity,
-  uncompleteActivity,
-} from '@od/shared/client';
-import type { PatchActivityInput } from '@od/shared/schemas';
+import { ApiError } from '@od/shared/client';
+import type { ActivityCompletionResult, PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, ActivityDetail, ActivityOutcome } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
-import { apiClient } from '@/lib/apiClient';
+import type {
+  CompleteActivityVariables,
+  DeleteActivityVariables,
+  DuplicateActivityVariables,
+  UncompleteActivityVariables,
+} from '@/lib/mutationDefaults';
+import { activityMutationKeys } from '@/lib/mutationKeys';
 import { startUndoable } from '@/lib/startUndoable';
 import { useToast } from '@/stores/toast';
 import { activityKey } from './useActivity';
@@ -57,47 +57,37 @@ function describe(error: unknown): string {
 export function useActivityActions(activityId: string): ActivityActions {
   const queryClient = useQueryClient();
 
-  const duplicateMutation = useMutation({
+  const duplicateMutation = useMutation<Activity, Error, DuplicateActivityVariables>({
+    mutationKey: activityMutationKeys.duplicate,
     /**
      * A creating `POST`, so it carries an `Idempotency-Key` generated once per attempt
      * (`api-contract.md` §1). Without it the transport refuses to retry at all, and a dropped
      * response on a flaky connection becomes a failed duplicate rather than a recovered one.
      */
-    mutationFn: () => duplicateActivity(apiClient, activityId, randomUUID()),
     onSuccess: () => {
       // The copy is a new row in every list that could show it.
       void queryClient.invalidateQueries({ queryKey: ['activities'] });
     },
-    retry: false,
-    networkMode: 'always',
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: () => deleteActivity(apiClient, activityId),
+  const deleteMutation = useMutation<
+    { activityId: string },
+    Error,
+    DeleteActivityVariables
+  >({
+    mutationKey: activityMutationKeys.delete,
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: ['activity', activityId] });
       void queryClient.invalidateQueries({ queryKey: ['activities'] });
     },
-    retry: false,
-    networkMode: 'always',
   });
 
-  const completeMutation = useMutation({
-    mutationFn: ({
-      outcome,
-      occurrenceDate,
-      idempotencyKey,
-    }: {
-      outcome: ActivityOutcome;
-      occurrenceDate?: string;
-      idempotencyKey: string;
-    }) =>
-      completeActivity(
-        apiClient,
-        activityId,
-        { outcome, ...(occurrenceDate === undefined ? {} : { occurrenceDate }) },
-        idempotencyKey,
-      ),
+  const completeMutation = useMutation<
+    ActivityCompletionResult,
+    Error,
+    CompleteActivityVariables
+  >({
+    mutationKey: activityMutationKeys.complete,
     onSuccess: ({ activity }) => {
       queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) =>
         previous === undefined
@@ -107,24 +97,14 @@ export function useActivityActions(activityId: string): ActivityActions {
       void queryClient.invalidateQueries({ queryKey: ['agenda'] });
       void queryClient.invalidateQueries({ queryKey: ['activities'] });
     },
-    retry: false,
-    networkMode: 'always',
   });
 
-  const uncompleteMutation = useMutation({
-    mutationFn: ({
-      occurrenceDate,
-      idempotencyKey,
-    }: {
-      occurrenceDate?: string;
-      idempotencyKey: string;
-    }) =>
-      uncompleteActivity(
-        apiClient,
-        activityId,
-        occurrenceDate === undefined ? {} : { occurrenceDate },
-        idempotencyKey,
-      ),
+  const uncompleteMutation = useMutation<
+    ActivityCompletionResult,
+    Error,
+    UncompleteActivityVariables
+  >({
+    mutationKey: activityMutationKeys.uncomplete,
     onSuccess: ({ activity }) => {
       queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) =>
         previous === undefined
@@ -134,8 +114,6 @@ export function useActivityActions(activityId: string): ActivityActions {
       void queryClient.invalidateQueries({ queryKey: ['agenda'] });
       void queryClient.invalidateQueries({ queryKey: ['activities'] });
     },
-    retry: false,
-    networkMode: 'always',
   });
 
   const failure =
@@ -147,7 +125,10 @@ export function useActivityActions(activityId: string): ActivityActions {
   return {
     duplicate: async () => {
       try {
-        return await duplicateMutation.mutateAsync();
+        return await duplicateMutation.mutateAsync({
+          activityId,
+          idempotencyKey: randomUUID(),
+        });
       } catch {
         // Handled: the message is on the mutation and rendered as the banner. Rethrowing
         // would surface an unhandled rejection for a failure the UI has absorbed.
@@ -156,7 +137,7 @@ export function useActivityActions(activityId: string): ActivityActions {
     },
     remove: async () => {
       try {
-        await deleteMutation.mutateAsync();
+        await deleteMutation.mutateAsync({ activityId });
         return true;
       } catch {
         return false;
@@ -165,12 +146,13 @@ export function useActivityActions(activityId: string): ActivityActions {
     resolvePassed: (outcome, occurrenceDate, onProjected) => {
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
       const original = {
-        outcome,
-        ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+        activityId,
+        input: { outcome, ...(occurrenceDate === undefined ? {} : { occurrenceDate }) },
         idempotencyKey: randomUUID(),
       };
       const compensation = {
-        ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+        activityId,
+        input: occurrenceDate === undefined ? {} : { occurrenceDate },
         idempotencyKey: randomUUID(),
       };
 

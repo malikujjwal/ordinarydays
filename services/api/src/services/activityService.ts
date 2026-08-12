@@ -1073,6 +1073,8 @@ export async function removeActivity(
   const partition = await getActivityPartition(activityId);
 
   await releaseChildren(childIdsOf(partition), now);
+  // The repository removes partition children and index pointers next, then META last. That
+  // leaves this access seam present until every retryable cleanup step has succeeded.
   await deleteActivityRows(userId, activityId, { partition });
 
   return activityId;

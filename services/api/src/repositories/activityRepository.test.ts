@@ -1,4 +1,5 @@
 import {
+  BatchWriteCommand,
   DynamoDBDocumentClient,
   QueryCommand,
   TransactWriteCommand,
@@ -8,6 +9,7 @@ import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createActivity,
+  deleteActivity,
   listOverdueTaskCandidates,
   localDateTime,
   newActivityId,
@@ -74,6 +76,46 @@ const series = {
 beforeEach(() => {
   ddbMock.reset();
   ddbMock.on(TransactWriteCommand).resolves({});
+  ddbMock.on(BatchWriteCommand).resolves({});
+});
+
+describe('delete ordering', () => {
+  it('removes child/index rows before META so an interrupted delete stays authorisable', async () => {
+    await deleteActivity(ALICE, ACT, {
+      partition: [
+        { pk: `ACT#${ACT}`, sk: 'META', entity: 'Activity', schemaVersion: 1 },
+        {
+          pk: `ACT#${ACT}`,
+          sk: 'SUB#act_child',
+          entity: 'ChildPointer',
+          schemaVersion: 1,
+        },
+        {
+          pk: `ACT#${ACT}`,
+          sk: `REM#${ALICE}#rem_1`,
+          entity: 'Reminder',
+          schemaVersion: 1,
+        },
+      ],
+    });
+
+    const calls = ddbMock.commandCalls(BatchWriteCommand);
+    expect(calls).toHaveLength(2);
+    const firstRequests = Object.values(calls[0]?.args[0]?.input.RequestItems ?? {})[0];
+    const lastRequests = Object.values(calls[1]?.args[0]?.input.RequestItems ?? {})[0];
+    const firstKeys = firstRequests?.map((request) => request.DeleteRequest?.Key);
+    const lastKeys = lastRequests?.map((request) => request.DeleteRequest?.Key);
+
+    expect(firstKeys).toEqual(
+      expect.arrayContaining([
+        { pk: `ACT#${ACT}`, sk: 'SUB#act_child' },
+        { pk: `ACT#${ACT}`, sk: `REM#${ALICE}#rem_1` },
+        { pk: `USER#${ALICE}`, sk: `IDX#${ACT}` },
+      ]),
+    );
+    expect(firstKeys).not.toContainEqual({ pk: `ACT#${ACT}`, sk: 'META' });
+    expect(lastKeys).toEqual([{ pk: `ACT#${ACT}`, sk: 'META' }]);
+  });
 });
 
 const sentItems = () =>

@@ -726,13 +726,19 @@ export async function deleteActivity(
   const indexedUserIds = options.indexedUserIds ?? [];
   const partition = options.partition ?? (await getActivityPartition(activityId));
 
-  const keys = partition.map((item) => storedItemKey.parse(item));
+  const metaKey = activityMeta(activityId);
+  const keys = partition
+    .map((item) => storedItemKey.parse(item))
+    .filter((key) => key.pk !== metaKey.pk || key.sk !== metaKey.sk);
 
   for (const indexedUserId of new Set([userId, ...indexedUserIds])) {
     keys.push(activityIndex(indexedUserId, activityId));
   }
 
+  // META is the authority seam. Everything else goes first so an interrupted delete can
+  // still authenticate a retry and finish cleanup; once META is gone, cleanup is complete.
   await deleteAll(keys);
+  await deleteAll([metaKey]);
 }
 
 export interface ListOptions {

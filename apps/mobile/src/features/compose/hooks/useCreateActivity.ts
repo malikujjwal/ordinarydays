@@ -1,11 +1,12 @@
-import { ApiError, type CreationTarget, createActivity } from '@od/shared/client';
+import { ApiError, type CreationTarget } from '@od/shared/client';
 import type { Activity } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   type DraftFields,
   toCreateActivityInput,
 } from '@/features/compose/model/targets';
-import { apiClient } from '@/lib/apiClient';
+import type { CreateActivityVariables } from '@/lib/mutationDefaults';
+import { activityMutationKeys } from '@/lib/mutationKeys';
 import { ACTIVITIES_KEY } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -13,7 +14,7 @@ import { useComposeDraft } from '@/stores/composeDraft';
  * `POST /v1/activities` from the compose form (P1-24, `activities.md` §2.5).
  *
  * One write per save. The `Idempotency-Key` comes from the draft store's
- * `takeIdempotencyKey`, which generates it at `onMutate` and hands back the *same* key on
+ * `takeIdempotencyKey`, which generates it at the public save boundary and hands back the same key on
  * every retry until the draft changes — the client's transport then retries a 5xx or a
  * network fault under that key, so a save that succeeded on the server but lost its response
  * resolves to one Activity rather than two.
@@ -67,25 +68,8 @@ export function useCreateActivity(): CreateActivityResult {
   const takeIdempotencyKey = useComposeDraft((s) => s.takeIdempotencyKey);
   const queryClient = useQueryClient();
 
-  const mutation = useMutation({
-    mutationFn: ({
-      target,
-      fields,
-      timezone,
-    }: {
-      target: CreationTarget;
-      fields: DraftFields;
-      timezone: string;
-    }) => {
-      const input = toCreateActivityInput(target, fields, timezone);
-      if (input === undefined) {
-        // Unreachable from the UI: a List item never gets a save button on this path in
-        // Phase 1. Thrown rather than silently no-oped so that if Phase 3 wires it wrong,
-        // it fails loudly instead of appearing to save.
-        throw new Error('A List item is not created through POST /v1/activities.');
-      }
-      return createActivity(apiClient, input, takeIdempotencyKey());
-    },
+  const mutation = useMutation<Activity, Error, CreateActivityVariables>({
+    mutationKey: activityMutationKeys.create,
     /**
      * **The write is not finished until the lists know about it.**
      *
@@ -102,14 +86,6 @@ export function useCreateActivity(): CreateActivityResult {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ACTIVITIES_KEY });
     },
-    /**
-     * No retries at this layer. `createHttpClient` already retries a 5xx or a network fault
-     * three times under the one idempotency key; stacking Query's rounds on top multiplies
-     * that to sixteen requests and makes the user wait a minute to be told it failed.
-     */
-    retry: false,
-    /** The form must be reachable while a save is in flight, and must survive a failure. */
-    networkMode: 'always',
   });
 
   const failure = mutation.error === null ? undefined : describe(mutation.error);
@@ -117,7 +93,14 @@ export function useCreateActivity(): CreateActivityResult {
   return {
     save: async (target, fields, timezone) => {
       try {
-        return await mutation.mutateAsync({ target, fields, timezone });
+        const input = toCreateActivityInput(target, fields, timezone);
+        if (input === undefined) {
+          throw new Error('A List item is not created through POST /v1/activities.');
+        }
+        return await mutation.mutateAsync({
+          input,
+          idempotencyKey: takeIdempotencyKey(),
+        });
       } catch {
         // Swallowed on purpose: the error is already on `mutation.error` and is rendered as
         // the banner. Rethrowing here would surface an unhandled rejection for a failure the

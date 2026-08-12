@@ -1,13 +1,18 @@
-import { ThemeProvider } from '@od/ui';
+import { Skeleton, ThemeProvider, useTheme } from '@od/ui';
 import { QueryClientProvider } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import { Stack } from 'expo-router';
 import Head from 'expo-router/head';
 import { StatusBar } from 'expo-status-bar';
+import { type ReactNode, useEffect, useState } from 'react';
+import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SyncStatusBanner } from '@/features/shell/components/SyncStatusBanner';
 import { ClockProvider } from '@/hooks/useClock';
 import { useSerifFamily } from '@/lib/fonts';
+import { installOnlineManager } from '@/lib/onlineManager';
+import { restorePersistedClient, subscribeToPersistence } from '@/lib/persister';
 import { queryClient } from '@/lib/queryClient';
 
 /**
@@ -31,6 +36,53 @@ const APP_NAME =
   typeof Constants.expoConfig?.name === 'string'
     ? Constants.expoConfig.name
     : 'Ordinary Days';
+
+function HydrationGate({ children }: { children: ReactNode }) {
+  const theme = useTheme();
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let stopPersistence: (() => void) | undefined;
+    let stopOnlineManager: (() => void) | undefined;
+
+    void restorePersistedClient(queryClient).then(() => {
+      if (!active) return;
+      stopPersistence = subscribeToPersistence(queryClient);
+      stopOnlineManager = installOnlineManager(queryClient);
+      setReady(true);
+    });
+
+    return () => {
+      active = false;
+      stopPersistence?.();
+      stopOnlineManager?.();
+    };
+  }, []);
+
+  if (!ready) {
+    return (
+      <View
+        testID="cache-hydration-loading"
+        style={{
+          flex: 1,
+          justifyContent: 'center',
+          paddingHorizontal: theme.space[6],
+          backgroundColor: theme.colors.surface,
+        }}
+      >
+        <Skeleton shape="row" count={5} />
+      </View>
+    );
+  }
+
+  return (
+    <>
+      {children}
+      <SyncStatusBanner />
+    </>
+  );
+}
 
 export default function RootLayout() {
   const serifFamily = useSerifFamily();
@@ -57,9 +109,11 @@ export default function RootLayout() {
         <ClockProvider>
           <ThemeProvider {...(serifFamily === undefined ? {} : { serifFamily })}>
             <QueryClientProvider client={queryClient}>
-              {/* Headerless: every screen owns its own chrome (`interaction-contract.md`). */}
-              <Stack screenOptions={{ headerShown: false }} />
-              <StatusBar style="auto" />
+              <HydrationGate>
+                {/* Headerless: every screen owns its own chrome (`interaction-contract.md`). */}
+                <Stack screenOptions={{ headerShown: false }} />
+                <StatusBar style="auto" />
+              </HydrationGate>
             </QueryClientProvider>
           </ThemeProvider>
         </ClockProvider>

@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { useComposeDraft } from '@/stores/composeDraft';
 import { useToast } from '@/stores/toast';
 import { ComposeScreen, type ComposeScreenProps } from './ComposeScreen';
@@ -102,6 +103,7 @@ function mount(
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
+  registerActivityMutationDefaults(queryClient);
   const wrap = (ui: ReactNode) => (
     <SafeAreaProvider>
       <ThemeProvider scheme="light">

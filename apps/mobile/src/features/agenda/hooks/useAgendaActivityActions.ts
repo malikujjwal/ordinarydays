@@ -1,10 +1,3 @@
-import {
-  completeActivity,
-  scheduleActivity,
-  snoozeActivity,
-  uncompleteActivity,
-  unsnoozeActivity,
-} from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
 import type {
   ActivityListItem,
@@ -15,7 +8,14 @@ import type {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback } from 'react';
-import { apiClient } from '@/lib/apiClient';
+import type {
+  CompleteActivityVariables,
+  ScheduleActivityVariables,
+  SnoozeActivityVariables,
+  UncompleteActivityVariables,
+  UnsnoozeActivityVariables,
+} from '@/lib/mutationDefaults';
+import { activityMutationKeys } from '@/lib/mutationKeys';
 import { startUndoable } from '@/lib/startUndoable';
 import { useToast } from '@/stores/toast';
 import { applyCompletion } from '../model/applyCompletion';
@@ -23,13 +23,6 @@ import { applyReschedule } from '../model/applyReschedule';
 import { applySkip } from '../model/applySkip';
 import { applySnooze } from '../model/applySnooze';
 import type { AgendaSwipeAction } from '../model/swipeActions';
-
-interface CompletionVariables {
-  activityId: string;
-  occurrenceDate?: string;
-  outcome?: ActivityOutcome;
-  idempotencyKey: string;
-}
 
 interface ActivityListCache {
   pages: Array<{ data: ActivityListItem[] }>;
@@ -46,70 +39,20 @@ export interface UseAgendaActivityActionsOptions {
 /** Immediate agenda completion with cache/scroll rollback and compensating Undo. */
 export function useAgendaActivityActions(options: UseAgendaActivityActionsOptions) {
   const queryClient = useQueryClient();
-  const complete = useMutation({
-    mutationFn: ({
-      activityId,
-      occurrenceDate,
-      outcome,
-      idempotencyKey,
-    }: CompletionVariables) =>
-      completeActivity(
-        apiClient,
-        activityId,
-        {
-          ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
-          ...(outcome === undefined ? {} : { outcome }),
-        },
-        idempotencyKey,
-      ),
+  const complete = useMutation<unknown, Error, CompleteActivityVariables>({
+    mutationKey: activityMutationKeys.complete,
   });
-  const uncomplete = useMutation({
-    mutationFn: ({ activityId, occurrenceDate, idempotencyKey }: CompletionVariables) =>
-      uncompleteActivity(
-        apiClient,
-        activityId,
-        occurrenceDate === undefined ? {} : { occurrenceDate },
-        idempotencyKey,
-      ),
+  const uncomplete = useMutation<unknown, Error, UncompleteActivityVariables>({
+    mutationKey: activityMutationKeys.uncomplete,
   });
-  const snoozeMutation = useMutation({
-    mutationFn: ({ item, until }: { item: AgendaItem; until: string }) =>
-      snoozeActivity(
-        apiClient,
-        item.activityId,
-        {
-          ...(item.isRecurring && item.occurrenceDate !== undefined
-            ? { occurrenceDate: item.occurrenceDate }
-            : {}),
-          until,
-        },
-        randomUUID(),
-      ),
+  const snoozeMutation = useMutation<unknown, Error, SnoozeActivityVariables>({
+    mutationKey: activityMutationKeys.snooze,
   });
-  const unsnoozeMutation = useMutation({
-    mutationFn: (item: AgendaItem) =>
-      unsnoozeActivity(
-        apiClient,
-        item.activityId,
-        item.isRecurring && item.occurrenceDate !== undefined
-          ? { occurrenceDate: item.occurrenceDate }
-          : {},
-        randomUUID(),
-      ),
+  const unsnoozeMutation = useMutation<unknown, Error, UnsnoozeActivityVariables>({
+    mutationKey: activityMutationKeys.unsnooze,
   });
-  const scheduleMutation = useMutation({
-    mutationFn: ({ item, date }: { item: AgendaItem; date: string }) =>
-      scheduleActivity(
-        apiClient,
-        item.activityId,
-        {
-          date,
-          ...(item.time === undefined ? {} : { time: item.time }),
-          ...(item.endTime === undefined ? {} : { endTime: item.endTime }),
-          timezone: options.timezone,
-        },
-        randomUUID(),
-      ),
+  const scheduleMutation = useMutation<unknown, Error, ScheduleActivityVariables>({
+    mutationKey: activityMutationKeys.schedule,
   });
 
   const toggleComplete = useCallback(
@@ -169,8 +112,16 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         for (const [key, cached] of anytimeSnapshots)
           queryClient.setQueryData(key, cached);
       };
-      const original = { ...target, idempotencyKey: randomUUID() };
-      const compensation = { ...target, idempotencyKey: randomUUID() };
+      const original = {
+        activityId: target.activityId,
+        input: {
+          ...(target.occurrenceDate === undefined
+            ? {}
+            : { occurrenceDate: target.occurrenceDate }),
+        },
+        idempotencyKey: randomUUID(),
+      };
+      const compensation = { ...original, idempotencyKey: randomUUID() };
 
       startUndoable({
         apply: project,
@@ -245,8 +196,24 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       const restore = () => {
         for (const [key, cached] of snapshots) queryClient.setQueryData(key, cached);
       };
-      const original = { ...target, outcome, idempotencyKey: randomUUID() };
-      const compensation = { ...target, idempotencyKey: randomUUID() };
+      const original = {
+        activityId: target.activityId,
+        input: {
+          outcome,
+          ...(target.occurrenceDate === undefined
+            ? {}
+            : { occurrenceDate: target.occurrenceDate }),
+        },
+        idempotencyKey: randomUUID(),
+      };
+      const compensation = {
+        activityId: target.activityId,
+        input:
+          target.occurrenceDate === undefined
+            ? {}
+            : { occurrenceDate: target.occurrenceDate },
+        idempotencyKey: randomUUID(),
+      };
 
       startUndoable({
         apply: () => project(true),
@@ -316,14 +283,32 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       const restoreSnapshot = () => {
         for (const [key, cached] of snapshots) queryClient.setQueryData(key, cached);
       };
+      const original: SnoozeActivityVariables = {
+        activityId: item.activityId,
+        input: {
+          ...(item.isRecurring && item.occurrenceDate !== undefined
+            ? { occurrenceDate: item.occurrenceDate }
+            : {}),
+          until,
+        },
+        idempotencyKey: randomUUID(),
+      };
+      const compensation: UnsnoozeActivityVariables = {
+        activityId: item.activityId,
+        input:
+          item.isRecurring && item.occurrenceDate !== undefined
+            ? { occurrenceDate: item.occurrenceDate }
+            : {},
+        idempotencyKey: randomUUID(),
+      };
 
       startUndoable({
         apply: project,
         revert: undoProjection,
         rollbackFailure: restoreSnapshot,
         restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
-        request: () => snoozeMutation.mutateAsync({ item, until }),
-        compensate: () => unsnoozeMutation.mutateAsync(item),
+        request: () => snoozeMutation.mutateAsync(original),
+        compensate: () => unsnoozeMutation.mutateAsync(compensation),
         toast: {
           showUndo: useToast.getState().showUndo,
           failUndo: useToast.getState().failUndo,
@@ -363,13 +348,25 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       const restore = () => {
         for (const [key, cached] of snapshots) queryClient.setQueryData(key, cached);
       };
+      const scheduleVariables = (date: string): ScheduleActivityVariables => ({
+        activityId: item.activityId,
+        input: {
+          date,
+          time: itemTime,
+          ...(item.endTime === undefined ? {} : { endTime: item.endTime }),
+          timezone: options.timezone,
+        },
+        idempotencyKey: randomUUID(),
+      });
+      const original = scheduleVariables(tomorrow);
+      const compensation = scheduleVariables(options.today);
 
       startUndoable({
         apply: project,
         revert: restore,
         restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
-        request: () => scheduleMutation.mutateAsync({ item, date: tomorrow }),
-        compensate: () => scheduleMutation.mutateAsync({ item, date: options.today }),
+        request: () => scheduleMutation.mutateAsync(original),
+        compensate: () => scheduleMutation.mutateAsync(compensation),
         toast: {
           showUndo: useToast.getState().showUndo,
           failUndo: useToast.getState().failUndo,

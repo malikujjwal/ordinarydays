@@ -8,6 +8,7 @@ import {
   deriveStatus,
   patchActivity,
   projectDetail,
+  removeActivity,
   toSchedule,
 } from './activityService.js';
 
@@ -24,7 +25,9 @@ vi.mock('../repositories/activityRepository.js', () => ({
   newActivityId: vi.fn(() => 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2'),
   newReminderId: vi.fn(() => 'rem_01J8XKQ2M4N5P6R7S8T9V0W1X2'),
   getActivityMeta: vi.fn(),
+  getActivityPartition: vi.fn(),
   listParticipants: vi.fn(() => Promise.resolve([])),
+  deleteActivity: vi.fn(() => Promise.resolve()),
 }));
 
 const repository = await import('../repositories/activityRepository.js');
@@ -47,8 +50,11 @@ beforeEach(() => {
   vi.mocked(repository.createActivity).mockClear();
   vi.mocked(repository.createActivity).mockResolvedValue(undefined);
   vi.mocked(repository.getActivityMeta).mockReset();
+  vi.mocked(repository.getActivityPartition).mockReset();
   vi.mocked(repository.listParticipants).mockReset();
   vi.mocked(repository.listParticipants).mockResolvedValue([]);
+  vi.mocked(repository.deleteActivity).mockReset();
+  vi.mocked(repository.deleteActivity).mockResolvedValue(undefined);
 });
 
 /**
@@ -542,6 +548,85 @@ describe('the nesting cap', () => {
     await expect(
       createActivity(USER, task({ parentActivityId: PLAN }), NOW),
     ).rejects.toMatchObject({ code: 'not_found' });
+  });
+});
+
+describe('removeActivity replay recovery', () => {
+  const meta = {
+    pk: `ACT#${PLAN}`,
+    sk: 'META',
+    entity: 'Activity',
+    activityId: PLAN,
+    ownerId: USER,
+    status: 'saved',
+    objectKind: 'plan',
+    type: 'custom',
+    title: 'Trip',
+    details: { kind: 'custom' },
+    participantCount: 0,
+    childCount: 1,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    schemaVersion: 1,
+  } as StoredItem;
+
+  const child = {
+    activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB',
+    ownerId: USER,
+    status: 'saved',
+    objectKind: 'task',
+    type: 'task',
+    title: 'Pack',
+    details: { kind: 'task' },
+    parentActivityId: PLAN,
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    schemaVersion: 1,
+  } as Activity;
+
+  it('retries after child cleanup while META still authorises, then ends at not_found', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(meta as never)
+      .mockResolvedValueOnce(child)
+      .mockResolvedValueOnce(meta as never)
+      .mockResolvedValueOnce(undefined);
+    vi.mocked(repository.getActivityPartition)
+      .mockResolvedValueOnce([
+        meta,
+        {
+          pk: `ACT#${PLAN}`,
+          sk: `SUB#${child.activityId}`,
+          entity: 'ChildPointer',
+          childActivityId: child.activityId,
+          schemaVersion: 1,
+        },
+      ])
+      .mockResolvedValueOnce([meta]);
+    vi.mocked(repository.deleteActivity)
+      .mockRejectedValueOnce(new Error('interrupted before META delete'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(removeActivity(USER, PLAN, NOW)).rejects.toThrow(
+      'interrupted before META delete',
+    );
+    expect(repository.patchActivity).toHaveBeenCalledTimes(1);
+
+    await expect(removeActivity(USER, PLAN, NOW)).resolves.toBe(PLAN);
+    expect(repository.patchActivity).toHaveBeenCalledTimes(1);
+    expect(repository.deleteActivity).toHaveBeenCalledTimes(2);
+
+    await expect(removeActivity(USER, PLAN, NOW)).rejects.toMatchObject({
+      code: 'not_found',
+    });
+    expect(repository.deleteActivity).toHaveBeenCalledTimes(2);
   });
 });
 

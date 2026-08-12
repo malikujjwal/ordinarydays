@@ -6,10 +6,12 @@ import {
   createActivity,
   createReminder,
   deleteActivity,
+  deleteActivityForReplay,
   deleteReminder,
   duplicateActivity,
   listActivities,
   listReminders,
+  patchActivityForReplay,
   scheduleActivity,
   skipActivity,
   snoozeActivity,
@@ -571,6 +573,100 @@ describe('the remaining activity endpoints', () => {
     expect(gone.activityId).toBe('act_01J0000000000000000000000A');
   });
 
+  it('treats a replayed delete 404 as success without changing ordinary delete semantics', async () => {
+    const missing = {
+      error: {
+        code: 'not_found',
+        message: 'Activity not found.',
+        requestId: REQUEST_ID,
+      },
+    };
+    const replay = makeClient([{ status: 404, body: missing }]);
+    const ordinary = makeClient([{ status: 404, body: missing }]);
+
+    await expect(
+      deleteActivityForReplay(replay.client, 'act_01J0000000000000000000000A'),
+    ).resolves.toEqual({ activityId: 'act_01J0000000000000000000000A' });
+    await expect(
+      deleteActivity(ordinary.client, 'act_01J0000000000000000000000A'),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('accepts a replayed PATCH only when the canonical values already match', async () => {
+    const conflict = {
+      error: {
+        code: 'conflict',
+        message: 'The activity changed.',
+        requestId: REQUEST_ID,
+      },
+    };
+    const canonical = {
+      ...CREATED.data,
+      schedule: { date: '2026-08-01', time: '09:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [
+          { freq: 'daily', effectiveFrom: '2026-08-01', time: '09:00' },
+          { freq: 'daily', effectiveFrom: '2026-08-20', time: '09:00' },
+        ],
+      },
+      updatedAt: '2026-08-12T12:00:00.000Z',
+    };
+    const detail = { data: { activity: canonical, reminders: [] }, meta: CREATED.meta };
+    const { client } = makeClient([
+      { status: 409, body: conflict },
+      { status: 200, body: detail },
+    ]);
+
+    await expect(
+      patchActivityForReplay(
+        client,
+        'act_01J0000000000000000000000A',
+        {
+          recurrence: {
+            mode: 'fixed',
+            segments: [
+              { freq: 'daily', effectiveFrom: '2026-08-01', time: '09:00' },
+              { freq: 'daily', effectiveFrom: '2026-08-15' },
+            ],
+          },
+          editedFromDate: '2026-08-20',
+        },
+        CREATED.data.updatedAt,
+      ),
+    ).resolves.toMatchObject({ recurrence: canonical.recurrence });
+  });
+
+  it('keeps a genuinely divergent replayed PATCH as a conflict', async () => {
+    const conflict = {
+      error: {
+        code: 'conflict',
+        message: 'The activity changed.',
+        requestId: REQUEST_ID,
+      },
+    };
+    const detail = {
+      data: {
+        activity: { ...CREATED.data, title: 'Someone else chose this' },
+        reminders: [],
+      },
+      meta: CREATED.meta,
+    };
+    const { client } = makeClient([
+      { status: 409, body: conflict },
+      { status: 200, body: detail },
+    ]);
+
+    await expect(
+      patchActivityForReplay(
+        client,
+        'act_01J0000000000000000000000A',
+        { title: 'Dentist' },
+        CREATED.data.updatedAt,
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
   it('duplicates with an idempotency key and no body', async () => {
     const { client, calls } = makeClient([{ status: 201, body: CREATED }]);
 
@@ -636,6 +732,117 @@ describe('the remaining activity endpoints', () => {
       );
       expect(calls[0]?.headers['Idempotency-Key']).toBe(key);
       expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual(expectedInput);
+    },
+  );
+
+  const replayPostCases: Array<
+    readonly [
+      string,
+      unknown,
+      (client: ReturnType<typeof makeClient>['client'], key: string) => Promise<unknown>,
+    ]
+  > = [
+    [
+      'create',
+      CREATED,
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        createActivity(
+          client,
+          { objectKind: 'task', type: 'task', title: 'Call the dentist' },
+          key,
+        ),
+    ],
+    [
+      'duplicate',
+      CREATED,
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        duplicateActivity(client, 'act_01J0000000000000000000000A', key),
+    ],
+    [
+      'schedule',
+      { data: { activity: CREATED.data }, meta: CREATED.meta },
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        scheduleActivity(
+          client,
+          'act_01J0000000000000000000000A',
+          { date: '2026-08-12', timezone: 'UTC' },
+          key,
+        ),
+    ],
+    [
+      'complete',
+      { data: { activity: CREATED.data }, meta: CREATED.meta },
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        completeActivity(client, 'act_01J0000000000000000000000A', {}, key),
+    ],
+    [
+      'uncomplete',
+      { data: { activity: CREATED.data }, meta: CREATED.meta },
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        uncompleteActivity(client, 'act_01J0000000000000000000000A', {}, key),
+    ],
+    [
+      'skip',
+      { data: { activity: CREATED.data }, meta: CREATED.meta },
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        skipActivity(client, 'act_01J0000000000000000000000A', {}, key),
+    ],
+    [
+      'snooze',
+      { data: { activity: CREATED.data }, meta: CREATED.meta },
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        snoozeActivity(client, 'act_01J0000000000000000000000A', { until: '20:00' }, key),
+    ],
+    [
+      'unsnooze',
+      { data: { activity: CREATED.data }, meta: CREATED.meta },
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        unsnoozeActivity(client, 'act_01J0000000000000000000000A', {}, key),
+    ],
+    [
+      'reminder-create',
+      {
+        data: {
+          reminderId: 'rem_01J0000000000000000000000A',
+          activityId: 'act_01J0000000000000000000000A',
+          userId: 'usr_01J0000000000000000000000B',
+          offsetMinutes: -15,
+          channel: 'push',
+          createdAt: '2026-08-08T10:00:00.000Z',
+          updatedAt: '2026-08-08T10:00:00.000Z',
+          schemaVersion: 1,
+        },
+        meta: CREATED.meta,
+      },
+      (client: ReturnType<typeof makeClient>['client'], key: string) =>
+        createReminder(
+          client,
+          'act_01J0000000000000000000000A',
+          { offsetMinutes: -15 },
+          key,
+        ),
+    ],
+  ];
+
+  it.each(replayPostCases)(
+    'reuses the exact %s Idempotency-Key across a transport retry and resumed replay',
+    async (_name, response, invoke) => {
+      const key = '00000000-0000-4000-8000-000000000001';
+      const { client, calls } = makeClient([
+        { status: 503 },
+        { status: 200, body: response },
+        { status: 200, body: response },
+      ]);
+
+      await invoke(client, key);
+      await invoke(client, key);
+
+      expect(calls).toHaveLength(3);
+      expect(calls.map((call) => call.headers['Idempotency-Key'])).toEqual([
+        key,
+        key,
+        key,
+      ]);
     },
   );
 

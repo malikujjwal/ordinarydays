@@ -47,6 +47,21 @@ export default defineConfig({
         find: /^react-native-safe-area-context$/,
         replacement: fileURLToPath(new URL('./test/safe-area-stub.tsx', import.meta.url)),
       },
+      /**
+       * AsyncStorage's React Native entry reaches Flow-only source that Node cannot parse.
+       * Tests exercise the persister contract through a deterministic in-memory driver.
+       */
+      {
+        find: /^@react-native-async-storage\/async-storage$/,
+        replacement: fileURLToPath(
+          new URL('./test/async-storage-stub.ts', import.meta.url),
+        ),
+      },
+      /** NetInfo has the same Flow-source boundary; this stub keeps connectivity injectable. */
+      {
+        find: /^@react-native-community\/netinfo$/,
+        replacement: fileURLToPath(new URL('./test/netinfo-stub.ts', import.meta.url)),
+      },
       {
         find: /^@\//,
         replacement: fileURLToPath(new URL('./src/', import.meta.url)),
