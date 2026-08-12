@@ -29,9 +29,10 @@ export interface TabScreenProps {
   title: string;
   children: ReactNode;
   testID: string;
+  headerAction?: ReactNode;
 }
 
-export function TabScreen({ title, children, testID }: TabScreenProps) {
+export function TabScreen({ title, children, testID, headerAction }: TabScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const compact = useBreakpoint() === 'compact';
@@ -50,9 +51,20 @@ export function TabScreen({ title, children, testID }: TabScreenProps) {
           paddingBottom: theme.space[3],
         }}
       >
-        <Text variant="display" color="textDisplay" accessibilityRole="header">
-          {title}
-        </Text>
+        <View
+          style={{
+            minHeight: theme.layout.hitTarget,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: theme.space[4],
+          }}
+        >
+          <Text variant="display" color="textDisplay" accessibilityRole="header">
+            {title}
+          </Text>
+          {headerAction}
+        </View>
       </View>
 
       <View

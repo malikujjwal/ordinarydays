@@ -12,11 +12,7 @@ export interface TodaySections {
 
 const COMPLETED = new Set<AgendaItem['status']>(['completed', 'completed_occurrence']);
 
-const HIDDEN = new Set<AgendaItem['status']>([
-  'cancelled',
-  'skipped',
-  'skipped_occurrence',
-]);
+const SKIPPED = new Set<AgendaItem['status']>(['skipped', 'skipped_occurrence']);
 
 const compareIdentity = (left: AgendaItem, right: AgendaItem): number =>
   left.activityId.localeCompare(right.activityId) ||
@@ -73,15 +69,20 @@ const compareEarlier = (
 export function partitionAgenda(
   items: readonly AgendaItem[],
   currentMinute: string,
+  showSkipped = false,
 ): TodaySections {
   const visible = items
     .map((item, sourceIndex) => ({ item, sourceIndex }))
-    .filter(({ item }) => !HIDDEN.has(item.status));
+    .filter(
+      ({ item }) =>
+        item.status !== 'cancelled' && (showSkipped || !SKIPPED.has(item.status)),
+    );
 
   const schedule = visible
     .filter(
       ({ item }) =>
         !COMPLETED.has(item.status) &&
+        !SKIPPED.has(item.status) &&
         item.time !== undefined &&
         (item.endTime ?? item.time) >= currentMinute,
     )
@@ -89,7 +90,12 @@ export function partitionAgenda(
     .sort(compareSchedule);
 
   const anytime = visible
-    .filter(({ item }) => !COMPLETED.has(item.status) && item.time === undefined)
+    .filter(
+      ({ item }) =>
+        !COMPLETED.has(item.status) &&
+        !SKIPPED.has(item.status) &&
+        item.time === undefined,
+    )
     .map(({ item }) => item)
     .sort(compareAnytime);
 
@@ -97,6 +103,7 @@ export function partitionAgenda(
     .filter(
       ({ item }) =>
         COMPLETED.has(item.status) ||
+        SKIPPED.has(item.status) ||
         (item.time !== undefined && (item.endTime ?? item.time) < currentMinute),
     )
     .sort(compareEarlier)
