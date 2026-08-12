@@ -1,7 +1,7 @@
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
 import { Hono } from 'hono';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.STAGE = 'local';
 process.env.AUTH_MODE = 'local';
@@ -19,6 +19,9 @@ const KEY = '6f9619ff-8b86-d011-b42d-00c04fc964ff';
 const USER = 'usr_local_dev';
 const NOW = Date.UTC(2026, 7, 9, 12, 0, 0);
 
+let createIdempotency: typeof import('./idempotency.js')['createIdempotency'];
+let errorHandler: typeof import('./errorHandler.js')['errorHandler'];
+
 const REGISTRY: readonly RouteEntry[] = [
   { method: 'POST', pattern: '/v1/things', auth: 'authenticated', mutates: true },
   {
@@ -29,7 +32,7 @@ const REGISTRY: readonly RouteEntry[] = [
   },
 ];
 
-async function buildApp(options: {
+function buildApp(options: {
   handler?: () => Response;
   replayReads?: number;
   drainCleanup?: (ref: {
@@ -38,8 +41,6 @@ async function buildApp(options: {
     idempotencyKey: string;
   }) => Promise<void>;
 }) {
-  const { createIdempotency } = await import('./idempotency.js');
-  const { errorHandler } = await import('./errorHandler.js');
   const app = new Hono<AppEnv>();
   app.onError(errorHandler);
   app.use('*', async (c, next) => {
@@ -81,6 +82,15 @@ const post = (app: Hono<AppEnv>, path: string, key?: string) =>
     }),
   );
 
+beforeAll(async () => {
+  const [idempotencyModule, errorModule] = await Promise.all([
+    import('./idempotency.js'),
+    import('./errorHandler.js'),
+  ]);
+  createIdempotency = idempotencyModule.createIdempotency;
+  errorHandler = errorModule.errorHandler;
+});
+
 beforeEach(() => {
   ddbMock.reset();
   ddbMock.on(GetCommand).resolves({});
@@ -88,13 +98,13 @@ beforeEach(() => {
 
 describe('mutating POST classification', () => {
   it('requires a UUID key on a mutating POST', async () => {
-    const res = await post(await buildApp({}), '/v1/things');
+    const res = await post(buildApp({}), '/v1/things');
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe('validation_failed');
   });
 
   it('explicitly permits a read-only POST stub without a key', async () => {
-    expect((await post(await buildApp({}), '/v1/capture/parse')).status).toBe(200);
+    expect((await post(buildApp({}), '/v1/capture/parse')).status).toBe(200);
   });
 });
 
@@ -104,7 +114,7 @@ describe('replay', () => {
     ddbMock.on(GetCommand).resolves({ Item: { body: stored, status: 201 } });
     const handler = vi.fn(() => new Response('fresh', { status: 201 }));
 
-    const res = await post(await buildApp({ handler }), '/v1/things', KEY);
+    const res = await post(buildApp({ handler }), '/v1/things', KEY);
 
     expect(res.status).toBe(201);
     expect(await res.text()).toBe(stored);
@@ -119,7 +129,7 @@ describe('replay', () => {
       .resolves({ Item: { body: '{"data":1}', status: 201, cleanupRef: ref } });
     const drainCleanup = vi.fn(async () => {});
 
-    const res = await post(await buildApp({ drainCleanup }), '/v1/things', KEY);
+    const res = await post(buildApp({ drainCleanup }), '/v1/things', KEY);
 
     expect(res.status).toBe(201);
     expect(drainCleanup).toHaveBeenCalledWith(ref);
@@ -131,7 +141,7 @@ describe('replay', () => {
       .on(GetCommand)
       .resolves({ Item: { body: '{"data":1}', status: 201, cleanupRef: ref } });
     const res = await post(
-      await buildApp({
+      buildApp({
         drainCleanup: async () => {
           throw new Error('transient');
         },
@@ -150,7 +160,7 @@ describe('concurrent first attempts', () => {
       .resolvesOnce({})
       .resolvesOnce({})
       .resolves({ Item: { body: '{"data":{"id":"winner"}}', status: 201 } });
-    const app = await buildApp({
+    const app = buildApp({
       handler: () => {
         throw new IdempotencyRaceError();
       },
@@ -172,7 +182,7 @@ describe('concurrent first attempts', () => {
   });
 
   it('returns 503 rather than inventing an in-flight record when no winner appears', async () => {
-    const app = await buildApp({
+    const app = buildApp({
       handler: () => {
         throw new IdempotencyRaceError();
       },

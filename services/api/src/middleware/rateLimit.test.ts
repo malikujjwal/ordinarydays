@@ -1,7 +1,7 @@
 import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
 import { Hono } from 'hono';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 process.env.STAGE = 'local';
 process.env.AUTH_MODE = 'local';
@@ -14,6 +14,8 @@ import type { AppEnv } from '../app-env.js';
 import type { RouteAuth } from './routeRegistry.js';
 
 const ddbMock = mockClient(DynamoDBDocumentClient);
+let rateLimitModule: typeof import('./rateLimit.js');
+let errorHandler: typeof import('./errorHandler.js')['errorHandler'];
 
 /** 2026-08-09T00:00:30Z. Thirty seconds into the window, so `Retry-After` is 30. */
 const MID_WINDOW = Date.UTC(2026, 7, 9, 0, 0, 30);
@@ -37,9 +39,6 @@ async function appWith(options: {
   path?: string;
   userId?: string | undefined;
 }) {
-  const { createRateLimit } = await import('./rateLimit.js');
-  const { errorHandler } = await import('./errorHandler.js');
-
   const path = options.path ?? '/probe';
   const app = new Hono<AppEnv>();
   app.onError(errorHandler);
@@ -49,7 +48,7 @@ async function appWith(options: {
     if (options.userId !== undefined) c.set('userId', options.userId);
     await next();
   });
-  app.use('*', createRateLimit({ now: () => MID_WINDOW }));
+  app.use('*', rateLimitModule.createRateLimit({ now: () => MID_WINDOW }));
 
   if ((options.method ?? 'GET') === 'POST') {
     app.post(path, (c) => c.json({ data: 'ok' }));
@@ -65,9 +64,17 @@ async function appWith(options: {
   };
 }
 
+beforeAll(async () => {
+  const [loadedRateLimitModule, errorModule] = await Promise.all([
+    import('./rateLimit.js'),
+    import('./errorHandler.js'),
+  ]);
+  rateLimitModule = loadedRateLimitModule;
+  errorHandler = errorModule.errorHandler;
+});
+
 beforeEach(() => {
   ddbMock.reset();
-  vi.resetModules();
 });
 
 describe('what is limited', () => {
@@ -158,8 +165,6 @@ describe('over the limit', () => {
 
   it('does not run the handler', async () => {
     ddbMock.on(UpdateCommand).rejects(conditionalFailure());
-    const { createRateLimit } = await import('./rateLimit.js');
-    const { errorHandler } = await import('./errorHandler.js');
     const handler = vi.fn();
 
     const app = new Hono<AppEnv>();
@@ -170,7 +175,7 @@ describe('over the limit', () => {
       c.set('userId', 'usr_local_dev');
       await next();
     });
-    app.use('*', createRateLimit({ now: () => MID_WINDOW }));
+    app.use('*', rateLimitModule.createRateLimit({ now: () => MID_WINDOW }));
     app.get('/probe', (c) => {
       handler();
       return c.json({ data: 'ok' });
@@ -195,10 +200,8 @@ describe('when DynamoDB is unavailable', () => {
 });
 
 describe('the rules', () => {
-  it('gives an authenticated route the general 120/min allowance', async () => {
-    const { ruleFor } = await import('./rateLimit.js');
-
-    expect(ruleFor('authenticated', 'GET', '/v1/activities')).toEqual({
+  it('gives an authenticated route the general 120/min allowance', () => {
+    expect(rateLimitModule.ruleFor('authenticated', 'GET', '/v1/activities')).toEqual({
       scope: 'general',
       limit: 120,
       windowSeconds: 60,
@@ -211,43 +214,41 @@ describe('the rules', () => {
    * inheriting 120/min would be 120 model calls a minute against the spend the row exists to
    * protect, and nothing about that looks wrong in a log.
    */
-  it('gives POST /v1/capture/* the tighter 20/hour, protecting the model spend', async () => {
-    const { ruleFor } = await import('./rateLimit.js');
-
-    expect(ruleFor('authenticated', 'POST', '/v1/capture/parse')).toEqual({
-      scope: 'capture',
-      limit: 20,
-      windowSeconds: 3600,
-    });
+  it('gives POST /v1/capture/* the tighter 20/hour, protecting the model spend', () => {
+    expect(rateLimitModule.ruleFor('authenticated', 'POST', '/v1/capture/parse')).toEqual(
+      {
+        scope: 'capture',
+        limit: 20,
+        windowSeconds: 3600,
+      },
+    );
   });
 
-  it('gives POST /v1/attachments/upload-url 60/hour', async () => {
-    const { ruleFor } = await import('./rateLimit.js');
-
-    expect(ruleFor('authenticated', 'POST', '/v1/attachments/upload-url')).toEqual({
+  it('gives POST /v1/attachments/upload-url 60/hour', () => {
+    expect(
+      rateLimitModule.ruleFor('authenticated', 'POST', '/v1/attachments/upload-url'),
+    ).toEqual({
       scope: 'upload-url',
       limit: 60,
       windowSeconds: 3600,
     });
   });
 
-  it('matches an override on the method too, so a GET falls back to the general rule', async () => {
-    const { ruleFor } = await import('./rateLimit.js');
-
-    expect(ruleFor('authenticated', 'GET', '/v1/capture/parse')?.scope).toBe('general');
+  it('matches an override on the method too, so a GET falls back to the general rule', () => {
+    expect(
+      rateLimitModule.ruleFor('authenticated', 'GET', '/v1/capture/parse')?.scope,
+    ).toBe('general');
   });
 
   it.each<RouteAuth>(['public', 'unauthenticated-private'])(
     'has no rule for a %s route',
-    async (auth) => {
-      const { ruleFor } = await import('./rateLimit.js');
-      expect(ruleFor(auth, 'GET', '/probe')).toBeUndefined();
+    (auth) => {
+      expect(rateLimitModule.ruleFor(auth, 'GET', '/probe')).toBeUndefined();
     },
   );
 
   /** Distinct scopes are what stop an hourly counter sharing a partition with a per-minute one. */
-  it('gives every rule its own scope', async () => {
-    const { SCOPES } = await import('./rateLimit.js');
-    expect(new Set(SCOPES).size).toBe(SCOPES.length);
+  it('gives every rule its own scope', () => {
+    expect(new Set(rateLimitModule.SCOPES).size).toBe(rateLimitModule.SCOPES.length);
   });
 });
