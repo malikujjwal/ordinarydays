@@ -1,6 +1,7 @@
 import type { ActivityType, AgendaItem } from '@od/shared/types';
 import { Chip, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
-import { View } from 'react-native';
+import type { AccessibilityActionEvent } from 'react-native';
+import { Platform, View } from 'react-native';
 import { RowBadges } from './RowBadges';
 import { RowLeading } from './RowLeading';
 
@@ -11,6 +12,10 @@ export interface AgendaRowProps {
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onOpenReschedule?: (item: AgendaItem) => void;
   onOpenOverdue?: (item: AgendaItem) => void;
+  accessibilityActions?: { name: string; label: string }[];
+  onAccessibilityAction?: (event: AccessibilityActionEvent) => void;
+  onBodyFocus?: () => void;
+  onBodyBlur?: () => void;
 }
 
 const COMPLETED_STATUSES = new Set<AgendaItem['status']>([
@@ -59,6 +64,10 @@ export function AgendaRow({
   onToggleComplete,
   onOpenReschedule,
   onOpenOverdue,
+  accessibilityActions,
+  onAccessibilityAction,
+  onBodyFocus,
+  onBodyBlur,
 }: AgendaRowProps) {
   const theme = useTheme();
   const checked = COMPLETED_STATUSES.has(item.status);
@@ -101,6 +110,10 @@ export function AgendaRow({
         <Touchable
           accessibilityRole="button"
           accessibilityLabel={bodyLabel(item, checked)}
+          {...(accessibilityActions === undefined ? {} : { accessibilityActions })}
+          {...(onAccessibilityAction === undefined ? {} : { onAccessibilityAction })}
+          {...(onBodyFocus === undefined ? {} : { onFocus: onBodyFocus })}
+          {...(onBodyBlur === undefined ? {} : { onBlur: onBodyBlur })}
           onPress={() => onOpen(item)}
           testID="agenda-row-body"
           style={{ alignItems: 'flex-start' }}
@@ -172,7 +185,14 @@ export function AgendaRow({
 
 function ChipPrompt({ title }: { title: string }) {
   return (
-    <View accessible accessibilityLabel={`How did it go? Choose an outcome for ${title}`}>
+    <View
+      {...(Platform.OS === 'web'
+        ? {}
+        : {
+            accessible: true,
+            accessibilityLabel: `How did it go? Choose an outcome for ${title}`,
+          })}
+    >
       <View
         aria-hidden
         accessibilityElementsHidden

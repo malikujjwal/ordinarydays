@@ -12,6 +12,7 @@ import { TabScreen } from '@/components/TabScreen';
 import { useAgenda } from '@/features/agenda/hooks/useAgenda';
 import { useMinuteTicker } from '@/features/agenda/hooks/useMinuteTicker';
 import { agendaItemsForDay, partitionAgenda } from '@/features/agenda/model/partition';
+import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { selectUpNext, toUpNextSelection } from '@/features/agenda/model/upNext';
 import { AgendaSection } from './AgendaSection';
 import { UpNextCard } from './UpNextCard';
@@ -20,6 +21,7 @@ export interface TodayScreenProps {
   onOpenAnytime: () => void;
   onOpenAgendaItem: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
+  onAgendaAction?: (item: AgendaItem, action: AgendaSwipeAction) => void;
 }
 
 function cappedAnytime(items: readonly AgendaItem[]): {
@@ -47,6 +49,7 @@ export function TodayScreen({
   onOpenAnytime,
   onOpenAgendaItem,
   onToggleComplete,
+  onAgendaAction,
 }: TodayScreenProps) {
   const theme = useTheme();
   const tick = useMinuteTicker();
@@ -108,6 +111,7 @@ export function TodayScreen({
             selection={upNext}
             onOpen={onOpenAgendaItem}
             {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
+            {...(onAgendaAction === undefined ? {} : { onAction: onAgendaAction })}
           />
         )}
         {sections.schedule.length === 0 ? null : (
@@ -118,6 +122,7 @@ export function TodayScreen({
             showTime
             onOpen={onOpenAgendaItem}
             {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
+            {...(onAgendaAction === undefined ? {} : { onAction: onAgendaAction })}
           />
         )}
         {anytime.items.length === 0 ? null : (
@@ -127,6 +132,7 @@ export function TodayScreen({
             testID="today-anytime"
             onOpen={onOpenAgendaItem}
             {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
+            {...(onAgendaAction === undefined ? {} : { onAction: onAgendaAction })}
             footer={
               anytime.savedCount > TODAY_ANYTIME_SAVED_LIMIT ? (
                 <Button
@@ -148,6 +154,7 @@ export function TodayScreen({
             showTime
             onOpen={onOpenAgendaItem}
             {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
+            {...(onAgendaAction === undefined ? {} : { onAction: onAgendaAction })}
             footer={
               !showAllEarlier &&
               sections.earlier.length > TODAY_EARLIER_COLLAPSED_LIMIT ? (

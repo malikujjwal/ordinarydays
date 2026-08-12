@@ -109,6 +109,19 @@ describe('AgendaRow affordances', () => {
     expect(screen.getByText('Season 2, episode 4')).toBeDefined();
   });
 
+  it('uses visible prompt text on web without invalid roleless ARIA', () => {
+    mount(
+      <AgendaRow
+        item={item('event', { isPast: true, hasCheckbox: false })}
+        onOpen={() => {}}
+      />,
+    );
+
+    const prompt = screen.getByText('How did it go?');
+    expect(prompt).toBeDefined();
+    expect(prompt.closest('[aria-label]')).toBeNull();
+  });
+
   it.each([
     ['task', 'Complete'],
     ['meal', 'Had it'],
