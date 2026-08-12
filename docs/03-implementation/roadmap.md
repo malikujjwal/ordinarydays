@@ -79,8 +79,10 @@ a six-second undo, passed-plan prompts, a persisted offline mutation queue, and 
 reminders scheduled on device. It closes on the founder-approved palettes and the screen
 restructure they were drawn for: the detail screen's header grammar and its long-deferred
 completion button, the reschedule and snooze sheets, and a creation flow that shows what the
-user's choices have made relevant rather than a form of disabled fields. This is the phase
-where the product becomes usable daily — still entirely on the laptop. **43 tasks.**
+user's choices have made relevant rather than a form of disabled fields, the day header and
+timeline furniture the design system specified but no task had claimed, and a read-only
+look-ahead at tomorrow. This is the phase where the product becomes usable daily — still
+entirely on the laptop. **45 tasks.**
 
 ### 1.4 Phase 3 — Plans and lists
 
@@ -242,7 +244,7 @@ and can be started against the contract alone.
 graph TD
     P0["Phase 0 · Foundations<br/>local · 31 tasks · 63 AWU"]
     P1["Phase 1 · Activity core<br/>local · 30 tasks · 72 AWU"]
-    P2["Phase 2 · Today and tasks<br/>local · 43 tasks · 109 AWU"]
+    P2["Phase 2 · Today and tasks<br/>local · 45 tasks · 113 AWU"]
     P3["Phase 3 · Plans and lists<br/>local · 43 tasks · 110 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
     P5["Phase 5 · Ship v1<br/>TestFlight · 37 tasks · 82 AWU"]
@@ -399,17 +401,17 @@ sizings did not support; those are corrected here.
 | --- | --- | --- | --- | --- |
 | 0 — Foundations | 31 | 9 / 17 / 5 | **63** | ~3 weeks |
 | 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
-| 2 — Today and tasks | 43 (40 plus P2-41, P2-42 and P2-43 — all 2026-08-12) | 5 / 24 / 14 | **109** | ~5.45 weeks |
+| 2 — Today and tasks | 45 (40 plus P2-41…P2-45 — all 2026-08-12) | 5 / 26 / 14 | **113** | ~5.65 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **147** | **22 / 84 / 41** | **354** | **~17.7 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **149** | **22 / 86 / 41** | **358** | **~17.9 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **217** | **34 / 129 / 54** | **508** | **~25.4 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **219** | **34 / 131 / 54** | **512** | **~25.6 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9** | **366** | **47 / 220 / 99** | **883** | **~44.2 weeks (~10 months)** |
+| **Total 0–9** | **368** | **47 / 222 / 99** | **887** | **~44.4 weeks (~10 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -421,7 +423,7 @@ P1-01…P1-18 and P1-20…P1-31.
 
 The previous roadmap's total was ~683 AWU and ~34 weeks. The first recomputation on
 2026-08-07 produced **859 AWU and ~43 weeks**; the dated gate corrections below bring the
-current plan to 883 AWU. The difference is not drift but explicit, auditable corrections.
+current plan to 887 AWU. The difference is not drift but explicit, auditable corrections.
 
 | Change | AWU |
 | --- | --- |
@@ -493,8 +495,18 @@ builds the completion button that Phase 1 deferred to Phase 2 and that no Phase 
 claimed. All three depend on P2-40 so they are built in the approved palette rather than
 against it. That is **+3 tasks and +6 AWU**, giving **366 tasks and 883 AWU**.
 
-Use **883 AWU and ~44.2 weeks** (883 / 20 = 44.15) as the plan of record. Everything
-through Phase 5 is now 508 AWU and ~25.4 weeks; the
+A read of the founder's `Planner` prototype against the built Today screen on **2026-08-12**
+adds two more. **P2-44** owns the day header and timeline furniture that `design-system.md`
+§7.1 fully specifies and that no task had ever claimed — the date caption, the day count, the
+one sanctioned progress bar, the NOW divider, the marker connector and the UP NEXT text
+actions. It is catch-up against an existing specification, not new scope. **P2-45** is new
+scope: the founder ruled the prototype's read-only Tomorrow look-ahead is wanted, and it
+appears in no canonical document, so the task carries the `today-and-tasks.md` §2 amendment
+that makes it canonical. Both are M. That is **+2 tasks and +4 AWU**, giving **368 tasks and
+887 AWU**.
+
+Use **887 AWU and ~44.4 weeks** (887 / 20 = 44.35) as the plan of record. Everything
+through Phase 5 is now 512 AWU and ~25.6 weeks; the
 remaining ~18.8 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
 participant can act on.
@@ -633,7 +645,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-147 tasks, 354 AWU, ~17.7 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+149 tasks, 358 AWU, ~17.9 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -645,7 +657,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-217 tasks, 508 AWU, ~25.4 weeks. External testers who are not the founder are using it on
+219 tasks, 512 AWU, ~25.6 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -657,7 +669,7 @@ after the first TestFlight build, migrations are mandatory in both environments.
 
 ### 6.3 End of Phase 7 — the full multi-player product, before any AI spend
 
-300 tasks, 709 AWU, ~35.45 weeks. Sharing, guests, invites, shared lists, date suggestions,
+302 tasks, 713 AWU, ~35.65 weeks. Sharing, guests, invites, shared lists, date suggestions,
 expenses, balances and settlement all work. Every marginal cost in the system is still a fraction of a cent per
 request, and every AWS line item is either free-tier or the domain.
 
@@ -738,7 +750,7 @@ isolation, and it only holds if the isolation is real.
 **Phases 0 through 3, surfacing in Phase 4. New with the local-first ordering, and the price
 paid for it.**
 
-Nothing runs on AWS for 147 tasks. Every divergence between DynamoDB Local and DynamoDB,
+Nothing runs on AWS for 149 tasks. Every divergence between DynamoDB Local and DynamoDB,
 between the Hono Node adapter and an API Gateway v2 payload, and between a warm laptop
 process and a cold Lambda accumulates silently and is discovered in one phase — tangled up
 with a Cognito user pool, a first deploy and a new IAM surface, so that when something fails

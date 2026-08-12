@@ -171,6 +171,35 @@ Anytime list. This is the phase where the product becomes usable daily.
 >    design asks for belongs to P2-41, P2-42 or P2-43, all of which depend on P2-40 so that they
 >    are built in the real palette rather than against it.
 
+> **Today-screen furniture and the Tomorrow preview — 2026-08-12 (newest note in this file).**
+> A read of the founder's `Planner` prototype (Claude Design project
+> `83c4a4eb-57cd-48a4-b6a6-705fbe0327ff`) against the built Today screen found that
+> [`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.1 fully
+> specifies a day header and a set of timeline furniture that **no phase task has ever
+> owned**: the date caption, the `2 of 6 done` day count, the one sanctioned progress bar, the
+> `NOW` divider, the marker connector hairline, and the UP NEXT card's text actions. P2-19 is
+> scoped to the four sections and their partitioning; P2-20 is scoped to the UP NEXT selector
+> and the ticker. Neither claims any of it, and nothing downstream does either. The tell is
+> that `ProgressBar` was built as a primitive in P1-22 and is referenced only by the token
+> gallery. **P2-44** closes that gap; it introduces no new design decision, because §7.1
+> already made them.
+>
+> The founder additionally ruled on 2026-08-12 that the prototype's **Tomorrow look-ahead** is
+> wanted. It appears in no canonical document — `today-and-tasks.md` describes Today as one
+> day — so this is a new product surface, not catch-up, and **P2-45** carries it together with
+> the amendment to `today-and-tasks.md` §2 that makes it canonical. It is deliberately a
+> separate task from P2-44 for that reason.
+>
+> Two items from the prototype are **not** adopted. The `Anytime` section's `1 of 2 done`
+> count is not taken: §7.1 gives a count to EARLIER TODAY only, and a second progress figure
+> on one screen dilutes the day bar. `Directions` on the UP NEXT card and on a row needs a
+> maps deep link that does not exist — `WhenWhereBlock` accepts `onPressAddress` and
+> `ActivityDetailScreen` passes `undefined` — so P2-44 renders the quick actions that exist and
+> the maps handler stays unowned. `Needs attention` (settle expenses) and `People` are Phase 7
+> and are correctly absent.
+>
+> Two M tasks, taking Phase 2 to **45 tasks / 113 AWU**.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -277,6 +306,8 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-41 | Activity detail restructure and the completion button | mobile | P2-13, P2-15, P2-40 | yes | M |
 | P2-42 | Reschedule and snooze sheet restructure | mobile | P2-25, P2-26, P2-40, P2-41 | yes | M |
 | P2-43 | Compose flow progressive disclosure | mobile | P2-40, P2-41 | yes | M |
+| P2-44 | Today day header and timeline furniture | mobile | P2-19, P2-20, P2-21, P2-40 | yes | M |
+| P2-45 | The Tomorrow preview on Today | mobile | P2-18, P2-44 | yes | M |
 
 P2-17, P2-30, P2-31 and P2-35 are mechanical; follow the canonical sections named in the
 table and skip the design discussion. P2-31's exact label is `+ Add a task`: it bypasses the
@@ -2972,6 +3003,111 @@ no disabled field is rendered in any state; `More options` lists only built capa
 **Scope guard.** Do not change `CreationTarget`, the capture stubs, or any create endpoint.
 Do not add a field, an activity type, or a colour outside P2-40's tables. Do not pre-select
 anything.
+
+---
+
+### P2-44 — Today day header and timeline furniture
+
+**Files.** `apps/mobile/src/components/TabScreen.tsx`,
+`apps/mobile/src/features/agenda/components/{TodayScreen.tsx,AgendaSection.tsx,AgendaRow.tsx,
+UpNextCard.tsx}`, and their existing tests. Inventory is a minimum.
+
+**Approach.** Build the block that
+[`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.1 opens with and
+the furniture it goes on to describe. **Every value below is already specified there**; this
+task writes an owner for it, and adds no design decision of its own.
+
+- **The day header.** Date caption above the serif title, the day's completion count on the
+  title's trailing edge, and the one sanctioned progress bar beneath. `2 of 6 done` counts
+  everything on Today. The bar fills with `accent`, renders **empty at `0 of n` rather than
+  hidden**, and never animates beyond the `base` width ease — §7.1 is explicit that this is
+  information, not celebration.
+- `TabScreen` is shared by all three tabs, so grow it with an optional caption above the title
+  and an optional slot beneath the header row, both used only by Today. Plans and Lists must
+  render byte-identically after this change. *If the implementer prefers a `TodayHeader` that
+  Today renders itself, note that the caption has to sit above the title and `TabScreen` owns
+  that position — raise it rather than reordering the header.*
+- **`ProgressBar` already exists** (P1-22) and is referenced only by the token gallery. Use it.
+  Do not write a second one.
+- **The NOW divider.** `NOW` in `caption` `accent`, a 1 px `accent` hairline, the current time
+  right-aligned in `footnoteStrong` `accent`, driven by the existing one-minute ticker and
+  purely presentational. **Its position is an open conflict and must be raised, not resolved
+  silently:** §7.1 places it "between EARLIER TODAY and what remains", while
+  [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §2 fixes the section
+  order that P2-19 built, in which EARLIER TODAY renders **last**. Under that order there is no
+  position matching §7.1's sentence. §2 outranks §7.1 (`agent-playbook.md` §2), so the section
+  order does not move; bring the founder the two candidate positions and a recommendation.
+- **The marker connector.** A 1 px `border` hairline running vertically between row markers —
+  §7.1: "it is what makes the day read as a timeline". It must not render above the first
+  marker or below the last in a section, and it is `accessibilityElementsHidden`.
+- **UP NEXT text actions.** The row's own quick actions as `footnoteStrong` text buttons, no
+  icons and no chrome, sourced from the existing `agendaQuickActions` so the card can never
+  offer an action the row does not. §7.1's example names `Directions`, which is not a quick
+  action and has no maps handler; render what exists and leave the maps deep link unowned.
+- **EARLIER TODAY's collapse affordance** becomes `2 done ⌃` per §7.1, replacing the current
+  `Show all` ghost button. Check
+  [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §5 first —
+  where §5 specifies this copy, §5 wins and the design system is amended instead.
+
+**Tests.** Unit: the day count over a day with zero, some and all items complete. Component:
+the bar renders at `0 of n`; the caption renders the user's date in their zone; Plans and
+Lists render no caption, count or bar; the connector is absent above the first and below the
+last marker in a section and is hidden from the accessibility tree; the UP NEXT text actions
+match `agendaQuickActions` for that item and are announced with the same labels as the swipe
+actions. The existing P2-19 section-order and P2-20 ticker tests pass unmodified.
+
+**Scope guard.** Do not change the four sections, their order, their sort, or the partition
+function. Do not add a second progress figure anywhere on the screen. Do not build the maps
+handler. Do not add a colour outside P2-40's tables.
+
+---
+
+### P2-45 — The Tomorrow preview on Today
+
+**Files.** `apps/mobile/src/features/agenda/{hooks/useAgenda.ts,components/TodayScreen.tsx,
+model/partition.ts}`, `docs/01-product/today-and-tasks.md` §2,
+`docs/01-product/interaction-contract.md` §5, and their existing tests.
+
+**Approach.** A short, **read-only** look-ahead at the foot of Today, from the founder's
+2026-08-12 ruling. Because no canonical document describes it, **the amendment to
+`today-and-tasks.md` §2 lands in this PR, not after it** — a PR that leaves that document
+stale is incomplete.
+
+- **Check this before writing anything.** Today's request is `from: today, to: today` with
+  `include=anytime_unscheduled,overdue` (`useAgenda.ts`, `keys.ts`). Establish against P2-08
+  and P2-11 whether `include` is **request-scoped or day-scoped**. If undated and overdue items
+  would attach to both days once the window widens, the four Today sections must keep
+  partitioning `days[0]` alone and the preview must read only `days[1]`'s dated items. If the
+  endpoint cannot express that, **stop and raise it** — silently de-duplicating on the client
+  would put a second copy of the server's bucket logic in the wrong place, which is the mistake
+  `agent-playbook.md` §6.5 and P2-19 both warn about.
+- **Widen the existing window to two days. Do not add a second query.** Today is the most
+  loaded screen in the product; one request, one cache entry, one `ETag`. Note that the query
+  key changes, so the first launch after this ships refetches — that is expected and is not a
+  cache bug.
+- **The preview is not a second Today.** No checkbox, no swipe actions, no completion, no
+  resolution prompt, no snooze. Tapping a row opens detail and mutates nothing (rule 6). It
+  renders timed and dated items only, capped, with the same time-rail and marker treatment as
+  a Today row so it reads as continuous with the timeline.
+- **It is hidden entirely when tomorrow holds nothing** — no empty state and no heading. A
+  look-ahead that says "nothing tomorrow" is a nag about an empty day.
+- **It changes no aggregate.** `2 of 6 done` and the progress bar count Today only. UP NEXT
+  stays today's next timed item, and P2-20's rule that it is not rendered once every timed item
+  today is past must not begin reaching into tomorrow.
+- Undated tasks never appear: they are already on Today under ANYTIME and would otherwise
+  render twice.
+
+**Tests.** Component: the section is absent when tomorrow is empty; rows carry no checkbox and
+no swipe action and expose no completion accessibility action; tapping opens detail without a
+mutation; an undated saved task appears once, under ANYTIME, and never in the preview; the day
+count and progress bar are unchanged by tomorrow's items; UP NEXT stays absent when today's
+timed items are all past even with items tomorrow. Unit: the partition still derives the four
+sections from `days[0]` with a two-day payload. The existing P2-18 query-key test is extended
+rather than replaced.
+
+**Scope guard.** Do not make the preview interactive, do not extend it past tomorrow, do not
+add a per-day header beyond the section's own, and do not change what the four Today sections
+contain. Do not add a colour outside P2-40's tables.
 
 ## Acceptance criteria
 
