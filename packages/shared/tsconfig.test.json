@@ -22,7 +22,8 @@
     "composite": false,
     "declaration": false,
     "declarationMap": false,
-    "noEmit": true
+    "noEmit": true,
+    "resolveJsonModule": true
   },
-  "include": ["src/**/*.test.ts", "src/**/*.ts"]
+  "include": ["src/**/*.test.ts", "src/**/*.ts", "src/**/*.json"]
 }

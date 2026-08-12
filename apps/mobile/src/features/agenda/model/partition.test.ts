@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { workedExampleDayResponse } from '@od/shared/test-fixtures';
 import type { AgendaItem } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 import { agendaItemsForDay, partitionAgenda } from './partition';
@@ -22,45 +23,6 @@ const item = (
   isPast: false,
   ...patch,
 });
-
-// today-and-tasks.md §9, self-seeded here so this pure projection owns its own fixture.
-const workedExample = [
-  item('act_A', 'Overnight oats', {
-    type: 'meal',
-    status: 'completed',
-    time: '08:00',
-    hasCheckbox: false,
-    isPast: true,
-  }),
-  item('act_B', 'Dentist appointment', {
-    type: 'event',
-    time: '14:30',
-    hasCheckbox: false,
-    isPast: true,
-  }),
-  item('act_C', 'Pick up groceries', { time: '17:30' }),
-  item('act_D', 'Gym', {
-    time: '18:00',
-    occurrenceDate: '2026-08-06',
-    isRecurring: true,
-  }),
-  item('act_E', 'Chicken tacos', {
-    type: 'meal',
-    time: '19:30',
-    hasCheckbox: false,
-  }),
-  item('act_F', 'Severance', {
-    type: 'watch',
-    time: '20:00',
-    hasCheckbox: false,
-  }),
-  item('act_G', 'Submit insurance form'),
-  item('act_H', 'Call apartment office', { overdueFromDate: '2026-08-04' }),
-  item('act_I', 'Book flights for New York', {
-    status: 'saved',
-    subtitle: 'New York Trip',
-  }),
-];
 
 const titles = (items: readonly AgendaItem[]) => items.map((entry) => entry.title);
 
@@ -95,7 +57,9 @@ describe('partitionAgenda', () => {
       ],
     ],
   ])('matches the worked example at %s', (minute, upNext, schedule, anytime, earlier) => {
-    const result = partitionAgenda(workedExample, minute);
+    const day = workedExampleDayResponse().days[0];
+    if (day === undefined) throw new Error('The worked example fixture is incomplete.');
+    const result = partitionAgenda(agendaItemsForDay(day), minute);
     expect(titles(result.upNext)).toEqual(upNext);
     expect(titles(result.schedule)).toEqual(schedule);
     expect(titles(result.anytime)).toEqual(anytime);
@@ -142,19 +106,14 @@ describe('partitionAgenda', () => {
   });
 
   it('flattens the server arrays without duplicating up next', () => {
-    const schedule = workedExample[2];
-    const anytime = workedExample[6];
-    const earlier = workedExample[1];
-    if (schedule === undefined || anytime === undefined || earlier === undefined) {
-      throw new Error('The worked example fixture is incomplete.');
-    }
+    const day = workedExampleDayResponse().days[0];
+    if (day === undefined) throw new Error('The worked example fixture is incomplete.');
+    const items = agendaItemsForDay(day);
+
+    expect(items).toEqual([...day.schedule, ...day.anytime, ...day.earlier]);
     expect(
-      agendaItemsForDay({
-        schedule: [schedule],
-        anytime: [anytime],
-        earlier: [earlier],
-      }),
-    ).toEqual([schedule, anytime, earlier]);
+      items.filter(({ activityId }) => activityId === day.upNext?.activityId),
+    ).toHaveLength(1);
   });
 
   it('contains no client copy of the server bucket rule', () => {

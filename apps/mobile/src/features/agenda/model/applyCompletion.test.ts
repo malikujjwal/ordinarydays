@@ -1,68 +1,46 @@
-import type { AgendaData, AgendaItem } from '@od/shared/types';
+import {
+  WORKED_EXAMPLE_ACTIVITY_IDS,
+  WORKED_EXAMPLE_DATE,
+  workedExampleDayResponse,
+} from '@od/shared/test-fixtures';
 import { describe, expect, it } from 'vitest';
 import { applyCompletion } from './applyCompletion';
 
-const task = (activityId: string, time: string): AgendaItem => ({
-  activityId,
-  type: 'task',
-  title: activityId,
-  status: 'scheduled',
-  time,
-  isRecurring: false,
-  isSnoozed: false,
-  hasCheckbox: true,
-  capabilities: { complete: true, skip: false, snooze: true },
-  participantAvatars: [],
-  participantCount: 0,
-  isPast: false,
-});
-
-const first = task('act_A', '17:00');
-const second = task('act_B', '19:00');
-const cached: AgendaData = {
-  days: [
-    {
-      date: '2026-08-11',
-      upNext: first,
-      schedule: [first, second],
-      anytime: [],
-      earlier: [],
-    },
-  ],
-  warnings: [],
-};
+const clock = { today: WORKED_EXAMPLE_DATE, currentMinute: '15:10' };
 
 describe('applyCompletion', () => {
-  it('matches the self-seeded server response for task completion', () => {
-    const completed = { ...first, status: 'completed' as const };
-    const recordedServerResponse: AgendaData = {
-      days: [
-        {
-          date: '2026-08-11',
-          upNext: second,
-          schedule: [second],
-          anytime: [],
-          earlier: [completed],
-        },
-      ],
-      warnings: [],
-    };
+  it('matches the captured worked-example response after task completion', () => {
+    const cached = workedExampleDayResponse();
+    const expected = workedExampleDayResponse();
+    const day = expected.days[0];
+    const groceries = day?.schedule.find(
+      ({ activityId }) => activityId === WORKED_EXAMPLE_ACTIVITY_IDS.groceries,
+    );
+    if (day === undefined || groceries === undefined) {
+      throw new Error('The worked example fixture is incomplete.');
+    }
+    day.schedule = day.schedule.filter(
+      ({ activityId }) => activityId !== WORKED_EXAMPLE_ACTIVITY_IDS.groceries,
+    );
+    const next = day.schedule[0];
+    if (next === undefined) throw new Error('The worked example schedule is incomplete.');
+    day.upNext = next;
+    day.earlier = [{ ...groceries, status: 'completed' }, ...day.earlier];
 
     expect(
       applyCompletion(cached, {
-        activityId: first.activityId,
+        activityId: WORKED_EXAMPLE_ACTIVITY_IDS.groceries,
         completed: true,
-        today: '2026-08-11',
-        currentMinute: '15:00',
+        ...clock,
       }),
-    ).toEqual(recordedServerResponse);
+    ).toEqual(expected);
   });
 
-  it('returns the original cache deep-equal after the compensating mutation', () => {
+  it('returns the captured cache deep-equal after the compensating mutation', () => {
+    const cached = workedExampleDayResponse();
     const variables = {
-      activityId: first.activityId,
-      today: '2026-08-11',
-      currentMinute: '15:00',
+      activityId: WORKED_EXAMPLE_ACTIVITY_IDS.groceries,
+      ...clock,
     };
     const completed = applyCompletion(cached, { ...variables, completed: true });
 
@@ -76,40 +54,20 @@ describe('applyCompletion', () => {
   });
 
   it('removes a completed rolled-forward task without inserting it into Earlier today', () => {
-    const { time: _time, ...untimedFirst } = first;
-    const overdue: AgendaItem = {
-      ...untimedFirst,
-      overdueFromDate: '2026-08-04',
-    };
-    const data: AgendaData = {
-      days: [
-        {
-          date: '2026-08-11',
-          schedule: [],
-          anytime: [overdue],
-          earlier: [],
-        },
-      ],
-      warnings: [],
-    };
+    const cached = workedExampleDayResponse();
+    const expected = workedExampleDayResponse();
+    const day = expected.days[0];
+    if (day === undefined) throw new Error('The worked example fixture is incomplete.');
+    day.anytime = day.anytime.filter(
+      ({ activityId }) => activityId !== WORKED_EXAMPLE_ACTIVITY_IDS.apartment,
+    );
 
     expect(
-      applyCompletion(data, {
-        activityId: overdue.activityId,
+      applyCompletion(cached, {
+        activityId: WORKED_EXAMPLE_ACTIVITY_IDS.apartment,
         completed: true,
-        today: '2026-08-11',
-        currentMinute: '15:00',
+        ...clock,
       }),
-    ).toEqual({
-      days: [
-        {
-          date: '2026-08-11',
-          schedule: [],
-          anytime: [],
-          earlier: [],
-        },
-      ],
-      warnings: [],
-    });
+    ).toEqual(expected);
   });
 });

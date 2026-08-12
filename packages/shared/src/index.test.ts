@@ -8,6 +8,7 @@ import * as errors from '@od/shared/errors';
 import * as recurrence from '@od/shared/recurrence';
 import * as schemas from '@od/shared/schemas';
 import * as table from '@od/shared/table';
+import * as testFixtures from '@od/shared/test-fixtures';
 import * as time from '@od/shared/time';
 import * as types from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
@@ -58,6 +59,7 @@ describe('exports map', () => {
     expect(recurrence.toUtcInstant).toBeDefined();
     expect(activity.deriveGsi1Bucket).toBeDefined();
     expect(activity.changeActivityKind).toBeDefined();
+    expect(testFixtures.workedExampleDayResponse).toBeDefined();
     expect(types.assertNever).toBeDefined();
   });
 

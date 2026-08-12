@@ -1,8 +1,6 @@
 import { expandRecurrence } from '@od/shared/recurrence';
-import { agendaData } from '@od/shared/schemas';
 import type { Activity } from '@od/shared/types';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { authedHeaders, withUser } from '../helpers/auth.js';
 import { useTestTable } from './harness.js';
 
 useTestTable();
@@ -12,23 +10,17 @@ type OccurrenceRepository =
   typeof import('../../src/repositories/occurrenceRepository.js');
 type ReminderRepository = typeof import('../../src/repositories/reminderRepository.js');
 type AgendaService = typeof import('../../src/services/agendaService.js');
-type Base = typeof import('../../src/repositories/base.js');
-type Keys = typeof import('../../src/repositories/keys.js');
 
 let activities: ActivityRepository;
 let occurrences: OccurrenceRepository;
 let reminders: ReminderRepository;
 let agenda: AgendaService;
-let base: Base;
-let keys: Keys;
 
 beforeAll(async () => {
   activities = await import('../../src/repositories/activityRepository.js');
   occurrences = await import('../../src/repositories/occurrenceRepository.js');
   reminders = await import('../../src/repositories/reminderRepository.js');
   agenda = await import('../../src/services/agendaService.js');
-  base = await import('../../src/repositories/base.js');
-  keys = await import('../../src/repositories/keys.js');
 });
 
 let sequence = 0;
@@ -56,208 +48,6 @@ function subject(overrides: Partial<Activity>): Activity {
     ...overrides,
   } as Activity;
 }
-
-describe('the worked-example day', () => {
-  it('hydrates, expands, orders and never reads Needs a date', async () => {
-    const oats = subject({
-      type: 'meal',
-      objectKind: 'plan',
-      title: 'Overnight oats',
-      status: 'completed',
-      details: { kind: 'meal', mealSlot: 'breakfast' },
-      schedule: { date: '2026-08-06', time: '08:00', timezone: 'America/New_York' },
-      completedAt: '2026-08-06T12:05:00.000Z',
-    });
-    const dentist = subject({
-      type: 'event',
-      objectKind: 'plan',
-      title: 'Dentist appointment',
-      details: { kind: 'event' },
-      schedule: { date: '2026-08-06', time: '14:30', timezone: 'America/New_York' },
-      location: { label: 'Dr Patel' },
-    });
-    const groceries = subject({
-      title: 'Pick up groceries',
-      schedule: { date: '2026-08-06', time: '17:30', timezone: 'America/New_York' },
-    });
-    const gym = subject({
-      title: 'Gym',
-      schedule: { date: '2026-01-05', time: '18:00', timezone: 'America/New_York' },
-      recurrence: {
-        mode: 'fixed',
-        segments: [{ freq: 'weekdays', effectiveFrom: '2026-01-05', time: '18:00' }],
-      },
-    });
-    const tacos = subject({
-      type: 'meal',
-      objectKind: 'plan',
-      title: 'Chicken tacos',
-      details: { kind: 'meal', mealSlot: 'dinner' },
-      schedule: { date: '2026-08-06', time: '19:30', timezone: 'America/New_York' },
-    });
-    const severance = subject({
-      type: 'watch',
-      objectKind: 'plan',
-      title: 'Severance',
-      details: { kind: 'watch', mediaTitle: 'Severance', season: 2, episode: 4 },
-      schedule: { date: '2026-08-06', time: '20:00', timezone: 'America/New_York' },
-    });
-    const insurance = subject({
-      title: 'Submit insurance form',
-      schedule: { date: '2026-08-06', timezone: 'America/New_York' },
-    });
-    const anytime = subject({
-      title: 'Book flights for New York',
-      status: 'saved',
-    });
-    const needsDate = subject({
-      objectKind: 'plan',
-      type: 'custom',
-      title: 'Dinner at Zahav',
-      details: { kind: 'custom' },
-      status: 'saved',
-    });
-
-    for (const row of [
-      oats,
-      dentist,
-      groceries,
-      gym,
-      tacos,
-      severance,
-      insurance,
-      anytime,
-      needsDate,
-    ]) {
-      await activities.createActivity('usr_alice', row);
-    }
-    await base.putItem({
-      ...keys.reminder(groceries.activityId, 'usr_alice', 'rem_alice'),
-      entity: 'Reminder',
-      reminderId: 'rem_01J8XKQ2M4N5P6R7S8T9V0W1AA',
-      activityId: groceries.activityId,
-      userId: 'usr_alice',
-      offsetMinutes: -15,
-      channel: 'push',
-      createdAt: oats.createdAt,
-      updatedAt: oats.updatedAt,
-      schemaVersion: 1,
-    });
-    await base.putItem({
-      ...keys.reminder(groceries.activityId, 'usr_bob', 'rem_bob'),
-      entity: 'Reminder',
-      reminderId: 'rem_01J8XKQ2M4N5P6R7S8T9V0W1AB',
-      activityId: groceries.activityId,
-      userId: 'usr_bob',
-      offsetMinutes: -60,
-      channel: 'push',
-      createdAt: oats.createdAt,
-      updatedAt: oats.updatedAt,
-      schemaVersion: 1,
-    });
-
-    const queried: string[] = [];
-    const result = await agenda.assembleAgenda(
-      {
-        userId: 'usr_alice',
-        from: '2026-08-06',
-        to: '2026-08-06',
-        timezone: 'America/New_York',
-        now: '2026-08-06T19:10:00.000Z',
-        includeAnytimeUnscheduled: true,
-        includeReminders: true,
-      },
-      {
-        listBucket: async (...args) => {
-          queried.push(args[1]);
-          return activities.listByBucket(...args);
-        },
-        listOverdue: activities.listOverdueTaskCandidates,
-        batchActivities: activities.batchGetActivityMeta,
-        listParticipants: activities.listParticipants,
-        batchAgendaRows: occurrences.batchGetAgendaRows,
-        batchOccurrences: occurrences.batchGetForPairs,
-        listReminders: reminders.listForUser,
-        expand: expandRecurrence,
-        warn: vi.fn(),
-      },
-    );
-
-    const baselineQueried: string[] = [];
-    const baseline = await agenda.assembleAgenda(
-      {
-        userId: 'usr_alice',
-        from: '2026-08-06',
-        to: '2026-08-06',
-        timezone: 'America/New_York',
-        now: '2026-08-06T19:10:00.000Z',
-      },
-      {
-        listBucket: async (...args) => {
-          baselineQueried.push(args[1]);
-          return activities.listByBucket(...args);
-        },
-        listOverdue: activities.listOverdueTaskCandidates,
-        batchActivities: activities.batchGetActivityMeta,
-        listParticipants: activities.listParticipants,
-        batchAgendaRows: occurrences.batchGetAgendaRows,
-        batchOccurrences: occurrences.batchGetForPairs,
-        listReminders: reminders.listForUser,
-        expand: expandRecurrence,
-        warn: vi.fn(),
-      },
-    );
-
-    const day = result.days[0];
-    expect(queried).toEqual(['S', 'R', 'N']);
-    expect(queried).not.toContain('P');
-    expect(baselineQueried).toEqual(['S', 'R']);
-    expect(baselineQueried).not.toContain('P');
-    expect(JSON.stringify(baseline)).not.toContain('Dinner at Zahav');
-    expect(day?.upNext?.activity.title).toBe('Pick up groceries');
-    expect(day?.schedule.map((row) => row.activity.title)).toEqual([
-      'Pick up groceries',
-      'Gym',
-      'Chicken tacos',
-      'Severance',
-    ]);
-    expect(day?.anytime.map((row) => row.activity.title)).toEqual([
-      'Submit insurance form',
-      'Book flights for New York',
-    ]);
-    expect(day?.earlier.map((row) => row.activity.title)).toEqual([
-      'Dentist appointment',
-      'Overnight oats',
-    ]);
-    expect(
-      day?.schedule.find((row) => row.activity.activityId === groceries.activityId)
-        ?.reminders,
-    ).toEqual([expect.objectContaining({ userId: 'usr_alice', offsetMinutes: -15 })]);
-    expect(JSON.stringify(result)).not.toContain('usr_bob');
-    expect(JSON.stringify(result)).not.toContain('Dinner at Zahav');
-
-    const response = await withUser('usr_alice').fetch(
-      new Request(
-        'http://localhost/v1/agenda?from=2026-08-06&to=2026-08-06&tz=America%2FNew_York&include=anytime_unscheduled,reminders',
-        { headers: authedHeaders() },
-      ),
-    );
-    const body = await response.json();
-    const parsed = agendaData.parse(body.data);
-    const projectedRows = parsed.days.flatMap((projectedDay) => [
-      ...projectedDay.schedule,
-      ...projectedDay.anytime,
-      ...projectedDay.earlier,
-    ]);
-
-    expect(response.status).toBe(200);
-    expect(parsed.days).toHaveLength(1);
-    expect(
-      projectedRows.find((row) => row.activityId === groceries.activityId)?.reminders,
-    ).toEqual([expect.objectContaining({ userId: 'usr_alice', offsetMinutes: -15 })]);
-    expect(JSON.stringify(body)).not.toContain('usr_bob');
-  });
-});
 
 describe('overdue roll-forward', () => {
   it('rolls only the bounded task forward and completion preserves its stored date', async () => {

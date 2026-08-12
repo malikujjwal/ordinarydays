@@ -1,0 +1,161 @@
+{
+  "days": [
+    {
+      "date": "2026-08-06",
+      "upNext": {
+        "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A3",
+        "type": "task",
+        "title": "Pick up groceries",
+        "status": "scheduled",
+        "time": "17:30",
+        "isRecurring": false,
+        "isSnoozed": false,
+        "hasCheckbox": true,
+        "capabilities": { "complete": true, "skip": true, "snooze": true },
+        "participantAvatars": [],
+        "participantCount": 0,
+        "isPast": false
+      },
+      "schedule": [
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A3",
+          "type": "task",
+          "title": "Pick up groceries",
+          "status": "scheduled",
+          "time": "17:30",
+          "isRecurring": false,
+          "isSnoozed": false,
+          "hasCheckbox": true,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "isPast": false
+        },
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A4",
+          "occurrenceDate": "2026-08-06",
+          "type": "task",
+          "title": "Gym",
+          "status": "scheduled",
+          "time": "18:00",
+          "isRecurring": true,
+          "recurrenceDescription": "Every weekday",
+          "isSnoozed": false,
+          "hasCheckbox": true,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "isPast": false
+        },
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A5",
+          "type": "meal",
+          "title": "Chicken tacos",
+          "status": "scheduled",
+          "time": "19:30",
+          "isRecurring": false,
+          "isSnoozed": false,
+          "hasCheckbox": false,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "subtitle": "Meal · Dinner",
+          "isPast": false
+        },
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A6",
+          "type": "watch",
+          "title": "Severance",
+          "status": "scheduled",
+          "time": "20:00",
+          "isRecurring": false,
+          "isSnoozed": false,
+          "hasCheckbox": false,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "subtitle": "Watch · S2 E4",
+          "isPast": false
+        }
+      ],
+      "anytime": [
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A8",
+          "type": "task",
+          "title": "Call apartment office",
+          "status": "scheduled",
+          "isRecurring": false,
+          "isSnoozed": false,
+          "hasCheckbox": true,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "isPast": false,
+          "overdueFromDate": "2026-08-04"
+        },
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A7",
+          "type": "task",
+          "title": "Submit insurance form",
+          "status": "scheduled",
+          "isRecurring": false,
+          "isSnoozed": false,
+          "hasCheckbox": true,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "isPast": false
+        },
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A9",
+          "parentActivityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1AP",
+          "type": "task",
+          "title": "Book flights for New York",
+          "status": "saved",
+          "isRecurring": false,
+          "isSnoozed": false,
+          "hasCheckbox": true,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "subtitle": "New York Trip",
+          "isPast": false
+        }
+      ],
+      "earlier": [
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A2",
+          "type": "event",
+          "title": "Dentist appointment",
+          "status": "scheduled",
+          "time": "14:30",
+          "isRecurring": false,
+          "isSnoozed": false,
+          "hasCheckbox": false,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "locationLabel": "Dr Patel",
+          "subtitle": "Dr Patel",
+          "isPast": true
+        },
+        {
+          "activityId": "act_01J8XKQ2M4N5P6R7S8T9V0W1A1",
+          "type": "meal",
+          "title": "Overnight oats",
+          "status": "completed",
+          "time": "08:00",
+          "isRecurring": false,
+          "isSnoozed": false,
+          "hasCheckbox": false,
+          "capabilities": { "complete": true, "skip": true, "snooze": true },
+          "participantAvatars": [],
+          "participantCount": 0,
+          "subtitle": "Meal · Breakfast",
+          "isPast": true
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

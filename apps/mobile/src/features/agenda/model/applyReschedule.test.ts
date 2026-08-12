@@ -1,3 +1,8 @@
+import {
+  WORKED_EXAMPLE_ACTIVITY_IDS,
+  WORKED_EXAMPLE_DATE,
+  workedExampleDayResponse,
+} from '@od/shared/test-fixtures';
 import type { AgendaData, AgendaDay, AgendaItem } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 import { applyReschedule } from './applyReschedule';
@@ -61,53 +66,53 @@ const overdue: AgendaItem = {
 };
 
 describe('applyReschedule', () => {
-  it('matches the self-seeded server response for a cross-day reschedule', () => {
-    const rescheduled = { ...moved, time: '09:00' };
-    const recordedServerResponse: AgendaData = {
-      days: [
-        {
-          date: '2026-08-11',
-          upNext: later,
-          schedule: [later],
-          anytime: [],
-          earlier: [],
-        },
-        {
-          date: '2026-08-12',
-          upNext: rescheduled,
-          schedule: [rescheduled, tomorrow],
-          anytime: [],
-          earlier: [],
-        },
-      ],
-      warnings: [],
-    };
+  it('matches the captured worked-example response for a same-day reschedule', () => {
+    const canonical = workedExampleDayResponse();
+    const expected = workedExampleDayResponse();
+    const day = expected.days[0];
+    const groceries = day?.schedule.find(
+      ({ activityId }) => activityId === WORKED_EXAMPLE_ACTIVITY_IDS.groceries,
+    );
+    if (day === undefined || groceries === undefined) {
+      throw new Error('The worked example fixture is incomplete.');
+    }
+    const [, gym, tacos, severance] = day.schedule;
+    if (gym === undefined || tacos === undefined || severance === undefined) {
+      throw new Error('The worked example schedule is incomplete.');
+    }
+    const rescheduled = { ...groceries, time: '19:00' };
+    day.upNext = gym;
+    day.schedule = [gym, rescheduled, tacos, severance];
 
     expect(
-      applyReschedule(cached, {
-        activityId: moved.activityId,
-        date: '2026-08-12',
-        time: '09:00',
-        ...clock,
+      applyReschedule(canonical, {
+        activityId: WORKED_EXAMPLE_ACTIVITY_IDS.groceries,
+        date: WORKED_EXAMPLE_DATE,
+        time: '19:00',
+        today: WORKED_EXAMPLE_DATE,
+        currentMinute: '15:10',
       }),
-    ).toEqual(recordedServerResponse);
+    ).toEqual(expected);
   });
 
   it('returns the original cache deep-equal after the inverse reschedule', () => {
-    const forward = applyReschedule(cached, {
-      activityId: moved.activityId,
-      date: '2026-08-12',
-      time: '09:00',
-      ...clock,
+    const canonical = workedExampleDayResponse();
+    const variables = {
+      activityId: WORKED_EXAMPLE_ACTIVITY_IDS.groceries,
+      date: WORKED_EXAMPLE_DATE,
+      today: WORKED_EXAMPLE_DATE,
+      currentMinute: '15:10',
+    };
+    const forward = applyReschedule(canonical, {
+      ...variables,
+      time: '19:00',
     });
     expect(
       applyReschedule(forward, {
-        activityId: moved.activityId,
-        date: '2026-08-11',
-        time: '17:00',
-        ...clock,
+        ...variables,
+        time: '17:30',
       }),
-    ).toEqual(cached);
+    ).toEqual(canonical);
   });
 
   it('returns the same cache reference when the target is absent', () => {

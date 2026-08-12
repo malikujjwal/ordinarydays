@@ -53,6 +53,11 @@
       "types": "./dist/activity/index.d.ts",
       "react-native": "./src/activity/index.ts",
       "default": "./dist/activity/index.js"
+    },
+    "./test-fixtures": {
+      "types": "./dist/test-fixtures/index.d.ts",
+      "react-native": "./src/test-fixtures/index.ts",
+      "default": "./dist/test-fixtures/index.js"
     }
   },
   "scripts": {
