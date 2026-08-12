@@ -4,7 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useToast } from '@/stores/toast';
-import { useAgendaActivityActions } from './useActivityActions';
+import { useAgendaActivityActions } from './useAgendaActivityActions';
 
 const clientCalls = vi.hoisted(() => ({
   complete: vi.fn(),
@@ -52,7 +52,26 @@ function setup(restoreScrollOffset = vi.fn()) {
     defaultOptions: { mutations: { retry: false, networkMode: 'always' } },
   });
   const key = ['agenda', '2026-08-11'];
+  const anytimeKey = ['activities', 'saved'];
   client.setQueryData(key, cached);
+  client.setQueryData(anytimeKey, {
+    pages: [
+      {
+        data: [
+          {
+            activityId: first.activityId,
+            type: 'task',
+            title: first.title,
+            status: 'saved',
+            isRecurring: false,
+            participantCount: 0,
+          },
+        ],
+        meta: { requestId: 'req_saved' },
+      },
+    ],
+    pageParams: [undefined],
+  });
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
@@ -66,7 +85,7 @@ function setup(restoreScrollOffset = vi.fn()) {
       }),
     { wrapper },
   );
-  return { ...hook, client, key, restoreScrollOffset };
+  return { ...hook, client, key, anytimeKey, restoreScrollOffset };
 }
 
 beforeEach(() => {
@@ -75,7 +94,7 @@ beforeEach(() => {
   useToast.setState({ current: undefined });
 });
 
-describe('useActivityActions completion undo', () => {
+describe('useAgendaActivityActions completion undo', () => {
   it('restores the exact cache order and scroll offset, then compensates', async () => {
     let finishComplete!: () => void;
     clientCalls.complete.mockReturnValue(
@@ -100,9 +119,19 @@ describe('useActivityActions completion undo', () => {
       ],
     });
     await waitFor(() => expect(clientCalls.complete).toHaveBeenCalledOnce());
+    expect(
+      mounted.client.getQueryData<{ pages: Array<{ data: AgendaItem[] }> }>(
+        mounted.anytimeKey,
+      )?.pages[0]?.data[0]?.status,
+    ).toBe('completed');
 
     act(() => useToast.getState().undo());
     expect(mounted.client.getQueryData(mounted.key)).toEqual(cached);
+    expect(
+      mounted.client.getQueryData<{ pages: Array<{ data: AgendaItem[] }> }>(
+        mounted.anytimeKey,
+      )?.pages[0]?.data[0]?.status,
+    ).toBe('saved');
     expect(mounted.restoreScrollOffset).toHaveBeenCalledExactlyOnceWith(240);
     expect(clientCalls.uncomplete).not.toHaveBeenCalled();
 

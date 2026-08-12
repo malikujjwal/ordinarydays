@@ -35,7 +35,7 @@ function port() {
   };
 }
 
-describe('startUndoable', () => {
+describe('startUndoable helper', () => {
   it('starts the network immediately and compensates only after Undo', async () => {
     const pending = deferred();
     const apply = vi.fn();

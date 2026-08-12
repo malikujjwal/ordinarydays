@@ -18,7 +18,7 @@ export interface UndoableAction {
 }
 
 /**
- * Starts the write immediately and makes Undo a local rollback plus compensating write.
+ * Starts a write immediately and makes Undo a local rollback plus compensating write.
  * The toast timer only releases its callbacks; it never controls when the network runs.
  */
 export function startUndoable(action: UndoableAction): void {
