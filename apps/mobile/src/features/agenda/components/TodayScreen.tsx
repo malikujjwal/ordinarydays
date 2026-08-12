@@ -5,7 +5,7 @@ import {
   TODAY_OVERDUE_COLLAPSE_THRESHOLD,
   TODAY_OVERDUE_COLLAPSED_LIMIT,
 } from '@od/shared/constants';
-import { fixedClock, toWallDate, toWallTime } from '@od/shared/time';
+import { fixedClock, toWallDate, toWallTime, type WallDate } from '@od/shared/time';
 import type { ActivityOutcome, AgendaData, AgendaItem } from '@od/shared/types';
 import {
   Button,
@@ -34,6 +34,7 @@ import { UpNextCard } from './UpNextCard';
 
 export interface TodayScreenProps {
   onAdd: () => void;
+  onAddTask: (date: WallDate) => void;
   onOpenAnytime: () => void;
   onOpenAgendaItem: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
@@ -101,6 +102,7 @@ function errorDetails(error: unknown): { message: string; requestId?: string } {
 /** Today is a disposable projection: one agenda response, four locally derived sections. */
 export function TodayScreen({
   onAdd,
+  onAddTask,
   onOpenAnytime,
   onOpenAgendaItem,
   onToggleComplete,
@@ -307,6 +309,26 @@ export function TodayScreen({
     items.every(
       (item) => item.status === 'completed' || item.status === 'completed_occurrence',
     );
+  const anytimeFooter = (
+    <View testID="today-anytime-actions" style={{ gap: theme.space[2] }}>
+      {anytime.savedCount > TODAY_ANYTIME_SAVED_LIMIT ? (
+        <Button
+          label={`See all (${anytime.savedCount})`}
+          variant="ghost"
+          fullWidth
+          onPress={onOpenAnytime}
+          testID="today-anytime-see-all"
+        />
+      ) : null}
+      <Button
+        label="+ Add a task"
+        variant="ghost"
+        fullWidth
+        onPress={() => onAddTask(today)}
+        testID="today-add-task"
+      />
+    </View>
+  );
 
   if (isFullyEmpty) {
     return (
@@ -399,19 +421,10 @@ export function TodayScreen({
               ) : null
             }
             today={today}
-            footer={
-              anytime.savedCount > TODAY_ANYTIME_SAVED_LIMIT ? (
-                <Button
-                  label={`See all (${anytime.savedCount})`}
-                  variant="ghost"
-                  fullWidth
-                  onPress={onOpenAnytime}
-                  testID="today-anytime-see-all"
-                />
-              ) : null
-            }
+            footer={anytimeFooter}
           />
         )}
+        {visibleAnytime.length === 0 ? anytimeFooter : null}
         {earlier.length === 0 ? null : (
           <AgendaSection
             title="Earlier today"

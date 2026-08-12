@@ -1,3 +1,4 @@
+import type { WallDate } from '@od/shared/time';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EMPTY_DETAILS,
@@ -76,6 +77,35 @@ describe('nothing is selected until the user taps', () => {
     expect(draft().step).toBe('form');
     expect(draft().target).toBeUndefined();
   });
+});
+
+describe("Today's contextual Task action", () => {
+  it('fixes the Task target and today date before words are accepted', () => {
+    draft().setTitle('an old draft');
+
+    draft().openTodayTask('2026-08-06' as WallDate);
+
+    expect(draft().step).toBe('form');
+    expect(draft().target).toEqual({ objectKind: 'task', type: 'task' });
+    expect(draft().title).toBe('');
+    expect(draft().schedule).toEqual({
+      date: '2026-08-06',
+      time: undefined,
+      endTime: undefined,
+      timeFromSlot: false,
+    });
+  });
+
+  it.each(['Dinner with Alice', 'watch Severance', 'add milk to groceries'])(
+    'keeps the labelled Task target when the title is %j',
+    (title) => {
+      draft().openTodayTask('2026-08-06' as WallDate);
+      draft().setTitle(title);
+
+      expect(draft().target).toEqual({ objectKind: 'task', type: 'task' });
+      expect(draft().step).toBe('form');
+    },
+  );
 });
 
 describe('typed words never choose anything', () => {

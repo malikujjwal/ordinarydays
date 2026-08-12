@@ -670,7 +670,7 @@ The user-facing contract:
 
 | Behaviour | Rule |
 | --- | --- |
-| Inline add on Today | The Anytime section has a persistent `+ Add a task` row at its foot. Typing a title and pressing Return creates a `task` with today's date and no time, and immediately re-focuses the input so several can be entered in a row. |
+| Inline add on Today | The Anytime section has a persistent `+ Add a task` row at its foot. The labelled action fixes `{ objectKind: 'task', type: 'task' }` before any words are accepted, opens the Task form directly with today's date and no time, and finishes with `Save task`. It never opens the global chooser or infers Task versus Plan from the title. |
 | Inline add on a list | The list detail's `+ Add an item` row creates a `ListItem` in that list, never an Activity. Return commits with the accessible action `Add to <list name>` and re-focuses. |
 | Inline add of a prep task | The plan's `+ Add a prep task` row creates a `task` with `parentActivityId` set. |
 | Global `+` from Today | Opens **Task / Plan / List item**. After the user chooses Task or Plan, the form may pre-fill `schedule.date` = today. |

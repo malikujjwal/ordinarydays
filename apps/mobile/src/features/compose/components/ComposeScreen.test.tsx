@@ -1,3 +1,4 @@
+import type { WallDate } from '@od/shared/time';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -152,6 +153,34 @@ describe('the first screen', () => {
   it('sends no request of any kind before a choice is made', () => {
     mount();
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe("Today's contextual Task entry", () => {
+  it('bypasses both choosers and saves the fixed Task target on today without a time', async () => {
+    useComposeDraft.getState().openTodayTask(TODAY as WallDate);
+    mount();
+
+    expect(
+      screen.queryByRole('heading', { name: 'What would you like to add?' }),
+    ).toBeNull();
+    expect(screen.getByText('Task')).toBeDefined();
+    expect(screen.getByLabelText('Title')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Save task' })).toBeDefined();
+
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Dinner with Alice' },
+    });
+    tap('Save task');
+
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]?.body).toMatchObject({
+      objectKind: 'task',
+      type: 'task',
+      schedule: { date: TODAY, timezone: ZONE },
+    });
+    const body = sent[0]?.body as { schedule?: { time?: string } } | undefined;
+    expect(body?.schedule?.time).toBeUndefined();
   });
 });
 

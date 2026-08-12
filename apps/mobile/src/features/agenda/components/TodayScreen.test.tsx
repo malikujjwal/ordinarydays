@@ -133,6 +133,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -155,6 +156,7 @@ describe('TodayScreen', () => {
     const first = mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -175,6 +177,7 @@ describe('TodayScreen', () => {
     const second = mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -188,7 +191,12 @@ describe('TodayScreen', () => {
     const onAdd = vi.fn();
     stubFetch(response([]));
     mount(
-      <TodayScreen onAdd={onAdd} onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />,
+      <TodayScreen
+        onAdd={onAdd}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
     );
 
     await waitFor(() => expect(screen.getByTestId('today-empty')).toBeDefined());
@@ -206,11 +214,34 @@ describe('TodayScreen', () => {
     expect(onAdd).toHaveBeenCalledOnce();
   });
 
+  it('keeps the contextual Add a task action at the list foot and supplies today', async () => {
+    const onAddTask = vi.fn();
+    stubFetch(response([row(1, { title: 'Scheduled plan', time: '18:00' })]));
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={onAddTask}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '+ Add a task' })).toBeDefined(),
+    );
+    expect(screen.queryByRole('heading', { name: 'Anytime' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Add a task' }));
+
+    expect(onAddTask).toHaveBeenCalledExactlyOnceWith('2026-08-06');
+  });
+
   it('notes an otherwise empty day above undated tasks', async () => {
     stubFetch(response([row(1, { title: 'File the form', status: 'saved' })]));
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -235,6 +266,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -262,6 +294,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -286,6 +319,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={onOpenAnytime}
         onOpenAgendaItem={() => {}}
       />,
@@ -309,6 +343,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -333,6 +368,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={onOpenAgendaItem}
       />,
@@ -386,6 +422,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -434,6 +471,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
         onToggleComplete={onToggleComplete}
@@ -471,6 +509,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
         onResolvePassed={onResolvePassed}
@@ -523,6 +562,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
         onToggleComplete={onToggleComplete}
@@ -592,6 +632,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
         onToggleComplete={onToggleComplete}
@@ -620,6 +661,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,
@@ -663,6 +705,7 @@ describe('TodayScreen', () => {
     mount(
       <TodayScreen
         onAdd={() => {}}
+        onAddTask={() => {}}
         onOpenAnytime={() => {}}
         onOpenAgendaItem={() => {}}
       />,

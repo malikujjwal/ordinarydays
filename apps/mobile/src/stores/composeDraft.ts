@@ -1,5 +1,6 @@
 import { changeActivityKind } from '@od/shared';
 import type { CreationTarget } from '@od/shared/client';
+import type { WallDate } from '@od/shared/time';
 import type { PlanType, Recurrence } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { create } from 'zustand';
@@ -25,12 +26,12 @@ import type { ObjectChoice } from '@/features/compose/model/targets';
  *
  * ## The invariant this store exists to hold
  *
- * `target` is `undefined` until the user taps a row, and **there is no action that sets it
- * from anything but a tap**. `setTitle` cannot reach it. Neither can a capture result: the
- * capture actions write `title`, `notes` and `sourceUrl` and nothing else, by construction
- * rather than by filtering. The store is small enough to read in one sitting for exactly this
- * reason — the rule is only as strong as the reader's ability to confirm it
- * (`CLAUDE.md` rule 2).
+ * `target` is `undefined` until the user taps either a chooser row or a labelled contextual
+ * action, and **there is no action that sets it from words**. `setTitle` cannot reach it.
+ * Neither can a capture result: the capture actions write `title`, `notes` and `sourceUrl`
+ * and nothing else, by construction rather than by filtering. The store is small enough to
+ * read in one sitting for exactly this reason — the rule is only as strong as the reader's
+ * ability to confirm it (`CLAUDE.md` rule 2).
  */
 
 /** Which screen of the modal is showing. `object` is always where it opens. */
@@ -80,6 +81,7 @@ export interface ComposeDraftState {
   details: DraftDetails;
 
   open: () => void;
+  openTodayTask: (date: WallDate) => void;
   chooseObject: (choice: ObjectChoice) => void;
   choosePlanKind: (type: PlanType, eventDefaults?: EventDraftDefaults) => void;
   back: () => void;
@@ -118,6 +120,7 @@ const EMPTY = {
 } satisfies Omit<
   ComposeDraftState,
   | 'open'
+  | 'openTodayTask'
   | 'chooseObject'
   | 'choosePlanKind'
   | 'back'
@@ -176,6 +179,21 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
 
   /** Always opens on the object step with nothing selected. Explicit intent costs one tap, every time. */
   open: () => set({ ...EMPTY }),
+
+  /**
+   * Today's labelled action is itself the explicit Task choice.
+   *
+   * It starts from an empty draft, supplies only the date fixed by that screen, and lands on
+   * the Task form. There is deliberately no title parameter: words cannot participate in
+   * choosing the target, and an old draft cannot leak into a new contextual entry.
+   */
+  openTodayTask: (date) =>
+    set({
+      ...EMPTY,
+      step: 'form',
+      target: { objectKind: 'task', type: 'task' },
+      schedule: { ...EMPTY_SCHEDULE, date },
+    }),
 
   /**
    * The one place `target` can become a Task.

@@ -6,10 +6,15 @@ import { useComposeDraft } from '@/stores/composeDraft';
 export default function TodayTab() {
   const router = useRouter();
   const openDraft = useComposeDraft((state) => state.open);
+  const openTodayTask = useComposeDraft((state) => state.openTodayTask);
   return (
     <TodayScreen
       onAdd={() => {
         openDraft();
+        router.push('/compose');
+      }}
+      onAddTask={(date) => {
+        openTodayTask(date);
         router.push('/compose');
       }}
       onOpenAnytime={() => router.push('/anytime')}
