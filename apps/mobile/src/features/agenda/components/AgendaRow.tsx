@@ -12,7 +12,11 @@ import { RowLeading } from './RowLeading';
 export interface AgendaRowProps {
   item: AgendaItem;
   today?: string;
+  /** Date context spoken for untimed rows outside Today. */
+  untimedContextLabel?: string;
   showTime?: boolean;
+  /** Cards turn off the ordinary list divider while retaining this same row body. */
+  divider?: boolean;
   onOpen: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onOpenReschedule?: (item: AgendaItem) => void;
@@ -46,11 +50,15 @@ function completionVerb(type: ActivityType): string {
   }
 }
 
-function bodyLabel(item: AgendaItem, checked: boolean): string {
+function bodyLabel(
+  item: AgendaItem,
+  checked: boolean,
+  untimedContextLabel: string,
+): string {
   const parts = [item.title];
   if (checked) parts.push(completionVerb(item.type));
   if (item.subtitle !== undefined) parts.push(item.subtitle);
-  if (item.time === undefined) parts.push('today', 'no time');
+  if (item.time === undefined) parts.push(untimedContextLabel, 'no time');
   else parts.push(formatWallTime(item.time));
   if (item.recurrenceDescription !== undefined) parts.push(item.recurrenceDescription);
   if (item.locationLabel !== undefined) parts.push(item.locationLabel);
@@ -66,7 +74,9 @@ function bodyLabel(item: AgendaItem, checked: boolean): string {
 export function AgendaRow({
   item,
   today,
+  untimedContextLabel = 'today',
   showTime = false,
+  divider = true,
   onOpen,
   onToggleComplete,
   onOpenReschedule,
@@ -91,7 +101,7 @@ export function AgendaRow({
         alignItems: 'flex-start',
         gap: theme.space[3],
         paddingVertical: theme.space[5],
-        borderBottomWidth: 1,
+        borderBottomWidth: divider ? 1 : 0,
         borderBottomColor: theme.colors.border,
         opacity: dimmed ? 0.62 : 1,
       }}
@@ -117,7 +127,7 @@ export function AgendaRow({
       <View style={{ flex: 1, minWidth: 0, gap: theme.space[2] }}>
         <Touchable
           accessibilityRole="button"
-          accessibilityLabel={bodyLabel(item, checked)}
+          accessibilityLabel={bodyLabel(item, checked, untimedContextLabel)}
           {...(accessibilityActions === undefined ? {} : { accessibilityActions })}
           {...(onAccessibilityAction === undefined ? {} : { onAccessibilityAction })}
           {...(onBodyFocus === undefined ? {} : { onFocus: onBodyFocus })}

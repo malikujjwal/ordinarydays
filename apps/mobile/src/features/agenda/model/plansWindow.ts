@@ -1,0 +1,92 @@
+import { addWallDays, differenceInWallDays } from '@od/shared/recurrence';
+import type { AgendaData, AgendaDay, AgendaItem } from '@od/shared/types';
+import { format, parseISO } from 'date-fns';
+
+export interface UpcomingDateGroup {
+  kind: 'date';
+  date: string;
+  label: string;
+  items: AgendaItem[];
+}
+
+export interface UpcomingGap {
+  kind: 'gap';
+  from: string;
+  to: string;
+  label: string;
+}
+
+export type UpcomingListItem = UpcomingDateGroup | UpcomingGap;
+
+export interface UpcomingMonthSection {
+  month: string;
+  title: string;
+  data: UpcomingListItem[];
+}
+
+const asDate = (date: string): Date => parseISO(`${date}T12:00:00`);
+
+export const formatDateHeading = (date: string): string =>
+  format(asDate(date), 'EEE, MMM d');
+
+export const formatMonthHeading = (date: string): string =>
+  format(asDate(date), 'MMMM yyyy');
+
+function formatGap(from: string, to: string): string {
+  if (from === to) return `${format(asDate(from), 'MMM d')} · nothing planned`;
+  const sameMonth = from.slice(0, 7) === to.slice(0, 7);
+  return `${format(asDate(from), 'MMM d')} – ${format(asDate(to), sameMonth ? 'd' : 'MMM d')} · nothing planned`;
+}
+
+const itemIdentity = (item: AgendaItem): string =>
+  `${item.activityId}:${item.occurrenceDate ?? ''}`;
+
+function itemsForDay(day: AgendaDay): AgendaItem[] {
+  return [...day.schedule, ...day.anytime, ...day.earlier].sort(
+    (left, right) =>
+      (left.time ?? '').localeCompare(right.time ?? '') ||
+      itemIdentity(left).localeCompare(itemIdentity(right)),
+  );
+}
+
+/**
+ * Builds Plans → Upcoming from the server's complete date window.
+ *
+ * Empty dates become one line only when they are bounded by populated dates. The grouping
+ * deliberately reads no Activity shape: an undated Plan never reaches AgendaData at all.
+ */
+export function buildUpcomingSections(agenda: AgendaData): UpcomingMonthSection[] {
+  const occupied = agenda.days
+    .map((day) => ({ date: day.date, items: itemsForDay(day) }))
+    .filter(({ items }) => items.length > 0)
+    .sort((left, right) => left.date.localeCompare(right.date));
+
+  const list: UpcomingListItem[] = [];
+  for (const [index, day] of occupied.entries()) {
+    const previous = occupied[index - 1];
+    if (previous !== undefined && differenceInWallDays(day.date, previous.date) > 1) {
+      const from = addWallDays(previous.date, 1);
+      const to = addWallDays(day.date, -1);
+      list.push({ kind: 'gap', from, to, label: formatGap(from, to) });
+    }
+    list.push({
+      kind: 'date',
+      date: day.date,
+      label: formatDateHeading(day.date),
+      items: day.items,
+    });
+  }
+
+  const sections: UpcomingMonthSection[] = [];
+  for (const item of list) {
+    const anchor = item.kind === 'date' ? item.date : item.from;
+    const month = anchor.slice(0, 7);
+    const current = sections.at(-1);
+    if (current?.month === month) {
+      current.data.push(item);
+    } else {
+      sections.push({ month, title: formatMonthHeading(anchor), data: [item] });
+    }
+  }
+  return sections;
+}

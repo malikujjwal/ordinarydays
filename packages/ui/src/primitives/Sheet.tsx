@@ -1,4 +1,4 @@
-import { Modal, Pressable, View } from 'react-native';
+import { Modal, Platform, Pressable, View } from 'react-native';
 import { Close } from '../icons/index';
 import { useBreakpoint, useTheme } from '../theme/index';
 import { IconButton } from './IconButton';
@@ -41,6 +41,7 @@ export function Sheet({
       visible={open}
       transparent
       animationType="fade"
+      accessibilityLabel={title ?? 'Dialog'}
       onRequestClose={dismissible ? onClose : undefined}
     >
       <View
@@ -61,8 +62,7 @@ export function Sheet({
         />
 
         <View
-          accessibilityViewIsModal
-          accessibilityRole={centred ? 'alert' : undefined}
+          {...(Platform.OS === 'web' ? {} : { accessibilityViewIsModal: true })}
           testID={testID}
           style={[
             {

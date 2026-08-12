@@ -1,3 +1,4 @@
+import { MAX_AGENDA_DAYS } from '@od/shared/constants';
 import type { Instant } from '@od/shared/time';
 import type { User } from '@od/shared/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -246,5 +247,27 @@ describe('useAgenda', () => {
     expect(calls[0]?.url).toBe(
       'http://localhost:3000/v1/agenda?from=2026-08-06&to=2026-08-12&tz=UTC',
     );
+  });
+
+  it('derives the Plans window from today in the profile timezone with no include tokens', async () => {
+    const { calls } = stubFetch({ status: 200, body: agendaBody('2026-08-06') });
+    const { wrapper } = testClient('UTC');
+
+    const { result } = renderHook(
+      () =>
+        useAgenda({
+          now: '2026-08-06T16:00:00.000Z' as Instant,
+          days: MAX_AGENDA_DAYS,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.status).toBe('success'));
+    expect(calls).toEqual([
+      {
+        url: 'http://localhost:3000/v1/agenda?from=2026-08-06&to=2026-10-06&tz=UTC',
+        headers: expect.any(Object),
+      },
+    ]);
   });
 });

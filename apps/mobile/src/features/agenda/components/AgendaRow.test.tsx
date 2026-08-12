@@ -109,6 +109,24 @@ describe('AgendaRow affordances', () => {
     expect(screen.getByText('Season 2, episode 4')).toBeDefined();
   });
 
+  it('speaks a supplied date for an untimed Plans row and drops its list divider in a card', () => {
+    const untimed = item('event');
+    delete untimed.time;
+    mount(
+      <AgendaRow
+        item={untimed}
+        untimedContextLabel="Wed, Aug 19"
+        divider={false}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Evening plan, Wed, Aug 19, no time' }),
+    ).toBeDefined();
+    expect(screen.getByTestId(/^agenda-row-act_/).style.borderBottomWidth).toBe('0px');
+  });
+
   it.each([
     ['task', 'Done?'],
     ['meal', 'How did it go?'],

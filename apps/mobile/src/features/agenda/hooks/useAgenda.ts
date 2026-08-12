@@ -1,4 +1,5 @@
 import { getAgenda, getMe } from '@od/shared/client';
+import { addWallDays } from '@od/shared/recurrence';
 import type { AgendaQuery } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import { useQuery } from '@tanstack/react-query';
@@ -17,8 +18,10 @@ export interface AgendaWindow {
 }
 
 export interface UseAgendaOptions {
-  /** Absent means the product-owned Today request; supplied means a parameterised window. */
+  /** Absent with no `days` means the product-owned Today request. */
   window?: AgendaWindow;
+  /** An inclusive window beginning today. Plans supplies the endpoint's 62-day maximum. */
+  days?: number;
   /** The P2-20 minute ticker supplies this value so crossing midnight changes the key. */
   now?: Instant;
 }
@@ -39,21 +42,27 @@ export function useAgenda(options: UseAgendaOptions = {}) {
       ? clock.todayIn(timezone)
       : toWallDate(options.now, timezone);
   const request: AgendaQuery =
-    options.window === undefined
+    options.window !== undefined
       ? {
-          from: today,
-          to: today,
-          tz: timezone,
-          include: TODAY_AGENDA_INCLUDE,
-        }
-      : {
           from: options.window.from,
           to: options.window.to,
           tz: timezone,
           ...(options.window.include === undefined
             ? {}
             : { include: options.window.include }),
-        };
+        }
+      : options.days === undefined
+        ? {
+            from: today,
+            to: today,
+            tz: timezone,
+            include: TODAY_AGENDA_INCLUDE,
+          }
+        : {
+            from: today,
+            to: addWallDays(today, options.days - 1),
+            tz: timezone,
+          };
 
   const agenda = useQuery({
     queryKey: agendaKey(request.from, request.to, request.tz, request.include),

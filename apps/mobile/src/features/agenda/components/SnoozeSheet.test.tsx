@@ -97,7 +97,7 @@ describe('SnoozeSheet', () => {
     const callbacks = mount(timed, '19:00');
 
     fireEvent.click(screen.getByRole('button', { name: 'Pick a time' }));
-    fireEvent.change(screen.getByLabelText('Snooze time'), {
+    fireEvent.change(screen.getByLabelText('Snooze time', { selector: 'input' }), {
       target: { value: '18:55' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));

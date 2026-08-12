@@ -8,6 +8,8 @@ import type { WallDate } from '@/features/activity/model/dates';
 export interface AgendaRescheduleCoordinatorProps {
   item: AgendaItem;
   today: WallDate;
+  /** The date represented by the row, which may be later than today in Plans. */
+  renderedDate?: WallDate;
   onClose: () => void;
 }
 
@@ -15,6 +17,7 @@ export interface AgendaRescheduleCoordinatorProps {
 export function AgendaRescheduleCoordinator({
   item,
   today,
+  renderedDate,
   onClose,
 }: AgendaRescheduleCoordinatorProps) {
   const detail = useActivityDetail(item.activityId);
@@ -41,7 +44,7 @@ export function AgendaRescheduleCoordinator({
           {...(item.occurrenceDate === undefined
             ? {}
             : { occurrenceDate: item.occurrenceDate })}
-          renderedDate={today}
+          renderedDate={renderedDate ?? today}
           {...(item.time === undefined ? {} : { renderedTime: item.time })}
           onSchedule={detail.schedule}
           onPatch={detail.patch}

@@ -79,7 +79,9 @@ describe('RepeatSheet', () => {
     expect(screen.getByTestId('repeat-end-date')).toBeDefined();
     expect(screen.queryByTestId('repeat-count')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Pick a date' }));
-    expect(screen.getByLabelText('End date').getAttribute('type')).toBe('date');
+    expect(
+      screen.getByLabelText('End date', { selector: 'input' }).getAttribute('type'),
+    ).toBe('date');
   });
 
   it('commits a same-day correction without appending a duplicate anchor', async () => {

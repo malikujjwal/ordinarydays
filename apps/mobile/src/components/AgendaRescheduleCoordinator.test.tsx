@@ -1,6 +1,6 @@
 import type { Activity, AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import type { ActivityDetailView } from '@/features/activity/hooks/useActivity';
 import { AgendaRescheduleCoordinator } from './AgendaRescheduleCoordinator';
@@ -84,4 +84,26 @@ it('keeps one native sheet mounted while activity detail finishes loading', () =
 
   expect(screen.getByTestId('reschedule-sheet')).toBe(originalSheet);
   expect(screen.getByTestId('reschedule-occurrence-editor')).toBeDefined();
+});
+
+it('passes the rendered future date into the shared reschedule editor', () => {
+  mockUseActivityDetail.mockReturnValue({
+    status: 'success',
+    detail: { activity, reminders: [] },
+    ...sharedActions,
+  });
+
+  render(
+    <ThemeProvider scheme="light">
+      <AgendaRescheduleCoordinator
+        item={item}
+        today="2026-08-12"
+        renderedDate="2026-08-20"
+        onClose={() => {}}
+      />
+    </ThemeProvider>,
+  );
+
+  fireEvent.click(screen.getByTestId('quick-date-pick'));
+  expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe('2026-08-20');
 });

@@ -117,7 +117,7 @@ describe('DatePicker', () => {
     // act-wrapped helper flushes the re-render this assertion then reads.
     fireEvent.click(screen.getByRole('button', { name: 'Pick a date' }));
 
-    const calendar = screen.getByLabelText('Date');
+    const calendar = screen.getByLabelText('Date', { selector: 'input' });
     fireEvent.change(calendar, { target: { value: '2026-11-03' } });
     expect(onChange).toHaveBeenCalledExactlyOnceWith('2026-11-03');
   });
@@ -189,7 +189,7 @@ describe('TimePicker', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Set a time' }));
 
-    const wheel = screen.getByLabelText('Time');
+    const wheel = screen.getByLabelText('Time', { selector: 'input' });
     expect(wheel.getAttribute('step')).toBe('300');
 
     fireEvent.change(wheel, { target: { value: '19:30' } });

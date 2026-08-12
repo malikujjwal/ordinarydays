@@ -191,6 +191,8 @@ describe('Sheet', () => {
       </Sheet>,
     );
     expect(screen.getByText('Body')).toBeDefined();
+    const modal = document.querySelector('[aria-modal="true"]');
+    expect(modal?.getAttribute('aria-label')).toBe('Reschedule');
     expect(screen.getByRole('button', { name: 'Close' })).toBeDefined();
   });
 
