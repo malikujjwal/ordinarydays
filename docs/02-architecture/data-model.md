@@ -540,8 +540,9 @@ interface RecurrenceSegment {
 }
 ```
 
-Segments are **append-only**. An "all future occurrences" edit (rule or time) appends a
-segment; it never mutates or deletes an existing one. A segment is in force from its
+Segments are **append-only** except for the same-day correction below. An "all future
+occurrences" edit (rule or time) normally appends a segment; it never mutates or deletes an
+existing one. A segment is in force from its
 `effectiveFrom` to the day before the next segment's `effectiveFrom`; the last segment runs
 until `endDate`/`count`, or forever. The 21st segment is rejected with `validation_failed`.
 `schedule.time`/`schedule.endTime` mirror the **active** (last) segment so detail rendering,
@@ -552,6 +553,14 @@ startDate, time: schedule.time, endTime: schedule.endTime }] }`. See
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §6.2 for the product
 decision (segmented recurrence, 2026-08-07: history always renders under the rule in force
 at the time).
+
+**Same-day correction (founder-approved 2026-08-12).** If the active segment's
+`effectiveFrom` equals today in the Activity timezone, the client may replace only that last
+segment instead of appending, provided `ACT#<id>/OCC#<today>` does not exist. The META/index
+rewrite and `attribute_not_exists` condition on the occurrence key share one transaction, so
+an occurrence action racing the edit cannot lose history. Any stored occurrence override,
+any earlier active date, or any attempt to change an earlier segment keeps the append-only
+rule. This is correction-before-history, not an "edit all occurrences" operation.
 
 `Recurrence` remains a 1–20-segment stored shape, but `CreateActivityInput` accepts exactly
 one segment. Supplying more on create is `validation_failed`; the only way stored history
@@ -1325,6 +1334,7 @@ status/body.
 | Undo settlement | Resolve and delete the `USER#/SETTLE#` row and its `SETTLEMENT#` locator + conditionally remove only each recorded debtor/Settlement pair from the covered `ACT#/EXP#` items, recompute their roll-ups, then recompute balances from Expenses |
 | Purge account | **Shared-plan financial records survive the purge — retain and anonymise, never unwind (decision 2026-08-07).** Expenses and Settlement audit rows, with their locators, on shared plans that still have surviving participants are retained for those participants, with the deleted user's display name replaced by `Deleted user` wherever those rows render it. Balances involving the deleted account become read-only history: no further settlement, no recompute against a partition that no longer exists. Owned **shared** plans are cancelled, with notification to the participants, before any removal, and their partitions are retained for the survivors. Checkpoint and run exact whole-Settlement Undo only for financial rows nothing retains — Settlements whose covered Expenses sit on plans with no surviving participant. Then cascade owned private Activities and owned Lists (all pointers/`LLINK#`/`LNK#`) and remove the user from other-owned Lists (`MEMBER#`, both links, pointer, counter, viewer links) while retaining other users' `PERSON#` rows. Only after cross-partition cleanup may the user partition be deleted; see `auth.md` §8. |
 | Patch a prep task's title | Child `ACT#/META`, every required index row, and parent `ACT#/SUB#<child>` in one transaction. P2-13 repairs the Phase 1 omission that updated the child title without rewriting this denormalised pointer. |
+| Correct a recurrence segment that starts today | `ACT#/META` plus every required `USER#/IDX#` row, with a condition in the same transaction that `ACT#/OCC#<today>` does not exist. No occurrence is written; any existing occurrence makes the correction fail without changing the series. |
 | Complete / uncomplete / skip a non-occurrence | `ACT#/META` plus every owner/participant `USER#/IDX#` status and, for a prep task, parent `ACT#/SUB#<child>` in one transaction, following the Phase 1 PATCH transaction pattern |
 | Complete / skip an occurrence | `ACT#/OCC#<date>` only (put or delete as appropriate). Never the series. |
 | Cross-day occurrence reschedule / snooze / unsnooze | Nominal `ACT#/OCC#<date>` plus the destination `ACT#/MOVE#<date>` marker in one transaction; replacing a destination also removes the prior marker reference. Never the series. Same-day snooze remains one `OCC#` write. |

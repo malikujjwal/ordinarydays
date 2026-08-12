@@ -2185,6 +2185,14 @@ however many segments it has.
 > longer offered. The Phase 9 RFC 5545 custom rule remains separate. Hourly is deferred
 > because multiple same-day occurrences require a recurrence and occurrence-storage redesign.
 
+> **Founder amendment — 2026-08-12 (existing-series correction and native input QA).** If
+> the active segment starts today and today's occurrence has no stored override, changing
+> Repeat replaces that active segment under an atomic absence condition instead of trying to
+> append a duplicate `effectiveFrom`; after any occurrence action, append-only history still
+> wins. The Repeat sheet must keep focused controls visible above the iOS keyboard, provide a
+> Done path for the number pad, and use the shared native `DatePicker` for End date rather
+> than a text field.
+
 - **The sheet writes one rule segment's fields**, validated by the same Zod schema the
   server uses (P2-04) — imported, never redefined. It always writes explicit anchors:
   `byWeekday` from the anchor date's weekday for Weekly, `byMonthDay` for Monthly,

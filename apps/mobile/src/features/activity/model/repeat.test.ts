@@ -107,6 +107,39 @@ describe('buildRepeatValue', () => {
     ]);
   });
 
+  it('replaces a changed active rule that already starts on the correction date', () => {
+    const first: RecurrenceSegment = {
+      freq: 'daily',
+      interval: 1,
+      effectiveFrom: '2026-08-01',
+    };
+    const active: RecurrenceSegment = {
+      freq: 'weekly',
+      interval: 1,
+      byWeekday: [3],
+      effectiveFrom: ANCHOR,
+      time: '09:00',
+    };
+
+    expect(
+      buildRepeatValue({
+        option: 'monthly',
+        anchorDate: ANCHOR,
+        customDays: 2,
+        ends: { kind: 'never' },
+        current: { mode: 'fixed', segments: [first, active] },
+      }).segments,
+    ).toEqual([
+      first,
+      {
+        freq: 'monthly',
+        byMonthDay: [12],
+        effectiveFrom: ANCHOR,
+        time: '09:00',
+      },
+    ]);
+  });
+
   it('keeps an unchanged active rule and changes only Ends', () => {
     const active: RecurrenceSegment = {
       freq: 'daily',

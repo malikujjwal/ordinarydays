@@ -519,6 +519,15 @@ existing Occurrence-override semantics (§6.3), unchanged: an occurrence overrid
 never mutates the series, and appending a segment is an owner's edit to the series row, not
 an occurrence action.
 
+> **Same-day correction amendment — 2026-08-12.** There is one narrow exception to
+> append-only history: when the active segment itself starts today and today's occurrence has
+> no stored completion, skip, snooze, or reschedule override, changing Repeat replaces that
+> active segment in place. This lets a user correct a rule immediately after creating it
+> without attempting two segments with the same `effectiveFrom`. The write conditionally
+> verifies that `OCC#<today>` is absent in the same transaction. Once today's occurrence has
+> any stored action, history exists and the ordinary append-only rule applies; the user edits
+> from the next occurrence instead. Every segment before the active one remains immutable.
+
 A series is capped at **20 segments**. The edit that would create a 21st returns
 `validation_failed`, and the sheet explains it and suggests ending the series (see
 [`activities.md`](activities.md#64-deleting) §6.4) and starting a new one — a series edited

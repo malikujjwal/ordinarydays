@@ -322,6 +322,56 @@ describe('U4 — tapping a date opens the reschedule sheet', () => {
 });
 
 describe('editing in place', () => {
+  it('applies a same-day repeat correction to an existing series and refreshes detail', async () => {
+    const current = plan({
+      schedule: {
+        date: TODAY,
+        time: '19:00',
+        timezone: 'America/New_York',
+      },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', interval: 1, effectiveFrom: TODAY, time: '19:00' }],
+      },
+    });
+    const corrected = plan({
+      ...current,
+      updatedAt: '2026-08-12T12:00:00.000Z',
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'weekdays', effectiveFrom: TODAY, time: '19:00' }],
+      },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(current) },
+      { status: 200, body: { data: corrected, meta: { requestId: 'req_patch' } } },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Daily, change repeat' }));
+    fireEvent.change(screen.getByTestId('repeat-option'), {
+      target: { value: 'weekdays' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
+
+    await waitFor(() =>
+      expect(sent.filter((request) => request.method === 'PATCH')).toHaveLength(1),
+    );
+    const request = sent.find((entry) => entry.method === 'PATCH');
+    expect(request?.body).toEqual({
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'weekdays', effectiveFrom: TODAY, time: '19:00' }],
+      },
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Every weekday, change repeat' }),
+      ).toBeDefined(),
+    );
+  });
+
   it('commits the title on blur with If-Match, and no Save button exists', async () => {
     stubFetch(
       { status: 200, body: detailBody(plan()) },

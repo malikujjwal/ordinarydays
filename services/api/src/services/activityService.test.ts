@@ -1062,6 +1062,60 @@ describe('patchActivity', () => {
     });
   });
 
+  it('replaces an untouched active segment that starts today and guards its occurrence row', async () => {
+    const todaySegment = {
+      freq: 'daily' as const,
+      effectiveFrom: '2026-08-09',
+      time: '09:00',
+    };
+    seed(
+      recurring({
+        schedule: {
+          date: '2026-08-09',
+          time: '09:00',
+          timezone: 'America/New_York',
+        },
+        recurrence: { mode: 'fixed', segments: [todaySegment] },
+      }),
+    );
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            {
+              freq: 'weekly',
+              interval: 1,
+              byWeekday: [0],
+              effectiveFrom: '2026-08-09',
+            },
+          ],
+        },
+      },
+      VERSION,
+      LATER,
+    );
+
+    expect(result.recurrence?.segments).toEqual([
+      {
+        freq: 'weekly',
+        interval: 1,
+        byWeekday: [0],
+        effectiveFrom: '2026-08-09',
+        time: '09:00',
+      },
+    ]);
+    expect(repository.patchActivity).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ recurrence: result.recurrence }),
+      VERSION,
+      expect.objectContaining({ requireMissingOccurrenceDate: '2026-08-09' }),
+    );
+  });
+
   it('mirrors an all-future segment time onto the active schedule without rewriting history', async () => {
     seed(recurring());
 

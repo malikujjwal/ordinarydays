@@ -132,10 +132,14 @@ function sameRule(a: RecurrenceSegment, b: RecurrenceSegment): boolean {
   return JSON.stringify(ruleFields(a)) === JSON.stringify(ruleFields(b));
 }
 
+function isSameDayCorrection(active: RecurrenceSegment, anchorDate: string): boolean {
+  return active.effectiveFrom === anchorDate;
+}
+
 /**
  * Builds the complete request value and validates it with the server's own Zod schema.
- * Existing history is byte-identical; a changed rule appends exactly one client placeholder
- * segment whose `effectiveFrom` the server replaces.
+ * Existing history is byte-identical. A changed rule replaces an untouched same-day active
+ * segment; otherwise it appends one placeholder segment whose `effectiveFrom` the server owns.
  */
 export function buildRepeatValue(input: BuildRepeatValueInput): Recurrence {
   const active = input.current?.segments.at(-1);
@@ -145,7 +149,9 @@ export function buildRepeatValue(input: BuildRepeatValueInput): Recurrence {
       ? [next]
       : active !== undefined && sameRule(active, next)
         ? input.current.segments
-        : [...input.current.segments, next];
+        : active !== undefined && isSameDayCorrection(active, input.anchorDate)
+          ? [...input.current.segments.slice(0, -1), next]
+          : [...input.current.segments, next];
 
   return recurrenceSchema.parse({
     mode: 'fixed',

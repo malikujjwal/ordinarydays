@@ -380,6 +380,19 @@ describe('patch', () => {
     });
   });
 
+  it('guards a same-day recurrence correction against stored occurrence history', async () => {
+    const previous = activity();
+    await patchActivity(ALICE, activity(), previous.updatedAt, {
+      previous,
+      requireMissingOccurrenceDate: '2026-08-12',
+    });
+
+    expect(sentItems().at(-1)?.ConditionCheck).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: 'OCC#2026-08-12' },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
   /**
    * **The one that matters, in its corrected form.** The index entry keeps its primary key
    * across a bucket change — only `gsi1pk`/`gsi1sk` move — so a whole-item `Put` is what

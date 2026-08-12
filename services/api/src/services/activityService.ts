@@ -441,6 +441,65 @@ function seriesLevel(supplied: Recurrence, segments: RecurrenceSegment[]): Recur
   };
 }
 
+function activityLocalDate(schedule: ActivitySchedule, now: string): string {
+  return formatInTimeZone(new Date(now), schedule.timezone, 'yyyy-MM-dd');
+}
+
+function isSameDayCorrection(
+  stored: Recurrence,
+  supplied: Recurrence,
+  localDate: string,
+): boolean {
+  if (supplied.segments.length !== stored.segments.length) return false;
+  const storedActive = stored.segments.at(-1);
+  const suppliedActive = supplied.segments.at(-1);
+  if (
+    storedActive === undefined ||
+    suppliedActive === undefined ||
+    storedActive.effectiveFrom !== localDate ||
+    isDeepStrictEqual(storedActive, suppliedActive)
+  ) {
+    return false;
+  }
+  return stored.segments
+    .slice(0, -1)
+    .every((segment, index) => isDeepStrictEqual(segment, supplied.segments[index]));
+}
+
+function segmentTimeSource(
+  segment: RecurrenceSegment,
+  schedule: ActivitySchedule,
+): Pick<RecurrenceSegment, 'time' | 'endTime'> {
+  return {
+    ...((segment.time ?? schedule.time) === undefined
+      ? {}
+      : { time: segment.time ?? schedule.time }),
+    ...((segment.endTime ?? schedule.endTime) === undefined
+      ? {}
+      : { endTime: segment.endTime ?? schedule.endTime }),
+  };
+}
+
+function sameDayCorrectionDate(
+  current: Activity,
+  patch: PatchActivityInput,
+  now: string,
+): string | undefined {
+  if (
+    current.recurrence === undefined ||
+    current.schedule === undefined ||
+    patch.recurrence === undefined ||
+    patch.recurrence === null ||
+    patch.editedFromDate !== undefined
+  ) {
+    return undefined;
+  }
+  const localDate = activityLocalDate(current.schedule, now);
+  return isSameDayCorrection(current.recurrence, patch.recurrence, localDate)
+    ? localDate
+    : undefined;
+}
+
 function recurrenceForPatch(
   current: Activity,
   patch: PatchActivityInput,
@@ -482,24 +541,39 @@ function recurrenceForPatch(
   if (supplied.segments.length < oldCount || supplied.segments.length > oldCount + 1) {
     recurrenceFailure(RECURRENCE_APPEND_ONLY);
   }
+
+  if (supplied.segments.length === oldCount) {
+    if (patch.editedFromDate !== undefined) {
+      recurrenceFailure(EDIT_DATE_NEEDS_APPEND, 'editedFromDate');
+    }
+    const localDate = activityLocalDate(schedule, now);
+    if (isSameDayCorrection(stored, supplied, localDate)) {
+      const incoming = supplied.segments.at(-1);
+      if (incoming === undefined) recurrenceFailure(RECURRENCE_APPEND_ONLY);
+      return validateRecurrence(
+        seriesLevel(supplied, [
+          ...stored.segments.slice(0, -1),
+          serverSegment(incoming, localDate, segmentTimeSource(incoming, schedule)),
+        ]),
+      );
+    }
+    for (const [index, oldSegment] of stored.segments.entries()) {
+      if (!isDeepStrictEqual(supplied.segments[index], oldSegment)) {
+        recurrenceFailure(RECURRENCE_APPEND_ONLY, `recurrence.segments.${index}`);
+      }
+    }
+    return validateRecurrence(seriesLevel(supplied, stored.segments));
+  }
+
   for (const [index, oldSegment] of stored.segments.entries()) {
     if (!isDeepStrictEqual(supplied.segments[index], oldSegment)) {
       recurrenceFailure(RECURRENCE_APPEND_ONLY, `recurrence.segments.${index}`);
     }
   }
 
-  if (supplied.segments.length === oldCount) {
-    if (patch.editedFromDate !== undefined) {
-      recurrenceFailure(EDIT_DATE_NEEDS_APPEND, 'editedFromDate');
-    }
-    return validateRecurrence(seriesLevel(supplied, stored.segments));
-  }
-
   const incoming = supplied.segments[oldCount];
   if (incoming === undefined) recurrenceFailure(RECURRENCE_APPEND_ONLY);
-  const anchor =
-    patch.editedFromDate ??
-    formatInTimeZone(new Date(now), schedule.timezone, 'yyyy-MM-dd');
+  const anchor = patch.editedFromDate ?? activityLocalDate(schedule, now);
 
   if (
     patch.editedFromDate !== undefined &&
@@ -521,14 +595,7 @@ function recurrenceForPatch(
       ...stored.segments,
       // P2-26's all-future reschedule carries the new active time on the appended segment.
       // Existing history stays byte-identical; the active schedule mirror is updated below.
-      serverSegment(incoming, anchor, {
-        ...((incoming.time ?? schedule.time) === undefined
-          ? {}
-          : { time: incoming.time ?? schedule.time }),
-        ...((incoming.endTime ?? schedule.endTime) === undefined
-          ? {}
-          : { endTime: incoming.endTime ?? schedule.endTime }),
-      }),
+      serverSegment(incoming, anchor, segmentTimeSource(incoming, schedule)),
     ]),
   );
 }
@@ -573,6 +640,7 @@ export async function patchActivity(
   const current = access.activity;
   if (current.updatedAt !== ifMatch) throw staleEdit(String(current.updatedAt));
 
+  const correctionDate = sameDayCorrectionDate(current, patch, now);
   const change = applyKindChange(current, patch, log);
   const next = merge(current, patch, change, now);
   const parent =
@@ -587,6 +655,9 @@ export async function patchActivity(
   try {
     await putPatch(userId, next, ifMatch, {
       previous: current,
+      ...(correctionDate === undefined
+        ? {}
+        : { requireMissingOccurrenceDate: correctionDate }),
       ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
       ...(updatesExistingChildPointer ? { updateChildPointer: true } : {}),
     });
@@ -648,27 +719,32 @@ function merge(
    */
   const schedule = base.schedule;
   const recurrenceUpdate = recurrenceForPatch(current, patch, schedule, now);
-  const appendedSegment =
+  const activeRuleSegment =
     schedule !== undefined &&
     current.recurrence !== undefined &&
     recurrenceUpdate !== undefined &&
     recurrenceUpdate !== null &&
-    recurrenceUpdate.segments.length === current.recurrence.segments.length + 1
+    !isDeepStrictEqual(
+      recurrenceUpdate.segments.at(-1),
+      current.recurrence.segments.at(-1),
+    )
       ? recurrenceUpdate.segments.at(-1)
       : undefined;
   const activeSchedule =
-    schedule === undefined || appendedSegment === undefined
+    schedule === undefined || activeRuleSegment === undefined
       ? schedule
       : toSchedule({
           date: schedule.date,
           timezone: schedule.timezone,
-          ...(appendedSegment.time === undefined ? {} : { time: appendedSegment.time }),
-          ...(appendedSegment.endTime === undefined
+          ...(activeRuleSegment.time === undefined
             ? {}
-            : { endTime: appendedSegment.endTime }),
+            : { time: activeRuleSegment.time }),
+          ...(activeRuleSegment.endTime === undefined
+            ? {}
+            : { endTime: activeRuleSegment.endTime }),
         });
   const scheduleTimeChanged =
-    appendedSegment !== undefined &&
+    activeRuleSegment !== undefined &&
     (schedule?.time !== activeSchedule?.time ||
       schedule?.endTime !== activeSchedule?.endTime);
 

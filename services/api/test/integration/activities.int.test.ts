@@ -338,7 +338,12 @@ describe('reading one activity back', () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(Object.keys(body.data).sort()).toEqual(['activity', 'reminders']);
+    expect(Object.keys(body.data).sort()).toEqual([
+      'activity',
+      'completedOccurrenceCount',
+      'reminders',
+    ]);
+    expect(body.data.completedOccurrenceCount).toBe(0);
     expect(body.data.activity).toMatchObject({
       activityId: data.activityId,
       title: 'Buy milk',
@@ -700,6 +705,84 @@ describe('patching an activity', () => {
           movedFrom: ['2026-08-11'],
         }),
       ]),
+    );
+  });
+
+  it('replaces an active segment created today while no occurrence history exists', async () => {
+    const activity = await created({
+      ...TASK,
+      schedule: { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-12' }],
+      },
+    });
+
+    const res = await patch(
+      activity.activityId,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            {
+              freq: 'weekly',
+              interval: 1,
+              byWeekday: [3],
+              effectiveFrom: '2026-08-12',
+            },
+          ],
+        },
+      },
+      { ifMatch: activity.updatedAt },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.recurrence.segments).toEqual([
+      {
+        freq: 'weekly',
+        interval: 1,
+        byWeekday: [3],
+        effectiveFrom: '2026-08-12',
+        time: '18:00',
+      },
+    ]);
+  });
+
+  it('rejects a same-day replacement after today has occurrence history', async () => {
+    const activity = await created({
+      ...TASK,
+      schedule: { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-12' }],
+      },
+    });
+    const completed = await withUser().fetch(
+      new Request(`http://localhost/v1/activities/${activity.activityId}/complete`, {
+        method: 'POST',
+        headers: authedHeaders({ idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ occurrenceDate: '2026-08-12' }),
+      }),
+    );
+    expect(completed.status).toBe(200);
+
+    const res = await patch(
+      activity.activityId,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'weekdays', effectiveFrom: '2026-08-12' }],
+        },
+      },
+      { ifMatch: activity.updatedAt },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.message).toContain('already has history');
+    expect((await repo.getActivityMeta(activity.activityId))?.recurrence).toEqual(
+      activity.recurrence,
     );
   });
 

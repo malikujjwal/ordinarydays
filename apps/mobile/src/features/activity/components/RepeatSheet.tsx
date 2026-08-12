@@ -1,8 +1,8 @@
 import { describeRecurrence } from '@od/shared/recurrence';
 import type { Recurrence } from '@od/shared/types';
-import { Button, Field, SelectField, Sheet, Text, useTheme } from '@od/ui';
+import { Button, DatePicker, Field, SelectField, Sheet, Text, useTheme } from '@od/ui';
 import { useEffect, useMemo, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { InputAccessoryView, Keyboard, Platform, ScrollView, View } from 'react-native';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import { removeRecurrenceConfirmation } from '@/features/activity/model/confirmations';
 import {
@@ -22,6 +22,8 @@ const endsOptions = [
   { value: 'count', label: 'After N times' },
 ] as const;
 const CUSTOM_DAYS_PATTERN = /^\d+$/;
+const DAYS_INPUT_ACCESSORY = 'repeat-days-keyboard';
+const PICK_DATE_ONLY = ['pick'] as const;
 
 export interface RepeatSheetProps {
   open: boolean;
@@ -175,7 +177,7 @@ export function RepeatSheet({
   async function commitNever() {
     if (await onCommit(undefined)) {
       setConfirmNever(false);
-      onClose();
+      close();
     }
   }
 
@@ -211,7 +213,7 @@ export function RepeatSheet({
       });
       if (limitAttempt !== undefined) {
         if (await onCommit(limitAttempt)) {
-          onClose();
+          close();
           return;
         }
         setSeriesLimit(true);
@@ -222,7 +224,7 @@ export function RepeatSheet({
     }
 
     if (await onCommit(next)) {
-      onClose();
+      close();
       return;
     }
     if (value !== undefined && value.segments.length >= 20) setSeriesLimit(true);
@@ -231,7 +233,7 @@ export function RepeatSheet({
   async function endSeries() {
     if (value === undefined) return;
     const next = endRepeatSeries(value, anchorDate);
-    if (await onCommit(next)) onClose();
+    if (await onCommit(next)) close();
   }
 
   const summary =
@@ -245,12 +247,20 @@ export function RepeatSheet({
       ? undefined
       : removeRecurrenceConfirmation(activityForConfirmation, completedOccurrenceCount);
 
+  function close() {
+    Keyboard.dismiss();
+    onClose();
+  }
+
   return (
     <>
-      <Sheet open={open} onClose={onClose} title="Repeat" testID="repeat-sheet">
+      <Sheet open={open} onClose={close} title="Repeat" testID="repeat-sheet">
         <ScrollView
           style={{ maxHeight: 620 }}
           contentContainerStyle={{ gap: theme.space[5] }}
+          automaticallyAdjustKeyboardInsets
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          keyboardShouldPersistTaps="handled"
         >
           <SelectField
             label="Repeats"
@@ -266,6 +276,7 @@ export function RepeatSheet({
               value={customDaysText}
               onChangeText={setCustomDaysText}
               keyboardType="number-pad"
+              inputAccessoryViewID={DAYS_INPUT_ACCESSORY}
               maxLength={3}
               {...(customDaysValid ? {} : { error: 'Enter a number from 2 to 365.' })}
               testID="repeat-interval"
@@ -290,11 +301,15 @@ export function RepeatSheet({
                 testID="repeat-ends"
               />
               {ends.kind === 'date' ? (
-                <Field
+                <DatePicker
                   label="End date"
                   value={endDate}
-                  onChangeText={setEndDate}
-                  placeholder="YYYY-MM-DD"
+                  onChange={(date) => {
+                    if (date !== null) setEndDate(date);
+                  }}
+                  today={anchorDate}
+                  min={anchorDate}
+                  quickOptions={PICK_DATE_ONLY}
                   testID="repeat-end-date"
                 />
               ) : ends.kind === 'count' ? (
@@ -356,6 +371,21 @@ export function RepeatSheet({
           />
         </ScrollView>
       </Sheet>
+
+      {Platform.OS === 'ios' && option === 'custom' ? (
+        <InputAccessoryView nativeID={DAYS_INPUT_ACCESSORY}>
+          <View
+            style={{
+              alignItems: 'flex-end',
+              paddingHorizontal: theme.space[4],
+              paddingVertical: theme.space[2],
+              backgroundColor: theme.colors.surfaceOverlay,
+            }}
+          >
+            <Button label="Done" variant="ghost" onPress={Keyboard.dismiss} />
+          </View>
+        </InputAccessoryView>
+      ) : null}
 
       {confirmation === undefined ? null : (
         <ConfirmDialog

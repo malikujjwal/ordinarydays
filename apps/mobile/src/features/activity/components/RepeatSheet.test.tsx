@@ -78,6 +78,30 @@ describe('RepeatSheet', () => {
     fireEvent.change(screen.getByTestId('repeat-ends'), { target: { value: 'date' } });
     expect(screen.getByTestId('repeat-end-date')).toBeDefined();
     expect(screen.queryByTestId('repeat-count')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Pick a date' }));
+    expect(screen.getByLabelText('End date').getAttribute('type')).toBe('date');
+  });
+
+  it('commits a same-day correction without appending a duplicate anchor', async () => {
+    const onCommit = vi.fn(async (_value: Recurrence | undefined) => true);
+    mount(
+      {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', interval: 1, effectiveFrom: TODAY }],
+      },
+      { onCommit },
+    );
+
+    fireEvent.change(screen.getByTestId('repeat-option'), {
+      target: { value: 'weekdays' },
+    });
+    expect(screen.getByTestId('repeat-summary').textContent).toContain('Every weekday');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
+
+    await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(1));
+    expect(onCommit.mock.calls[0]?.[0]?.segments).toEqual([
+      { freq: 'weekdays', effectiveFrom: TODAY },
+    ]);
   });
 
   it('turns a rejected 21st rule into an explanation with an End series path', async () => {

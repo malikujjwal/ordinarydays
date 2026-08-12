@@ -5,6 +5,7 @@ import { TABLE } from '@od/shared/table';
 import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
+import { AppError } from '../lib/errors.js';
 import {
   type CleanupWork,
   IdempotencyRaceError,
@@ -23,6 +24,7 @@ import {
   gsi1NeedsDate,
   gsi1Recurring,
   gsi1Scheduled,
+  occurrence,
   participantPrefix,
   reminder as reminderKey,
 } from './keys.js';
@@ -426,6 +428,8 @@ export interface PatchOptions extends CreateOptions {
   readonly indexedUserIds?: readonly string[];
   /** Keep the parent's denormalised `SUB#` title/status in the same transaction. */
   readonly updateChildPointer?: boolean;
+  /** A same-day recurrence correction is valid only while that date has no stored history. */
+  readonly requireMissingOccurrenceDate?: string;
 }
 
 /**
@@ -508,6 +512,17 @@ export async function patchActivity(
     });
   }
 
+  const occurrenceGuardIndex =
+    options.requireMissingOccurrenceDate === undefined ? undefined : items.length;
+  if (options.requireMissingOccurrenceDate !== undefined) {
+    items.push({
+      ConditionCheck: {
+        Key: occurrence(next.activityId, options.requireMissingOccurrenceDate),
+        ConditionExpression: 'attribute_not_exists(pk)',
+      },
+    });
+  }
+
   const builder = new TransactionBuilder(
     'patchActivity',
     options.idempotencyReceipt === undefined ? 0 : 1,
@@ -518,8 +533,17 @@ export async function patchActivity(
 
   await transactWrite(builder.build(), {
     operation: 'patchActivity',
-    onConditionFailed: () =>
-      options.idempotencyReceipt === undefined ? undefined : new IdempotencyRaceError(),
+    onConditionFailed: (index) => {
+      if (index === occurrenceGuardIndex) {
+        return new AppError(
+          'validation_failed',
+          "Today's occurrence already has history. Change repeat from the next occurrence instead.",
+        );
+      }
+      return options.idempotencyReceipt === undefined
+        ? undefined
+        : new IdempotencyRaceError();
+    },
   });
 }
 

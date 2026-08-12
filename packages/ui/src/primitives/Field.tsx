@@ -24,6 +24,8 @@ export interface FieldProps {
   required?: boolean;
   multiline?: boolean;
   keyboardType?: 'default' | 'email-address' | 'number-pad' | 'url';
+  /** Connects an iOS keyboard toolbar to inputs such as the number pad, which has no Return. */
+  inputAccessoryViewID?: string;
   maxLength?: number;
   disabled?: boolean;
   onBlur?: () => void;
@@ -58,6 +60,7 @@ export function Field({
   required = false,
   multiline = false,
   keyboardType = 'default',
+  inputAccessoryViewID,
   maxLength,
   disabled = false,
   onBlur,
@@ -103,6 +106,7 @@ export function Field({
         placeholderTextColor={theme.colors.textDisabled}
         multiline={multiline}
         keyboardType={keyboardType}
+        {...(inputAccessoryViewID === undefined ? {} : { inputAccessoryViewID })}
         {...(maxLength === undefined ? {} : { maxLength })}
         onFocus={() => setFocused(true)}
         onBlur={() => {
