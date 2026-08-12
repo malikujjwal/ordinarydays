@@ -2818,6 +2818,26 @@
           "activity": {
             "$ref": "#/components/schemas/Activity"
           },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "complete": {
+                "type": "boolean"
+              },
+              "skip": {
+                "type": "boolean"
+              },
+              "snooze": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "complete",
+              "skip",
+              "snooze"
+            ],
+            "additionalProperties": false
+          },
           "reminders": {
             "type": "array",
             "items": {

@@ -8,6 +8,7 @@ import {
   agendaSwipeActions,
   allAgendaSwipeActions,
 } from '@/features/agenda/model/swipeActions';
+import { canResolvePassedAgendaItem } from '@/lib/passedPlanResolution';
 import { AgendaRow, type AgendaRowProps } from './AgendaRow';
 
 export interface SwipeableRowProps extends AgendaRowProps {
@@ -33,6 +34,8 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
   const [focusWithin, setFocusWithin] = useState(false);
   const [rowFocused, setRowFocused] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const hasResolutionPrompt =
+    rowProps.onOpenResolution !== undefined && canResolvePassedAgendaItem(item);
   const controlsVisible = hovered || focusWithin || rowFocused || menuOpen;
 
   const dispatch = useCallback(
@@ -102,73 +105,75 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
         onBodyBlur={() => setRowFocused(false)}
       />
 
-      <View
-        testID="agenda-web-controls"
-        aria-hidden={!controlsVisible}
-        accessibilityElementsHidden={!controlsVisible}
-        importantForAccessibility={controlsVisible ? 'auto' : 'no-hide-descendants'}
-        style={{
-          position: 'absolute',
-          top: theme.space[2],
-          right: 0,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: theme.space[2],
-          padding: theme.space[2],
-          borderRadius: theme.radius.lg,
-          backgroundColor: theme.colors.surfaceRaised,
-          opacity: controlsVisible ? 1 : 0,
-          pointerEvents: controlsVisible ? 'auto' : 'none',
-          zIndex: 2,
-        }}
-      >
-        {positive === undefined ? null : (
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel={positive.label}
-            onFocus={() => setFocusWithin(true)}
-            onBlur={() => setFocusWithin(false)}
-            onPress={() => dispatch(positive)}
-            testID="agenda-web-positive-action"
-            style={{
-              minHeight: theme.layout.hitTarget,
-              paddingHorizontal: theme.space[4],
-              borderRadius: theme.radius.pill,
-              backgroundColor: theme.colors.success,
-              alignItems: 'center',
-            }}
-          >
-            <Text variant="footnoteStrong" color="inverse">
-              {positive.label}
-            </Text>
-          </Touchable>
-        )}
+      {hasResolutionPrompt ? null : (
+        <View
+          testID="agenda-web-controls"
+          aria-hidden={!controlsVisible}
+          accessibilityElementsHidden={!controlsVisible}
+          importantForAccessibility={controlsVisible ? 'auto' : 'no-hide-descendants'}
+          style={{
+            position: 'absolute',
+            top: theme.space[2],
+            right: 0,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: theme.space[2],
+            padding: theme.space[2],
+            borderRadius: theme.radius.lg,
+            backgroundColor: theme.colors.surfaceRaised,
+            opacity: controlsVisible ? 1 : 0,
+            pointerEvents: controlsVisible ? 'auto' : 'none',
+            zIndex: 2,
+          }}
+        >
+          {positive === undefined ? null : (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={positive.label}
+              onFocus={() => setFocusWithin(true)}
+              onBlur={() => setFocusWithin(false)}
+              onPress={() => dispatch(positive)}
+              testID="agenda-web-positive-action"
+              style={{
+                minHeight: theme.layout.hitTarget,
+                paddingHorizontal: theme.space[4],
+                borderRadius: theme.radius.pill,
+                backgroundColor: theme.colors.success,
+                alignItems: 'center',
+              }}
+            >
+              <Text variant="footnoteStrong" color="inverse">
+                {positive.label}
+              </Text>
+            </Touchable>
+          )}
 
-        {actions.secondary.length === 0 ? null : (
-          <Touchable
-            square
-            accessibilityRole="button"
-            accessibilityLabel={`More actions for ${item.title}`}
-            onFocus={() => setFocusWithin(true)}
-            onBlur={() => setFocusWithin(false)}
-            onPress={() => setMenuOpen((open) => !open)}
-            testID="agenda-web-more-actions"
-            style={{
-              alignItems: 'center',
-              borderRadius: theme.radius.pill,
-              borderWidth: 1,
-              borderColor: theme.colors.borderStrong,
-              backgroundColor: theme.colors.surfaceRaised,
-            }}
-          >
-            <Text variant="title" color="textPrimary">
-              ⋯
-            </Text>
-          </Touchable>
-        )}
-      </View>
+          {actions.secondary.length === 0 ? null : (
+            <Touchable
+              square
+              accessibilityRole="button"
+              accessibilityLabel={`More actions for ${item.title}`}
+              onFocus={() => setFocusWithin(true)}
+              onBlur={() => setFocusWithin(false)}
+              onPress={() => setMenuOpen((open) => !open)}
+              testID="agenda-web-more-actions"
+              style={{
+                alignItems: 'center',
+                borderRadius: theme.radius.pill,
+                borderWidth: 1,
+                borderColor: theme.colors.borderStrong,
+                backgroundColor: theme.colors.surfaceRaised,
+              }}
+            >
+              <Text variant="title" color="textPrimary">
+                ⋯
+              </Text>
+            </Touchable>
+          )}
+        </View>
+      )}
 
-      {menuOpen ? (
+      {!hasResolutionPrompt && menuOpen ? (
         <View
           accessibilityRole="menu"
           accessibilityLabel={`Actions for ${item.title}`}

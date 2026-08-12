@@ -132,6 +132,7 @@ describe('the generated document', () => {
 
     expect(Object.keys(detail.properties ?? {}).sort()).toEqual([
       'activity',
+      'capabilities',
       'completedOccurrenceCount',
       'reminders',
     ]);

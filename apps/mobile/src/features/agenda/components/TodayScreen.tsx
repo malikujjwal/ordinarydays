@@ -4,11 +4,12 @@ import {
   TODAY_EARLIER_COLLAPSED_LIMIT,
 } from '@od/shared/constants';
 import { fixedClock, toWallDate, toWallTime } from '@od/shared/time';
-import type { AgendaData, AgendaItem } from '@od/shared/types';
+import type { ActivityOutcome, AgendaData, AgendaItem } from '@od/shared/types';
 import { Button, EmptyState, Skeleton, useMotion, useTheme } from '@od/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
+import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { TabScreen } from '@/components/TabScreen';
 import { useAgenda } from '@/features/agenda/hooks/useAgenda';
 import { useAgendaActivityActions } from '@/features/agenda/hooks/useAgendaActivityActions';
@@ -25,6 +26,7 @@ export interface TodayScreenProps {
   onOpenAgendaItem: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onAgendaAction?: (item: AgendaItem, action: AgendaSwipeAction) => void;
+  onResolvePassed?: (item: AgendaItem, outcome: ActivityOutcome) => void;
 }
 
 type CompletionSource = 'schedule' | 'anytime';
@@ -90,6 +92,7 @@ export function TodayScreen({
   onOpenAgendaItem,
   onToggleComplete,
   onAgendaAction,
+  onResolvePassed,
 }: TodayScreenProps) {
   const theme = useTheme();
   const motion = useMotion();
@@ -98,6 +101,7 @@ export function TodayScreen({
   const [showAllEarlier, setShowAllEarlier] = useState(false);
   const [snoozeItem, setSnoozeItem] = useState<AgendaItem>();
   const [rescheduleItem, setRescheduleItem] = useState<AgendaItem>();
+  const [resolutionItem, setResolutionItem] = useState<AgendaItem>();
   const [completionTransitions, setCompletionTransitions] = useState<
     CompletionTransitionState[]
   >([]);
@@ -133,6 +137,7 @@ export function TodayScreen({
     },
   });
   const effectiveToggleComplete = onToggleComplete ?? activityActions.toggleComplete;
+  const effectiveResolvePassed = onResolvePassed ?? activityActions.resolvePassed;
 
   if (agenda.status === 'pending') {
     return (
@@ -332,6 +337,7 @@ export function TodayScreen({
             onOpenReschedule={setRescheduleItem}
             onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
+            onOpenResolution={setResolutionItem}
             footer={
               !showAllEarlier &&
               sections.earlier.length > TODAY_EARLIER_COLLAPSED_LIMIT ? (
@@ -360,6 +366,19 @@ export function TodayScreen({
           item={rescheduleItem}
           today={today}
           onClose={() => setRescheduleItem(undefined)}
+        />
+      )}
+      {resolutionItem === undefined ? null : (
+        <PassedPlanResolutionSheet
+          open
+          type={resolutionItem.type}
+          title={resolutionItem.title}
+          onClose={() => setResolutionItem(undefined)}
+          onResolve={(outcome) => {
+            const item = resolutionItem;
+            setResolutionItem(undefined);
+            effectiveResolvePassed(item, outcome);
+          }}
         />
       )}
     </TabScreen>

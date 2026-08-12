@@ -166,6 +166,58 @@ describe('useAgendaActivityActions completion undo', () => {
     expect(mounted.client.getQueryData(mounted.key)).toEqual(cached);
   });
 
+  it('records an exact passed-plan outcome and Undo compensates the same occurrence', async () => {
+    clientCalls.complete.mockResolvedValue(undefined);
+    clientCalls.uncomplete.mockResolvedValue(undefined);
+    const mounted = setup();
+    const passed: AgendaItem = {
+      ...first,
+      type: 'event',
+      title: 'Dentist appointment',
+      hasCheckbox: false,
+      time: '10:00',
+      occurrenceDate: '2026-08-11',
+      isRecurring: true,
+      isPast: true,
+    };
+    mounted.client.setQueryData<AgendaData>(mounted.key, {
+      days: [
+        {
+          date: '2026-08-11',
+          schedule: [],
+          anytime: [],
+          earlier: [passed],
+        },
+      ],
+      warnings: [],
+    });
+
+    act(() => mounted.result.current.resolvePassed(passed, 'didnt_go'));
+
+    await waitFor(() => expect(clientCalls.complete).toHaveBeenCalledOnce());
+    expect(clientCalls.complete).toHaveBeenCalledWith(
+      expect.anything(),
+      passed.activityId,
+      { occurrenceDate: '2026-08-11', outcome: 'didnt_go' },
+      'idem-test-key',
+    );
+    expect(
+      mounted.client.getQueryData<AgendaData>(mounted.key)?.days[0]?.earlier[0]?.status,
+    ).toBe('skipped_occurrence');
+
+    act(() => useToast.getState().undo());
+    await waitFor(() => expect(clientCalls.uncomplete).toHaveBeenCalledOnce());
+    expect(clientCalls.uncomplete).toHaveBeenCalledWith(
+      expect.anything(),
+      passed.activityId,
+      { occurrenceDate: '2026-08-11' },
+      'idem-test-key',
+    );
+    expect(
+      mounted.client.getQueryData<AgendaData>(mounted.key)?.days[0]?.earlier[0]?.status,
+    ).toBe('scheduled');
+  });
+
   it('snoozes a one-off without occurrenceDate and undo unsnoozes the same scope', async () => {
     clientCalls.snooze.mockResolvedValue(undefined);
     clientCalls.unsnooze.mockResolvedValue(undefined);

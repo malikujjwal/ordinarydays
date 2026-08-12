@@ -6,7 +6,12 @@ import {
   unsnoozeActivity,
 } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
-import type { ActivityListItem, AgendaData, AgendaItem } from '@od/shared/types';
+import type {
+  ActivityListItem,
+  ActivityOutcome,
+  AgendaData,
+  AgendaItem,
+} from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback } from 'react';
@@ -15,12 +20,14 @@ import { startUndoable } from '@/lib/startUndoable';
 import { useToast } from '@/stores/toast';
 import { applyCompletion } from '../model/applyCompletion';
 import { applyReschedule } from '../model/applyReschedule';
+import { applySkip } from '../model/applySkip';
 import { applySnooze } from '../model/applySnooze';
 import type { AgendaSwipeAction } from '../model/swipeActions';
 
 interface CompletionVariables {
   activityId: string;
   occurrenceDate?: string;
+  outcome?: ActivityOutcome;
   idempotencyKey: string;
 }
 
@@ -40,11 +47,19 @@ export interface UseAgendaActivityActionsOptions {
 export function useAgendaActivityActions(options: UseAgendaActivityActionsOptions) {
   const queryClient = useQueryClient();
   const complete = useMutation({
-    mutationFn: ({ activityId, occurrenceDate, idempotencyKey }: CompletionVariables) =>
+    mutationFn: ({
+      activityId,
+      occurrenceDate,
+      outcome,
+      idempotencyKey,
+    }: CompletionVariables) =>
       completeActivity(
         apiClient,
         activityId,
-        occurrenceDate === undefined ? {} : { occurrenceDate },
+        {
+          ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+          ...(outcome === undefined ? {} : { outcome }),
+        },
         idempotencyKey,
       ),
   });
@@ -190,6 +205,68 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
     [toggleComplete],
   );
 
+  const resolvePassed = useCallback(
+    (item: AgendaItem, outcome: ActivityOutcome) => {
+      if (!item.isPast || item.status !== 'scheduled' || !item.capabilities.complete)
+        return;
+
+      const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
+      const scrollOffset = options.getScrollOffset?.() ?? 0;
+      const target = {
+        activityId: item.activityId,
+        ...(item.occurrenceDate === undefined
+          ? {}
+          : { occurrenceDate: item.occurrenceDate }),
+      };
+      const negative = outcome === 'didnt_happen' || outcome === 'didnt_go';
+      const project = (resolved: boolean) => {
+        for (const [key, cached] of snapshots) {
+          if (cached === undefined) continue;
+          queryClient.setQueryData(
+            key,
+            negative
+              ? applySkip(cached, {
+                  ...target,
+                  today: options.today,
+                  currentMinute: options.currentMinute,
+                  skipped: resolved,
+                })
+              : applyCompletion(cached, {
+                  ...target,
+                  today: options.today,
+                  currentMinute: options.currentMinute,
+                  ...(resolved
+                    ? { completed: true }
+                    : { completed: false, restoredStatus: 'scheduled' as const }),
+                }),
+          );
+        }
+      };
+      const restore = () => {
+        for (const [key, cached] of snapshots) queryClient.setQueryData(key, cached);
+      };
+      const original = { ...target, outcome, idempotencyKey: randomUUID() };
+      const compensation = { ...target, idempotencyKey: randomUUID() };
+
+      startUndoable({
+        apply: () => project(true),
+        revert: () => project(false),
+        rollbackFailure: restore,
+        restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
+        request: () => complete.mutateAsync(original),
+        compensate: () => uncomplete.mutateAsync(compensation),
+        toast: {
+          showUndo: useToast.getState().showUndo,
+          failUndo: useToast.getState().failUndo,
+        },
+        message: negative ? 'Outcome recorded' : 'Plan completed',
+        failureMessage: "Couldn't record that outcome.",
+        compensationFailureMessage: "Couldn't undo that outcome.",
+      });
+    },
+    [complete, options, queryClient, uncomplete],
+  );
+
   const snooze = useCallback(
     (item: AgendaItem, until: string) => {
       if (
@@ -305,5 +382,5 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
     [options, queryClient, scheduleMutation],
   );
 
-  return { toggleComplete, onAgendaAction, snooze, moveToTomorrow };
+  return { toggleComplete, onAgendaAction, resolvePassed, snooze, moveToTomorrow };
 }

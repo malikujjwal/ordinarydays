@@ -1141,9 +1141,14 @@ export async function getActivityDetail(
   userId: string,
   activityId: string,
 ): Promise<ActivityDetail> {
-  await assertActivityAccess(userId, activityId, 'read');
+  const access = await assertActivityAccess(userId, activityId, 'read');
 
-  return projectDetail(await getActivityPartition(activityId), userId);
+  const mayAct = access.isOwner || access.viaParent;
+  return projectDetail(await getActivityPartition(activityId), userId, {
+    complete: mayAct,
+    skip: mayAct,
+    snooze: mayAct,
+  });
 }
 
 /**
@@ -1173,12 +1178,23 @@ export async function getActivityDetail(
  * There is exactly one client-facing serialiser for an activity, so there is exactly one
  * place this can be forgotten.
  */
-export function projectDetail(partition: StoredItem[], userId: string): ActivityDetail {
+export function projectDetail(
+  partition: StoredItem[],
+  userId: string,
+  capabilities?: ActivityDetail['capabilities'],
+): ActivityDetail {
   const meta = partition.find((row) => row.sk === 'META');
   if (meta === undefined) throw new AppError('not_found', 'Activity not found.');
+  const projected = toActivity(meta);
+  const ownerMayAct = projected.ownerId === userId;
 
   return {
-    activity: toActivity(meta),
+    activity: projected,
+    capabilities: capabilities ?? {
+      complete: ownerMayAct,
+      skip: ownerMayAct,
+      snooze: ownerMayAct,
+    },
     reminders: partition
       .filter((row) => isReminderRow(row) && row.userId === userId)
       .map(toReminder),

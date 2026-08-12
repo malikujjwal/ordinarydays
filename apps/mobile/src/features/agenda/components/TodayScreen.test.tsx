@@ -204,6 +204,44 @@ describe('TodayScreen', () => {
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(12);
   });
 
+  it('opens the neutral passed-item chooser and returns the exact selected outcome', async () => {
+    const onResolvePassed = vi.fn();
+    stubFetch(
+      response([
+        row(1, {
+          type: 'event',
+          title: 'Dentist appointment',
+          hasCheckbox: false,
+          time: '10:00',
+          isPast: true,
+        }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+        onResolvePassed={onResolvePassed}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('today-earlier')).toBeDefined());
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'How did it go? Choose an outcome for Dentist appointment',
+      }),
+    );
+    expect(screen.getByTestId('passed-plan-resolution-sheet')).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: "Didn't go" }));
+
+    expect(onResolvePassed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ title: 'Dentist appointment' }),
+      'didnt_go',
+    );
+    expect(screen.queryByTestId('passed-plan-resolution-sheet')).toBeNull();
+  });
+
   it('strikes a completed row in place before revealing its Earlier today projection', async () => {
     vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
     stubFetch(
@@ -349,7 +387,11 @@ describe('TodayScreen', () => {
     });
     const agendaBody = response([scheduled]);
     const detailBody = {
-      data: { activity: recurringActivity(scheduled.activityId), reminders: [] },
+      data: {
+        activity: recurringActivity(scheduled.activityId),
+        capabilities: { complete: true, skip: true, snooze: true },
+        reminders: [],
+      },
       meta: { requestId: 'req_detail' },
     };
     vi.stubGlobal('fetch', (input: RequestInfo | URL) => {

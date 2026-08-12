@@ -96,6 +96,16 @@ const RULES = {
     pattern: /dangerouslySetInnerHTML/,
   },
 
+  'no-passed-plan-count': {
+    description: 'No unresolved passed-plan count, badge binding, or nag in the client',
+    doc: 'today-and-tasks.md §8.3 and P2-28 — passed resolution is one quiet inline question and is never counted',
+    roots: ['apps/mobile'],
+    extensions: ['.ts', '.tsx'],
+    // A count is the forbidden state itself. Banning the identifier is stronger and more
+    // durable than looking for one current Badge component name beside it.
+    pattern: /\b(?:unresolvedCount|unresolvedItemCount|passedPlanCount)\b/,
+  },
+
   /**
    * Covers the two client rules dependency-cruiser cannot see, because it cannot parse
    * `.tsx` at all under TypeScript 7 (see the note in `.dependency-cruiser.cjs`). Textual

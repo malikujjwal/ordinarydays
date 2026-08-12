@@ -1,7 +1,11 @@
 import type { ActivityType, AgendaItem } from '@od/shared/types';
 import { Chip, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
 import type { AccessibilityActionEvent } from 'react-native';
-import { Platform, View } from 'react-native';
+import { View } from 'react-native';
+import {
+  canResolvePassedAgendaItem,
+  passedPlanResolution,
+} from '@/lib/passedPlanResolution';
 import { RowBadges } from './RowBadges';
 import { RowLeading } from './RowLeading';
 
@@ -12,6 +16,7 @@ export interface AgendaRowProps {
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onOpenReschedule?: (item: AgendaItem) => void;
   onOpenOverdue?: (item: AgendaItem) => void;
+  onOpenResolution?: (item: AgendaItem) => void;
   accessibilityActions?: { name: string; label: string }[];
   onAccessibilityAction?: (event: AccessibilityActionEvent) => void;
   onBodyFocus?: () => void;
@@ -64,6 +69,7 @@ export function AgendaRow({
   onToggleComplete,
   onOpenReschedule,
   onOpenOverdue,
+  onOpenResolution,
   accessibilityActions,
   onAccessibilityAction,
   onBodyFocus,
@@ -142,10 +148,6 @@ export function AgendaRow({
             ? {}
             : { onOpenOverdue: () => onOpenOverdue(item) })}
         />
-
-        {item.isPast && !item.hasCheckbox && !checked ? (
-          <ChipPrompt title={item.title} />
-        ) : null}
       </View>
 
       {!showTime || formattedTime === undefined ? null : (
@@ -179,27 +181,16 @@ export function AgendaRow({
           </Text>
         </View>
       ) : null}
-    </View>
-  );
-}
 
-function ChipPrompt({ title }: { title: string }) {
-  return (
-    <View
-      {...(Platform.OS === 'web'
-        ? {}
-        : {
-            accessible: true,
-            accessibilityLabel: `How did it go? Choose an outcome for ${title}`,
-          })}
-    >
-      <View
-        aria-hidden
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-      >
-        <Chip label="How did it go?" tone="accent" testID="agenda-resolution-prompt" />
-      </View>
+      {!canResolvePassedAgendaItem(item) || onOpenResolution === undefined ? null : (
+        <Chip
+          label={passedPlanResolution(item.type).prompt}
+          accessibilityLabel={`${passedPlanResolution(item.type).prompt} Choose an outcome for ${item.title}`}
+          tone="neutral"
+          onPress={() => onOpenResolution(item)}
+          testID="agenda-resolution-prompt"
+        />
+      )}
     </View>
   );
 }

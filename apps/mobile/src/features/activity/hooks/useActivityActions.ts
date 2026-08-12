@@ -1,10 +1,19 @@
 import { type ChangeTarget, changeActivityKind } from '@od/shared';
-import { ApiError, deleteActivity, duplicateActivity } from '@od/shared/client';
+import {
+  ApiError,
+  completeActivity,
+  deleteActivity,
+  duplicateActivity,
+  uncompleteActivity,
+} from '@od/shared/client';
 import type { PatchActivityInput } from '@od/shared/schemas';
-import type { Activity } from '@od/shared/types';
+import type { Activity, ActivityDetail, ActivityOutcome } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { apiClient } from '@/lib/apiClient';
+import { startUndoable } from '@/lib/startUndoable';
+import { useToast } from '@/stores/toast';
+import { activityKey } from './useActivity';
 
 /**
  * The three `⋯` actions: change kind, duplicate, delete (P1-27).
@@ -22,6 +31,11 @@ import { apiClient } from '@/lib/apiClient';
 export interface ActivityActions {
   duplicate: () => Promise<Activity | undefined>;
   remove: () => Promise<boolean>;
+  resolvePassed: (
+    outcome: ActivityOutcome,
+    occurrenceDate: string | undefined,
+    onProjected: (resolved: boolean) => void,
+  ) => void;
   isBusy: boolean;
   /** `interaction-contract.md` §5.3 copy for whichever action failed. */
   errorMessage: string | undefined;
@@ -68,7 +82,67 @@ export function useActivityActions(activityId: string): ActivityActions {
     networkMode: 'always',
   });
 
-  const failure = duplicateMutation.error ?? deleteMutation.error;
+  const completeMutation = useMutation({
+    mutationFn: ({
+      outcome,
+      occurrenceDate,
+      idempotencyKey,
+    }: {
+      outcome: ActivityOutcome;
+      occurrenceDate?: string;
+      idempotencyKey: string;
+    }) =>
+      completeActivity(
+        apiClient,
+        activityId,
+        { outcome, ...(occurrenceDate === undefined ? {} : { occurrenceDate }) },
+        idempotencyKey,
+      ),
+    onSuccess: ({ activity }) => {
+      queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) =>
+        previous === undefined
+          ? previous
+          : { ...previous, activity: activity as Activity },
+      );
+      void queryClient.invalidateQueries({ queryKey: ['agenda'] });
+      void queryClient.invalidateQueries({ queryKey: ['activities'] });
+    },
+    retry: false,
+    networkMode: 'always',
+  });
+
+  const uncompleteMutation = useMutation({
+    mutationFn: ({
+      occurrenceDate,
+      idempotencyKey,
+    }: {
+      occurrenceDate?: string;
+      idempotencyKey: string;
+    }) =>
+      uncompleteActivity(
+        apiClient,
+        activityId,
+        occurrenceDate === undefined ? {} : { occurrenceDate },
+        idempotencyKey,
+      ),
+    onSuccess: ({ activity }) => {
+      queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) =>
+        previous === undefined
+          ? previous
+          : { ...previous, activity: activity as Activity },
+      );
+      void queryClient.invalidateQueries({ queryKey: ['agenda'] });
+      void queryClient.invalidateQueries({ queryKey: ['activities'] });
+    },
+    retry: false,
+    networkMode: 'always',
+  });
+
+  const failure =
+    duplicateMutation.error ??
+    deleteMutation.error ??
+    completeMutation.error ??
+    uncompleteMutation.error;
 
   return {
     duplicate: async () => {
@@ -88,12 +162,49 @@ export function useActivityActions(activityId: string): ActivityActions {
         return false;
       }
     },
-    isBusy: duplicateMutation.isPending || deleteMutation.isPending,
+    resolvePassed: (outcome, occurrenceDate, onProjected) => {
+      const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      const original = {
+        outcome,
+        ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+        idempotencyKey: randomUUID(),
+      };
+      const compensation = {
+        ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+        idempotencyKey: randomUUID(),
+      };
+
+      startUndoable({
+        apply: () => onProjected(true),
+        revert: () => {
+          onProjected(false);
+          if (snapshot !== undefined)
+            queryClient.setQueryData(activityKey(activityId), snapshot);
+        },
+        restorePosition: () => {},
+        request: () => completeMutation.mutateAsync(original),
+        compensate: () => uncompleteMutation.mutateAsync(compensation),
+        toast: {
+          showUndo: useToast.getState().showUndo,
+          failUndo: useToast.getState().failUndo,
+        },
+        message: 'Outcome recorded',
+        failureMessage: "Couldn't record that outcome.",
+        compensationFailureMessage: "Couldn't undo that outcome.",
+      });
+    },
+    isBusy:
+      duplicateMutation.isPending ||
+      deleteMutation.isPending ||
+      completeMutation.isPending ||
+      uncompleteMutation.isPending,
     errorMessage:
       failure === null || failure === undefined ? undefined : describe(failure),
     dismissError: () => {
       duplicateMutation.reset();
       deleteMutation.reset();
+      completeMutation.reset();
+      uncompleteMutation.reset();
     },
   };
 }

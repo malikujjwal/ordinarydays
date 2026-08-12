@@ -13,7 +13,11 @@ import { ActivityDetailScreen } from '@/features/activity/components/ActivityDet
  * the only one that changes.
  */
 export default function ActivityDetailRoute() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, resolvePassed, occurrenceDate } = useLocalSearchParams<{
+    id: string;
+    resolvePassed?: string;
+    occurrenceDate?: string;
+  }>();
   const router = useRouter();
 
   return (
@@ -21,6 +25,13 @@ export default function ActivityDetailRoute() {
       activityId={id ?? ''}
       today={format(new Date(), 'yyyy-MM-dd')}
       onBack={() => router.back()}
+      {...(resolvePassed === '1'
+        ? {
+            resolutionOccurrenceDate: occurrenceDate ?? null,
+            onResolutionProjectionChange: (resolved: boolean) =>
+              router.setParams({ resolvePassed: resolved ? '0' : '1' }),
+          }
+        : {})}
       /**
        * `replace`, not `push`: the copy takes the original's place in the stack, so Back from
        * it returns where the user came from rather than to the row they just duplicated. Two

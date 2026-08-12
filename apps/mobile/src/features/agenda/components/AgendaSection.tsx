@@ -15,6 +15,7 @@ export interface AgendaSectionProps {
   onOpen: (item: AgendaItem) => void;
   onOpenReschedule?: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
+  onOpenResolution?: (item: AgendaItem) => void;
   onAction?: (item: AgendaItem, action: AgendaSwipeAction) => void;
   completionTransitionKeys?: ReadonlySet<string>;
   onCompletionTransitionFinished?: (transitionKey: string) => void;
@@ -33,6 +34,7 @@ export function AgendaSection({
   onOpen,
   onOpenReschedule,
   onToggleComplete,
+  onOpenResolution,
   onAction,
   completionTransitionKeys,
   onCompletionTransitionFinished,
@@ -52,6 +54,7 @@ export function AgendaSection({
             onOpen={onOpen}
             {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}
             {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
+            {...(onOpenResolution === undefined ? {} : { onOpenResolution })}
             {...(onAction === undefined ? {} : { onAction })}
           />
         );

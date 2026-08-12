@@ -15,6 +15,8 @@ export type ChipTone = 'neutral' | 'accent' | 'warning' | 'danger' | 'success';
 
 export interface ChipProps {
   label: string;
+  /** Use when the visible shorthand does not fully name the action. */
+  accessibilityLabel?: string;
   icon?: (props: IconProps) => React.ReactElement;
   tone?: ChipTone;
   onPress?: () => void;
@@ -25,6 +27,7 @@ export interface ChipProps {
 
 export function Chip({
   label,
+  accessibilityLabel,
   icon: Icon,
   tone = 'neutral',
   onPress,
@@ -75,7 +78,7 @@ export function Chip({
         testID={testID}
         {...(Platform.OS === 'web'
           ? {}
-          : { accessible: true, accessibilityLabel: label })}
+          : { accessible: true, accessibilityLabel: accessibilityLabel ?? label })}
       >
         {body}
       </View>
@@ -85,7 +88,7 @@ export function Chip({
   return (
     <Touchable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ selected, disabled }}
       /**
        * The web half of the same statement. React Native Web drops

@@ -38,6 +38,35 @@ describe('SwipeableRow web equivalents', () => {
     ).toBeDefined();
   });
 
+  it('keeps a passed resolution prompt clear of the hover-action overlay', () => {
+    const onAction = vi.fn();
+    const onOpenResolution = vi.fn();
+    mount(
+      <SwipeableRow
+        item={item({
+          type: 'event',
+          title: 'Coffee with Sam',
+          hasCheckbox: false,
+          isPast: true,
+        })}
+        onOpen={() => {}}
+        onAction={onAction}
+        onOpenResolution={onOpenResolution}
+      />,
+    );
+
+    fireEvent.pointerEnter(screen.getByTestId(/^swipeable-row-/));
+    expect(screen.queryByTestId('agenda-web-controls')).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'How did it go? Choose an outcome for Coffee with Sam',
+      }),
+    );
+    expect(onOpenResolution).toHaveBeenCalledOnce();
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
   it('keeps the hover controls keyboard reachable and dispatches the focused-row shortcut', () => {
     const onAction = vi.fn();
     mount(<SwipeableRow item={item()} onOpen={() => {}} onAction={onAction} />);

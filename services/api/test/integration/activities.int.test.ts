@@ -340,6 +340,7 @@ describe('reading one activity back', () => {
     expect(res.status).toBe(200);
     expect(Object.keys(body.data).sort()).toEqual([
       'activity',
+      'capabilities',
       'completedOccurrenceCount',
       'reminders',
     ]);

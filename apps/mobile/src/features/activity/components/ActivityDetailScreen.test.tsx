@@ -70,8 +70,20 @@ const task = (patch: Record<string, unknown> = {}): Activity =>
     ...patch,
   });
 
-const detailBody = (activity: Activity, reminders: ActivityDetail['reminders'] = []) => ({
-  data: { activity, reminders },
+const detailBody = (
+  activity: Activity,
+  reminders: ActivityDetail['reminders'] = [],
+  capabilities: ActivityDetail['capabilities'] = {
+    complete: true,
+    skip: true,
+    snooze: true,
+  },
+) => ({
+  data: {
+    activity,
+    capabilities,
+    reminders,
+  },
   meta: { requestId: 'req_test' },
 });
 
@@ -106,7 +118,11 @@ function stubFetch(...responses: Array<{ status: number; body: unknown }>) {
   });
 }
 
-function mount(onBack = () => {}, onOpenActivity: (id: string) => void = () => {}) {
+function mount(
+  onBack = () => {},
+  onOpenActivity: (id: string) => void = () => {},
+  resolutionOccurrenceDate?: string | null,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -124,6 +140,7 @@ function mount(onBack = () => {}, onOpenActivity: (id: string) => void = () => {
         today={TODAY}
         onBack={onBack}
         onOpenActivity={onOpenActivity}
+        {...(resolutionOccurrenceDate === undefined ? {} : { resolutionOccurrenceDate })}
       />,
     ),
   );
@@ -250,6 +267,132 @@ describe('the sections', () => {
     expect(screen.queryByText('Add prep task')).toBeNull();
     expect(screen.queryByText('Add list')).toBeNull();
     expect(screen.getByTestId('section-related')).toBeDefined();
+  });
+});
+
+describe('passed-plan resolution', () => {
+  it('shows the same prompt at the top and sends the exact positive outcome', async () => {
+    const passed = plan({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(passed) },
+      {
+        status: 200,
+        body: {
+          data: {
+            activity: plan({ ...passed, status: 'completed', outcome: 'attended' }),
+            outcome: 'attended',
+          },
+          meta: { requestId: 'req_resolution' },
+        },
+      },
+    );
+    mount(
+      () => {},
+      () => {},
+      null,
+    );
+    await loaded();
+
+    const prompt = screen.getByRole('button', {
+      name: 'How did it go? Choose an outcome for Zahav',
+    });
+    expect(
+      prompt.compareDocumentPosition(screen.getByLabelText('Title')) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    fireEvent.click(prompt);
+    fireEvent.click(screen.getByRole('button', { name: 'Attended' }));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+    );
+    expect(sent[1]?.url).toMatch(new RegExp(`/v1/activities/${ID}/complete$`));
+    expect(sent[1]?.body).toEqual({ outcome: 'attended' });
+    expect(screen.queryByTestId('detail-resolution-prompt')).toBeNull();
+  });
+
+  it('hides the prompt from a caller without authority', async () => {
+    const recurring = plan({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch({
+      status: 200,
+      body: detailBody(recurring, [], {
+        complete: false,
+        skip: false,
+        snooze: false,
+      }),
+    });
+    mount(
+      () => {},
+      () => {},
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.queryByTestId('detail-resolution-prompt')).toBeNull();
+  });
+
+  it('hides the prompt when an older cached detail has no capabilities projection', async () => {
+    const passed = plan({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+    });
+    stubFetch({
+      status: 200,
+      body: {
+        data: { activity: passed, reminders: [] },
+        meta: { requestId: 'req_cached_detail' },
+      },
+    });
+    mount(
+      () => {},
+      () => {},
+      null,
+    );
+    await loaded();
+
+    expect(screen.queryByTestId('detail-resolution-prompt')).toBeNull();
+  });
+
+  it('preserves occurrence scope for a recurring negative outcome', async () => {
+    const recurring = plan({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(recurring) },
+      {
+        status: 200,
+        body: {
+          data: { activity: recurring, occurrenceDate: TODAY, outcome: 'didnt_go' },
+          meta: { requestId: 'req_resolution' },
+        },
+      },
+    );
+    mount(
+      () => {},
+      () => {},
+      TODAY,
+    );
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-resolution-prompt'));
+    fireEvent.click(screen.getByRole('button', { name: "Didn't go" }));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+    );
+    expect(sent[1]?.body).toEqual({ occurrenceDate: TODAY, outcome: 'didnt_go' });
   });
 });
 

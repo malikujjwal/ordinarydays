@@ -58,6 +58,7 @@ describe('the activity detail projection', () => {
     expect(
       activityDetail.safeParse({
         activity: task,
+        capabilities: { complete: true, skip: true, snooze: true },
         reminders: [],
         completedOccurrenceCount: 40,
       }).success,
@@ -68,6 +69,7 @@ describe('the activity detail projection', () => {
     expect(
       activityDetail.safeParse({
         activity: task,
+        capabilities: { complete: true, skip: true, snooze: true },
         reminders: [],
         completedOccurrenceCount: count,
       }).success,

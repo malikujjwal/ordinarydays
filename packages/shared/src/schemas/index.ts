@@ -7,6 +7,7 @@
  */
 export * from './activity.js';
 export * from './agenda.js';
+export * from './capabilities.js';
 export * from './capture.js';
 export * from './common.js';
 export * from './device.js';

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { MAX_AGENDA_DAYS, MAX_FREE_TEXT_LEN, MAX_TITLE_LEN } from '../constants.js';
 import { activityType } from './activity.js';
+import { activityActionCapabilities } from './capabilities.js';
 import { hhmm, ianaTimezone, isoDate, ulidId } from './common.js';
 import { reminder } from './reminder.js';
 
@@ -14,11 +15,7 @@ export const agendaItemStatus = z.enum([
   'skipped_occurrence',
 ]);
 
-export const agendaCapabilities = z.strictObject({
-  complete: z.boolean(),
-  skip: z.boolean(),
-  snooze: z.boolean(),
-});
+export const agendaCapabilities = activityActionCapabilities;
 
 export const agendaParticipantAvatar = z.strictObject({
   personId: z.string().min(1).max(40),

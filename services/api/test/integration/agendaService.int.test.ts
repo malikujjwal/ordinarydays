@@ -346,3 +346,54 @@ describe('overdue roll-forward', () => {
     });
   });
 });
+
+describe('passed-plan history', () => {
+  it('does not carry an unresolved plan from yesterday into today', async () => {
+    const unresolved = subject({
+      objectKind: 'plan',
+      type: 'event',
+      title: 'Yesterday dentist appointment',
+      details: { kind: 'event' },
+      schedule: {
+        date: '2026-08-05',
+        time: '14:30',
+        timezone: 'America/New_York',
+      },
+    });
+    await activities.createActivity('usr_alice', unresolved);
+
+    const result = await agenda.assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'America/New_York',
+        now: '2026-08-06T16:00:00.000Z',
+        includeOverdue: true,
+      },
+      {
+        listBucket: activities.listByBucket,
+        listOverdue: activities.listOverdueTaskCandidates,
+        batchActivities: activities.batchGetActivityMeta,
+        listParticipants: activities.listParticipants,
+        batchAgendaRows: occurrences.batchGetAgendaRows,
+        batchOccurrences: occurrences.batchGetForPairs,
+        listReminders: reminders.listForUser,
+        expand: expandRecurrence,
+        warn: vi.fn(),
+      },
+    );
+
+    const today = result.days[0];
+    expect(
+      today === undefined
+        ? []
+        : [...today.schedule, ...today.anytime, ...today.earlier].map(
+            (row) => row.activity.activityId,
+          ),
+    ).not.toContain(unresolved.activityId);
+    expect((await activities.getActivityMeta(unresolved.activityId))?.status).toBe(
+      'scheduled',
+    );
+  });
+});

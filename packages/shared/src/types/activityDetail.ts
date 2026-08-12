@@ -1,4 +1,5 @@
 import type { Activity } from './activity.js';
+import type { AgendaCapabilities } from './agenda.js';
 import type { Reminder } from './reminder.js';
 
 /**
@@ -30,6 +31,8 @@ import type { Reminder } from './reminder.js';
  * > **Owned by P1-12, defined by P1-26**, which needed it before the endpoint existed.
  */
 export interface ActivityDetail {
+  /** Server-authored action authority for this caller; absent only in an older cached response. */
+  capabilities?: AgendaCapabilities;
   /**
    * The caller's own, filtered server-side in the projection before serialising
    * (`security-privacy.md` §1 row 15). A shared plan has one schedule and many reminder

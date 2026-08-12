@@ -114,6 +114,7 @@ describe('reading an activity you own', () => {
 
     expect(Object.keys(body.data).sort()).toEqual([
       'activity',
+      'capabilities',
       'completedOccurrenceCount',
       'reminders',
     ]);
@@ -143,6 +144,11 @@ describe('reading an activity you own', () => {
     const body = await (await get(createApp())).json();
 
     expect(body.data.reminders).toEqual([]);
+    expect(body.data.capabilities).toEqual({
+      complete: true,
+      skip: true,
+      snooze: true,
+    });
   });
 
   it('never leaks the storage attributes', async () => {

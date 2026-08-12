@@ -4,6 +4,7 @@ import type { PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, PlanType } from '@od/shared/types';
 import {
   Button,
+  Chip,
   EmptyState,
   Field,
   IconButton,
@@ -17,6 +18,7 @@ import {
 import { useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ComingSoonSection } from '@/features/activity/components/ComingSoonSection';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
@@ -36,6 +38,7 @@ import {
 } from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
+import { passedPlanResolution } from '@/lib/passedPlanResolution';
 import { planKindLabel } from '@/lib/planKinds';
 
 /**
@@ -72,6 +75,10 @@ export interface ActivityDetailScreenProps {
   onBack: () => void;
   /** Where a duplicate lands: its own detail screen (P1-27, `activities.md` §7.1). */
   onOpenActivity: (activityId: string) => void;
+  /** Present only when navigation came from a passed, unresolved agenda row. */
+  resolutionOccurrenceDate?: string | null;
+  /** Keeps the route marker in sync with optimistic resolution, Undo, and request rollback. */
+  onResolutionProjectionChange?: (resolved: boolean) => void;
 }
 
 /** A kind change waiting on its confirmation. Absent means nothing is being confirmed. */
@@ -85,6 +92,8 @@ export function ActivityDetailScreen({
   today,
   onBack,
   onOpenActivity,
+  resolutionOccurrenceDate,
+  onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
   const theme = useTheme();
   const breakpoint = useBreakpoint();
@@ -99,6 +108,8 @@ export function ActivityDetailScreen({
   );
   const [pending, setPending] = useState<PendingChange | undefined>(undefined);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [resolutionOpen, setResolutionOpen] = useState(false);
+  const [resolutionDismissed, setResolutionDismissed] = useState(false);
 
   /**
    * A kind change confirms **only when it would drop something** (`activities.md` §6.3 rule 6,
@@ -140,6 +151,11 @@ export function ActivityDetailScreen({
   }
 
   const activity = detail.detail?.activity;
+  const showResolutionPrompt =
+    resolutionOccurrenceDate !== undefined &&
+    activity?.status === 'scheduled' &&
+    detail.detail?.capabilities?.complete === true &&
+    !resolutionDismissed;
 
   /** The measure, per §8. `compact` is full width minus the gutters. */
   const maxWidth =
@@ -204,6 +220,8 @@ export function ActivityDetailScreen({
               today={today}
               onOpenReschedule={() => setRescheduleOpen(true)}
               onOpenRepeat={() => setRepeatOpen(true)}
+              showResolutionPrompt={showResolutionPrompt}
+              onOpenResolution={() => setResolutionOpen(true)}
             />
           )}
         </View>
@@ -295,6 +313,25 @@ export function ActivityDetailScreen({
             onConfirm={() => void remove()}
             testID="delete-confirm"
           />
+
+          <PassedPlanResolutionSheet
+            open={resolutionOpen && showResolutionPrompt}
+            type={activity.type}
+            title={activity.title}
+            busy={actions.isBusy}
+            onClose={() => setResolutionOpen(false)}
+            onResolve={(outcome) => {
+              setResolutionOpen(false);
+              actions.resolvePassed(
+                outcome,
+                resolutionOccurrenceDate ?? undefined,
+                (resolved) => {
+                  setResolutionDismissed(resolved);
+                  onResolutionProjectionChange?.(resolved);
+                },
+              );
+            }}
+          />
         </>
       )}
     </View>
@@ -307,6 +344,8 @@ interface LoadedProps {
   today: WallDate;
   onOpenReschedule: () => void;
   onOpenRepeat: () => void;
+  showResolutionPrompt: boolean;
+  onOpenResolution: () => void;
 }
 
 function Loaded({
@@ -315,12 +354,23 @@ function Loaded({
   today,
   onOpenReschedule,
   onOpenRepeat,
+  showResolutionPrompt,
+  onOpenResolution,
 }: LoadedProps) {
   const theme = useTheme();
   const sections = sectionsFor(activity);
 
   return (
     <>
+      {showResolutionPrompt ? (
+        <Chip
+          label={passedPlanResolution(activity.type).prompt}
+          accessibilityLabel={`${passedPlanResolution(activity.type).prompt} Choose an outcome for ${activity.title}`}
+          tone="neutral"
+          onPress={onOpenResolution}
+          testID="detail-resolution-prompt"
+        />
+      ) : null}
       {detail.conflict === undefined ? null : (
         <View
           accessibilityRole="alert"

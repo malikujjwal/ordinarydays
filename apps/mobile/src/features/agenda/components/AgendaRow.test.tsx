@@ -109,17 +109,49 @@ describe('AgendaRow affordances', () => {
     expect(screen.getByText('Season 2, episode 4')).toBeDefined();
   });
 
-  it('uses visible prompt text on web without invalid roleless ARIA', () => {
+  it.each([
+    ['task', 'Done?'],
+    ['meal', 'How did it go?'],
+    ['watch', 'How did it go?'],
+    ['event', 'How did it go?'],
+    ['custom', 'Done?'],
+  ] as const)(
+    'opens the exact %s resolution prompt without navigating',
+    (type, prompt) => {
+      const onOpen = vi.fn();
+      const onOpenResolution = vi.fn();
+      mount(
+        <AgendaRow
+          item={item(type, { isPast: true })}
+          onOpen={onOpen}
+          onOpenResolution={onOpenResolution}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: `${prompt} Choose an outcome for Evening plan`,
+        }),
+      );
+
+      expect(onOpenResolution).toHaveBeenCalledWith(expect.objectContaining({ type }));
+      expect(onOpen).not.toHaveBeenCalled();
+    },
+  );
+
+  it('renders no resolution prompt for an unauthorized participant', () => {
     mount(
       <AgendaRow
-        item={item('event', { isPast: true, hasCheckbox: false })}
+        item={item('event', {
+          isPast: true,
+          capabilities: { complete: false, skip: false, snooze: false },
+        })}
         onOpen={() => {}}
+        onOpenResolution={() => {}}
       />,
     );
 
-    const prompt = screen.getByText('How did it go?');
-    expect(prompt).toBeDefined();
-    expect(prompt.closest('[aria-label]')).toBeNull();
+    expect(screen.queryByTestId('agenda-resolution-prompt')).toBeNull();
   });
 
   it.each([

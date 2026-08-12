@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { type Href, useRouter } from 'expo-router';
 import { TodayScreen } from '@/features/agenda/components/TodayScreen';
 
 /** Thin Today route: the feature owns the projection; this edge owns pushed navigation. */
@@ -7,7 +7,20 @@ export default function TodayTab() {
   return (
     <TodayScreen
       onOpenAnytime={() => router.push('/anytime')}
-      onOpenAgendaItem={({ activityId }) => router.push(`/activity/${activityId}`)}
+      onOpenAgendaItem={({ activityId, occurrenceDate, isPast, status }) =>
+        router.push(
+          (isPast && status === 'scheduled'
+            ? {
+                pathname: '/activity/[id]',
+                params: {
+                  id: activityId,
+                  resolvePassed: '1',
+                  ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+                },
+              }
+            : `/activity/${activityId}`) as Href,
+        )
+      }
     />
   );
 }

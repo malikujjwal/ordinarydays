@@ -599,6 +599,26 @@ describe('projectDetail', () => {
 
   const partition = [meta, reminderOf('usr_a', -15), reminderOf('usr_b', -90)];
 
+  it('authors action capability for the caller instead of exposing owner inference', () => {
+    expect(projectDetail(partition, 'usr_a').capabilities).toEqual({
+      complete: true,
+      skip: true,
+      snooze: true,
+    });
+    expect(projectDetail(partition, 'usr_b').capabilities).toEqual({
+      complete: false,
+      skip: false,
+      snooze: false,
+    });
+    expect(
+      projectDetail(partition, 'usr_b', {
+        complete: true,
+        skip: true,
+        snooze: true,
+      }).capabilities,
+    ).toEqual({ complete: true, skip: true, snooze: true });
+  });
+
   it('returns the caller’s own reminder', () => {
     const detail = projectDetail(partition, 'usr_a');
 

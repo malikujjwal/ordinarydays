@@ -8,6 +8,7 @@ import {
   MAX_REMINDERS_PER_USER_PER_ACTIVITY,
   MAX_TITLE_LEN,
 } from '../constants.js';
+import { activityActionCapabilities } from './capabilities.js';
 import { cents, cursor, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
 import { occurrence } from './occurrence.js';
 import { createRecurrence, recurrence } from './recurrence.js';
@@ -360,6 +361,8 @@ export type CreateActivityInput = z.infer<typeof createActivityInput>;
 export const activityDetail = z
   .object({
     activity,
+    /** Additive authority projection; absent only in an older cached response. */
+    capabilities: activityActionCapabilities.optional(),
     /** The caller's own. Never anybody else's — see above. */
     reminders: z.array(reminder),
     /** Additive Phase 2 projection; absent only in an older cached response. */
