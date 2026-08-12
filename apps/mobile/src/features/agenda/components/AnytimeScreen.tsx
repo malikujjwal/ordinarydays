@@ -28,6 +28,7 @@ export function AnytimeScreen({ onBack, onOpenAgendaItem }: AnytimeScreenProps) 
   const actions = useAgendaActivityActions({
     today: toWallDate(now, anytime.timezone),
     currentMinute: toWallTime(now, anytime.timezone),
+    timezone: anytime.timezone,
     getScrollOffset: () => scrollOffset.current,
     restoreScrollOffset: (offset) => {
       requestAnimationFrame(() =>

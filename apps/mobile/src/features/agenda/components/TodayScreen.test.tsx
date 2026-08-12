@@ -217,4 +217,21 @@ describe('TodayScreen', () => {
       ).toBeDefined();
     });
   });
+
+  it('opens the snooze sheet from the shared timed-row action', async () => {
+    stubFetch(response([row(1, { title: 'Call the dentist', time: '15:30' })]));
+    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+
+    await waitFor(() => expect(screen.getAllByText('Call the dentist')).toHaveLength(2));
+    fireEvent.pointerEnter(screen.getAllByTestId(/^swipeable-row-/)[0] as Element);
+    fireEvent.click(
+      screen.getAllByRole('button', {
+        name: 'More actions for Call the dentist',
+      })[0] as Element,
+    );
+    fireEvent.click(screen.getAllByRole('menuitem', { name: 'Snooze' })[0] as Element);
+
+    expect(screen.getByRole('heading', { name: 'Snooze' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Snooze until 3:25 PM' })).toBeDefined();
+  });
 });

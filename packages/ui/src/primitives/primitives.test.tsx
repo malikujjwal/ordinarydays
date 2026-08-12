@@ -41,6 +41,17 @@ describe('every primitive renders', () => {
     expect(screen.getByRole('button', { name: 'Save task' })).toBeDefined();
   });
 
+  it('Button can announce the result behind shorthand copy', () => {
+    wrap(
+      <Button
+        label="15 minutes"
+        accessibilityLabel="Snooze until 3:25 PM"
+        onPress={() => {}}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Snooze until 3:25 PM' })).toBeDefined();
+  });
+
   it('IconButton', () => {
     wrap(<IconButton icon={Plus} label="Add" onPress={() => {}} />);
     expect(screen.getByRole('button', { name: 'Add' })).toBeDefined();

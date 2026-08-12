@@ -211,6 +211,27 @@ describe('TimePicker', () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith('19:00');
   });
 
+  it('supports result-specific trigger copy and reports the confirmed value', () => {
+    const onChange = vi.fn();
+    const onConfirm = vi.fn();
+    wrap(
+      <TimePicker
+        label="Snooze time"
+        triggerLabel="Pick a time"
+        value={null}
+        onChange={onChange}
+        onConfirm={onConfirm}
+        openAt="19:00"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pick a time' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('19:00');
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith('19:00');
+  });
+
   /** Dismissing is how the user says "no time". Only `Done` writes. */
   it('writes nothing when the sheet is dismissed instead of confirmed', () => {
     const onChange = vi.fn();

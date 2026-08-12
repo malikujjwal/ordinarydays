@@ -1,4 +1,11 @@
-import { completeActivity, uncompleteActivity } from '@od/shared/client';
+import {
+  completeActivity,
+  scheduleActivity,
+  snoozeActivity,
+  uncompleteActivity,
+  unsnoozeActivity,
+} from '@od/shared/client';
+import { addWallDays } from '@od/shared/recurrence';
 import type { ActivityListItem, AgendaData, AgendaItem } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
@@ -7,6 +14,8 @@ import { apiClient } from '@/lib/apiClient';
 import { startUndoable } from '@/lib/startUndoable';
 import { useToast } from '@/stores/toast';
 import { applyCompletion } from '../model/applyCompletion';
+import { applyReschedule } from '../model/applyReschedule';
+import { applySnooze } from '../model/applySnooze';
 import type { AgendaSwipeAction } from '../model/swipeActions';
 
 interface CompletionVariables {
@@ -22,6 +31,7 @@ interface ActivityListCache {
 export interface UseAgendaActivityActionsOptions {
   today: string;
   currentMinute: string;
+  timezone: string;
   getScrollOffset?: () => number;
   restoreScrollOffset?: (offset: number) => void;
 }
@@ -45,6 +55,45 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         activityId,
         occurrenceDate === undefined ? {} : { occurrenceDate },
         idempotencyKey,
+      ),
+  });
+  const snoozeMutation = useMutation({
+    mutationFn: ({ item, until }: { item: AgendaItem; until: string }) =>
+      snoozeActivity(
+        apiClient,
+        item.activityId,
+        {
+          ...(item.isRecurring && item.occurrenceDate !== undefined
+            ? { occurrenceDate: item.occurrenceDate }
+            : {}),
+          until,
+        },
+        randomUUID(),
+      ),
+  });
+  const unsnoozeMutation = useMutation({
+    mutationFn: (item: AgendaItem) =>
+      unsnoozeActivity(
+        apiClient,
+        item.activityId,
+        item.isRecurring && item.occurrenceDate !== undefined
+          ? { occurrenceDate: item.occurrenceDate }
+          : {},
+        randomUUID(),
+      ),
+  });
+  const scheduleMutation = useMutation({
+    mutationFn: ({ item, date }: { item: AgendaItem; date: string }) =>
+      scheduleActivity(
+        apiClient,
+        item.activityId,
+        {
+          date,
+          ...(item.time === undefined ? {} : { time: item.time }),
+          ...(item.endTime === undefined ? {} : { endTime: item.endTime }),
+          timezone: options.timezone,
+        },
+        randomUUID(),
       ),
   });
 
@@ -141,5 +190,120 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
     [toggleComplete],
   );
 
-  return { toggleComplete, onAgendaAction };
+  const snooze = useCallback(
+    (item: AgendaItem, until: string) => {
+      if (
+        !item.capabilities.snooze ||
+        item.time === undefined ||
+        (item.isRecurring && item.occurrenceDate === undefined)
+      ) {
+        return;
+      }
+      const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
+      const scrollOffset = options.getScrollOffset?.() ?? 0;
+      const target = {
+        activityId: item.activityId,
+        ...(item.isRecurring ? { occurrenceDate: item.occurrenceDate } : {}),
+      };
+      const project = () => {
+        for (const [key, cached] of snapshots) {
+          if (cached === undefined) continue;
+          queryClient.setQueryData(
+            key,
+            applySnooze(cached, {
+              ...target,
+              today: options.today,
+              currentMinute: options.currentMinute,
+              date: options.today,
+              snoozed: true,
+              time: until,
+            }),
+          );
+        }
+      };
+      const undoProjection = () => {
+        for (const [key, cached] of snapshots) {
+          if (cached === undefined) continue;
+          queryClient.setQueryData(
+            key,
+            applySnooze(cached, {
+              ...target,
+              today: options.today,
+              currentMinute: options.currentMinute,
+              date: options.today,
+              snoozed: false,
+            }),
+          );
+        }
+      };
+      const restoreSnapshot = () => {
+        for (const [key, cached] of snapshots) queryClient.setQueryData(key, cached);
+      };
+
+      startUndoable({
+        apply: project,
+        revert: undoProjection,
+        rollbackFailure: restoreSnapshot,
+        restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
+        request: () => snoozeMutation.mutateAsync({ item, until }),
+        compensate: () => unsnoozeMutation.mutateAsync(item),
+        toast: {
+          showUndo: useToast.getState().showUndo,
+          failUndo: useToast.getState().failUndo,
+        },
+        message: 'Task snoozed',
+        failureMessage: "Couldn't snooze this task.",
+        compensationFailureMessage: "Couldn't undo this snooze.",
+      });
+    },
+    [options, queryClient, snoozeMutation, unsnoozeMutation],
+  );
+
+  const moveToTomorrow = useCallback(
+    (item: AgendaItem) => {
+      if (!item.capabilities.snooze || item.isRecurring || item.time === undefined)
+        return;
+      const itemTime = item.time;
+      const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
+      const scrollOffset = options.getScrollOffset?.() ?? 0;
+      const tomorrow = addWallDays(options.today, 1);
+      const project = () => {
+        for (const [key, cached] of snapshots) {
+          if (cached === undefined) continue;
+          queryClient.setQueryData(
+            key,
+            applyReschedule(cached, {
+              activityId: item.activityId,
+              today: options.today,
+              currentMinute: options.currentMinute,
+              date: tomorrow,
+              time: itemTime,
+              ...(item.endTime === undefined ? {} : { endTime: item.endTime }),
+            }),
+          );
+        }
+      };
+      const restore = () => {
+        for (const [key, cached] of snapshots) queryClient.setQueryData(key, cached);
+      };
+
+      startUndoable({
+        apply: project,
+        revert: restore,
+        restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
+        request: () => scheduleMutation.mutateAsync({ item, date: tomorrow }),
+        compensate: () => scheduleMutation.mutateAsync({ item, date: options.today }),
+        toast: {
+          showUndo: useToast.getState().showUndo,
+          failUndo: useToast.getState().failUndo,
+        },
+        message: 'Moved to tomorrow',
+        failureMessage: "Couldn't move this task.",
+        compensationFailureMessage: "Couldn't undo this move.",
+      });
+    },
+    [options, queryClient, scheduleMutation],
+  );
+
+  return { toggleComplete, onAgendaAction, snooze, moveToTomorrow };
 }

@@ -16,6 +16,7 @@ import { agendaItemsForDay, partitionAgenda } from '@/features/agenda/model/part
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { selectUpNext, toUpNextSelection } from '@/features/agenda/model/upNext';
 import { AgendaSection } from './AgendaSection';
+import { SnoozeSheet } from './SnoozeSheet';
 import { UpNextCard } from './UpNextCard';
 
 export interface TodayScreenProps {
@@ -56,12 +57,14 @@ export function TodayScreen({
   const tick = useMinuteTicker();
   const agenda = useAgenda({ now: tick.instant });
   const [showAllEarlier, setShowAllEarlier] = useState(false);
+  const [snoozeItem, setSnoozeItem] = useState<AgendaItem>();
   const scrollView = useRef<ScrollView>(null);
   const scrollOffset = useRef(0);
   const currentMinute = toWallTime(tick.instant, agenda.timezone);
   const activityActions = useAgendaActivityActions({
     today: toWallDate(tick.instant, agenda.timezone),
     currentMinute,
+    timezone: agenda.timezone,
     getScrollOffset: () => scrollOffset.current,
     restoreScrollOffset: (offset) => {
       requestAnimationFrame(() =>
@@ -70,7 +73,17 @@ export function TodayScreen({
     },
   });
   const effectiveToggleComplete = onToggleComplete ?? activityActions.toggleComplete;
-  const effectiveAgendaAction = onAgendaAction ?? activityActions.onAgendaAction;
+  const effectiveAgendaAction = (item: AgendaItem, action: AgendaSwipeAction) => {
+    if (onAgendaAction !== undefined) {
+      onAgendaAction(item, action);
+      return;
+    }
+    if (action.name === 'snooze') {
+      if (item.capabilities.snooze) setSnoozeItem(item);
+      return;
+    }
+    activityActions.onAgendaAction(item, action);
+  };
 
   if (agenda.status === 'pending') {
     return (
@@ -190,6 +203,14 @@ export function TodayScreen({
           />
         )}
       </ScrollView>
+      <SnoozeSheet
+        open={snoozeItem !== undefined}
+        item={snoozeItem}
+        currentMinute={currentMinute}
+        onClose={() => setSnoozeItem(undefined)}
+        onSnooze={activityActions.snooze}
+        onTomorrow={activityActions.moveToTomorrow}
+      />
     </TabScreen>
   );
 }

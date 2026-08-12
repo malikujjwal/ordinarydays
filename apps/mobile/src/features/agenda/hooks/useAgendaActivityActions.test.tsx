@@ -9,12 +9,18 @@ import { useAgendaActivityActions } from './useAgendaActivityActions';
 const clientCalls = vi.hoisted(() => ({
   complete: vi.fn(),
   uncomplete: vi.fn(),
+  snooze: vi.fn(),
+  unsnooze: vi.fn(),
+  schedule: vi.fn(),
 }));
 
 vi.mock('@od/shared/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@od/shared/client')>()),
   completeActivity: clientCalls.complete,
   uncompleteActivity: clientCalls.uncomplete,
+  snoozeActivity: clientCalls.snooze,
+  unsnoozeActivity: clientCalls.unsnooze,
+  scheduleActivity: clientCalls.schedule,
 }));
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-test-key' }));
@@ -80,6 +86,7 @@ function setup(restoreScrollOffset = vi.fn()) {
       useAgendaActivityActions({
         today: '2026-08-11',
         currentMinute: '15:00',
+        timezone: 'UTC',
         getScrollOffset: () => 240,
         restoreScrollOffset,
       }),
@@ -91,6 +98,9 @@ function setup(restoreScrollOffset = vi.fn()) {
 beforeEach(() => {
   clientCalls.complete.mockReset();
   clientCalls.uncomplete.mockReset();
+  clientCalls.snooze.mockReset();
+  clientCalls.unsnooze.mockReset();
+  clientCalls.schedule.mockReset();
   useToast.setState({ current: undefined });
 });
 
@@ -154,5 +164,81 @@ describe('useAgendaActivityActions completion undo', () => {
       }),
     );
     expect(mounted.client.getQueryData(mounted.key)).toEqual(cached);
+  });
+
+  it('snoozes a one-off without occurrenceDate and undo unsnoozes the same scope', async () => {
+    clientCalls.snooze.mockResolvedValue(undefined);
+    clientCalls.unsnooze.mockResolvedValue(undefined);
+    const mounted = setup();
+
+    act(() => mounted.result.current.snooze(first, '18:00'));
+    await waitFor(() => expect(clientCalls.snooze).toHaveBeenCalledOnce());
+
+    expect(clientCalls.snooze).toHaveBeenCalledWith(
+      expect.anything(),
+      first.activityId,
+      { until: '18:00' },
+      'idem-test-key',
+    );
+    expect(
+      mounted.client.getQueryData<AgendaData>(mounted.key)?.days[0]?.schedule[0],
+    ).toMatchObject({ time: '18:00', originalTime: '17:00', isSnoozed: true });
+
+    act(() => useToast.getState().undo());
+    await waitFor(() => expect(clientCalls.unsnooze).toHaveBeenCalledOnce());
+    expect(clientCalls.unsnooze).toHaveBeenCalledWith(
+      expect.anything(),
+      first.activityId,
+      {},
+      'idem-test-key',
+    );
+  });
+
+  it('always scopes recurring snooze and undo to the occurrence', async () => {
+    clientCalls.snooze.mockResolvedValue(undefined);
+    clientCalls.unsnooze.mockResolvedValue(undefined);
+    const mounted = setup();
+    const occurrence = {
+      ...first,
+      isRecurring: true,
+      occurrenceDate: '2026-08-11',
+    };
+
+    act(() => mounted.result.current.snooze(occurrence, '18:00'));
+    await waitFor(() => expect(clientCalls.snooze).toHaveBeenCalledOnce());
+    expect(clientCalls.snooze.mock.calls[0]?.[2]).toEqual({
+      occurrenceDate: '2026-08-11',
+      until: '18:00',
+    });
+
+    act(() => useToast.getState().undo());
+    await waitFor(() => expect(clientCalls.unsnooze).toHaveBeenCalledOnce());
+    expect(clientCalls.unsnooze.mock.calls[0]?.[2]).toEqual({
+      occurrenceDate: '2026-08-11',
+    });
+  });
+
+  it('moves Tomorrow through schedule with the unchanged time, never snooze', async () => {
+    clientCalls.schedule.mockResolvedValue(undefined);
+    const mounted = setup();
+
+    act(() => mounted.result.current.moveToTomorrow(first));
+    await waitFor(() => expect(clientCalls.schedule).toHaveBeenCalledOnce());
+
+    expect(clientCalls.schedule).toHaveBeenCalledWith(
+      expect.anything(),
+      first.activityId,
+      { date: '2026-08-12', time: '17:00', timezone: 'UTC' },
+      'idem-test-key',
+    );
+    expect(clientCalls.snooze).not.toHaveBeenCalled();
+
+    act(() => useToast.getState().undo());
+    await waitFor(() => expect(clientCalls.schedule).toHaveBeenCalledTimes(2));
+    expect(clientCalls.schedule.mock.calls[1]?.[2]).toEqual({
+      date: '2026-08-11',
+      time: '17:00',
+      timezone: 'UTC',
+    });
   });
 });

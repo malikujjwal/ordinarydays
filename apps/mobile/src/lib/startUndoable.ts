@@ -8,6 +8,8 @@ export interface UndoToastPort {
 export interface UndoableAction {
   apply: () => void;
   revert: () => void;
+  /** Optional server-failure rollback when it differs from a user-requested Undo. */
+  rollbackFailure?: () => void;
   restorePosition: () => void;
   request: () => Promise<unknown>;
   compensate: () => Promise<unknown>;
@@ -23,12 +25,27 @@ export interface UndoableAction {
  */
 export function startUndoable(action: UndoableAction): void {
   let undone = false;
+  let requestSucceeded = false;
+  let compensationStarted = false;
   action.apply();
   const request = action.request();
 
   const retryCompensation = () => {
     action.revert();
     action.restorePosition();
+    void action.compensate().catch(() => {
+      action.apply();
+      action.toast.failUndo(toastId, {
+        message: action.compensationFailureMessage ?? "Couldn't undo this.",
+        tone: 'error',
+        action: { label: 'Retry', onPress: retryCompensation },
+      });
+    });
+  };
+
+  const compensateAfterUndo = () => {
+    if (compensationStarted) return;
+    compensationStarted = true;
     void action.compensate().catch(() => {
       action.apply();
       action.toast.failUndo(toastId, {
@@ -46,24 +63,18 @@ export function startUndoable(action: UndoableAction): void {
       undone = true;
       action.revert();
       action.restorePosition();
+      if (requestSucceeded) compensateAfterUndo();
     },
   });
 
   void request
     .then(() => {
-      if (!undone) return;
-      return action.compensate().catch(() => {
-        action.apply();
-        action.toast.failUndo(toastId, {
-          message: action.compensationFailureMessage ?? "Couldn't undo this.",
-          tone: 'error',
-          action: { label: 'Retry', onPress: retryCompensation },
-        });
-      });
+      requestSucceeded = true;
+      if (undone) compensateAfterUndo();
     })
     .catch(() => {
       if (undone) return;
-      action.revert();
+      (action.rollbackFailure ?? action.revert)();
       action.restorePosition();
       action.toast.failUndo(toastId, {
         message: action.failureMessage,

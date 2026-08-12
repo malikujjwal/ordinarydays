@@ -65,6 +65,26 @@ describe('startUndoable helper', () => {
     await vi.waitFor(() => expect(compensate).toHaveBeenCalledOnce());
   });
 
+  it('still compensates when the write succeeds before Undo is tapped', async () => {
+    const compensate = vi.fn(() => Promise.resolve());
+    const messages = port();
+
+    startUndoable({
+      apply: vi.fn(),
+      revert: vi.fn(),
+      restorePosition: vi.fn(),
+      request: vi.fn(() => Promise.resolve()),
+      compensate,
+      toast: messages.toast,
+      message: 'Completed',
+      failureMessage: 'Failed',
+    });
+    await Promise.resolve();
+    messages.undo?.onUndo();
+
+    await vi.waitFor(() => expect(compensate).toHaveBeenCalledOnce());
+  });
+
   it('rolls back a failed original and exposes Retry', async () => {
     const pending = deferred();
     const apply = vi.fn();
@@ -94,5 +114,30 @@ describe('startUndoable helper', () => {
       tone: 'error',
       action: { label: 'Retry' },
     });
+  });
+
+  it('can restore a failed write differently from a user-requested Undo', async () => {
+    const pending = deferred();
+    const revert = vi.fn();
+    const rollbackFailure = vi.fn();
+    const messages = port();
+
+    startUndoable({
+      apply: vi.fn(),
+      revert,
+      rollbackFailure,
+      restorePosition: vi.fn(),
+      request: vi.fn(() => pending.promise),
+      compensate: vi.fn(() => Promise.resolve()),
+      toast: messages.toast,
+      message: 'Snoozed',
+      failureMessage: "Couldn't snooze this task.",
+    });
+    pending.reject(new Error('offline'));
+    await pending.promise.catch(() => {});
+    await vi.waitFor(() => expect(messages.toast.failUndo).toHaveBeenCalledOnce());
+
+    expect(rollbackFailure).toHaveBeenCalledOnce();
+    expect(revert).not.toHaveBeenCalled();
   });
 });

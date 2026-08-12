@@ -26,6 +26,10 @@ export interface TimePickerProps {
   label: string;
   value: WallTime | null;
   onChange: (next: WallTime | null) => void;
+  /** Called only when Done commits the wheel's visible value. */
+  onConfirm?: (value: WallTime) => void;
+  /** Optional compact trigger copy; the wheel keeps `label` as its accessible name. */
+  triggerLabel?: string;
   /** The step the wheel offers. 5 throughout this product. */
   minuteInterval?: number;
   /** Whether the clear affordance renders. */
@@ -48,6 +52,8 @@ export function TimePicker({
   label,
   value,
   onChange,
+  onConfirm,
+  triggerLabel,
   minuteInterval = 5,
   allowClear = true,
   openAt = '09:00',
@@ -72,7 +78,10 @@ export function TimePicker({
         }}
       >
         <Chip
-          label={value === null ? `Set a ${label.toLowerCase()}` : formatWallTime(value)}
+          label={
+            triggerLabel ??
+            (value === null ? `Set a ${label.toLowerCase()}` : formatWallTime(value))
+          }
           selected={value !== null}
           disabled={disabled}
           onPress={() => setWheelOpen(true)}
@@ -111,7 +120,9 @@ export function TimePicker({
         <Button
           label="Done"
           onPress={() => {
-            if (value === null) onChange(openAt);
+            const committed = value ?? openAt;
+            if (value === null) onChange(committed);
+            onConfirm?.(committed);
             setWheelOpen(false);
           }}
         />

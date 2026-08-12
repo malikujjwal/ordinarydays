@@ -18,6 +18,8 @@ export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
 export interface ButtonProps {
   label: string;
+  /** Override when the visible shorthand does not describe the action's result. */
+  accessibilityLabel?: string;
   onPress?: () => void;
   variant?: ButtonVariant;
   size?: 'md' | 'lg';
@@ -30,6 +32,7 @@ export interface ButtonProps {
 
 export function Button({
   label,
+  accessibilityLabel,
   onPress,
   variant = 'primary',
   size = 'md',
@@ -71,7 +74,7 @@ export function Button({
   return (
     <Touchable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ disabled: inactive, busy: loading }}
       disabled={inactive}
       onPress={onPress}
