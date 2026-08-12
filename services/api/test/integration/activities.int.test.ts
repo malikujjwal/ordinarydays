@@ -631,6 +631,128 @@ describe('patching an activity', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.gsi1pk).toBe(`U#${DEV}#S`);
   });
+
+  it('reschedules one recurring occurrence into one OCC row without changing the series', async () => {
+    const activity = await created({
+      ...TASK,
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    const before = await repo.getActivityMeta(activity.activityId);
+
+    const res = await schedule(activity.activityId, {
+      date: '2026-08-11',
+      time: '19:30',
+      timezone: 'UTC',
+      occurrenceDate: '2026-08-11',
+    });
+
+    expect(res.status).toBe(200);
+    expect(await repo.getActivityMeta(activity.activityId)).toEqual(before);
+    expect(
+      (await repo.getActivityPartition(activity.activityId)).filter(
+        (row) => row.entity === 'Occurrence',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        sk: 'OCC#2026-08-11',
+        status: 'rescheduled',
+        overrideTime: '19:30',
+      }),
+    ]);
+  });
+
+  it('writes a cross-day occurrence source and destination marker atomically', async () => {
+    const activity = await created({
+      ...TASK,
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    const before = await repo.getActivityMeta(activity.activityId);
+
+    const res = await schedule(activity.activityId, {
+      date: '2026-08-13',
+      time: '19:30',
+      timezone: 'UTC',
+      occurrenceDate: '2026-08-11',
+    });
+
+    expect(res.status).toBe(200);
+    expect(await repo.getActivityMeta(activity.activityId)).toEqual(before);
+    const rows = await repo.getActivityPartition(activity.activityId);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sk: 'OCC#2026-08-11',
+          status: 'rescheduled',
+          overrideDate: '2026-08-13',
+          overrideTime: '19:30',
+        }),
+        expect.objectContaining({
+          sk: 'MOVE#2026-08-13',
+          entity: 'OccurrenceMoveMarker',
+          movedFrom: ['2026-08-11'],
+        }),
+      ]),
+    );
+  });
+
+  it('appends an all-future segment while preserving history and occurrence overrides', async () => {
+    const activity = await created({
+      ...TASK,
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+    await schedule(activity.activityId, {
+      date: '2026-08-09',
+      time: '17:00',
+      timezone: 'UTC',
+      occurrenceDate: '2026-08-09',
+    });
+    const occurrenceBefore = (
+      await repo.getActivityPartition(activity.activityId)
+    ).filter((row) => row.entity === 'Occurrence');
+    const originalSegment = activity.recurrence.segments[0];
+
+    const res = await patch(
+      activity.activityId,
+      {
+        recurrence: {
+          ...activity.recurrence,
+          segments: [
+            originalSegment,
+            { freq: 'daily', effectiveFrom: '2099-01-01', time: '20:15' },
+          ],
+        },
+        editedFromDate: '2026-08-11',
+      },
+      { ifMatch: activity.updatedAt },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.recurrence.segments[0]).toEqual(originalSegment);
+    expect(body.data.recurrence.segments[1]).toEqual({
+      freq: 'daily',
+      effectiveFrom: '2026-08-11',
+      time: '20:15',
+    });
+    expect(body.data.schedule.time).toBe('20:15');
+    expect(
+      (await repo.getActivityPartition(activity.activityId)).filter(
+        (row) => row.entity === 'Occurrence',
+      ),
+    ).toEqual(occurrenceBefore);
+  });
 });
 
 /**

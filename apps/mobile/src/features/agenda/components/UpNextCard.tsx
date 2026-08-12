@@ -1,5 +1,5 @@
 import type { AgendaItem } from '@od/shared/types';
-import { Card, formatWallTime, SectionHeader, Text, useTheme } from '@od/ui';
+import { Card, formatWallTime, SectionHeader, Text, Touchable, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import type { UpNextSelection } from '@/features/agenda/model/upNext';
@@ -8,6 +8,7 @@ import { SwipeableRow } from './SwipeableRow';
 export interface UpNextCardProps {
   selection: UpNextSelection;
   onOpen: (item: AgendaItem) => void;
+  onOpenReschedule?: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onAction?: (item: AgendaItem, action: AgendaSwipeAction) => void;
 }
@@ -16,6 +17,7 @@ export interface UpNextCardProps {
 export function UpNextCard({
   selection,
   onOpen,
+  onOpenReschedule,
   onToggleComplete,
   onAction,
 }: UpNextCardProps) {
@@ -33,7 +35,18 @@ export function UpNextCard({
             gap: theme.space[3],
           }}
         >
-          <Text variant="heading">{formatWallTime(selection.time)}</Text>
+          {onOpenReschedule === undefined ? (
+            <Text variant="heading">{formatWallTime(selection.time)}</Text>
+          ) : (
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel={`${formatWallTime(selection.time)}, change time`}
+              onPress={() => onOpenReschedule(selection.item)}
+              testID="up-next-time"
+            >
+              <Text variant="heading">{formatWallTime(selection.time)}</Text>
+            </Touchable>
+          )}
           <Text variant="footnoteStrong" color="accent">
             {selection.relativeTime}
           </Text>

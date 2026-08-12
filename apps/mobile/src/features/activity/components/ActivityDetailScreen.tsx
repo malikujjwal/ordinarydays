@@ -211,22 +211,11 @@ export function ActivityDetailScreen({
             open={rescheduleOpen}
             onClose={() => setRescheduleOpen(false)}
             today={today}
-            value={activity.schedule?.date}
-            onChoose={(date) =>
-              void detail.schedule({
-                date,
-                timezone:
-                  activity.schedule?.timezone ??
-                  Intl.DateTimeFormat().resolvedOptions().timeZone,
-                ...(activity.schedule?.time === undefined
-                  ? {}
-                  : { time: activity.schedule.time }),
-                ...(activity.schedule?.endTime === undefined
-                  ? {}
-                  : { endTime: activity.schedule.endTime }),
-              })
-            }
-            onClear={() => void detail.schedule({ date: null })}
+            activity={activity}
+            onSchedule={detail.schedule}
+            onPatch={detail.patch}
+            busy={detail.isSaving}
+            {...(detail.editError === undefined ? {} : { error: detail.editError })}
           />
           <OverflowMenu
             open={menuOpen}
@@ -344,7 +333,9 @@ function Loaded({ activity, detail, today, onOpenReschedule }: LoadedProps) {
         hideLabel
         appearance="bare"
         textVariant="title"
-        onCommit={(title) => detail.patch({ title })}
+        onCommit={async (title) => {
+          await detail.patch({ title });
+        }}
         testID="detail-title"
       />
       <Text variant="footnote" color="textSecondary" testID="detail-subtitle">
@@ -402,7 +393,9 @@ function Loaded({ activity, detail, today, onOpenReschedule }: LoadedProps) {
                 hideLabel
                 multiline
                 placeholder="Add notes"
-                onCommit={(notes) => detail.patch({ notes })}
+                onCommit={async (notes) => {
+                  await detail.patch({ notes });
+                }}
                 testID="detail-notes"
               />
             </View>

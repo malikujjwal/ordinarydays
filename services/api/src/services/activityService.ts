@@ -203,7 +203,7 @@ function recurrenceFailure(message: string, path = 'recurrence'): never {
 function serverSegment(
   segment: RecurrenceSegment,
   effectiveFrom: string,
-  schedule: ActivitySchedule,
+  timeSource: Pick<RecurrenceSegment, 'time' | 'endTime'>,
 ): RecurrenceSegment {
   return {
     freq: segment.freq,
@@ -213,8 +213,8 @@ function serverSegment(
     ...(segment.byMonth === undefined ? {} : { byMonth: segment.byMonth }),
     ...(segment.rrule === undefined ? {} : { rrule: segment.rrule }),
     effectiveFrom,
-    ...(schedule.time === undefined ? {} : { time: schedule.time }),
-    ...(schedule.endTime === undefined ? {} : { endTime: schedule.endTime }),
+    ...(timeSource.time === undefined ? {} : { time: timeSource.time }),
+    ...(timeSource.endTime === undefined ? {} : { endTime: timeSource.endTime }),
   };
 }
 
@@ -519,7 +519,16 @@ function recurrenceForPatch(
   return validateRecurrence(
     seriesLevel(supplied, [
       ...stored.segments,
-      serverSegment(incoming, anchor, schedule),
+      // P2-26's all-future reschedule carries the new active time on the appended segment.
+      // Existing history stays byte-identical; the active schedule mirror is updated below.
+      serverSegment(incoming, anchor, {
+        ...((incoming.time ?? schedule.time) === undefined
+          ? {}
+          : { time: incoming.time ?? schedule.time }),
+        ...((incoming.endTime ?? schedule.endTime) === undefined
+          ? {}
+          : { endTime: incoming.endTime ?? schedule.endTime }),
+      }),
     ]),
   );
 }
@@ -639,18 +648,43 @@ function merge(
    */
   const schedule = base.schedule;
   const recurrenceUpdate = recurrenceForPatch(current, patch, schedule, now);
+  const appendedSegment =
+    schedule !== undefined &&
+    current.recurrence !== undefined &&
+    recurrenceUpdate !== undefined &&
+    recurrenceUpdate !== null &&
+    recurrenceUpdate.segments.length === current.recurrence.segments.length + 1
+      ? recurrenceUpdate.segments.at(-1)
+      : undefined;
+  const activeSchedule =
+    schedule === undefined || appendedSegment === undefined
+      ? schedule
+      : toSchedule({
+          date: schedule.date,
+          timezone: schedule.timezone,
+          ...(appendedSegment.time === undefined ? {} : { time: appendedSegment.time }),
+          ...(appendedSegment.endTime === undefined
+            ? {}
+            : { endTime: appendedSegment.endTime }),
+        });
+  const scheduleTimeChanged =
+    appendedSegment !== undefined &&
+    (schedule?.time !== activeSchedule?.time ||
+      schedule?.endTime !== activeSchedule?.endTime);
 
   const next: Record<string, unknown> = {
     ...base,
     ...pick(patch, 'title', 'notes', 'details'),
     ...(recurrenceUpdate == null ? {} : { recurrence: recurrenceUpdate }),
     ...nullable(patch, 'location', 'sourceUrl', 'parentActivityId'),
+    ...(activeSchedule === undefined ? {} : { schedule: activeSchedule }),
     /**
      * Re-derived rather than carried, because clearing a date is a scheduling-state change:
      * an activity with no date is `saved`. `cancelled` from the client and the two terminal
      * statuses survive, which is what `deriveStatus` already encodes.
      */
     status: terminal(base.status) ? base.status : (patch.status ?? base.status),
+    icsSequence: base.icsSequence + (scheduleTimeChanged ? 1 : 0),
     updatedAt: now,
   };
 

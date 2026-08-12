@@ -1,5 +1,5 @@
 import { fixedClock, type Instant } from '@od/shared/time';
-import type { AgendaItem } from '@od/shared/types';
+import type { Activity, AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -57,6 +57,42 @@ function stubFetch(body: unknown) {
       text: () => Promise.resolve(JSON.stringify(body)),
     }),
   );
+}
+
+function okResponse(body: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
+  };
+}
+
+function recurringActivity(activityId: string): Activity {
+  return {
+    activityId,
+    ownerId: 'usr_01J0000000000000000000000B',
+    objectKind: 'task',
+    type: 'task',
+    status: 'scheduled',
+    title: 'Recurring standup',
+    schedule: { date: '2026-08-01', time: '15:30', timezone: 'UTC' },
+    recurrence: {
+      mode: 'fixed',
+      segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '15:30' }],
+    },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    details: { kind: 'task' },
+    icsSequence: 0,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    lastActivityAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    schemaVersion: 1,
+  };
 }
 
 function createClient() {
@@ -302,5 +338,40 @@ describe('TodayScreen', () => {
 
     expect(screen.getByRole('heading', { name: 'Snooze' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Snooze until 3:25 PM' })).toBeDefined();
+  });
+
+  it('opens the shared recurring scope chooser when a rendered time is tapped', async () => {
+    const scheduled = row(1, {
+      title: 'Recurring standup',
+      time: '15:30',
+      occurrenceDate: '2026-08-06',
+      isRecurring: true,
+    });
+    const agendaBody = response([scheduled]);
+    const detailBody = {
+      data: { activity: recurringActivity(scheduled.activityId), reminders: [] },
+      meta: { requestId: 'req_detail' },
+    };
+    vi.stubGlobal('fetch', (input: RequestInfo | URL) => {
+      const url = String(input);
+      return Promise.resolve(
+        okResponse(url.includes('/agenda') ? agendaBody : detailBody),
+      );
+    });
+    mount(<TodayScreen onOpenAnytime={() => {}} onOpenAgendaItem={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole('button', { name: '3:30 PM, change time' }),
+      ).not.toHaveLength(0),
+    );
+    fireEvent.click(
+      screen.getAllByRole('button', { name: '3:30 PM, change time' })[0] as Element,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'This occurrence only' })).toBeDefined(),
+    );
+    expect(screen.getByRole('button', { name: 'All future occurrences' })).toBeDefined();
   });
 });

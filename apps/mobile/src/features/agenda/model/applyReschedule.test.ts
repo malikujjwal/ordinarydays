@@ -1,4 +1,4 @@
-import type { AgendaData, AgendaItem } from '@od/shared/types';
+import type { AgendaData, AgendaDay, AgendaItem } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 import { applyReschedule } from './applyReschedule';
 
@@ -18,26 +18,47 @@ const moved: AgendaItem = {
 };
 const later = { ...moved, activityId: 'act_LATER', time: '19:00' };
 const tomorrow = { ...moved, activityId: 'act_TOMORROW', time: '10:00' };
+const todayDay: AgendaDay = {
+  date: '2026-08-11',
+  upNext: moved,
+  schedule: [moved, later],
+  anytime: [],
+  earlier: [],
+};
+const tomorrowDay: AgendaDay = {
+  date: '2026-08-12',
+  upNext: tomorrow,
+  schedule: [tomorrow],
+  anytime: [],
+  earlier: [],
+};
 const cached: AgendaData = {
-  days: [
-    {
-      date: '2026-08-11',
-      upNext: moved,
-      schedule: [moved, later],
-      anytime: [],
-      earlier: [],
-    },
-    {
-      date: '2026-08-12',
-      upNext: tomorrow,
-      schedule: [tomorrow],
-      anytime: [],
-      earlier: [],
-    },
-  ],
+  days: [todayDay, tomorrowDay],
   warnings: [],
 };
 const clock = { today: '2026-08-11', currentMinute: '15:00' };
+
+const saved: AgendaItem = {
+  activityId: 'act_SAVED',
+  type: 'task',
+  title: 'Already saved',
+  status: 'saved',
+  isRecurring: false,
+  isSnoozed: false,
+  hasCheckbox: true,
+  capabilities: { complete: true, skip: false, snooze: false },
+  participantAvatars: [],
+  participantCount: 0,
+  isPast: false,
+};
+
+const overdue: AgendaItem = {
+  ...saved,
+  activityId: 'act_OVERDUE',
+  title: 'Rolled forward',
+  status: 'scheduled',
+  overdueFromDate: '2026-08-10',
+};
 
 describe('applyReschedule', () => {
   it('matches the self-seeded server response for a cross-day reschedule', () => {
@@ -88,4 +109,100 @@ describe('applyReschedule', () => {
       }),
     ).toEqual(cached);
   });
+
+  it('returns the same cache reference when the target is absent', () => {
+    expect(
+      applyReschedule(cached, {
+        activityId: 'act_MISSING',
+        date: '2026-08-12',
+        ...clock,
+      }),
+    ).toBe(cached);
+  });
+
+  it('clears date, time, end time, and overdue state into sorted Anytime', () => {
+    const source = {
+      ...moved,
+      endTime: '18:00',
+      overdueFromDate: '2026-08-10',
+    };
+    const secondOverdue = { ...overdue, activityId: 'act_OVERDUE_B' };
+    const undatedA = { ...overdue, activityId: 'act_UNDATED_A' };
+    const undatedB = { ...overdue, activityId: 'act_UNDATED_B' };
+    delete undatedA.overdueFromDate;
+    delete undatedB.overdueFromDate;
+    const agenda: AgendaData = {
+      ...cached,
+      days: [
+        {
+          ...todayDay,
+          upNext: source,
+          schedule: [source, later],
+          anytime: [saved, overdue, secondOverdue, undatedA, undatedB],
+        },
+        tomorrowDay,
+      ],
+    };
+
+    const result = applyReschedule(agenda, {
+      activityId: moved.activityId,
+      date: null,
+      ...clock,
+    });
+
+    expect(result.days[0]?.anytime.map(({ activityId }) => activityId)).toEqual([
+      'act_OVERDUE',
+      'act_OVERDUE_B',
+      'act_UNDATED_A',
+      'act_UNDATED_B',
+      'act_SAVED',
+      'act_MOVE',
+    ]);
+    expect(result.days[0]?.anytime.at(-1)).not.toHaveProperty('time');
+    expect(result.days[0]?.anytime.at(-1)).not.toHaveProperty('endTime');
+    expect(result.days[0]?.anytime.at(-1)).not.toHaveProperty('overdueFromDate');
+    expect(result.days[0]?.anytime.at(-1)).toMatchObject({
+      status: 'saved',
+      isPast: false,
+    });
+  });
+
+  it('marks a same-day move past once its end time has elapsed', () => {
+    const result = applyReschedule(cached, {
+      activityId: moved.activityId,
+      date: clock.today,
+      time: '14:00',
+      endTime: '14:30',
+      ...clock,
+    });
+
+    expect(result.days[0]?.earlier[0]).toMatchObject({
+      activityId: moved.activityId,
+      time: '14:00',
+      endTime: '14:30',
+      isPast: true,
+    });
+  });
+
+  it.each(['completed', 'skipped'] as const)(
+    'preserves a %s status when the row is moved',
+    (status) => {
+      const resolved = { ...moved, status };
+      const agenda: AgendaData = {
+        ...cached,
+        days: [{ ...todayDay, upNext: later, schedule: [resolved, later] }, tomorrowDay],
+      };
+
+      const result = applyReschedule(agenda, {
+        activityId: moved.activityId,
+        date: '2026-08-12',
+        time: '16:00',
+        ...clock,
+      });
+
+      expect(result.days[1]?.schedule).toContainEqual(
+        expect.objectContaining({ activityId: moved.activityId, status }),
+      );
+    },
+  );
 });

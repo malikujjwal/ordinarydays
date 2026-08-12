@@ -23,4 +23,25 @@ describe('toAnytimeAgendaItem', () => {
       isPast: false,
     });
   });
+
+  it('preserves every optional row value returned by the saved-list projection', () => {
+    const saved: ActivityListItem = {
+      activityId: 'act_01J0000000000000000000000B',
+      type: 'meal',
+      title: 'Soup night',
+      status: 'saved',
+      time: '18:00',
+      endTime: '19:00',
+      isRecurring: false,
+      participantCount: 2,
+      locationLabel: 'Home',
+    };
+
+    expect(toAnytimeAgendaItem(saved)).toMatchObject({
+      time: '18:00',
+      endTime: '19:00',
+      locationLabel: 'Home',
+      hasCheckbox: false,
+    });
+  });
 });

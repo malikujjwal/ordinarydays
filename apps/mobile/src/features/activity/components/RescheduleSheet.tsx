@@ -1,121 +1,305 @@
-import { Button, Chip, Field, Sheet, Text, useTheme } from '@od/ui';
-import { useState } from 'react';
+import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
+import type { Activity, RecurrenceSegment } from '@od/shared/types';
+import { Button, Chip, Field, Sheet, Text, TimePicker, useTheme } from '@od/ui';
+import { useEffect, useState } from 'react';
 import { View } from 'react-native';
+import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import {
   type QuickDate,
   quickDates,
   type WallDate,
 } from '@/features/activity/model/dates';
 
-/**
- * The reschedule sheet (U4, `activities.md` §6.2).
- *
- * > Tapping the date or time **anywhere in the product** opens this. It never edits in place
- * > on the row.
- *
- * That is a universal rule rather than a screen's preference, which is why this component
- * takes a value and a callback and knows nothing about activities: Today's rows, the plan
- * detail's when/where block and a list item's state line all open the same sheet.
- *
- * ## What it does not do yet
- *
- * `Clear the date` on an activity with participants owes the §1a.1 confirmation naming what
- * comes off everyone's day. Phase 1 has no participants, so the branch is unreachable and is
- * deliberately not written — a confirmation nobody can trigger is a confirmation nobody has
- * tested. P6 adds it with the first participant.
- *
- * A recurring series owes the `This occurrence only` / `All future occurrences` choice
- * (§6.2). Recurrence is Phase 2 (P2-01); the same applies.
- */
+type SeriesScope = 'occurrence' | 'future';
+
 export interface RescheduleSheetProps {
   open: boolean;
   onClose: () => void;
-  /** The user's today, in their zone. Injected so the chips are testable (§4.3). */
+  /** The user's today, in their zone. Injected so chips and detail edits are deterministic. */
   today: WallDate;
-  /** The activity's current date, or `undefined` when it has none. */
-  value: WallDate | undefined;
-  onChoose: (date: WallDate) => void;
-  onClear: () => void;
+  activity: Activity;
+  /** Present only when the sheet was opened from one expanded occurrence. */
+  occurrenceDate?: WallDate;
+  /** Agenda overrides can make the rendered value differ from the active segment snapshot. */
+  renderedDate?: WallDate;
+  renderedTime?: string;
+  onSchedule: (input: ScheduleActivityInput) => Promise<boolean>;
+  onPatch: (input: PatchActivityInput) => Promise<boolean>;
+  busy?: boolean;
+  error?: string;
 }
 
+function segmentInForce(
+  activity: Activity,
+  occurrenceDate: WallDate | undefined,
+): RecurrenceSegment | undefined {
+  const segments = activity.recurrence?.segments;
+  if (segments === undefined) return undefined;
+  if (occurrenceDate === undefined) return segments.at(-1);
+  return [...segments]
+    .reverse()
+    .find((segment) => segment.effectiveFrom <= occurrenceDate);
+}
+
+function appendedSegment(
+  active: RecurrenceSegment,
+  effectiveFrom: WallDate,
+  time: string | null,
+): RecurrenceSegment {
+  return {
+    freq: active.freq,
+    ...(active.interval === undefined ? {} : { interval: active.interval }),
+    ...(active.byWeekday === undefined ? {} : { byWeekday: active.byWeekday }),
+    ...(active.byMonthDay === undefined ? {} : { byMonthDay: active.byMonthDay }),
+    ...(active.byMonth === undefined ? {} : { byMonth: active.byMonth }),
+    ...(active.rrule === undefined ? {} : { rrule: active.rrule }),
+    // Required by the shared schema, but the server derives and overwrites this value.
+    effectiveFrom,
+    ...(time === null ? {} : { time }),
+    ...(time === null || active.endTime === undefined ? {} : { endTime: active.endTime }),
+  };
+}
+
+/**
+ * The single reschedule surface used by activity detail and agenda rows (U4, P2-26).
+ * A recurring occurrence must choose its scope before a date or time can write anything.
+ */
 export function RescheduleSheet({
   open,
   onClose,
   today,
-  value,
-  onChoose,
-  onClear,
+  activity,
+  occurrenceDate,
+  renderedDate,
+  renderedTime,
+  onSchedule,
+  onPatch,
+  busy = false,
+  error,
 }: RescheduleSheetProps) {
   const theme = useTheme();
+  const recurring = activity.recurrence !== undefined;
+  const active = segmentInForce(activity, occurrenceDate);
+  const initialDate = renderedDate ?? occurrenceDate ?? activity.schedule?.date ?? today;
+  const initialTime = renderedTime ?? active?.time ?? activity.schedule?.time ?? null;
+  const [scope, setScope] = useState<SeriesScope | undefined>();
   const [picking, setPicking] = useState(false);
-  const [typed, setTyped] = useState(value ?? '');
+  const [typed, setTyped] = useState(initialDate);
+  const [pickedTime, setPickedTime] = useState<string | null>(initialTime);
+  const [clearConfirmation, setClearConfirmation] = useState(false);
+  const [seriesLimit, setSeriesLimit] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setScope(recurring && occurrenceDate === undefined ? 'future' : undefined);
+    setPicking(false);
+    setTyped(initialDate);
+    setPickedTime(initialTime);
+    setClearConfirmation(false);
+    setSeriesLimit(false);
+  }, [initialDate, initialTime, occurrenceDate, open, recurring]);
+
+  const effectiveScope = recurring ? scope : 'occurrence';
+  const scheduleInput = (date: WallDate, time: string | null): ScheduleActivityInput => ({
+    date,
+    ...(time === null ? {} : { time }),
+    ...(time === null || active?.endTime === undefined
+      ? {}
+      : { endTime: active.endTime }),
+    timezone:
+      activity.schedule?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    ...(recurring && occurrenceDate !== undefined ? { occurrenceDate } : {}),
+  });
+
+  const commitOccurrence = async (date: WallDate, time: string | null) => {
+    if (await onSchedule(scheduleInput(date, time))) onClose();
+  };
+
+  const commitFuture = async (time: string | null) => {
+    const recurrence = activity.recurrence;
+    if (recurrence === undefined || active === undefined) return;
+    const ok = await onPatch({
+      recurrence: {
+        ...recurrence,
+        segments: [
+          ...recurrence.segments,
+          appendedSegment(active, occurrenceDate ?? today, time),
+        ],
+      },
+      ...(occurrenceDate === undefined ? {} : { editedFromDate: occurrenceDate }),
+    });
+    if (ok) {
+      onClose();
+      return;
+    }
+    if (recurrence.segments.length >= 20) setSeriesLimit(true);
+  };
 
   const choose = (chip: QuickDate) => {
     if (chip.date === undefined) {
       setPicking(true);
       return;
     }
-    onChoose(chip.date);
-    onClose();
+    void commitOccurrence(chip.date, pickedTime);
   };
 
   const commitTyped = () => {
-    // The one validation the sheet owns: a date it cannot parse is not sent to the server
-    // to be rejected. Everything else about the value is the schema's business.
     if (!/^\d{4}-\d{2}-\d{2}$/.test(typed)) return;
-    onChoose(typed);
-    setPicking(false);
-    onClose();
+    void commitOccurrence(typed, pickedTime);
   };
 
+  const clearDate = async () => {
+    if (await onSchedule({ date: null })) {
+      setClearConfirmation(false);
+      onClose();
+    }
+  };
+
+  const clearDateButton =
+    activity.schedule === undefined || recurring ? null : (
+      <Button
+        label="Clear the date"
+        variant="ghost"
+        onPress={() => {
+          if (activity.participantCount > 0) {
+            setClearConfirmation(true);
+            return;
+          }
+          void clearDate();
+        }}
+        testID="reschedule-clear"
+      />
+    );
+
   return (
-    <Sheet open={open} onClose={onClose} title="When?" testID="reschedule-sheet">
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] }}>
-        {quickDates(today).map((chip) => (
-          <Chip
-            key={chip.key}
-            label={chip.label}
-            onPress={() => choose(chip)}
-            selected={chip.date !== undefined && chip.date === value}
-            testID={`quick-date-${chip.key}`}
-          />
-        ))}
-      </View>
+    <>
+      <Sheet open={open} onClose={onClose} title="When?" testID="reschedule-sheet">
+        {recurring && occurrenceDate !== undefined && effectiveScope === undefined ? (
+          <View style={{ gap: theme.space[3] }} testID="reschedule-scope">
+            <Button
+              label="This occurrence only"
+              variant="secondary"
+              fullWidth
+              onPress={() => setScope('occurrence')}
+              testID="reschedule-this-occurrence"
+            />
+            <Button
+              label="All future occurrences"
+              variant="secondary"
+              fullWidth
+              onPress={() => setScope('future')}
+              testID="reschedule-all-future"
+            />
+          </View>
+        ) : effectiveScope === 'future' ? (
+          <View style={{ gap: theme.space[5] }} testID="reschedule-future-editor">
+            <Text variant="subhead" color="textSecondary">
+              Future dates keep their repeat pattern. Change the time from this point on.
+            </Text>
+            <TimePicker
+              label="Time"
+              value={pickedTime}
+              onChange={setPickedTime}
+              onConfirm={(value) => void commitFuture(value)}
+              openAt={initialTime ?? '09:00'}
+              minuteInterval={5}
+              allowClear={false}
+              testID="reschedule-time-picker"
+            />
+            {seriesLimit ? (
+              <View style={{ gap: theme.space[2] }} testID="reschedule-series-limit">
+                <Text accessibilityRole="alert" color="danger" numberOfLines={0}>
+                  This series already has 20 schedule changes. End this series and start a
+                  new one to keep its history intact.
+                </Text>
+                <Text variant="subhead" color="textSecondary">
+                  Use End series from the activity menu, then create a new series.
+                </Text>
+              </View>
+            ) : error === undefined ? null : (
+              <Text accessibilityRole="alert" color="danger">
+                {error}
+              </Text>
+            )}
+          </View>
+        ) : (
+          <View style={{ gap: theme.space[5] }} testID="reschedule-occurrence-editor">
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] }}>
+              {quickDates(today).map((chip) => (
+                <Chip
+                  key={chip.key}
+                  label={chip.label}
+                  onPress={() => choose(chip)}
+                  selected={chip.date !== undefined && chip.date === initialDate}
+                  testID={`quick-date-${chip.key}`}
+                />
+              ))}
+            </View>
 
-      {picking ? (
-        <View style={{ gap: theme.space[3] }}>
-          <Field
-            label="Date"
-            value={typed}
-            onChangeText={setTyped}
-            placeholder="YYYY-MM-DD"
-            hint="v1 has no calendar grid — type the date."
-            testID="reschedule-date-input"
-          />
-          <Button label="Set date" onPress={commitTyped} testID="reschedule-commit" />
-        </View>
-      ) : null}
+            {picking ? (
+              <View style={{ gap: theme.space[3] }}>
+                <Field
+                  label="Date"
+                  value={typed}
+                  onChangeText={setTyped}
+                  placeholder="YYYY-MM-DD"
+                  hint="v1 has no calendar grid — type the date."
+                  testID="reschedule-date-input"
+                />
+                <Button
+                  label="Set date"
+                  loading={busy}
+                  onPress={commitTyped}
+                  testID="reschedule-commit"
+                />
+              </View>
+            ) : null}
 
-      {value === undefined ? null : (
-        <View>
-          <Button
-            label="Clear the date"
-            variant="ghost"
-            onPress={() => {
-              onClear();
-              onClose();
-            }}
-            testID="reschedule-clear"
-          />
-          <Text variant="footnote" color="textSecondary">
-            It stays a plan. It moves back to Needs a date.
-          </Text>
-        </View>
-      )}
-      <Text variant="footnote" color="textSecondary">
-        Removing a time keeps reminders and moves sub-day reminders to the nearest whole
-        day.
-      </Text>
-    </Sheet>
+            <TimePicker
+              label="Time"
+              value={pickedTime}
+              onChange={(value) => {
+                setPickedTime(value);
+                if (value === null) void commitOccurrence(initialDate, null);
+              }}
+              onConfirm={(value) => void commitOccurrence(initialDate, value)}
+              openAt={initialTime ?? '09:00'}
+              minuteInterval={5}
+              allowClear={!recurring}
+              testID="reschedule-time-picker"
+            />
+
+            {clearDateButton}
+            {pickedTime !== null ? null : (
+              <Text variant="footnote" color="textSecondary">
+                Removing a time keeps reminders and moves sub-day reminders to the nearest
+                whole day.
+              </Text>
+            )}
+            {error === undefined ? null : (
+              <Text accessibilityRole="alert" color="danger">
+                {error}
+              </Text>
+            )}
+          </View>
+        )}
+      </Sheet>
+
+      <ConfirmDialog
+        open={clearConfirmation}
+        confirmation={{
+          heading: `Remove the date from “${activity.title}”?`,
+          removesLead:
+            'This takes it off everyone’s day and moves it back to Needs a date.',
+          removes: [],
+          keeps: 'the plan, everyone on it, and their replies.',
+          confirmLabel: 'Remove the date',
+        }}
+        busy={busy}
+        onCancel={() => setClearConfirmation(false)}
+        onConfirm={() => void clearDate()}
+        testID="reschedule-clear-confirmation"
+      />
+    </>
   );
 }

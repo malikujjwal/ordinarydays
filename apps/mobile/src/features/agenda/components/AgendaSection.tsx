@@ -13,6 +13,7 @@ export interface AgendaSectionProps {
   testID: string;
   showTime?: boolean;
   onOpen: (item: AgendaItem) => void;
+  onOpenReschedule?: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onAction?: (item: AgendaItem, action: AgendaSwipeAction) => void;
   completionTransitionKeys?: ReadonlySet<string>;
@@ -30,6 +31,7 @@ export function AgendaSection({
   testID,
   showTime = false,
   onOpen,
+  onOpenReschedule,
   onToggleComplete,
   onAction,
   completionTransitionKeys,
@@ -48,6 +50,7 @@ export function AgendaSection({
             item={item}
             showTime={showTime}
             onOpen={onOpen}
+            {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}
             {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
             {...(onAction === undefined ? {} : { onAction })}
           />

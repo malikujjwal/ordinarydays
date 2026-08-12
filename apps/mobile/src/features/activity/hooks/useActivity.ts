@@ -35,10 +35,10 @@ export interface ActivityDetailView {
   requestId?: string;
   refetch: () => void;
   isSaving: boolean;
-  /** Commits one field. Returns once the write has settled, so a blur can await it. */
-  patch: (input: PatchActivityInput) => Promise<void>;
+  /** Commits one field and reports whether the server accepted it. */
+  patch: (input: PatchActivityInput) => Promise<boolean>;
   /** Sole scheduling mutation; its enqueue-time key is persisted with mutation variables. */
-  schedule: (input: ScheduleActivityInput) => Promise<void>;
+  schedule: (input: ScheduleActivityInput) => Promise<boolean>;
   /** The conflict banner, present only after a 409. Dismissed by `acknowledgeConflict`. */
   conflict?: { message: string; dropped?: string };
   acknowledgeConflict: () => void;
@@ -166,16 +166,20 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
     patch: async (input) => {
       try {
         await mutation.mutateAsync(input);
+        return true;
       } catch {
         // Handled: the message is already on `editError` and rendered inline. Rethrowing
         // would surface an unhandled rejection for a failure the UI has fully absorbed.
+        return false;
       }
     },
     schedule: async (input) => {
       try {
         await scheduleMutation.mutateAsync({ input, idempotencyKey: randomUUID() });
+        return true;
       } catch {
         // The inline error state owns the failure; the enqueue-time key stays in variables.
+        return false;
       }
     },
     acknowledgeConflict: () => setConflict(undefined),

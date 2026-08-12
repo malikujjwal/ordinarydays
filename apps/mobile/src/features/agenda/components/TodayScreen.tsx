@@ -8,6 +8,7 @@ import type { AgendaData, AgendaItem } from '@od/shared/types';
 import { Button, EmptyState, Skeleton, useMotion, useTheme } from '@od/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
+import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
 import { TabScreen } from '@/components/TabScreen';
 import { useAgenda } from '@/features/agenda/hooks/useAgenda';
 import { useAgendaActivityActions } from '@/features/agenda/hooks/useAgendaActivityActions';
@@ -96,6 +97,7 @@ export function TodayScreen({
   const agenda = useAgenda({ now: tick.instant });
   const [showAllEarlier, setShowAllEarlier] = useState(false);
   const [snoozeItem, setSnoozeItem] = useState<AgendaItem>();
+  const [rescheduleItem, setRescheduleItem] = useState<AgendaItem>();
   const [completionTransitions, setCompletionTransitions] = useState<
     CompletionTransitionState[]
   >([]);
@@ -118,8 +120,9 @@ export function TodayScreen({
   const scrollView = useRef<ScrollView>(null);
   const scrollOffset = useRef(0);
   const currentMinute = toWallTime(tick.instant, agenda.timezone);
+  const today = toWallDate(tick.instant, agenda.timezone);
   const activityActions = useAgendaActivityActions({
-    today: toWallDate(tick.instant, agenda.timezone),
+    today,
     currentMinute,
     timezone: agenda.timezone,
     getScrollOffset: () => scrollOffset.current,
@@ -230,6 +233,13 @@ export function TodayScreen({
       if (item.capabilities.snooze) setSnoozeItem(item);
       return;
     }
+    if (
+      onAgendaAction === undefined &&
+      ['reschedule', 'schedule'].includes(action.name)
+    ) {
+      setRescheduleItem(item);
+      return;
+    }
     delegate();
   };
   const schedule = withCompletionTransitions(
@@ -269,6 +279,7 @@ export function TodayScreen({
           <UpNextCard
             selection={upNext}
             onOpen={onOpenAgendaItem}
+            onOpenReschedule={setRescheduleItem}
             onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
           />
@@ -280,6 +291,7 @@ export function TodayScreen({
             testID="today-schedule"
             showTime
             onOpen={onOpenAgendaItem}
+            onOpenReschedule={setRescheduleItem}
             onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
             completionTransitionKeys={completionTransitionKeys}
@@ -292,6 +304,7 @@ export function TodayScreen({
             items={anytime.items}
             testID="today-anytime"
             onOpen={onOpenAgendaItem}
+            onOpenReschedule={setRescheduleItem}
             onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
             completionTransitionKeys={completionTransitionKeys}
@@ -316,6 +329,7 @@ export function TodayScreen({
             testID="today-earlier"
             showTime
             onOpen={onOpenAgendaItem}
+            onOpenReschedule={setRescheduleItem}
             onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
             footer={
@@ -341,6 +355,13 @@ export function TodayScreen({
         onSnooze={activityActions.snooze}
         onTomorrow={activityActions.moveToTomorrow}
       />
+      {rescheduleItem === undefined ? null : (
+        <AgendaRescheduleCoordinator
+          item={rescheduleItem}
+          today={today}
+          onClose={() => setRescheduleItem(undefined)}
+        />
+      )}
     </TabScreen>
   );
 }

@@ -1,11 +1,13 @@
 import { toWallDate, toWallTime } from '@od/shared/time';
 import type { AgendaItem } from '@od/shared/types';
 import { Button, EmptyState, Skeleton, Text, useBreakpoint, useTheme } from '@od/ui';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
 import { useAgendaActivityActions } from '@/features/agenda/hooks/useAgendaActivityActions';
 import { useAnytime } from '@/features/agenda/hooks/useAnytime';
+import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { toAnytimeAgendaItem } from '@/features/agenda/model/toAnytimeAgendaItem';
 import { useClock } from '@/hooks/useClock';
 import { SwipeableRow } from './SwipeableRow';
@@ -25,8 +27,10 @@ export function AnytimeScreen({ onBack, onOpenAgendaItem }: AnytimeScreenProps) 
   const now = clock.now();
   const scrollView = useRef<ScrollView>(null);
   const scrollOffset = useRef(0);
+  const [rescheduleItem, setRescheduleItem] = useState<AgendaItem>();
+  const today = toWallDate(now, anytime.timezone);
   const actions = useAgendaActivityActions({
-    today: toWallDate(now, anytime.timezone),
+    today,
     currentMinute: toWallTime(now, anytime.timezone),
     timezone: anytime.timezone,
     getScrollOffset: () => scrollOffset.current,
@@ -37,6 +41,13 @@ export function AnytimeScreen({ onBack, onOpenAgendaItem }: AnytimeScreenProps) 
     },
   });
   const items = anytime.items.map(toAnytimeAgendaItem);
+  const onAction = (item: AgendaItem, action: AgendaSwipeAction) => {
+    if (action.name === 'schedule' || action.name === 'reschedule') {
+      setRescheduleItem(item);
+      return;
+    }
+    actions.onAgendaAction(item, action);
+  };
 
   return (
     <View
@@ -102,7 +113,7 @@ export function AnytimeScreen({ onBack, onOpenAgendaItem }: AnytimeScreenProps) 
                 item={item}
                 onOpen={onOpenAgendaItem}
                 onToggleComplete={actions.toggleComplete}
-                onAction={actions.onAgendaAction}
+                onAction={onAction}
               />
             ))}
             {anytime.isLoadingMore ? (
@@ -113,6 +124,13 @@ export function AnytimeScreen({ onBack, onOpenAgendaItem }: AnytimeScreenProps) 
           </ScrollView>
         )}
       </View>
+      {rescheduleItem === undefined ? null : (
+        <AgendaRescheduleCoordinator
+          item={rescheduleItem}
+          today={today}
+          onClose={() => setRescheduleItem(undefined)}
+        />
+      )}
     </View>
   );
 }

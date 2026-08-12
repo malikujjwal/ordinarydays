@@ -1035,6 +1035,41 @@ describe('patchActivity', () => {
     });
   });
 
+  it('mirrors an all-future segment time onto the active schedule without rewriting history', async () => {
+    seed(recurring());
+
+    const result = await patchActivity(
+      USER,
+      PLAN,
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            firstSegment,
+            { freq: 'daily', effectiveFrom: '2099-01-01', time: '18:30' },
+          ],
+        },
+        editedFromDate: '2026-08-10',
+      },
+      VERSION,
+      LATER,
+    );
+
+    expect(result.recurrence?.segments[0]).toEqual(firstSegment);
+    expect(result.recurrence?.segments[1]).toEqual({
+      freq: 'daily',
+      effectiveFrom: '2026-08-10',
+      time: '18:30',
+    });
+    expect(result.schedule).toEqual({
+      date: '2026-08-01',
+      time: '18:30',
+      timezone: 'America/New_York',
+      scheduledAtUtc: '2026-08-01T22:30:00.000Z',
+    });
+    expect(result.icsSequence).toBe(1);
+  });
+
   it('rejects an editedFromDate the current active rule does not emit', async () => {
     const monday = {
       freq: 'weekly' as const,

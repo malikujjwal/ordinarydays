@@ -5,6 +5,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnytimeScreen } from './AnytimeScreen';
 
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-test-key' }));
+
 const state = vi.hoisted(() => ({
   view: {
     status: 'pending' as 'pending' | 'success' | 'error',
