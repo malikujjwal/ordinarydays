@@ -478,9 +478,10 @@ minimal pushed, paginated saved-task screen. It executes immediately after P2-24
 reuse AgendaRow, swipe and undo foundations. That is **+1 task and +2 AWU**, giving
 **362 tasks and 875 AWU**.
 
-The founder-approved dark-mode palette ruling on **2026-08-12** adds **P2-40**, an M task
-that replaces P1-22's derived dark colours after the Phase 2 E2E task and preserves the
-existing contrast gates. That is **+1 task and +2 AWU**, giving **363 tasks and 877 AWU**.
+The founder-approved palette rulings on **2026-08-12** add **P2-40**, an M task that replaces
+P1-22's derived light and dark colours after the Phase 2 E2E task and preserves the existing
+contrast gates through explicit semantic restrictions on low-contrast decorative values.
+That is **+1 task and +2 AWU**, giving **363 tasks and 877 AWU**.
 
 Use **877 AWU and ~43.9 weeks** (877 / 20 = 43.85) as the plan of record. Everything
 through Phase 5 is now 502 AWU and ~25.1 weeks; the

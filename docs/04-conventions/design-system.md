@@ -27,6 +27,15 @@ Everything here lives in `packages/ui/src/theme/` and is consumed through
 > surface, so it is a non-text accent. Readable labels use semantic text tokens; filled
 > controls use the accessible accent treatment specified below. This preserves every supplied
 > colour without weakening the contrast gates.
+>
+> **Light-mode palette replacement — founder decision (2026-08-12, P2-40; newer note).**
+> The founder also replaced the mock-derived light values with the warm paper palette in
+> §5.1 and §5.2. Three supplied roles are deliberately narrower than their plain-language
+> names: muted `#978F84` is disabled/nonessential decoration rather than readable hint text;
+> border `#D3C9BC` is a decorative field/chip outline rather than the sole control boundary;
+> and accent `#8B6374` is a fill/icon colour rather than body text on `surface`. Readable
+> hints and required boundaries use `#6E675F`; accent text and focus use `#795565`. All
+> founder-supplied values remain exact without weakening the 4.5:1 text or 3:1 control gates.
 
 ---
 
@@ -224,37 +233,38 @@ unconditionally.
 Components never reference a hex value or a ramp step. They reference a semantic token. The
 ramps exist inside `theme/colors.ts` and are not exported.
 
-Light values are the mock's, contrast-checked; two were nudged for AA and are marked.
-Dark values are the founder-approved P2-40 palette. Values not supplied for safety-only
-semantics (`danger`, `scrim`, and disabled labels) remain independently contrast-checked.
+Light and dark values are the founder-approved P2-40 palettes. Values not supplied for
+safety/status semantics (`danger`, `scrim`, and the light sage/ochre/type families) remain
+independently contrast-checked.
 
 | Token | Light | Dark | Contrast (light / dark) | Use |
 | --- | --- | --- | --- | --- |
-| `surface` | `#FBF9F3` | `#171613` | — | Screen background — warm cream, never white |
-| `surfaceRaised` | `#FFFFFF` | `#211F1B` | — | Cards, sheets, the segmented control's active segment |
-| `surfaceRaised2` | `#FFFFFF` | `#292620` | — | A card on a card; dark-mode `e2` |
-| `surfaceOverlay` | `#FFFFFF` | `#292620` | — | Menus, toasts, dark-mode `e3`/`e4` |
-| `surfaceInput` | `#FFFFFF` | `#1C1B18` | — | Fields, selects and native/web picker surfaces |
-| `surfaceSunken` | `#F1EEE5` | `#1C1B18` | — | Rail selection pill, segmented-control track, icon squircles' base, skeletons |
+| `surface` | `#F1EDE5` | `#171613` | — | Screen background — warm cream, never white |
+| `surfaceRaised` | `#F8F5EF` | `#211F1B` | — | Main paper surface: cards, sheets, the segmented control's active segment |
+| `surfaceRaised2` | `#FCFAF6` | `#292620` | — | A card on a card; elevation-required surfaces |
+| `surfaceOverlay` | `#FCFAF6` | `#292620` | — | Menus, toasts and `e3`/`e4` surfaces |
+| `surfaceInput` | `#F0EBE3` | `#1C1B18` | — | Fields, selects and native/web picker surfaces |
+| `surfaceSunken` | `#ECE7DE` | `#1C1B18` | — | Rail selection pill, segmented-control track, grouped areas, icon squircles' base, skeletons |
 | `scrim` | `rgba(38,42,40,0.40)` | `rgba(0,0,0,0.60)` | — | Behind a modal sheet |
-| `textDisplay` | `#252521` | `#F4F0E8` | 14.6:1 / 15.9:1 | Serif display and title ink — the darkest thing on any screen |
-| `textPrimary` | `#4A4841` | `#F4F0E8` | 8.7:1 / 15.9:1 | Row titles, body copy — the mock's softer everyday ink |
-| `textSecondary` | `#6F6D63` | `#D0C9BE` | 4.9:1 / 11.0:1 | Subtitles, metadata, times. *(Light nudged from the mock's `#77756C`, which was 4.39:1 against `surface`.)* |
-| `textMuted` | `#6F6D63` | `#9F988D` | 4.9:1 / 6.3:1 | Readable tertiary metadata; never a disabled state |
-| `textDisabled` | `#9B988D` | `#6E6C63` | 2.7:1 / 3.1:1 | Disabled labels only — never carries meaning |
-| `textInverse` | `#FFFFFF` | `#171613` | — | On an accessible filled accent, sage, ochre, or danger surface |
-| `border` | `#E5E2D9` | `#34312B` | — | Separators, hairlines, the timeline's connector line. Decorative only. |
-| `borderStrong` | `#6F6D63` | `#9F988D` | 4.9:1 / 6.3:1 | Control outlines, focus rings, checkbox border |
-| `accent` | `#965D78` | `#9F667F` | 4.8:1 / 4.0:1 | Dark: non-text fills, icons, progress, focus and decoration; never body text |
-| `accentDeep` | `#744158` | `#AD748C` | 7.6:1 / 4.9:1 | Hover/pressed emphasis and the accessible dark filled-control surface |
-| `accentSurface` | `#F9F1F5` | `#2D2026` | — | UP NEXT card fill, selected-row tint, accent chip background |
-| `accentBorder` | `#744158` | `#5A3A49` | — | Decorative accent-surface outline; never a control boundary |
+| `textDisplay` | `#292621` | `#F4F0E8` | 12.9:1 / 15.9:1 | Serif display and title ink — the darkest thing on any screen |
+| `textPrimary` | `#292621` | `#F4F0E8` | 12.9:1 / 15.9:1 | Row titles and body copy |
+| `textSecondary` | `#6E675F` | `#D0C9BE` | 4.8:1 / 11.0:1 | Subtitles, metadata and times |
+| `textMuted` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Readable hints, placeholders and tertiary metadata; never a disabled state |
+| `textDisabled` | `#978F84` | `#6E6C63` | 2.7:1 / 3.1:1 | Disabled labels and nonessential decoration only — never carries meaning |
+| `textInverse` | `#FFFDF9` | `#171613` | — | On an accessible filled accent, sage, ochre, or danger surface |
+| `border` | `#E1DAD0` | `#34312B` | — | Dividers, separators, hairlines and the timeline's connector line. Decorative only. |
+| `borderSubtle` | `#D3C9BC` | `#34312B` | — | Decorative light field/chip outline; never the sole control boundary or focus indicator |
+| `borderStrong` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Required control outlines and checkbox border |
+| `accent` | `#8B6374` | `#9F667F` | 4.4:1 / 4.0:1 | Non-text fills, icons, progress and decoration; never body text on `surface` |
+| `accentDeep` | `#795565` | `#AD748C` | 5.5:1 / 4.9:1 | Hover/pressed emphasis, readable accent text and accessible filled-control treatment |
+| `accentSurface` | `#EEE3E7` | `#2D2026` | — | UP NEXT card fill, selected-row tint, accent chip background |
+| `accentBorder` | `#C7AAB6` | `#5A3A49` | — | Decorative accent-surface outline; never a control boundary |
 | `success` | `#667747` | `#A7B690` | 4.6:1 / 8.4:1 | Sage. Completed check, RSVP going, `Owes you $42.50` |
 | `successSurface` | `#EDF0E2` | `#252A20` | — | Completed check fill, sage icon squircles |
 | `warning` | `#8A6520` | `#E3C07A` | 5.0:1 / 10.4:1 | Ochre. Overdue chip, pending sync, RSVP maybe, `You owe $18.00`, feed-note lines on cards |
 | `warningSurface` | `#F6F0E2` | `#332B1C` | — | Overdue chip fill, ochre icon squircles |
 | `danger` | `#B3261E` | `#F08579` | 6.2:1 / 7.3:1 | Destructive actions, error states. Not in the mock — it has nothing destructive on screen — carried over unchanged. |
-| `focusRing` | `#965D78` | `#9F667F` | ≥ 3:1 against both surfaces | Keyboard focus, 2 px, never removed |
+| `focusRing` | `#795565` | `#9F667F` | ≥ 3:1 against both surfaces | Keyboard focus, 2 px, never removed |
 
 **WCAG compliance, stated:** every readable `text*` token except `textDisabled` meets **AA at
 4.5:1** against both `surface` and `surfaceRaised` in both schemes; `borderStrong`,
@@ -262,14 +272,16 @@ semantics (`danger`, `scrim`, and disabled labels) remain independently contrast
 disabled controls are exempt from AA, and because disabled state is never the sole carrier
 of meaning (`interaction-contract.md` §6.4). The `packages/ui` test suite asserts every
 pair programmatically, so a token change that breaks AA fails CI rather than shipping —
-including any adjustment made to the derived dark values at the gallery review.
+including any adjustment made to either founder-approved palette.
 
-**Dark accent usage.** The founder-approved `accent` is deliberately not a body-text token.
-Dark text actions and labels use `textPrimary` or `textSecondary` according to hierarchy;
-their role, underline, label or control shape still communicates interactivity without colour
-alone. A filled control carrying normal-size text uses `accentDeep` with dark `textInverse`,
-not `accent`. Text on `accentSurface` also uses a readable text token. `accentBorder` is
-decorative and cannot replace `borderStrong` or `focusRing`.
+**Accent and quiet-border usage.** The founder-approved `accent` values are deliberately not
+body-text tokens on every page surface. Light text actions and focus use `accentDeep`; dark
+text actions and labels use `textPrimary` or `textSecondary` according to hierarchy. A light
+filled control may use `accent` with `textInverse` (5.0:1); a dark filled control uses
+`accentDeep` with dark `textInverse`. Text on `accentSurface` uses a readable text token.
+`accentBorder` and `borderSubtle` are decorative and cannot replace `borderStrong` or
+`focusRing`. The role, underline, label or control shape still communicates interactivity
+without colour alone.
 
 **Increase Contrast.** When the system setting is on, `border` is replaced by
 `borderStrong`, `textSecondary` moves to `textPrimary`, and de-emphasis is carried by size
@@ -291,11 +303,11 @@ background.
 
 | `type` | Icon | Light | Dark | Contrast (light/dark) |
 | --- | --- | --- | --- | --- |
-| `task` | `check-square` (a checkbox — tasks are the only type with one) | `#6F6D63` | `#9F988D` | 4.9:1 / ≥ 3:1 |
+| `task` | `check-square` (a checkbox — tasks are the only type with one) | `#6E675F` | `#9F988D` | 4.8:1 / ≥ 3:1 |
 | `meal` | `bowl` | `#8A6520` | `#E3C07A` | 5.0:1 / ≥ 3:1 |
 | `watch` | `play-rect` | `#667747` | `#A7B690` | 4.6:1 / ≥ 3:1 |
 | `event` | `map-pin` | `#8C4A5E` | `#AD748C` | 6.1:1 / ≥ 3:1 |
-| `custom` | `diamond` | `#77756C` | `#9F988D` | 4.4:1 large-glyph only / ≥ 3:1 |
+| `custom` | `diamond` | `#6E675F` | `#9F988D` | 4.8:1 / ≥ 3:1 |
 
 Non-task rows render a small non-interactive marker in the type's accent — outlined, in
 the mock's style (a diamond outline for events, a ring for meals), sized `16 × 16` and
@@ -354,14 +366,14 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `SegmentedControl` | `segments` (`{ label, count? }[]`), `selectedIndex`, `onChange` | `surfaceSunken` pill track (`radius.md`), active segment `surfaceRaised` + `e1`. Counts render as a `footnote` beside the label. |
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
 | `Sheet` | `open`, `onClose`, `title?`, `detents` (`['medium','large']`), `dismissible` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. |
-| `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength` | default, focused, filled, error, disabled. `surfaceInput` fill, `radius.lg`, no visible border until focus. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
-| `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Native opens one accessible option sheet; web uses one styled platform `<select>`. |
+| `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength` | default, focused, filled, error, disabled. `surfaceInput` fill, `radius.lg`, decorative `borderSubtle` at rest and the accessible `focusRing` on focus. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
+| `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Uses the same `surfaceInput` / `borderSubtle` / `focusRing` treatment as `Field`; native opens one accessible option sheet and web uses one styled platform `<select>`. |
 | `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
 | `TimePicker` | `label`, `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear`, `openAt?`, `presentation?` (`sheet` \| `inline`), `disabled` | default, open, cleared (meaning "anytime that day"). A picker inside an existing native sheet uses `inline`, so it never presents a nested modal. |
 | `Checkbox` | `checked`, `onChange`, `label` (accessible name), `disabled` | unchecked (borderStrong ring), checked (olive fill, white check, spring), disabled, focus-visible. 44 × 44 target, 24 × 24 visual. |
 | `Avatar` | `displayName`, `imageUrl?`, `size` (`sm` 24 \| `md` 28 \| `lg` 48) | image, **tinted-initials fallback** (two letters, `footnoteStrong`, disc filled with a stable per-person tint drawn from the `*Surface` family), loading |
 | `AvatarStack` | `people`, `max` (4), `size` | Renders up to `max` overlapped by 6 pt plus a `+n` disc. Non-interactive on rows. |
-| `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (accent tint fill), pressed, disabled. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
+| `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (accent tint fill), pressed, disabled. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
 | `SectionHeader` | `title`, `count?`, `action?` | default only. `caption` type, uppercase, wide-tracked, `accessibilityRole="header"`. |
 | `EmptyState` | `heading`, `body?`, `action?` | One heading line, at most one body line, at most one action. No illustration. |
 | `Toast` | `message`, `action?` (`{ label, onPress }`), `tone` (`neutral` \| `error`), `duration` (6000 \| 10000) | entering, visible, exiting. One at a time; a new one commits the previous. `accessibilityLiveRegion="polite"`. |
