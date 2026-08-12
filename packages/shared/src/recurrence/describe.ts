@@ -94,7 +94,13 @@ function weeklyLabel(segment: RecurrenceSegment): string {
 
 function monthlyLabel(segment: RecurrenceSegment): string {
   const monthDay = segment.byMonthDay?.[0] ?? wallDateParts(segment.effectiveFrom).day;
-  return `Monthly on the ${ordinal(monthDay)}`;
+  const interval = segment.interval ?? 1;
+  if (interval < 1) {
+    throw new RecurrenceValidationError('Monthly recurrence interval must be positive.');
+  }
+  return interval === 1
+    ? `Monthly on the ${ordinal(monthDay)}`
+    : `Every ${interval} months on the ${ordinal(monthDay)}`;
 }
 
 function yearlyLabel(segment: RecurrenceSegment): string {

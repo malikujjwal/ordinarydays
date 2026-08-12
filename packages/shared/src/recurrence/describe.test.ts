@@ -86,6 +86,26 @@ describe('describeRecurrence', () => {
       expected: 'Monthly on the 6th',
     },
     {
+      name: 'labels an every-three-months series',
+      recurrence: recurrence({
+        freq: 'monthly',
+        interval: 3,
+        byMonthDay: [6],
+        effectiveFrom: '2026-08-06',
+      }),
+      expected: 'Every 3 months on the 6th',
+    },
+    {
+      name: 'labels an every-six-months series',
+      recurrence: recurrence({
+        freq: 'monthly',
+        interval: 6,
+        byMonthDay: [6],
+        effectiveFrom: '2026-08-06',
+      }),
+      expected: 'Every 6 months on the 6th',
+    },
+    {
       name: 'labels a yearly series from its explicit anchors',
       recurrence: recurrence({
         freq: 'yearly',
@@ -286,6 +306,16 @@ describe('describeRecurrence', () => {
         effectiveFrom: '2026-08-01',
       }),
       message: 'Weekly recurrence interval must be positive.',
+    },
+    {
+      name: 'a monthly rule with a non-positive interval',
+      recurrence: recurrence({
+        freq: 'monthly',
+        interval: 0,
+        byMonthDay: [1],
+        effectiveFrom: '2026-08-01',
+      }),
+      message: 'Monthly recurrence interval must be positive.',
     },
     {
       name: 'an every-X-days rule without an interval',

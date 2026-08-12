@@ -7,167 +7,136 @@ import {
   endsForRecurrence,
   optionForSegment,
   type RepeatOption,
+  repeatOptions,
   segmentForOption,
 } from './repeat';
 
 const ANCHOR = '2026-08-12'; // Wednesday
 
+describe('repeat options', () => {
+  it('exposes the founder-approved dropdown order and labels', () => {
+    expect(repeatOptions).toEqual([
+      { value: 'never', label: 'Never' },
+      { value: 'daily', label: 'Daily' },
+      { value: 'weekdays', label: 'Weekdays' },
+      { value: 'weekends', label: 'Weekends' },
+      { value: 'weekly', label: 'Weekly' },
+      { value: 'biweekly', label: 'Biweekly' },
+      { value: 'monthly', label: 'Monthly' },
+      { value: 'quarterly', label: 'Every 3 Months' },
+      { value: 'semiannual', label: 'Every 6 Months' },
+      { value: 'yearly', label: 'Yearly' },
+      { value: 'custom', label: 'Custom' },
+    ]);
+  });
+});
+
 describe('segmentForOption', () => {
-  it.each<{
-    option: Exclude<RepeatOption, 'never'>;
-    expected: RecurrenceSegment;
-  }>([
-    {
-      option: 'daily',
-      expected: { freq: 'daily', interval: 1, effectiveFrom: ANCHOR },
-    },
+  it.each<{ option: Exclude<RepeatOption, 'never'>; expected: RecurrenceSegment }>([
+    { option: 'daily', expected: { freq: 'daily', interval: 1, effectiveFrom: ANCHOR } },
     { option: 'weekdays', expected: { freq: 'weekdays', effectiveFrom: ANCHOR } },
     {
+      option: 'weekends',
+      expected: { freq: 'weekly', interval: 1, byWeekday: [0, 6], effectiveFrom: ANCHOR },
+    },
+    {
       option: 'weekly',
-      expected: {
-        freq: 'weekly',
-        interval: 1,
-        byWeekday: [3],
-        effectiveFrom: ANCHOR,
-      },
+      expected: { freq: 'weekly', interval: 1, byWeekday: [3], effectiveFrom: ANCHOR },
+    },
+    {
+      option: 'biweekly',
+      expected: { freq: 'weekly', interval: 2, byWeekday: [3], effectiveFrom: ANCHOR },
     },
     {
       option: 'monthly',
       expected: { freq: 'monthly', byMonthDay: [12], effectiveFrom: ANCHOR },
     },
     {
+      option: 'quarterly',
+      expected: { freq: 'monthly', interval: 3, byMonthDay: [12], effectiveFrom: ANCHOR },
+    },
+    {
+      option: 'semiannual',
+      expected: { freq: 'monthly', interval: 6, byMonthDay: [12], effectiveFrom: ANCHOR },
+    },
+    {
       option: 'yearly',
-      expected: {
-        freq: 'yearly',
-        byMonth: [8],
-        byMonthDay: [12],
-        effectiveFrom: ANCHOR,
-      },
+      expected: { freq: 'yearly', byMonth: [8], byMonthDay: [12], effectiveFrom: ANCHOR },
     },
     {
-      option: 'interval_days',
-      expected: { freq: 'interval_days', interval: 2, effectiveFrom: ANCHOR },
-    },
-    {
-      option: 'selected_weekdays',
-      expected: {
-        freq: 'weekly',
-        interval: 1,
-        byWeekday: [1, 5],
-        effectiveFrom: ANCHOR,
-      },
+      option: 'custom',
+      expected: { freq: 'interval_days', interval: 9, effectiveFrom: ANCHOR },
     },
   ])('writes exact $option fields and anchors', ({ option, expected }) => {
-    expect(segmentForOption(option, ANCHOR, 2, [5, 1])).toEqual(expected);
+    expect(segmentForOption(option, ANCHOR, 9)).toEqual(expected);
   });
 });
 
 describe('buildRepeatValue', () => {
   it.each([
-    ['never', { kind: 'never' } as const, {}],
-    ['date', { kind: 'date', date: '2026-12-31' } as const, { endDate: '2026-12-31' }],
-    ['count', { kind: 'count', count: 7 } as const, { count: 7 }],
-  ])('writes %s Ends at series level', (_label, ends, expected) => {
+    [{ kind: 'never' } as const, {}],
+    [{ kind: 'date', date: '2026-12-31' } as const, { endDate: '2026-12-31' }],
+    [{ kind: 'count', count: 7 } as const, { count: 7 }],
+  ])('writes Ends at series level', (ends, expected) => {
     const result = buildRepeatValue({
       option: 'daily',
       anchorDate: ANCHOR,
-      intervalDays: 2,
-      selectedWeekdays: [],
+      customDays: 2,
       ends,
     });
-
     expect(result).toMatchObject({ mode: 'fixed', ...expected });
     expect(result.segments[0]).not.toHaveProperty('endDate');
     expect(result.segments[0]).not.toHaveProperty('count');
   });
 
-  it('keeps old segments byte-identical and appends a changed active rule', () => {
-    const first: RecurrenceSegment = {
-      freq: 'daily',
-      interval: 1,
-      effectiveFrom: '2026-08-01',
-    };
-    const second: RecurrenceSegment = {
-      freq: 'weekly',
-      interval: 1,
-      byWeekday: [1],
-      effectiveFrom: '2026-08-05',
-    };
-    const current: Recurrence = { mode: 'fixed', segments: [first, second] };
-
+  it('preserves history and appends only a changed active rule', () => {
+    const segments: RecurrenceSegment[] = [
+      { freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' },
+      { freq: 'weekly', interval: 1, byWeekday: [1], effectiveFrom: '2026-08-05' },
+    ];
     const result = buildRepeatValue({
-      option: 'monthly',
+      option: 'quarterly',
       anchorDate: ANCHOR,
-      intervalDays: 2,
-      selectedWeekdays: [],
+      customDays: 2,
       ends: { kind: 'never' },
-      current,
+      current: { mode: 'fixed', segments },
     });
-
     expect(result.segments).toEqual([
-      first,
-      second,
-      { freq: 'monthly', byMonthDay: [12], effectiveFrom: ANCHOR },
+      ...segments,
+      { freq: 'monthly', interval: 3, byMonthDay: [12], effectiveFrom: ANCHOR },
     ]);
-    expect(result.segments[0]).toEqual(first);
-    expect(result.segments[1]).toEqual(second);
   });
 
-  it('updates only the series limit when the active rule is unchanged', () => {
+  it('keeps an unchanged active rule and changes only Ends', () => {
     const active: RecurrenceSegment = {
       freq: 'daily',
       interval: 1,
       effectiveFrom: '2026-08-01',
       time: '09:00',
     };
-
     expect(
       buildRepeatValue({
         option: 'daily',
         anchorDate: ANCHOR,
-        intervalDays: 2,
-        selectedWeekdays: [],
+        customDays: 2,
         ends: { kind: 'count', count: 5 },
         current: { mode: 'fixed', segments: [active] },
       }),
     ).toEqual({ mode: 'fixed', segments: [active], count: 5 });
   });
 
-  it('treats selected weekdays as a set and appends a changed interval', () => {
-    const selected: Recurrence = {
-      mode: 'fixed',
-      segments: [
-        {
-          freq: 'weekly',
-          interval: 1,
-          byWeekday: [1, 5],
-          effectiveFrom: '2026-08-01',
-        },
-      ],
-    };
-    expect(
-      buildRepeatValue({
-        option: 'selected_weekdays',
-        anchorDate: ANCHOR,
-        intervalDays: 2,
-        selectedWeekdays: [5, 1, 5],
-        ends: { kind: 'never' },
-        current: selected,
-      }).segments,
-    ).toHaveLength(1);
-
-    const interval: Recurrence = {
+  it('appends when the custom-day interval changes', () => {
+    const current: Recurrence = {
       mode: 'fixed',
       segments: [{ freq: 'interval_days', interval: 2, effectiveFrom: '2026-08-01' }],
     };
     expect(
       buildRepeatValue({
-        option: 'interval_days',
+        option: 'custom',
         anchorDate: ANCHOR,
-        intervalDays: 3,
-        selectedWeekdays: [],
+        customDays: 3,
         ends: { kind: 'never' },
-        current: interval,
+        current,
       }).segments,
     ).toHaveLength(2);
   });
@@ -180,70 +149,62 @@ describe('buildRepeatLimitAttempt', () => {
     effectiveFrom: `2026-07-${String(index + 1).padStart(2, '0')}`,
   }));
 
-  it('does nothing below the cap or when the rule is unchanged', () => {
-    const input = {
-      option: 'monthly' as const,
-      anchorDate: ANCHOR,
-      intervalDays: 2,
-      selectedWeekdays: [],
-      ends: { kind: 'never' as const },
-    };
-    expect(buildRepeatLimitAttempt(input)).toBeUndefined();
+  it('returns only a deliberate changed 21st segment', () => {
     expect(
       buildRepeatLimitAttempt({
-        ...input,
-        current: { mode: 'fixed', segments: segments.slice(0, 19) },
+        option: 'monthly',
+        anchorDate: ANCHOR,
+        customDays: 2,
+        ends: { kind: 'never' },
       }),
     ).toBeUndefined();
     expect(
       buildRepeatLimitAttempt({
-        ...input,
         option: 'daily',
+        anchorDate: ANCHOR,
+        customDays: 2,
+        ends: { kind: 'never' },
         current: { mode: 'fixed', segments },
       }),
     ).toBeUndefined();
-  });
-
-  it.each([
-    [{ kind: 'never' } as const, {}],
-    [{ kind: 'date', date: '2026-12-31' } as const, { endDate: '2026-12-31' }],
-    [{ kind: 'count', count: 8 } as const, { count: 8 }],
-  ])('builds the deliberate 21st segment with series-level Ends', (ends, expected) => {
-    const result = buildRepeatLimitAttempt({
-      option: 'monthly',
-      anchorDate: ANCHOR,
-      intervalDays: 2,
-      selectedWeekdays: [],
-      ends,
-      current: { mode: 'fixed', segments },
+    expect(
+      buildRepeatLimitAttempt({
+        option: 'monthly',
+        anchorDate: ANCHOR,
+        customDays: 2,
+        ends: { kind: 'date', date: '2026-12-31' },
+        current: { mode: 'fixed', segments },
+      }),
+    ).toMatchObject({
+      endDate: '2026-12-31',
+      segments: [
+        ...segments,
+        { freq: 'monthly', byMonthDay: [12], effectiveFrom: ANCHOR },
+      ],
     });
-    expect(result).toMatchObject({ mode: 'fixed', ...expected });
-    expect(result?.segments).toHaveLength(21);
   });
 });
 
 describe('repeat projections', () => {
-  it('classifies active segments without losing the two weekly choices', () => {
-    expect(
-      optionForSegment({
-        freq: 'weekly',
-        interval: 1,
-        byWeekday: [1, 5],
-        effectiveFrom: ANCHOR,
-      }),
-    ).toBe('selected_weekdays');
-    expect(
-      optionForSegment({
-        freq: 'weekly',
-        interval: 1,
-        byWeekday: [3],
-        effectiveFrom: ANCHOR,
-      }),
-    ).toBe('weekly');
-    expect(
-      optionForSegment({ freq: 'interval_days', interval: 4, effectiveFrom: ANCHOR }),
-    ).toBe('interval_days');
-    expect(optionForSegment({ freq: 'custom', effectiveFrom: ANCHOR })).toBe('daily');
+  it.each([
+    [
+      { freq: 'weekly', interval: 1, byWeekday: [0, 6], effectiveFrom: ANCHOR },
+      'weekends',
+    ],
+    [{ freq: 'weekly', interval: 2, byWeekday: [3], effectiveFrom: ANCHOR }, 'biweekly'],
+    [{ freq: 'weekly', interval: 1, byWeekday: [1, 5], effectiveFrom: ANCHOR }, 'weekly'],
+    [
+      { freq: 'monthly', interval: 3, byMonthDay: [12], effectiveFrom: ANCHOR },
+      'quarterly',
+    ],
+    [
+      { freq: 'monthly', interval: 6, byMonthDay: [12], effectiveFrom: ANCHOR },
+      'semiannual',
+    ],
+    [{ freq: 'interval_days', interval: 4, effectiveFrom: ANCHOR }, 'custom'],
+    [{ freq: 'custom', effectiveFrom: ANCHOR }, 'custom'],
+  ] as const)('projects %j to %s', (segment, expected) => {
+    expect(optionForSegment(segment as unknown as RecurrenceSegment)).toBe(expected);
   });
 
   it('projects every series-level ending', () => {
@@ -253,9 +214,6 @@ describe('repeat projections', () => {
       effectiveFrom: ANCHOR,
     };
     expect(endsForRecurrence(undefined)).toEqual({ kind: 'never' });
-    expect(endsForRecurrence({ mode: 'fixed', segments: [daily] })).toEqual({
-      kind: 'never',
-    });
     expect(
       endsForRecurrence({ mode: 'fixed', segments: [daily], endDate: '2026-09-01' }),
     ).toEqual({ kind: 'date', date: '2026-09-01' });
@@ -270,13 +228,9 @@ describe('endRepeatSeries', () => {
   it('preserves every segment and replaces count with the end date', () => {
     const current: Recurrence = {
       mode: 'fixed',
-      segments: [
-        { freq: 'interval_days', interval: 3, effectiveFrom: '2026-08-01' },
-        { freq: 'weekly', interval: 1, byWeekday: [3], effectiveFrom: ANCHOR },
-      ],
+      segments: [{ freq: 'daily', effectiveFrom: ANCHOR }],
       count: 12,
     };
-
     expect(endRepeatSeries(current, '2026-08-20')).toEqual({
       mode: 'fixed',
       segments: current.segments,

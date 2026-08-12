@@ -46,6 +46,7 @@ export const monthNumber = z.union([
 
 const segmentShape = z.strictObject({
   freq: recurrenceFreq,
+  /** Used by interval_days, weekly and monthly rules. */
   interval: z.number().int().positive().max(365).optional(),
   byWeekday: z.array(weekday).min(1).max(7).optional(),
   byMonthDay: z.array(z.number().int().min(1).max(31)).length(1).optional(),

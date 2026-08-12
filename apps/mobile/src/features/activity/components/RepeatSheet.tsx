@@ -1,6 +1,6 @@
 import { describeRecurrence } from '@od/shared/recurrence';
-import type { Recurrence, Weekday } from '@od/shared/types';
-import { Button, Chip, Field, Sheet, Text, useTheme } from '@od/ui';
+import type { Recurrence } from '@od/shared/types';
+import { Button, Field, SelectField, Sheet, Text, useTheme } from '@od/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
@@ -14,8 +14,14 @@ import {
   type RepeatEnds,
   type RepeatOption,
   repeatOptions,
-  weekdayChoices,
 } from '@/features/activity/model/repeat';
+
+const endsOptions = [
+  { value: 'never', label: 'Never' },
+  { value: 'date', label: 'On a date' },
+  { value: 'count', label: 'After N times' },
+] as const;
+const CUSTOM_DAYS_PATTERN = /^\d+$/;
 
 export interface RepeatSheetProps {
   open: boolean;
@@ -38,11 +44,8 @@ function initialOption(value: Recurrence | undefined): RepeatOption {
   return active === undefined ? 'never' : optionForSegment(active);
 }
 
-function initialWeekdays(value: Recurrence | undefined): Weekday[] {
-  return [...(value?.segments.at(-1)?.byWeekday ?? [])];
-}
-
-function initialInterval(value: Recurrence | undefined): number {
+function initialCustomDays(value: Recurrence | undefined): number {
+  if (value?.segments.at(-1)?.freq !== 'interval_days') return 2;
   return value?.segments.at(-1)?.interval ?? 2;
 }
 
@@ -111,9 +114,8 @@ export function RepeatSheet({
 }: RepeatSheetProps) {
   const theme = useTheme();
   const [option, setOption] = useState<RepeatOption>(() => initialOption(value));
-  const [intervalDays, setIntervalDays] = useState(() => initialInterval(value));
-  const [selectedWeekdays, setSelectedWeekdays] = useState<Weekday[]>(() =>
-    initialWeekdays(value),
+  const [customDaysText, setCustomDaysText] = useState(() =>
+    String(initialCustomDays(value)),
   );
   const [ends, setEnds] = useState<RepeatEnds>(() => endsForRecurrence(value));
   const [endDate, setEndDate] = useState(value?.endDate ?? anchorDate);
@@ -125,8 +127,7 @@ export function RepeatSheet({
   useEffect(() => {
     if (!open) return;
     setOption(initialOption(value));
-    setIntervalDays(initialInterval(value));
-    setSelectedWeekdays(initialWeekdays(value));
+    setCustomDaysText(String(initialCustomDays(value)));
     setEnds(endsForRecurrence(value));
     setEndDate(value?.endDate ?? anchorDate);
     setEndCount(value?.count ?? 1);
@@ -141,20 +142,22 @@ export function RepeatSheet({
       : ends.kind === 'count'
         ? { kind: 'count', count: endCount }
         : { kind: 'never' };
+  const parsedCustomDays = Number(customDaysText);
+  const customDaysValid =
+    CUSTOM_DAYS_PATTERN.test(customDaysText) &&
+    Number.isInteger(parsedCustomDays) &&
+    parsedCustomDays >= 2 &&
+    parsedCustomDays <= 365;
 
   const candidate = useMemo(() => {
-    if (
-      option === 'never' ||
-      (option === 'selected_weekdays' && selectedWeekdays.length === 0)
-    ) {
+    if (option === 'never' || (option === 'custom' && !customDaysValid)) {
       return undefined;
     }
     try {
       return buildRepeatValue({
         option,
         anchorDate,
-        intervalDays,
-        selectedWeekdays,
+        customDays: parsedCustomDays,
         ends: effectiveEnds,
         ...(value === undefined ? {} : { current: value }),
       });
@@ -162,13 +165,12 @@ export function RepeatSheet({
       return buildRepeatLimitAttempt({
         option,
         anchorDate,
-        intervalDays,
-        selectedWeekdays,
+        customDays: parsedCustomDays,
         ends: effectiveEnds,
         ...(value === undefined ? {} : { current: value }),
       });
     }
-  }, [anchorDate, effectiveEnds, intervalDays, option, selectedWeekdays, value]);
+  }, [anchorDate, customDaysValid, effectiveEnds, option, parsedCustomDays, value]);
 
   async function commitNever() {
     if (await onCommit(undefined)) {
@@ -188,15 +190,14 @@ export function RepeatSheet({
       await commitNever();
       return;
     }
-    if (option === 'selected_weekdays' && selectedWeekdays.length === 0) return;
+    if (option === 'custom' && !customDaysValid) return;
 
     let next: Recurrence;
     try {
       next = buildRepeatValue({
         option,
         anchorDate,
-        intervalDays,
-        selectedWeekdays,
+        customDays: parsedCustomDays,
         ends: effectiveEnds,
         ...(value === undefined ? {} : { current: value }),
       });
@@ -204,8 +205,7 @@ export function RepeatSheet({
       const limitAttempt = buildRepeatLimitAttempt({
         option,
         anchorDate,
-        intervalDays,
-        selectedWeekdays,
+        customDays: parsedCustomDays,
         ends: effectiveEnds,
         ...(value === undefined ? {} : { current: value }),
       });
@@ -235,7 +235,11 @@ export function RepeatSheet({
   }
 
   const summary =
-    candidate === undefined ? 'Never' : describeRecurrence(candidate, anchorDate);
+    option === 'custom' && !customDaysValid
+      ? 'Enter a number from 2 to 365 days.'
+      : candidate === undefined
+        ? 'Never'
+        : describeRecurrence(candidate, anchorDate);
   const confirmation =
     activityForConfirmation === undefined
       ? undefined
@@ -248,106 +252,43 @@ export function RepeatSheet({
           style={{ maxHeight: 620 }}
           contentContainerStyle={{ gap: theme.space[5] }}
         >
-          <View style={{ gap: theme.space[2] }}>
-            <Text variant="footnoteStrong" color="textSecondary">
-              Repeats
-            </Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[2] }}>
-              {repeatOptions.map((choice) => (
-                <Chip
-                  key={choice.value}
-                  label={choice.label}
-                  selected={option === choice.value}
-                  onPress={() => {
-                    setOption(choice.value);
-                    if (
-                      choice.value === 'selected_weekdays' &&
-                      selectedWeekdays.length === 0
-                    ) {
-                      setSelectedWeekdays([]);
-                    }
-                  }}
-                  testID={`repeat-option-${choice.value}`}
-                />
-              ))}
-            </View>
-          </View>
+          <SelectField
+            label="Repeats"
+            value={option}
+            options={repeatOptions}
+            onChange={setOption}
+            testID="repeat-option"
+          />
 
-          {option === 'interval_days' ? (
-            <Stepper
+          {option === 'custom' ? (
+            <Field
               label="Days"
-              value={intervalDays}
-              min={2}
-              max={365}
-              onChange={setIntervalDays}
+              value={customDaysText}
+              onChangeText={setCustomDaysText}
+              keyboardType="number-pad"
+              maxLength={3}
+              {...(customDaysValid ? {} : { error: 'Enter a number from 2 to 365.' })}
               testID="repeat-interval"
             />
           ) : null}
 
-          {option === 'selected_weekdays' ? (
-            <View style={{ gap: theme.space[2] }}>
-              <Text variant="footnoteStrong" color="textSecondary">
-                Days
-              </Text>
-              <View
-                style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[2] }}
-              >
-                {weekdayChoices.map((day) => (
-                  <Chip
-                    key={day.value}
-                    label={day.label}
-                    selected={selectedWeekdays.includes(day.value)}
-                    onPress={() =>
-                      setSelectedWeekdays((current) =>
-                        current.includes(day.value)
-                          ? current.filter((value) => value !== day.value)
-                          : [...current, day.value],
-                      )
-                    }
-                    testID={`repeat-weekday-${day.value}`}
-                  />
-                ))}
-              </View>
-              {selectedWeekdays.length === 0 ? (
-                <Text accessibilityRole="alert" variant="footnote" color="danger">
-                  Choose at least one weekday.
-                </Text>
-              ) : null}
-            </View>
-          ) : null}
-
           {option === 'never' ? null : (
             <View style={{ gap: theme.space[3] }}>
-              <Text variant="footnoteStrong" color="textSecondary">
-                Ends
-              </Text>
-              <View
-                style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[2] }}
-              >
-                {(['never', 'date', 'count'] as const).map((kind) => (
-                  <Chip
-                    key={kind}
-                    label={
-                      kind === 'never'
-                        ? 'Never'
-                        : kind === 'date'
-                          ? 'On a date'
-                          : 'After N times'
-                    }
-                    selected={ends.kind === kind}
-                    onPress={() =>
-                      setEnds(
-                        kind === 'date'
-                          ? { kind, date: endDate }
-                          : kind === 'count'
-                            ? { kind, count: endCount }
-                            : { kind },
-                      )
-                    }
-                    testID={`repeat-ends-${kind}`}
-                  />
-                ))}
-              </View>
+              <SelectField
+                label="Ends"
+                value={ends.kind}
+                options={endsOptions}
+                onChange={(kind) =>
+                  setEnds(
+                    kind === 'date'
+                      ? { kind, date: endDate }
+                      : kind === 'count'
+                        ? { kind, count: endCount }
+                        : { kind },
+                  )
+                }
+                testID="repeat-ends"
+              />
               {ends.kind === 'date' ? (
                 <Field
                   label="End date"
@@ -409,7 +350,7 @@ export function RepeatSheet({
             label="Apply repeat"
             fullWidth
             loading={busy}
-            disabled={option === 'selected_weekdays' && selectedWeekdays.length === 0}
+            disabled={option === 'custom' && !customDaysValid}
             onPress={() => void commit()}
             testID="repeat-apply"
           />

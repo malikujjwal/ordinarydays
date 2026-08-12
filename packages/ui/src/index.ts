@@ -47,6 +47,11 @@ export {
   SegmentedControl,
   type SegmentedControlProps,
 } from './primitives/SegmentedControl';
+export {
+  SelectField,
+  type SelectFieldProps,
+  type SelectOption,
+} from './primitives/SelectField';
 export { Sheet, type SheetProps } from './primitives/Sheet';
 export { Text, type TextColor, type TextProps } from './primitives/Text';
 export { TimePicker, type TimePickerProps } from './primitives/TimePicker';

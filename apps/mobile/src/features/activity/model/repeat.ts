@@ -9,11 +9,14 @@ export type RepeatOption =
   | 'never'
   | 'daily'
   | 'weekdays'
+  | 'weekends'
   | 'weekly'
+  | 'biweekly'
   | 'monthly'
+  | 'quarterly'
+  | 'semiannual'
   | 'yearly'
-  | 'interval_days'
-  | 'selected_weekdays';
+  | 'custom';
 
 export type RepeatEnds =
   | { kind: 'never' }
@@ -24,52 +27,33 @@ export const repeatOptions: readonly { value: RepeatOption; label: string }[] = 
   { value: 'never', label: 'Never' },
   { value: 'daily', label: 'Daily' },
   { value: 'weekdays', label: 'Weekdays' },
+  { value: 'weekends', label: 'Weekends' },
   { value: 'weekly', label: 'Weekly' },
+  { value: 'biweekly', label: 'Biweekly' },
   { value: 'monthly', label: 'Monthly' },
+  { value: 'quarterly', label: 'Every 3 Months' },
+  { value: 'semiannual', label: 'Every 6 Months' },
   { value: 'yearly', label: 'Yearly' },
-  { value: 'interval_days', label: 'Every X days' },
-  { value: 'selected_weekdays', label: 'Selected weekdays' },
-] as const;
-
-export const weekdayChoices: readonly { value: Weekday; label: string }[] = [
-  { value: 1, label: 'Mon' },
-  { value: 2, label: 'Tue' },
-  { value: 3, label: 'Wed' },
-  { value: 4, label: 'Thu' },
-  { value: 5, label: 'Fri' },
-  { value: 6, label: 'Sat' },
-  { value: 0, label: 'Sun' },
+  { value: 'custom', label: 'Custom' },
 ] as const;
 
 export interface BuildRepeatValueInput {
   option: Exclude<RepeatOption, 'never'>;
   anchorDate: string;
-  intervalDays: number;
-  selectedWeekdays: readonly Weekday[];
+  customDays: number;
   ends: RepeatEnds;
   current?: Recurrence;
 }
 
 function segmentForInput(input: BuildRepeatValueInput): RecurrenceSegment {
   const active = input.current?.segments.at(-1);
-  const sameSelectedWeekdays =
-    active?.byWeekday !== undefined &&
-    JSON.stringify([...active.byWeekday].sort()) ===
-      JSON.stringify([...new Set(input.selectedWeekdays)].sort());
   const preservesActiveRule =
     active !== undefined &&
     optionForSegment(active) === input.option &&
-    (input.option !== 'interval_days' || active.interval === input.intervalDays) &&
-    (input.option !== 'selected_weekdays' || sameSelectedWeekdays);
+    (input.option !== 'custom' || active.interval === input.customDays);
   return preservesActiveRule
     ? active
-    : segmentForOption(
-        input.option,
-        input.anchorDate,
-        input.intervalDays,
-        input.selectedWeekdays,
-        active,
-      );
+    : segmentForOption(input.option, input.anchorDate, input.customDays, active);
 }
 
 function seriesLevel(ends: RepeatEnds) {
@@ -92,8 +76,7 @@ function anchorParts(anchorDate: string) {
 export function segmentForOption(
   option: Exclude<RepeatOption, 'never'>,
   anchorDate: string,
-  intervalDays: number,
-  selectedWeekdays: readonly Weekday[],
+  customDays: number,
   snapshot?: Pick<RecurrenceSegment, 'time' | 'endTime'>,
 ): RecurrenceSegment {
   const anchor = anchorParts(anchorDate);
@@ -108,10 +91,18 @@ export function segmentForOption(
       return { ...common, freq: 'daily', interval: 1 };
     case 'weekdays':
       return { ...common, freq: 'weekdays' };
+    case 'weekends':
+      return { ...common, freq: 'weekly', interval: 1, byWeekday: [0, 6] };
     case 'weekly':
       return { ...common, freq: 'weekly', interval: 1, byWeekday: [anchor.weekday] };
+    case 'biweekly':
+      return { ...common, freq: 'weekly', interval: 2, byWeekday: [anchor.weekday] };
     case 'monthly':
       return { ...common, freq: 'monthly', byMonthDay: [anchor.monthDay] };
+    case 'quarterly':
+      return { ...common, freq: 'monthly', interval: 3, byMonthDay: [anchor.monthDay] };
+    case 'semiannual':
+      return { ...common, freq: 'monthly', interval: 6, byMonthDay: [anchor.monthDay] };
     case 'yearly':
       return {
         ...common,
@@ -119,15 +110,8 @@ export function segmentForOption(
         byMonth: [anchor.month],
         byMonthDay: [anchor.monthDay],
       };
-    case 'interval_days':
-      return { ...common, freq: 'interval_days', interval: intervalDays };
-    case 'selected_weekdays':
-      return {
-        ...common,
-        freq: 'weekly',
-        interval: 1,
-        byWeekday: [...new Set(selectedWeekdays)].sort(),
-      };
+    case 'custom':
+      return { ...common, freq: 'interval_days', interval: customDays };
   }
 }
 
@@ -209,11 +193,19 @@ export function buildRepeatLimitAttempt(
 export function optionForSegment(
   segment: RecurrenceSegment,
 ): Exclude<RepeatOption, 'never'> {
-  if (segment.freq === 'weekly' && (segment.byWeekday?.length ?? 0) > 1) {
-    return 'selected_weekdays';
+  if (segment.freq === 'weekly') {
+    const weekdays = [...(segment.byWeekday ?? [])].sort();
+    if (segment.interval === 1 && weekdays.join(',') === '0,6') return 'weekends';
+    if (segment.interval === 2 && weekdays.length === 1) return 'biweekly';
+    return 'weekly';
   }
-  if (segment.freq === 'interval_days') return 'interval_days';
-  return segment.freq === 'custom' ? 'daily' : segment.freq;
+  if (segment.freq === 'monthly') {
+    if (segment.interval === 3) return 'quarterly';
+    if (segment.interval === 6) return 'semiannual';
+    return 'monthly';
+  }
+  if (segment.freq === 'interval_days' || segment.freq === 'custom') return 'custom';
+  return segment.freq;
 }
 
 export function endsForRecurrence(recurrence: Recurrence | undefined): RepeatEnds {

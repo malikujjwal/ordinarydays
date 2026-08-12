@@ -83,6 +83,13 @@ describe('monthly rules', () => {
     ).toBe(true);
   });
 
+  it.each([1, 3, 6, 365])('accepts a positive monthly interval of %i', (interval) => {
+    expect(
+      recurrence.safeParse(series({ freq: 'monthly', interval, byMonthDay: [31] }))
+        .success,
+    ).toBe(true);
+  });
+
   it.each([
     ['no month-day anchor', { freq: 'monthly' }],
     ['an empty month-day list', { freq: 'monthly', byMonthDay: [] }],

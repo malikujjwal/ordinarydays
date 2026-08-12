@@ -41,8 +41,8 @@ describe('RepeatSheet', () => {
       ],
     });
 
-    expect(screen.getByTestId('repeat-option-monthly').getAttribute('aria-pressed')).toBe(
-      'true',
+    expect((screen.getByTestId('repeat-option') as HTMLSelectElement).value).toBe(
+      'monthly',
     );
     expect(screen.getByTestId('repeat-summary').textContent).toContain(
       'Monthly on the 5th',
@@ -50,17 +50,34 @@ describe('RepeatSheet', () => {
     expect(screen.getByTestId('repeat-summary').textContent).not.toContain('Daily');
   });
 
-  it('disables commit when Selected weekdays has no day selected', () => {
+  it('shows typed Days for Custom and validates 2 through 365', () => {
     mount();
 
-    fireEvent.click(screen.getByTestId('repeat-option-selected_weekdays'));
+    fireEvent.change(screen.getByTestId('repeat-option'), {
+      target: { value: 'custom' },
+    });
+    fireEvent.change(screen.getByTestId('repeat-interval'), { target: { value: '1' } });
 
     expect(
       screen.getByRole('button', { name: 'Apply repeat' }).getAttribute('aria-disabled'),
     ).toBe('true');
-    expect(screen.getByRole('alert').textContent).toContain(
-      'Choose at least one weekday',
-    );
+    expect(screen.getByText('Enter a number from 2 to 365.')).toBeDefined();
+
+    fireEvent.change(screen.getByTestId('repeat-interval'), { target: { value: '17' } });
+    expect(
+      screen.getByRole('button', { name: 'Apply repeat' }).getAttribute('aria-disabled'),
+    ).not.toBe('true');
+    expect(screen.getByTestId('repeat-summary').textContent).toContain('Every 17 days');
+  });
+
+  it('uses a dropdown for Ends and reveals only its detail control', () => {
+    mount();
+    fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'daily' } });
+    expect((screen.getByTestId('repeat-ends') as HTMLSelectElement).value).toBe('never');
+
+    fireEvent.change(screen.getByTestId('repeat-ends'), { target: { value: 'date' } });
+    expect(screen.getByTestId('repeat-end-date')).toBeDefined();
+    expect(screen.queryByTestId('repeat-count')).toBeNull();
   });
 
   it('turns a rejected 21st rule into an explanation with an End series path', async () => {
@@ -74,7 +91,9 @@ describe('RepeatSheet', () => {
     const onCommit = vi.fn(async (_value: Recurrence | undefined) => false);
     mount({ mode: 'fixed', segments }, { onCommit });
 
-    fireEvent.click(screen.getByTestId('repeat-option-monthly'));
+    fireEvent.change(screen.getByTestId('repeat-option'), {
+      target: { value: 'monthly' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
 
     await waitFor(() => expect(screen.getByTestId('repeat-series-limit')).toBeDefined());
@@ -98,7 +117,7 @@ describe('RepeatSheet', () => {
       { completedOccurrenceCount: 40, onCommit },
     );
 
-    fireEvent.click(screen.getByTestId('repeat-option-never'));
+    fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
 
     expect(onCommit).not.toHaveBeenCalled();
@@ -114,7 +133,7 @@ describe('RepeatSheet', () => {
       segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' }],
     });
 
-    fireEvent.click(screen.getByTestId('repeat-option-never'));
+    fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
 
     await waitFor(() => expect(onCommit).toHaveBeenCalledWith(undefined));

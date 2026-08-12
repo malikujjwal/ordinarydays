@@ -58,6 +58,7 @@ describe('the ui package barrel', () => {
   it('resolves, and exports the theme and the primitives', () => {
     expect(barrel.ThemeProvider).toBeDefined();
     expect(barrel.Button).toBeDefined();
+    expect(barrel.SelectField).toBeDefined();
     expect(barrel.Text).toBeDefined();
     expect(barrel.space).toBeDefined();
     expect(barrel.ratioOf).toBeDefined();

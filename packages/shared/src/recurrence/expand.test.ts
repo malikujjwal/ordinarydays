@@ -202,6 +202,32 @@ const engineCases: EngineCase[] = [
     expectedDates: ['2026-08-06', '2026-09-06', '2026-10-06'],
   },
   {
+    number: 44,
+    name: 'every three months stays aligned when the window starts mid-series',
+    recurrence: recurrence({
+      freq: 'monthly',
+      interval: 3,
+      byMonthDay: [31],
+      effectiveFrom: '2026-01-31',
+    }),
+    from: '2026-02-01',
+    to: '2027-01-31',
+    expectedDates: ['2026-04-30', '2026-07-31', '2026-10-31', '2027-01-31'],
+  },
+  {
+    number: 45,
+    name: 'every six months expands from its anchor month',
+    recurrence: recurrence({
+      freq: 'monthly',
+      interval: 6,
+      byMonthDay: [12],
+      effectiveFrom: '2026-08-12',
+    }),
+    from: '2026-08-01',
+    to: '2028-08-31',
+    expectedDates: ['2026-08-12', '2027-02-12', '2027-08-12', '2028-02-12', '2028-08-12'],
+  },
+  {
     number: 10,
     name: 'month-end rollover for the 30th in February',
     recurrence: recurrence({
@@ -1141,6 +1167,16 @@ describe('invalid and defensive recurrence paths', () => {
         effectiveFrom: '2026-01-01',
       }),
       message: 'Monthly recurrence day must be from 1 to 31.',
+    },
+    {
+      name: 'monthly with a non-positive interval',
+      recurrence: recurrence({
+        freq: 'monthly',
+        interval: 0,
+        byMonthDay: [1],
+        effectiveFrom: '2026-01-01',
+      }),
+      message: 'Monthly recurrence interval must be positive.',
     },
     {
       name: 'yearly with month but no day',

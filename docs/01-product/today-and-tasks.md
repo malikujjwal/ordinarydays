@@ -417,7 +417,8 @@ requirements with mandatory test coverage (brief §12).
 
 ### 6.1 The options list
 
-The Repeat field opens a sheet with exactly these options. The `Recurrence written` column
+The Repeat field opens a sheet with one clean dropdown containing exactly these options.
+The `Recurrence written` column
 lists the rule fields of one **rule segment** (§6.2): the sheet always shows and edits the
 series' **active** (last) segment, which — on a series that has never had an "all future"
 edit, the overwhelmingly common case — is the only segment there is. Earlier segments are
@@ -428,14 +429,16 @@ history and have no UI of their own.
 | Never | `recurrence` removed | Default. Confirms first on a series with stored completions — see below |
 | Daily | `{ freq: 'daily', interval: 1 }` | |
 | Weekdays | `{ freq: 'weekdays' }` | Monday–Friday |
+| Weekends | `{ freq: 'weekly', interval: 1, byWeekday: [0, 6] }` | Saturday and Sunday |
 | Weekly | `{ freq: 'weekly', interval: 1, byWeekday: [<weekday of the anchor date>] }` | Label reads `Weekly on Thursday` |
+| Biweekly | `{ freq: 'weekly', interval: 2, byWeekday: [<weekday of the anchor date>] }` | Label reads `Every 2 weeks on Thursday` |
 | Monthly | `{ freq: 'monthly', byMonthDay: [<day of the anchor date>] }` | Explicit anchor. Label reads `Monthly on the 6th` |
+| Every 3 Months | `{ freq: 'monthly', interval: 3, byMonthDay: [<day of the anchor date>] }` | Explicit anchor. Label reads `Every 3 months on the 6th` |
+| Every 6 Months | `{ freq: 'monthly', interval: 6, byMonthDay: [<day of the anchor date>] }` | Explicit anchor. Label reads `Every 6 months on the 6th` |
 | Yearly | `{ freq: 'yearly', byMonth: [<month of the anchor date>], byMonthDay: [<day of the anchor date>] }` | Explicit anchor. Label reads `Every year on 3 September` |
-| Every X days | `{ freq: 'interval_days', interval: X }` | Stepper, 2–365 |
-| Selected weekdays | `{ freq: 'weekly', interval: 1, byWeekday: [...] }` | Seven toggles; at least one must be on |
-| Custom | `{ freq: 'custom', rrule: '<RFC 5545>' }` | Phase 9. Until then the option is not shown. |
+| Custom | `{ freq: 'interval_days', interval: X }` | Reveals a typed `Days` input, integer 2–365. This is not the Phase 9 RFC 5545 rule. |
 
-Every option additionally exposes **Ends**: `Never` (default), `On a date`
+Every repeating option additionally exposes an **Ends** dropdown: `Never` (default), `On a date`
 (`recurrence.endDate`), `After N times` (`recurrence.count`, 1–999). Ends belongs to the
 **series**, not to a segment: however many segments a series has accumulated, there is one
 Ends setting and it closes the whole series.
@@ -457,6 +460,13 @@ written — editing a series appends a segment; it never moves an existing one.
 
 `recurrence.mode` is `'fixed'` in v1 (§6.7).
 
+> **Repeat-control amendment — 2026-08-12.** This dropdown replaces the earlier chip,
+> stepper, and selected-weekday controls. Here `Custom` deliberately means a typed
+> `interval_days` value; the RFC 5545 `freq: 'custom'` editor remains Phase 9 work. Hourly is
+> deliberately deferred: the current recurrence engine and occurrence identity produce one
+> wall-date occurrence per series per day, so multiple intraday occurrences require a broader
+> recurrence and occurrence-storage redesign.
+
 > **Decision:** Yearly ships in v1 rather than waiting for `freq: 'custom'`. Birthdays and
 > anniversaries are the most obvious recurring events in a life planner, and putting them
 > behind a hand-written RFC 5545 `rrule` would put the most common case behind the least
@@ -471,9 +481,10 @@ written — editing a series appends a segment; it never moves an existing one.
 > series works, but the sheet never relies on that
 > ([`../02-architecture/data-model.md#42-recurrence`](../02-architecture/data-model.md#42-recurrence)).
 
-**Month-end clamping.** A monthly series on day 29, 30 or 31 emits the last day of any
-month that is shorter. `byMonthDay: [31]` produces 28 February (29 in a leap year), 30
-April, 31 May. It never skips a month and never spills into the next.
+**Month-end clamping.** A monthly or every-N-months series on day 29, 30 or 31 emits the
+last day of any selected month that is shorter. `byMonthDay: [31]` produces 28 February
+(29 in a leap year), 30 April, 31 May. It never skips a selected month and never spills
+into the next.
 
 The same rule covers **29 February** on a yearly series. A yearly series anchored on
 29 February emits 29 February in a leap year and **28 February** in every other year. It is

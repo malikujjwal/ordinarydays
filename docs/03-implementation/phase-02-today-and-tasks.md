@@ -2176,6 +2176,15 @@ Phase 9, and there is no mode control — `mode` is `'fixed'` (§6.7). Every opt
 (`recurrence.count`, 1–999). Ends belongs to the series and closes the whole series,
 however many segments it has.
 
+> **Founder amendment — 2026-08-12 (supersedes the older control and option text above).**
+> Repeats is one clean dropdown: Never, Daily, Weekdays, Weekends, Weekly, Biweekly,
+> Monthly, Every 3 Months, Every 6 Months, Yearly, Custom. `Custom` maps to
+> `interval_days` and reveals a typed integer Days input (2–365), not a stepper. Ends is
+> also one dropdown; its conditional date/count controls remain. Monthly intervals 3 and 6
+> are real shared-engine rules, anchored and clamped like Monthly. Selected weekdays is no
+> longer offered. The Phase 9 RFC 5545 custom rule remains separate. Hourly is deferred
+> because multiple same-day occurrences require a recurrence and occurrence-storage redesign.
+
 - **The sheet writes one rule segment's fields**, validated by the same Zod schema the
   server uses (P2-04) — imported, never redefined. It always writes explicit anchors:
   `byWeekday` from the anchor date's weekday for Weekly, `byMonthDay` for Monthly,
@@ -2206,9 +2215,9 @@ however many segments it has.
 - The summary row and the collapsed field value both come from `describeRecurrence`
   (P2-03), so the sheet and the form can never disagree about what was chosen.
 
-**Tests.** Unit: one case per option asserting the exact segment fields written, matching
-§6.1's table (including the anchors); Selected weekdays with zero toggles disables the
-commit; each Ends variant lands on the series level, not the segment. Component: opened on
+**Tests.** Unit: one case per amended option asserting the exact segment fields written,
+matching §6.1's table (including the anchors); invalid Custom Days disables the commit;
+each Ends variant lands on the series level, not the segment. Component: opened on
 a two-segment series, the sheet renders the active segment's values and nothing from the
 first; the 21-segment `validation_failed` renders the explanatory state with an
 `End series` path; `Never` on a series with seeded completions shows the confirmation with
