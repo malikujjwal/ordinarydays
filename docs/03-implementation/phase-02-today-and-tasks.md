@@ -95,6 +95,15 @@ Anytime list. This is the phase where the product becomes usable daily.
 > reflect the user's own write. This follow-up is deliberately not part of P2-24 or any
 > remaining Phase 2 implementation task.
 
+> **Founder-approved dark-mode palette amendment — 2026-08-12.** P2-40 replaces the
+> P1-22-derived dark colours with the founder's reviewed warm-neutral, mulberry, sage and
+> ochre palette after the Phase 2 E2E task. It is an M task, taking Phase 2 to
+> **40 tasks / 103 AWU**. The supplied `accent` is intentionally too dark for body text on
+> the supplied background and surfaces (4.03:1 / 3.67:1), so it remains an exact palette
+> value for fills, borders, icons and decoration while readable labels use the semantic text
+> tokens. P2-40 must preserve the 4.5:1 text and 3:1 control-boundary gates; it may not lower
+> either threshold to make the palette pass.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -197,6 +206,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-35 | `Show skipped` device-local toggle | mobile | P2-21 | yes | S |
 | P2-36 | Worked-example-day integration fixture and test | ci | P2-04, P2-08, P2-11, P2-13, P2-19, P2-23 | no | M |
 | P2-37 | E2E: Today flows on web and iOS | ci | P2-20, P2-24, P2-25, P2-26, P2-28, P2-29, P2-31, P2-33 | no | M |
+| P2-40 | Founder-approved dark-mode palette | shared/mobile | P1-22, P2-37 | no | M |
 
 P2-17, P2-30, P2-31 and P2-35 are mechanical; follow the canonical sections named in the
 table and skip the design discussion. P2-31's exact label is `+ Add a task`: it bypasses the
@@ -2652,6 +2662,67 @@ and a pass-on-retry is still flagged); Maestro runs in `mobile.yml` on
 end-to-end halves are asserted by these files and fail when deliberately broken (comment
 out the undo handler locally; the suite must catch it).
 
+---
+
+### P2-40 — Founder-approved dark-mode palette
+
+**Files.** `packages/ui/src/theme/{colors.ts,contrast.test.ts,elevation.ts}`,
+`packages/ui/src/primitives/{Button.tsx,Card.tsx,Field.tsx,SelectField.tsx,
+SelectField.web.tsx,pickerSurface.web.tsx,Text.tsx}`,
+`apps/mobile/app/(app)/gallery.tsx`, and every existing dark-mode token test or primitive
+consumer whose semantic role changes under the mapping below. This inventory is a minimum;
+the export-contract and repository-structure rules remain implicit.
+
+**What to build.** Replace only the dark-mode palette. Light mode stays byte-identical.
+Implement the 2026-08-12 canonical mapping in
+[`../04-conventions/design-system.md`](../04-conventions/design-system.md) §5.1 and §5.2:
+
+| Founder palette role | Value | Semantic use |
+| --- | --- | --- |
+| Background | `#171613` | `surface` |
+| Surface | `#211F1B` | `surfaceRaised` |
+| Elevated surface | `#292620` | `surfaceRaised2` and `surfaceOverlay` |
+| Input | `#1C1B18` | new `surfaceInput`; also the dark `surfaceSunken` neutral |
+| Border | `#34312B` | decorative `border` |
+| Primary text | `#F4F0E8` | `textDisplay` and `textPrimary` |
+| Secondary text | `#D0C9BE` | `textSecondary` |
+| Muted text | `#9F988D` | new readable `textMuted`; also `borderStrong` |
+| Accent | `#9F667F` | `accent`: non-text fills, icons, progress, focus and decoration |
+| Accent hover | `#AD748C` | `accentDeep`: hover/pressed emphasis and the accessible dark filled-control surface |
+| Accent surface | `#2D2026` | `accentSurface` |
+| Accent border | `#5A3A49` | new decorative `accentBorder`, never a control-boundary substitute |
+| Sage | `#A7B690` | `success` and the dark Watch accent |
+| Sage surface | `#252A20` | `successSurface` and the dark Watch tint |
+| Ochre | `#E3C07A` | `warning` and the dark Meal accent |
+| Ochre surface | `#332B1C` | `warningSurface` and the dark Meal tint |
+
+The dark Event accent uses `accentDeep` on `accentSurface`; Task and Custom use
+`textMuted` on `surfaceInput`. Unlisted safety semantics (`danger`, `scrim`, and a genuinely
+disabled label) retain their existing dark values unless a contrast assertion requires an
+equivalent value already present in this table. No new raw colour may be invented.
+
+**Accessibility rule.** `accent` and `accentDeep` are not body-text colours on
+`surfaceRaised`, and `accent` is not paired with a normal-size label on a filled control.
+Dark primary filled controls use the accessible accent treatment with a dark inverse label;
+accent-surface chips and text actions use `textPrimary` or `textSecondary` according to their
+content hierarchy. `textMuted` is readable tertiary content and must not be conflated with
+`textDisabled`; audit existing non-disabled `textDisabled` uses and migrate them. Keep the
+visible role, label, underline or control shape that communicates interactivity without
+relying on colour alone.
+
+**Scope guard.** Do not change light-mode values, spacing, typography, radius, elevation
+levels, motion, screen layout, component anatomy, user-facing copy or interaction behaviour.
+Do not redesign the Task or Plan detail screens in this task. Add no dependency.
+
+**Tests and visual proof.** Extend the contrast matrix to cover `surfaceInput`, `textMuted`,
+accent-surface labels, filled-control labels, `accentBorder`'s decorative-only status, and
+every type accent on its tint and the page. Assert every hexadecimal value above exactly and
+assert the complete light palette is unchanged. Render the token gallery in dark mode and
+visually inspect every primitive state, then screenshot dark Today, a Task detail, a Plan
+detail and an open sheet at 390 px; repeat at 1280 px wherever the layout differs. Include a
+light token-gallery screenshot as the regression proof. No contrast test or threshold may be
+removed or weakened.
+
 ## Acceptance criteria
 
 1. `expandRecurrence` passes P2-02's 37 engine/calendar cases (numbered 1–24 and 31–43)
@@ -2790,6 +2861,13 @@ out the undo handler locally; the suite must catch it).
     Its multi-phase variant crashes after main state + receipt + `CLEANUP#` commit but before
     cleanup: replay drains that work before returning, and a next same-Activity mutation can
     drain the same abandoned work idempotently.
+33. P2-40's dark palette equals every founder-supplied value in its task table; light values
+    are byte-identical to their pre-task fixture. The automated matrix passes at 4.5:1 for
+    readable text and 3:1 for controls/type graphics across every surface on which each token
+    is actually rendered. No body text uses `accent` or `accentDeep` on `surfaceRaised`, no
+    normal-size filled-control label is paired with `accent`, and the dark token-gallery,
+    Today, Task-detail, Plan-detail and sheet screenshots show the approved palette without
+    a raw component-level hex value.
 
 ## Out of scope for this phase
 
