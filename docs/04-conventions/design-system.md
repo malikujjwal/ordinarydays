@@ -538,6 +538,61 @@ a search `Field`, then rows:
 Balance direction is always words plus tone — olive toward you, ochre from you, quiet
 when even (`expenses.md` §5). The initials discs are the `Avatar` tinted fallback.
 
+### 7.5 Activity detail
+
+One header grammar for every activity type, from a one-off task to a shared event. Added
+2026-08-12 from the founder's `Activity Detail Restructure` design document; built by P2-41,
+and the reference for every later task that adds a capability to this screen.
+
+```
+ ‹                                          ⋯     ← back, overflow
+ Chicken tacos                                     ← display, serif
+ Meal · Alice + 2                                  ← subhead, textSecondary
+ Tonight · 7:30 PM                                 ← bodyStrong, tap target → reschedule
+ Reminder 1 hour before                            ← footnote, textSecondary
+ ┌───────────────────────────────────────────┐
+ │                 Had it                    │     ← primary, type-derived verb
+ └───────────────────────────────────────────┘
+ ─────────────────────────────────────────────
+ People                             + Add          ← collapsed: label / value / action
+ Alice, Ben, Mia
+ ─────────────────────────────────────────────
+ PREPARATION                        0 of 2         ← expanded: caption header + content
+ ☐ Pick up tortillas
+ ☐ Defrost chicken
+ + Add task
+```
+
+**Three rules hold the whole screen.**
+
+1. **The top says what it is, when it is, and what to do next** — in that order, in one
+   grammar, for every type. Title, then type-and-audience, then the schedule as a tap target,
+   then the primary action. Nothing else competes for the top of the screen.
+2. **A capability is one compact row until it holds content, then a section.** Collapsed is
+   `label` / current value in `subhead` `textSecondary` / a trailing `+ Add`. Expanded is a
+   `caption` section header with a count and the content beneath. A capability that exists and
+   is empty collapses rather than disappearing, so it stays discoverable
+   (`plans-and-lists.md` §2).
+3. **A capability that is not built is absent, not disabled.** A row reading "coming soon" is a
+   dead affordance that teaches the user the app can do something it cannot. Rule 2 governs
+   *empty*; this governs *unbuilt*. The two are different states and only the first is
+   discoverable by design.
+
+**The completion action.** One component, one position, one accessibility pattern for both
+object kinds — there is no Task treatment and no Plan treatment. Its label is derived from the
+activity's type (`Done`, `Had it`, `Watched`, `Attended`), which is `overview.md` §4.1's "type
+guides, never restricts" applied to a verb, and it must match the verb the row's trailing slot
+and the passed-plan sheet render for the same activity. The button is **absent** when the
+caller lacks the completion capability; it is never shown disabled. On an occurrence of a
+series, `Snooze` and `Skip today` follow as a secondary pair.
+
+**The schedule line is a tap target and never an inline field** (U4). This holds wherever a
+date is rendered in the product; the detail screen is not an exception to it.
+
+**Capability order**, when each is built: People, Preparation, Related lists, Expenses, Notes,
+Attachments. A task shows only Notes and Related plan and renders no placeholder for anything
+it lacks — a Task is not a Plan with things hidden (`today-and-tasks.md` §5.6).
+
 ---
 
 ## 8. Responsive

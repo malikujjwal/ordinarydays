@@ -112,6 +112,65 @@ Anytime list. This is the phase where the product becomes usable daily.
 > `#8B6374` never become low-contrast readable text or the sole required control indicator.
 > Task size, dependencies and the existing accessibility thresholds are unchanged.
 
+> **Founder-approved UI restructure amendment — 2026-08-12 (newest note in this file; it
+> post-dates both palette notes above).** The founder's `Activity Detail Restructure` design
+> document — Claude Design project `31103057-aae4-4782-9a3f-eb73d6ca0713`, file
+> `Activity Detail Restructure.dc.html` — is adopted as the reference for this product's screen
+> anatomy, and adds **P2-41, P2-42 and P2-43** after P2-40. Three M tasks, taking Phase 2 to
+> **43 tasks / 109 AWU**.
+>
+> The design is a **mock of intended shape, not a specification of content.** It draws screens
+> whose data does not exist yet and types this product does not have. Six founder decisions
+> bound what may be taken from it:
+>
+> 1. **No `Outing` type.** The design's sixth plan kind is not adopted; the code and the data
+>    model are concrete. `PlanType` remains `meal | watch | event | custom`
+>    ([`../../packages/shared/src/types/vocabulary.ts`](../../packages/shared/src/types/vocabulary.ts)).
+>    Wherever a frame shows `Outing`, read `custom`.
+> 2. **The detail screen's primary completion button is built** — the deliverable
+>    [`phase-01-activity-core.md`](phase-01-activity-core.md)'s out-of-scope table deferred to
+>    Phase 2 and which no Phase 2 task claimed. It is **one component** with one position and
+>    one accessibility pattern for both object kinds — no Task path and no Plan path — and its
+>    **label is type-derived** from the existing verb mapping (`Done`, `Had it`, `Watched`,
+>    `Attended`) per
+>    [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#4-the-leading-control-and-what-completes-a-row)
+>    §4. A single literal `Complete` for every type was considered and **rejected**: `outcome`
+>    is a stored enum (`had_it`, `watched`, `attended`), Phase 3's list bridge reads it, and
+>    P2-21's rows and P2-28's resolution sheet already render per-type verbs. Collapsing the
+>    verb would have been a rank-2 product change across six canonical documents.
+> 3. **Colour comes from P2-40, never from the design's dark frames.** The design's filled
+>    controls put light `#F4F0E8` on `#9F667F`/`#8F5D73`; P2-40's accessibility rule requires
+>    dark filled controls to use the accessible `accentDeep` treatment with a dark inverse
+>    label, because the design's pairing does not clear the 4.5:1 gate. P2-40 wins.
+> 4. **The design's seven off-palette colours are mapped onto approved tokens, never added.**
+>    P2-40's "no new raw colour may be invented" holds. The governing principle: **where the
+>    design's dark and light frames disagree, the light frames are right** — they were drawn
+>    inside the palette's contrast constraints; the dark frames reach for greys the palette
+>    does not contain.
+>
+>    | Design value | Drawn for | Use instead | Why |
+>    | --- | --- | --- | --- |
+>    | `#49443C` | checkbox outlines, input and unselected-pill borders, sheet grabber, the dashed schedule underline | `borderStrong` for control boundaries; `border` for pure dividers and the grabber | `#49443C` on `#211F1B` is ≈1.5:1 and fails the 3:1 control-boundary gate P2-40 extends |
+>    | `#8F5D73` | dark filled primary button | `accentDeep` with a dark inverse label | decision 3 |
+>    | `#E7D3DB` | secondary line on a selected, filled reschedule row | stop filling the row: `accentSurface` + `accentBorder`, `textPrimary` and `textSecondary` | what the design's own light frames do for the selected `Today` pill; removes two off-palette values at once |
+>    | `#D58F87` | `Delete`, `Discard` labels | `danger` | P2-40 retains the existing dark `danger` |
+>    | `#34201E` | `Discard` button fill | no fill — the existing `Button variant="danger"`, or ghost with a `danger` label | there is no `dangerSurface` token and inventing one buys nothing |
+>    | `#6F6A62` | placeholder in an empty field | readable `textMuted` | P2-40: hints and placeholders use readable `textMuted` |
+>    | `#7C766D` | chooser row subtitles | readable `textMuted` | the same readable-tertiary role |
+>
+> 5. **Nothing unimplemented is drawn.** The design's `Recipe` row is on
+>    [`../02-architecture/data-model.md`](../02-architecture/data-model.md) §10's
+>    deliberately-not-modelled list; its ingredient checklist and grocery destination are
+>    Phase 3; its `Directions` button is unowned by any phase; People, Preparation, Related
+>    lists, Expenses and Attachments are Phase 3 and Phase 7. **P2-41–P2-43 render none of
+>    them.** The task that builds each capability takes its anatomy from §7.5 of
+>    [`../04-conventions/design-system.md`](../04-conventions/design-system.md), which records
+>    the intended shape now so it is not re-derived later.
+> 6. **P2-40's scope guard stands unchanged.** P2-40 remains a pure token replacement and still
+>    may not touch layout, copy, anatomy or the detail screens. Every structural change the
+>    design asks for belongs to P2-41, P2-42 or P2-43, all of which depend on P2-40 so that they
+>    are built in the real palette rather than against it.
+
 > **File inventories are minima, not exhaustive.** The checklists in
 > [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md) — including the
 > route checklist, export-map tests, dependency declarations and lockfile — bind every task
@@ -215,6 +274,9 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-36 | Worked-example-day integration fixture and test | ci | P2-04, P2-08, P2-11, P2-13, P2-19, P2-23 | no | M |
 | P2-37 | E2E: Today flows on web and iOS | ci | P2-20, P2-24, P2-25, P2-26, P2-28, P2-29, P2-31, P2-33 | no | M |
 | P2-40 | Founder-approved light- and dark-mode palettes | shared/mobile | P1-22, P2-37 | no | M |
+| P2-41 | Activity detail restructure and the completion button | mobile | P2-13, P2-15, P2-40 | yes | M |
+| P2-42 | Reschedule and snooze sheet restructure | mobile | P2-25, P2-26, P2-40, P2-41 | yes | M |
+| P2-43 | Compose flow progressive disclosure | mobile | P2-40, P2-41 | yes | M |
 
 P2-17, P2-30, P2-31 and P2-35 are mechanical; follow the canonical sections named in the
 table and skip the design discussion. P2-31's exact label is `+ Add a task`: it bypasses the
@@ -2546,7 +2608,7 @@ verification then advances the simulator clock and observes both timed and all-d
 > simulator setup step and the manual timed/all-day delivery observation remain explicitly
 > **unverified**, not waived. Run them on macOS and record the evidence before the first
 > TestFlight submission. This verification-only follow-up does not move P2-34 defects into
-> P2-37 and does not block P2-35 through P2-40, none of which depends on P2-34.
+> P2-37 and does not block P2-35 through P2-43, none of which depends on P2-34.
 
 ---
 
@@ -2748,6 +2810,17 @@ content hierarchy. `textMuted` is readable tertiary content and must not be conf
 visible role, label, underline or control shape that communicates interactivity without
 relying on colour alone.
 
+**The filled-control token — added 2026-08-12.** The mapping above makes the light primary
+fill `accent` (`#8B6374`) but the dark primary fill `accentDeep` (`#AD748C`). That is a
+per-scheme choice, and [`../../packages/ui/src/primitives/Button.tsx`](../../packages/ui/src/primitives/Button.tsx)
+reads `theme.colors.accent` flat, while
+[`../../packages/ui/src/theme/colors.ts`](../../packages/ui/src/theme/colors.ts)'s header
+states the mechanism outright: "there is no `isDark` branch in any component, because there is
+nothing for one to choose between." Introduce a semantic `accentControl` — `#8B6374` light,
+`#AD748C` dark — and its paired label token, so `Button` selects a token rather than a scheme.
+Adding the first scheme branch in the codebase to satisfy a palette change is not an
+acceptable resolution. No raw value outside the two tables is introduced by this.
+
 **Scope guard.** Do not change spacing, typography, radius, elevation levels, motion, screen
 layout, component anatomy, user-facing copy or interaction behaviour.
 Do not redesign the Task or Plan detail screens in this task. Add no dependency.
@@ -2760,6 +2833,145 @@ and light `accent`. Render the token gallery in both modes and visually inspect 
 primitive state, then screenshot Today, a Task detail, a Plan detail and an open sheet in
 both modes at 390 px; repeat at 1280 px wherever the layout differs. No contrast test or
 threshold may be removed or weakened.
+
+---
+
+### P2-41 — Activity detail restructure and the completion button
+
+**Files.** `apps/mobile/src/features/activity/components/{ActivityDetailScreen.tsx,
+WhenWhereBlock.tsx,ComingSoonSection.tsx}`, `apps/mobile/src/features/activity/model/sections.ts`,
+and their existing tests. `ComingSoonSection.tsx` is **deleted**. Inventory is a minimum.
+
+**Approach.** Implement the `1A` frames of the design document named in this file's
+2026-08-12 UI restructure amendment, under all six of its decisions. Anatomy is
+[`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.5.
+
+- **Header grammar.** Serif `display` title — still inline-editable, still committing on blur
+  and on nothing else — then the `subhead` type-and-audience line, then the schedule as a
+  single tap target with the recurrence and reminder summary beneath it in `footnote`. The
+  schedule leaves its `Card`: `WhenWhereBlock` becomes an unboxed block directly under the
+  header. **U4 is unchanged** — tapping the schedule opens the reschedule sheet and never
+  turns the line into a field.
+- **The completion button.** Primary, full width, immediately under the header block: the
+  Phase 2 deliverable deferred by Phase 1 and claimed by no other task. **One component**, one
+  position, one accessibility pattern for both object kinds. Its label is type-derived from
+  the mapping in
+  [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §4 and must render the
+  same verb the row's trailing slot and the passed-plan sheet already render. Absent — not
+  disabled — when `capabilities.complete` is false, which is how §4.1's "a plan you did not
+  create carries no completion control" is satisfied without the client re-deriving ownership.
+- **The recurring occurrence pair.** `Snooze` and `Skip today` as secondary buttons beneath
+  the primary, only on an occurrence of a series, each gated on its own capability. They
+  dispatch P2-15's and P2-14's existing endpoints with `occurrenceDate`; this task adds no
+  write path.
+- **`ComingSoonSection` is deleted, and this is a resolution to raise in the PR.**
+  [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §2 says an empty
+  section "collapses to a single add affordance rather than disappearing, so the plan's
+  capabilities stay discoverable". That governs a capability that **exists and is empty** — and
+  is exactly what §7.5's collapsed rows do. It does not govern a capability that is **not
+  built**, which is a third state the product doc does not address. A row reading "Sharing is
+  coming soon" is a dead affordance that teaches the user the app can do something it cannot.
+  People, Prep, Lists and Attachments are therefore absent until the phase that builds them,
+  at which point they return as §2 collapsed rows. This extends the resolution already recorded
+  in `sections.ts`'s header comment for Expenses and Updates rather than inventing a new one.
+- **Destructive actions stay in the `⋯` menu.** The design also draws a `MORE` block listing
+  `Edit recurrence` and `Delete` beneath the header while keeping `⋯` in it. Adopting both
+  puts delete in two places, and U6 — nothing destructive happens from a tap on the menu — is
+  easier to hold in one. P1-27's menu remains the single home. *Decision recorded here; raise
+  in the PR if the founder wants the visible block instead, in which case `⋯` is removed and
+  P1-27's tests move with it.*
+- Loading, empty, error and offline states, the `maxWidth` measure, and the conflict banner are
+  preserved exactly as they are today.
+
+**Tests.** Component: the correct verb renders for each of the five types; the button is
+absent when `capabilities.complete` is false; `Snooze`/`Skip today` appear only on a series
+occurrence and only with their capabilities; the schedule line opens the reschedule sheet and
+does not become an editable field; the title still commits on blur and only when it changed;
+no rendered string contains `coming soon`. Unit: `sectionsFor` never returns a `coming-soon`
+state for any input. **The P1-26 test `has no completion button anywhere on the screen` is
+replaced by one asserting the type's verb is present — it is not deleted, and no other
+assertion in that file is weakened to accommodate this task.**
+
+**Scope guard.** Do not render People, Preparation, Related lists, Expenses or Attachments.
+Do not add a colour outside P2-40's tables. Do not add an activity type. Do not touch the
+completion, skip or snooze endpoints, the `outcome` enum, or the agenda projection. Do not
+change the Today row or the passed-plan sheet.
+
+---
+
+### P2-42 — Reschedule and snooze sheet restructure
+
+**Files.** `apps/mobile/src/features/activity/components/RescheduleSheet.tsx`,
+`apps/mobile/src/features/agenda/components/SnoozeSheet.tsx`, and their existing tests.
+Extend both; do not fork either.
+
+**Approach.** Implement the `2A` frames. This is a **presentation change over P2-25 and P2-26**:
+every option must dispatch exactly the endpoint it dispatches today.
+
+- Each date option becomes a two-part row — the relative label with its resolved date on the
+  trailing edge (`Today` · `Wed, Aug 12`) — replacing the chip row. The resolved date stops
+  the user having to decode what "Saturday" means before committing. Existing accessibility
+  labels already name the resulting date and are kept.
+- The removal action's copy follows the object rather than the mechanism: a one-off task offers
+  `Move to Anytime`, a plan offers the existing `Needs a date` wording, and a recurring
+  occurrence offers `Skip this occurrence`. **Any string this task changes must have its row in
+  [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §5 amended in
+  the same PR; where §5 already specifies the copy, §5 wins over the design's shorter draft.**
+- The series scope question moves out of the sheet's opening state and into a distinct
+  `Apply changes to` sheet presented **after** Save, carrying the before→after summary
+  (`6:00 PM → 7:00 PM`). The two options and what each writes are P2-26's and are unchanged;
+  only when the question is asked changes. Confirm against
+  [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §3 before
+  building, and raise it if §3 fixes the ordering.
+- The snooze sheet names its activity and states its blast radius (`Today only. Tomorrow stays
+  6:00 PM.`) above a wrapped pill grid. **P2-25's option table is canonical and unchanged** —
+  the design draws four options where P2-25 specifies six and the omission of `Tomorrow` for a
+  recurring occurrence; P2-25 wins.
+
+**Tests.** Every existing P2-25 and P2-26 dispatch test passes **unmodified** — that is the
+proof this task changed presentation only. Add: each row renders its resolved date from a
+frozen clock; the removal label matches the object kind and recurrence state; the scope sheet
+appears only for a series and only after Save; the before→after summary reflects the pending
+edit.
+
+**Scope guard.** Do not change which endpoint any option dispatches, P2-25's option set, the
+60-day cross-day cap, the 20-segment cap, or the optimistic and undo behaviour. Do not add a
+colour outside P2-40's tables.
+
+---
+
+### P2-43 — Compose flow progressive disclosure
+
+**Files.** `apps/mobile/src/features/compose/components/{ComposeForm.tsx,ComposeScreen.tsx,
+PlanKindChooser.tsx,ObjectChooser.tsx,ChooserRow.tsx}` and their existing tests.
+
+**Approach.** Implement the `3A` frames. The organising idea is that the form shows what the
+user's choices have made relevant and nothing else — no disabled fields and no "pick a date
+first" copy.
+
+- Time renders only once a date exists. Reminder begins as a `+ Reminder` action rather than a
+  populated row. Remaining fields sit behind `More options`, whose subtitle names what is
+  inside it — and per decision 5 of the amendment, names **only what is built**.
+- The Save control is pinned above the safe area at full width and continues to name the exact
+  write and destination, which is CLAUDE.md rule 2 and is already the case; verify rather than
+  restate.
+- Menus are bottom-anchored with the form dimmed behind them, replacing inline dropdowns. The
+  selected row carries `accentSurface` and a check — no radio column. The selected `When` pill
+  uses `accentSurface` with `accentBorder`, and the resolved date always prints beneath the
+  pill row.
+- **Rule 2 is the binding constraint on this task.** Progressive disclosure changes what is
+  *visible*; it may never change what is *selected*. The object chooser and the Plan-kind
+  chooser open with nothing chosen, no field acquires a default because it became visible, and
+  no revealed control arrives pre-filled. A test asserting the choosers open unselected is
+  required, not optional.
+
+**Tests.** Component: no time control before a date and one after; both choosers open with
+nothing selected; the Save label names the destination for each of the three object kinds;
+no disabled field is rendered in any state; `More options` lists only built capabilities.
+
+**Scope guard.** Do not change `CreationTarget`, the capture stubs, or any create endpoint.
+Do not add a field, an activity type, or a colour outside P2-40's tables. Do not pre-select
+anything.
 
 ## Acceptance criteria
 
