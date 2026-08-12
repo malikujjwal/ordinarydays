@@ -15,16 +15,88 @@ export interface ToastMessage {
   message: string;
   tone?: 'neutral' | 'error';
   action?: { label: string; onPress: () => void };
+  duration?: 6000 | 10000;
 }
+
+export interface UndoToastMessage {
+  message: string;
+  duration?: 6000 | 10000;
+  onUndo: () => void;
+  onCommit: () => void;
+}
+
+export type ActiveToast =
+  | (ToastMessage & { id: number; kind: 'message' })
+  | (Omit<UndoToastMessage, 'onUndo' | 'onCommit'> & {
+      id: number;
+      kind: 'undo';
+      onUndo: () => void;
+      onCommit: () => void;
+    });
 
 export interface ToastState {
-  current: ToastMessage | undefined;
-  show: (toast: ToastMessage) => void;
-  dismiss: () => void;
+  current: ActiveToast | undefined;
+  show: (toast: ToastMessage) => number;
+  showUndo: (toast: UndoToastMessage) => number;
+  dismiss: (id?: number) => void;
+  undo: (id?: number) => void;
+  failUndo: (id: number, toast: ToastMessage) => number;
 }
 
-export const useToast = create<ToastState>()((set) => ({
-  current: undefined,
-  show: (toast) => set({ current: toast }),
-  dismiss: () => set({ current: undefined }),
-}));
+let nextToastId = 1;
+
+const activeMessage = (toast: ToastMessage): ActiveToast => ({
+  ...toast,
+  id: nextToastId++,
+  kind: 'message',
+});
+
+const activeUndo = (toast: UndoToastMessage): ActiveToast => ({
+  ...toast,
+  id: nextToastId++,
+  kind: 'undo',
+});
+
+export const useToast = create<ToastState>()((set, get) => {
+  const commitCurrent = (id?: number) => {
+    const current = get().current;
+    if (current === undefined || (id !== undefined && current.id !== id)) return;
+    set({ current: undefined });
+    if (current.kind === 'undo') current.onCommit();
+  };
+
+  const replace = (next: ActiveToast) => {
+    commitCurrent();
+    set({ current: next });
+    return next.id;
+  };
+
+  return {
+    current: undefined,
+    show: (toast) => replace(activeMessage(toast)),
+    showUndo: (toast) => replace(activeUndo(toast)),
+    dismiss: commitCurrent,
+    undo: (id) => {
+      const current = get().current;
+      if (
+        current === undefined ||
+        current.kind !== 'undo' ||
+        (id !== undefined && current.id !== id)
+      ) {
+        return;
+      }
+      set({ current: undefined });
+      current.onUndo();
+    },
+    failUndo: (id, toast) => {
+      const current = get().current;
+      const next = activeMessage(toast);
+      if (current?.id === id && current.kind === 'undo') {
+        // The original write did not happen, so ending its window is not a commit.
+        set({ current: next });
+        return next.id;
+      }
+      return replace(next);
+    },
+  };
+});

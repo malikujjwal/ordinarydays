@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
 import { TodayScreen } from './TodayScreen';
 
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-test-key' }));
+
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
 const row = (index: number, patch: Partial<AgendaItem> = {}): AgendaItem => ({

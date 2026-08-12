@@ -281,8 +281,13 @@ describe('accessibility details that are easy to get wrong', () => {
   });
 
   it('Toast is a polite live region, so it never steals focus', () => {
-    wrap(<Toast message="Task completed" />);
+    wrap(
+      <Toast message="Task completed" action={{ label: 'Undo', onPress: () => {} }} />,
+    );
     expect(screen.getByRole('alert').getAttribute('aria-live')).toBe('polite');
+    expect(
+      screen.getByRole('button', { name: 'Undo' }).getAttribute('tabindex'),
+    ).not.toBe('-1');
   });
 });
 

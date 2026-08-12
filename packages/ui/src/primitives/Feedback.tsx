@@ -160,6 +160,7 @@ export function Toast({
           accessibilityRole="button"
           accessibilityLabel={action.label}
           onPress={action.onPress}
+          testID="toast-action"
           style={{ paddingHorizontal: theme.space[2] }}
         >
           <Text variant="footnoteStrong" color="accent">

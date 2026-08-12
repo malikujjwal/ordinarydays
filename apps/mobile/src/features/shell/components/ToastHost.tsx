@@ -1,5 +1,6 @@
 import { Toast, useTheme } from '@od/ui';
-import { View } from 'react-native';
+import { useEffect } from 'react';
+import { Platform, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useToast } from '@/stores/toast';
 
@@ -16,6 +17,34 @@ export function ToastHost() {
   const insets = useSafeAreaInsets();
   const current = useToast((s) => s.current);
   const dismiss = useToast((s) => s.dismiss);
+  const undo = useToast((s) => s.undo);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || current?.kind !== 'undo') return;
+    const predecessor = document.activeElement;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        undo(current.id);
+        return;
+      }
+      if (
+        event.key === 'Tab' &&
+        !event.shiftKey &&
+        document.activeElement === predecessor
+      ) {
+        const action = document.querySelector<HTMLElement>(
+          '[data-testid="toast-action"]',
+        );
+        if (action !== null) {
+          event.preventDefault();
+          action.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [current, undo]);
 
   if (current === undefined) return null;
 
@@ -34,9 +63,16 @@ export function ToastHost() {
     >
       <Toast
         message={current.message}
-        onDismiss={dismiss}
-        {...(current.tone === undefined ? {} : { tone: current.tone })}
-        {...(current.action === undefined ? {} : { action: current.action })}
+        onDismiss={() => dismiss(current.id)}
+        {...(current.duration === undefined ? {} : { duration: current.duration })}
+        {...(current.kind === 'message' && current.tone !== undefined
+          ? { tone: current.tone }
+          : {})}
+        {...(current.kind === 'undo'
+          ? { action: { label: 'Undo', onPress: () => undo(current.id) } }
+          : current.action === undefined
+            ? {}
+            : { action: current.action })}
       />
     </View>
   );

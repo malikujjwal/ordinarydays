@@ -1,5 +1,5 @@
 import { ThemeProvider } from '@od/ui';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -161,7 +161,7 @@ describe('NavRail', () => {
 });
 
 describe('ToastHost', () => {
-  beforeEach(() => useToast.getState().dismiss());
+  beforeEach(() => useToast.setState({ current: undefined }));
 
   it('renders nothing when there is no toast', () => {
     wrap(<ToastHost />);
@@ -185,5 +185,34 @@ describe('ToastHost', () => {
 
     expect(screen.queryByText('first')).toBeNull();
     expect(screen.getByText('second')).toBeDefined();
+  });
+
+  it('runs Undo without committing and supports Cmd/Ctrl+Z', () => {
+    const onUndo = vi.fn();
+    const onCommit = vi.fn();
+    useToast.getState().showUndo({ message: 'Task completed', onUndo, onCommit });
+    wrap(<ToastHost />);
+
+    fireEvent.keyDown(document, { key: 'z', ctrlKey: true });
+
+    expect(onUndo).toHaveBeenCalledOnce();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('commits once when the six-second window expires', () => {
+    vi.useFakeTimers();
+    const onCommit = vi.fn();
+    useToast
+      .getState()
+      .showUndo({ message: 'Task completed', onUndo: vi.fn(), onCommit });
+    wrap(<ToastHost />);
+
+    act(() => vi.advanceTimersByTime(6000));
+    act(() => vi.advanceTimersByTime(6000));
+
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('alert')).toBeNull();
+    vi.useRealTimers();
   });
 });

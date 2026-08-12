@@ -1,10 +1,21 @@
 import { type ChangeTarget, changeActivityKind } from '@od/shared';
-import { ApiError, deleteActivity, duplicateActivity } from '@od/shared/client';
+import {
+  ApiError,
+  completeActivity,
+  deleteActivity,
+  duplicateActivity,
+  uncompleteActivity,
+} from '@od/shared/client';
 import type { PatchActivityInput } from '@od/shared/schemas';
-import type { Activity } from '@od/shared/types';
+import type { Activity, AgendaData, AgendaItem } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
+import { useCallback } from 'react';
+import { applyCompletion } from '@/features/agenda/model/applyCompletion';
+import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
+import { startUndoable } from '@/features/undo/startUndoable';
 import { apiClient } from '@/lib/apiClient';
+import { useToast } from '@/stores/toast';
 
 /**
  * The three `⋯` actions: change kind, duplicate, delete (P1-27).
@@ -96,6 +107,115 @@ export function useActivityActions(activityId: string): ActivityActions {
       deleteMutation.reset();
     },
   };
+}
+
+interface CompletionVariables {
+  activityId: string;
+  occurrenceDate?: string;
+  idempotencyKey: string;
+}
+
+export interface UseAgendaActivityActionsOptions {
+  today: string;
+  currentMinute: string;
+  getScrollOffset?: () => number;
+  restoreScrollOffset?: (offset: number) => void;
+}
+
+/** Immediate agenda completion with cache/scroll rollback and compensating Undo. */
+export function useAgendaActivityActions(options: UseAgendaActivityActionsOptions) {
+  const queryClient = useQueryClient();
+  const complete = useMutation({
+    mutationFn: ({ activityId, occurrenceDate, idempotencyKey }: CompletionVariables) =>
+      completeActivity(
+        apiClient,
+        activityId,
+        occurrenceDate === undefined ? {} : { occurrenceDate },
+        idempotencyKey,
+      ),
+  });
+  const uncomplete = useMutation({
+    mutationFn: ({ activityId, occurrenceDate, idempotencyKey }: CompletionVariables) =>
+      uncompleteActivity(
+        apiClient,
+        activityId,
+        occurrenceDate === undefined ? {} : { occurrenceDate },
+        idempotencyKey,
+      ),
+  });
+
+  const toggleComplete = useCallback(
+    (item: AgendaItem, checked: boolean) => {
+      const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
+      const scrollOffset = options.getScrollOffset?.() ?? 0;
+      const target = {
+        activityId: item.activityId,
+        ...(item.occurrenceDate === undefined
+          ? {}
+          : { occurrenceDate: item.occurrenceDate }),
+      };
+      const project = () => {
+        for (const [key, cached] of snapshots) {
+          if (cached === undefined) continue;
+          queryClient.setQueryData(
+            key,
+            applyCompletion(cached, {
+              ...target,
+              today: options.today,
+              currentMinute: options.currentMinute,
+              ...(checked
+                ? { completed: true }
+                : {
+                    completed: false,
+                    restoredStatus:
+                      item.status === 'saved'
+                        ? ('saved' as const)
+                        : ('scheduled' as const),
+                  }),
+            }),
+          );
+        }
+      };
+      const restore = () => {
+        for (const [key, cached] of snapshots) queryClient.setQueryData(key, cached);
+      };
+      const original = { ...target, idempotencyKey: randomUUID() };
+      const compensation = { ...target, idempotencyKey: randomUUID() };
+
+      startUndoable({
+        apply: project,
+        revert: restore,
+        restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
+        request: () =>
+          checked ? complete.mutateAsync(original) : uncomplete.mutateAsync(original),
+        compensate: () =>
+          checked
+            ? uncomplete.mutateAsync(compensation)
+            : complete.mutateAsync(compensation),
+        toast: {
+          showUndo: useToast.getState().showUndo,
+          failUndo: useToast.getState().failUndo,
+        },
+        message: checked ? 'Task completed' : 'Completion undone',
+        failureMessage: checked
+          ? "Couldn't complete this task."
+          : "Couldn't undo this completion.",
+      });
+    },
+    [complete, options, queryClient, uncomplete],
+  );
+
+  const onAgendaAction = useCallback(
+    (item: AgendaItem, action: AgendaSwipeAction) => {
+      if (action.name === 'complete') toggleComplete(item, true);
+      if (action.name === 'undo' || action.name === 'undoSkip') {
+        toggleComplete(item, false);
+      }
+    },
+    [toggleComplete],
+  );
+
+  return { toggleComplete, onAgendaAction };
 }
 
 /**
