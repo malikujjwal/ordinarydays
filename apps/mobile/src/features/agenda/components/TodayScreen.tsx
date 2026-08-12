@@ -10,6 +10,8 @@ import type { ActivityOutcome, AgendaData, AgendaItem } from '@od/shared/types';
 import {
   Button,
   EmptyState,
+  IconButton,
+  MoreHorizontal,
   SectionHeader,
   Skeleton,
   Text,
@@ -24,12 +26,14 @@ import { TabScreen } from '@/components/TabScreen';
 import { useAgenda } from '@/features/agenda/hooks/useAgenda';
 import { useAgendaActivityActions } from '@/features/agenda/hooks/useAgendaActivityActions';
 import { useMinuteTicker } from '@/features/agenda/hooks/useMinuteTicker';
+import { useShowSkippedPreference } from '@/features/agenda/hooks/useShowSkippedPreference';
 import { agendaItemsForDay, partitionAgenda } from '@/features/agenda/model/partition';
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { selectUpNext, toUpNextSelection } from '@/features/agenda/model/upNext';
 import { AgendaSection, agendaItemKey } from './AgendaSection';
 import { OverdueCollapse } from './OverdueCollapse';
 import { SnoozeSheet } from './SnoozeSheet';
+import { TodayOverflowMenu } from './TodayOverflowMenu';
 import { UpNextCard } from './UpNextCard';
 
 export interface TodayScreenProps {
@@ -113,6 +117,8 @@ export function TodayScreen({
   const motion = useMotion();
   const tick = useMinuteTicker();
   const agenda = useAgenda({ now: tick.instant });
+  const { showSkipped, setShowSkipped } = useShowSkippedPreference();
+  const [overflowOpen, setOverflowOpen] = useState(false);
   const [showAllEarlier, setShowAllEarlier] = useState(false);
   const [showAllOverdue, setShowAllOverdue] = useState(false);
   const [snoozeItem, setSnoozeItem] = useState<AgendaItem>();
@@ -154,29 +160,51 @@ export function TodayScreen({
   });
   const effectiveToggleComplete = onToggleComplete ?? activityActions.toggleComplete;
   const effectiveResolvePassed = onResolvePassed ?? activityActions.resolvePassed;
+  const headerAction = (
+    <IconButton
+      icon={MoreHorizontal}
+      label="More"
+      onPress={() => setOverflowOpen(true)}
+      testID="today-overflow-trigger"
+    />
+  );
+  const overflowMenu = (
+    <TodayOverflowMenu
+      open={overflowOpen}
+      showSkipped={showSkipped}
+      onShowSkippedChange={setShowSkipped}
+      onClose={() => setOverflowOpen(false)}
+    />
+  );
 
   if (agenda.status === 'pending') {
     return (
-      <TabScreen title="Today" testID="today-screen">
-        <View testID="today-loading">
-          <Skeleton shape="row" count={5} />
-        </View>
-      </TabScreen>
+      <>
+        <TabScreen title="Today" testID="today-screen" headerAction={headerAction}>
+          <View testID="today-loading">
+            <Skeleton shape="row" count={5} />
+          </View>
+        </TabScreen>
+        {overflowMenu}
+      </>
     );
   }
 
   if (agenda.status === 'error') {
     const failure = errorDetails(agenda.error);
     return (
-      <TabScreen title="Today" testID="today-screen">
-        <View testID="today-error">
-          <EmptyState
-            heading={failure.message}
-            {...(failure.requestId === undefined ? {} : { body: failure.requestId })}
-            action={{ label: 'Try again', onPress: () => void agenda.refetch() }}
-          />
-        </View>
-      </TabScreen>
+      <>
+        <TabScreen title="Today" testID="today-screen" headerAction={headerAction}>
+          <View testID="today-error">
+            <EmptyState
+              heading={failure.message}
+              {...(failure.requestId === undefined ? {} : { body: failure.requestId })}
+              action={{ label: 'Try again', onPress: () => void agenda.refetch() }}
+            />
+          </View>
+        </TabScreen>
+        {overflowMenu}
+      </>
     );
   }
 
@@ -185,7 +213,7 @@ export function TodayScreen({
   const data = agenda.data as AgendaData;
   const day = data.days[0];
   const items = day === undefined ? [] : agendaItemsForDay(day);
-  const sections = partitionAgenda(items, currentMinute);
+  const sections = partitionAgenda(items, currentMinute, showSkipped);
   const activeCompletionTransitions = completionTransitions.filter((transition) => {
     const sourceItems =
       transition.source === 'schedule' ? sections.schedule : sections.anytime;
@@ -295,7 +323,8 @@ export function TodayScreen({
   const earlier = showAllEarlier
     ? projectedEarlier
     : projectedEarlier.slice(0, TODAY_EARLIER_COLLAPSED_LIMIT);
-  const isFullyEmpty = items.length === 0;
+  const visibleItems = [...sections.schedule, ...sections.anytime, ...projectedEarlier];
+  const isFullyEmpty = visibleItems.length === 0;
   const hasOnlyUndatedTasks =
     schedule.length === 0 &&
     projectedEarlier.length === 0 &&
@@ -305,8 +334,8 @@ export function TodayScreen({
     schedule.length === 0 && sections.anytime.length > 0 && projectedEarlier.length > 0;
   const isAllCompleted =
     activeCompletionTransitions.length === 0 &&
-    items.length > 0 &&
-    items.every(
+    visibleItems.length > 0 &&
+    visibleItems.every(
       (item) => item.status === 'completed' || item.status === 'completed_occurrence',
     );
   const anytimeFooter = (
@@ -332,19 +361,22 @@ export function TodayScreen({
 
   if (isFullyEmpty) {
     return (
-      <TabScreen title="Today" testID="today-screen">
-        <EmptyState
-          heading="Nothing planned today"
-          body="Add something you want to do, or check your Lists."
-          action={{ label: 'Add', onPress: onAdd }}
-          testID="today-empty"
-        />
-      </TabScreen>
+      <>
+        <TabScreen title="Today" testID="today-screen" headerAction={headerAction}>
+          <EmptyState
+            heading="Nothing planned today"
+            body="Add something you want to do, or check your Lists."
+            action={{ label: 'Add', onPress: onAdd }}
+            testID="today-empty"
+          />
+        </TabScreen>
+        {overflowMenu}
+      </>
     );
   }
 
   return (
-    <TabScreen title="Today" testID="today-screen">
+    <TabScreen title="Today" testID="today-screen" headerAction={headerAction}>
       <ScrollView
         ref={scrollView}
         testID="today-agenda"
@@ -479,6 +511,7 @@ export function TodayScreen({
           }}
         />
       )}
+      {overflowMenu}
     </TabScreen>
   );
 }

@@ -103,19 +103,42 @@ describe('partitionAgenda', () => {
   });
 
   it('uses an end time as the pass boundary and hides skipped and cancelled rows', () => {
-    const result = partitionAgenda(
-      [
-        item('act_range', 'Workshop', { time: '14:00', endTime: '16:00' }),
-        item('act_skip', 'Skipped', { status: 'skipped' }),
-        item('act_cancel', 'Cancelled', { status: 'cancelled', time: '18:00' }),
-      ],
-      '15:10',
-    );
+    const items = [
+      item('act_range', 'Workshop', { time: '14:00', endTime: '16:00' }),
+      item('act_skip', 'Skipped', { status: 'skipped' }),
+      item('act_cancel', 'Cancelled', { status: 'cancelled', time: '18:00' }),
+    ];
+    const result = partitionAgenda(items, '15:10');
 
     expect(titles(result.schedule)).toEqual(['Workshop']);
     expect(titles(result.upNext)).toEqual([]);
     expect(titles(result.anytime)).toEqual([]);
     expect(titles(result.earlier)).toEqual([]);
+
+    const revealed = partitionAgenda(items, '15:10', true);
+    expect(titles(revealed.schedule)).toEqual(['Workshop']);
+    expect(titles(revealed.anytime)).toEqual([]);
+    expect(titles(revealed.earlier)).toEqual(['Skipped']);
+  });
+
+  it('always places revealed skipped occurrences in Earlier today', () => {
+    const result = partitionAgenda(
+      [
+        item('act_future', 'Future skip', {
+          status: 'skipped_occurrence',
+          occurrenceDate: '2026-08-06',
+          time: '20:00',
+        }),
+        item('act_untimed', 'Untimed skip', { status: 'skipped_occurrence' }),
+      ],
+      '15:10',
+      true,
+    );
+
+    expect(titles(result.upNext)).toEqual([]);
+    expect(titles(result.schedule)).toEqual([]);
+    expect(titles(result.anytime)).toEqual([]);
+    expect(titles(result.earlier)).toEqual(['Future skip', 'Untimed skip']);
   });
 
   it('flattens the server arrays without duplicating up next', () => {

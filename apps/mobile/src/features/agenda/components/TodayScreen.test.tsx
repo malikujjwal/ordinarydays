@@ -1,6 +1,7 @@
 import { fixedClock, type Instant } from '@od/shared/time';
 import type { Activity, AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -116,9 +117,10 @@ function mount(ui: ReactNode, client = createClient()) {
   return { ...mounted, client };
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  await AsyncStorage.clear();
 });
 
 describe('TodayScreen', () => {
@@ -233,6 +235,92 @@ describe('TodayScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     expect(onAdd).toHaveBeenCalledOnce();
+  });
+
+  it('reveals skipped occurrences from More and restores the device-local choice', async () => {
+    const skipped = row(1, {
+      title: 'Skipped standup',
+      status: 'skipped_occurrence',
+      occurrenceDate: '2026-08-06',
+      time: '20:00',
+    });
+    const transport = vi.fn(() => Promise.resolve(okResponse(response([skipped]))));
+    vi.stubGlobal('fetch', transport);
+    const first = mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('today-empty')).toBeDefined());
+    expect(screen.queryByText('Skipped standup')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    const toggle = screen.getByRole('checkbox', { name: 'Show skipped' });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('today-earlier')).getByText('Skipped standup'),
+      ).toBeDefined(),
+    );
+    expect(
+      screen.getByRole('checkbox', { name: 'Show skipped' }).getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(await AsyncStorage.getItem('ordinarydays-today-show-skipped-v1')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.pointerEnter(screen.getByTestId(/^swipeable-row-/));
+    expect(screen.getByRole('button', { name: 'Undo skip' })).toBeDefined();
+    expect(transport).toHaveBeenCalledOnce();
+
+    first.unmount();
+    stubFetch(response([skipped]));
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('today-earlier')).getByText('Skipped standup'),
+      ).toBeDefined(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(
+      screen.getByRole('checkbox', { name: 'Show skipped' }).getAttribute('aria-checked'),
+    ).toBe('true');
+  });
+
+  it('keeps Show skipped off when device preference storage is unavailable', async () => {
+    vi.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('storage offline'));
+    stubFetch(
+      response([
+        row(1, {
+          title: 'Hidden skipped row',
+          status: 'skipped_occurrence',
+          occurrenceDate: '2026-08-06',
+        }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('today-empty')).toBeDefined());
+    expect(screen.queryByText('Hidden skipped row')).toBeNull();
   });
 
   it('keeps the contextual Add a task action at the list foot and supplies today', async () => {
