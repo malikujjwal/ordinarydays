@@ -101,13 +101,33 @@ Anytime list. This is the phase where the product becomes usable daily.
 > not pass until the fix landed. Scheduling it "after every Phase 2 task and gate is complete"
 > was circular. It is now **P2-46**, sequenced before P2-37 completes.
 >
-> The root cause turned out to be one mechanism repeated at five call sites, not five bugs. A
+> **The 2026-08-11 note's diagnosis was wrong, and following it cost two failed attempts.** It
+> says the fix is that a write "must invalidate every affected agenda window". Invalidation was
+> never broken. It fires exactly when it should, and it did so before any of this work.
+>
+> The real cause: **the agenda is served from `GSI1`, and a global secondary index is
+> eventually consistent.** There is no such thing as a consistent read on one. Invalidating the
+> agenda after a write fires a refetch within tens of milliseconds, which races the index write
+> and usually loses — the server answers `200` with pre-write data, the client caches it, and
+> nothing retries. Measured on a local create through the UI: `201` at +1922 ms, refetch issued
+> at +1967 ms, row absent; the identical query issued directly six seconds later returned the
+> row. The API was correct throughout.
+>
+> So invalidation cannot be the mechanism that makes a write visible — only the reconciliation
+> behind one. The fix has two halves: the client **projects** the write into the agenda cache
+> (from the server's own response for create, duplicate and schedule; from the existing
+> optimistic models for complete, skip and snooze), and the agenda is then marked stale
+> **without refetching** (`refetchType: 'none'`) so the racing refetch cannot discard the
+> projection. Completing and snoozing never had this bug because they already projected first.
+>
+> This also explains `e2e/specs/create-activity.spec.ts`, which had been failing on `main`
+> since **Phase 1** for the same reason and was wrongly filed as a stale Phase 1 spec.
+>
+> A secondary defect was fixed along the way and is real but was not the cause: a
 > component-level `useMutation` that reuses a registered `mutationKey` and supplies its own
-> `onSuccess` **replaces** the registered default's rather than composing with it — TanStack
-> Query does not merge them — so `refreshActivityLists` never ran. Create, schedule, patch,
-> duplicate and delete each did this; the duplicate handler even carried a comment promising
-> "a new row in every list that could show it" while invalidating only the activity list.
-> Every isolated test of those hooks passed, because each hook did exactly what it said.
+> `onSuccess` **replaces** the registered default's rather than composing with it, so five call
+> sites had lost `refreshActivityLists` entirely. The refresh now lives on the `MutationCache`,
+> which outlives every component and covers offline-queue replays after a restart.
 
 > **Founder-approved dark-mode palette amendment — 2026-08-12.** P2-40 replaces the
 > P1-22-derived dark colours with the founder's reviewed warm-neutral, mulberry, sage and
@@ -2728,37 +2748,51 @@ CI.
 
 ### P2-46 — Agenda cache invalidation on every activity write
 
-**Files.** `apps/mobile/src/lib/mutationDefaults.ts`,
+**Files.** `apps/mobile/src/lib/{queryClient.ts,agendaCache.ts,mutationDefaults.ts,
+mutationOptions.test.ts}`, `apps/mobile/src/features/agenda/model/applyCreate.ts`,
 `apps/mobile/src/features/compose/hooks/useCreateActivity.ts`,
-`apps/mobile/src/features/activity/hooks/{useActivity.ts,useActivityActions.ts}`,
-`apps/mobile/src/lib/mutationOptions.test.ts`.
+`apps/mobile/src/features/activity/hooks/{useActivity.ts,useActivityActions.ts}`.
 
-**Approach.** Export `refreshActivityLists` from `mutationDefaults.ts` as the single definition
-of what a successful activity write makes stale, and call it from **every** local `onSuccess`
-on an activity mutation key. There is no per-call-site judgement about which agenda window is
-affected: the root `['agenda']` and `['activities']` keys, because a write lands in whichever
-windows its date implies and no call site has any business working that out.
+**Approach.** Two halves, and the second is the one that is easy to undo by accident.
 
-- Five call sites lose the invalidation today: create, schedule, patch, duplicate and delete.
-  Complete and uncomplete already invalidate both keys but by hand; fold them onto the shared
-  helper so there is one definition rather than a convention.
-- Do **not** fix this by removing the local `onSuccess` handlers. They exist for real reasons —
-  writing the server's `updatedAt` back so the next `If-Match` is correct, clearing the edit
-  error, removing the detail key on delete — and deleting them to inherit the default would
-  trade this bug for a worse one.
+1. **Project the write into the agenda cache.** `applyCreate` joins the existing P2-23 `apply*`
+   models and places a created or duplicated activity; `schedule` reuses `applyReschedule`,
+   which already existed and which the swipe path already used — only the detail-sheet path
+   had bypassed it. Both project from the **server's response**, so there is no rollback path
+   and no invented `activityId`, and both are idempotent so a reconciling refetch cannot
+   double a row.
+2. **Mark the agenda stale without refetching** — `refetchType: 'none'`. This is the fix, not a
+   detail. An immediate refetch races the eventually-consistent index and usually loses,
+   returning pre-write data that overwrites the projection. Reconciliation happens on the next
+   remount, foreground or staleTime expiry, against an index that has caught up.
 
-**Tests.** A **structural** guard in `mutationOptions.test.ts`, alongside the existing
-offline-options guard over the same four files: every `onSuccess` in those files is matched by
-a `refreshActivityLists` call, and no file reaches for a bare
-`invalidateQueries({ queryKey: ['agenda'] })`. The guard is structural because the defect is —
-it is invisible to any isolated test of a hook, since each hook does exactly what it says it
-does. P2-37's `complete-undo` and `reschedule` specs are the behavioural half and must pass
-after this lands.
+The refresh itself lives on the `MutationCache` in `queryClient.ts`, not on any component or
+per-key default, because a component's `onSuccess` dies with its component and the two writes
+that most need this close their own surface on success. The cache also covers mutations
+replayed from the offline queue, which never had a component.
 
-**Scope guard.** Do not touch the optimistic-update paths in `useAgendaActivityActions.ts` —
-they take agenda snapshots for rollback and issue no invalidation, which is correct. Do not
-change the 60-second stale time, add polling, or make anything depend on app foregrounding.
-Do not widen any agenda query window.
+Do **not** fix this by deleting the local `onSuccess` handlers. They exist for real reasons —
+writing the server's `updatedAt` back so the next `If-Match` is correct, clearing the edit
+error, removing the detail key on delete.
+
+**Tests.** `applyCreate.test.ts` covers dated, undated, out-of-window, past-today and repeat
+application. Two **structural** guards in `mutationOptions.test.ts`: the four activity hook
+files must not own the agenda refresh, and `refreshActivityLists` must keep
+`refetchType: 'none'` on the agenda key. Both are structural because the defect is — every
+isolated test of every layer passed while this was broken. P2-37's `complete-undo` and
+`reschedule` specs, plus Phase 1's `create-activity` spec, are the behavioural half.
+
+**Scope guard.** Do not change the 60-second stale time, add polling, or make anything depend
+on app foregrounding. Do not widen any agenda query window. Do not move the agenda off `GSI1`
+or attempt a consistent read on an index — the projection exists precisely because that is not
+possible.
+
+> **Deferred, on the founder's call — 2026-08-12.** Persisting the cache to **SQLite** rather
+> than the current store was raised while diagnosing this and is deliberately **not** part of
+> P2-46. It is a different problem: this defect lives in the gap between a write and a read and
+> would exist under any cache backend, so the projection above is required either way. SQLite
+> changes durability and query power, needs a new dependency with a `tech-stack.md` entry, and
+> is a storage-layer decision for a later phase.
 
 ---
 

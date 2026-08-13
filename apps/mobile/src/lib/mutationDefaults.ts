@@ -78,7 +78,21 @@ const AGENDA_KEY = ['agenda'] as const;
  */
 export function refreshActivityLists(client: QueryClient): void {
   void client.invalidateQueries({ queryKey: ACTIVITY_LIST_KEY });
-  void client.invalidateQueries({ queryKey: AGENDA_KEY });
+  /**
+   * **`refetchType: 'none'` is the whole point — do not "fix" this by removing it.**
+   *
+   * The agenda is read from `GSI1`, and a global secondary index is eventually consistent. A
+   * refetch issued in the milliseconds after a write races that index and usually loses: the
+   * server answers `200` with pre-write data and the client caches it, discarding whatever the
+   * client had just projected. Measured locally: `201` at +1922 ms, refetch at +1967 ms, row
+   * absent from a response the API served correctly six seconds later.
+   *
+   * So the agenda is marked **stale without refetching**. The client already holds the truth —
+   * either the server's own response (create, duplicate, schedule) or an optimistic projection
+   * (complete, skip, snooze) — and the next natural refetch on remount, foreground or staleTime
+   * expiry reconciles against an index that has long since caught up.
+   */
+  void client.invalidateQueries({ queryKey: AGENDA_KEY, refetchType: 'none' });
 }
 
 /**

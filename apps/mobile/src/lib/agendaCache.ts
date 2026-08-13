@@ -30,10 +30,10 @@ export function projectActivityWrite(
   client: QueryClient,
   mutationKey: MutationKey | undefined,
   data: unknown,
-): void {
+): boolean {
   const name = Array.isArray(mutationKey) ? mutationKey[1] : undefined;
   const activity = activityFrom(data);
-  if (activity === undefined) return;
+  if (activity === undefined) return false;
 
   const timezone = (client.getQueryData<User>(['me'])?.timezone ??
     Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone;
@@ -45,7 +45,7 @@ export function projectActivityWrite(
 
   if (name === 'create' || name === 'duplicate') {
     update(client, (agenda) => applyCreate(agenda, { activity, ...clock }));
-    return;
+    return true;
   }
 
   if (name === 'schedule') {
@@ -63,7 +63,10 @@ export function projectActivityWrite(
         ...clock,
       }),
     );
+    return true;
   }
+
+  return false;
 }
 
 /** Both a bare Activity and a `{ activity }` envelope reach this from different endpoints. */

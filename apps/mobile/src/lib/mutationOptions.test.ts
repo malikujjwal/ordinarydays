@@ -57,6 +57,22 @@ describe('offline mutation option guard', () => {
     expect(cacheSurface).toMatch(/refreshActivityLists\(client\)/);
   });
 
+  /**
+   * The agenda is read from an eventually-consistent index, so a refetch fired in the
+   * milliseconds after a write races that index and usually loses — returning pre-write data
+   * and discarding whatever the client had just projected. Marking the agenda stale *without*
+   * refetching is the entire fix; deleting `refetchType` reads like a harmless simplification
+   * and silently restores the bug, so it is asserted rather than left to a comment.
+   */
+  it('marks the agenda stale without firing a refetch that would race the index', () => {
+    const source = sourceOf('./mutationDefaults.ts');
+    const refresh = source.slice(source.indexOf('export function refreshActivityLists'));
+    const body = refresh.slice(0, refresh.indexOf('\n}'));
+
+    expect(body).toMatch(/queryKey:\s*AGENDA_KEY,\s*refetchType:\s*'none'/);
+    expect(body).toMatch(/queryKey:\s*ACTIVITY_LIST_KEY\s*\}/);
+  });
+
   it('keeps the Activity GET override that makes Try again issue a request', () => {
     const source = sourceOf('../features/activity/hooks/useActivity.ts');
     const querySurface = source.slice(
