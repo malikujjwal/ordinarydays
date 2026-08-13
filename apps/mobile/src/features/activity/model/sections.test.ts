@@ -75,10 +75,10 @@ describe('a Plan previews its later capabilities without dead controls', () => {
   it('renders the §2.1 sections in their fixed order', () => {
     expect(sectionsFor(activity({})).map((s) => s.key)).toEqual([
       'whenWhere',
+      'notes',
       'people',
       'prep',
       'lists',
-      'notes',
       'attachments',
     ]);
   });

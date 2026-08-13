@@ -70,21 +70,23 @@ const COMING_LATER: DetailSection[] = [
 /**
  * The sections for one activity, in render order.
  *
- * Order is `plans-and-lists.md` §2.1's and is part of the spec, not a preference.
+ * Notes-first order is the founder's 2026-08-13 refinement to the canonical detail anatomy.
+ * The remaining Plan capabilities keep `plans-and-lists.md` §2.1's relative order.
  */
 export function sectionsFor(activity: Activity): DetailSection[] {
   if (activity.objectKind === 'task') {
     // §5.6's list, and nothing else. No placeholders.
     return [
       { key: 'whenWhere' },
-      ...(activity.schedule === undefined ? [] : [{ key: 'reminders' }]),
       { key: 'notes', label: 'Notes' },
+      ...(activity.schedule === undefined ? [] : [{ key: 'reminders' }]),
       { key: 'relatedPlan', label: 'Related plan' },
     ];
   }
 
   return [
     { key: 'whenWhere' },
+    { key: 'notes', label: 'Notes' },
     ...(activity.schedule === undefined ? [] : [{ key: 'reminders' }]),
     ...COMING_LATER,
     ...(activity.type === 'meal'
@@ -97,7 +99,6 @@ export function sectionsFor(activity: Activity): DetailSection[] {
           },
         ]
       : []),
-    { key: 'notes', label: 'Notes' },
     {
       key: 'attachments',
       label: 'Attachments',

@@ -1,7 +1,7 @@
 import type { AgendaData, AgendaItem } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
-import { projectActivityWrite } from '@/lib/agendaCache';
+import { projectActivityWrite, projectOptimisticCompletion } from '@/lib/agendaCache';
 
 /**
  * The regression this file exists for.
@@ -61,6 +61,32 @@ const completion = (activityId: string, status: string) => ({
 });
 
 describe('a completion recorded anywhere reaches the agenda cache', () => {
+  it('crosses the Today row off before the detail request settles and can roll back', () => {
+    const client = seeded();
+
+    const rollback = projectOptimisticCompletion(client, {
+      activityId: 'act_STANDUP',
+      completed: true,
+    });
+
+    expect(statusOf(client, 'act_STANDUP')).toBe('completed');
+    rollback();
+    expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
+  });
+
+  it('restores an overdue row removed by an optimistic completion', () => {
+    const client = seeded(row({ overdueFromDate: '2026-08-11' }));
+
+    const rollback = projectOptimisticCompletion(client, {
+      activityId: 'act_STANDUP',
+      completed: true,
+    });
+
+    expect(statusOf(client, 'act_STANDUP')).toBeUndefined();
+    rollback();
+    expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
+  });
+
   it('marks the row completed, so Today crosses it off without a refetch', () => {
     const client = seeded();
 

@@ -2989,6 +2989,14 @@ threshold may be removed or weakened.
 > non-interactive `Coming later` discovery rows, reminder management is functional, and the
 > visible bottom time action is `Edit recurrence`; Delete remains in `⋯`.
 
+> **Later founder refinement — 2026-08-13.** Notes is the first capability row. Reminder
+> choices render as a bounded vertical scroll menu. The schedule and its recurrence/reminder
+> summary share one compact touch target, eliminating the empty hit-target gap between them.
+> `Edit recurrence` is a full-width row with `Tap to edit` and a chevron, and the completion
+> button matches the detail surface's `radius.xl`. Completing or undoing from detail projects
+> the targeted Today row optimistically and rolls it back on failure; the server response still
+> performs the existing central reconciliation.
+
 **Files.** `apps/mobile/src/features/activity/components/{ActivityDetailScreen.tsx,
 WhenWhereBlock.tsx,ComingSoonSection.tsx}`, `apps/mobile/src/features/activity/model/sections.ts`,
 and their existing tests. `ComingSoonSection.tsx` is **deleted**. Inventory is a minimum.
@@ -3051,8 +3059,10 @@ assertion in that file is weakened to accommodate this task.**
 Ingredients; their discovery rows are non-interactive per the 2026-08-13 clarification. Do
 not render Expenses, Updates or Recipe.
 Do not add a colour outside P2-40's tables. Do not add an activity type. Do not touch the
-completion, skip or snooze endpoints, the `outcome` enum, or the agenda projection. Do not
-change the Today row or the passed-plan sheet.
+completion, skip or snooze endpoints or the `outcome` enum. Do not change the Today row or the
+passed-plan sheet. A targeted optimistic cache projection from the detail action is allowed by
+the later founder refinement above; it changes neither the row component nor the endpoint or
+agenda schema.
 
 ---
 

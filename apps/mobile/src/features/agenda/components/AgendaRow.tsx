@@ -1,4 +1,4 @@
-import type { ActivityType, AgendaItem } from '@od/shared/types';
+import type { AgendaItem } from '@od/shared/types';
 import { Chip, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
 import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
@@ -16,6 +16,8 @@ export interface AgendaRowProps {
   /** Date context spoken for untimed rows outside Today. */
   untimedContextLabel?: string;
   showTime?: boolean;
+  /** A tinted containing surface may require primary ink to retain AA contrast. */
+  subtitleColor?: 'textPrimary' | 'textSecondary';
   /** Cards turn off the ordinary list divider while retaining this same row body. */
   divider?: boolean;
   onOpen: (item: AgendaItem) => void;
@@ -62,6 +64,7 @@ export function AgendaRow({
   today,
   untimedContextLabel = 'today',
   showTime = false,
+  subtitleColor = 'textSecondary',
   divider = true,
   onOpen,
   onToggleComplete,
@@ -124,7 +127,7 @@ export function AgendaRow({
         >
           <Text struck={checked}>{item.title}</Text>
           {item.subtitle === undefined ? null : (
-            <Text variant="subhead" color="textSecondary">
+            <Text variant="subhead" color={subtitleColor} testID="agenda-row-subtitle">
               {item.subtitle}
             </Text>
           )}

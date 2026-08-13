@@ -88,3 +88,52 @@ test('creates, completes, and compensates a task without changing its prior posi
     await deleteActivities(request, createdIds);
   }
 });
+
+test('completing from detail crosses the Today task off before the request settles', async ({
+  page,
+  request,
+}) => {
+  const title = `P2-41 detail complete ${randomUUID()}`;
+  const created = await createTask(request, { title, date: wallDate() });
+  let releaseComplete = () => {};
+  const heldComplete = new Promise<void>((resolve) => {
+    releaseComplete = resolve;
+  });
+
+  await page.route('**/v1/activities/*/complete', async (route) => {
+    await heldComplete;
+    await route.continue();
+  });
+
+  try {
+    await page.goto('/');
+    await expect(page.locator('[data-testid="today-agenda"]')).toBeVisible();
+    const row = agendaRow(page, created.activityId).filter({ hasText: title });
+    await row.locator('[data-testid="agenda-row-body"]').click();
+    await expect(page.locator('[data-testid="detail-complete"]')).toBeVisible();
+
+    const completionStarted = page.waitForRequest((requestEvent) =>
+      new URL(requestEvent.url()).pathname.endsWith('/complete'),
+    );
+    await page.locator('[data-testid="detail-complete"]').click();
+    await completionStarted;
+    await page.locator('[data-testid="detail-back"]').click();
+
+    const projected = agendaRow(page, created.activityId).filter({ hasText: title });
+    await expect(projected.getByRole('checkbox')).toBeChecked();
+    await expect(projected.getByText(title, { exact: true })).toHaveCSS(
+      'text-decoration-line',
+      'line-through',
+    );
+
+    const completionFinished = page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith('/complete'),
+    );
+    releaseComplete();
+    await completionFinished;
+  } finally {
+    releaseComplete();
+    await page.unroute('**/v1/activities/*/complete');
+    await deleteActivities(request, [created.activityId]);
+  }
+});

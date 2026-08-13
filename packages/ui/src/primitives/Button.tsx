@@ -3,6 +3,7 @@ import { ActivityIndicator, View } from 'react-native';
 import type { IconProps } from '../icons/index';
 import { accentGlow } from '../theme/elevation';
 import { useTheme } from '../theme/index';
+import type { RadiusToken } from '../theme/tokens';
 import { Text } from './Text';
 import { Touchable } from './Touchable';
 
@@ -27,6 +28,8 @@ export interface ButtonProps {
   loading?: boolean;
   disabled?: boolean;
   fullWidth?: boolean;
+  /** Defaults to the system pill; surface-aligned hero actions may match their container. */
+  radius?: RadiusToken;
   testID?: string;
 }
 
@@ -40,6 +43,7 @@ export function Button({
   loading = false,
   disabled = false,
   fullWidth = false,
+  radius = 'pill',
   testID,
 }: ButtonProps) {
   const theme = useTheme();
@@ -91,7 +95,7 @@ export function Button({
         {
           height: size === 'lg' ? 52 : theme.layout.hitTarget,
           paddingHorizontal: theme.space[6],
-          borderRadius: theme.radius.pill,
+          borderRadius: theme.radius[radius],
           backgroundColor: palette.bg,
           borderWidth: variant === 'secondary' ? 1 : 0,
           borderColor: palette.border,

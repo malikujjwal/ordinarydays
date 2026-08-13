@@ -1,6 +1,6 @@
 import type { Reminder } from '@od/shared/types';
-import { Button, Chip, Text, useTheme } from '@od/ui';
-import { View } from 'react-native';
+import { Check, Text, Touchable, useTheme } from '@od/ui';
+import { ScrollView, View } from 'react-native';
 import { formatReminderOffset } from '@/features/activity/model/dates';
 import { DetailDisclosureRow } from './DetailDisclosureRow';
 
@@ -31,10 +31,10 @@ export function ReminderDisclosure({
   onRemove,
 }: ReminderDisclosureProps) {
   const theme = useTheme();
-  const selected = new Set(reminders.map((reminder) => reminder.offsetMinutes));
-  const options = (timed ? TIMED_OFFSETS : ALL_DAY_OFFSETS).filter(
-    (offset) => !selected.has(offset),
+  const reminderByOffset = new Map(
+    reminders.map((reminder) => [reminder.offsetMinutes, reminder]),
   );
+  const options = timed ? TIMED_OFFSETS : ALL_DAY_OFFSETS;
   const summary =
     reminders.length === 0
       ? 'No reminder'
@@ -45,59 +45,64 @@ export function ReminderDisclosure({
 
   return (
     <DetailDisclosureRow title="Reminder" summary={summary} testID="section-reminders">
-      {reminders.map((reminder) => {
-        const label = reminderLabel(reminder.offsetMinutes, timed);
-        return (
-          <View
-            key={reminder.reminderId}
-            style={{
-              minHeight: theme.layout.hitTarget,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: theme.space[4],
-            }}
-          >
-            <Text variant="body" color="textPrimary">
-              {label}
-            </Text>
-            <Button
-              label="Remove"
-              accessibilityLabel={`Remove reminder ${label}`}
-              variant="ghost"
-              disabled={busy}
-              onPress={() => void onRemove(reminder.reminderId)}
-            />
-          </View>
-        );
-      })}
+      <ScrollView
+        style={{ maxHeight: theme.layout.rowMinHeight * 4 }}
+        nestedScrollEnabled
+        showsVerticalScrollIndicator
+        testID="reminder-menu"
+      >
+        {options.map((offsetMinutes) => {
+          const existing = reminderByOffset.get(offsetMinutes);
+          const selected = existing !== undefined;
+          const label = reminderLabel(offsetMinutes, timed);
+          const disabled = busy || (atLimit && !selected);
+          return (
+            <Touchable
+              key={offsetMinutes}
+              square={false}
+              accessibilityRole="checkbox"
+              accessibilityLabel={`${selected ? 'Remove' : 'Add'} reminder ${label}`}
+              accessibilityState={{ checked: selected, disabled }}
+              disabled={disabled}
+              onPress={() => {
+                if (existing === undefined) void onAdd(offsetMinutes);
+                else void onRemove(existing.reminderId);
+              }}
+              testID={`reminder-option-${offsetMinutes}`}
+            >
+              <View
+                style={{
+                  minHeight: theme.layout.rowMinHeight,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: theme.space[4],
+                  borderBottomWidth: 1,
+                  borderBottomColor: theme.colors.border,
+                }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text variant="body" color="textPrimary">
+                    {label}
+                  </Text>
+                </View>
+                {selected ? (
+                  <Check size={20} color={theme.colors.success} />
+                ) : (
+                  <Text variant="footnoteStrong" color="textAction">
+                    Add
+                  </Text>
+                )}
+              </View>
+            </Touchable>
+          );
+        })}
+      </ScrollView>
 
       {atLimit ? (
         <Text variant="footnote" color="textSecondary">
           You can add up to 3 reminders.
         </Text>
-      ) : (
-        <View style={{ gap: theme.space[3] }}>
-          <Text variant="footnoteStrong" color="textSecondary">
-            Add a reminder
-          </Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] }}>
-            {options.map((offsetMinutes) => {
-              const label = reminderLabel(offsetMinutes, timed);
-              return (
-                <Chip
-                  key={offsetMinutes}
-                  label={label}
-                  accessibilityLabel={`Add reminder ${label}`}
-                  disabled={busy}
-                  onPress={() => void onAdd(offsetMinutes)}
-                  testID={`reminder-option-${offsetMinutes}`}
-                />
-              );
-            })}
-          </View>
-        </View>
-      )}
+      ) : null}
 
       {error === undefined ? null : (
         <Text accessibilityRole="alert" variant="footnote" color="danger">

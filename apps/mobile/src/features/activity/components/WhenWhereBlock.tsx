@@ -61,28 +61,34 @@ export function WhenWhereBlock({
           onPress={onPressDate}
           testID="when-where-date"
         >
-          <View
-            style={{ flexDirection: 'row', alignItems: 'baseline', gap: theme.space[3] }}
-          >
-            <Text
-              variant="bodyStrong"
-              color={scheduled ? 'textPrimary' : 'textSecondary'}
+          <View style={{ gap: theme.space[2] }}>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'baseline',
+                gap: theme.space[3],
+              }}
             >
-              {formatSchedule(schedule, today)}
-            </Text>
-            <Text variant="footnote" color="textSecondary">
-              Tap to edit
-            </Text>
+              <Text
+                variant="bodyStrong"
+                color={scheduled ? 'textPrimary' : 'textSecondary'}
+              >
+                {formatSchedule(schedule, today)}
+              </Text>
+              <Text variant="footnote" color="textSecondary">
+                Tap to edit
+              </Text>
+            </View>
+
+            {!scheduled ? null : (
+              <View testID="when-where-reminders">
+                <Text variant="footnote" color="textSecondary">
+                  {`${repeatSummary(recurrenceDescription)} · ${reminderSummary(reminders)}`}
+                </Text>
+              </View>
+            )}
           </View>
         </Touchable>
-
-        {!scheduled ? null : (
-          <View testID="when-where-reminders">
-            <Text variant="footnote" color="textSecondary">
-              {`${repeatSummary(recurrenceDescription)} · ${reminderSummary(reminders)}`}
-            </Text>
-          </View>
-        )}
 
         {location === undefined || location.label === '' ? null : (
           <Touchable

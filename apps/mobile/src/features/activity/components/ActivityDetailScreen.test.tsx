@@ -1,4 +1,4 @@
-import type { Activity, ActivityDetail } from '@od/shared/types';
+import type { Activity, ActivityDetail, AgendaData, AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -145,7 +145,7 @@ function mount(
       </ThemeProvider>
     </SafeAreaProvider>
   );
-  return render(
+  const rendered = render(
     wrap(
       <ActivityDetailScreen
         activityId={ID}
@@ -157,6 +157,7 @@ function mount(
       />,
     ),
   );
+  return { ...rendered, queryClient };
 }
 
 beforeEach(() => {
@@ -176,6 +177,29 @@ const loaded = () =>
  */
 const fieldValue = (label: string): string =>
   (screen.getByLabelText(label) as HTMLInputElement | HTMLTextAreaElement).value;
+
+const agendaItem = (): AgendaItem => ({
+  activityId: ID,
+  type: 'task',
+  title: 'Call the dentist',
+  status: 'scheduled',
+  time: '09:30',
+  isRecurring: false,
+  isSnoozed: false,
+  hasCheckbox: true,
+  capabilities: { complete: true, skip: false, snooze: true },
+  participantAvatars: [],
+  participantCount: 0,
+  isPast: false,
+});
+
+function agendaStatus(queryClient: QueryClient): string | undefined {
+  const agenda = queryClient.getQueryData<AgendaData>(['agenda', 'detail-regression']);
+  const day = agenda?.days[0];
+  return day === undefined
+    ? undefined
+    : [...day.schedule, ...day.anytime, ...day.earlier][0]?.status;
+}
 
 describe('reading', () => {
   it('shows the header-shaped skeleton while the detail request is pending', () => {
@@ -204,8 +228,13 @@ describe('reading', () => {
 
     expect(fieldValue('Title')).toBe('Zahav');
     expect(screen.getByText('Fri, Aug 14 · 7:00 PM')).toBeDefined();
-    expect(screen.getByText('Tap to edit')).toBeDefined();
+    expect(screen.getAllByText('Tap to edit')).toHaveLength(2);
     expect(screen.getByText('Does not repeat · No reminder')).toBeDefined();
+    expect(
+      screen
+        .getByTestId('when-where-date')
+        .contains(screen.getByText('Does not repeat · No reminder')),
+    ).toBe(true);
     fireEvent.click(
       screen.getByRole('button', { name: 'Notes, Check-in is after 3 PM.' }),
     );
@@ -244,6 +273,22 @@ describe('reading', () => {
     expect(screen.getByTestId('section-related').style.borderTopWidth).toBe('1px');
   });
 
+  it('puts Notes first and keeps every capability on the same row rhythm', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    const notes = screen.getByTestId('section-notes');
+    const reminders = screen.getByTestId('section-reminders');
+    const people = screen.getByTestId('section-people');
+    expect(
+      notes.compareDocumentPosition(reminders) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      reminders.compareDocumentPosition(people) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it('says Not scheduled on an undated plan rather than hiding the row', async () => {
     stubFetch({ status: 200, body: detailBody(plan({ schedule: undefined })) });
     mount();
@@ -274,7 +319,7 @@ describe('reading', () => {
     ).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Reminder, 15 minutes before' }));
     expect(
-      screen.getByRole('button', { name: 'Remove reminder 15 minutes before' }),
+      screen.getByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
     ).toBeDefined();
   });
 
@@ -299,6 +344,7 @@ describe('reading', () => {
       sections.compareDocumentPosition(recurrence) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    expect(recurrence.textContent).toContain('Tap to edit');
 
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined();
@@ -407,12 +453,12 @@ describe('caller-owned reminders', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reminder, No reminder' }));
     fireEvent.click(
-      screen.getByRole('button', { name: 'Add reminder 15 minutes before' }),
+      screen.getByRole('checkbox', { name: 'Add reminder 15 minutes before' }),
     );
 
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'Remove reminder 15 minutes before' }),
+        screen.getByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
       ).toBeDefined(),
     );
     const request = sent.find((entry) => entry.method === 'POST');
@@ -439,12 +485,12 @@ describe('caller-owned reminders', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reminder, 15 minutes before' }));
     fireEvent.click(
-      screen.getByRole('button', { name: 'Remove reminder 15 minutes before' }),
+      screen.getByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
     );
 
     await waitFor(() =>
       expect(
-        screen.queryByRole('button', { name: 'Remove reminder 15 minutes before' }),
+        screen.queryByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
       ).toBeNull(),
     );
     expect(sent.find((entry) => entry.method === 'DELETE')?.url).toMatch(
@@ -466,7 +512,11 @@ describe('caller-owned reminders', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reminder, 3 reminders' }));
     expect(screen.getByText('You can add up to 3 reminders.')).toBeDefined();
-    expect(screen.queryByText('Add a reminder')).toBeNull();
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'Add reminder At the time' })
+        .getAttribute('aria-disabled'),
+    ).toBe('true');
   });
 
   it('offers only whole-day offsets when the Activity has no time', async () => {
@@ -480,15 +530,71 @@ describe('caller-owned reminders', () => {
     await loaded();
 
     fireEvent.click(screen.getByRole('button', { name: 'Reminder, No reminder' }));
-    expect(screen.getByRole('button', { name: 'Add reminder On the day' })).toBeDefined();
     expect(
-      screen.getByRole('button', { name: 'Add reminder 1 day before' }),
+      screen.getByRole('checkbox', { name: 'Add reminder On the day' }),
     ).toBeDefined();
-    expect(screen.queryByRole('button', { name: /15 minutes/ })).toBeNull();
+    expect(
+      screen.getByRole('checkbox', { name: 'Add reminder 1 day before' }),
+    ).toBeDefined();
+    expect(screen.queryByRole('checkbox', { name: /15 minutes/ })).toBeNull();
+  });
+
+  it('renders reminder choices as a bounded vertical scroll menu', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reminder, No reminder' }));
+    const menu = screen.getByTestId('reminder-menu');
+    expect(Number.parseInt(menu.style.maxHeight, 10)).toBe(224);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(8);
   });
 });
 
 describe('passed-plan resolution', () => {
+  it('crosses the Today task off before the detail completion request settles', async () => {
+    const scheduled = task();
+    const completed = task({ status: 'completed', outcome: 'done' });
+    stubFetch({ status: 200, body: detailBody(scheduled) });
+    const { queryClient } = mount();
+    await loaded();
+    queryClient.setQueryData<AgendaData>(['agenda', 'detail-regression'], {
+      days: [{ date: '2026-08-13', schedule: [agendaItem()], anytime: [], earlier: [] }],
+      warnings: [],
+    });
+
+    let finish: ((response: object) => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      () =>
+        new Promise<object>((resolve) => {
+          finish = resolve;
+        }),
+    );
+
+    fireEvent.click(screen.getByTestId('detail-complete'));
+
+    expect(agendaStatus(queryClient)).toBe('completed');
+    finish?.({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: () =>
+        Promise.resolve({
+          data: { activity: completed, outcome: 'done' },
+          meta: { requestId: 'req_complete' },
+        }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            data: { activity: completed, outcome: 'done' },
+            meta: { requestId: 'req_complete' },
+          }),
+        ),
+    });
+    await waitFor(() => expect(screen.getByTestId('detail-undo')).toBeDefined());
+  });
+
   it('shows the prompt in the primary-action position and sends the exact positive outcome', async () => {
     const passed = plan({
       schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
@@ -962,6 +1068,8 @@ describe('the overflow menu', () => {
 
       const button = screen.getByRole('button', { name: verb });
       expect(button).toBe(screen.getByTestId('detail-complete'));
+      expect(button.style.borderTopLeftRadius).toBe('22px');
+      expect(button.style.borderBottomRightRadius).toBe('22px');
       fireEvent.click(button);
 
       await waitFor(() =>

@@ -59,7 +59,10 @@ test('reschedules from the time column, re-sorts, and persists the new time', as
         new URL(response.url()).pathname ===
           `/v1/activities/${target.activityId}/schedule`,
     );
-    await page.getByRole('button', { name: 'Done' }).click();
+    await page
+      .locator('[data-testid="reschedule-time-picker"]')
+      .getByRole('button', { name: 'Done' })
+      .click();
     await scheduleResponse;
     await expect(page.locator('[data-testid="reschedule-sheet"]')).toHaveCount(0);
     await expect(row.locator('[data-testid="agenda-row-time"]')).toContainText('8:30 PM');

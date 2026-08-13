@@ -1,7 +1,13 @@
 import { type Instant, type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type { Activity, AgendaData, User } from '@od/shared/types';
 import type { MutationKey, QueryClient } from '@tanstack/react-query';
-import { applyCompletion } from '@/features/agenda/model/applyCompletion';
+import {
+  type AgendaMutationTarget,
+  type AgendaProjectionClock,
+  applyCompletion,
+  findAgendaItem,
+  replaceAgendaItem,
+} from '@/features/agenda/model/applyCompletion';
 import { applyCreate } from '@/features/agenda/model/applyCreate';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
@@ -39,13 +45,7 @@ export function projectActivityWrite(
   const activity = activityFrom(data);
   if (activity === undefined) return false;
 
-  const timezone = (client.getQueryData<User>(['me'])?.timezone ??
-    Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone;
-  const now = new Date().toISOString() as Instant;
-  const clock = {
-    today: toWallDate(now, timezone),
-    currentMinute: toWallTime(now, timezone),
-  };
+  const clock = agendaClock(client);
 
   if (name === 'create' || name === 'duplicate') {
     update(client, (agenda) => applyCreate(agenda, { activity, ...clock }));
@@ -130,6 +130,36 @@ export function projectActivityWrite(
   return false;
 }
 
+/**
+ * Projects a detail-screen completion before its request settles and returns a targeted
+ * rollback. The rollback restores only the affected row in each cached agenda window, so an
+ * unrelated agenda write made while the completion is in flight is never overwritten.
+ */
+export function projectOptimisticCompletion(
+  client: QueryClient,
+  variables: AgendaMutationTarget &
+    ({ completed: true } | { completed: false; restoredStatus: 'saved' | 'scheduled' }),
+): () => void {
+  const clock = agendaClock(client);
+  const snapshots = client
+    .getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })
+    .map(([queryKey, agenda]) => ({
+      queryKey,
+      found: agenda === undefined ? undefined : findAgendaItem(agenda, variables),
+    }));
+
+  update(client, (agenda) => applyCompletion(agenda, { ...variables, ...clock }));
+
+  return () => {
+    for (const { queryKey, found } of snapshots) {
+      client.setQueryData<AgendaData>(queryKey, (agenda) => {
+        if (agenda === undefined || found === undefined) return agenda;
+        return replaceAgendaItem(agenda, variables, found.item, found.sourceDate, clock);
+      });
+    }
+  };
+}
+
 /** Occurrence scope travels in the request, not the response. */
 function occurrenceDateFrom(variables: unknown): string | undefined {
   if (typeof variables !== 'object' || variables === null) return undefined;
@@ -145,6 +175,16 @@ function activityFrom(data: unknown): Activity | undefined {
   const candidate = 'activity' in data ? (data as { activity: unknown }).activity : data;
   if (typeof candidate !== 'object' || candidate === null) return undefined;
   return 'activityId' in candidate ? (candidate as Activity) : undefined;
+}
+
+function agendaClock(client: QueryClient): AgendaProjectionClock {
+  const timezone = (client.getQueryData<User>(['me'])?.timezone ??
+    Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone;
+  const now = new Date().toISOString() as Instant;
+  return {
+    today: toWallDate(now, timezone),
+    currentMinute: toWallTime(now, timezone),
+  };
 }
 
 function update(client: QueryClient, project: (agenda: AgendaData) => AgendaData): void {

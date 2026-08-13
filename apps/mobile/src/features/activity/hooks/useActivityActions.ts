@@ -5,6 +5,7 @@ import type { Activity, ActivityDetail, ActivityOutcome } from '@od/shared/types
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useRef } from 'react';
+import { projectOptimisticCompletion } from '@/lib/agendaCache';
 import type {
   CompleteActivityVariables,
   DeleteActivityVariables,
@@ -159,6 +160,7 @@ export function useActivityActions(activityId: string): ActivityActions {
     },
     resolvePassed: (outcome, occurrenceDate, onProjected) => {
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      let restoreAgenda = () => {};
       const original = {
         activityId,
         input: { outcome, ...(occurrenceDate === undefined ? {} : { occurrenceDate }) },
@@ -179,6 +181,11 @@ export function useActivityActions(activityId: string): ActivityActions {
          */
         apply: () => {
           onProjected(true);
+          restoreAgenda = projectOptimisticCompletion(queryClient, {
+            activityId,
+            completed: true,
+            ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+          });
           /**
            * **Only a one-off moves the Activity.** Completing an *occurrence* writes an
            * `Occurrence` override and leaves `ACT#/META` untouched (`data-model.md` §4.5), so
@@ -199,6 +206,7 @@ export function useActivityActions(activityId: string): ActivityActions {
         },
         revert: () => {
           onProjected(false);
+          restoreAgenda();
           if (snapshot !== undefined)
             queryClient.setQueryData(activityKey(activityId), snapshot);
         },
@@ -242,6 +250,14 @@ export function useActivityActions(activityId: string): ActivityActions {
       // without dismissing an unrelated toast that may have replaced the completion toast.
       resolutionToastId.current = undefined;
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      const restoredStatus =
+        snapshot?.activity.schedule?.date === undefined ? 'saved' : 'scheduled';
+      const restoreAgenda = projectOptimisticCompletion(queryClient, {
+        activityId,
+        completed: false,
+        restoredStatus,
+        ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+      });
 
       /**
        * Projected before the request, not after it.
@@ -260,8 +276,7 @@ export function useActivityActions(activityId: string): ActivityActions {
           ...snapshot,
           activity: {
             ...snapshot.activity,
-            status:
-              snapshot.activity.schedule?.date === undefined ? 'saved' : 'scheduled',
+            status: restoredStatus,
           },
         });
       }
@@ -277,6 +292,7 @@ export function useActivityActions(activityId: string): ActivityActions {
           // The message is on the mutation and renders as the screen's banner.
           if (snapshot !== undefined)
             queryClient.setQueryData(activityKey(activityId), snapshot);
+          restoreAgenda();
         });
     },
     isBusy:

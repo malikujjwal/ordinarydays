@@ -1,6 +1,6 @@
 import { fixedClock, type Instant } from '@od/shared/time';
 import type { Activity, AgendaItem } from '@od/shared/types';
-import { ThemeProvider } from '@od/ui';
+import { colors, ThemeProvider } from '@od/ui';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -14,6 +14,11 @@ import { TodayScreen } from './TodayScreen';
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-test-key' }));
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+const cssColor = (hex: string): string => {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${value >> 16}, ${(value >> 8) & 255}, ${value & 255})`;
+};
 
 const row = (index: number, patch: Partial<AgendaItem> = {}): AgendaItem => ({
   activityId: `act_01J8SEED${'0'.repeat(16)}${CROCKFORD[index % CROCKFORD.length]}${CROCKFORD[(index * 7) % CROCKFORD.length]}`,
@@ -146,7 +151,11 @@ describe('TodayScreen', () => {
   });
 
   it('uses the server UP NEXT row for the initial paint', async () => {
-    const serverUpNext = row(1, { title: 'Server snapshot', time: '15:00' });
+    const serverUpNext = row(1, {
+      title: 'Server snapshot',
+      subtitle: 'Morning routine',
+      time: '15:00',
+    });
     stubFetch(
       response(
         [serverUpNext, row(2, { title: 'Local next', time: '15:30' })],
@@ -166,6 +175,13 @@ describe('TodayScreen', () => {
     expect(
       within(screen.getByTestId('up-next-card')).getByText('Server snapshot'),
     ).toBeDefined();
+    expect(screen.getByTestId('up-next-relative').style.color).toBe(
+      cssColor(colors.light.textAction),
+    );
+    expect(
+      within(screen.getByTestId('up-next-card')).getByTestId('agenda-row-subtitle').style
+        .color,
+    ).toBe(cssColor(colors.light.textPrimary));
   });
 
   it('renders non-empty sections in fixed order and omits an empty section', async () => {

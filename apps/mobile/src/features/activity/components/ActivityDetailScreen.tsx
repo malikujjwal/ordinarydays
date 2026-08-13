@@ -22,6 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
+import { DetailActionRow } from '@/features/activity/components/DetailActionRow';
 import { DetailDisclosureRow } from '@/features/activity/components/DetailDisclosureRow';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
 import { ReminderDisclosure } from '@/features/activity/components/ReminderDisclosure';
@@ -422,7 +423,7 @@ function Loaded({
   const resolved = RESOLVED_STATUSES.has(activity.status);
 
   return (
-    <View style={{ gap: theme.space[7] }} testID="detail-content">
+    <View style={{ gap: theme.space[6] }} testID="detail-content">
       {detail.conflict === undefined ? null : (
         <View
           accessibilityRole="alert"
@@ -452,7 +453,7 @@ function Loaded({
         </View>
       )}
 
-      <View style={{ gap: theme.space[7] }} testID="detail-header">
+      <View style={{ gap: theme.space[5] }} testID="detail-header">
         {/** Title and type/audience are one header unit, not two unrelated form rows. */}
         <View style={{ gap: theme.space[2] }}>
           <InlineText
@@ -514,6 +515,7 @@ function Loaded({
             label={completionVerb(activity.type)}
             fullWidth
             size="lg"
+            radius="xl"
             loading={completing}
             onPress={onComplete}
             testID="detail-complete"
@@ -528,6 +530,7 @@ function Loaded({
                 variant="secondary"
                 size="lg"
                 fullWidth
+                radius="xl"
                 loading={undoing}
                 onPress={onUndoResolution}
                 testID="detail-undo"
@@ -622,19 +625,13 @@ function Loaded({
       {activity.schedule === undefined ? null : (
         <View
           style={{
-            gap: theme.space[3],
-            paddingTop: theme.space[6],
-            borderTopWidth: 1,
-            borderTopColor: theme.colors.border,
+            paddingTop: theme.space[2],
           }}
           testID="detail-time-actions"
         >
-          <Text variant="caption" color="textSecondary">
-            More
-          </Text>
-          <Button
-            label="Edit recurrence"
-            variant="ghost"
+          <DetailActionRow
+            title="Edit recurrence"
+            hint="Tap to edit"
             onPress={onOpenRepeat}
             testID="detail-edit-recurrence"
           />

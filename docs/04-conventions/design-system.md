@@ -367,7 +367,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | Component | Props | States |
 | --- | --- | --- |
 | `Text` | `variant` (the nine type roles), `color` (`textDisplay` \| `textPrimary` \| `textSecondary` \| `textMuted` \| `textDisabled` \| `textAction` \| `accent` \| `danger` \| `success` \| `warning` \| `inverse`), `numberOfLines`, `align` | — |
-| `Button` | `variant` (`primary` — accent pill with `eAccent` \| `secondary` \| `ghost` \| `danger`), `size` (`md` 44 \| `lg` 52), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth` | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
+| `Button` | `variant` (`primary` — accent pill with `eAccent` \| `secondary` \| `ghost` \| `danger`), `size` (`md` 44 \| `lg` 52), `radius` (defaults to `pill`; a hero action may match its containing surface), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth` | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
 | `IconButton` | `icon`, `label` (required — it is the accessible name), `onPress`, `variant` (`ghost` \| `filled`), `tone` (`neutral` \| `accent`), `disabled` | default, pressed, disabled, focus-visible. Always 44 × 44. |
 | `Row` | `onPress?`, `leading?`, `title`, `subtitle?`, `trailing?`, `accent?`, `dimmed`, `struck`, `swipeActions?`, `accessibilityActions` | default, pressed, hovered (web), focused, dimmed (completed), disabled |
 | `Card` | `elevation` (`e1` \| `e2` \| `e3`), `radius` (`lg` \| `xl`), `padding` (a `space` token), `onPress?` | default, pressed, focused |
@@ -436,6 +436,10 @@ the `base` width ease, and at `0 of n` it renders empty, not hidden.
 
 One card, always the next timed thing, per `today-and-tasks.md` §2.1. Its actions are the
 row's own quick actions as text buttons — no icons, no chrome.
+
+On the light `accentSurface`, the relative-time label uses `textAction` and the embedded
+row's subtitle uses `textPrimary`. The decorative `accent` token is never text, and
+`textSecondary` measures 4.45:1 on this tinted surface rather than the required 4.5:1.
 
 **Timeline rows.** Rows are not cards. A time rail on the left, a marker column with a
 hairline connector, content to the right:
@@ -587,6 +591,12 @@ and the reference for every later task that adds a capability to this screen.
    have no chevron, disabled action, expansion or tap behaviour. All other unbuilt
    capabilities remain absent. A task still renders no Plan-only future rows.
 
+**Founder refinement — 2026-08-13.** Notes is the first capability row for both Tasks and
+Plans. Reminder opens as a bounded, vertically scrollable choice menu; selected offsets remain
+available to remove. The completion action uses `radius.xl`, matching the detail surface rather
+than the global pill default. The bottom recurrence action uses the same full-width row measure
+as the disclosures, with `Tap to edit` and a trailing chevron.
+
 **The completion action.** One component, one position, one accessibility pattern for both
 object kinds — there is no Task treatment and no Plan treatment. Its label is derived from the
 activity's type (`Done`, `Had it`, `Watched`, `Attended`), which is `overview.md` §4.1's "type
@@ -602,9 +612,10 @@ hint `Tap to edit`, and is immediately followed by the combined recurrence/remin
 The bottom time-actions block contains `Edit recurrence` when recurrence is available.
 Delete remains only in the `⋯` menu.
 
-**Capability order**, when each is built: People, Preparation, Related lists, Expenses, Notes,
-Attachments. A task shows only Notes and Related plan and renders no placeholder for anything
-it lacks — a Task is not a Plan with things hidden (`today-and-tasks.md` §5.6).
+**Capability order**, when each is built: Notes, Reminder, People, Preparation, Related lists,
+Expenses, Attachments. A task shows only Notes, Reminder when scheduled, and Related plan and
+renders no placeholder for anything it lacks — a Task is not a Plan with things hidden
+(`today-and-tasks.md` §5.6).
 
 ---
 
