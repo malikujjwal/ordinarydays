@@ -237,10 +237,17 @@ describe('RowBadges', () => {
 
     const badge = screen.getByLabelText('Snoozed from 6:00 PM to 8:00 PM');
     const original = screen.getByTestId('agenda-snooze-original');
+    /**
+     * `textMuted`, not `textDisabled` (P2-40). The pre-snooze time is the only thing on the
+     * row that says what the time *was*, so it carries meaning — and §5.1 states `textDisabled`
+     * never does. De-emphasis is still asserted; it is just asserted against the readable
+     * tertiary token rather than the exempt one.
+     */
     const colorProbe = document.createElement('span');
-    colorProbe.style.color = colors.light.textDisabled;
+    colorProbe.style.color = colors.light.textMuted;
     expect(badge.textContent).toBe('6:00 PM → 8:00 PM');
     expect(original.style.color).toBe(colorProbe.style.color);
+    expect(colors.light.textMuted).not.toBe(colors.light.textPrimary);
   });
 
   it('renders the compact overdue date with its full label and warning tokens', () => {

@@ -38,11 +38,14 @@ export const upNextShadow =
   '0 1px 2px rgba(38,42,40,0.04), 0 12px 24px -20px rgba(90,50,72,0.55)';
 
 /**
- * The filled `primary` Button's accent glow, from the mock. Defined once and **used nowhere
- * else** — it is what makes the one primary action on a screen feel like the one primary
- * action.
+ * The filled `primary` Button's accent glow. Defined once and **used nowhere else** — it is
+ * what makes the one primary action on a screen feel like the one primary action.
+ *
+ * Tracks the founder-approved light `accent` `#8B6374` (P2-40). A shadow is not a semantic
+ * token and stays one value across schemes; it reads as a soft mulberry lift under either
+ * `accentControl` fill.
  */
-export const accentGlow = '0 8px 18px -8px rgba(150,93,120,0.85)';
+export const accentGlow = '0 8px 18px -8px rgba(139,99,116,0.85)';
 
 /** iOS shadow equivalents, approximating the same soft falloff. */
 const nativeShadow: Record<ElevationToken, ViewStyle> = {

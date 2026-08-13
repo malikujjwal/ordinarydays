@@ -61,7 +61,13 @@ export function Button({
   const inactive = disabled || loading;
 
   const palette = {
-    primary: { bg: theme.colors.accent, fg: 'inverse' as const, border: 'transparent' },
+    // `accentControl`, not `accent`: the dark `accent` carries an inverse label at only
+    // 4.00:1. The palette resolves which fill each scheme uses so this stays branch-free.
+    primary: {
+      bg: theme.colors.accentControl,
+      fg: 'inverse' as const,
+      border: 'transparent',
+    },
     secondary: {
       bg: theme.colors.surfaceRaised,
       fg: 'textPrimary' as const,

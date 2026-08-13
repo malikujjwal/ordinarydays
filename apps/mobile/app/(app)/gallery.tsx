@@ -142,18 +142,57 @@ function Gallery({ scheme }: { scheme: ColorScheme }) {
         ))}
       </Section>
 
+      <Section title="Surfaces">
+        <View style={{ flexDirection: 'row', gap: space[3], flexWrap: 'wrap' }}>
+          {(
+            [
+              'surface',
+              'surfaceRaised',
+              'surfaceRaised2',
+              'surfaceOverlay',
+              'surfaceInput',
+              'surfaceSunken',
+              'accentSurface',
+              'successSurface',
+              'warningSurface',
+            ] as const
+          ).map((token) => (
+            <View key={token} style={{ alignItems: 'center', gap: space[2] }}>
+              <View
+                style={{
+                  width: 64,
+                  height: 44,
+                  borderRadius: 8,
+                  borderWidth: 1,
+                  borderColor: colors[scheme].border,
+                  backgroundColor: colors[scheme][token],
+                }}
+              />
+              <Text variant="caption" color="textSecondary">
+                {token}
+              </Text>
+            </View>
+          ))}
+        </View>
+      </Section>
+
       <Section title="Semantic colour">
         {(
           [
             'textDisplay',
             'textPrimary',
             'textSecondary',
+            'textMuted',
             'textDisabled',
             'accent',
             'accentDeep',
+            'accentControl',
+            'accentBorder',
             'success',
             'warning',
             'danger',
+            'border',
+            'borderSubtle',
             'borderStrong',
           ] as const
         ).map((token) => (

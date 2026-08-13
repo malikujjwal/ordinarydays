@@ -74,7 +74,8 @@ export function RowBadges({
           testID="agenda-badge-snooze"
         >
           <Text variant="footnote" color="textSecondary">
-            <Text testID="agenda-snooze-original" variant="footnote" color="textDisabled">
+            {/* The pre-snooze time carries meaning, so it is muted, never disabled (§5.1). */}
+            <Text testID="agenda-snooze-original" variant="footnote" color="textMuted">
               {original}
             </Text>
             {` → ${effective}`}

@@ -14,6 +14,8 @@ export type TextColor =
   | 'textDisplay'
   | 'textPrimary'
   | 'textSecondary'
+  /** Readable tertiary content — hints, placeholders, metadata. Never a disabled state. */
+  | 'textMuted'
   | 'textDisabled'
   | 'accent'
   | 'danger'

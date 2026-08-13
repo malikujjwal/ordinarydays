@@ -43,7 +43,7 @@ export function SelectField<Value extends string>({
           width: '100%',
           minHeight: theme.layout.hitTarget,
           color: disabled ? theme.colors.textDisabled : theme.colors.textPrimary,
-          backgroundColor: theme.colors.surfaceRaised,
+          backgroundColor: theme.colors.surfaceInput,
           borderStyle: 'solid',
           borderWidth: focused ? theme.layout.focusRingWidth : 1,
           borderColor:
@@ -51,7 +51,7 @@ export function SelectField<Value extends string>({
               ? theme.colors.danger
               : focused
                 ? theme.colors.focusRing
-                : theme.colors.border,
+                : theme.colors.borderSubtle,
           borderRadius: theme.radius.lg,
           paddingBlock: theme.space[4],
           paddingInlineStart: theme.space[5],

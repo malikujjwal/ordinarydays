@@ -3,12 +3,17 @@
  *
  * **Components never reference a hex value.** They reference a semantic token, and the token
  * resolves differently per scheme. That is the whole mechanism: there is no `isDark` branch
- * in any component, because there is nothing for one to choose between.
+ * in any component, because there is nothing for one to choose between. `accentControl` exists
+ * to keep that true — see its entry below.
  *
- * Light values come from the founder's design mock, contrast-checked; the two that failed AA
- * were nudged and are marked. **Dark values are derived, not designed** — same hues, inverted
- * value — and the P1-22 token gallery is where they get looked at by a human before any
- * screen is built on them.
+ * **Both palettes are founder-approved and reviewed (P2-40).** They are no longer a mock plus
+ * a derived dark set: light is warm paper and dusty plum, dark is warm neutral with mulberry,
+ * sage and ochre. Values are used exactly as supplied except where a contrast assertion made
+ * that impossible, and every such case is marked inline with its measured ratio.
+ *
+ * Where a supplied value cannot carry text, the resolution is **semantic, not cosmetic**: the
+ * value stays and its role narrows. `accent` is the clearest case — it is a fill, icon and
+ * decoration colour in both schemes and never body copy.
  *
  * Every pair is asserted programmatically in `contrast.test.ts`, so a token change that
  * breaks AA fails CI rather than shipping.
@@ -22,21 +27,40 @@ export interface SemanticColors {
   surfaceRaised: string;
   surfaceRaised2: string;
   surfaceOverlay: string;
+  /** Fields, selects and native/web picker surfaces. */
+  surfaceInput: string;
   surfaceSunken: string;
   scrim: string;
 
   textDisplay: string;
   textPrimary: string;
   textSecondary: string;
+  /** Readable tertiary content: hints, placeholders, metadata. **Never a disabled state.** */
+  textMuted: string;
   textDisabled: string;
   textInverse: string;
 
   border: string;
+  /** Decorative field and chip outline. Never the sole control boundary or focus indicator. */
+  borderSubtle: string;
   borderStrong: string;
 
+  /** Non-text fills, icons, progress and decoration. **Never body text.** */
   accent: string;
   accentDeep: string;
   accentSurface: string;
+  /** Decorative accent-surface outline. Never a control boundary. */
+  accentBorder: string;
+  /**
+   * The filled primary control's surface, paired with `textInverse`.
+   *
+   * Light uses `accent` and dark uses `accentDeep`, because the dark `accent` cannot carry a
+   * label at AA (4.00:1 against `textInverse`) while `accentDeep` can (4.87:1). That is a
+   * per-scheme choice, and a component resolving it with an `isDark` branch would be the first
+   * in the codebase and would break the mechanism described at the top of this file. So the
+   * scheme difference lives here, in the palette, where every other scheme difference lives.
+   */
+  accentControl: string;
 
   success: string;
   successSurface: string;
@@ -48,73 +72,91 @@ export interface SemanticColors {
 }
 
 const light: SemanticColors = {
-  surface: '#FBF9F3',
-  surfaceRaised: '#FFFFFF',
-  surfaceRaised2: '#FFFFFF',
-  surfaceOverlay: '#FFFFFF',
-  /**
-   * Nudged from the mock's `#F1EEE5`, which put `textSecondary` at 4.48:1 — a hair under AA.
-   * This surface carries real text: the rail's active nav label (§8) and the inactive labels
-   * on a `SegmentedControl` track (§6). At `#F3F0E8` that pair is 4.56:1.
-   *
-   * Found by the contrast gate in P1-22, which is the first thing to have measured this pair
-   * — §5.1's stated promise covers `surface` and `surfaceRaised`, and `surfaceSunken` was
-   * never checked against the text that sits on it.
-   */
-  surfaceSunken: '#F3F0E8',
+  surface: '#F1EDE5',
+  surfaceRaised: '#F8F5EF',
+  surfaceRaised2: '#FCFAF6',
+  surfaceOverlay: '#FCFAF6',
+  surfaceInput: '#F0EBE3',
+  surfaceSunken: '#ECE7DE',
   scrim: 'rgba(38,42,40,0.40)',
 
-  textDisplay: '#252521',
-  textPrimary: '#4A4841',
-  /** Nudged from the mock's `#77756C`, which was 4.39:1 against `surface`. */
-  textSecondary: '#6F6D63',
-  textDisabled: '#9B988D',
-  textInverse: '#FFFFFF',
+  textDisplay: '#292621',
+  textPrimary: '#292621',
+  textSecondary: '#6E675F',
+  /** The supplied secondary ink, because the supplied muted `#978F84` is 2.7:1 — decoration. */
+  textMuted: '#6E675F',
+  textDisabled: '#978F84',
+  textInverse: '#FFFDF9',
 
-  border: '#E5E2D9',
-  borderStrong: '#6F6D63',
+  border: '#E1DAD0',
+  borderSubtle: '#D3C9BC',
+  borderStrong: '#6E675F',
 
-  accent: '#965D78',
-  accentDeep: '#744158',
-  accentSurface: '#F9F1F5',
+  accent: '#8B6374',
+  accentDeep: '#795565',
+  accentSurface: '#EEE3E7',
+  accentBorder: '#C7AAB6',
+  accentControl: '#8B6374',
 
-  success: '#667747',
+  /**
+   * Darkened from the founder's `#667747` on the founder's decision (2026-08-12).
+   *
+   * Sage carries a money figure — `Owes you $42.50` (§5.1, §7.4) — so it is body text and owes
+   * AA. Against the new warmer `surface` it measured **4.19:1**, and 4.49:1 on `surfaceRaised`;
+   * the previous, lighter `#FBF9F3` background was what had been carrying it. `#616F45` is the
+   * smallest change that clears both (4.65:1 and 4.99:1) and stays the same sage.
+   *
+   * The alternative — keeping the value and dropping colour from balance figures — was
+   * considered and rejected: the figure is where the colour does its work.
+   */
+  success: '#616F45',
   successSurface: '#EDF0E2',
   warning: '#8A6520',
   warningSurface: '#F6F0E2',
   danger: '#B3261E',
 
-  focusRing: '#965D78',
+  focusRing: '#795565',
 };
 
 const dark: SemanticColors = {
-  surface: '#151412',
-  surfaceRaised: '#1F1E1B',
-  surfaceRaised2: '#282722',
-  surfaceOverlay: '#2E2D28',
-  surfaceSunken: '#100F0D',
+  surface: '#171613',
+  surfaceRaised: '#211F1B',
+  surfaceRaised2: '#292620',
+  surfaceOverlay: '#292620',
+  surfaceInput: '#1C1B18',
+  surfaceSunken: '#1C1B18',
   scrim: 'rgba(0,0,0,0.60)',
 
-  textDisplay: '#F0EEE8',
-  textPrimary: '#E4E2DA',
-  textSecondary: '#B0ADA2',
+  textDisplay: '#F4F0E8',
+  textPrimary: '#F4F0E8',
+  textSecondary: '#D0C9BE',
+  textMuted: '#9F988D',
+  /** Retained: unlisted safety semantics keep their existing dark values. */
   textDisabled: '#6E6C63',
-  textInverse: '#1B1A17',
+  textInverse: '#171613',
 
-  border: '#33322C',
-  borderStrong: '#8A887E',
+  border: '#34312B',
+  /** The supplied border serves both roles in dark; there is no second dark outline value. */
+  borderSubtle: '#34312B',
+  borderStrong: '#9F988D',
 
-  accent: '#C9A3B7',
-  accentDeep: '#D8A0BC',
-  accentSurface: '#31242B',
+  /**
+   * 4.00:1 on `surface` and 3.70:1 on `surfaceRaised` — **deliberately not a text colour**.
+   * Fills, icons, progress, focus and decoration only, which is what §5.1 restricts it to.
+   */
+  accent: '#9F667F',
+  accentDeep: '#AD748C',
+  accentSurface: '#2D2026',
+  accentBorder: '#5A3A49',
+  accentControl: '#AD748C',
 
-  success: '#9DBA6E',
-  successSurface: '#232A1C',
-  warning: '#E0B25A',
-  warningSurface: '#2A2317',
+  success: '#A7B690',
+  successSurface: '#252A20',
+  warning: '#E3C07A',
+  warningSurface: '#332B1C',
   danger: '#F08579',
 
-  focusRing: '#C9A3B7',
+  focusRing: '#9F667F',
 };
 
 export const colors: Record<ColorScheme, SemanticColors> = { light, dark };
@@ -137,23 +179,19 @@ export interface TypeAccent {
 
 export const typeAccents: Record<ColorScheme, Record<ActivityTypeName, TypeAccent>> = {
   light: {
-    task: { accent: '#6F6D63', surface: '#F1EEE5' },
+    task: { accent: '#6E675F', surface: '#F0EBE3' },
     meal: { accent: '#8A6520', surface: '#F6F0E2' },
-    watch: { accent: '#667747', surface: '#EDF0E2' },
-    event: { accent: '#8C4A5E', surface: '#F9F1F5' },
-    /**
-     * 4.4:1 — **large-glyph only**, as the design system marks it. It is used for a 16 pt
-     * marker and a 24 pt squircle glyph, never for body text, so it is exempt from the 4.5:1
-     * body rule and meets the 3:1 large-text/graphics rule comfortably.
-     */
-    custom: { accent: '#77756C', surface: '#F1EEE5' },
+    /** The same sage as `success`, and darkened with it — one colour, not two. */
+    watch: { accent: '#616F45', surface: '#EDF0E2' },
+    event: { accent: '#8C4A5E', surface: '#EEE3E7' },
+    custom: { accent: '#6E675F', surface: '#F0EBE3' },
   },
   dark: {
-    task: { accent: '#B0ADA2', surface: '#100F0D' },
-    meal: { accent: '#E0B25A', surface: '#2A2317' },
-    watch: { accent: '#9DBA6E', surface: '#232A1C' },
-    event: { accent: '#D8A0BC', surface: '#31242B' },
-    custom: { accent: '#A8A599', surface: '#100F0D' },
+    task: { accent: '#9F988D', surface: '#1C1B18' },
+    meal: { accent: '#E3C07A', surface: '#332B1C' },
+    watch: { accent: '#A7B690', surface: '#252A20' },
+    event: { accent: '#AD748C', surface: '#2D2026' },
+    custom: { accent: '#9F988D', surface: '#1C1B18' },
   },
 };
 

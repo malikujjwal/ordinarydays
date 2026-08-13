@@ -103,7 +103,8 @@ export function Field({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={theme.colors.textDisabled}
+        /* A placeholder is readable tertiary content, not a disabled state (§5.1). */
+        placeholderTextColor={theme.colors.textMuted}
         multiline={multiline}
         keyboardType={keyboardType}
         {...(inputAccessoryViewID === undefined ? {} : { inputAccessoryViewID })}
@@ -122,7 +123,7 @@ export function Field({
               : bare
                 ? theme.colors.textDisplay
                 : theme.colors.textPrimary,
-            backgroundColor: bare ? 'transparent' : theme.colors.surfaceRaised,
+            backgroundColor: bare ? 'transparent' : theme.colors.surfaceInput,
             borderRadius: bare ? theme.radius.none : theme.radius.lg,
             paddingHorizontal: bare ? theme.space[0] : theme.space[5],
             paddingVertical: bare ? theme.space[2] : theme.space[4],

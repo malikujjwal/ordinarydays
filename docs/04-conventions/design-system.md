@@ -255,11 +255,12 @@ independently contrast-checked.
 | `border` | `#E1DAD0` | `#34312B` | — | Dividers, separators, hairlines and the timeline's connector line. Decorative only. |
 | `borderSubtle` | `#D3C9BC` | `#34312B` | — | Decorative light field/chip outline; never the sole control boundary or focus indicator |
 | `borderStrong` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Required control outlines and checkbox border |
-| `accent` | `#8B6374` | `#9F667F` | 4.4:1 / 4.0:1 | Non-text fills, icons, progress and decoration; never body text on `surface` |
-| `accentDeep` | `#795565` | `#AD748C` | 5.5:1 / 4.9:1 | Hover/pressed emphasis, readable accent text and accessible filled-control treatment |
+| `accent` | `#8B6374` | `#9F667F` | 4.3:1 / 4.0:1 | Non-text fills, icons, progress and decoration. **Never text, in either scheme** — the ratios are why |
+| `accentDeep` | `#795565` | `#AD748C` | 5.4:1 / 4.9:1 | Light: hover/pressed and readable accent text. Dark: pressed emphasis only — it is 4.4:1 on dark `surfaceRaised`, so dark text actions use `textPrimary`/`textSecondary` |
 | `accentSurface` | `#EEE3E7` | `#2D2026` | — | UP NEXT card fill, selected-row tint, accent chip background |
 | `accentBorder` | `#C7AAB6` | `#5A3A49` | — | Decorative accent-surface outline; never a control boundary |
-| `success` | `#667747` | `#A7B690` | 4.6:1 / 8.4:1 | Sage. Completed check, RSVP going, `Owes you $42.50` |
+| `accentControl` | `#8B6374` | `#AD748C` | 5.0:1 / 4.9:1 with `textInverse` | The filled primary control's surface. Light resolves to `accent`, dark to `accentDeep`, because dark `accent` carries a label at only 4.0:1 |
+| `success` | `#616F45` | `#A7B690` | 4.7:1 / 8.4:1 | Sage. Completed check, RSVP going, `Owes you $42.50`. Darkened from the supplied `#667747` (4.19:1) on the founder's 2026-08-12 decision, because it carries a balance figure |
 | `successSurface` | `#EDF0E2` | `#252A20` | — | Completed check fill, sage icon squircles |
 | `warning` | `#8A6520` | `#E3C07A` | 5.0:1 / 10.4:1 | Ochre. Overdue chip, pending sync, RSVP maybe, `You owe $18.00`, feed-note lines on cards |
 | `warningSurface` | `#F6F0E2` | `#332B1C` | — | Overdue chip fill, ochre icon squircles |
@@ -275,13 +276,20 @@ pair programmatically, so a token change that breaks AA fails CI rather than shi
 including any adjustment made to either founder-approved palette.
 
 **Accent and quiet-border usage.** The founder-approved `accent` values are deliberately not
-body-text tokens on every page surface. Light text actions and focus use `accentDeep`; dark
-text actions and labels use `textPrimary` or `textSecondary` according to hierarchy. A light
-filled control may use `accent` with `textInverse` (5.0:1); a dark filled control uses
-`accentDeep` with dark `textInverse`. Text on `accentSurface` uses a readable text token.
+body-text tokens on any page surface. Light text actions and focus use `accentDeep`; dark
+text actions and labels use `textPrimary` or `textSecondary` according to hierarchy. Filled
+controls use `accentControl` with `textInverse` — one token, so no component branches on the
+scheme to pick a fill.
+
+**Text on `accentSurface` is `textPrimary` in light.** `textSecondary` measures 4.45:1 there,
+so on the founder's 2026-08-12 decision the supplied `accentSurface` is kept exactly and the
+role narrows instead of the value moving. Dark carries both (13.7:1 and 9.5:1) and keeps its
+primary/secondary hierarchy.
+
 `accentBorder` and `borderSubtle` are decorative and cannot replace `borderStrong` or
-`focusRing`. The role, underline, label or control shape still communicates interactivity
-without colour alone.
+`focusRing`; the test suite asserts they stay **below** 3:1 so that promoting one is a
+deliberate act rather than an accident. The role, underline, label or control shape still
+communicates interactivity without colour alone.
 
 **Increase Contrast.** When the system setting is on, `border` is replaced by
 `borderStrong`, `textSecondary` moves to `textPrimary`, and de-emphasis is carried by size
@@ -305,7 +313,7 @@ background.
 | --- | --- | --- | --- | --- |
 | `task` | `check-square` (a checkbox — tasks are the only type with one) | `#6E675F` | `#9F988D` | 4.8:1 / ≥ 3:1 |
 | `meal` | `bowl` | `#8A6520` | `#E3C07A` | 5.0:1 / ≥ 3:1 |
-| `watch` | `play-rect` | `#667747` | `#A7B690` | 4.6:1 / ≥ 3:1 |
+| `watch` | `play-rect` | `#616F45` | `#A7B690` | 4.7:1 / ≥ 3:1 |
 | `event` | `map-pin` | `#8C4A5E` | `#AD748C` | 6.1:1 / ≥ 3:1 |
 | `custom` | `diamond` | `#6E675F` | `#9F988D` | 4.8:1 / ≥ 3:1 |
 

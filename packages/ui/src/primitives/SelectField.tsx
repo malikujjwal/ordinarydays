@@ -42,8 +42,9 @@ export function SelectField<Value extends string>({
           paddingVertical: theme.space[4],
           borderRadius: theme.radius.lg,
           borderWidth: 1,
-          borderColor: error === undefined ? theme.colors.border : theme.colors.danger,
-          backgroundColor: theme.colors.surfaceRaised,
+          borderColor:
+            error === undefined ? theme.colors.borderSubtle : theme.colors.danger,
+          backgroundColor: theme.colors.surfaceInput,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',

@@ -45,7 +45,9 @@ export function Card({
     },
     theme.elevation(elevation),
     hero && theme.scheme === 'light' ? ({ boxShadow: upNextShadow } as object) : null,
-    hero ? { borderWidth: 1, borderColor: theme.colors.accentDeep } : null,
+    // `accentBorder` is §5.1's decorative accent-surface outline; the hero card's rim is
+    // exactly that and never a control boundary.
+    hero ? { borderWidth: 1, borderColor: theme.colors.accentBorder } : null,
   ];
 
   if (onPress === undefined) {
