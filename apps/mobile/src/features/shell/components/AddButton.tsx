@@ -33,7 +33,9 @@ export function AddButton({ onPress, testID = 'global-add' }: AddButtonProps) {
           width: ADD_SIZE,
           height: ADD_SIZE,
           borderRadius: theme.radius.pill,
-          backgroundColor: theme.colors.accent,
+          // `accentControl`, the filled-control surface (P2-40 §5.1). The dark `accent` carries
+          // an inverse glyph at 4.00:1; `accentControl` resolves per scheme and clears it.
+          backgroundColor: theme.colors.accentControl,
           alignItems: 'center',
           justifyContent: 'center',
         },
