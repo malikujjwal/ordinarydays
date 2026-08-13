@@ -47,6 +47,9 @@ export interface ActivityActions {
    */
   undoResolution: (occurrenceDate: string | undefined) => void;
   isBusy: boolean;
+  /** The two halves stay separate so an optimistic Complete never disables its own Undo. */
+  isCompleting: boolean;
+  isUndoing: boolean;
   /** `interaction-contract.md` §5.3 copy for whichever action failed. */
   errorMessage: string | undefined;
   dismissError: () => void;
@@ -216,11 +219,27 @@ export function useActivityActions(activityId: string): ActivityActions {
       });
     },
     undoResolution: (occurrenceDate) => {
-      // The permanent control and the six-second toast reverse the same write. Once the
-      // permanent path wins, its own still-active shortcut must not offer a second Undo.
-      if (resolutionToastId.current !== undefined) {
-        useToast.getState().dismiss(resolutionToastId.current);
+      const toastId = resolutionToastId.current;
+      const activeToast = useToast.getState().current;
+
+      /**
+       * A fresh completion may still be in flight when the optimistic screen reveals Undo.
+       * Route that press through `startUndoable`'s existing coordinator: it reverts locally
+       * now, waits for Complete to succeed, then sends the compensating Uncomplete. Sending
+       * both POSTs concurrently would let network order decide the final state.
+       */
+      if (
+        toastId !== undefined &&
+        activeToast?.id === toastId &&
+        activeToast.kind === 'undo'
+      ) {
+        resolutionToastId.current = undefined;
+        useToast.getState().undo(toastId);
+        return;
       }
+
+      // The toast expired or this detail loaded in a completed state. Use the permanent path
+      // without dismissing an unrelated toast that may have replaced the completion toast.
       resolutionToastId.current = undefined;
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
 
@@ -265,6 +284,8 @@ export function useActivityActions(activityId: string): ActivityActions {
       deleteMutation.isPending ||
       completeMutation.isPending ||
       uncompleteMutation.isPending,
+    isCompleting: completeMutation.isPending,
+    isUndoing: uncompleteMutation.isPending,
     errorMessage:
       failure === null || failure === undefined ? undefined : describe(failure),
     dismissError: () => {

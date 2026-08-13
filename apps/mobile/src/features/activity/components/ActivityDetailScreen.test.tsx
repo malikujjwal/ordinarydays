@@ -798,7 +798,7 @@ describe('the overflow menu', () => {
       {
         status: 200,
         body: {
-          data: { activity: plan(), outcome: null },
+          data: { activity: plan() },
           meta: { requestId: 'req_undo' },
         },
       },
@@ -834,7 +834,7 @@ describe('the overflow menu', () => {
       {
         status: 200,
         body: {
-          data: { activity: scheduled, outcome: null },
+          data: { activity: scheduled },
           meta: { requestId: 'req_uncomplete' },
         },
       },
@@ -847,6 +847,82 @@ describe('the overflow menu', () => {
     expect(useToast.getState().current?.kind).toBe('undo');
 
     fireEvent.click(screen.getByTestId('detail-undo'));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(2),
+    );
+    expect(sent[2]?.url).toMatch(new RegExp(`/v1/activities/${ID}/uncomplete$`));
+    expect(useToast.getState().current).toBeUndefined();
+  });
+
+  it('accepts Undo immediately while Complete is still in flight and compensates in order', async () => {
+    const scheduled = plan();
+    const completed = plan({ status: 'completed', outcome: 'attended' });
+    stubFetch({ status: 200, body: detailBody(scheduled) });
+    mount();
+    await loaded();
+
+    let finishComplete: ((response: object) => void) | undefined;
+    const pendingComplete = new Promise<object>((resolve) => {
+      finishComplete = resolve;
+    });
+    let postCount = 0;
+    vi.stubGlobal('fetch', (url: string, init?: Record<string, unknown>) => {
+      sent.push({
+        url,
+        method: (init?.method as string | undefined) ?? 'GET',
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body: init?.body === undefined ? undefined : JSON.parse(init.body as string),
+      });
+      postCount += 1;
+      if (postCount === 1) return pendingComplete;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: () =>
+          Promise.resolve({
+            data: { activity: scheduled },
+            meta: { requestId: 'req_uncomplete' },
+          }),
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              data: { activity: scheduled },
+              meta: { requestId: 'req_uncomplete' },
+            }),
+          ),
+      });
+    });
+
+    fireEvent.click(screen.getByTestId('detail-complete'));
+
+    const undo = await screen.findByTestId('detail-undo');
+    expect(undo.getAttribute('aria-disabled')).toBeNull();
+    fireEvent.click(undo);
+
+    // The optimistic revert is immediate, but its compensating write must wait until the
+    // original request settles or network order could leave the activity completed.
+    expect(screen.getByTestId('detail-complete')).toBeDefined();
+    expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1);
+
+    finishComplete?.({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: () =>
+        Promise.resolve({
+          data: { activity: completed, outcome: 'attended' },
+          meta: { requestId: 'req_complete' },
+        }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            data: { activity: completed, outcome: 'attended' },
+            meta: { requestId: 'req_complete' },
+          }),
+        ),
+    });
 
     await waitFor(() =>
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(2),

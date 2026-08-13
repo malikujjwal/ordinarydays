@@ -233,7 +233,8 @@ export function ActivityDetailScreen({
               occurrenceScoped={actionOccurrenceDate !== undefined}
               onOpenResolution={() => setResolutionOpen(true)}
               canComplete={detail.detail?.capabilities?.complete === true}
-              completing={actions.isBusy}
+              completing={actions.isCompleting}
+              undoing={actions.isUndoing}
               onComplete={() => {
                 actions.resolvePassed(
                   passedPlanResolution(activity.type).positive.outcome,
@@ -373,6 +374,7 @@ interface LoadedProps {
   /** Server-authored. The client never re-derives ownership (`today-and-tasks.md` §4.1). */
   canComplete: boolean;
   completing: boolean;
+  undoing: boolean;
   onComplete: () => void;
   onUndoResolution: () => void;
 }
@@ -390,6 +392,7 @@ function Loaded({
   onOpenResolution,
   canComplete,
   completing,
+  undoing,
   onComplete,
   onUndoResolution,
 }: LoadedProps) {
@@ -522,26 +525,21 @@ function Loaded({
        * intent, and the outcome itself is what the screen is stating.
        */}
       {resolved ? (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: theme.space[4],
-          }}
-        >
-          <Text variant="bodyStrong" color="success" testID="detail-resolved">
-            {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
-          </Text>
+        <View style={{ gap: theme.space[3] }}>
           {canComplete ? (
             <Button
               label="Undo"
               variant="secondary"
-              loading={completing}
+              size="lg"
+              fullWidth
+              loading={undoing}
               onPress={onUndoResolution}
               testID="detail-undo"
             />
           ) : null}
+          <Text variant="bodyStrong" color="success" testID="detail-resolved">
+            {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
+          </Text>
         </View>
       ) : null}
 
