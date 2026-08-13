@@ -66,7 +66,20 @@ export type ReminderCreateVariables = ActivityPostVariables<ReminderInput>;
 const ACTIVITY_LIST_KEY = ['activities'] as const;
 const AGENDA_KEY = ['agenda'] as const;
 
-function refreshActivityLists(client: QueryClient): void {
+/**
+ * Everything a successful activity write makes stale, in one place.
+ *
+ * **Exported because a local `onSuccess` replaces this one rather than composing with it.**
+ * A component-level `useMutation` that reuses a registered `mutationKey` and passes its own
+ * `onSuccess` silently drops the default's — TanStack Query does not merge the two. Three
+ * call sites did exactly that and lost the agenda invalidation, so a create or a reschedule
+ * succeeded on the server and Today went on showing the stale row until the 60 s stale time
+ * expired (P2-46). Any local `onSuccess` on an activity mutation key must call this.
+ *
+ * The **root** keys, not one window: a write lands in whichever agenda windows its date
+ * implies, and no call site has any business working out which.
+ */
+export function refreshActivityLists(client: QueryClient): void {
   void client.invalidateQueries({ queryKey: ACTIVITY_LIST_KEY });
   void client.invalidateQueries({ queryKey: AGENDA_KEY });
 }

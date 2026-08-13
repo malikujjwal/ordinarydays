@@ -18,6 +18,7 @@ import { apiClient } from '@/lib/apiClient';
 import {
   type PatchActivityVariables,
   patchChangeNames,
+  refreshActivityLists,
   type ScheduleActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
@@ -131,6 +132,9 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
         (previous: ActivityDetail | undefined) =>
           previous === undefined ? previous : { ...previous, activity },
       );
+      // This `onSuccess` replaces the registered default's, so the shared invalidation has
+      // to be called explicitly or an edit never reaches Today (P2-46).
+      refreshActivityLists(queryClient);
     },
     onError: (error: unknown) => setEditError(describe(error).message),
   });
@@ -149,6 +153,9 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
         (previous: ActivityDetail | undefined) =>
           previous === undefined ? previous : { ...previous, activity },
       );
+      // Same override, same requirement: without this a reschedule moves the server's row
+      // and Today keeps rendering the old time (P2-46).
+      refreshActivityLists(queryClient);
     },
     onError: (error: unknown) => setEditError(describe(error).message),
   });

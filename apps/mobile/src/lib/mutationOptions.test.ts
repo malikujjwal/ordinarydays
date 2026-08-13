@@ -26,6 +26,31 @@ describe('offline mutation option guard', () => {
     );
   });
 
+  /**
+   * P2-46. A component-level `useMutation` that reuses a registered `mutationKey` and passes
+   * its own `onSuccess` **replaces** the default's rather than composing with it, so the
+   * default's `refreshActivityLists` never runs. Five call sites did that and lost the agenda
+   * invalidation: a task saved from compose was missing from Today, a reschedule left the old
+   * time on the row, a duplicate never appeared and a delete never left.
+   *
+   * The guard is structural rather than behavioural because the defect is structural — it is
+   * invisible in every isolated test of the hook, since the hook does exactly what it says.
+   */
+  it.each(files)(
+    '%s calls refreshActivityLists from every local mutation onSuccess',
+    (relative) => {
+      const source = sourceOf(relative);
+      const handlers = source.match(/onSuccess\s*:/g)?.length ?? 0;
+      const refreshes = source.match(/refreshActivityLists\(/g)?.length ?? 0;
+
+      expect(refreshes).toBeGreaterThanOrEqual(handlers);
+      if (handlers > 0) expect(source).toMatch(/refreshActivityLists/);
+      // The bare invalidation is what the shared helper exists to replace; reaching for it
+      // directly is how these five drifted apart in the first place.
+      expect(source).not.toMatch(/invalidateQueries\(\{\s*queryKey:\s*\['agenda'\]/);
+    },
+  );
+
   it('keeps the Activity GET override that makes Try again issue a request', () => {
     const source = sourceOf('../features/activity/hooks/useActivity.ts');
     const querySurface = source.slice(

@@ -95,6 +95,20 @@ Anytime list. This is the phase where the product becomes usable daily.
 > reflect the user's own write. This follow-up is deliberately not part of P2-24 or any
 > remaining Phase 2 implementation task.
 
+> **The cache follow-up is now P2-46, pulled forward — 2026-08-12 (supersedes the note
+> above).** The deferral could not stand: P2-37's Playwright specs assert that a create and a
+> reschedule reach Today, which is precisely the broken behaviour, so a Phase 2 **gate** could
+> not pass until the fix landed. Scheduling it "after every Phase 2 task and gate is complete"
+> was circular. It is now **P2-46**, sequenced before P2-37 completes.
+>
+> The root cause turned out to be one mechanism repeated at five call sites, not five bugs. A
+> component-level `useMutation` that reuses a registered `mutationKey` and supplies its own
+> `onSuccess` **replaces** the registered default's rather than composing with it — TanStack
+> Query does not merge them — so `refreshActivityLists` never ran. Create, schedule, patch,
+> duplicate and delete each did this; the duplicate handler even carried a comment promising
+> "a new row in every list that could show it" while invalidating only the activity list.
+> Every isolated test of those hooks passed, because each hook did exactly what it said.
+
 > **Founder-approved dark-mode palette amendment — 2026-08-12.** P2-40 replaces the
 > P1-22-derived dark colours with the founder's reviewed warm-neutral, mulberry, sage and
 > ochre palette after the Phase 2 E2E task. It is an M task, taking Phase 2 to
@@ -303,6 +317,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-36 | Worked-example-day integration fixture and test | ci | P2-04, P2-08, P2-11, P2-13, P2-19, P2-23 | no | M |
 | P2-37 | E2E: Today flows on web and iOS | ci | P2-20, P2-24, P2-25, P2-26, P2-28, P2-29, P2-31, P2-33 | no | M |
 | P2-40 | Founder-approved light- and dark-mode palettes | shared/mobile | P1-22, P2-37 | no | M |
+| P2-46 | Agenda cache invalidation on every activity write | mobile | P2-18, P2-23 | no | S |
 | P2-41 | Activity detail restructure and the completion button | mobile | P2-13, P2-15, P2-40 | yes | M |
 | P2-42 | Reschedule and snooze sheet restructure | mobile | P2-25, P2-26, P2-40, P2-41 | yes | M |
 | P2-43 | Compose flow progressive disclosure | mobile | P2-40, P2-41 | yes | M |
@@ -2708,6 +2723,42 @@ against the spec.
 **Tests.** This task **is** the test; its deliverable is the passing suite plus the
 committed response fixture. It runs in `pnpm test:int` against DynamoDB Local in
 CI.
+
+---
+
+### P2-46 — Agenda cache invalidation on every activity write
+
+**Files.** `apps/mobile/src/lib/mutationDefaults.ts`,
+`apps/mobile/src/features/compose/hooks/useCreateActivity.ts`,
+`apps/mobile/src/features/activity/hooks/{useActivity.ts,useActivityActions.ts}`,
+`apps/mobile/src/lib/mutationOptions.test.ts`.
+
+**Approach.** Export `refreshActivityLists` from `mutationDefaults.ts` as the single definition
+of what a successful activity write makes stale, and call it from **every** local `onSuccess`
+on an activity mutation key. There is no per-call-site judgement about which agenda window is
+affected: the root `['agenda']` and `['activities']` keys, because a write lands in whichever
+windows its date implies and no call site has any business working that out.
+
+- Five call sites lose the invalidation today: create, schedule, patch, duplicate and delete.
+  Complete and uncomplete already invalidate both keys but by hand; fold them onto the shared
+  helper so there is one definition rather than a convention.
+- Do **not** fix this by removing the local `onSuccess` handlers. They exist for real reasons —
+  writing the server's `updatedAt` back so the next `If-Match` is correct, clearing the edit
+  error, removing the detail key on delete — and deleting them to inherit the default would
+  trade this bug for a worse one.
+
+**Tests.** A **structural** guard in `mutationOptions.test.ts`, alongside the existing
+offline-options guard over the same four files: every `onSuccess` in those files is matched by
+a `refreshActivityLists` call, and no file reaches for a bare
+`invalidateQueries({ queryKey: ['agenda'] })`. The guard is structural because the defect is —
+it is invisible to any isolated test of a hook, since each hook does exactly what it says it
+does. P2-37's `complete-undo` and `reschedule` specs are the behavioural half and must pass
+after this lands.
+
+**Scope guard.** Do not touch the optimistic-update paths in `useAgendaActivityActions.ts` —
+they take agenda snapshots for rollback and issue no invalidation, which is correct. Do not
+change the 60-second stale time, add polling, or make anything depend on app foregrounding.
+Do not widen any agenda query window.
 
 ---
 

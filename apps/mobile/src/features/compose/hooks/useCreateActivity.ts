@@ -5,9 +5,11 @@ import {
   type DraftFields,
   toCreateActivityInput,
 } from '@/features/compose/model/targets';
-import type { CreateActivityVariables } from '@/lib/mutationDefaults';
+import {
+  type CreateActivityVariables,
+  refreshActivityLists,
+} from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
-import { ACTIVITIES_KEY } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -82,9 +84,13 @@ export function useCreateActivity(): CreateActivityResult {
      *
      * The **root** key, not one stage: a new activity lands in whichever of the four its date
      * and kind imply, and this hook has no business working out which.
+     *
+     * `refreshActivityLists`, not a bare `ACTIVITIES_KEY` invalidation: this `onSuccess`
+     * replaces the registered default's rather than composing with it, and invalidating only
+     * the activity list left a task saved from compose missing from Today (P2-46).
      */
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ACTIVITIES_KEY });
+      refreshActivityLists(queryClient);
     },
   });
 

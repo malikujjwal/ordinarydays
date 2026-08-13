@@ -4,11 +4,12 @@ import type { ActivityCompletionResult, PatchActivityInput } from '@od/shared/sc
 import type { Activity, ActivityDetail, ActivityOutcome } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
-import type {
-  CompleteActivityVariables,
-  DeleteActivityVariables,
-  DuplicateActivityVariables,
-  UncompleteActivityVariables,
+import {
+  type CompleteActivityVariables,
+  type DeleteActivityVariables,
+  type DuplicateActivityVariables,
+  refreshActivityLists,
+  type UncompleteActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
 import { startUndoable } from '@/lib/startUndoable';
@@ -65,8 +66,10 @@ export function useActivityActions(activityId: string): ActivityActions {
      * response on a flaky connection becomes a failed duplicate rather than a recovered one.
      */
     onSuccess: () => {
-      // The copy is a new row in every list that could show it.
-      void queryClient.invalidateQueries({ queryKey: ['activities'] });
+      // The copy is a new row in every list that could show it — Today and Plans included,
+      // which is why this is the shared helper and not a bare activity-list invalidation
+      // (P2-46).
+      refreshActivityLists(queryClient);
     },
   });
 
@@ -78,7 +81,9 @@ export function useActivityActions(activityId: string): ActivityActions {
     mutationKey: activityMutationKeys.delete,
     onSuccess: () => {
       queryClient.removeQueries({ queryKey: ['activity', activityId] });
-      void queryClient.invalidateQueries({ queryKey: ['activities'] });
+      // A deleted activity has to leave every agenda window too, or Today keeps rendering a
+      // row whose detail screen is already gone (P2-46).
+      refreshActivityLists(queryClient);
     },
   });
 
@@ -94,8 +99,7 @@ export function useActivityActions(activityId: string): ActivityActions {
           ? previous
           : { ...previous, activity: activity as Activity },
       );
-      void queryClient.invalidateQueries({ queryKey: ['agenda'] });
-      void queryClient.invalidateQueries({ queryKey: ['activities'] });
+      refreshActivityLists(queryClient);
     },
   });
 
@@ -111,8 +115,7 @@ export function useActivityActions(activityId: string): ActivityActions {
           ? previous
           : { ...previous, activity: activity as Activity },
       );
-      void queryClient.invalidateQueries({ queryKey: ['agenda'] });
-      void queryClient.invalidateQueries({ queryKey: ['activities'] });
+      refreshActivityLists(queryClient);
     },
   });
 
