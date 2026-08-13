@@ -2852,6 +2852,18 @@ CI wiring per §6.2: Playwright runs in `ci.yml` on **every pull request** (retr
 and a pass-on-retry is still flagged); Maestro runs in `mobile.yml` on
 `workflow_dispatch` and **release tags** and gates the TestFlight submission, not the merge.
 
+> **Founder-approved P2-37 native-execution deferral — 2026-08-12.** P2-37 may merge after
+> its four Maestro flows, deterministic fixtures, cleanup, simulator workflow and static
+> validation are complete even though this Windows checkout cannot execute iOS. Before the
+> first TestFlight submission, run all four flows successfully on both an iOS simulator and
+> a physical iPhone and attach the run output and screenshots to the release checklist. The
+> simulator-only offline flow uses `e2e/mobile-network-proxy.mjs`, because Maestro's airplane
+> commands do not change iOS simulator connectivity; the physical-device run must use real
+> airplane mode and must not substitute the proxy. This is a verification deferral only:
+> defects found in either deferred run return to P2-37 rather than moving into a later task.
+> Run the physical-device offline flow with `-e NETWORK_MODE=physical`; that path drives the
+> iOS Settings airplane-mode control while the default simulator path drives the proxy.
+
 **Tests.** This task is tests. Its own acceptance is that criteria 6, 13, 14, 15 and 19's
 end-to-end halves are asserted by these files and fail when deliberately broken (comment
 out the undo handler locally; the suite must catch it).

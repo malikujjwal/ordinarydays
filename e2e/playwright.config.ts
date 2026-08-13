@@ -68,7 +68,13 @@ export default defineConfig({
   workers: 1,
   forbidOnly: process.env.CI !== undefined,
   reporter:
-    process.env.CI === undefined ? [['list']] : [['github'], ['html', { open: 'never' }]],
+    process.env.CI === undefined
+      ? [['list']]
+      : [
+          ['github'],
+          ['html', { open: 'never' }],
+          ['json', { outputFile: 'playwright-results.json' }],
+        ],
 
   use: {
     baseURL: BASE_URL,

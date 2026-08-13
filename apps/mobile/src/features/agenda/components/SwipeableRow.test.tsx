@@ -72,8 +72,9 @@ describe('SwipeableRow web equivalents', () => {
     mount(<SwipeableRow item={item()} onOpen={() => {}} onAction={onAction} />);
 
     const body = screen.getByTestId('agenda-row-body');
+    body.focus();
     fireEvent.focus(body);
-    fireEvent.keyDown(document, { key: 'e' });
+    fireEvent.keyDown(body, { key: 'e' });
     expect(onAction).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({ name: 'complete', label: 'Complete' }),
@@ -83,6 +84,42 @@ describe('SwipeableRow web equivalents', () => {
     fireEvent.blur(body);
     fireEvent.focus(positive);
     expect(positive.parentElement?.getAttribute('aria-hidden')).not.toBe('true');
+  });
+
+  it('moves row focus with arrows, toggles with Space, and opens with Return', () => {
+    const onOpen = vi.fn();
+    const onToggleComplete = vi.fn();
+    mount(
+      <>
+        <SwipeableRow
+          item={item({ activityId: 'act_01J8SEED000000000000000001', title: 'First' })}
+          onOpen={onOpen}
+          onToggleComplete={onToggleComplete}
+        />
+        <SwipeableRow
+          item={item({ activityId: 'act_01J8SEED000000000000000002', title: 'Second' })}
+          onOpen={onOpen}
+          onToggleComplete={onToggleComplete}
+        />
+      </>,
+    );
+
+    const [first, second] = screen.getAllByTestId('agenda-row-body');
+    first?.focus();
+    fireEvent.focus(first as HTMLElement);
+    fireEvent.keyDown(first as HTMLElement, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(second);
+
+    fireEvent.keyDown(second as HTMLElement, { key: ' ' });
+    expect(onToggleComplete).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ title: 'Second' }),
+      true,
+    );
+
+    fireEvent.keyDown(second as HTMLElement, { key: 'Enter' });
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ title: 'Second' }),
+    );
   });
 
   it('opens the exact secondary-action menu and dispatches its destructive button', () => {

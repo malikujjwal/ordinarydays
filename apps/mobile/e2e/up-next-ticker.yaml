@@ -1,0 +1,30 @@
+appId: app.ordinarydays.ios.local
+name: P2-37 foreground UP NEXT ticker
+jsEngine: graaljs
+tags: [p2-37, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: up-next-ticker
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    text: ${output.firstTitle}
+    childOf:
+      id: up-next-card
+- pressKey: home
+- runScript: scripts/wait-past-up-next.js
+- launchApp:
+    stopApp: false
+- assertVisible:
+    text: ${output.secondTitle}
+    childOf:
+      id: up-next-card
+- runScript: scripts/assert-up-next-recomputed-locally.js

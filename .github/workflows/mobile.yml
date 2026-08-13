@@ -1,0 +1,103 @@
+name: mobile-e2e
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*.*.*']
+
+concurrency:
+  group: mobile-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ios-e2e:
+    name: iOS E2E
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start DynamoDB Local
+        run: |
+          curl --fail --silent --show-error --location \
+            https://s3.us-west-2.amazonaws.com/dynamodb-local/dynamodb_local_latest.tar.gz \
+            --output "$RUNNER_TEMP/dynamodb-local.tar.gz"
+          mkdir "$RUNNER_TEMP/dynamodb-local"
+          tar -xzf "$RUNNER_TEMP/dynamodb-local.tar.gz" -C "$RUNNER_TEMP/dynamodb-local"
+          java -Djava.library.path="$RUNNER_TEMP/dynamodb-local/DynamoDBLocal_lib" \
+            -jar "$RUNNER_TEMP/dynamodb-local/DynamoDBLocal.jar" -sharedDb -inMemory -port 8000 \
+            > "$RUNNER_TEMP/dynamodb.log" 2>&1 &
+          for attempt in {1..60}; do
+            if curl --silent http://127.0.0.1:8000 >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/dynamodb.log"
+          exit 1
+
+      - name: Create table and start API proxy
+        env:
+          STAGE: local
+          AUTH_MODE: local
+          LOG_LEVEL: warn
+          TABLE_NAME: od-main-local
+          DDB_ENDPOINT: http://127.0.0.1:8000
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: local
+          AWS_SECRET_ACCESS_KEY: localsecret
+          MEDIA_BUCKET: od-media-local
+          PORT: 3001
+        run: |
+          pnpm --filter @od/shared build
+          pnpm --filter @od/api ddb:create-table
+          pnpm --filter @od/api exec tsx src/local.ts > "$RUNNER_TEMP/api.log" 2>&1 &
+          node e2e/mobile-network-proxy.mjs > "$RUNNER_TEMP/proxy.log" 2>&1 &
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:3000/v1/health >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/api.log"
+          cat "$RUNNER_TEMP/proxy.log"
+          exit 1
+
+      - name: Install Maestro
+        run: curl --silent --show-error --location https://get.maestro.mobile.dev | bash
+
+      - name: Boot an iPhone simulator
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j | jq -r \
+            '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
+          test -n "$DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID" || true
+          open -a Simulator --args -CurrentDeviceUDID "$DEVICE_ID"
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          echo "DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
+
+      - name: Build and install the local iOS app
+        env:
+          EXPO_PUBLIC_PROFILE: local
+        run: pnpm --filter @od/mobile exec expo run:ios --device "$DEVICE_ID" --configuration Release --no-bundler
+
+      - name: Run the fixed P2-37 Maestro catalogue
+        run: '"$HOME/.maestro/bin/maestro" test apps/mobile/e2e'
+
+      - name: Upload native diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-e2e-diagnostics
+          path: |
+            ${{ runner.temp }}/api.log
+            ${{ runner.temp }}/proxy.log
+            ${{ runner.temp }}/dynamodb.log
+            ~/.maestro/tests/**
+          if-no-files-found: ignore
+          retention-days: 7

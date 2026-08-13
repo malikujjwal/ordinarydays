@@ -211,6 +211,10 @@ module.exports = {
           '^packages/(shared|ui)/src/index\\.ts$',
           // Test fixtures exist to be read by a test, and tests are excluded below.
           '/(fixtures|__fixtures__)/',
+          // Maestro flow scripts (P2-37). Reached by a `runScript:` string in a flow YAML,
+          // never by an import, so the module graph cannot see the edge — the same shape of
+          // invisibility as the vitest setup files above, and the same prescribed fix.
+          '^apps/mobile/e2e/scripts/',
           // The 100%-coverage placeholders (P0-24). Deliberately imported by nothing but
           // their own tests; these two entries are deleted with the files, in P2-01 and
           // Phase 7 respectively.

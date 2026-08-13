@@ -1,5 +1,5 @@
 import { Text, Touchable, useTheme } from '@od/ui';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View } from 'react-native';
 import {
   type AgendaSwipeAction,
@@ -25,9 +25,45 @@ const editableTarget = (target: EventTarget | null): boolean => {
   );
 };
 
+type RowKeyboardHandler = (event: KeyboardEvent) => void;
+
+const rowKeyboardHandlers = new WeakMap<HTMLElement, RowKeyboardHandler>();
+let rowKeyboardSubscribers = 0;
+
+function dispatchRowKeyboardEvent(event: KeyboardEvent) {
+  if (editableTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey) {
+    return;
+  }
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return;
+  const wrapper = active.closest<HTMLElement>('[data-testid^="swipeable-row-"]');
+  if (wrapper === null) return;
+  rowKeyboardHandlers.get(wrapper)?.(event);
+}
+
+function subscribeToRowKeyboard(
+  element: HTMLElement,
+  handler: RowKeyboardHandler,
+): () => void {
+  rowKeyboardHandlers.set(element, handler);
+  if (rowKeyboardSubscribers === 0) {
+    document.addEventListener('keydown', dispatchRowKeyboardEvent, true);
+  }
+  rowKeyboardSubscribers += 1;
+
+  return () => {
+    rowKeyboardHandlers.delete(element);
+    rowKeyboardSubscribers -= 1;
+    if (rowKeyboardSubscribers === 0) {
+      document.removeEventListener('keydown', dispatchRowKeyboardEvent, true);
+    }
+  };
+}
+
 /** Web uses hover/focus controls and keyboard shortcuts in place of swipe gestures. */
 export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps) {
   const theme = useTheme();
+  const wrapper = useRef<View>(null);
   const actions = useMemo(() => agendaSwipeActions(item), [item]);
   const allActions = useMemo(() => allAgendaSwipeActions(actions), [actions]);
   const [hovered, setHovered] = useState(false);
@@ -37,6 +73,7 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
   const hasResolutionPrompt =
     rowProps.onOpenResolution !== undefined && canResolvePassedAgendaItem(item);
   const controlsVisible = hovered || focusWithin || rowFocused || menuOpen;
+  const { onOpen, onToggleComplete } = rowProps;
 
   const dispatch = useCallback(
     (selected: AgendaSwipeAction) => onAction?.(item, selected),
@@ -50,19 +87,44 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
   );
 
   useEffect(() => {
-    if (!rowFocused) return;
+    const element = wrapper.current as unknown as HTMLElement | null;
+    if (element === null) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        editableTarget(event.target) ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.altKey
-      ) {
+      const key = event.key.toLowerCase();
+      if (['arrowup', 'arrowdown', 'home', 'end'].includes(key)) {
+        const rows = Array.from(
+          document.querySelectorAll<HTMLElement>('[data-testid="agenda-row-body"]'),
+        );
+        const current = rows.indexOf(document.activeElement as HTMLElement);
+        if (current < 0 || rows.length === 0) return;
+        const next =
+          key === 'home'
+            ? 0
+            : key === 'end'
+              ? rows.length - 1
+              : key === 'arrowup'
+                ? Math.max(0, current - 1)
+                : Math.min(rows.length - 1, current + 1);
+        event.preventDefault();
+        rows[next]?.focus();
         return;
       }
 
-      const key = event.key.toLowerCase();
+      if (key === 'enter') {
+        event.preventDefault();
+        onOpen(item);
+        return;
+      }
+
+      const checked =
+        item.status === 'completed' || item.status === 'completed_occurrence';
+      if ((event.key === ' ' || key === 'spacebar') && item.hasCheckbox) {
+        event.preventDefault();
+        onToggleComplete?.(item, !checked);
+        return;
+      }
+
       const selected =
         key === 'e'
           ? actions.positive[0]
@@ -79,15 +141,15 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
       dispatch(selected);
     };
 
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [actions.positive, dispatch, findAction, rowFocused]);
+    return subscribeToRowKeyboard(element, onKeyDown);
+  }, [actions.positive, dispatch, findAction, item, onOpen, onToggleComplete]);
 
   const accessibilityActions = agendaAccessibilityActions(actions);
   const positive = actions.positive[0];
 
   return (
     <View
+      ref={wrapper}
       testID={`swipeable-row-${item.activityId}`}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
@@ -101,8 +163,14 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
           const selected = allActions.find(({ name }) => name === nativeEvent.actionName);
           if (selected !== undefined) dispatch(selected);
         }}
-        onBodyFocus={() => setRowFocused(true)}
-        onBodyBlur={() => setRowFocused(false)}
+        onBodyFocus={() => {
+          setRowFocused(true);
+          rowProps.onBodyFocus?.();
+        }}
+        onBodyBlur={() => {
+          setRowFocused(false);
+          rowProps.onBodyBlur?.();
+        }}
       />
 
       {hasResolutionPrompt ? null : (

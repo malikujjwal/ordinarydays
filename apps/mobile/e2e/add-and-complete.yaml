@@ -1,0 +1,31 @@
+appId: app.ordinarydays.ios.local
+name: P2-37 add and complete
+jsEngine: graaljs
+tags: [p2-37, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: add-and-complete
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible:
+    id: today-screen
+- tapOn:
+    id: today-add-task
+- assertVisible:
+    id: compose-form
+- tapOn:
+    id: compose-title
+- inputText: ${output.title}
+- tapOn:
+    id: compose-save
+- assertVisible: ${output.title}
+- tapOn: ${output.title + ', not completed'}
+- assertVisible: ${output.title + ', completed'}

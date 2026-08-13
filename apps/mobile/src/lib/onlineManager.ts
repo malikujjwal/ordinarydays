@@ -1,6 +1,32 @@
 import NetInfo from '@react-native-community/netinfo';
 import { onlineManager, type QueryClient } from '@tanstack/react-query';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import { apiBaseUrl } from '@/lib/apiClient';
+
+type NetInfoConfiguration = NonNullable<Parameters<typeof NetInfo.configure>[0]>;
+
+/**
+ * Local iOS builds use the API health endpoint as their reachability probe. This lets the
+ * dependency-free P2-37 proxy exercise the real persisted queue on a simulator, where
+ * Maestro's airplane-mode commands are unavailable. Dev and production builds retain the
+ * operating system's native reachability source.
+ */
+export function localReachabilityConfiguration(
+  profile: unknown,
+  baseUrl: string,
+): NetInfoConfiguration | undefined {
+  if (profile !== 'local') return undefined;
+  return {
+    reachabilityUrl: `${baseUrl}/v1/health`,
+    reachabilityMethod: 'GET',
+    reachabilityTest: async (response) => response.ok,
+    reachabilityShortTimeout: 1_000,
+    reachabilityLongTimeout: 1_000,
+    reachabilityRequestTimeout: 2_000,
+    useNativeReachability: false,
+  };
+}
 
 function pendingMutationCount(client: QueryClient): number {
   return client
@@ -29,6 +55,14 @@ export function installOnlineManager(client: QueryClient): () => void {
         window.removeEventListener('online', onOnline);
         window.removeEventListener('offline', onOffline);
       };
+    }
+
+    const reachability = localReachabilityConfiguration(
+      Constants.expoConfig?.extra?.profile,
+      apiBaseUrl,
+    );
+    if (Platform.OS === 'ios' && reachability !== undefined) {
+      NetInfo.configure(reachability);
     }
 
     return NetInfo.addEventListener((state) => {

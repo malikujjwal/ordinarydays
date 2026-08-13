@@ -1,0 +1,47 @@
+appId: app.ordinarydays.ios.local
+name: P2-37 snooze one recurring occurrence
+jsEngine: graaljs
+tags: [p2-37, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: snooze-occurrence
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible: ${output.title}
+- swipe:
+    from:
+      id: ${'swipeable-row-' + output.activityId}
+    direction: LEFT
+- tapOn:
+    id: agenda-swipe-snooze
+- assertVisible:
+    id: snooze-sheet
+- tapOn:
+    id: snooze-minutes15
+- assertVisible:
+    id: agenda-badge-snooze
+- assertVisible: ${'Snoozed from ' + output.originalTimeLabel + ' to ' + output.snoozeTimeLabel}
+- tapOn: ${output.title}
+- assertVisible:
+    id: detail-title
+- assertVisible:
+    id: when-where-date
+- assertVisible: ${'.*' + output.originalTimeLabel + '.*'}
+- assertVisible:
+    id: when-where-repeat
+- assertVisible: Daily
+- tapOn:
+    id: detail-back
+- tapOn: Plans
+- assertVisible:
+    id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
+- assertVisible: ${output.title}
+- assertVisible: ${output.originalTimeLabel + ', change time'}

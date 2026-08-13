@@ -1,0 +1,68 @@
+appId: app.ordinarydays.ios.local
+name: P2-37 offline queue survives process death
+jsEngine: graaljs
+tags: [p2-37, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+  NETWORK_MODE: proxy
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: offline-queue-relaunch
+onFlowComplete:
+  - runFlow:
+      when:
+        true: ${NETWORK_MODE == 'physical' && output.airplaneEnabled == true && output.networkRestored != true}
+      commands:
+        - launchApp:
+            appId: com.apple.Preferences
+        - tapOn: Airplane Mode
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible: ${output.offlineTitle1}
+- assertVisible: ${output.offlineTitle2}
+- assertVisible: ${output.offlineTitle3}
+- pressKey: home
+- killApp
+- runScript: scripts/proxy-offline.js
+- runFlow:
+    when:
+      true: ${NETWORK_MODE == 'physical'}
+    commands:
+      - launchApp:
+          appId: com.apple.Preferences
+      - tapOn: Airplane Mode
+      - evalScript: ${output.airplaneEnabled = true}
+- launchApp:
+    stopApp: false
+- assertVisible: ${output.offlineTitle1}
+- tapOn: ${output.offlineTitle1 + ', not completed'}
+- tapOn: ${output.offlineTitle2 + ', not completed'}
+- tapOn: ${output.offlineTitle3 + ', not completed'}
+- assertVisible: ${output.offlineTitle1 + ', completed'}
+- assertVisible: ${output.offlineTitle2 + ', completed'}
+- assertVisible: ${output.offlineTitle3 + ', completed'}
+- runScript: scripts/wait-for-persistence.js
+- pressKey: home
+- killApp
+- launchApp:
+    stopApp: false
+- assertVisible: ${output.offlineTitle1 + ', completed'}
+- assertVisible: ${output.offlineTitle2 + ', completed'}
+- assertVisible: ${output.offlineTitle3 + ', completed'}
+- runFlow:
+    when:
+      true: ${NETWORK_MODE == 'physical'}
+    commands:
+      - launchApp:
+          appId: com.apple.Preferences
+      - tapOn: Airplane Mode
+      - evalScript: ${output.networkRestored = true}
+- runScript: scripts/proxy-online.js
+- launchApp:
+    stopApp: false
+- runScript: scripts/verify-offline-replay.js

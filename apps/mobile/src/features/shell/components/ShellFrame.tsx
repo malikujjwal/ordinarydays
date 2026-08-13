@@ -1,10 +1,20 @@
 import { useBreakpoint, useTheme } from '@od/ui';
-import type { ReactNode } from 'react';
-import { View } from 'react-native';
+import { type ReactNode, useEffect } from 'react';
+import { Platform, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AddButton } from '@/features/shell/components/AddButton';
 import { NavRail } from '@/features/shell/components/NavRail';
-import type { TabDefinition } from '@/features/shell/model/tabs';
+import { type TabDefinition, tabs } from '@/features/shell/model/tabs';
+
+const editableTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.isContentEditable ||
+    target.tagName === 'INPUT' ||
+    target.tagName === 'SELECT' ||
+    target.tagName === 'TEXTAREA'
+  );
+};
 
 /**
  * The shell's chrome around whatever navigator is showing (P1-23).
@@ -37,6 +47,30 @@ export function ShellFrame({ activeName, onSelect, onAdd, children }: ShellFrame
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const rail = useBreakpoint() !== 'compact';
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        editableTarget(event.target) ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.key.toLowerCase() !== 't'
+      ) {
+        return;
+      }
+
+      const today = tabs.find(({ name }) => name === 'index');
+      if (today === undefined) return;
+      event.preventDefault();
+      onSelect(today);
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onSelect]);
 
   return (
     <View style={{ flex: 1, flexDirection: rail ? 'row' : 'column' }}>

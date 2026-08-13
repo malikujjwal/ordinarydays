@@ -119,6 +119,28 @@ describe('ShellFrame', () => {
     // Still exactly one Add button — the rail does not bring a second.
     expect(screen.getAllByRole('button', { name: 'Add' })).toHaveLength(1);
   });
+
+  it('routes T to Today only when focus is outside an editable field', () => {
+    const onSelect = vi.fn();
+    wrap(
+      <ShellFrame activeName="plans" onSelect={onSelect} onAdd={() => {}}>
+        <input aria-label="Title" />
+      </ShellFrame>,
+    );
+
+    fireEvent.keyDown(document, { key: 't' });
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith({
+      name: 'index',
+      label: 'Today',
+      path: '/',
+    });
+
+    onSelect.mockClear();
+    const title = screen.getByRole('textbox', { name: 'Title' });
+    title.focus();
+    fireEvent.keyDown(title, { key: 't' });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });
 
 describe('NavRail', () => {
