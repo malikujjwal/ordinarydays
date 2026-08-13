@@ -76,7 +76,7 @@ export function WhenWhereBlock({
             onPress={onPressRepeat}
             testID="when-where-repeat"
           >
-            <Text variant="body" color="textSecondary">
+            <Text variant="footnote" color="textSecondary">
               {recurrenceDescription}
             </Text>
           </Touchable>

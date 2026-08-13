@@ -25,6 +25,7 @@ export default function ActivityDetailRoute() {
       activityId={id ?? ''}
       today={format(new Date(), 'yyyy-MM-dd')}
       onBack={() => router.back()}
+      {...(occurrenceDate === undefined ? {} : { occurrenceDate })}
       {...(resolvePassed === '1'
         ? {
             resolutionOccurrenceDate: occurrenceDate ?? null,

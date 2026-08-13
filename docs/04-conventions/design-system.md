@@ -252,6 +252,7 @@ independently contrast-checked.
 | `textMuted` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Readable hints, placeholders and tertiary metadata; never a disabled state |
 | `textDisabled` | `#978F84` | `#6E6C63` | 2.7:1 / 3.1:1 | Disabled labels and nonessential decoration only — never carries meaning |
 | `textInverse` | `#FFFDF9` | `#171613` | — | On an accessible filled accent, sage, ochre, or danger surface |
+| `textAction` | `#795565` | `#F4F0E8` | 5.4:1 / 15.9:1 | Readable text actions: light `accentDeep`, dark `textPrimary`; semantic alias, no new palette value |
 | `border` | `#E1DAD0` | `#34312B` | — | Dividers, separators, hairlines and the timeline's connector line. Decorative only. |
 | `borderSubtle` | `#D3C9BC` | `#34312B` | — | Decorative light field/chip outline; never the sole control boundary or focus indicator |
 | `borderStrong` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Required control outlines and checkbox border |
@@ -365,7 +366,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 
 | Component | Props | States |
 | --- | --- | --- |
-| `Text` | `variant` (the nine type roles), `color` (`textDisplay` \| `textPrimary` \| `textSecondary` \| `textMuted` \| `textDisabled` \| `accent` \| `danger` \| `success` \| `warning` \| `inverse`), `numberOfLines`, `align` | — |
+| `Text` | `variant` (the nine type roles), `color` (`textDisplay` \| `textPrimary` \| `textSecondary` \| `textMuted` \| `textDisabled` \| `textAction` \| `accent` \| `danger` \| `success` \| `warning` \| `inverse`), `numberOfLines`, `align` | — |
 | `Button` | `variant` (`primary` — accent pill with `eAccent` \| `secondary` \| `ghost` \| `danger`), `size` (`md` 44 \| `lg` 52), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth` | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
 | `IconButton` | `icon`, `label` (required — it is the accessible name), `onPress`, `variant` (`ghost` \| `filled`), `disabled` | default, pressed, disabled, focus-visible. Always 44 × 44. |
 | `Row` | `onPress?`, `leading?`, `title`, `subtitle?`, `trailing?`, `accent?`, `dimmed`, `struck`, `swipeActions?`, `accessibilityActions` | default, pressed, hovered (web), focused, dimmed (completed), disabled |

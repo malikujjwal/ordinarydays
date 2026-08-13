@@ -38,6 +38,11 @@ const wrap = (ui: ReactNode, scheme: ColorScheme = 'light') =>
 
 const schemes: ColorScheme[] = ['light', 'dark'];
 
+const cssRgb = (hex: string): string => {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${value >> 16}, ${(value >> 8) & 255}, ${value & 255})`;
+};
+
 describe.each(schemes)('%s scheme renders every variant', (scheme) => {
   it.each<ButtonVariant>(['primary', 'secondary', 'ghost', 'danger'])(
     'Button %s',
@@ -60,6 +65,7 @@ describe.each(schemes)('%s scheme renders every variant', (scheme) => {
     'textPrimary',
     'textSecondary',
     'textDisabled',
+    'textAction',
     'accent',
     'danger',
     'success',
@@ -87,6 +93,24 @@ describe.each(schemes)('%s scheme renders every variant', (scheme) => {
       expect(screen.getByTestId('tile')).toBeDefined();
     },
   );
+});
+
+describe.each(schemes)('%s scheme uses only readable action text', (scheme) => {
+  it('gives a ghost button the semantic action-text token', () => {
+    wrap(<Button label="Back" variant="ghost" />, scheme);
+
+    expect(getComputedStyle(screen.getByText('Back')).color).toBe(
+      cssRgb(colors[scheme].textAction),
+    );
+  });
+
+  it('uses primary text on an accent-surface chip', () => {
+    wrap(<Chip label="Tomorrow" tone="accent" />, scheme);
+
+    expect(getComputedStyle(screen.getByText('Tomorrow')).color).toBe(
+      cssRgb(colors[scheme].textPrimary),
+    );
+  });
 });
 
 /**

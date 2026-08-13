@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
+import { useToast } from '@/stores/toast';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
 
 /**
@@ -123,6 +124,7 @@ function mount(
   onBack = () => {},
   onOpenActivity: (id: string) => void = () => {},
   resolutionOccurrenceDate?: string | null,
+  occurrenceDate?: string,
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -143,6 +145,7 @@ function mount(
         onBack={onBack}
         onOpenActivity={onOpenActivity}
         {...(resolutionOccurrenceDate === undefined ? {} : { resolutionOccurrenceDate })}
+        {...(occurrenceDate === undefined ? {} : { occurrenceDate })}
       />,
     ),
   );
@@ -150,6 +153,7 @@ function mount(
 
 beforeEach(() => {
   sent.length = 0;
+  useToast.setState({ current: undefined });
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -166,6 +170,15 @@ const fieldValue = (label: string): string =>
   (screen.getByLabelText(label) as HTMLInputElement | HTMLTextAreaElement).value;
 
 describe('reading', () => {
+  it('shows the header-shaped skeleton while the detail request is pending', () => {
+    vi.stubGlobal('fetch', () => new Promise(() => {}));
+    mount();
+
+    expect(screen.getByTestId('detail-loading')).toBeDefined();
+    expect(screen.queryByLabelText('Title')).toBeNull();
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+  });
+
   it('issues exactly one GET for the screen', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
@@ -184,6 +197,15 @@ describe('reading', () => {
     expect(fieldValue('Title')).toBe('Zahav');
     expect(screen.getByText('Fri 14 Aug · 7:00 PM')).toBeDefined();
     expect(fieldValue('Notes')).toBe('Check-in is after 3 PM.');
+  });
+
+  it('uses icon-only header controls with complete accessible names', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    expect(screen.getByRole('button', { name: 'Back' }).textContent).toBe('');
+    expect(screen.getByRole('button', { name: 'More' }).textContent).toBe('');
   });
 
   it('says Not scheduled on an undated plan rather than hiding the row', async () => {
@@ -313,16 +335,12 @@ describe('passed-plan resolution', () => {
       prompt.compareDocumentPosition(screen.getByLabelText('Title')) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    // `plans-and-lists.md` §2.1 replaces the ordinary completion action with this prompt.
+    // Two positive actions in the header can target different scopes on a recurring Plan.
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
 
     fireEvent.click(prompt);
-    /**
-     * By testID, not by name. Since P2-41 the detail screen also carries an `Attended` button —
-     * the primary completion action — and both are correct: the sheet resolves a *passed*
-     * occurrence, the header button completes the activity. Selecting by role and name would
-     * now match two elements, which is the ambiguity telling us the screen gained a second,
-     * intended affordance rather than a duplicate.
-     */
-    fireEvent.click(screen.getByTestId('passed-plan-positive'));
+    fireEvent.click(screen.getByRole('button', { name: 'Attended' }));
 
     await waitFor(() =>
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
@@ -411,6 +429,29 @@ describe('passed-plan resolution', () => {
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
     );
     expect(sent[1]?.body).toEqual({ occurrenceDate: TODAY, outcome: 'didnt_go' });
+    // Resolving one occurrence must not reveal a control that can mutate the whole series.
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+  });
+
+  it('does not widen to a series action after the route clears the prompt marker', async () => {
+    const recurring = plan({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch({ status: 200, body: detailBody(recurring) });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.queryByTestId('detail-resolution-prompt')).toBeNull();
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
   });
 });
 
@@ -699,24 +740,45 @@ describe('the overflow menu', () => {
    * completes with.
    */
   it.each([
-    ['task', 'Complete'],
-    ['meal', 'Had it'],
-    ['watch', 'Watched'],
-    ['event', 'Attended'],
-    ['custom', 'Done'],
-  ] as const)('renders the %s completion verb "%s"', async (type, verb) => {
-    // `details.kind` is the discriminator and has to move with `type`, and only a Task carries
-    // `objectKind: 'task'` — a Plan is never of type `task`. `watch` additionally requires a
-    // `mediaTitle`, so its details are not a bare `kind`.
-    const details =
-      type === 'watch' ? { kind: 'watch', mediaTitle: 'Severance' } : { kind: type };
-    const activity = type === 'task' ? task() : plan({ type, details });
-    stubFetch({ status: 200, body: detailBody(activity) });
-    mount();
-    await loaded();
+    ['task', 'Complete', 'done'],
+    ['meal', 'Had it', 'had_it'],
+    ['watch', 'Watched', 'watched'],
+    ['event', 'Attended', 'attended'],
+    ['custom', 'Done', 'done'],
+  ] as const)(
+    'renders the %s completion verb "%s" and sends outcome "%s"',
+    async (type, verb, outcome) => {
+      // `details.kind` is the discriminator and has to move with `type`, and only a Task carries
+      // `objectKind: 'task'` — a Plan is never of type `task`. `watch` additionally requires a
+      // `mediaTitle`, so its details are not a bare `kind`.
+      const details =
+        type === 'watch' ? { kind: 'watch', mediaTitle: 'Severance' } : { kind: type };
+      const activity = type === 'task' ? task() : plan({ type, details });
+      const completed = { ...activity, status: 'completed', outcome } as Activity;
+      stubFetch(
+        { status: 200, body: detailBody(activity) },
+        {
+          status: 200,
+          body: {
+            data: { activity: completed, outcome },
+            meta: { requestId: 'req_completion' },
+          },
+        },
+      );
+      mount();
+      await loaded();
 
-    expect(screen.getByTestId('detail-complete').textContent).toContain(verb);
-  });
+      const button = screen.getByRole('button', { name: verb });
+      expect(button).toBe(screen.getByTestId('detail-complete'));
+      fireEvent.click(button);
+
+      await waitFor(() =>
+        expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+      );
+      expect(sent[1]?.url).toMatch(new RegExp(`/v1/activities/${ID}/complete$`));
+      expect(sent[1]?.body).toEqual({ outcome });
+    },
+  );
 
   /**
    * §4.1: "a plan you did not create carries no completion control". **Absent, not disabled** —
@@ -746,6 +808,7 @@ describe('the overflow menu', () => {
 
     expect(screen.queryByTestId('detail-complete')).toBeNull();
     expect(screen.getByTestId('detail-resolved').textContent).toContain('Attended');
+    const unrelatedToast = useToast.getState().show({ message: 'Saved another item' });
 
     fireEvent.click(screen.getByTestId('detail-undo'));
 
@@ -753,6 +816,43 @@ describe('the overflow menu', () => {
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
     );
     expect(sent[1]?.url).toMatch(new RegExp(`/v1/activities/${ID}/uncomplete$`));
+    expect(useToast.getState().current?.id).toBe(unrelatedToast);
+  });
+
+  it('removes its stale toast shortcut when permanent Undo reverses a fresh completion', async () => {
+    const scheduled = plan();
+    const completed = plan({ status: 'completed', outcome: 'attended' });
+    stubFetch(
+      { status: 200, body: detailBody(scheduled) },
+      {
+        status: 200,
+        body: {
+          data: { activity: completed, outcome: 'attended' },
+          meta: { requestId: 'req_complete' },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          data: { activity: scheduled, outcome: null },
+          meta: { requestId: 'req_uncomplete' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-complete'));
+    await waitFor(() => expect(screen.getByTestId('detail-undo')).toBeDefined());
+    expect(useToast.getState().current?.kind).toBe('undo');
+
+    fireEvent.click(screen.getByTestId('detail-undo'));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(2),
+    );
+    expect(sent[2]?.url).toMatch(new RegExp(`/v1/activities/${ID}/uncomplete$`));
+    expect(useToast.getState().current).toBeUndefined();
   });
 
   it('offers no Undo to a caller who cannot complete', async () => {

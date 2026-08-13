@@ -4,6 +4,7 @@ import type { ActivityCompletionResult, PatchActivityInput } from '@od/shared/sc
 import type { Activity, ActivityDetail, ActivityOutcome } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
+import { useRef } from 'react';
 import type {
   CompleteActivityVariables,
   DeleteActivityVariables,
@@ -65,6 +66,7 @@ function describe(error: unknown): string {
 
 export function useActivityActions(activityId: string): ActivityActions {
   const queryClient = useQueryClient();
+  const resolutionToastId = useRef<number | undefined>(undefined);
 
   const duplicateMutation = useMutation<Activity, Error, DuplicateActivityVariables>({
     mutationKey: activityMutationKeys.duplicate,
@@ -201,7 +203,11 @@ export function useActivityActions(activityId: string): ActivityActions {
         request: () => completeMutation.mutateAsync(original),
         compensate: () => uncompleteMutation.mutateAsync(compensation),
         toast: {
-          showUndo: useToast.getState().showUndo,
+          showUndo: (toast) => {
+            const id = useToast.getState().showUndo(toast);
+            resolutionToastId.current = id;
+            return id;
+          },
           failUndo: useToast.getState().failUndo,
         },
         message: 'Outcome recorded',
@@ -210,6 +216,12 @@ export function useActivityActions(activityId: string): ActivityActions {
       });
     },
     undoResolution: (occurrenceDate) => {
+      // The permanent control and the six-second toast reverse the same write. Once the
+      // permanent path wins, its own still-active shortcut must not offer a second Undo.
+      if (resolutionToastId.current !== undefined) {
+        useToast.getState().dismiss(resolutionToastId.current);
+      }
+      resolutionToastId.current = undefined;
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
 
       /**

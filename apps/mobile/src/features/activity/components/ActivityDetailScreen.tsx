@@ -4,6 +4,7 @@ import type { PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, PlanType } from '@od/shared/types';
 import {
   Button,
+  ChevronLeft,
   Chip,
   EmptyState,
   Field,
@@ -76,6 +77,8 @@ export interface ActivityDetailScreenProps {
   onOpenActivity: (activityId: string) => void;
   /** Present only when navigation came from a passed, unresolved agenda row. */
   resolutionOccurrenceDate?: string | null;
+  /** The occurrence whose agenda row opened this route, independent of prompt visibility. */
+  occurrenceDate?: string;
   /** Keeps the route marker in sync with optimistic resolution, Undo, and request rollback. */
   onResolutionProjectionChange?: (resolved: boolean) => void;
 }
@@ -92,6 +95,7 @@ export function ActivityDetailScreen({
   onBack,
   onOpenActivity,
   resolutionOccurrenceDate,
+  occurrenceDate,
   onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
   const theme = useTheme();
@@ -155,6 +159,7 @@ export function ActivityDetailScreen({
     activity?.status === 'scheduled' &&
     detail.detail?.capabilities?.complete === true &&
     !resolutionDismissed;
+  const actionOccurrenceDate = occurrenceDate ?? resolutionOccurrenceDate ?? undefined;
 
   /** The measure, per §8. `compact` is full width minus the gutters. */
   const maxWidth =
@@ -172,7 +177,12 @@ export function ActivityDetailScreen({
           paddingBottom: theme.space[3],
         }}
       >
-        <Button label="Back" variant="ghost" onPress={onBack} testID="detail-back" />
+        <IconButton
+          icon={ChevronLeft}
+          label="Back"
+          onPress={onBack}
+          testID="detail-back"
+        />
         {activity === undefined ? null : (
           <IconButton
             icon={MoreHorizontal}
@@ -220,13 +230,14 @@ export function ActivityDetailScreen({
               onOpenReschedule={() => setRescheduleOpen(true)}
               onOpenRepeat={() => setRepeatOpen(true)}
               showResolutionPrompt={showResolutionPrompt}
+              occurrenceScoped={actionOccurrenceDate !== undefined}
               onOpenResolution={() => setResolutionOpen(true)}
               canComplete={detail.detail?.capabilities?.complete === true}
               completing={actions.isBusy}
               onComplete={() => {
                 actions.resolvePassed(
                   passedPlanResolution(activity.type).positive.outcome,
-                  resolutionOccurrenceDate ?? undefined,
+                  actionOccurrenceDate,
                   (resolved) => {
                     setResolutionDismissed(resolved);
                     onResolutionProjectionChange?.(resolved);
@@ -234,7 +245,7 @@ export function ActivityDetailScreen({
                 );
               }}
               onUndoResolution={() => {
-                actions.undoResolution(resolutionOccurrenceDate ?? undefined);
+                actions.undoResolution(actionOccurrenceDate);
                 setResolutionDismissed(false);
                 onResolutionProjectionChange?.(false);
               }}
@@ -338,14 +349,10 @@ export function ActivityDetailScreen({
             onClose={() => setResolutionOpen(false)}
             onResolve={(outcome) => {
               setResolutionOpen(false);
-              actions.resolvePassed(
-                outcome,
-                resolutionOccurrenceDate ?? undefined,
-                (resolved) => {
-                  setResolutionDismissed(resolved);
-                  onResolutionProjectionChange?.(resolved);
-                },
-              );
+              actions.resolvePassed(outcome, actionOccurrenceDate, (resolved) => {
+                setResolutionDismissed(resolved);
+                onResolutionProjectionChange?.(resolved);
+              });
             }}
           />
         </>
@@ -361,6 +368,7 @@ interface LoadedProps {
   onOpenReschedule: () => void;
   onOpenRepeat: () => void;
   showResolutionPrompt: boolean;
+  occurrenceScoped: boolean;
   onOpenResolution: () => void;
   /** Server-authored. The client never re-derives ownership (`today-and-tasks.md` §4.1). */
   canComplete: boolean;
@@ -378,6 +386,7 @@ function Loaded({
   onOpenReschedule,
   onOpenRepeat,
   showResolutionPrompt,
+  occurrenceScoped,
   onOpenResolution,
   canComplete,
   completing,
@@ -494,7 +503,7 @@ function Loaded({
        * `today-and-tasks.md` §4.1's "a plan you did not create carries no completion control"
        * is satisfied without the client re-deriving ownership from an owner id.
        */}
-      {canComplete && !resolved ? (
+      {canComplete && !resolved && !showResolutionPrompt && !occurrenceScoped ? (
         <Button
           label={completionVerb(activity.type)}
           fullWidth

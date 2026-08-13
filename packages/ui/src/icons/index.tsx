@@ -129,6 +129,12 @@ export const ChevronRight = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+export const ChevronLeft = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path d="M15 5l-7 7 7 7" stroke={color} {...stroke} />
+  </Frame>
+);
+
 export const Search = ({ size, color }: IconProps) => (
   <Frame size={size}>
     <Circle cx={11} cy={11} r={6.5} stroke={color} {...stroke} />

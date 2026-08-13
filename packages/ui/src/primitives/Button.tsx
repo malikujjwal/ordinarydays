@@ -73,9 +73,11 @@ export function Button({
       fg: 'textPrimary' as const,
       border: theme.colors.border,
     },
-    ghost: { bg: 'transparent', fg: 'accent' as const, border: 'transparent' },
+    ghost: { bg: 'transparent', fg: 'textAction' as const, border: 'transparent' },
     danger: { bg: theme.colors.danger, fg: 'inverse' as const, border: 'transparent' },
   }[variant];
+  const foregroundColor =
+    palette.fg === 'inverse' ? theme.colors.textInverse : theme.colors[palette.fg];
 
   return (
     <Touchable
@@ -105,24 +107,10 @@ export function Button({
       ]}
     >
       {showSpinner ? (
-        <ActivityIndicator
-          size="small"
-          color={
-            palette.fg === 'inverse' ? theme.colors.textInverse : theme.colors.accent
-          }
-        />
+        <ActivityIndicator size="small" color={foregroundColor} />
       ) : (
         <>
-          {Icon === undefined ? null : (
-            <Icon
-              size={20}
-              color={
-                palette.fg === 'inverse'
-                  ? theme.colors.textInverse
-                  : theme.colors[palette.fg === 'accent' ? 'accent' : 'textPrimary']
-              }
-            />
-          )}
+          {Icon === undefined ? null : <Icon size={20} color={foregroundColor} />}
           <View>
             <Text variant="bodyStrong" color={palette.fg}>
               {label}
