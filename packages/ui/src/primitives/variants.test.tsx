@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   Bowl,
   Diamond,
+  type IconProps,
   ListLines,
   MapPin,
   navIcons,
@@ -19,6 +20,7 @@ import { Avatar } from './Avatar';
 import { Button, type ButtonVariant } from './Button';
 import { Card } from './Card';
 import { Chip, type ChipTone } from './Chip';
+import { IconButton } from './IconButton';
 import { IconTile } from './IconTile';
 import { ProgressBar } from './ProgressBar';
 import { Row } from './Row';
@@ -110,6 +112,20 @@ describe.each(schemes)('%s scheme uses only readable action text', (scheme) => {
     expect(getComputedStyle(screen.getByText('Tomorrow')).color).toBe(
       cssRgb(colors[scheme].textPrimary),
     );
+  });
+});
+
+describe.each(schemes)('%s scheme renders accent icon actions', (scheme) => {
+  it('uses the semantic accent token', () => {
+    const ColorProbe = ({ color }: IconProps) => <span data-color={color} />;
+    wrap(<IconButton icon={ColorProbe} label="Back" tone="accent" />, scheme);
+
+    expect(
+      screen
+        .getByRole('button', { name: 'Back' })
+        .querySelector('[data-color]')
+        ?.getAttribute('data-color'),
+    ).toBe(colors[scheme].accent);
   });
 });
 

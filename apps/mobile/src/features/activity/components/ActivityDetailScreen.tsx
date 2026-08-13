@@ -4,6 +4,7 @@ import type { PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, PlanType } from '@od/shared/types';
 import {
   Button,
+  Card,
   ChevronLeft,
   Chip,
   EmptyState,
@@ -164,22 +165,23 @@ export function ActivityDetailScreen({
   /** The measure, per §8. `compact` is full width minus the gutters. */
   const maxWidth =
     breakpoint === 'compact' ? undefined : breakpoint === 'medium' ? 720 : 620;
+  const framed = breakpoint !== 'compact';
 
-  return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.surface }}>
+  const detailContent = (
+    <>
       <View
         style={{
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
-          paddingTop: insets.top + theme.space[3],
-          paddingHorizontal: theme.space[5],
-          paddingBottom: theme.space[3],
+          paddingBottom: theme.space[5],
         }}
+        testID="detail-navigation"
       >
         <IconButton
           icon={ChevronLeft}
           label="Back"
+          tone="accent"
           onPress={onBack}
           testID="detail-back"
         />
@@ -193,64 +195,76 @@ export function ActivityDetailScreen({
         )}
       </View>
 
+      {detail.status === 'pending' ? (
+        // A skeleton matching the real layout's shape, not a spinner (§5.1).
+        <View style={{ gap: theme.space[5] }} testID="detail-loading">
+          <Skeleton shape="text" count={2} />
+          <Skeleton shape="card" count={1} />
+          <Skeleton shape="row" count={3} />
+        </View>
+      ) : detail.status === 'error' || activity === undefined ? (
+        <View testID="detail-error">
+          <EmptyState
+            heading={detail.message ?? "Couldn't load this."}
+            {...(detail.requestId === undefined ? {} : { body: detail.requestId })}
+            action={{ label: 'Try again', onPress: detail.refetch }}
+          />
+        </View>
+      ) : (
+        <Loaded
+          activity={activity}
+          detail={detail}
+          today={today}
+          onOpenReschedule={() => setRescheduleOpen(true)}
+          onOpenRepeat={() => setRepeatOpen(true)}
+          showResolutionPrompt={showResolutionPrompt}
+          occurrenceScoped={actionOccurrenceDate !== undefined}
+          onOpenResolution={() => setResolutionOpen(true)}
+          canComplete={detail.detail?.capabilities?.complete === true}
+          completing={actions.isCompleting}
+          undoing={actions.isUndoing}
+          onComplete={() => {
+            actions.resolvePassed(
+              passedPlanResolution(activity.type).positive.outcome,
+              actionOccurrenceDate,
+              (resolved) => {
+                setResolutionDismissed(resolved);
+                onResolutionProjectionChange?.(resolved);
+              },
+            );
+          }}
+          onUndoResolution={() => {
+            actions.undoResolution(actionOccurrenceDate);
+            setResolutionDismissed(false);
+            onResolutionProjectionChange?.(false);
+          }}
+        />
+      )}
+    </>
+  );
+
+  return (
+    <View style={{ flex: 1, backgroundColor: theme.colors.surface }}>
       <ScrollView
         contentContainerStyle={{
           paddingHorizontal: theme.space[5],
+          paddingTop: insets.top + (framed ? theme.space[7] : theme.space[3]),
           paddingBottom: insets.bottom + theme.space[8],
         }}
       >
         <View
           style={{
-            gap: theme.space[7],
             width: '100%',
             alignSelf: 'center',
             ...(maxWidth === undefined ? {} : { maxWidth }),
           }}
         >
-          {detail.status === 'pending' ? (
-            // A skeleton matching the real layout's shape, not a spinner (§5.1).
-            <View style={{ gap: theme.space[5] }} testID="detail-loading">
-              <Skeleton shape="text" count={2} />
-              <Skeleton shape="card" count={1} />
-              <Skeleton shape="row" count={3} />
-            </View>
-          ) : detail.status === 'error' || activity === undefined ? (
-            <View testID="detail-error">
-              <EmptyState
-                heading={detail.message ?? "Couldn't load this."}
-                {...(detail.requestId === undefined ? {} : { body: detail.requestId })}
-                action={{ label: 'Try again', onPress: detail.refetch }}
-              />
-            </View>
+          {framed ? (
+            <Card elevation="e2" radius="xl" padding={7} testID="detail-surface">
+              {detailContent}
+            </Card>
           ) : (
-            <Loaded
-              activity={activity}
-              detail={detail}
-              today={today}
-              onOpenReschedule={() => setRescheduleOpen(true)}
-              onOpenRepeat={() => setRepeatOpen(true)}
-              showResolutionPrompt={showResolutionPrompt}
-              occurrenceScoped={actionOccurrenceDate !== undefined}
-              onOpenResolution={() => setResolutionOpen(true)}
-              canComplete={detail.detail?.capabilities?.complete === true}
-              completing={actions.isCompleting}
-              undoing={actions.isUndoing}
-              onComplete={() => {
-                actions.resolvePassed(
-                  passedPlanResolution(activity.type).positive.outcome,
-                  actionOccurrenceDate,
-                  (resolved) => {
-                    setResolutionDismissed(resolved);
-                    onResolutionProjectionChange?.(resolved);
-                  },
-                );
-              }}
-              onUndoResolution={() => {
-                actions.undoResolution(actionOccurrenceDate);
-                setResolutionDismissed(false);
-                onResolutionProjectionChange?.(false);
-              }}
-            />
+            <View testID="detail-surface">{detailContent}</View>
           )}
         </View>
       </ScrollView>
@@ -401,16 +415,7 @@ function Loaded({
   const resolved = RESOLVED_STATUSES.has(activity.status);
 
   return (
-    <>
-      {showResolutionPrompt ? (
-        <Chip
-          label={passedPlanResolution(activity.type).prompt}
-          accessibilityLabel={`${passedPlanResolution(activity.type).prompt} Choose an outcome for ${activity.title}`}
-          tone="neutral"
-          onPress={onOpenResolution}
-          testID="detail-resolution-prompt"
-        />
-      ) : null}
+    <View style={{ gap: theme.space[7] }} testID="detail-content">
       {detail.conflict === undefined ? null : (
         <View
           accessibilityRole="alert"
@@ -440,151 +445,150 @@ function Loaded({
         </View>
       )}
 
-      {/**
-       * The title is the screen's header, not a form row (`plans-and-lists.md` §2.1 row 1):
-       * serif `title`, no fill, no drawn label — and still inline-editable by the owner,
-       * committing on blur like every other field.
-       */}
-      <InlineText
-        label="Title"
-        value={activity.title}
-        hideLabel
-        appearance="bare"
-        textVariant="display"
-        onCommit={async (title) => {
-          await detail.patch({ title });
-        }}
-        testID="detail-title"
-      />
-      <Text variant="subhead" color="textSecondary" testID="detail-subtitle">
-        {subtitleFor(
-          activity,
-          activity.objectKind === 'plan' ? planKindLabel(activity.type) : '',
-        )}
-      </Text>
-
-      {detail.editError === undefined ? null : (
-        <Text variant="footnote" color="danger" testID="detail-edit-error">
-          {detail.editError}
-        </Text>
-      )}
-
-      {/**
-       * The schedule is part of the header grammar, not a section in the list
-       * (`design-system.md` §7.5): what it is, when it is, then what to do next. **U4 is
-       * unchanged** — it is a tap target that opens the reschedule sheet and never becomes a
-       * field.
-       */}
-      <WhenWhereBlock
-        schedule={activity.schedule}
-        location={activity.location}
-        reminders={detail.detail?.reminders ?? []}
-        {...(activity.schedule === undefined
-          ? {}
-          : {
-              recurrenceDescription:
-                activity.recurrence === undefined
-                  ? 'Never'
-                  : describeRecurrence(activity.recurrence, today),
-            })}
-        today={today}
-        onPressDate={onOpenReschedule}
-        onPressRepeat={onOpenRepeat}
-        onPressAddress={undefined}
-      />
-
-      {/**
-       * The primary completion action — the Phase 2 deliverable `phase-01-activity-core.md`
-       * deferred and that no other task claimed.
-       *
-       * **One component and one position for both object kinds**, with the label derived from
-       * the activity's type, so a Task, a Meal and an Event differ only in the verb. That verb
-       * comes from the same table the row's trailing slot and the passed-plan sheet read, so
-       * the three cannot disagree.
-       *
-       * **Absent, never disabled, when the caller lacks the capability.** That is how
-       * `today-and-tasks.md` §4.1's "a plan you did not create carries no completion control"
-       * is satisfied without the client re-deriving ownership from an owner id.
-       */}
-      {canComplete && !resolved && !showResolutionPrompt && !occurrenceScoped ? (
-        <Button
-          label={completionVerb(activity.type)}
-          fullWidth
-          size="lg"
-          loading={completing}
-          onPress={onComplete}
-          testID="detail-complete"
-        />
-      ) : null}
-      {/**
-       * The resolved state, and the way back out of it.
-       *
-       * A completed row on Today keeps its `Undo` for as long as it is completed, so the one
-       * surface that can *record* a completion needs the same permanent affordance — the toast
-       * is a shortcut, not the mechanism. Secondary rather than primary: undoing is the rarer
-       * intent, and the outcome itself is what the screen is stating.
-       */}
-      {resolved ? (
-        <View style={{ gap: theme.space[3] }}>
-          {canComplete ? (
-            <Button
-              label="Undo"
-              variant="secondary"
-              size="lg"
-              fullWidth
-              loading={undoing}
-              onPress={onUndoResolution}
-              testID="detail-undo"
-            />
-          ) : null}
-          <Text variant="bodyStrong" color="success" testID="detail-resolved">
-            {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
+      <View style={{ gap: theme.space[7] }} testID="detail-header">
+        {/** Title and type/audience are one header unit, not two unrelated form rows. */}
+        <View style={{ gap: theme.space[2] }}>
+          <InlineText
+            label="Title"
+            value={activity.title}
+            hideLabel
+            appearance="bare"
+            textVariant="display"
+            onCommit={async (title) => {
+              await detail.patch({ title });
+            }}
+            testID="detail-title"
+          />
+          <Text variant="subhead" color="textSecondary" testID="detail-subtitle">
+            {subtitleFor(
+              activity,
+              activity.objectKind === 'plan' ? planKindLabel(activity.type) : '',
+            )}
           </Text>
+
+          {detail.editError === undefined ? null : (
+            <Text variant="footnote" color="danger" testID="detail-edit-error">
+              {detail.editError}
+            </Text>
+          )}
         </View>
-      ) : null}
 
-      {sections.map((section) => {
-        if (section.key === 'whenWhere') return null;
+        {/** U4: the schedule remains a tap target and never becomes an inline field. */}
+        <WhenWhereBlock
+          schedule={activity.schedule}
+          location={activity.location}
+          reminders={detail.detail?.reminders ?? []}
+          {...(activity.schedule === undefined
+            ? {}
+            : {
+                recurrenceDescription:
+                  activity.recurrence === undefined
+                    ? 'Never'
+                    : describeRecurrence(activity.recurrence, today),
+              })}
+          today={today}
+          onPressDate={onOpenReschedule}
+          onPressRepeat={onOpenRepeat}
+          onPressAddress={undefined}
+        />
 
-        if (section.key === 'notes') {
+        {/** A passed-plan prompt replaces the primary action in the same visual position. */}
+        {showResolutionPrompt ? (
+          <Chip
+            label={passedPlanResolution(activity.type).prompt}
+            accessibilityLabel={`${passedPlanResolution(activity.type).prompt} Choose an outcome for ${activity.title}`}
+            tone="neutral"
+            onPress={onOpenResolution}
+            testID="detail-resolution-prompt"
+          />
+        ) : null}
+
+        {/** One type-derived completion component and position for both object kinds. */}
+        {canComplete && !resolved && !showResolutionPrompt && !occurrenceScoped ? (
+          <Button
+            label={completionVerb(activity.type)}
+            fullWidth
+            size="lg"
+            loading={completing}
+            onPress={onComplete}
+            testID="detail-complete"
+          />
+        ) : null}
+
+        {resolved ? (
+          <View style={{ gap: theme.space[3] }}>
+            {canComplete ? (
+              <Button
+                label="Undo"
+                variant="secondary"
+                size="lg"
+                fullWidth
+                loading={undoing}
+                onPress={onUndoResolution}
+                testID="detail-undo"
+              />
+            ) : null}
+            <Text variant="bodyStrong" color="success" testID="detail-resolved">
+              {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      <View testID="detail-sections">
+        {sections.map((section) => {
+          if (section.key === 'whenWhere') return null;
+
+          if (section.key === 'notes') {
+            return (
+              <View
+                key={section.key}
+                style={{
+                  gap: theme.space[3],
+                  paddingVertical: theme.space[7],
+                  borderTopWidth: 1,
+                  borderTopColor: theme.colors.border,
+                }}
+                testID="section-notes"
+              >
+                <SectionHeader title="Notes" />
+                <InlineText
+                  label="Notes"
+                  value={activity.notes ?? ''}
+                  hideLabel
+                  appearance="bare"
+                  multiline
+                  placeholder="Add notes"
+                  onCommit={async (notes) => {
+                    await detail.patch({ notes });
+                  }}
+                  testID="detail-notes"
+                />
+              </View>
+            );
+          }
+
+          // Related plan — the parent link on a prep task (`today-and-tasks.md` §5.5).
           return (
             <View
               key={section.key}
-              style={{ gap: theme.space[3] }}
-              testID="section-notes"
+              style={{
+                gap: theme.space[3],
+                paddingVertical: theme.space[7],
+                borderTopWidth: 1,
+                borderTopColor: theme.colors.border,
+              }}
+              testID="section-related"
             >
-              <SectionHeader title="Notes" />
-              {/* `hideLabel`: the SectionHeader above already says NOTES. */}
-              <InlineText
-                label="Notes"
-                value={activity.notes ?? ''}
-                hideLabel
-                multiline
-                placeholder="Add notes"
-                onCommit={async (notes) => {
-                  await detail.patch({ notes });
-                }}
-                testID="detail-notes"
-              />
+              <SectionHeader title="Related plan" />
+              <Text variant="body" color="textSecondary">
+                {activity.parentActivityId === undefined ? 'None' : 'Part of a plan'}
+              </Text>
             </View>
           );
-        }
-
-        // Related plan — the parent link on a prep task (`today-and-tasks.md` §5.5).
-        return (
-          <View
-            key={section.key}
-            style={{ gap: theme.space[3] }}
-            testID="section-related"
-          >
-            <SectionHeader title="Related plan" />
-            <Text variant="body" color="textSecondary">
-              {activity.parentActivityId === undefined ? 'None' : 'Part of a plan'}
-            </Text>
-          </View>
-        );
-      })}
-    </>
+        })}
+      </View>
+    </View>
   );
 }
 

@@ -16,6 +16,8 @@ export interface IconButtonProps {
   label: string;
   onPress?: () => void;
   variant?: 'ghost' | 'filled';
+  /** `accent` is for quiet icon actions that should carry the product's action colour. */
+  tone?: 'neutral' | 'accent';
   disabled?: boolean;
   testID?: string;
 }
@@ -25,6 +27,7 @@ export function IconButton({
   label,
   onPress,
   variant = 'ghost',
+  tone = 'neutral',
   disabled = false,
   testID,
 }: IconButtonProps) {
@@ -51,7 +54,13 @@ export function IconButton({
     >
       <Icon
         size={24}
-        color={disabled ? theme.colors.textDisabled : theme.colors.textPrimary}
+        color={
+          disabled
+            ? theme.colors.textDisabled
+            : tone === 'accent'
+              ? theme.colors.accent
+              : theme.colors.textPrimary
+        }
       />
     </Touchable>
   );

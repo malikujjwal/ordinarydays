@@ -208,6 +208,26 @@ describe('reading', () => {
     expect(screen.getByRole('button', { name: 'More' }).textContent).toBe('');
   });
 
+  it('keeps navigation and content in one detail surface', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    const surface = screen.getByTestId('detail-surface');
+    expect(surface.contains(screen.getByTestId('detail-navigation'))).toBe(true);
+    expect(surface.contains(screen.getByTestId('detail-content'))).toBe(true);
+  });
+
+  it('renders capability content as divided, unboxed sections', async () => {
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('section-notes').style.borderTopWidth).toBe('1px');
+    expect(screen.getByLabelText('Notes').style.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(screen.getByTestId('section-related').style.borderTopWidth).toBe('1px');
+  });
+
   it('says Not scheduled on an undated plan rather than hiding the row', async () => {
     stubFetch({ status: 200, body: detailBody(plan({ schedule: undefined })) });
     mount();
@@ -304,7 +324,7 @@ describe('the sections', () => {
 });
 
 describe('passed-plan resolution', () => {
-  it('shows the same prompt at the top and sends the exact positive outcome', async () => {
+  it('shows the prompt in the primary-action position and sends the exact positive outcome', async () => {
     const passed = plan({
       schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
     });
@@ -331,9 +351,17 @@ describe('passed-plan resolution', () => {
     const prompt = screen.getByRole('button', {
       name: 'How did it go? Choose an outcome for Zahav',
     });
+    const title = screen.getByLabelText('Title');
+    const schedule = screen.getByTestId('when-where');
+    const sections = screen.getByTestId('detail-sections');
+    expect(title.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
     expect(
-      prompt.compareDocumentPosition(screen.getByLabelText('Title')) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      schedule.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      prompt.compareDocumentPosition(sections) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     // `plans-and-lists.md` §2.1 replaces the ordinary completion action with this prompt.
     // Two positive actions in the header can target different scopes on a recurring Plan.

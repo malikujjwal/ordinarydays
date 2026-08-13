@@ -57,6 +57,11 @@ describe('every primitive renders', () => {
     expect(screen.getByRole('button', { name: 'Add' })).toBeDefined();
   });
 
+  it('IconButton keeps its accessible name when it carries the accent tone', () => {
+    wrap(<IconButton icon={Plus} label="Back" tone="accent" onPress={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDefined();
+  });
+
   it('Row', () => {
     wrap(<Row title="Gym" subtitle="6:00 PM" onPress={() => {}} />);
     expect(screen.getByRole('button', { name: 'Gym' })).toBeDefined();
@@ -100,6 +105,25 @@ describe('every primitive renders', () => {
   it('Field', () => {
     wrap(<Field label="Title" value="" onChangeText={() => {}} />);
     expect(screen.getByLabelText('Title')).toBeDefined();
+  });
+
+  it('keeps bare multiline content compact without shrinking boxed form fields', () => {
+    wrap(
+      <>
+        <Field label="Notes" value="" multiline appearance="bare" />
+        <Field label="Description" value="" multiline />
+      </>,
+    );
+
+    expect(
+      Number.parseInt(getComputedStyle(screen.getByLabelText('Notes')).minHeight, 10),
+    ).toBe(layout.hitTarget);
+    expect(
+      Number.parseInt(
+        getComputedStyle(screen.getByLabelText('Description')).minHeight,
+        10,
+      ),
+    ).toBe(96);
   });
 
   it('Chip', () => {
