@@ -67,21 +67,41 @@ const ACTIVITY_LIST_KEY = ['activities'] as const;
 const AGENDA_KEY = ['agenda'] as const;
 
 /**
- * Everything a successful activity write makes stale, in one place.
- *
- * **Exported because a local `onSuccess` replaces this one rather than composing with it.**
- * A component-level `useMutation` that reuses a registered `mutationKey` and passes its own
- * `onSuccess` silently drops the default's — TanStack Query does not merge the two. Three
- * call sites did exactly that and lost the agenda invalidation, so a create or a reschedule
- * succeeded on the server and Today went on showing the stale row until the 60 s stale time
- * expired (P2-46). Any local `onSuccess` on an activity mutation key must call this.
+ * Everything a successful activity write makes stale.
  *
  * The **root** keys, not one window: a write lands in whichever agenda windows its date
- * implies, and no call site has any business working out which.
+ * implies, and no caller has any business working out which.
+ *
+ * Called from exactly one place — the `MutationCache`'s `onSuccess` in `queryClient.ts`
+ * (P2-46). Not from a component's `onSuccess`, and not from a per-key default. See
+ * `changesActivityLists` below for why.
  */
 export function refreshActivityLists(client: QueryClient): void {
   void client.invalidateQueries({ queryKey: ACTIVITY_LIST_KEY });
   void client.invalidateQueries({ queryKey: AGENDA_KEY });
+}
+
+/**
+ * Whether a successful mutation changes what a list or an agenda window contains.
+ *
+ * **Why this lives on the `MutationCache` and not on the mutations themselves (P2-46).** A
+ * component's `onSuccess` is bound to that component's observer, so it never runs once the
+ * component has gone — and the two writes that most need to refresh Today are precisely the
+ * two that close their own surface on success: compose unmounts on save, and the reschedule
+ * sheet unmounts when it closes. Attaching the refresh there puts it in the one place it
+ * cannot fire. Completing or snoozing from a Today row always worked for the same reason
+ * inverted: nothing unmounts, so the handler survives long enough to run.
+ *
+ * The `MutationCache` outlives every component and every screen, and it also covers mutations
+ * replayed from the offline queue after a restart, which have no component at all.
+ *
+ * Every activity mutation key is `['activity', <name>]`. Only a reminder leaves lists and
+ * agenda windows untouched.
+ */
+export function changesActivityLists(mutationKey: unknown): boolean {
+  if (!Array.isArray(mutationKey)) return false;
+  const [scope, name] = mutationKey as readonly unknown[];
+  return scope === 'activity' && name !== 'reminder-create';
 }
 
 /** Registers every function a dehydrated mutation can need after its component is gone. */
@@ -92,19 +112,16 @@ export function registerActivityMutationDefaults(
   client.setMutationDefaults(activityMutationKeys.create, {
     mutationFn: ({ input, idempotencyKey }: CreateActivityVariables) =>
       createActivity(httpClient, input, idempotencyKey),
-    onSuccess: () => refreshActivityLists(client),
   });
   client.setMutationDefaults(activityMutationKeys.duplicate, {
     mutationFn: ({ activityId, idempotencyKey }: DuplicateActivityVariables) =>
       duplicateActivity(httpClient, activityId, idempotencyKey),
-    onSuccess: () => refreshActivityLists(client),
   });
   client.setMutationDefaults(activityMutationKeys.delete, {
     mutationFn: ({ activityId }: DeleteActivityVariables) =>
       deleteActivityForReplay(httpClient, activityId),
     onSuccess: (_data, { activityId }: DeleteActivityVariables) => {
       client.removeQueries({ queryKey: ['activity', activityId] });
-      refreshActivityLists(client);
     },
   });
   client.setMutationDefaults(activityMutationKeys.patch, {
@@ -112,38 +129,31 @@ export function registerActivityMutationDefaults(
       patchActivityForReplay(httpClient, activityId, input, ifMatch),
     onSuccess: (activity) => {
       void client.invalidateQueries({ queryKey: ['activity', activity.activityId] });
-      refreshActivityLists(client);
     },
   });
   client.setMutationDefaults(activityMutationKeys.schedule, {
     mutationFn: ({ activityId, input, idempotencyKey }: ScheduleActivityVariables) =>
       scheduleActivity(httpClient, activityId, input, idempotencyKey),
-    onSuccess: () => refreshActivityLists(client),
   });
   client.setMutationDefaults(activityMutationKeys.complete, {
     mutationFn: ({ activityId, input, idempotencyKey }: CompleteActivityVariables) =>
       completeActivity(httpClient, activityId, input, idempotencyKey),
-    onSuccess: () => refreshActivityLists(client),
   });
   client.setMutationDefaults(activityMutationKeys.uncomplete, {
     mutationFn: ({ activityId, input, idempotencyKey }: UncompleteActivityVariables) =>
       uncompleteActivity(httpClient, activityId, input, idempotencyKey),
-    onSuccess: () => refreshActivityLists(client),
   });
   client.setMutationDefaults(activityMutationKeys.skip, {
     mutationFn: ({ activityId, input, idempotencyKey }: SkipActivityVariables) =>
       skipActivity(httpClient, activityId, input, idempotencyKey),
-    onSuccess: () => refreshActivityLists(client),
   });
   client.setMutationDefaults(activityMutationKeys.snooze, {
     mutationFn: ({ activityId, input, idempotencyKey }: SnoozeActivityVariables) =>
       snoozeActivity(httpClient, activityId, input, idempotencyKey),
-    onSuccess: () => refreshActivityLists(client),
   });
   client.setMutationDefaults(activityMutationKeys.unsnooze, {
     mutationFn: ({ activityId, input, idempotencyKey }: UnsnoozeActivityVariables) =>
       unsnoozeActivity(httpClient, activityId, input, idempotencyKey),
-    onSuccess: () => refreshActivityLists(client),
   });
   client.setMutationDefaults(activityMutationKeys.reminderCreate, {
     mutationFn: ({ activityId, input, idempotencyKey }: ReminderCreateVariables) =>

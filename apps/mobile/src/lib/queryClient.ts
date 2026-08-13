@@ -1,7 +1,11 @@
 import { MAX_OFFLINE_MUTATIONS } from '@od/shared';
 import { MutationCache, QueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
-import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
+import {
+  changesActivityLists,
+  refreshActivityLists,
+  registerActivityMutationDefaults,
+} from '@/lib/mutationDefaults';
 import { OFFLINE_QUEUE_FULL_MESSAGE, useSyncStatus } from '@/stores/syncStatus';
 
 /**
@@ -30,6 +34,20 @@ export function createOfflineQueryClient(platform = Platform.OS): QueryClient {
         useSyncStatus
           .getState()
           .captureMutationError(error, mutation.options.mutationKey, variables);
+      },
+      /**
+       * The single place a successful activity write refreshes the lists and agenda windows
+       * it changed (P2-46).
+       *
+       * It has to be here rather than on the mutations because a component's `onSuccess` dies
+       * with its component, and the two writes that most need this close their own surface on
+       * success — compose unmounts on save, the reschedule sheet unmounts when it closes. The
+       * cache outlives both, and also covers mutations replayed from the offline queue after a
+       * restart, which never had a component to begin with.
+       */
+      onSuccess: (_data, _variables, _context, mutation) => {
+        if (!changesActivityLists(mutation.options.mutationKey)) return;
+        refreshActivityLists(client);
       },
     }),
     defaultOptions: {

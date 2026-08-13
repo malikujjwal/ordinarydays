@@ -27,29 +27,35 @@ describe('offline mutation option guard', () => {
   });
 
   /**
-   * P2-46. A component-level `useMutation` that reuses a registered `mutationKey` and passes
-   * its own `onSuccess` **replaces** the default's rather than composing with it, so the
-   * default's `refreshActivityLists` never runs. Five call sites did that and lost the agenda
-   * invalidation: a task saved from compose was missing from Today, a reschedule left the old
-   * time on the row, a duplicate never appeared and a delete never left.
+   * P2-46. A component's `onSuccess` is bound to that component's observer and never runs once
+   * the component has gone — and the two writes that most need to refresh Today are exactly
+   * the two that close their own surface on success: compose unmounts on save, and the
+   * reschedule sheet unmounts when it closes. So the agenda refresh belongs on the
+   * `MutationCache`, which outlives every screen and also covers mutations replayed from the
+   * offline queue after a restart.
    *
-   * The guard is structural rather than behavioural because the defect is structural — it is
-   * invisible in every isolated test of the hook, since the hook does exactly what it says.
+   * The guard is structural because the defect is: every isolated test of these hooks passes,
+   * since each hook does exactly what it says it does. Only the interaction between a handler
+   * and its component's lifetime is wrong, and nothing at unit level can see that.
    */
-  it.each(files)(
-    '%s calls refreshActivityLists from every local mutation onSuccess',
-    (relative) => {
-      const source = sourceOf(relative);
-      const handlers = source.match(/onSuccess\s*:/g)?.length ?? 0;
-      const refreshes = source.match(/refreshActivityLists\(/g)?.length ?? 0;
+  it.each(files)('%s does not own the agenda refresh', (relative) => {
+    const source = sourceOf(relative);
 
-      expect(refreshes).toBeGreaterThanOrEqual(handlers);
-      if (handlers > 0) expect(source).toMatch(/refreshActivityLists/);
-      // The bare invalidation is what the shared helper exists to replace; reaching for it
-      // directly is how these five drifted apart in the first place.
-      expect(source).not.toMatch(/invalidateQueries\(\{\s*queryKey:\s*\['agenda'\]/);
-    },
-  );
+    expect(source).not.toMatch(/refreshActivityLists/);
+    expect(source).not.toMatch(/invalidateQueries\(\{\s*queryKey:\s*\['agenda'\]/);
+  });
+
+  it('keeps the agenda refresh on the MutationCache, where an unmount cannot cancel it', () => {
+    const source = sourceOf('./queryClient.ts');
+    const cacheSurface = source.slice(
+      source.indexOf('new MutationCache'),
+      source.indexOf('defaultOptions'),
+    );
+
+    expect(cacheSurface).toMatch(/onSuccess/);
+    expect(cacheSurface).toMatch(/changesActivityLists/);
+    expect(cacheSurface).toMatch(/refreshActivityLists\(client\)/);
+  });
 
   it('keeps the Activity GET override that makes Try again issue a request', () => {
     const source = sourceOf('../features/activity/hooks/useActivity.ts');
