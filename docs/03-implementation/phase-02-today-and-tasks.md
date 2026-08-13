@@ -343,6 +343,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-43 | Compose flow progressive disclosure | mobile | P2-40, P2-41 | yes | M |
 | P2-44 | Today day header and timeline furniture | mobile | P2-19, P2-20, P2-21, P2-40 | yes | M |
 | P2-45 | The Tomorrow preview on Today | mobile | P2-18, P2-44 | yes | M |
+| P2-47 | Occurrence actions on a series detail screen | mobile | P2-14, P2-15, P2-25, P2-41 | yes | M |
 
 P2-17, P2-30, P2-31 and P2-35 are mechanical; follow the canonical sections named in the
 table and skip the design discussion. P2-31's exact label is `+ Add a task`: it bypasses the
@@ -3028,6 +3029,48 @@ assertion in that file is weakened to accommodate this task.**
 Do not add a colour outside P2-40's tables. Do not add an activity type. Do not touch the
 completion, skip or snooze endpoints, the `outcome` enum, or the agenda projection. Do not
 change the Today row or the passed-plan sheet.
+
+---
+
+### P2-47 — Occurrence actions on a series detail screen
+
+**Files.** `apps/mobile/src/components/SnoozeSheet.tsx` (moved from
+`apps/mobile/src/features/agenda/components/`), `apps/mobile/src/features/agenda/components/
+TodayScreen.tsx`, `apps/mobile/src/features/activity/hooks/useActivityActions.ts`,
+`apps/mobile/src/features/activity/components/ActivityDetailScreen.tsx`, and their tests.
+
+**Why this is its own task.** P2-41 carried this as a bullet and could not build it. Three
+blockers, and only the first two are wiring:
+
+1. `useActivityActions` exposes `duplicate`, `remove` and `resolvePassed` and nothing else.
+2. `Snooze` needs a time, and `SnoozeSheet` lives in `features/agenda`, which
+   `dependency-cruiser`'s cross-feature rule puts out of reach of `features/activity`.
+3. **The detail screen usually has no occurrence date.** `resolutionOccurrenceDate` is set only
+   when navigation came from a passed, unresolved agenda row. A series opened from Plans or
+   from search has no occurrence in hand, so `Skip today` has nothing to skip.
+
+**Settle the third before writing code.** Options are: act on today's occurrence whenever the
+series has one; act on the next upcoming occurrence; or show the pair only when an occurrence
+is in context and rely on Today's swipe actions otherwise. Each changes what the button means
+on a series whose next occurrence is three weeks away, and
+[`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §6 does not answer it.
+Bring the founder the three readings and a recommendation.
+
+**Approach.** Move `SnoozeSheet` to `apps/mobile/src/components/`, which is where a sheet two
+features share already lives — `AgendaRescheduleCoordinator` is the precedent. The move is
+mechanical and P2-25's tests must pass unmodified across it; that is what proves it was a move
+and not a rewrite. Then add `skipOccurrence` and `snoozeOccurrence` to `useActivityActions`
+against the mutation keys `mutationDefaults.ts` already registers — no new endpoint, no new
+write path — and render `Snooze` and `Skip today` as secondary buttons beneath P2-41's primary,
+each gated on its own server-authored capability.
+
+**Tests.** P2-25's snooze-sheet tests pass unmodified after the move. Component: the pair is
+absent on a one-off; absent when the capability is false; present on a series occurrence and
+dispatching with `occurrenceDate`. The series is unchanged by either — assert `ACT#/META` is
+untouched, which is `testing.md` §3.3's existing requirement, not a new one.
+
+**Scope guard.** Do not change the snooze option table (P2-25 owns it), the completion button
+(P2-41 owns it), or any endpoint. Do not add a colour outside P2-40's tables.
 
 ---
 
