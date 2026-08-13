@@ -233,6 +233,11 @@ export function ActivityDetailScreen({
                   },
                 );
               }}
+              onUndoResolution={() => {
+                actions.undoResolution(resolutionOccurrenceDate ?? undefined);
+                setResolutionDismissed(false);
+                onResolutionProjectionChange?.(false);
+              }}
             />
           )}
         </View>
@@ -361,6 +366,7 @@ interface LoadedProps {
   canComplete: boolean;
   completing: boolean;
   onComplete: () => void;
+  onUndoResolution: () => void;
 }
 
 const RESOLVED_STATUSES = new Set(['completed', 'skipped']);
@@ -376,6 +382,7 @@ function Loaded({
   canComplete,
   completing,
   onComplete,
+  onUndoResolution,
 }: LoadedProps) {
   const theme = useTheme();
   const sections = sectionsFor(activity);
@@ -497,10 +504,36 @@ function Loaded({
           testID="detail-complete"
         />
       ) : null}
+      {/**
+       * The resolved state, and the way back out of it.
+       *
+       * A completed row on Today keeps its `Undo` for as long as it is completed, so the one
+       * surface that can *record* a completion needs the same permanent affordance — the toast
+       * is a shortcut, not the mechanism. Secondary rather than primary: undoing is the rarer
+       * intent, and the outcome itself is what the screen is stating.
+       */}
       {resolved ? (
-        <Text variant="bodyStrong" color="success" testID="detail-resolved">
-          {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
-        </Text>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: theme.space[4],
+          }}
+        >
+          <Text variant="bodyStrong" color="success" testID="detail-resolved">
+            {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
+          </Text>
+          {canComplete ? (
+            <Button
+              label="Undo"
+              variant="secondary"
+              loading={completing}
+              onPress={onUndoResolution}
+              testID="detail-undo"
+            />
+          ) : null}
+        </View>
       ) : null}
 
       {sections.map((section) => {

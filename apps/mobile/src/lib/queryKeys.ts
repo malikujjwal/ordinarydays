@@ -3,8 +3,8 @@
  *
  * ## Why this is not in a feature
  *
- * A key belongs in its feature's hooks — `activityKey` in `features/activity`, `healthKey` in
- * `features/health` — and `repo-structure.md` §7 says so. This one has no single owner:
+ * A key belongs in its feature's hooks — `healthKey` in `features/health` — and
+ * `repo-structure.md` §7 says so. The ones here have no single owner:
  * `features/plans` **reads** the activity lists and `features/compose` **writes** to them, so
  * whichever feature held the root, the other would have to reach across for it, and
  * `check-forbidden`'s `client-layer-rules` bans exactly that import (rightly — a feature
@@ -24,3 +24,18 @@
  * can land in any of them and the writer does not know which.
  */
 export const ACTIVITIES_KEY = ['activities'] as const;
+
+/**
+ * One activity's detail read.
+ *
+ * Moved here from `features/activity/hooks/useActivity` when `lib/agendaCache` needed it: a
+ * completion recorded on any surface has to update the detail cache, or the detail screen goes
+ * on claiming an activity is completed for the length of its stale time after the row has
+ * gone back to normal.
+ *
+ * It moved rather than being imported from the hook because a **key is not a hook**. Importing
+ * the hook module for it dragged `expo-crypto` into every consumer, which fails outright in a
+ * unit test with no native module — the import graph telling us the key was in the wrong
+ * place.
+ */
+export const activityKey = (activityId: string) => ['activity', activityId] as const;

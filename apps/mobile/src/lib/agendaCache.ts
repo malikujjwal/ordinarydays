@@ -5,6 +5,7 @@ import { applyCompletion } from '@/features/agenda/model/applyCompletion';
 import { applyCreate } from '@/features/agenda/model/applyCreate';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
+import { activityKey } from '@/lib/queryKeys';
 
 const AGENDA_KEY = ['agenda'] as const;
 
@@ -83,6 +84,20 @@ export function projectActivityWrite(
    * offline queue after a restart.
    */
   if (name === 'complete' || name === 'uncomplete' || name === 'skip') {
+    /**
+     * The **detail cache** as well as the agenda.
+     *
+     * Completing or undoing from a Today row never touched `['activity', id]`, and that query
+     * has a 60-second stale time — so opening the detail screen after an undo showed the
+     * activity still completed, sometimes for a full minute, and the completion button showed
+     * the resolved state long after the row had gone back to normal. The server's response is
+     * the activity, so there is nothing to derive.
+     */
+    client.setQueryData<{ activity: Activity }>(
+      activityKey(activity.activityId),
+      (previous) => (previous === undefined ? previous : { ...previous, activity }),
+    );
+
     const occurrenceDate = occurrenceDateFrom(variables);
     const target = {
       activityId: activity.activityId,

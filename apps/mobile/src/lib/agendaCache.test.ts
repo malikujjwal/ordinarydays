@@ -115,6 +115,32 @@ describe('a completion recorded anywhere reaches the agenda cache', () => {
     expect(statusOf(client, 'act_STANDUP')).toBe('skipped');
   });
 
+  /**
+   * The detail cache as well as the agenda. Completing or undoing from a Today row never
+   * touched `['activity', id]`, and that query has a 60-second stale time — so the detail
+   * screen kept claiming an activity was completed long after the row had gone back to normal.
+   */
+  it('updates the detail cache too, so the two screens cannot disagree', () => {
+    const client = seeded(row({ status: 'completed' }));
+    client.setQueryData(['activity', 'act_STANDUP'], {
+      activity: { activityId: 'act_STANDUP', status: 'completed' },
+      reminders: [],
+    });
+
+    projectActivityWrite(
+      client,
+      ['activity', 'uncomplete'],
+      completion('act_STANDUP', 'scheduled'),
+      { activityId: 'act_STANDUP', input: {} },
+    );
+
+    const detail = client.getQueryData<{ activity: { status: string } }>([
+      'activity',
+      'act_STANDUP',
+    ]);
+    expect(detail?.activity.status).toBe('scheduled');
+  });
+
   it('ignores a mutation that carries no activity', () => {
     const client = seeded();
 

@@ -21,6 +21,7 @@ import {
   type ScheduleActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
+import { activityKey } from '@/lib/queryKeys';
 
 /**
  * The activity detail read and its in-place edits (P1-26).
@@ -31,7 +32,12 @@ import { activityMutationKeys } from '@/lib/mutationKeys';
  * there is no "form state" to hold — the query's data *is* the state.
  */
 
-export const activityKey = (activityId: string) => ['activity', activityId] as const;
+/**
+ * Re-exported from `lib/queryKeys`, which now owns it — `lib/agendaCache` needs the same key
+ * and a key is not a hook. Kept here so the screens and tests that already read it from the
+ * hook module do not all have to change to say the same thing.
+ */
+export { activityKey };
 
 export interface ActivityDetailView {
   status: 'pending' | 'success' | 'error';

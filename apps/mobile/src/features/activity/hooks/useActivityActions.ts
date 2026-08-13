@@ -36,6 +36,15 @@ export interface ActivityActions {
     occurrenceDate: string | undefined,
     onProjected: (resolved: boolean) => void,
   ) => void;
+  /**
+   * Reverses a completion from the detail screen.
+   *
+   * Separate from `resolvePassed`'s undo, which is the six-second toast. This is the permanent
+   * affordance: a completed row on Today keeps its `Undo` swipe action for as long as it is
+   * completed, and the detail screen — the one surface that can *record* a completion — could
+   * not reverse one at all.
+   */
+  undoResolution: (occurrenceDate: string | undefined) => void;
   isBusy: boolean;
   /** `interaction-contract.md` §5.3 copy for whichever action failed. */
   errorMessage: string | undefined;
@@ -199,6 +208,45 @@ export function useActivityActions(activityId: string): ActivityActions {
         failureMessage: "Couldn't record that outcome.",
         compensationFailureMessage: "Couldn't undo that outcome.",
       });
+    },
+    undoResolution: (occurrenceDate) => {
+      const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+
+      /**
+       * Projected before the request, not after it.
+       *
+       * The row on Today flips the instant you tap it, because the agenda path is optimistic.
+       * Waiting for the round trip here made the same undo feel a beat slower on the detail
+       * screen than on the row it came from — measured at ~820 ms locally, and worse on a real
+       * network. The response still lands and reconciles; this only decides what the screen
+       * shows while it is in flight.
+       *
+       * A recurring occurrence is left alone: its state lives on the `Occurrence`, not on the
+       * series (`data-model.md` §4.5).
+       */
+      if (occurrenceDate === undefined && snapshot !== undefined) {
+        queryClient.setQueryData<ActivityDetail>(activityKey(activityId), {
+          ...snapshot,
+          activity: {
+            ...snapshot.activity,
+            status:
+              snapshot.activity.schedule?.date === undefined ? 'saved' : 'scheduled',
+          },
+        });
+      }
+
+      void uncompleteMutation
+        .mutateAsync({
+          activityId,
+          input: occurrenceDate === undefined ? {} : { occurrenceDate },
+          idempotencyKey: randomUUID(),
+        })
+        .catch(() => {
+          // Put the completion back: the screen must not claim an undo the server refused.
+          // The message is on the mutation and renders as the screen's banner.
+          if (snapshot !== undefined)
+            queryClient.setQueryData(activityKey(activityId), snapshot);
+        });
     },
     isBusy:
       duplicateMutation.isPending ||

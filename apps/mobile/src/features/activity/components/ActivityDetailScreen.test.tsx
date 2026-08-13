@@ -722,6 +722,55 @@ describe('the overflow menu', () => {
    * §4.1: "a plan you did not create carries no completion control". **Absent, not disabled** —
    * and driven by the server's capability rather than an owner id the client re-derives.
    */
+  /**
+   * A completed row on Today keeps its `Undo` swipe action for as long as it is completed, so
+   * the one surface that can *record* a completion has to be able to reverse one. The toast is
+   * a six-second shortcut, not the mechanism.
+   */
+  it('offers a permanent Undo once the activity is completed', async () => {
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(plan({ status: 'completed', outcome: 'attended' })),
+      },
+      {
+        status: 200,
+        body: {
+          data: { activity: plan(), outcome: null },
+          meta: { requestId: 'req_undo' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+    expect(screen.getByTestId('detail-resolved').textContent).toContain('Attended');
+
+    fireEvent.click(screen.getByTestId('detail-undo'));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+    );
+    expect(sent[1]?.url).toMatch(new RegExp(`/v1/activities/${ID}/uncomplete$`));
+  });
+
+  it('offers no Undo to a caller who cannot complete', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan({ status: 'completed', outcome: 'attended' }), [], {
+        complete: false,
+        skip: false,
+        snooze: false,
+      }),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-resolved')).toBeDefined();
+    expect(screen.queryByTestId('detail-undo')).toBeNull();
+  });
+
   it('renders no completion button when the caller cannot complete', async () => {
     stubFetch({
       status: 200,
