@@ -1,8 +1,10 @@
 import { type Instant, type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type { Activity, AgendaData, User } from '@od/shared/types';
 import type { MutationKey, QueryClient } from '@tanstack/react-query';
+import { applyCompletion } from '@/features/agenda/model/applyCompletion';
 import { applyCreate } from '@/features/agenda/model/applyCreate';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
+import { applySkip } from '@/features/agenda/model/applySkip';
 
 const AGENDA_KEY = ['agenda'] as const;
 
@@ -30,6 +32,7 @@ export function projectActivityWrite(
   client: QueryClient,
   mutationKey: MutationKey | undefined,
   data: unknown,
+  variables?: unknown,
 ): boolean {
   const name = Array.isArray(mutationKey) ? mutationKey[1] : undefined;
   const activity = activityFrom(data);
@@ -66,7 +69,59 @@ export function projectActivityWrite(
     return true;
   }
 
+  /**
+   * Completion, and its compensating undo, from **anywhere**.
+   *
+   * The agenda screen projects these itself before the request goes out, so Today has always
+   * felt instant. The detail screen does not — and once the agenda stopped refetching on
+   * invalidation, a completion recorded from a detail screen reached the server and never
+   * reached Today, because a mounted tab has nothing to trigger a refetch. Plans looked
+   * correct only because navigating to it remounts and refetches.
+   *
+   * Projecting here rather than in either screen means one behaviour for the row checkbox, the
+   * swipe action, the passed-plan sheet, the detail button, and a mutation replayed from the
+   * offline queue after a restart.
+   */
+  if (name === 'complete' || name === 'uncomplete' || name === 'skip') {
+    const occurrenceDate = occurrenceDateFrom(variables);
+    const target = {
+      activityId: activity.activityId,
+      ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+      ...clock,
+    };
+
+    if (name === 'skip') {
+      update(client, (agenda) => applySkip(agenda, { ...target, skipped: true }));
+      return true;
+    }
+
+    update(client, (agenda) =>
+      applyCompletion(
+        agenda,
+        name === 'complete'
+          ? { ...target, completed: true }
+          : {
+              ...target,
+              completed: false,
+              // The server's own word for where the row goes back to.
+              restoredStatus:
+                activity.schedule?.date === undefined ? 'saved' : 'scheduled',
+            },
+      ),
+    );
+    return true;
+  }
+
   return false;
+}
+
+/** Occurrence scope travels in the request, not the response. */
+function occurrenceDateFrom(variables: unknown): string | undefined {
+  if (typeof variables !== 'object' || variables === null) return undefined;
+  const input = (variables as { input?: unknown }).input;
+  if (typeof input !== 'object' || input === null) return undefined;
+  const date = (input as { occurrenceDate?: unknown }).occurrenceDate;
+  return typeof date === 'string' ? date : undefined;
 }
 
 /** Both a bare Activity and a `{ activity }` envelope reach this from different endpoints. */

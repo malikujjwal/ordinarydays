@@ -51,10 +51,10 @@ export function createOfflineQueryClient(platform = Platform.OS): QueryClient {
        * return pre-write data and cache it. Writing the server's own response into the cache
        * is what makes the change visible; the invalidation behind it is reconciliation.
        */
-      onSuccess: (data, _variables, _context, mutation) => {
+      onSuccess: (data, variables, _context, mutation) => {
         const { mutationKey } = mutation.options;
         if (!changesActivityLists(mutationKey)) return;
-        projectActivityWrite(client, mutationKey, data);
+        projectActivityWrite(client, mutationKey, data, variables);
         refreshActivityLists(client);
       },
     }),

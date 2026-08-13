@@ -157,7 +157,32 @@ export function useActivityActions(activityId: string): ActivityActions {
       };
 
       startUndoable({
-        apply: () => onProjected(true),
+        /**
+         * `revert` restores this snapshot, so `apply` has to have moved something for the undo
+         * to mean anything. It did not: it only dismissed the passed-plan prompt, which left
+         * the detail screen showing its completion button unchanged after a successful
+         * completion — the write landed and the screen denied it.
+         */
+        apply: () => {
+          onProjected(true);
+          /**
+           * **Only a one-off moves the Activity.** Completing an *occurrence* writes an
+           * `Occurrence` override and leaves `ACT#/META` untouched (`data-model.md` §4.5), so
+           * projecting a completed status onto the series here would be the client telling the
+           * same lie the repository layer is forbidden from telling. The occurrence's own state
+           * is projected into the agenda by `agendaCache`, which is where occurrence scope
+           * lives.
+           */
+          if (occurrenceDate !== undefined) return;
+          queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) =>
+            previous === undefined
+              ? previous
+              : {
+                  ...previous,
+                  activity: { ...previous.activity, status: 'completed', outcome },
+                },
+          );
+        },
         revert: () => {
           onProjected(false);
           if (snapshot !== undefined)
