@@ -16,6 +16,7 @@ import {
 import { useMemo, useState } from 'react';
 import { SectionList, View } from 'react-native';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
+import { GLOBAL_ADD_SCROLL_PADDING } from '@/components/globalAddLayout';
 import { TabScreen } from '@/components/TabScreen';
 import { useAgenda } from '../hooks/useAgenda';
 import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
@@ -167,7 +168,11 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
             </View>
           )}
           renderItem={renderItem}
-          contentContainerStyle={{ gap: theme.space[5], paddingBottom: theme.space[8] }}
+          contentContainerStyle={{
+            gap: theme.space[5],
+            // The final row scrolls above the global Add button without shrinking the viewport.
+            paddingBottom: GLOBAL_ADD_SCROLL_PADDING,
+          }}
         />
       )}
 

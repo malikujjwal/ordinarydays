@@ -21,6 +21,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
+import { GLOBAL_ADD_SCROLL_PADDING } from '@/components/globalAddLayout';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { TabScreen } from '@/components/TabScreen';
 import { useAgenda } from '@/features/agenda/hooks/useAgenda';
@@ -384,7 +385,11 @@ export function TodayScreen({
           scrollOffset.current = nativeEvent.contentOffset.y;
         }}
         scrollEventThrottle={16}
-        contentContainerStyle={{ gap: theme.space[8], paddingBottom: theme.space[8] }}
+        contentContainerStyle={{
+          gap: theme.space[8],
+          // The final row scrolls above the global Add button without shrinking the viewport.
+          paddingBottom: GLOBAL_ADD_SCROLL_PADDING,
+        }}
       >
         {hasOnlyUndatedTasks ? (
           <Text variant="subhead" color="textSecondary" testID="today-unscheduled-note">
