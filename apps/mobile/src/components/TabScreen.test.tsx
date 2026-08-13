@@ -43,4 +43,16 @@ describe('TabScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(pressed).toBe(true);
   });
+
+  it('does not reserve a permanent band for the floating Add button', () => {
+    wrap(
+      <TabScreen title="Today" testID="today-screen">
+        <EmptyState heading="Nothing planned today" />
+      </TabScreen>,
+    );
+
+    expect(screen.getByTestId('tab-screen-body').getAttribute('style')).not.toContain(
+      'padding-bottom',
+    );
+  });
 });

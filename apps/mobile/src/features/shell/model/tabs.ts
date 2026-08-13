@@ -30,6 +30,3 @@ export const tabs: readonly TabDefinition[] = Object.freeze([
  * and a label naming an object would be the first place the product implied a default.
  */
 export const ADD_LABEL = 'Add';
-
-/** 56 × 56 pt, from the controls table. Not a design preference; a stated hit target. */
-export const ADD_SIZE = 56;

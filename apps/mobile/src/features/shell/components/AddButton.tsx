@@ -1,5 +1,6 @@
 import { accentGlow, Plus, Touchable, useTheme } from '@od/ui';
-import { ADD_LABEL, ADD_SIZE } from '@/features/shell/model/tabs';
+import { GLOBAL_ADD_SIZE } from '@/components/globalAddLayout';
+import { ADD_LABEL } from '@/features/shell/model/tabs';
 
 /**
  * The global `+` (`interaction-contract.md` §2, `activities.md` §2.1).
@@ -30,8 +31,8 @@ export function AddButton({ onPress, testID = 'global-add' }: AddButtonProps) {
       testID={testID}
       style={[
         {
-          width: ADD_SIZE,
-          height: ADD_SIZE,
+          width: GLOBAL_ADD_SIZE,
+          height: GLOBAL_ADD_SIZE,
           borderRadius: theme.radius.pill,
           // `accentControl`, the filled-control surface (P2-40 §5.1). The dark `accent` carries
           // an inverse glyph at 4.00:1; `accentControl` resolves per scheme and clears it.

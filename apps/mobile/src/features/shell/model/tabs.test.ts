@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ADD_LABEL, ADD_SIZE, tabs } from './tabs';
+import { GLOBAL_ADD_SIZE } from '@/components/globalAddLayout';
+import { ADD_LABEL, tabs } from './tabs';
 
 /**
  * The three nouns (P1-23).
@@ -44,6 +45,6 @@ describe('the global Add control', () => {
 
   /** 56 × 56 pt, from `interaction-contract.md` §2's controls table. */
   it('is 56 pt, comfortably over the 44 pt minimum', () => {
-    expect(ADD_SIZE).toBe(56);
+    expect(GLOBAL_ADD_SIZE).toBe(56);
   });
 });
