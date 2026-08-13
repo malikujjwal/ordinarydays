@@ -1,6 +1,7 @@
 import { MAX_OFFLINE_MUTATIONS } from '@od/shared';
 import { MutationCache, QueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
+import { projectActivityWrite } from '@/lib/agendaCache';
 import {
   changesActivityLists,
   refreshActivityLists,
@@ -36,17 +37,24 @@ export function createOfflineQueryClient(platform = Platform.OS): QueryClient {
           .captureMutationError(error, mutation.options.mutationKey, variables);
       },
       /**
-       * The single place a successful activity write refreshes the lists and agenda windows
-       * it changed (P2-46).
+       * The single place a successful activity write reaches the lists and agenda windows it
+       * changed (P2-46).
        *
        * It has to be here rather than on the mutations because a component's `onSuccess` dies
        * with its component, and the two writes that most need this close their own surface on
        * success — compose unmounts on save, the reschedule sheet unmounts when it closes. The
        * cache outlives both, and also covers mutations replayed from the offline queue after a
        * restart, which never had a component to begin with.
+       *
+       * **Project first, then invalidate, and in that order.** The agenda is read from an
+       * eventually-consistent index, so the refetch an invalidation triggers can legitimately
+       * return pre-write data and cache it. Writing the server's own response into the cache
+       * is what makes the change visible; the invalidation behind it is reconciliation.
        */
-      onSuccess: (_data, _variables, _context, mutation) => {
-        if (!changesActivityLists(mutation.options.mutationKey)) return;
+      onSuccess: (data, _variables, _context, mutation) => {
+        const { mutationKey } = mutation.options;
+        if (!changesActivityLists(mutationKey)) return;
+        projectActivityWrite(client, mutationKey, data);
         refreshActivityLists(client);
       },
     }),
