@@ -2988,10 +2988,14 @@ and their existing tests. `ComingSoonSection.tsx` is **deleted**. Inventory is a
   same verb the row's trailing slot and the passed-plan sheet already render. Absent — not
   disabled — when `capabilities.complete` is false, which is how §4.1's "a plan you did not
   create carries no completion control" is satisfied without the client re-deriving ownership.
-- **The recurring occurrence pair.** `Snooze` and `Skip today` as secondary buttons beneath
-  the primary, only on an occurrence of a series, each gated on its own capability. They
-  dispatch P2-15's and P2-14's existing endpoints with `occurrenceDate`; this task adds no
-  write path.
+- **The recurring occurrence pair — pulled from this task on 2026-08-13, now P2-47.** As
+  written this bullet did not survive contact with the code, and the founder moved it rather
+  than let it widen P2-41. Three things block it: `useActivityActions` exposes no snooze or
+  skip; `Snooze` needs a time, and `SnoozeSheet` lives in `features/agenda` where
+  `dependency-cruiser`'s cross-feature rule puts it out of reach of `features/activity`; and
+  the detail screen usually has **no occurrence date at all** — `resolutionOccurrenceDate` is
+  set only when navigation came from a passed, unresolved row, so a series opened from Plans
+  has nothing for `Skip today` to skip. The third is a product question, not a wiring one.
 - **`ComingSoonSection` is deleted, and this is a resolution to raise in the PR.**
   [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §2 says an empty
   section "collapses to a single add affordance rather than disappearing, so the plan's

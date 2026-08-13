@@ -1,5 +1,5 @@
 import type { Reminder } from '@od/shared/types';
-import { Card, Text, Touchable, useTheme } from '@od/ui';
+import { Text, Touchable, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import {
   formatReminderOffset,
@@ -54,7 +54,7 @@ export function WhenWhereBlock({
   const scheduled = schedule !== undefined;
 
   return (
-    <Card testID="when-where">
+    <View testID="when-where">
       <View style={{ gap: theme.space[3] }}>
         <Touchable
           square={false}
@@ -123,6 +123,6 @@ export function WhenWhereBlock({
           </View>
         )}
       </View>
-    </Card>
+    </View>
   );
 }

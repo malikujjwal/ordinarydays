@@ -30,44 +30,25 @@ import type { Activity } from '@od/shared/types';
  * `01-product/*` owns behaviour and outranks an implementation plan, which is not in that
  * table at all. So Expenses and Updates are absent rather than disabled here. Raised in the
  * PR description rather than settled silently.
+ *
+ * ## P2-41 extends that resolution to the remaining four
+ *
+ * People, Prep, Lists and Attachments used to render a disabled affordance reading "Sharing is
+ * coming soon." §2's collapse rule governs a capability that **exists and is empty** — which is
+ * what `design-system.md` §7.5's collapsed rows are — and says nothing about a capability that
+ * is **not built**. That is a third state, and a row promising something the app cannot do is a
+ * dead affordance that teaches the user a lie. They are absent until the phase that builds
+ * them, at which point they return as §2 collapsed rows with real content behind them.
+ *
+ * This is the same resolution already recorded above for Expenses and Updates, applied to the
+ * four that P1-26 had kept.
  */
-
-export type SectionState = 'ready' | 'coming-soon';
 
 export interface DetailSection {
   key: string;
   /** The `CAPTION`-cased heading, or `undefined` for the unlabelled when/where block. */
   heading?: string;
-  state: SectionState;
-  /** The disabled affordance's label, when the section is not ready. */
-  action?: string;
-  /** Why it is disabled, in the user's words. Never a phase number in the UI. */
-  note?: string;
 }
-
-/** Phase 1 has no list, participant or attachment writes; each names what it is waiting for. */
-const COMING_SOON: Record<string, { heading: string; action: string; note: string }> = {
-  people: {
-    heading: 'People',
-    action: 'Add people',
-    note: 'Sharing is coming soon.',
-  },
-  prep: {
-    heading: 'Prep',
-    action: 'Add prep task',
-    note: 'Prep tasks are coming soon.',
-  },
-  lists: {
-    heading: 'Lists',
-    action: 'Add list',
-    note: 'Lists are coming soon.',
-  },
-  attachments: {
-    heading: 'Attachments',
-    action: 'Add',
-    note: 'Attachments are coming soon.',
-  },
-};
 
 /**
  * The sections for one activity, in render order.
@@ -78,20 +59,13 @@ export function sectionsFor(activity: Activity): DetailSection[] {
   if (activity.objectKind === 'task') {
     // §5.6's list, and nothing else. No placeholders.
     return [
-      { key: 'whenWhere', state: 'ready' },
-      { key: 'notes', heading: 'Notes', state: 'ready' },
-      { key: 'relatedPlan', heading: 'Related plan', state: 'ready' },
+      { key: 'whenWhere' },
+      { key: 'notes', heading: 'Notes' },
+      { key: 'relatedPlan', heading: 'Related plan' },
     ];
   }
 
-  return [
-    { key: 'whenWhere', state: 'ready' },
-    { key: 'people', state: 'coming-soon', ...COMING_SOON.people },
-    { key: 'prep', state: 'coming-soon', ...COMING_SOON.prep },
-    { key: 'lists', state: 'coming-soon', ...COMING_SOON.lists },
-    { key: 'notes', heading: 'Notes', state: 'ready' },
-    { key: 'attachments', state: 'coming-soon', ...COMING_SOON.attachments },
-  ];
+  return [{ key: 'whenWhere' }, { key: 'notes', heading: 'Notes' }];
 }
 
 /**

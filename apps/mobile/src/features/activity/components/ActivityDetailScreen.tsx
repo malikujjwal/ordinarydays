@@ -20,7 +20,6 @@ import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
-import { ComingSoonSection } from '@/features/activity/components/ComingSoonSection';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
@@ -38,7 +37,7 @@ import {
 } from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
-import { passedPlanResolution } from '@/lib/passedPlanResolution';
+import { completionVerb, passedPlanResolution } from '@/lib/passedPlanResolution';
 import { planKindLabel } from '@/lib/planKinds';
 
 /**
@@ -222,6 +221,18 @@ export function ActivityDetailScreen({
               onOpenRepeat={() => setRepeatOpen(true)}
               showResolutionPrompt={showResolutionPrompt}
               onOpenResolution={() => setResolutionOpen(true)}
+              canComplete={detail.detail?.capabilities?.complete === true}
+              completing={actions.isBusy}
+              onComplete={() => {
+                actions.resolvePassed(
+                  passedPlanResolution(activity.type).positive.outcome,
+                  resolutionOccurrenceDate ?? undefined,
+                  (resolved) => {
+                    setResolutionDismissed(resolved);
+                    onResolutionProjectionChange?.(resolved);
+                  },
+                );
+              }}
             />
           )}
         </View>
@@ -346,7 +357,13 @@ interface LoadedProps {
   onOpenRepeat: () => void;
   showResolutionPrompt: boolean;
   onOpenResolution: () => void;
+  /** Server-authored. The client never re-derives ownership (`today-and-tasks.md` §4.1). */
+  canComplete: boolean;
+  completing: boolean;
+  onComplete: () => void;
 }
+
+const RESOLVED_STATUSES = new Set(['completed', 'skipped']);
 
 function Loaded({
   activity,
@@ -356,9 +373,13 @@ function Loaded({
   onOpenRepeat,
   showResolutionPrompt,
   onOpenResolution,
+  canComplete,
+  completing,
+  onComplete,
 }: LoadedProps) {
   const theme = useTheme();
   const sections = sectionsFor(activity);
+  const resolved = RESOLVED_STATUSES.has(activity.status);
 
   return (
     <>
@@ -410,13 +431,13 @@ function Loaded({
         value={activity.title}
         hideLabel
         appearance="bare"
-        textVariant="title"
+        textVariant="display"
         onCommit={async (title) => {
           await detail.patch({ title });
         }}
         testID="detail-title"
       />
-      <Text variant="footnote" color="textSecondary" testID="detail-subtitle">
+      <Text variant="subhead" color="textSecondary" testID="detail-subtitle">
         {subtitleFor(
           activity,
           activity.objectKind === 'plan' ? planKindLabel(activity.type) : '',
@@ -429,41 +450,61 @@ function Loaded({
         </Text>
       )}
 
-      {sections.map((section) => {
-        if (section.state === 'coming-soon') {
-          return (
-            <ComingSoonSection
-              key={section.key}
-              heading={section.heading ?? ''}
-              action={section.action ?? ''}
-              note={section.note ?? ''}
-              testID={`section-${section.key}`}
-            />
-          );
-        }
+      {/**
+       * The schedule is part of the header grammar, not a section in the list
+       * (`design-system.md` §7.5): what it is, when it is, then what to do next. **U4 is
+       * unchanged** — it is a tap target that opens the reschedule sheet and never becomes a
+       * field.
+       */}
+      <WhenWhereBlock
+        schedule={activity.schedule}
+        location={activity.location}
+        reminders={detail.detail?.reminders ?? []}
+        {...(activity.schedule === undefined
+          ? {}
+          : {
+              recurrenceDescription:
+                activity.recurrence === undefined
+                  ? 'Never'
+                  : describeRecurrence(activity.recurrence, today),
+            })}
+        today={today}
+        onPressDate={onOpenReschedule}
+        onPressRepeat={onOpenRepeat}
+        onPressAddress={undefined}
+      />
 
-        if (section.key === 'whenWhere') {
-          return (
-            <WhenWhereBlock
-              key={section.key}
-              schedule={activity.schedule}
-              location={activity.location}
-              reminders={detail.detail?.reminders ?? []}
-              {...(activity.schedule === undefined
-                ? {}
-                : {
-                    recurrenceDescription:
-                      activity.recurrence === undefined
-                        ? 'Never'
-                        : describeRecurrence(activity.recurrence, today),
-                  })}
-              today={today}
-              onPressDate={onOpenReschedule}
-              onPressRepeat={onOpenRepeat}
-              onPressAddress={undefined}
-            />
-          );
-        }
+      {/**
+       * The primary completion action — the Phase 2 deliverable `phase-01-activity-core.md`
+       * deferred and that no other task claimed.
+       *
+       * **One component and one position for both object kinds**, with the label derived from
+       * the activity's type, so a Task, a Meal and an Event differ only in the verb. That verb
+       * comes from the same table the row's trailing slot and the passed-plan sheet read, so
+       * the three cannot disagree.
+       *
+       * **Absent, never disabled, when the caller lacks the capability.** That is how
+       * `today-and-tasks.md` §4.1's "a plan you did not create carries no completion control"
+       * is satisfied without the client re-deriving ownership from an owner id.
+       */}
+      {canComplete && !resolved ? (
+        <Button
+          label={completionVerb(activity.type)}
+          fullWidth
+          size="lg"
+          loading={completing}
+          onPress={onComplete}
+          testID="detail-complete"
+        />
+      ) : null}
+      {resolved ? (
+        <Text variant="bodyStrong" color="success" testID="detail-resolved">
+          {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
+        </Text>
+      ) : null}
+
+      {sections.map((section) => {
+        if (section.key === 'whenWhere') return null;
 
         if (section.key === 'notes') {
           return (
@@ -536,7 +577,8 @@ function InlineText({
   placeholder?: string;
   hideLabel?: boolean;
   appearance?: 'boxed' | 'bare';
-  textVariant?: 'body' | 'title';
+  /** `display` is the detail header's serif title (`design-system.md` §7.5). */
+  textVariant?: 'body' | 'title' | 'display';
   testID?: string;
 }) {
   const [draft, setDraft] = useState(value);

@@ -46,7 +46,7 @@ describe('a Task renders no placeholder for what it lacks', () => {
   });
 
   it('has no coming-soon section at all', () => {
-    expect(sectionsFor(task()).every((s) => s.state === 'ready')).toBe(true);
+    expect(sectionsFor(task()).every((s) => !('state' in s))).toBe(true);
   });
 
   it.each(['people', 'prep', 'lists', 'attachments', 'expenses', 'updates'])(
@@ -57,30 +57,30 @@ describe('a Task renders no placeholder for what it lacks', () => {
   );
 });
 
-describe('a Plan keeps its capabilities discoverable', () => {
+describe('a Plan renders only what is built', () => {
   it('renders the §2.1 sections in their fixed order', () => {
-    expect(sectionsFor(activity({})).map((s) => s.key)).toEqual([
-      'whenWhere',
-      'people',
-      'prep',
-      'lists',
-      'notes',
-      'attachments',
-    ]);
+    expect(sectionsFor(activity({})).map((s) => s.key)).toEqual(['whenWhere', 'notes']);
   });
 
-  it('disables the sections whose phase has not landed, each with a reason', () => {
-    const coming = sectionsFor(activity({})).filter((s) => s.state === 'coming-soon');
+  /**
+   * P2-41. §2's collapse rule governs a capability that **exists and is empty**; it says
+   * nothing about one that is not built. A row reading "Sharing is coming soon" is a dead
+   * affordance promising something the app cannot do, so the four are absent until the phase
+   * that builds them returns them as real §2 collapsed rows.
+   */
+  it.each(['people', 'prep', 'lists', 'attachments'])(
+    'does not render an unbuilt %s section',
+    (key) => {
+      expect(sectionsFor(activity({})).map((s) => s.key)).not.toContain(key);
+    },
+  );
 
-    expect(coming.map((s) => s.heading)).toEqual([
-      'People',
-      'Prep',
-      'Lists',
-      'Attachments',
-    ]);
-    expect(coming.every((s) => s.action !== undefined && s.note !== undefined)).toBe(
-      true,
-    );
+  it('carries no disabled affordance or "coming soon" copy on any section', () => {
+    for (const section of sectionsFor(activity({}))) {
+      expect(section).not.toHaveProperty('action');
+      expect(section).not.toHaveProperty('note');
+      expect(section).not.toHaveProperty('state');
+    }
   });
 
   /**

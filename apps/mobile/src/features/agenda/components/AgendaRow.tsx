@@ -4,6 +4,7 @@ import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
 import {
   canResolvePassedAgendaItem,
+  completionVerb,
   passedPlanResolution,
 } from '@/lib/passedPlanResolution';
 import { RowBadges } from './RowBadges';
@@ -34,21 +35,6 @@ const COMPLETED_STATUSES = new Set<AgendaItem['status']>([
 ]);
 
 const SKIPPED_STATUSES = new Set<AgendaItem['status']>(['skipped', 'skipped_occurrence']);
-
-function completionVerb(type: ActivityType): string {
-  switch (type) {
-    case 'task':
-      return 'Complete';
-    case 'meal':
-      return 'Had it';
-    case 'watch':
-      return 'Watched';
-    case 'event':
-      return 'Attended';
-    case 'custom':
-      return 'Done';
-  }
-}
 
 function bodyLabel(
   item: AgendaItem,

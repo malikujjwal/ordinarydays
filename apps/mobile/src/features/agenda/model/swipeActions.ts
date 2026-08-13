@@ -1,4 +1,5 @@
 import type { AgendaItem } from '@od/shared/types';
+import { completionVerb } from '@/lib/passedPlanResolution';
 
 export type AgendaSwipeActionName =
   | 'complete'
@@ -35,20 +36,8 @@ const action = (
 const DELETE = action('delete', 'Delete', true);
 const RESCHEDULE = action('reschedule', 'Reschedule');
 
-const positiveVerb = (item: AgendaItem): string => {
-  switch (item.type) {
-    case 'task':
-      return 'Complete';
-    case 'meal':
-      return 'Had it';
-    case 'watch':
-      return 'Watched';
-    case 'event':
-      return 'Attended';
-    case 'custom':
-      return 'Done';
-  }
-};
+/** One definition, shared with the row's trailing slot and the detail button (P2-41). */
+const positiveVerb = (item: AgendaItem): string => completionVerb(item.type);
 
 const isCompleted = (item: AgendaItem): boolean =>
   item.status === 'completed' || item.status === 'completed_occurrence';

@@ -38,6 +38,23 @@ export function passedPlanResolution(type: ActivityType): PassedPlanResolution {
   return RESOLUTIONS[type];
 }
 
+/**
+ * The verb this type completes with — `Complete`, `Had it`, `Watched`, `Attended`, `Done`.
+ *
+ * **One definition, because three surfaces have to agree.** `today-and-tasks.md` §4 names the
+ * detail screen's primary button, the row's trailing slot and the passed-plan sheet as showing
+ * the same verb for the same activity, and P2-41 requires the button it adds to match what the
+ * other two already render. Until now the mapping existed three times — here, in `AgendaRow`
+ * and in `swipeActions` — and three copies of a table that must agree is a disagreement waiting
+ * to happen. Adding a fourth for the detail button was not an option.
+ *
+ * Derived from `RESOLUTIONS` rather than restated, so the sheet's positive label and the verb
+ * cannot drift apart either.
+ */
+export function completionVerb(type: ActivityType): string {
+  return RESOLUTIONS[type].positive.label;
+}
+
 /** Server-authored authority plus clock/status state; no owner-id inference in the client. */
 export function canResolvePassedAgendaItem(item: AgendaItem): boolean {
   return item.isPast && item.status === 'scheduled' && item.capabilities.complete;

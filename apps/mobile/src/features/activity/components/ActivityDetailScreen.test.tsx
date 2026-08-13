@@ -246,17 +246,26 @@ describe('reading', () => {
 });
 
 describe('the sections', () => {
-  it('keeps a Plan’s capabilities discoverable as disabled affordances', async () => {
+  /**
+   * P2-41 replaces P1-26's disabled affordances with absence.
+   *
+   * `plans-and-lists.md` §2's collapse rule governs a capability that **exists and is empty**;
+   * it does not govern one that is **not built**. A row reading "Sharing is coming soon" is a
+   * dead affordance promising something the app cannot do. The four return when the phase that
+   * builds them returns them, as real §2 collapsed rows with content behind them.
+   */
+  it('renders no unbuilt capability as a disabled affordance', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
     await loaded();
 
-    for (const label of ['Add people', 'Add prep task', 'Add list']) {
-      expect(
-        screen.getByRole('button', { name: label }).getAttribute('aria-disabled'),
-      ).toBe('true');
+    for (const label of ['Add people', 'Add prep task', 'Add list', 'Add']) {
+      expect(screen.queryByRole('button', { name: label })).toBeNull();
     }
-    expect(screen.getByText('Sharing is coming soon.')).toBeDefined();
+    for (const heading of ['People', 'Prep', 'Lists', 'Attachments']) {
+      expect(screen.queryByText(heading)).toBeNull();
+    }
+    expect(document.body.textContent).not.toMatch(/coming soon/i);
   });
 
   /** §5.6: a Task "renders no disabled placeholders for anything it lacks". */
@@ -306,7 +315,14 @@ describe('passed-plan resolution', () => {
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
     fireEvent.click(prompt);
-    fireEvent.click(screen.getByRole('button', { name: 'Attended' }));
+    /**
+     * By testID, not by name. Since P2-41 the detail screen also carries an `Attended` button —
+     * the primary completion action — and both are correct: the sheet resolves a *passed*
+     * occurrence, the header button completes the activity. Selecting by role and name would
+     * now match two elements, which is the ambiguity telling us the screen gained a second,
+     * intended affordance rather than a duplicate.
+     */
+    fireEvent.click(screen.getByTestId('passed-plan-positive'));
 
     await waitFor(() =>
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
@@ -676,15 +692,45 @@ describe('the overflow menu', () => {
     expect(screen.queryByRole('button', { name: 'Change Plan kind' })).toBeNull();
   });
 
-  /** P1-26's decision: no completion button in Phase 1, disabled or otherwise. */
-  it('has no completion button anywhere on the screen', async () => {
-    stubFetch({ status: 200, body: detailBody(plan()) });
+  /**
+   * P1-26 deferred the completion button; `phase-01-activity-core.md`'s out-of-scope table
+   * routed it to **Phase 2**, and no Phase 2 task claimed it until P2-41. So this assertion is
+   * inverted rather than deleted: the button exists, and it renders the verb this type
+   * completes with.
+   */
+  it.each([
+    ['task', 'Complete'],
+    ['meal', 'Had it'],
+    ['watch', 'Watched'],
+    ['event', 'Attended'],
+    ['custom', 'Done'],
+  ] as const)('renders the %s completion verb "%s"', async (type, verb) => {
+    // `details.kind` is the discriminator and has to move with `type`, and only a Task carries
+    // `objectKind: 'task'` — a Plan is never of type `task`. `watch` additionally requires a
+    // `mediaTitle`, so its details are not a bare `kind`.
+    const details =
+      type === 'watch' ? { kind: 'watch', mediaTitle: 'Severance' } : { kind: type };
+    const activity = type === 'task' ? task() : plan({ type, details });
+    stubFetch({ status: 200, body: detailBody(activity) });
     mount();
     await loaded();
 
-    for (const verb of ['Done', 'Complete', 'Attended', 'Had it', 'Watched']) {
-      expect(screen.queryByRole('button', { name: verb })).toBeNull();
-    }
+    expect(screen.getByTestId('detail-complete').textContent).toContain(verb);
+  });
+
+  /**
+   * §4.1: "a plan you did not create carries no completion control". **Absent, not disabled** —
+   * and driven by the server's capability rather than an owner id the client re-derives.
+   */
+  it('renders no completion button when the caller cannot complete', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan(), [], { complete: false, skip: false, snooze: false }),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
   });
 });
 
