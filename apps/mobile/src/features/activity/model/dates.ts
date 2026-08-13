@@ -82,7 +82,7 @@ export function formatWallTime(time: string): string {
 }
 
 /**
- * The when/where block's one line: `Fri 14 Aug · 6:00 PM – 8:00 PM`, or `Not scheduled`.
+ * The detail header's one line: `Fri, Aug 14 · 6:00 PM – 8:00 PM`, or `Not scheduled`.
  *
  * `Not scheduled` rather than an empty row, because an undated plan is a plan and the row is
  * never hidden (`plans-and-lists.md` §2.2).
@@ -93,7 +93,9 @@ export function formatSchedule(
 ): string {
   if (schedule === undefined) return 'Not scheduled';
 
-  const parts = [formatWallDate(schedule.date, today)];
+  const parsed = toDate(schedule.date);
+  const sameYear = schedule.date.slice(0, 4) === today.slice(0, 4);
+  const parts = [format(parsed, sameYear ? 'EEE, MMM d' : 'EEE, MMM d, yyyy')];
   if (schedule.time !== undefined) {
     parts.push(
       schedule.endTime === undefined

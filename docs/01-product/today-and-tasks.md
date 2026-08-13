@@ -407,11 +407,14 @@ of that plan.
 
 Task detail is the Activity detail screen, reduced. It follows the shared anatomy
 conventions in [`plans-and-lists.md`](plans-and-lists.md#21-anatomy) §2.1 and shows, top to
-bottom: title, the schedule row, the repeat row, the reminder row, notes, and a
+bottom: title, the schedule row with its combined repeat/reminder summary, the completion
+control, and the functional Reminder, Notes and
 `Related plan` row — the parent link, when it is a prep task (§5.5). Its actions are the
 standard complete, skip and snooze set (§4, §§5.3–5.4). It has no People, Expenses,
 Updates, or Attachments sections: tasks are solo (§5.1), so the coordination sections do
 not exist for them, and the screen renders no disabled placeholders for anything it lacks.
+Each functional capability is a single disclosure row with a trailing chevron and accessible
+expanded state; opening it shows either its current content or the real add controls.
 
 ---
 

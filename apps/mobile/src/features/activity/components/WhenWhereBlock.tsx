@@ -10,7 +10,7 @@ import {
 /**
  * The when / where block (`plans-and-lists.md` §2.1 row 2).
  *
- * Three rows in one card: the schedule, the location, and **your own** reminders.
+ * The compact schedule header: date/time, recurrence + caller reminder summary, then location.
  *
  * ## The date row is a button, and the address row is a different button
  *
@@ -36,7 +36,6 @@ export interface WhenWhereBlockProps {
   recurrenceDescription?: string;
   today: WallDate;
   onPressDate: () => void;
-  onPressRepeat?: () => void;
   onPressAddress: (() => void) | undefined;
 }
 
@@ -47,7 +46,6 @@ export function WhenWhereBlock({
   recurrenceDescription,
   today,
   onPressDate,
-  onPressRepeat,
   onPressAddress,
 }: WhenWhereBlockProps) {
   const theme = useTheme();
@@ -59,27 +57,31 @@ export function WhenWhereBlock({
         <Touchable
           square={false}
           accessibilityRole="button"
-          accessibilityLabel={`${formatSchedule(schedule, today)}, change the date`}
+          accessibilityLabel={`${formatSchedule(schedule, today)}, tap to edit`}
           onPress={onPressDate}
           testID="when-where-date"
         >
-          <Text variant="bodyStrong" color={scheduled ? 'textPrimary' : 'textSecondary'}>
-            {formatSchedule(schedule, today)}
-          </Text>
+          <View
+            style={{ flexDirection: 'row', alignItems: 'baseline', gap: theme.space[3] }}
+          >
+            <Text
+              variant="bodyStrong"
+              color={scheduled ? 'textPrimary' : 'textSecondary'}
+            >
+              {formatSchedule(schedule, today)}
+            </Text>
+            <Text variant="footnote" color="textSecondary">
+              Tap to edit
+            </Text>
+          </View>
         </Touchable>
 
-        {recurrenceDescription === undefined ? null : (
-          <Touchable
-            square={false}
-            accessibilityRole="button"
-            accessibilityLabel={`${recurrenceDescription}, change repeat`}
-            onPress={onPressRepeat}
-            testID="when-where-repeat"
-          >
+        {!scheduled ? null : (
+          <View testID="when-where-reminders">
             <Text variant="footnote" color="textSecondary">
-              {recurrenceDescription}
+              {`${repeatSummary(recurrenceDescription)} · ${reminderSummary(reminders)}`}
             </Text>
-          </Touchable>
+          </View>
         )}
 
         {location === undefined || location.label === '' ? null : (
@@ -105,24 +107,20 @@ export function WhenWhereBlock({
             )}
           </Touchable>
         )}
-
-        {/* Hidden without a date: nothing to count back from (§2.2). */}
-        {!scheduled ? null : (
-          <View style={{ gap: theme.space[2] }} testID="when-where-reminders">
-            {reminders.length === 0 ? (
-              <Text variant="footnote" color="textSecondary">
-                No reminder
-              </Text>
-            ) : (
-              reminders.map((reminder) => (
-                <Text key={reminder.reminderId} variant="footnote" color="textSecondary">
-                  {`Remind me · ${formatReminderOffset(reminder.offsetMinutes)}`}
-                </Text>
-              ))
-            )}
-          </View>
-        )}
       </View>
     </View>
   );
+}
+
+function repeatSummary(description: string | undefined): string {
+  if (description === undefined) return 'Does not repeat';
+  return `Repeats ${description.charAt(0).toLowerCase()}${description.slice(1)}`;
+}
+
+function reminderSummary(reminders: Reminder[]): string {
+  if (reminders.length === 0) return 'No reminder';
+  if (reminders.length === 1) {
+    return `Reminder ${formatReminderOffset(reminders[0]?.offsetMinutes ?? 0).toLowerCase()}`;
+  }
+  return `${reminders.length} reminders`;
 }

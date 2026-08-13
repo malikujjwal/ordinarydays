@@ -6,9 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   type ActivityPostVariables,
   type CreateActivityVariables,
+  changesActivityLists,
   type DeleteActivityVariables,
   type DuplicateActivityVariables,
   type PatchActivityVariables,
+  type ReminderDeleteVariables,
   registerActivityMutationDefaults,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
@@ -43,6 +45,7 @@ type Variables =
   | CreateActivityVariables
   | DuplicateActivityVariables
   | DeleteActivityVariables
+  | ReminderDeleteVariables
   | PatchActivityVariables
   | ActivityPostVariables<Record<string, unknown>>;
 
@@ -108,6 +111,13 @@ const cases: Array<{ key: MutationKey; variables: Variables }> = [
       idempotencyKey: IDEMPOTENCY_KEY,
     },
   },
+  {
+    key: activityMutationKeys.reminderDelete,
+    variables: {
+      activityId: ACTIVITY_ID,
+      reminderId: 'rem_01J0000000000000000000000A',
+    },
+  },
 ];
 
 function fakeHttpClient() {
@@ -123,6 +133,11 @@ function fakeHttpClient() {
           updatedAt: '2026-08-08T10:00:00.000Z',
           schemaVersion: 1,
         },
+      });
+    }
+    if (options.path.includes('/reminders/')) {
+      return Promise.resolve({
+        data: { reminderId: 'rem_01J0000000000000000000000A' },
       });
     }
     if (options.path === `/v1/activities/${ACTIVITY_ID}` && 'method' in options) {
@@ -181,7 +196,7 @@ describe('the query client defaults', () => {
     });
   });
 
-  it('owns exactly the eleven stable persisted keys', () => {
+  it('owns exactly the twelve stable persisted keys', () => {
     expect(Object.values(activityMutationKeys)).toEqual([
       ['activity', 'create'],
       ['activity', 'duplicate'],
@@ -194,16 +209,22 @@ describe('the query client defaults', () => {
       ['activity', 'snooze'],
       ['activity', 'unsnooze'],
       ['activity', 'reminder-create'],
+      ['activity', 'reminder-delete'],
     ]);
+  });
+
+  it('does not refresh activity lists for reminder-only writes', () => {
+    expect(changesActivityLists(activityMutationKeys.reminderCreate)).toBe(false);
+    expect(changesActivityLists(activityMutationKeys.reminderDelete)).toBe(false);
   });
 });
 
 describe('persisted mutation defaults', () => {
-  it('dehydrates, rehydrates and resolves all eleven iOS mutations', async () => {
+  it('dehydrates, rehydrates and resolves all twelve iOS mutations', async () => {
     const source = createOfflineQueryClient();
     for (const entry of cases) addPausedMutation(source, entry.key, entry.variables);
     const state = dehydratePersistedClient(source, 'ios');
-    expect(state.mutations).toHaveLength(11);
+    expect(state.mutations).toHaveLength(12);
 
     const target = createOfflineQueryClient();
     const fake = fakeHttpClient();
@@ -216,8 +237,8 @@ describe('persisted mutation defaults', () => {
         .getMutationCache()
         .getAll()
         .map((mutation) => mutation.state.status),
-    ).toEqual(Array.from({ length: 11 }, () => 'success'));
-    expect(fake.request).toHaveBeenCalledTimes(11);
+    ).toEqual(Array.from({ length: 12 }, () => 'success'));
+    expect(fake.request).toHaveBeenCalledTimes(12);
   });
 
   it('refuses mutation 201 on iOS with the canonical offline message', async () => {

@@ -157,6 +157,21 @@ export function deleteReminder(
     .then((response) => response.data);
 }
 
+/** A 404 is success only while replaying this caller's own queued reminder removal. */
+export async function deleteReminderForReplay(
+  client: HttpClient,
+  activityId: string,
+  reminderId: string,
+  signal?: AbortSignal,
+): Promise<{ reminderId: string }> {
+  try {
+    return await deleteReminder(client, activityId, reminderId, signal);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { reminderId };
+    throw error;
+  }
+}
+
 /**
  * `PATCH /v1/activities/:id`.
  *

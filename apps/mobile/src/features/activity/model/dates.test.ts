@@ -102,19 +102,25 @@ describe('formatSchedule', () => {
   });
 
   it('renders a date alone', () => {
-    expect(formatSchedule({ date: '2026-08-14' }, WEDNESDAY)).toBe('Fri 14 Aug');
+    expect(formatSchedule({ date: '2026-08-14' }, WEDNESDAY)).toBe('Fri, Aug 14');
   });
 
   it('renders a date and a start time', () => {
     expect(formatSchedule({ date: '2026-08-14', time: '19:00' }, WEDNESDAY)).toBe(
-      'Fri 14 Aug · 7:00 PM',
+      'Fri, Aug 14 · 7:00 PM',
+    );
+  });
+
+  it('includes the year when the schedule is outside the current year', () => {
+    expect(formatSchedule({ date: '2027-08-14', time: '19:00' }, WEDNESDAY)).toBe(
+      'Sat, Aug 14, 2027 · 7:00 PM',
     );
   });
 
   it('renders a time range when there is an end time', () => {
     expect(
       formatSchedule({ date: '2026-08-14', time: '19:00', endTime: '21:30' }, WEDNESDAY),
-    ).toBe('Fri 14 Aug · 7:00 PM – 9:30 PM');
+    ).toBe('Fri, Aug 14 · 7:00 PM – 9:30 PM');
   });
 });
 

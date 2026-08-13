@@ -376,6 +376,14 @@ inherits the creator's, and the owner cannot set one for anyone else.
 
 ### 2.2 Section visibility
 
+> **Pre-build discovery clarification — 2026-08-13.** The empty states below describe a
+> capability after its owning phase has built real controls. Before then, Plan detail may show
+> People, Prep, Lists and Attachments as non-interactive discovery rows ending in
+> `Coming later`; a Meal may also show Ingredients this way until Phase 3 builds its
+> interaction. Those rows have no chevron, disabled action, expansion or tap behaviour.
+> Recipe, Expenses and Updates remain absent until their own product conditions and
+> implementation are available.
+
 | Section | Hidden when |
 | --- | --- |
 | Hero image | No `primaryAttachmentId` |

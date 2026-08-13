@@ -3,6 +3,7 @@ import {
   createActivity,
   createReminder,
   deleteActivityForReplay,
+  deleteReminderForReplay,
   duplicateActivity,
   type HttpClient,
   patchActivityForReplay,
@@ -63,6 +64,11 @@ export type SnoozeActivityVariables = ActivityPostVariables<SnoozeActivityInput>
 export type UnsnoozeActivityVariables = ActivityPostVariables<UnsnoozeActivityInput>;
 export type ReminderCreateVariables = ActivityPostVariables<ReminderInput>;
 
+export interface ReminderDeleteVariables {
+  activityId: string;
+  reminderId: string;
+}
+
 const ACTIVITY_LIST_KEY = ['activities'] as const;
 const AGENDA_KEY = ['agenda'] as const;
 
@@ -109,13 +115,13 @@ export function refreshActivityLists(client: QueryClient): void {
  * The `MutationCache` outlives every component and every screen, and it also covers mutations
  * replayed from the offline queue after a restart, which have no component at all.
  *
- * Every activity mutation key is `['activity', <name>]`. Only a reminder leaves lists and
+ * Every activity mutation key is `['activity', <name>]`. Reminder writes leave lists and
  * agenda windows untouched.
  */
 export function changesActivityLists(mutationKey: unknown): boolean {
   if (!Array.isArray(mutationKey)) return false;
   const [scope, name] = mutationKey as readonly unknown[];
-  return scope === 'activity' && name !== 'reminder-create';
+  return scope === 'activity' && name !== 'reminder-create' && name !== 'reminder-delete';
 }
 
 /** Registers every function a dehydrated mutation can need after its component is gone. */
@@ -173,6 +179,13 @@ export function registerActivityMutationDefaults(
     mutationFn: ({ activityId, input, idempotencyKey }: ReminderCreateVariables) =>
       createReminder(httpClient, activityId, input, idempotencyKey),
     onSuccess: (_data, { activityId }: ReminderCreateVariables) => {
+      void client.invalidateQueries({ queryKey: ['activity', activityId] });
+    },
+  });
+  client.setMutationDefaults(activityMutationKeys.reminderDelete, {
+    mutationFn: ({ activityId, reminderId }: ReminderDeleteVariables) =>
+      deleteReminderForReplay(httpClient, activityId, reminderId),
+    onSuccess: (_data, { activityId }: ReminderDeleteVariables) => {
       void client.invalidateQueries({ queryKey: ['activity', activityId] });
     },
   });

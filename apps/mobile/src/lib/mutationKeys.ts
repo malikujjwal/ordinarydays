@@ -11,6 +11,7 @@ export const activityMutationKeys = {
   snooze: ['activity', 'snooze'],
   unsnooze: ['activity', 'unsnooze'],
   reminderCreate: ['activity', 'reminder-create'],
+  reminderDelete: ['activity', 'reminder-delete'],
 } as const;
 
 export type ActivityMutationName = keyof typeof activityMutationKeys;

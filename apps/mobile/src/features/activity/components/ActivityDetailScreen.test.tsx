@@ -89,6 +89,14 @@ const detailBody = (
   meta: { requestId: 'req_test' },
 });
 
+const reminder = (reminderId: string, offsetMinutes: number) => ({
+  reminderId,
+  activityId: ID,
+  userId: 'usr_01J0000000000000000000000B',
+  offsetMinutes,
+  channel: 'push' as const,
+});
+
 interface Sent {
   url: string;
   method: string | undefined;
@@ -189,13 +197,18 @@ describe('reading', () => {
     expect(sent[0]?.url).toMatch(new RegExp(`/v1/activities/${ID}$`));
   });
 
-  it('renders the title, the schedule and the notes', async () => {
+  it('renders the title, compact schedule metadata and collapsed notes', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
     await loaded();
 
     expect(fieldValue('Title')).toBe('Zahav');
-    expect(screen.getByText('Fri 14 Aug · 7:00 PM')).toBeDefined();
+    expect(screen.getByText('Fri, Aug 14 · 7:00 PM')).toBeDefined();
+    expect(screen.getByText('Tap to edit')).toBeDefined();
+    expect(screen.getByText('Does not repeat · No reminder')).toBeDefined();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Notes, Check-in is after 3 PM.' }),
+    );
     expect(fieldValue('Notes')).toBe('Check-in is after 3 PM.');
   });
 
@@ -224,6 +237,9 @@ describe('reading', () => {
     await loaded();
 
     expect(screen.getByTestId('section-notes').style.borderTopWidth).toBe('1px');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Notes, Check-in is after 3 PM.' }),
+    );
     expect(screen.getByLabelText('Notes').style.backgroundColor).toBe('rgba(0, 0, 0, 0)');
     expect(screen.getByTestId('section-related').style.borderTopWidth).toBe('1px');
   });
@@ -253,7 +269,13 @@ describe('reading', () => {
     mount();
     await loaded();
 
-    expect(screen.getByText('Remind me · 15 minutes before')).toBeDefined();
+    expect(
+      screen.getByText('Does not repeat · Reminder 15 minutes before'),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Reminder, 15 minutes before' }));
+    expect(
+      screen.getByRole('button', { name: 'Remove reminder 15 minutes before' }),
+    ).toBeDefined();
   });
 
   it('hides the reminder row entirely when there is no date to count back from', async () => {
@@ -262,6 +284,24 @@ describe('reading', () => {
     await loaded();
 
     expect(screen.queryByTestId('when-where-reminders')).toBeNull();
+    expect(screen.queryByTestId('section-reminders')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit recurrence' })).toBeNull();
+  });
+
+  it('keeps recurrence editing at the bottom and Delete in the three-dot menu', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    const sections = screen.getByTestId('detail-sections');
+    const recurrence = screen.getByRole('button', { name: 'Edit recurrence' });
+    expect(
+      sections.compareDocumentPosition(recurrence) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined();
   });
 
   it('shows the §5.3 failure with a Try again action', async () => {
@@ -288,6 +328,25 @@ describe('reading', () => {
 });
 
 describe('the sections', () => {
+  it('announces disclosure state and reveals Notes only after the row is pressed', async () => {
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+    await loaded();
+
+    const notes = screen.getByRole('button', {
+      name: 'Notes, Check-in is after 3 PM.',
+    });
+    expect(notes.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByLabelText('Notes')).toBeNull();
+
+    fireEvent.click(notes);
+    expect(notes.getAttribute('aria-expanded')).toBe('true');
+    expect(fieldValue('Notes')).toBe('Check-in is after 3 PM.');
+
+    fireEvent.click(notes);
+    expect(screen.queryByLabelText('Notes')).toBeNull();
+  });
+
   /**
    * P2-41 replaces P1-26's disabled affordances with absence.
    *
@@ -296,18 +355,30 @@ describe('the sections', () => {
    * dead affordance promising something the app cannot do. The four return when the phase that
    * builds them returns them, as real §2 collapsed rows with content behind them.
    */
-  it('renders no unbuilt capability as a disabled affordance', async () => {
+  it('renders future Plan capabilities as noninteractive Coming later rows', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
     await loaded();
 
-    for (const label of ['Add people', 'Add prep task', 'Add list', 'Add']) {
-      expect(screen.queryByRole('button', { name: label })).toBeNull();
+    for (const heading of ['People', 'Preparation', 'Related lists', 'Attachments']) {
+      expect(screen.getByText(heading)).toBeDefined();
     }
-    for (const heading of ['People', 'Prep', 'Lists', 'Attachments']) {
-      expect(screen.queryByText(heading)).toBeNull();
-    }
-    expect(document.body.textContent).not.toMatch(/coming soon/i);
+    expect(screen.getAllByText('Coming later')).toHaveLength(4);
+    expect(screen.queryByRole('button', { name: /People/ })).toBeNull();
+    expect(screen.queryByText(/coming soon/i)).toBeNull();
+  });
+
+  it('previews Ingredients as a noninteractive future row on Meal plans only', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan({ type: 'meal', details: { kind: 'meal' } })),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByText('Ingredients')).toBeDefined();
+    expect(screen.getByLabelText('Ingredients, coming later')).toBeDefined();
+    expect(screen.queryByRole('button', { name: /Ingredients/ })).toBeNull();
   });
 
   /** §5.6: a Task "renders no disabled placeholders for anything it lacks". */
@@ -320,6 +391,100 @@ describe('the sections', () => {
     expect(screen.queryByText('Add prep task')).toBeNull();
     expect(screen.queryByText('Add list')).toBeNull();
     expect(screen.getByTestId('section-related')).toBeDefined();
+  });
+});
+
+describe('caller-owned reminders', () => {
+  it('adds a reminder with a fresh idempotency key and updates the open row', async () => {
+    const added = reminder('rem_01J0000000000000000000000C', -15);
+    stubFetch(
+      { status: 200, body: detailBody(plan()) },
+      { status: 201, body: { data: added, meta: { requestId: 'req_reminder' } } },
+      { status: 200, body: detailBody(plan(), [added]) },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reminder, No reminder' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add reminder 15 minutes before' }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Remove reminder 15 minutes before' }),
+      ).toBeDefined(),
+    );
+    const request = sent.find((entry) => entry.method === 'POST');
+    expect(request?.url).toMatch(new RegExp(`/v1/activities/${ID}/reminders$`));
+    expect(request?.body).toEqual({ offsetMinutes: -15 });
+    expect(request?.headers['Idempotency-Key']).toBe('idem-test-key');
+  });
+
+  it('removes only the selected caller-owned reminder', async () => {
+    const existing = reminder('rem_01J0000000000000000000000C', -15);
+    stubFetch(
+      { status: 200, body: detailBody(plan(), [existing]) },
+      {
+        status: 200,
+        body: {
+          data: { reminderId: existing.reminderId },
+          meta: { requestId: 'req_reminder' },
+        },
+      },
+      { status: 200, body: detailBody(plan()) },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reminder, 15 minutes before' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Remove reminder 15 minutes before' }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: 'Remove reminder 15 minutes before' }),
+      ).toBeNull(),
+    );
+    expect(sent.find((entry) => entry.method === 'DELETE')?.url).toMatch(
+      new RegExp(`/v1/activities/${ID}/reminders/${existing.reminderId}$`),
+    );
+  });
+
+  it('stops at three reminders and explains the limit', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan(), [
+        reminder('rem_01J0000000000000000000000C', -5),
+        reminder('rem_01J0000000000000000000000D', -15),
+        reminder('rem_01J0000000000000000000000E', -60),
+      ]),
+    });
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reminder, 3 reminders' }));
+    expect(screen.getByText('You can add up to 3 reminders.')).toBeDefined();
+    expect(screen.queryByText('Add a reminder')).toBeNull();
+  });
+
+  it('offers only whole-day offsets when the Activity has no time', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({ schedule: { date: '2026-08-14', timezone: 'America/New_York' } }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reminder, No reminder' }));
+    expect(screen.getByRole('button', { name: 'Add reminder On the day' })).toBeDefined();
+    expect(
+      screen.getByRole('button', { name: 'Add reminder 1 day before' }),
+    ).toBeDefined();
+    expect(screen.queryByRole('button', { name: /15 minutes/ })).toBeNull();
   });
 });
 
@@ -493,7 +658,7 @@ describe('U4 — tapping a date opens the reschedule sheet', () => {
 
     expect(screen.getByTestId('reschedule-sheet')).toBeDefined();
     // The date row is a button, not a field. It did not become editable.
-    expect(screen.queryByLabelText('Fri 14 Aug · 7:00 PM')).toBeNull();
+    expect(screen.queryByRole('textbox', { name: /Fri, Aug 14/ })).toBeNull();
   });
 
   it('writes nothing from the tap itself (rule 6)', async () => {
@@ -579,7 +744,8 @@ describe('editing in place', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Daily, change repeat' }));
+    expect(screen.getByText('Repeats daily · No reminder')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit recurrence' }));
     fireEvent.change(screen.getByTestId('repeat-option'), {
       target: { value: 'weekdays' },
     });
@@ -596,9 +762,7 @@ describe('editing in place', () => {
       },
     });
     await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Every weekday, change repeat' }),
-      ).toBeDefined(),
+      expect(screen.getByText('Repeats every weekday · No reminder')).toBeDefined(),
     );
   });
 

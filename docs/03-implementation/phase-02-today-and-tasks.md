@@ -205,6 +205,22 @@ Anytime list. This is the phase where the product becomes usable daily.
 >    design asks for belongs to P2-41, P2-42 or P2-43, all of which depend on P2-40 so that they
 >    are built in the real palette rather than against it.
 
+> **Founder clarification for P2-41 — 2026-08-13 (newer than decision 5 above).** The mock is
+> still a flow reference rather than a literal feature checklist, but a Plan detail may expose
+> the future People, Preparation, Related lists and Attachments capabilities as compact,
+> **non-interactive** discovery rows ending in `Coming later`; a Meal also shows Ingredients
+> this way because the interactive ingredient flow belongs to Phase 3. They have no chevron,
+> disabled action, expansion or tap behaviour. Recipe, Expenses and Updates remain absent.
+> Capabilities that work now are single disclosure rows: a trailing chevron communicates the
+> expansion, the row exposes its expanded state to assistive technology, and opening it shows
+> either the current content or the real add controls. The schedule renders as
+> `Fri, Jul 24 · 6:00 PM` with `Tap to edit` beside it and
+> `Repeats daily · No reminder` immediately below. The top schedule target owns rescheduling;
+> `Edit recurrence` sits in the bottom time-actions block, while Delete remains only in the
+> three-dot menu. P2-16 supplied reminder storage and delivery but no detail-screen management
+> control, so P2-41 wires its existing create/delete client paths into the Reminder disclosure;
+> this adds no endpoint or reminder model.
+
 > **Today-screen furniture and the Tomorrow preview — 2026-08-12 (newest note in this file).**
 > A read of the founder's `Planner` prototype (Claude Design project
 > `83c4a4eb-57cd-48a4-b6a6-705fbe0327ff`) against the built Today screen found that
@@ -2967,6 +2983,12 @@ threshold may be removed or weakened.
 
 ### P2-41 — Activity detail restructure and the completion button
 
+> **Founder clarification — 2026-08-13.** The clarification near the top of this file is the
+> newest task text and supersedes the older absent-until-built and duplicate-action decisions
+> below wherever they disagree. In particular, the named future Plan capabilities render as
+> non-interactive `Coming later` discovery rows, reminder management is functional, and the
+> visible bottom time action is `Edit recurrence`; Delete remains in `⋯`.
+
 **Files.** `apps/mobile/src/features/activity/components/{ActivityDetailScreen.tsx,
 WhenWhereBlock.tsx,ComingSoonSection.tsx}`, `apps/mobile/src/features/activity/model/sections.ts`,
 and their existing tests. `ComingSoonSection.tsx` is **deleted**. Inventory is a minimum.
@@ -3025,7 +3047,9 @@ state for any input. **The P1-26 test `has no completion button anywhere on the 
 replaced by one asserting the type's verb is present — it is not deleted, and no other
 assertion in that file is weakened to accommodate this task.**
 
-**Scope guard.** Do not render People, Preparation, Related lists, Expenses or Attachments.
+**Scope guard.** Do not implement People, Preparation, Related lists, Attachments or Meal
+Ingredients; their discovery rows are non-interactive per the 2026-08-13 clarification. Do
+not render Expenses, Updates or Recipe.
 Do not add a colour outside P2-40's tables. Do not add an activity type. Do not touch the
 completion, skip or snooze endpoints, the `outcome` enum, or the agenda projection. Do not
 change the Today row or the passed-plan sheet.

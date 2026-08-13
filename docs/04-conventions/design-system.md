@@ -557,8 +557,8 @@ and the reference for every later task that adds a capability to this screen.
  ‹                                          ⋯     ← back, overflow
  Chicken tacos                                     ← display, serif
  Meal · Alice + 2                                  ← subhead, textSecondary
- Tonight · 7:30 PM                                 ← bodyStrong, tap target → reschedule
- Reminder 1 hour before                            ← footnote, textSecondary
+ Wed, Aug 12 · 7:30 PM  Tap to edit                ← bodyStrong, tap target → reschedule
+ Repeats daily · Reminder 1 hour before            ← footnote, textSecondary
  ┌───────────────────────────────────────────┐
  │                 Had it                    │     ← primary, type-derived verb
  └───────────────────────────────────────────┘
@@ -577,15 +577,15 @@ and the reference for every later task that adds a capability to this screen.
 1. **The top says what it is, when it is, and what to do next** — in that order, in one
    grammar, for every type. Title, then type-and-audience, then the schedule as a tap target,
    then the primary action. Nothing else competes for the top of the screen.
-2. **A capability is one compact row until it holds content, then a section.** Collapsed is
-   `label` / current value in `subhead` `textSecondary` / a trailing `+ Add`. Expanded is a
-   `caption` section header with a count and the content beneath. A capability that exists and
-   is empty collapses rather than disappearing, so it stays discoverable
-   (`plans-and-lists.md` §2).
-3. **A capability that is not built is absent, not disabled.** A row reading "coming soon" is a
-   dead affordance that teaches the user the app can do something it cannot. Rule 2 governs
-   *empty*; this governs *unbuilt*. The two are different states and only the first is
-   discoverable by design.
+2. **A capability is one compact disclosure row until opened.** The collapsed row presents its
+   label, current summary and a trailing chevron. Tapping the whole row expands it inline to
+   show either the current content or its real add controls, and the row exposes its expanded
+   state to assistive technology. Empty functional capabilities stay discoverable.
+3. **A named future Plan capability may be discoverable without pretending to work.** People,
+   Preparation, Related lists and Attachments — plus Ingredients on a Meal — render as
+   non-interactive rows ending in `Coming later` until their owning phase builds them. They
+   have no chevron, disabled action, expansion or tap behaviour. All other unbuilt
+   capabilities remain absent. A task still renders no Plan-only future rows.
 
 **The completion action.** One component, one position, one accessibility pattern for both
 object kinds — there is no Task treatment and no Plan treatment. Its label is derived from the
@@ -596,7 +596,11 @@ caller lacks the completion capability; it is never shown disabled. On an occurr
 series, `Snooze` and `Skip today` follow as a secondary pair.
 
 **The schedule line is a tap target and never an inline field** (U4). This holds wherever a
-date is rendered in the product; the detail screen is not an exception to it.
+date is rendered in the product; the detail screen is not an exception to it. It uses
+`EEE, MMM d · h:mm a` in the current year (adding the year otherwise), carries the visible
+hint `Tap to edit`, and is immediately followed by the combined recurrence/reminder summary.
+The bottom time-actions block contains `Edit recurrence` when recurrence is available.
+Delete remains only in the `⋯` menu.
 
 **Capability order**, when each is built: People, Preparation, Related lists, Expenses, Notes,
 Attachments. A task shows only Notes and Related plan and renders no placeholder for anything

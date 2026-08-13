@@ -11,7 +11,6 @@ import {
   Field,
   IconButton,
   MoreHorizontal,
-  SectionHeader,
   Skeleton,
   Text,
   useBreakpoint,
@@ -23,7 +22,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
+import { DetailDisclosureRow } from '@/features/activity/components/DetailDisclosureRow';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
+import { ReminderDisclosure } from '@/features/activity/components/ReminderDisclosure';
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
@@ -238,6 +239,8 @@ export function ActivityDetailScreen({
             setResolutionDismissed(false);
             onResolutionProjectionChange?.(false);
           }}
+          onAddReminder={detail.addReminder}
+          onRemoveReminder={detail.removeReminder}
         />
       )}
     </>
@@ -391,6 +394,8 @@ interface LoadedProps {
   undoing: boolean;
   onComplete: () => void;
   onUndoResolution: () => void;
+  onAddReminder: (offsetMinutes: number) => Promise<boolean>;
+  onRemoveReminder: (reminderId: string) => Promise<boolean>;
 }
 
 const RESOLVED_STATUSES = new Set(['completed', 'skipped']);
@@ -409,6 +414,8 @@ function Loaded({
   undoing,
   onComplete,
   onUndoResolution,
+  onAddReminder,
+  onRemoveReminder,
 }: LoadedProps) {
   const theme = useTheme();
   const sections = sectionsFor(activity);
@@ -480,15 +487,13 @@ function Loaded({
           reminders={detail.detail?.reminders ?? []}
           {...(activity.schedule === undefined
             ? {}
-            : {
-                recurrenceDescription:
-                  activity.recurrence === undefined
-                    ? 'Never'
-                    : describeRecurrence(activity.recurrence, today),
-              })}
+            : activity.recurrence === undefined
+              ? {}
+              : {
+                  recurrenceDescription: describeRecurrence(activity.recurrence, today),
+                })}
           today={today}
           onPressDate={onOpenReschedule}
-          onPressRepeat={onOpenRepeat}
           onPressAddress={undefined}
         />
 
@@ -539,19 +544,34 @@ function Loaded({
         {sections.map((section) => {
           if (section.key === 'whenWhere') return null;
 
+          if (section.key === 'reminders') {
+            return (
+              <ReminderDisclosure
+                key={section.key}
+                reminders={detail.detail?.reminders ?? []}
+                timed={activity.schedule?.time !== undefined}
+                busy={detail.isSavingReminder}
+                {...(detail.reminderError === undefined
+                  ? {}
+                  : { error: detail.reminderError })}
+                onAdd={onAddReminder}
+                onRemove={onRemoveReminder}
+              />
+            );
+          }
+
           if (section.key === 'notes') {
             return (
-              <View
+              <DetailDisclosureRow
                 key={section.key}
-                style={{
-                  gap: theme.space[3],
-                  paddingVertical: theme.space[7],
-                  borderTopWidth: 1,
-                  borderTopColor: theme.colors.border,
-                }}
+                title="Notes"
+                summary={
+                  activity.notes?.trim() === '' || activity.notes === undefined
+                    ? 'Add notes'
+                    : activity.notes
+                }
                 testID="section-notes"
               >
-                <SectionHeader title="Notes" />
                 <InlineText
                   label="Notes"
                   value={activity.notes ?? ''}
@@ -564,30 +584,62 @@ function Loaded({
                   }}
                   testID="detail-notes"
                 />
-              </View>
+              </DetailDisclosureRow>
+            );
+          }
+
+          if (section.state === 'coming-later') {
+            return (
+              <DetailDisclosureRow
+                key={section.key}
+                title={section.label ?? ''}
+                summary={section.summary ?? ''}
+                testID={`section-${section.key}`}
+              />
             );
           }
 
           // Related plan — the parent link on a prep task (`today-and-tasks.md` §5.5).
           return (
-            <View
+            <DetailDisclosureRow
               key={section.key}
-              style={{
-                gap: theme.space[3],
-                paddingVertical: theme.space[7],
-                borderTopWidth: 1,
-                borderTopColor: theme.colors.border,
-              }}
+              title="Related plan"
+              summary={
+                activity.parentActivityId === undefined ? 'None' : 'Part of a plan'
+              }
               testID="section-related"
             >
-              <SectionHeader title="Related plan" />
               <Text variant="body" color="textSecondary">
-                {activity.parentActivityId === undefined ? 'None' : 'Part of a plan'}
+                {activity.parentActivityId === undefined
+                  ? 'A related plan appears here when this task is added from a plan.'
+                  : 'This task is part of a plan.'}
               </Text>
-            </View>
+            </DetailDisclosureRow>
           );
         })}
       </View>
+
+      {activity.schedule === undefined ? null : (
+        <View
+          style={{
+            gap: theme.space[3],
+            paddingTop: theme.space[6],
+            borderTopWidth: 1,
+            borderTopColor: theme.colors.border,
+          }}
+          testID="detail-time-actions"
+        >
+          <Text variant="caption" color="textSecondary">
+            More
+          </Text>
+          <Button
+            label="Edit recurrence"
+            variant="ghost"
+            onPress={onOpenRepeat}
+            testID="detail-edit-recurrence"
+          />
+        </View>
+      )}
     </View>
   );
 }
