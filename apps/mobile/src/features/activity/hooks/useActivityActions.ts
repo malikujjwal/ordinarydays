@@ -2,6 +2,7 @@ import { type ChangeTarget, changeActivityKind } from '@od/shared';
 import { ApiError } from '@od/shared/client';
 import type { ActivityCompletionResult, PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, ActivityDetail, ActivityOutcome } from '@od/shared/types';
+import { type ActivityScope, scopeToWire, targetsWholeSeries } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useRef } from 'react';
@@ -35,7 +36,7 @@ export interface ActivityActions {
   remove: () => Promise<boolean>;
   resolvePassed: (
     outcome: ActivityOutcome,
-    occurrenceDate: string | undefined,
+    scope: ActivityScope,
     onProjected: (resolved: boolean) => void,
   ) => void;
   /**
@@ -47,7 +48,7 @@ export interface ActivityActions {
    * not reverse one at all.
    */
   undoResolution: (
-    occurrenceDate: string | undefined,
+    scope: ActivityScope,
     onProjected?: (resolved: boolean) => void,
   ) => void;
   isBusy: boolean;
@@ -57,6 +58,25 @@ export interface ActivityActions {
   /** `interaction-contract.md` §5.3 copy for whichever action failed. */
   errorMessage: string | undefined;
   dismissError: () => void;
+}
+
+/**
+ * A completion that would land on a series rather than on one of its days.
+ *
+ * `POST /complete` sent without an `occurrenceDate` sets `status: 'completed'` on `ACT#/META`
+ * and retires every future occurrence — rule 3 broken by one tap, and unrecoverable in the
+ * sense that matters: the days the user had already resolved are gone with it. The detail
+ * screen no longer offers the control (P2-47 owns what a series *should* offer), and this is
+ * the same rule held one layer down, where no future call site can route around it.
+ *
+ * Deliberately not applied to `undoResolution`: a bare *uncomplete* reverses this damage
+ * rather than causing it, and is the only way back for a series already completed this way.
+ */
+function isUnscopedSeries(
+  snapshot: ActivityDetail | undefined,
+  scope: ActivityScope,
+): boolean {
+  return targetsWholeSeries(snapshot?.activity.recurrence !== undefined, scope);
 }
 
 function describe(error: unknown): string {
@@ -161,17 +181,18 @@ export function useActivityActions(activityId: string): ActivityActions {
         return false;
       }
     },
-    resolvePassed: (outcome, occurrenceDate, onProjected) => {
+    resolvePassed: (outcome, scope, onProjected) => {
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      if (isUnscopedSeries(snapshot, scope)) return;
       let restoreAgenda = () => {};
       const original = {
         activityId,
-        input: { outcome, ...(occurrenceDate === undefined ? {} : { occurrenceDate }) },
+        input: { outcome, ...scopeToWire(scope) },
         idempotencyKey: randomUUID(),
       };
       const compensation = {
         activityId,
-        input: occurrenceDate === undefined ? {} : { occurrenceDate },
+        input: scopeToWire(scope),
         idempotencyKey: randomUUID(),
       };
 
@@ -187,7 +208,7 @@ export function useActivityActions(activityId: string): ActivityActions {
           restoreAgenda = projectOptimisticCompletion(queryClient, {
             activityId,
             completed: true,
-            ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+            ...scopeToWire(scope),
           });
           /**
            * **Only a one-off moves the Activity.** Completing an *occurrence* writes an
@@ -197,7 +218,7 @@ export function useActivityActions(activityId: string): ActivityActions {
            * is projected into the agenda by `agendaCache`, which is where occurrence scope
            * lives.
            */
-          if (occurrenceDate !== undefined) return;
+          if (scope.kind === 'occurrence') return;
           queryClient.setQueryData<ActivityDetail>(activityKey(activityId), (previous) =>
             previous === undefined
               ? previous
@@ -229,7 +250,7 @@ export function useActivityActions(activityId: string): ActivityActions {
         compensationFailureMessage: "Couldn't undo that outcome.",
       });
     },
-    undoResolution: (occurrenceDate, onProjected) => {
+    undoResolution: (scope, onProjected) => {
       const toastId = resolutionToastId.current;
       const activeToast = useToast.getState().current;
 
@@ -261,7 +282,7 @@ export function useActivityActions(activityId: string): ActivityActions {
         activityId,
         completed: false,
         restoredStatus,
-        ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+        ...scopeToWire(scope),
       });
 
       /**
@@ -276,7 +297,7 @@ export function useActivityActions(activityId: string): ActivityActions {
        * A recurring occurrence is left alone: its state lives on the `Occurrence`, not on the
        * series (`data-model.md` §4.5).
        */
-      if (occurrenceDate === undefined && snapshot !== undefined) {
+      if (scope.kind === 'activity' && snapshot !== undefined) {
         queryClient.setQueryData<ActivityDetail>(activityKey(activityId), {
           ...snapshot,
           activity: {
@@ -296,7 +317,7 @@ export function useActivityActions(activityId: string): ActivityActions {
       void uncompleteMutation
         .mutateAsync({
           activityId,
-          input: occurrenceDate === undefined ? {} : { occurrenceDate },
+          input: scopeToWire(scope),
           idempotencyKey: randomUUID(),
         })
         .catch(() => {

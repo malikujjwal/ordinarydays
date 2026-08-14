@@ -8,10 +8,7 @@ const TODAY = '2026-08-12';
 
 function mount(
   value?: Recurrence,
-  options: {
-    completedOccurrenceCount?: number;
-    onCommit?: ReturnType<typeof vi.fn>;
-  } = {},
+  options: { onCommit?: ReturnType<typeof vi.fn> } = {},
 ) {
   const onCommit = options.onCommit ?? vi.fn(async () => true);
   const onClose = vi.fn();
@@ -22,8 +19,6 @@ function mount(
         onClose={onClose}
         anchorDate={TODAY}
         {...(value === undefined ? {} : { value })}
-        activityForConfirmation={{ title: 'Gym' }}
-        completedOccurrenceCount={options.completedOccurrenceCount ?? 0}
         onCommit={onCommit}
       />
     </ThemeProvider>,
@@ -133,27 +128,36 @@ describe('RepeatSheet', () => {
     });
   });
 
-  it('confirms Never with the real stored completion count and names End series', async () => {
+  /**
+   * `Never` **ends** the series; it does not delete the rule (`today-and-tasks.md` §6 line
+   * 584). Deleting it was a type change — series to one-off — and that single operation is
+   * what required flattening surplus occurrences, choosing which day the survivor lives on,
+   * and clearing occurrence statuses from rows that were no longer occurrences. Ending needs
+   * none of it: one field moves on a row that stays a series.
+   */
+  it('ends the series on the occurrence in view rather than deleting the rule', async () => {
     const onCommit = vi.fn(async (_value: Recurrence | undefined) => true);
-    mount(
-      {
-        mode: 'fixed',
-        segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' }],
-      },
-      { completedOccurrenceCount: 40, onCommit },
-    );
+    const stored: Recurrence = {
+      mode: 'fixed',
+      segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' }],
+    };
+    mount(stored, { onCommit });
 
     fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
 
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(screen.getByText(/40 past completions from view/)).toBeDefined();
-    expect(screen.getByText(/End series instead/)).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Stop repeating' }));
-    await waitFor(() => expect(onCommit).toHaveBeenCalledWith(undefined));
+    // Segments are untouched, so history keeps rendering under the rule in force on its date.
+    await waitFor(() =>
+      expect(onCommit).toHaveBeenCalledWith({ ...stored, endDate: TODAY }),
+    );
   });
 
-  it('applies Never immediately when no completion history exists', async () => {
+  /**
+   * The old dialog warned that stopping a repeat removed past completions from view. That was
+   * true of deleting the rule and is not true of ending it, so a confirmation here would now
+   * be warning about something that does not happen.
+   */
+  it('needs no confirmation, because ending removes nothing', async () => {
     const { onCommit } = mount({
       mode: 'fixed',
       segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' }],
@@ -162,7 +166,7 @@ describe('RepeatSheet', () => {
     fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
 
-    await waitFor(() => expect(onCommit).toHaveBeenCalledWith(undefined));
+    await waitFor(() => expect(onCommit).toHaveBeenCalledOnce());
     expect(screen.queryByTestId('repeat-never-confirmation')).toBeNull();
   });
 });

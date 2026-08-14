@@ -651,3 +651,51 @@ describe('ADR-051 completion authority', () => {
     ).toMatchObject({ ':status': 'skipped' });
   });
 });
+
+/**
+ * A series may not be completed or skipped as a whole.
+ *
+ * Without an `occurrenceDate` both paths fell through to `patchActivity` and set
+ * `status: 'completed'` on `ACT#/META`. `agendaService`'s `mergeNominal` renders an occurrence
+ * with no override using `entry.activity.status`, so that one write crossed off **every**
+ * future occurrence — "select complete on today's occurrence and it marks the future ones
+ * complete". `snooze` had refused this since it was written; these two never grew the guard.
+ */
+describe('a recurring activity refuses an unscoped completion', () => {
+  const series = () =>
+    meta({
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+      },
+    });
+
+  it.each(['complete', 'skip'] as const)(
+    'rejects %s without an occurrenceDate',
+    async (op) => {
+      const state = seed({ activity: series() });
+      const before = JSON.stringify(state.currentActivity());
+
+      const response = await post(createApp(), op, {});
+
+      // `validation_failed` is 400 in `lib/errors.ts`, the same as every other bad input.
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(body.error.details?.[0]?.path).toBe('occurrenceDate');
+      // The series row is untouched, which is the whole point.
+      expect(JSON.stringify(state.currentActivity())).toBe(before);
+    },
+  );
+
+  /**
+   * Uncomplete stays unscoped on purpose: it is the only route back for a series this bug
+   * already completed, and guarding it would strand exactly the users who hit the bug.
+   */
+  it('still allows an unscoped uncomplete, the recovery path', async () => {
+    seed({ activity: { ...series(), status: 'completed' } });
+
+    const response = await post(createApp(), 'uncomplete', {});
+
+    expect(response.status).toBe(200);
+  });
+});

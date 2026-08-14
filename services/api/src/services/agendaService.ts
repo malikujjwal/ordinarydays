@@ -428,6 +428,27 @@ function oneOffCandidate(activity: Activity, projectedTimezone: unknown): RawCan
   };
 }
 
+/**
+ * The status of an occurrence that has **no** override of its own.
+ *
+ * An occurrence's resolution lives on its `Occurrence` row and nowhere else (CLAUDE.md rule 3,
+ * `data-model.md` §4.5), so a *series* that reads `completed` or `skipped` says nothing about
+ * any particular day. Falling back to it meant one series-level status crossed off every
+ * un-overridden occurrence at once — the amplifier that turned each unscoped-write bug into
+ * "the whole series is marked done", and that kept the symptom alive for already-damaged rows
+ * long after every write path was guarded.
+ *
+ * Only those two are rewritten. `cancelled` still propagates, because a cancelled series
+ * genuinely has no live occurrences, and `scheduled`/`saved` are the ordinary case.
+ *
+ * This corrects the **rendering**. A series META that holds `completed` is still a wrong row,
+ * and the local-table checker is what finds those; complete a one-off and then add recurrence
+ * to it and the patch path still leaves the status behind.
+ */
+function unresolvedSeriesStatus(status: Activity['status']): AgendaCandidateStatus {
+  return status === 'completed' || status === 'skipped' ? 'scheduled' : status;
+}
+
 function mergeNominal(
   entry: ExpandedNominal,
   override: Occurrence | undefined,
@@ -445,7 +466,7 @@ function mergeNominal(
         ? 'completed_occurrence'
         : override?.status === 'skipped'
           ? 'skipped_occurrence'
-          : entry.activity.status,
+          : unresolvedSeriesStatus(entry.activity.status),
     effectiveDate: entry.date,
     ...(effectiveTime === undefined ? {} : { effectiveTime }),
     sourceTimezone: entry.activity.schedule?.timezone ?? 'UTC',
@@ -482,7 +503,9 @@ function movedCandidates(
         activity,
         occurrenceDate: sourceDate,
         status:
-          override.status === 'completed' ? 'completed_occurrence' : activity.status,
+          override.status === 'completed'
+            ? 'completed_occurrence'
+            : unresolvedSeriesStatus(activity.status),
         effectiveDate: override.overrideDate ?? marker.destinationDate,
         ...(override.snoozedUntil?.includes('T') === true
           ? { effectiveInstant: override.snoozedUntil }

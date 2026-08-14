@@ -9,6 +9,7 @@
     "typecheck": { "dependsOn": ["^build"], "outputs": [] },
     "test": { "dependsOn": ["^build"], "outputs": ["coverage/**"] },
     "test:int": { "dependsOn": ["^build"], "cache": false },
+    "test:guards": { "dependsOn": ["^build"], "cache": false },
     "lint": { "outputs": [] },
     "gen:openapi": {
       "dependsOn": ["^build"],

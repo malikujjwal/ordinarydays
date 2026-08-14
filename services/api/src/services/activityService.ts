@@ -195,6 +195,7 @@ const RECURRENCE_CREATE_ONE = 'A new recurrence must contain exactly one segment
 const RECURRENCE_APPEND_ONLY =
   'Recurrence history is append-only. Existing segments cannot be changed or removed.';
 const EDIT_DATE_NEEDS_APPEND = 'editedFromDate requires a recurrence segment append.';
+const TERMINAL_CANNOT_RECUR = 'Reverse the completion before making this repeat.';
 
 function recurrenceFailure(message: string, path = 'recurrence'): never {
   throw new AppError('validation_failed', message, [{ path, message }]);
@@ -523,6 +524,23 @@ function recurrenceForPatch(
   const supplied = patch.recurrence;
   const stored = current.recurrence;
   if (stored === undefined) {
+    /**
+     * **A recurring activity never holds a terminal series status**, enforced from both
+     * directions.
+     *
+     * `completionService` refuses to *set* one: an unscoped complete or skip on a series is
+     * rejected, because an occurrence's resolution belongs on its `Occurrence` row (rule 3).
+     * This is the other way in — complete a one-off, then make it repeat, and the row keeps
+     * `status: 'completed'` while becoming a series. `agendaService` used to render every
+     * un-overridden occurrence from that status, so the whole series showed as done; it no
+     * longer does, but the row was still wrong and this is where it was created.
+     *
+     * `cancelled` is not terminal for this purpose — a cancelled series is legitimate and its
+     * occurrences inherit the cancellation.
+     */
+    if (current.status === 'completed' || current.status === 'skipped') {
+      recurrenceFailure(TERMINAL_CANNOT_RECUR, 'status');
+    }
     if (patch.editedFromDate !== undefined) {
       recurrenceFailure(
         'editedFromDate can only target an occurrence of an existing series.',

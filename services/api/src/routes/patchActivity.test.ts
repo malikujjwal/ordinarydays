@@ -495,3 +495,57 @@ describe('prep-task child pointer repair', () => {
     expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(1);
   });
 });
+
+/**
+ * A recurring activity never holds a terminal series status, enforced from both directions.
+ *
+ * `completionService` refuses to set one — an unscoped complete or skip on a series is
+ * rejected, because an occurrence's resolution belongs on its `Occurrence` row (rule 3). This
+ * is the other way in: complete a one-off, then make it repeat, and the row kept
+ * `status: 'completed'` while becoming a series. `agendaService` rendered every un-overridden
+ * occurrence from that status, so the whole series showed as done.
+ */
+describe('a completed activity cannot be made to repeat', () => {
+  const daily = {
+    mode: 'fixed' as const,
+    segments: [{ freq: 'daily' as const, effectiveFrom: '2026-08-11' }],
+  };
+  const dated = { date: '2026-08-11', timezone: 'UTC' };
+
+  it.each([['completed'], ['skipped']] as const)(
+    'rejects adding a recurrence to a %s activity',
+    async (status) => {
+      seed(meta({ status, schedule: dated }));
+
+      const res = await patch(createApp(), { recurrence: daily });
+
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error.details?.[0]?.path).toBe('status');
+      expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    },
+  );
+
+  /** A cancelled series is legitimate; its occurrences inherit the cancellation. */
+  it('allows a cancelled activity to be made to repeat', async () => {
+    seed(meta({ status: 'cancelled', schedule: dated }));
+
+    const res = await patch(createApp(), { recurrence: daily });
+
+    expect(res.status).toBe(200);
+  });
+
+  /** The guard is on the transition, not on every later edit of an existing series. */
+  it('does not block amending the segments of an existing series', async () => {
+    seed(meta({ status: 'scheduled', schedule: dated, recurrence: daily }));
+
+    const res = await patch(createApp(), {
+      recurrence: {
+        mode: 'fixed',
+        segments: [...daily.segments, { freq: 'weekdays', effectiveFrom: '2026-08-12' }],
+      },
+    });
+
+    expect(res.status).toBe(200);
+  });
+});

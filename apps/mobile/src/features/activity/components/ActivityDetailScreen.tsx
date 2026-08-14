@@ -2,10 +2,10 @@ import type { ChangeTarget } from '@od/shared';
 import { describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, PlanType } from '@od/shared/types';
+import { type ActivityScope, scopeFromWire } from '@od/shared/types';
 import {
   Button,
   ChevronLeft,
-  Chip,
   DisclosureRow,
   EmptyState,
   Field,
@@ -16,13 +16,11 @@ import {
   SettingRow,
   Skeleton,
   Text,
-  useBreakpoint,
   useTheme,
 } from '@od/ui';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
@@ -46,7 +44,11 @@ import {
 } from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
-import { readOccurrenceStatus } from '@/lib/agendaCache';
+import {
+  readOccurrenceDate,
+  readOccurrenceSchedule,
+  readOccurrenceStatus,
+} from '@/lib/agendaCache';
 import {
   completionVerb,
   outcomeVerb,
@@ -112,8 +114,6 @@ export function ActivityDetailScreen({
   onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
   const theme = useTheme();
-  const breakpoint = useBreakpoint();
-  const _insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const detail = useActivityDetail(activityId);
   const actions = useActivityActions(activityId);
@@ -129,15 +129,20 @@ export function ActivityDetailScreen({
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [resolutionDismissed, setResolutionDismissed] = useState(false);
   /**
-   * This screen's own projection of the occurrence's resolution — `undefined` until the user
-   * acts here, at which point it outranks the cached agenda.
+   * This screen's own projection of the resolution — `undefined` until the user acts here, at
+   * which point it outranks the cached agenda.
    *
    * Every path that projects a completion or reverses one moves it, including the rollbacks,
    * which is why it is fed from one `onProjected` callback rather than set beside the calls.
+   *
+   * **It carries the scope it was captured for.** Held as a bare boolean it outlived the thing
+   * it described: dropping recurrence from the Repeat sheet, or rescheduling, changes
+   * `actionOccurrenceDate` underneath it, and the old answer was then read as the new scope's.
+   * A projection whose scope no longer matches is stale, and stale falls back to the cache.
    */
-  const [occurrenceResolved, setOccurrenceResolved] = useState<boolean | undefined>(
-    undefined,
-  );
+  const [projection, setProjection] = useState<
+    { scope: string | undefined; resolved: boolean } | undefined
+  >(undefined);
 
   /**
    * A kind change confirms **only when it would drop something** (`activities.md` §6.3 rule 6,
@@ -187,48 +192,86 @@ export function ActivityDetailScreen({
   /**
    * The occurrence every action on this screen targets.
    *
-   * **A recurring activity always has one**, because the header is always showing one specific
-   * date — so completing "this" means completing the day on screen, and `POST /complete` never
-   * goes out without a scope. Sent bare it sets `status: 'completed'` on the series row itself
-   * and retires every future occurrence (verified against the local API), which is rule 3
-   * broken by one tap. Navigation supplies the date when the user came from a row; otherwise it
-   * is the date the schedule line is displaying, which is the only occurrence the user can be
-   * said to be looking at.
+   * Navigation supplies it when the user came from a row; Today does, Plans and the reminder
+   * notification do not. For a series reached without one, the **agenda** answers — it holds
+   * occurrences the server expanded, so `readOccurrenceDate` picks a real day rather than
+   * deriving one.
+   *
+   * It used to fall back to `activity.schedule.date`, which is where the series *starts*. A
+   * weekly series opened from Plans therefore completed its anchor — a day that may be months
+   * back — while the row the user meant never moved. The anchor is not an occurrence anyone is
+   * looking at, which is the distinction that fallback missed.
+   *
+   * Still `undefined` when no agenda window is cached, and the completion control is absent
+   * rather than pointed at a guess.
    */
   const actionOccurrenceDate =
     occurrenceDate ??
     resolutionOccurrenceDate ??
-    (activity?.recurrence === undefined ? undefined : activity.schedule?.date);
+    (activity?.recurrence === undefined
+      ? undefined
+      : readOccurrenceDate(queryClient, activityId, today));
+
+  /**
+   * A series reached without an occurrence offers no completion control.
+   *
+   * `POST /complete` sent bare sets `status: 'completed'` on the series row itself and retires
+   * every future occurrence (verified against the local API) — rule 3 broken by one tap. What a
+   * series detail screen *should* offer is **P2-47**'s open question, and absence is the honest
+   * answer until it has one.
+   */
+  /** One value the whole screen acts through, rather than a date each field re-reads. */
+  const actionScope: ActivityScope = scopeFromWire({
+    ...(actionOccurrenceDate === undefined
+      ? {}
+      : { occurrenceDate: actionOccurrenceDate }),
+  });
+
+  /**
+   * The schedule this screen is **about**.
+   *
+   * With an occurrence in scope that is the occurrence's own date and time, not the series'.
+   * An `Occurrence` override never moves `ACT#/META`, so `activity.schedule` keeps reporting
+   * the series value after the user has changed the day in front of them — which showed back a
+   * time they had not set, inviting a second "correction" and a second override.
+   */
+  const shownSchedule =
+    actionOccurrenceDate === undefined
+      ? activity?.schedule
+      : (readOccurrenceSchedule(queryClient, {
+          activityId,
+          occurrenceDate: actionOccurrenceDate,
+        }) ?? activity?.schedule);
+
+  const seriesWithoutOccurrence =
+    activity?.recurrence !== undefined && actionOccurrenceDate === undefined;
 
   /**
    * Resolution state for whatever is in scope.
    *
    * A one-off's is on the Activity. An occurrence's is not readable from its series at all, so
    * it comes from this screen's own projection once the user has acted, and before that from
-   * the agenda — the only client-side surface holding expanded occurrences.
+   * the agenda — the only client-side surface holding expanded occurrences. A projection
+   * captured under a different scope is ignored rather than believed.
    */
   const resolved =
-    actionOccurrenceDate === undefined
-      ? RESOLVED_STATUSES.has(activity?.status ?? '')
-      : (occurrenceResolved ??
-        RESOLVED_STATUSES.has(
-          readOccurrenceStatus(queryClient, {
-            activityId,
-            occurrenceDate: actionOccurrenceDate,
-          }) ?? '',
-        ));
+    projection !== undefined && projection.scope === actionOccurrenceDate
+      ? projection.resolved
+      : actionOccurrenceDate === undefined
+        ? RESOLVED_STATUSES.has(activity?.status ?? '')
+        : RESOLVED_STATUSES.has(
+            readOccurrenceStatus(queryClient, {
+              activityId,
+              occurrenceDate: actionOccurrenceDate,
+            }) ?? '',
+          );
 
   /** One callback for the optimistic flip, the Undo, and every rollback in between. */
   function projectResolution(next: boolean) {
     setResolutionDismissed(next);
-    setOccurrenceResolved(next);
+    setProjection({ scope: actionOccurrenceDate, resolved: next });
     onResolutionProjectionChange?.(next);
   }
-
-  /** The measure, per §8. `compact` is full width minus the gutters. */
-  const _maxWidth =
-    breakpoint === 'compact' ? undefined : breakpoint === 'medium' ? 720 : 620;
-  const _framed = breakpoint !== 'compact';
 
   const detailContent = (
     <>
@@ -284,18 +327,20 @@ export function ActivityDetailScreen({
           showResolutionPrompt={showResolutionPrompt}
           resolved={resolved}
           onOpenResolution={() => setResolutionOpen(true)}
+          shownSchedule={shownSchedule}
           canComplete={detail.detail?.capabilities?.complete === true}
+          seriesWithoutOccurrence={seriesWithoutOccurrence}
           completing={actions.isCompleting}
           undoing={actions.isUndoing}
           onComplete={() => {
             actions.resolvePassed(
               passedPlanResolution(activity.type).positive.outcome,
-              actionOccurrenceDate,
+              actionScope,
               projectResolution,
             );
           }}
           onUndoResolution={() => {
-            actions.undoResolution(actionOccurrenceDate, projectResolution);
+            actions.undoResolution(actionScope, projectResolution);
           }}
         />
       )}
@@ -329,6 +374,27 @@ export function ActivityDetailScreen({
             onClose={() => setRescheduleOpen(false)}
             today={today}
             activity={activity}
+            /**
+             * **Occurrence scope reaches the sheet, or the write is rejected.**
+             *
+             * `scheduleOccurrence` requires an `occurrenceDate` whenever the activity has a
+             * recurrence — without one it throws `A recurring occurrence date is required`,
+             * which the error middleware renders as "The request was not valid". The sheet
+             * already forwards the prop into its payload; this screen was the only caller not
+             * supplying it, so changing the time of one day of a series failed here while the
+             * same edit from a Today row succeeded.
+             */
+            {...(actionOccurrenceDate === undefined
+              ? {}
+              : { occurrenceDate: actionOccurrenceDate })}
+            {...(shownSchedule === undefined
+              ? {}
+              : {
+                  renderedDate: shownSchedule.date,
+                  ...(shownSchedule.time === undefined
+                    ? {}
+                    : { renderedTime: shownSchedule.time }),
+                })}
             onSchedule={detail.schedule}
             onPatch={detail.patch}
             busy={detail.isSaving}
@@ -341,11 +407,10 @@ export function ActivityDetailScreen({
               anchorDate={
                 activity.recurrence === undefined ? activity.schedule.date : today
               }
+              scope={actionScope}
               {...(activity.recurrence === undefined
                 ? {}
                 : { value: activity.recurrence })}
-              activityForConfirmation={{ title: activity.title }}
-              completedOccurrenceCount={detail.detail?.completedOccurrenceCount ?? 0}
               onCommit={(recurrence) => detail.patch({ recurrence: recurrence ?? null })}
               busy={detail.isSaving}
               {...(detail.editError === undefined ? {} : { error: detail.editError })}
@@ -430,7 +495,7 @@ export function ActivityDetailScreen({
             onClose={() => setResolutionOpen(false)}
             onResolve={(outcome) => {
               setResolutionOpen(false);
-              actions.resolvePassed(outcome, actionOccurrenceDate, projectResolution);
+              actions.resolvePassed(outcome, actionScope, projectResolution);
             }}
           />
         </>
@@ -449,8 +514,19 @@ interface LoadedProps {
   showResolutionPrompt: boolean;
   resolved: boolean;
   onOpenResolution: () => void;
+  /**
+   * The schedule the screen is about: the occurrence's when one is in scope, the Activity's
+   * otherwise. Passed in rather than read from `activity`, which only ever knows the series.
+   */
+  shownSchedule: { date: string; time?: string; endTime?: string } | undefined;
   /** Server-authored. The client never re-derives ownership (`today-and-tasks.md` §4.1). */
   canComplete: boolean;
+  /**
+   * Client-side scope, not a capability: a series nothing narrowed to one day. It suppresses
+   * the completion button without touching `canComplete`, so an `Undo` still reaches a series
+   * that is already resolved.
+   */
+  seriesWithoutOccurrence: boolean;
   completing: boolean;
   undoing: boolean;
   onComplete: () => void;
@@ -483,7 +559,9 @@ function Loaded({
   showResolutionPrompt,
   resolved,
   onOpenResolution,
+  shownSchedule,
   canComplete,
+  seriesWithoutOccurrence,
   completing,
   undoing,
   onComplete,
@@ -553,7 +631,7 @@ function Loaded({
 
         {/** U4: the schedule remains a tap target and never becomes an inline field. */}
         <WhenWhereBlock
-          schedule={activity.schedule}
+          schedule={shownSchedule}
           location={activity.location}
           reminders={detail.detail?.reminders ?? []}
           {...(activity.schedule === undefined
@@ -568,19 +646,26 @@ function Loaded({
           onPressAddress={undefined}
         />
 
-        {/** A passed-plan prompt replaces the primary action in the same visual position. */}
+        {/**
+         * A passed-plan prompt replaces the primary action in the same visual position — so it
+         * carries the primary action's anatomy too. As a `Chip` it was `radius.pill`,
+         * `footnote` and `surfaceSunken` at hug width: a passed plan's only offer was a small
+         * grey pill under the schedule, which §7.5 does not put at the top of a screen.
+         */}
         {showResolutionPrompt ? (
-          <Chip
+          <Button
             label={passedPlanResolution(activity.type).prompt}
             accessibilityLabel={`${passedPlanResolution(activity.type).prompt} Choose an outcome for ${activity.title}`}
-            tone="neutral"
+            fullWidth
+            size="lg"
+            radius="md"
             onPress={onOpenResolution}
             testID="detail-resolution-prompt"
           />
         ) : null}
 
         {/** One type-derived completion component and position for both object kinds. */}
-        {canComplete && !resolved && !showResolutionPrompt ? (
+        {canComplete && !seriesWithoutOccurrence && !resolved && !showResolutionPrompt ? (
           <Button
             label={completionVerb(activity.type)}
             fullWidth

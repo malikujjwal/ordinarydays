@@ -2043,3 +2043,67 @@ answer and where it was made.
 | OQ-10 | Do the three **web auth endpoints** belong on the public prefix? | `03-implementation/phase-04-deploy-and-identity.md` P4-18 | Yes, on `/public/v1/auth/*`, with their own limit of 10 req/min per IP and an additional 60/hour per IP on `/refresh`. Recorded in `api-contract.md` §2.0. |
 | OQ-11 | Is `zod` v4 viable, or does `zod-to-openapi` pin us to v3? | `03-implementation/phase-00-foundations.md` P0-07 | **Closed 2026-08-08 in P0-07: v4.** The premise expired — `@asteasolutions/zod-to-openapi@9` declares a peer dependency of `zod@^4.0.0`, so v4 is not merely viable, it is what the current generator supports and v3 is the version that would need pinning. `@hono/zod-validator@0.9` accepts `^3.25.0 \|\| ^4.0.0`, so the API side is unconstrained either way. `packages/shared` pins `zod@4.4.3`; `tech-stack.md` §2.2 carries the range. Revisit only if P0-25 finds the generator unusable, which would be a change of generator, not of zod. |
 | OQ-12 | Does **`.ics` generation** need a library, and which one? | `03-implementation/phase-06-sharing.md` P6-08 | No library. A typed builder in `packages/shared/src/ics/` with its own escaping, 75-octet folding, golden files and a parser-oracle test. |
+
+---
+
+## ADR-053 — Activity scope is explicit, never an optional `occurrenceDate` at a write site
+
+**Status:** Accepted · **Date:** 2026-08-13
+
+**Context.** Scope travelled as an optional `occurrenceDate?: string` — 184 references across
+30 non-test files — and its absence carried two meanings that nothing distinguished. On a
+one-off it means "not applicable", which is correct. On a recurring activity it means
+"operate on the whole series", which sets `status` on `ACT#/META` and, because
+`agendaService`'s `mergeNominal` renders an occurrence with no override using
+`entry.activity.status`, repaints **every** un-overridden occurrence as completed.
+Distinguishing the two required knowing whether the activity recurs, which most call sites did
+not have to hand.
+
+Twelve of the fifteen recurrence defects found on 2026-08-13 were that one shape: the Today
+checkbox, `applyCreate`, the detail screen's series-anchor fallback, the occurrence
+reschedule's duplicate row, `complete` and `skip` on the API, and the rest. None was found by
+the suite, which was green throughout at ~2,790 tests — unit fixtures inherit the same
+ambiguity, and two of them encoded states that cannot exist.
+
+An optional field whose omitted case is the destructive one is an API designed backwards.
+Forgetting should fail to compile, not escalate.
+
+**Decision.** `ActivityScope` in `packages/shared/src/types/scope.ts` is a discriminated union
+with no absent case:
+
+```ts
+type ActivityScope = { kind: 'activity' } | { kind: 'occurrence'; date: string };
+```
+
+A caller states which it means or does not compile, so activity scope is a decision rather
+than an omission. `targetsWholeSeries(recurs, scope)` states the condition every guard was
+missing, once. `scopeForRow` is the sole place an agenda row's scope is decided; the agenda
+hook previously held seven hand-rolled versions in three spellings, one of which spread
+`occurrenceDate: undefined` for a recurring row rather than omitting the key.
+
+**The wire is deliberately unchanged.** `occurrenceDate?` appears eleven times in
+`docs/generated/openapi.json` across the five inputs, `AgendaItem` and
+`ActivityCompletionResult`. The ambiguity lives in the code, not the protocol, so
+`scopeToWire`/`scopeFromWire` convert at the boundary and `pnpm gen:openapi` produces no diff.
+
+**Persisted mutation variables are unchanged for a sharper reason.** `persister.ts` dehydrates
+paused mutations on iOS *with their variables* under a single `CACHE_BUSTER`. A changed
+variable shape would replay a body it never meant, and the only alternative — bumping the
+buster — discards every queued offline write.
+
+**Consequences.** The union removes *accidental* absence, not all absence: every one-off uses
+activity scope, and `uncomplete` accepts it even on a series (see below). The rule is therefore
+per-operation and lives in `assertOccurrenceScoped`, not in the type.
+
+The union only protects call sites that use it, so `scopeGuard.test.ts` ratchets the file list
+allowed to name the wire key and forbids the client write layer from building it by hand.
+
+Converted so far: the mobile write sites and the API completion guard. **Not yet converted:**
+the agenda projectors in `lib/agendaCache.ts` and the `apply*` models, and the detail screen's
+own `occurrenceDate?: string` props. Those are mechanical follow-ups, and the ratchet stops the
+list growing meanwhile.
+
+**Alternatives rejected.** Changing the wire to a nested `scope` object — breaking, for a
+problem that is not in the protocol. Separate scope types per operation, so the type could
+carry the `uncomplete` exception — worse than one honest guard, and it multiplies the
+vocabulary for a single exception with a scheduled end.

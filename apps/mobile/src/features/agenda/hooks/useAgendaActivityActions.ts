@@ -5,6 +5,7 @@ import type {
   AgendaData,
   AgendaItem,
 } from '@od/shared/types';
+import { scopeToWire } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback } from 'react';
@@ -22,6 +23,7 @@ import { applyCompletion } from '../model/applyCompletion';
 import { applyReschedule } from '../model/applyReschedule';
 import { applySkip } from '../model/applySkip';
 import { applySnooze } from '../model/applySnooze';
+import { scopeForRow, wouldCompleteWholeSeries } from '../model/rowScope';
 import type { AgendaSwipeAction } from '../model/swipeActions';
 
 interface ActivityListCache {
@@ -57,6 +59,21 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
 
   const toggleComplete = useCallback(
     (item: AgendaItem, checked: boolean) => {
+      /**
+       * **A series row with no day is not something this checkbox may complete.**
+       *
+       * Omitting `occurrenceDate` turns a tick into an unscoped `POST /complete`, which sets
+       * the status on the series row itself — and `agendaService`'s `mergeNominal` renders
+       * every occurrence with no override using `entry.activity.status`. One tick therefore
+       * crossed off the whole series, which is CLAUDE.md rule 3 broken from the most ordinary
+       * gesture in the app. `snooze` below has always refused this; completion never did.
+       *
+       * The API rejects it too now, but that turns silent corruption into a visible error
+       * rather than into nothing happening, and an offline mutation queued here would still
+       * carry the unscoped body to a server that will refuse it.
+       */
+      if (wouldCompleteWholeSeries(item)) return;
+
       const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
       const anytimeSnapshots = queryClient.getQueriesData<ActivityListCache>({
         queryKey: ['activities', 'saved'],
@@ -64,9 +81,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       const scrollOffset = options.getScrollOffset?.() ?? 0;
       const target = {
         activityId: item.activityId,
-        ...(item.occurrenceDate === undefined
-          ? {}
-          : { occurrenceDate: item.occurrenceDate }),
+        ...scopeToWire(scopeForRow(item)),
       };
       const project = () => {
         for (const [key, cached] of snapshots) {
@@ -114,11 +129,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       };
       const original = {
         activityId: target.activityId,
-        input: {
-          ...(target.occurrenceDate === undefined
-            ? {}
-            : { occurrenceDate: target.occurrenceDate }),
-        },
+        input: { ...scopeToWire(scopeForRow(item)) },
         idempotencyKey: randomUUID(),
       };
       const compensation = { ...original, idempotencyKey: randomUUID() };
@@ -160,14 +171,14 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
     (item: AgendaItem, outcome: ActivityOutcome) => {
       if (!item.isPast || item.status !== 'scheduled' || !item.capabilities.complete)
         return;
+      // Same rule as the checkbox: a series row with no day names no day to resolve.
+      if (wouldCompleteWholeSeries(item)) return;
 
       const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
       const scrollOffset = options.getScrollOffset?.() ?? 0;
       const target = {
         activityId: item.activityId,
-        ...(item.occurrenceDate === undefined
-          ? {}
-          : { occurrenceDate: item.occurrenceDate }),
+        ...scopeToWire(scopeForRow(item)),
       };
       const negative = outcome === 'didnt_happen' || outcome === 'didnt_go';
       const project = (resolved: boolean) => {
@@ -198,20 +209,12 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       };
       const original = {
         activityId: target.activityId,
-        input: {
-          outcome,
-          ...(target.occurrenceDate === undefined
-            ? {}
-            : { occurrenceDate: target.occurrenceDate }),
-        },
+        input: { outcome, ...scopeToWire(scopeForRow(item)) },
         idempotencyKey: randomUUID(),
       };
       const compensation = {
         activityId: target.activityId,
-        input:
-          target.occurrenceDate === undefined
-            ? {}
-            : { occurrenceDate: target.occurrenceDate },
+        input: scopeToWire(scopeForRow(item)),
         idempotencyKey: randomUUID(),
       };
 
@@ -239,7 +242,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       if (
         !item.capabilities.snooze ||
         item.time === undefined ||
-        (item.isRecurring && item.occurrenceDate === undefined)
+        wouldCompleteWholeSeries(item)
       ) {
         return;
       }
@@ -247,7 +250,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       const scrollOffset = options.getScrollOffset?.() ?? 0;
       const target = {
         activityId: item.activityId,
-        ...(item.isRecurring ? { occurrenceDate: item.occurrenceDate } : {}),
+        ...scopeToWire(scopeForRow(item)),
       };
       const project = () => {
         for (const [key, cached] of snapshots) {
@@ -286,19 +289,14 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       const original: SnoozeActivityVariables = {
         activityId: item.activityId,
         input: {
-          ...(item.isRecurring && item.occurrenceDate !== undefined
-            ? { occurrenceDate: item.occurrenceDate }
-            : {}),
+          ...scopeToWire(scopeForRow(item)),
           until,
         },
         idempotencyKey: randomUUID(),
       };
       const compensation: UnsnoozeActivityVariables = {
         activityId: item.activityId,
-        input:
-          item.isRecurring && item.occurrenceDate !== undefined
-            ? { occurrenceDate: item.occurrenceDate }
-            : {},
+        input: scopeToWire(scopeForRow(item)),
         idempotencyKey: randomUUID(),
       };
 
