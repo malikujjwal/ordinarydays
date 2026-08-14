@@ -39,7 +39,7 @@ export function Chip({
 
   const tones: Record<ChipTone, { bg: string; fg: TextColor }> = {
     neutral: { bg: theme.colors.surfaceSunken, fg: 'textSecondary' },
-    accent: { bg: theme.colors.accentSurface, fg: 'accent' },
+    accent: { bg: theme.colors.accentSurface, fg: 'textPrimary' },
     warning: { bg: theme.colors.warningSurface, fg: 'warning' },
     success: { bg: theme.colors.successSurface, fg: 'success' },
     danger: { bg: theme.colors.surfaceSunken, fg: 'danger' },
@@ -63,7 +63,11 @@ export function Chip({
       {Icon === undefined ? null : (
         <Icon
           size={14}
-          color={theme.colors[palette.fg === 'accent' ? 'accent' : 'textSecondary']}
+          color={
+            selected || tone === 'accent'
+              ? theme.colors.accent
+              : theme.colors.textSecondary
+          }
         />
       )}
       <Text variant="footnote" color={palette.fg} numberOfLines={1}>

@@ -1,4 +1,4 @@
-import type { Activity, ActivityDetail } from '@od/shared/types';
+import type { Activity, ActivityDetail, AgendaData, AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
+import { useToast } from '@/stores/toast';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
 
 /**
@@ -88,6 +89,14 @@ const detailBody = (
   meta: { requestId: 'req_test' },
 });
 
+const reminder = (reminderId: string, offsetMinutes: number) => ({
+  reminderId,
+  activityId: ID,
+  userId: 'usr_01J0000000000000000000000B',
+  offsetMinutes,
+  channel: 'push' as const,
+});
+
 interface Sent {
   url: string;
   method: string | undefined;
@@ -123,6 +132,7 @@ function mount(
   onBack = () => {},
   onOpenActivity: (id: string) => void = () => {},
   resolutionOccurrenceDate?: string | null,
+  occurrenceDate?: string,
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -135,7 +145,7 @@ function mount(
       </ThemeProvider>
     </SafeAreaProvider>
   );
-  return render(
+  const rendered = render(
     wrap(
       <ActivityDetailScreen
         activityId={ID}
@@ -143,13 +153,16 @@ function mount(
         onBack={onBack}
         onOpenActivity={onOpenActivity}
         {...(resolutionOccurrenceDate === undefined ? {} : { resolutionOccurrenceDate })}
+        {...(occurrenceDate === undefined ? {} : { occurrenceDate })}
       />,
     ),
   );
+  return { ...rendered, queryClient };
 }
 
 beforeEach(() => {
   sent.length = 0;
+  useToast.setState({ current: undefined });
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -165,7 +178,39 @@ const loaded = () =>
 const fieldValue = (label: string): string =>
   (screen.getByLabelText(label) as HTMLInputElement | HTMLTextAreaElement).value;
 
+const agendaItem = (): AgendaItem => ({
+  activityId: ID,
+  type: 'task',
+  title: 'Call the dentist',
+  status: 'scheduled',
+  time: '09:30',
+  isRecurring: false,
+  isSnoozed: false,
+  hasCheckbox: true,
+  capabilities: { complete: true, skip: false, snooze: true },
+  participantAvatars: [],
+  participantCount: 0,
+  isPast: false,
+});
+
+function agendaStatus(queryClient: QueryClient): string | undefined {
+  const agenda = queryClient.getQueryData<AgendaData>(['agenda', 'detail-regression']);
+  const day = agenda?.days[0];
+  return day === undefined
+    ? undefined
+    : [...day.schedule, ...day.anytime, ...day.earlier][0]?.status;
+}
+
 describe('reading', () => {
+  it('shows the header-shaped skeleton while the detail request is pending', () => {
+    vi.stubGlobal('fetch', () => new Promise(() => {}));
+    mount();
+
+    expect(screen.getByTestId('detail-loading')).toBeDefined();
+    expect(screen.queryByLabelText('Title')).toBeNull();
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+  });
+
   it('issues exactly one GET for the screen', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
@@ -176,14 +221,74 @@ describe('reading', () => {
     expect(sent[0]?.url).toMatch(new RegExp(`/v1/activities/${ID}$`));
   });
 
-  it('renders the title, the schedule and the notes', async () => {
+  it('renders the title, compact schedule metadata and collapsed notes', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
     await loaded();
 
     expect(fieldValue('Title')).toBe('Zahav');
-    expect(screen.getByText('Fri 14 Aug · 7:00 PM')).toBeDefined();
+    expect(screen.getByText('Fri, Aug 14 · 7:00 PM')).toBeDefined();
+    expect(screen.getAllByText('Tap to edit')).toHaveLength(1);
+    expect(screen.getByText('Does not repeat · No reminder')).toBeDefined();
+    expect(
+      screen
+        .getByTestId('when-where-date')
+        .contains(screen.getByText('Does not repeat · No reminder')),
+    ).toBe(true);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Notes, Check-in is after 3 PM.' }),
+    );
     expect(fieldValue('Notes')).toBe('Check-in is after 3 PM.');
+  });
+
+  it('uses icon-only header controls with complete accessible names', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    expect(screen.getByRole('button', { name: 'Back' }).textContent).toBe('');
+    expect(screen.getByRole('button', { name: 'More' }).textContent).toBe('');
+  });
+
+  it('keeps navigation and content in one detail surface', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    const surface = screen.getByTestId('detail-surface');
+    expect(surface.contains(screen.getByTestId('detail-navigation'))).toBe(true);
+    expect(surface.contains(screen.getByTestId('detail-content'))).toBe(true);
+  });
+
+  it('renders capability content as divided, unboxed sections', async () => {
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+    await loaded();
+
+    // Each row closes itself, so the list ends on its last row rather than needing a rule
+    // bolted onto the container — which is what produced two lines with a gap between them.
+    expect(screen.getByTestId('section-notes').style.borderBottomWidth).toBe('1px');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Notes, Check-in is after 3 PM.' }),
+    );
+    expect(screen.getByLabelText('Notes').style.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    expect(screen.getByTestId('section-related').style.borderBottomWidth).toBe('1px');
+  });
+
+  it('puts Notes first and keeps every capability on the same row rhythm', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    const notes = screen.getByTestId('section-notes');
+    const reminders = screen.getByTestId('section-reminders');
+    const people = screen.getByTestId('section-people');
+    expect(
+      notes.compareDocumentPosition(reminders) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      reminders.compareDocumentPosition(people) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it('says Not scheduled on an undated plan rather than hiding the row', async () => {
@@ -211,7 +316,17 @@ describe('reading', () => {
     mount();
     await loaded();
 
-    expect(screen.getByText('Remind me · 15 minutes before')).toBeDefined();
+    expect(
+      screen.getByText('Does not repeat · Reminder 15 minutes before'),
+    ).toBeDefined();
+    // The row states the current value; the choices live in the sheet it opens.
+    expect(screen.getByTestId('section-reminders').textContent).toContain(
+      '15 minutes before',
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
+    expect(
+      screen.getByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
+    ).toBeDefined();
   });
 
   it('hides the reminder row entirely when there is no date to count back from', async () => {
@@ -220,6 +335,28 @@ describe('reading', () => {
     await loaded();
 
     expect(screen.queryByTestId('when-where-reminders')).toBeNull();
+    expect(screen.queryByTestId('section-reminders')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Repeat/ })).toBeNull();
+  });
+
+  /**
+   * `Repeat` is a setting row that **states its value** rather than an `Edit recurrence` row
+   * that named an action — which had offered to edit a recurrence on activities whose own
+   * summary said `Does not repeat`. Delete stays in the `⋯` menu either way (U6).
+   */
+  it('states the repeat value in the row list and keeps Delete in the three-dot menu', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    const repeat = screen.getByRole('button', { name: /^Repeat/ });
+    expect(screen.getByTestId('detail-sections').contains(repeat)).toBe(true);
+    expect(repeat.textContent).toContain('Does not repeat');
+    expect(screen.queryByRole('button', { name: 'Edit recurrence' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined();
   });
 
   it('shows the §5.3 failure with a Try again action', async () => {
@@ -246,6 +383,25 @@ describe('reading', () => {
 });
 
 describe('the sections', () => {
+  it('announces disclosure state and reveals Notes only after the row is pressed', async () => {
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+    await loaded();
+
+    const notes = screen.getByRole('button', {
+      name: 'Notes, Check-in is after 3 PM.',
+    });
+    expect(notes.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByLabelText('Notes')).toBeNull();
+
+    fireEvent.click(notes);
+    expect(notes.getAttribute('aria-expanded')).toBe('true');
+    expect(fieldValue('Notes')).toBe('Check-in is after 3 PM.');
+
+    fireEvent.click(notes);
+    expect(screen.queryByLabelText('Notes')).toBeNull();
+  });
+
   /**
    * P2-41 replaces P1-26's disabled affordances with absence.
    *
@@ -254,18 +410,54 @@ describe('the sections', () => {
    * dead affordance promising something the app cannot do. The four return when the phase that
    * builds them returns them, as real §2 collapsed rows with content behind them.
    */
-  it('renders no unbuilt capability as a disabled affordance', async () => {
+  it('renders future Plan capabilities as noninteractive Coming later rows', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
     await loaded();
 
-    for (const label of ['Add people', 'Add prep task', 'Add list', 'Add']) {
-      expect(screen.queryByRole('button', { name: label })).toBeNull();
+    for (const heading of ['People', 'Preparation', 'Related lists', 'Attachments']) {
+      expect(screen.getByText(heading)).toBeDefined();
     }
-    for (const heading of ['People', 'Prep', 'Lists', 'Attachments']) {
-      expect(screen.queryByText(heading)).toBeNull();
-    }
-    expect(document.body.textContent).not.toMatch(/coming soon/i);
+    expect(screen.getAllByText('Coming later')).toHaveLength(4);
+    expect(screen.queryByRole('button', { name: /People/ })).toBeNull();
+    expect(screen.queryByText(/coming soon/i)).toBeNull();
+  });
+
+  /**
+   * A collapsed row summarises; it does not render the value. Measured before this held: a
+   * 1,300-character note produced a 1,465 pt "collapsed" Notes row that pushed `Reminder` and
+   * every capability under it off the screen entirely.
+   */
+  it('summarises a long note in one line rather than rendering it collapsed', async () => {
+    const long = 'Lorem ipsum dolor sit amet. '.repeat(50).trim();
+    stubFetch({ status: 200, body: detailBody(task({ notes: long })) });
+    mount();
+    await loaded();
+
+    // React Native Web renders `numberOfLines={1}` as its one-line class rather than an
+    // inline clamp, so the assertion is on the resolved rule.
+    const summary = screen.getByText(long);
+    expect(getComputedStyle(summary).whiteSpace).toBe('nowrap');
+    expect(getComputedStyle(summary).textOverflow).toBe('ellipsis');
+    // The full text stays in the accessible name — the clamp is visual only.
+    expect(
+      screen
+        .getByRole('button', { name: `Notes, ${long}` })
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('previews Ingredients as a noninteractive future row on Meal plans only', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan({ type: 'meal', details: { kind: 'meal' } })),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByText('Ingredients')).toBeDefined();
+    expect(screen.getByLabelText(/^Ingredients,.*Coming later$/)).toBeDefined();
+    expect(screen.queryByRole('button', { name: /Ingredients/ })).toBeNull();
   });
 
   /** §5.6: a Task "renders no disabled placeholders for anything it lacks". */
@@ -281,8 +473,173 @@ describe('the sections', () => {
   });
 });
 
+describe('caller-owned reminders', () => {
+  it('adds a reminder with a fresh idempotency key and updates the open row', async () => {
+    const added = reminder('rem_01J0000000000000000000000C', -15);
+    stubFetch(
+      { status: 200, body: detailBody(plan()) },
+      { status: 201, body: { data: added, meta: { requestId: 'req_reminder' } } },
+      { status: 200, body: detailBody(plan(), [added]) },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Add reminder 15 minutes before' }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
+      ).toBeDefined(),
+    );
+    const request = sent.find((entry) => entry.method === 'POST');
+    expect(request?.url).toMatch(new RegExp(`/v1/activities/${ID}/reminders$`));
+    expect(request?.body).toEqual({ offsetMinutes: -15 });
+    expect(request?.headers['Idempotency-Key']).toBe('idem-test-key');
+  });
+
+  it('removes only the selected caller-owned reminder', async () => {
+    const existing = reminder('rem_01J0000000000000000000000C', -15);
+    stubFetch(
+      { status: 200, body: detailBody(plan(), [existing]) },
+      {
+        status: 200,
+        body: {
+          data: { reminderId: existing.reminderId },
+          meta: { requestId: 'req_reminder' },
+        },
+      },
+      { status: 200, body: detailBody(plan()) },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
+      ).toBeNull(),
+    );
+    expect(sent.find((entry) => entry.method === 'DELETE')?.url).toMatch(
+      new RegExp(`/v1/activities/${ID}/reminders/${existing.reminderId}$`),
+    );
+  });
+
+  it('stops at three reminders and explains the limit', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan(), [
+        reminder('rem_01J0000000000000000000000C', -5),
+        reminder('rem_01J0000000000000000000000D', -15),
+        reminder('rem_01J0000000000000000000000E', -60),
+      ]),
+    });
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
+    expect(screen.getByText('You can add up to 3 reminders.')).toBeDefined();
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'Add reminder At the time' })
+        .getAttribute('aria-disabled'),
+    ).toBe('true');
+  });
+
+  it('offers only whole-day offsets when the Activity has no time', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({ schedule: { date: '2026-08-14', timezone: 'America/New_York' } }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
+    expect(
+      screen.getByRole('checkbox', { name: 'Add reminder On the day' }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole('checkbox', { name: 'Add reminder 1 day before' }),
+    ).toBeDefined();
+    expect(screen.queryByRole('checkbox', { name: /15 minutes/ })).toBeNull();
+  });
+
+  /**
+   * The choices open in a sheet over the screen, not inline — expanded in place they pushed
+   * every capability below them down the page.
+   *
+   * **The sheet owns the bound, not this screen.** `Sheet`'s `medium` detent scrolls the body
+   * internally (§6.1); `ReminderSheet` used to set its own `maxHeight`, which is the ownership
+   * violation that let `Repeat` occupy most of a phone.
+   */
+  it('opens reminder choices in a sheet the sheet itself bounds', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount();
+    await loaded();
+
+    expect(screen.queryByTestId('reminder-menu')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
+    const sheet = screen.getByTestId('reminder-sheet');
+    expect(sheet.style.height).toBe('58%');
+    expect(screen.getByTestId('reminder-menu').style.maxHeight).toBe('');
+    expect(screen.getByTestId('reminder-sheet-body')).toBeDefined();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(8);
+  });
+});
+
 describe('passed-plan resolution', () => {
-  it('shows the same prompt at the top and sends the exact positive outcome', async () => {
+  it('crosses the Today task off before the detail completion request settles', async () => {
+    const scheduled = task();
+    const completed = task({ status: 'completed', outcome: 'done' });
+    stubFetch({ status: 200, body: detailBody(scheduled) });
+    const { queryClient } = mount();
+    await loaded();
+    queryClient.setQueryData<AgendaData>(['agenda', 'detail-regression'], {
+      days: [{ date: '2026-08-13', schedule: [agendaItem()], anytime: [], earlier: [] }],
+      warnings: [],
+    });
+
+    let finish: ((response: object) => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      () =>
+        new Promise<object>((resolve) => {
+          finish = resolve;
+        }),
+    );
+
+    fireEvent.click(screen.getByTestId('detail-complete'));
+
+    expect(agendaStatus(queryClient)).toBe('completed');
+    finish?.({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: () =>
+        Promise.resolve({
+          data: { activity: completed, outcome: 'done' },
+          meta: { requestId: 'req_complete' },
+        }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            data: { activity: completed, outcome: 'done' },
+            meta: { requestId: 'req_complete' },
+          }),
+        ),
+    });
+    await waitFor(() => expect(screen.getByTestId('detail-undo')).toBeDefined());
+  });
+
+  it('shows the prompt in the primary-action position and sends the exact positive outcome', async () => {
     const passed = plan({
       schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
     });
@@ -309,20 +666,24 @@ describe('passed-plan resolution', () => {
     const prompt = screen.getByRole('button', {
       name: 'How did it go? Choose an outcome for Zahav',
     });
+    const title = screen.getByLabelText('Title');
+    const schedule = screen.getByTestId('when-where');
+    const sections = screen.getByTestId('detail-sections');
+    expect(title.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
     expect(
-      prompt.compareDocumentPosition(screen.getByLabelText('Title')) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      schedule.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      prompt.compareDocumentPosition(sections) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    // `plans-and-lists.md` §2.1 replaces the ordinary completion action with this prompt.
+    // Two positive actions in the header can target different scopes on a recurring Plan.
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
 
     fireEvent.click(prompt);
-    /**
-     * By testID, not by name. Since P2-41 the detail screen also carries an `Attended` button —
-     * the primary completion action — and both are correct: the sheet resolves a *passed*
-     * occurrence, the header button completes the activity. Selecting by role and name would
-     * now match two elements, which is the ambiguity telling us the screen gained a second,
-     * intended affordance rather than a duplicate.
-     */
-    fireEvent.click(screen.getByTestId('passed-plan-positive'));
+    fireEvent.click(screen.getByRole('button', { name: 'Attended' }));
 
     await waitFor(() =>
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
@@ -411,6 +772,130 @@ describe('passed-plan resolution', () => {
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
     );
     expect(sent[1]?.body).toEqual({ occurrenceDate: TODAY, outcome: 'didnt_go' });
+    /**
+     * Resolving one occurrence must not leave the screen blank.
+     *
+     * An `Occurrence` override never moves `ACT#/META`, so the series row still reads
+     * `scheduled` and nothing derived from it can show the outcome. Before this, the prompt
+     * left and nothing replaced it: no completion button, no outcome, no Undo — the user had
+     * recorded something the screen then refused to admit.
+     */
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+    expect(screen.getByTestId('detail-undo')).toBeDefined();
+  });
+
+  it('keeps the completion action occurrence-scoped after the route clears the marker', async () => {
+    const recurring = plan({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(recurring) },
+      {
+        status: 200,
+        body: {
+          data: { activity: recurring, occurrenceDate: TODAY, outcome: 'attended' },
+          meta: { requestId: 'req_resolution' },
+        },
+      },
+    );
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.queryByTestId('detail-resolution-prompt')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Attended' }));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+    );
+    // The occurrence, never the series.
+    expect(sent[1]?.body).toEqual({ occurrenceDate: TODAY, outcome: 'attended' });
+  });
+
+  /**
+   * A series reached without navigation context still completes — **the day the header is
+   * showing**, never the series.
+   *
+   * `POST /complete` with no `occurrenceDate` writes `status: 'completed'` onto the series row
+   * itself and retires every future occurrence, which is rule 3 broken by one tap. So the scope
+   * is never allowed to be absent on a recurring activity: it falls back to the date on the
+   * schedule line, which is the only occurrence the user can be said to be looking at.
+   */
+  it('completes the occurrence on the schedule line when navigation carried no scope', async () => {
+    const recurring = plan({
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '19:00' }],
+      },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(recurring) },
+      {
+        status: 200,
+        body: {
+          data: {
+            activity: recurring,
+            occurrenceDate: '2026-08-14',
+            outcome: 'attended',
+          },
+          meta: { requestId: 'req_resolution' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-complete'));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+    );
+    // `plan()`'s schedule date, which is what the header rendered.
+    expect(sent[1]?.body).toEqual({ occurrenceDate: '2026-08-14', outcome: 'attended' });
+    expect(screen.getByTestId('detail-undo')).toBeDefined();
+  });
+
+  /** A completed occurrence is not readable from its series, so the agenda answers for it. */
+  it('opens an already-completed occurrence showing Undo rather than the verb', async () => {
+    const recurring = plan({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch({ status: 200, body: detailBody(recurring) });
+    const { queryClient } = mount();
+    queryClient.setQueryData<AgendaData>(['agenda', 'occurrence-state'], {
+      days: [
+        {
+          date: TODAY,
+          schedule: [
+            {
+              ...agendaItem(),
+              status: 'completed',
+              isRecurring: true,
+              occurrenceDate: TODAY,
+            },
+          ],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    });
+    await loaded();
+
+    await waitFor(() => expect(screen.getByTestId('detail-undo')).toBeDefined());
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
   });
 });
 
@@ -424,7 +909,7 @@ describe('U4 — tapping a date opens the reschedule sheet', () => {
 
     expect(screen.getByTestId('reschedule-sheet')).toBeDefined();
     // The date row is a button, not a field. It did not become editable.
-    expect(screen.queryByLabelText('Fri 14 Aug · 7:00 PM')).toBeNull();
+    expect(screen.queryByRole('textbox', { name: /Fri, Aug 14/ })).toBeNull();
   });
 
   it('writes nothing from the tap itself (rule 6)', async () => {
@@ -510,7 +995,8 @@ describe('editing in place', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Daily, change repeat' }));
+    expect(screen.getByText('Repeats daily · No reminder')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /^Repeat/ }));
     fireEvent.change(screen.getByTestId('repeat-option'), {
       target: { value: 'weekdays' },
     });
@@ -527,9 +1013,7 @@ describe('editing in place', () => {
       },
     });
     await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Every weekday, change repeat' }),
-      ).toBeDefined(),
+      expect(screen.getByText('Repeats every weekday · No reminder')).toBeDefined(),
     );
   });
 
@@ -699,24 +1183,55 @@ describe('the overflow menu', () => {
    * completes with.
    */
   it.each([
-    ['task', 'Complete'],
-    ['meal', 'Had it'],
-    ['watch', 'Watched'],
-    ['event', 'Attended'],
-    ['custom', 'Done'],
-  ] as const)('renders the %s completion verb "%s"', async (type, verb) => {
-    // `details.kind` is the discriminator and has to move with `type`, and only a Task carries
-    // `objectKind: 'task'` — a Plan is never of type `task`. `watch` additionally requires a
-    // `mediaTitle`, so its details are not a bare `kind`.
-    const details =
-      type === 'watch' ? { kind: 'watch', mediaTitle: 'Severance' } : { kind: type };
-    const activity = type === 'task' ? task() : plan({ type, details });
-    stubFetch({ status: 200, body: detailBody(activity) });
-    mount();
-    await loaded();
+    ['task', 'Complete', 'done'],
+    ['meal', 'Had it', 'had_it'],
+    ['watch', 'Watched', 'watched'],
+    ['event', 'Attended', 'attended'],
+    ['custom', 'Done', 'done'],
+  ] as const)(
+    'renders the %s completion verb "%s" and sends outcome "%s"',
+    async (type, verb, outcome) => {
+      // `details.kind` is the discriminator and has to move with `type`, and only a Task carries
+      // `objectKind: 'task'` — a Plan is never of type `task`. `watch` additionally requires a
+      // `mediaTitle`, so its details are not a bare `kind`.
+      const details =
+        type === 'watch' ? { kind: 'watch', mediaTitle: 'Severance' } : { kind: type };
+      const activity = type === 'task' ? task() : plan({ type, details });
+      const completed = { ...activity, status: 'completed', outcome } as Activity;
+      stubFetch(
+        { status: 200, body: detailBody(activity) },
+        {
+          status: 200,
+          body: {
+            data: { activity: completed, outcome },
+            meta: { requestId: 'req_completion' },
+          },
+        },
+      );
+      mount();
+      await loaded();
 
-    expect(screen.getByTestId('detail-complete').textContent).toContain(verb);
-  });
+      const button = screen.getByRole('button', { name: verb });
+      expect(button).toBe(screen.getByTestId('detail-complete'));
+      /**
+       * `radius.md` — the frames' filled control is a soft rectangle, not a pill. At `xl` on a
+       * 52 pt button the corners meet in the middle and it read as a lozenge; the founder's
+       * 2026-08-13 refinement asking for `xl` predates the frames being taken as the reference
+       * for what a control looks like. Raised in the PR.
+       */
+      expect(button.style.borderTopLeftRadius).toBe('12px');
+      expect(button.style.borderBottomRightRadius).toBe('12px');
+      // The frames put no glow under any filled control, in either palette.
+      expect(button.style.boxShadow).toBe('');
+      fireEvent.click(button);
+
+      await waitFor(() =>
+        expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+      );
+      expect(sent[1]?.url).toMatch(new RegExp(`/v1/activities/${ID}/complete$`));
+      expect(sent[1]?.body).toEqual({ outcome });
+    },
+  );
 
   /**
    * §4.1: "a plan you did not create carries no completion control". **Absent, not disabled** —
@@ -736,7 +1251,7 @@ describe('the overflow menu', () => {
       {
         status: 200,
         body: {
-          data: { activity: plan(), outcome: null },
+          data: { activity: plan() },
           meta: { requestId: 'req_undo' },
         },
       },
@@ -746,6 +1261,7 @@ describe('the overflow menu', () => {
 
     expect(screen.queryByTestId('detail-complete')).toBeNull();
     expect(screen.getByTestId('detail-resolved').textContent).toContain('Attended');
+    const unrelatedToast = useToast.getState().show({ message: 'Saved another item' });
 
     fireEvent.click(screen.getByTestId('detail-undo'));
 
@@ -753,6 +1269,119 @@ describe('the overflow menu', () => {
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
     );
     expect(sent[1]?.url).toMatch(new RegExp(`/v1/activities/${ID}/uncomplete$`));
+    expect(useToast.getState().current?.id).toBe(unrelatedToast);
+  });
+
+  it('removes its stale toast shortcut when permanent Undo reverses a fresh completion', async () => {
+    const scheduled = plan();
+    const completed = plan({ status: 'completed', outcome: 'attended' });
+    stubFetch(
+      { status: 200, body: detailBody(scheduled) },
+      {
+        status: 200,
+        body: {
+          data: { activity: completed, outcome: 'attended' },
+          meta: { requestId: 'req_complete' },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          data: { activity: scheduled },
+          meta: { requestId: 'req_uncomplete' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-complete'));
+    await waitFor(() => expect(screen.getByTestId('detail-undo')).toBeDefined());
+    expect(useToast.getState().current?.kind).toBe('undo');
+
+    fireEvent.click(screen.getByTestId('detail-undo'));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(2),
+    );
+    expect(sent[2]?.url).toMatch(new RegExp(`/v1/activities/${ID}/uncomplete$`));
+    expect(useToast.getState().current).toBeUndefined();
+  });
+
+  it('accepts Undo immediately while Complete is still in flight and compensates in order', async () => {
+    const scheduled = plan();
+    const completed = plan({ status: 'completed', outcome: 'attended' });
+    stubFetch({ status: 200, body: detailBody(scheduled) });
+    mount();
+    await loaded();
+
+    let finishComplete: ((response: object) => void) | undefined;
+    const pendingComplete = new Promise<object>((resolve) => {
+      finishComplete = resolve;
+    });
+    let postCount = 0;
+    vi.stubGlobal('fetch', (url: string, init?: Record<string, unknown>) => {
+      sent.push({
+        url,
+        method: (init?.method as string | undefined) ?? 'GET',
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body: init?.body === undefined ? undefined : JSON.parse(init.body as string),
+      });
+      postCount += 1;
+      if (postCount === 1) return pendingComplete;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: () =>
+          Promise.resolve({
+            data: { activity: scheduled },
+            meta: { requestId: 'req_uncomplete' },
+          }),
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              data: { activity: scheduled },
+              meta: { requestId: 'req_uncomplete' },
+            }),
+          ),
+      });
+    });
+
+    fireEvent.click(screen.getByTestId('detail-complete'));
+
+    const undo = await screen.findByTestId('detail-undo');
+    expect(undo.getAttribute('aria-disabled')).toBeNull();
+    fireEvent.click(undo);
+
+    // The optimistic revert is immediate, but its compensating write must wait until the
+    // original request settles or network order could leave the activity completed.
+    expect(screen.getByTestId('detail-complete')).toBeDefined();
+    expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1);
+
+    finishComplete?.({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: () =>
+        Promise.resolve({
+          data: { activity: completed, outcome: 'attended' },
+          meta: { requestId: 'req_complete' },
+        }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            data: { activity: completed, outcome: 'attended' },
+            meta: { requestId: 'req_complete' },
+          }),
+        ),
+    });
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(2),
+    );
+    expect(sent[2]?.url).toMatch(new RegExp(`/v1/activities/${ID}/uncomplete$`));
+    expect(useToast.getState().current).toBeUndefined();
   });
 
   it('offers no Undo to a caller who cannot complete', async () => {

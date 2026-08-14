@@ -4,6 +4,8 @@ import type { ActivityCompletionResult, PatchActivityInput } from '@od/shared/sc
 import type { Activity, ActivityDetail, ActivityOutcome } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
+import { useRef } from 'react';
+import { projectOptimisticCompletion } from '@/lib/agendaCache';
 import type {
   CompleteActivityVariables,
   DeleteActivityVariables,
@@ -44,8 +46,14 @@ export interface ActivityActions {
    * completed, and the detail screen — the one surface that can *record* a completion — could
    * not reverse one at all.
    */
-  undoResolution: (occurrenceDate: string | undefined) => void;
+  undoResolution: (
+    occurrenceDate: string | undefined,
+    onProjected?: (resolved: boolean) => void,
+  ) => void;
   isBusy: boolean;
+  /** The two halves stay separate so an optimistic Complete never disables its own Undo. */
+  isCompleting: boolean;
+  isUndoing: boolean;
   /** `interaction-contract.md` §5.3 copy for whichever action failed. */
   errorMessage: string | undefined;
   dismissError: () => void;
@@ -65,6 +73,7 @@ function describe(error: unknown): string {
 
 export function useActivityActions(activityId: string): ActivityActions {
   const queryClient = useQueryClient();
+  const resolutionToastId = useRef<number | undefined>(undefined);
 
   const duplicateMutation = useMutation<Activity, Error, DuplicateActivityVariables>({
     mutationKey: activityMutationKeys.duplicate,
@@ -154,6 +163,7 @@ export function useActivityActions(activityId: string): ActivityActions {
     },
     resolvePassed: (outcome, occurrenceDate, onProjected) => {
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      let restoreAgenda = () => {};
       const original = {
         activityId,
         input: { outcome, ...(occurrenceDate === undefined ? {} : { occurrenceDate }) },
@@ -174,6 +184,11 @@ export function useActivityActions(activityId: string): ActivityActions {
          */
         apply: () => {
           onProjected(true);
+          restoreAgenda = projectOptimisticCompletion(queryClient, {
+            activityId,
+            completed: true,
+            ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+          });
           /**
            * **Only a one-off moves the Activity.** Completing an *occurrence* writes an
            * `Occurrence` override and leaves `ACT#/META` untouched (`data-model.md` §4.5), so
@@ -194,6 +209,7 @@ export function useActivityActions(activityId: string): ActivityActions {
         },
         revert: () => {
           onProjected(false);
+          restoreAgenda();
           if (snapshot !== undefined)
             queryClient.setQueryData(activityKey(activityId), snapshot);
         },
@@ -201,7 +217,11 @@ export function useActivityActions(activityId: string): ActivityActions {
         request: () => completeMutation.mutateAsync(original),
         compensate: () => uncompleteMutation.mutateAsync(compensation),
         toast: {
-          showUndo: useToast.getState().showUndo,
+          showUndo: (toast) => {
+            const id = useToast.getState().showUndo(toast);
+            resolutionToastId.current = id;
+            return id;
+          },
           failUndo: useToast.getState().failUndo,
         },
         message: 'Outcome recorded',
@@ -209,8 +229,40 @@ export function useActivityActions(activityId: string): ActivityActions {
         compensationFailureMessage: "Couldn't undo that outcome.",
       });
     },
-    undoResolution: (occurrenceDate) => {
+    undoResolution: (occurrenceDate, onProjected) => {
+      const toastId = resolutionToastId.current;
+      const activeToast = useToast.getState().current;
+
+      /**
+       * A fresh completion may still be in flight when the optimistic screen reveals Undo.
+       * Route that press through `startUndoable`'s existing coordinator: it reverts locally
+       * now, waits for Complete to succeed, then sends the compensating Uncomplete. Sending
+       * both POSTs concurrently would let network order decide the final state.
+       */
+      if (
+        toastId !== undefined &&
+        activeToast?.id === toastId &&
+        activeToast.kind === 'undo'
+      ) {
+        resolutionToastId.current = undefined;
+        // `startUndoable`'s own `revert`/`apply` already drive the caller's projection through
+        // the `onProjected` it was given at completion time, including a failed compensation.
+        useToast.getState().undo(toastId);
+        return;
+      }
+
+      // The toast expired or this detail loaded in a completed state. Use the permanent path
+      // without dismissing an unrelated toast that may have replaced the completion toast.
+      resolutionToastId.current = undefined;
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      const restoredStatus =
+        snapshot?.activity.schedule?.date === undefined ? 'saved' : 'scheduled';
+      const restoreAgenda = projectOptimisticCompletion(queryClient, {
+        activityId,
+        completed: false,
+        restoredStatus,
+        ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+      });
 
       /**
        * Projected before the request, not after it.
@@ -229,11 +281,17 @@ export function useActivityActions(activityId: string): ActivityActions {
           ...snapshot,
           activity: {
             ...snapshot.activity,
-            status:
-              snapshot.activity.schedule?.date === undefined ? 'saved' : 'scheduled',
+            status: restoredStatus,
           },
         });
       }
+
+      /**
+       * An occurrence's resolution is not readable from the series it belongs to, so the
+       * caller holds that state and this is the only thing that can move it. The detail cache
+       * restore above is enough for a one-off and says nothing at all for an occurrence.
+       */
+      onProjected?.(false);
 
       void uncompleteMutation
         .mutateAsync({
@@ -246,6 +304,8 @@ export function useActivityActions(activityId: string): ActivityActions {
           // The message is on the mutation and renders as the screen's banner.
           if (snapshot !== undefined)
             queryClient.setQueryData(activityKey(activityId), snapshot);
+          restoreAgenda();
+          onProjected?.(true);
         });
     },
     isBusy:
@@ -253,6 +313,8 @@ export function useActivityActions(activityId: string): ActivityActions {
       deleteMutation.isPending ||
       completeMutation.isPending ||
       uncompleteMutation.isPending,
+    isCompleting: completeMutation.isPending,
+    isUndoing: uncompleteMutation.isPending,
     errorMessage:
       failure === null || failure === undefined ? undefined : describe(failure),
     dismissError: () => {

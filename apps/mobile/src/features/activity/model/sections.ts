@@ -31,41 +31,90 @@ import type { Activity } from '@od/shared/types';
  * table at all. So Expenses and Updates are absent rather than disabled here. Raised in the
  * PR description rather than settled silently.
  *
- * ## P2-41 extends that resolution to the remaining four
+ * ## Founder clarification — 2026-08-13
  *
- * People, Prep, Lists and Attachments used to render a disabled affordance reading "Sharing is
- * coming soon." §2's collapse rule governs a capability that **exists and is empty** — which is
- * what `design-system.md` §7.5's collapsed rows are — and says nothing about a capability that
- * is **not built**. That is a third state, and a row promising something the app cannot do is a
- * dead affordance that teaches the user a lie. They are absent until the phase that builds
- * them, at which point they return as §2 collapsed rows with real content behind them.
- *
- * This is the same resolution already recorded above for Expenses and Updates, applied to the
- * four that P1-26 had kept.
+ * Unbuilt Plan capabilities return as **noninteractive discovery rows** saying `Coming later`.
+ * They carry neither a disabled Add button nor a chevron, so they show the Plan's intended
+ * shape without claiming an action exists. Ingredients joins those rows for Meal plans: the
+ * activity model already stores them, while the interactive detail flow is owned by Phase 3.
  */
 
 export interface DetailSection {
   key: string;
-  /** The `CAPTION`-cased heading, or `undefined` for the unlabelled when/where block. */
-  heading?: string;
+  label?: string;
+  summary?: string;
+  state?: 'coming-later';
 }
+
+const COMING_LATER: DetailSection[] = [
+  {
+    key: 'people',
+    label: 'People',
+    summary: 'Sharing and participants',
+    state: 'coming-later',
+  },
+  {
+    key: 'prep',
+    label: 'Preparation',
+    summary: 'Tasks that help make this happen',
+    state: 'coming-later',
+  },
+  {
+    key: 'lists',
+    label: 'Related lists',
+    summary: 'Lists connected to this plan',
+    state: 'coming-later',
+  },
+];
 
 /**
  * The sections for one activity, in render order.
  *
- * Order is `plans-and-lists.md` §2.1's and is part of the spec, not a preference.
+ * Notes-first order is the founder's 2026-08-13 refinement to the canonical detail anatomy.
+ * The remaining Plan capabilities keep `plans-and-lists.md` §2.1's relative order.
  */
 export function sectionsFor(activity: Activity): DetailSection[] {
+  /**
+   * `repeat` and `reminders` are **setting rows** and sit together, in the frames' order:
+   * the two things about *when* this happens, stated by value, each opening its own sheet.
+   * Both need a date to hang off — there is nothing to repeat or to count back from without
+   * one — so both appear only when the activity is scheduled.
+   */
+  const schedule =
+    activity.schedule === undefined ? [] : [{ key: 'repeat' }, { key: 'reminders' }];
+
   if (activity.objectKind === 'task') {
     // §5.6's list, and nothing else. No placeholders.
     return [
       { key: 'whenWhere' },
-      { key: 'notes', heading: 'Notes' },
-      { key: 'relatedPlan', heading: 'Related plan' },
+      { key: 'notes', label: 'Notes' },
+      ...schedule,
+      { key: 'relatedPlan', label: 'Related plan' },
     ];
   }
 
-  return [{ key: 'whenWhere' }, { key: 'notes', heading: 'Notes' }];
+  return [
+    { key: 'whenWhere' },
+    { key: 'notes', label: 'Notes' },
+    ...schedule,
+    ...COMING_LATER,
+    ...(activity.type === 'meal'
+      ? [
+          {
+            key: 'ingredients',
+            label: 'Ingredients',
+            summary: 'Meal ingredients and shopping',
+            state: 'coming-later' as const,
+          },
+        ]
+      : []),
+    {
+      key: 'attachments',
+      label: 'Attachments',
+      summary: 'Photos and files',
+      state: 'coming-later',
+    },
+  ];
 }
 
 /**

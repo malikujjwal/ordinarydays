@@ -45,6 +45,20 @@ describe('a Task renders no placeholder for what it lacks', () => {
     ]);
   });
 
+  it('adds the real reminder disclosure only when the Task has a date', () => {
+    expect(sectionsFor(task()).map((s) => s.key)).not.toContain('reminders');
+    expect(
+      sectionsFor(
+        activity({
+          objectKind: 'task',
+          type: 'task',
+          details: { kind: 'task' },
+          schedule: { date: '2026-08-12', timezone: 'America/New_York' },
+        }),
+      ).map((s) => s.key),
+    ).toContain('reminders');
+  });
+
   it('has no coming-soon section at all', () => {
     expect(sectionsFor(task()).every((s) => !('state' in s))).toBe(true);
   });
@@ -57,30 +71,40 @@ describe('a Task renders no placeholder for what it lacks', () => {
   );
 });
 
-describe('a Plan renders only what is built', () => {
+describe('a Plan previews its later capabilities without dead controls', () => {
   it('renders the §2.1 sections in their fixed order', () => {
-    expect(sectionsFor(activity({})).map((s) => s.key)).toEqual(['whenWhere', 'notes']);
+    expect(sectionsFor(activity({})).map((s) => s.key)).toEqual([
+      'whenWhere',
+      'notes',
+      'people',
+      'prep',
+      'lists',
+      'attachments',
+    ]);
   });
 
   /**
-   * P2-41. §2's collapse rule governs a capability that **exists and is empty**; it says
-   * nothing about one that is not built. A row reading "Sharing is coming soon" is a dead
-   * affordance promising something the app cannot do, so the four are absent until the phase
-   * that builds them returns them as real §2 collapsed rows.
+   * Founder clarification 2026-08-13: these rows teach the Plan's shape without exposing a
+   * disabled Add action or pretending that the future capability is usable.
    */
   it.each(['people', 'prep', 'lists', 'attachments'])(
-    'does not render an unbuilt %s section',
+    'marks %s as coming later',
     (key) => {
-      expect(sectionsFor(activity({})).map((s) => s.key)).not.toContain(key);
+      expect(sectionsFor(activity({}))).toContainEqual(
+        expect.objectContaining({ key, state: 'coming-later' }),
+      );
     },
   );
 
-  it('carries no disabled affordance or "coming soon" copy on any section', () => {
-    for (const section of sectionsFor(activity({}))) {
-      expect(section).not.toHaveProperty('action');
-      expect(section).not.toHaveProperty('note');
-      expect(section).not.toHaveProperty('state');
-    }
+  it('previews Ingredients only on a Meal plan', () => {
+    expect(
+      sectionsFor(activity({ type: 'meal', details: { kind: 'meal', ingredients: [] } })),
+    ).toContainEqual(
+      expect.objectContaining({ key: 'ingredients', state: 'coming-later' }),
+    );
+    expect(sectionsFor(activity({})).map((section) => section.key)).not.toContain(
+      'ingredients',
+    );
   });
 
   /**

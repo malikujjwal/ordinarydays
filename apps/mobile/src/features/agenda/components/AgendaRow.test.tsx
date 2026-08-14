@@ -172,8 +172,14 @@ describe('AgendaRow affordances', () => {
     expect(screen.queryByTestId('agenda-resolution-prompt')).toBeNull();
   });
 
+  /**
+   * `today-and-tasks.md` §4: "Completed items render with their outcome verb (`Had it`,
+   * `Watched`, `Attended`, `Done`)" — `Complete` is not on that list. It belongs to §4's
+   * passed-plan sheet table, which is the *action* a task offers, not the state it ends in.
+   * One mapping was serving both, so a finished task announced an instruction.
+   */
   it.each([
-    ['task', 'Complete'],
+    ['task', 'Done'],
     ['meal', 'Had it'],
     ['watch', 'Watched'],
     ['event', 'Attended'],

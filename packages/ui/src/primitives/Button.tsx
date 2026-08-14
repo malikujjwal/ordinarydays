@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import type { IconProps } from '../icons/index';
-import { accentGlow } from '../theme/elevation';
 import { useTheme } from '../theme/index';
+import type { RadiusToken } from '../theme/tokens';
 import { Text } from './Text';
 import { Touchable } from './Touchable';
 
 /**
  * `design-system.md` §6.
  *
- * `primary` is the accent pill carrying the mock's `eAccent` glow — the one surface in the
+ * `primary` is the accent fill — the one control in the
  * product that gets it, which is what makes the single primary action on a screen read as the
  * single primary action.
  */
@@ -27,6 +27,12 @@ export interface ButtonProps {
   loading?: boolean;
   disabled?: boolean;
   fullWidth?: boolean;
+  /**
+   * `md` — the filled-control shape. **Not `pill`**, which the radius table reserves for things
+   * that behave like pills: the Add button, chips, filters. Defaulting to `pill` made every
+   * button a lozenge, which is the shape a control takes when nothing decided it should.
+   */
+  radius?: RadiusToken;
   testID?: string;
 }
 
@@ -40,6 +46,7 @@ export function Button({
   loading = false,
   disabled = false,
   fullWidth = false,
+  radius = 'md',
   testID,
 }: ButtonProps) {
   const theme = useTheme();
@@ -73,9 +80,11 @@ export function Button({
       fg: 'textPrimary' as const,
       border: theme.colors.border,
     },
-    ghost: { bg: 'transparent', fg: 'accent' as const, border: 'transparent' },
+    ghost: { bg: 'transparent', fg: 'textAction' as const, border: 'transparent' },
     danger: { bg: theme.colors.danger, fg: 'inverse' as const, border: 'transparent' },
   }[variant];
+  const foregroundColor =
+    palette.fg === 'inverse' ? theme.colors.textInverse : theme.colors[palette.fg];
 
   return (
     <Touchable
@@ -89,7 +98,7 @@ export function Button({
         {
           height: size === 'lg' ? 52 : theme.layout.hitTarget,
           paddingHorizontal: theme.space[6],
-          borderRadius: theme.radius.pill,
+          borderRadius: theme.radius[radius],
           backgroundColor: palette.bg,
           borderWidth: variant === 'secondary' ? 1 : 0,
           borderColor: palette.border,
@@ -99,30 +108,14 @@ export function Button({
           gap: theme.space[3],
           alignSelf: fullWidth ? 'stretch' : 'flex-start',
         },
-        // The accent glow, defined once and used nowhere else.
-        variant === 'primary' && !inactive ? ({ boxShadow: accentGlow } as object) : null,
         inactive ? { opacity: 0.45 } : null,
       ]}
     >
       {showSpinner ? (
-        <ActivityIndicator
-          size="small"
-          color={
-            palette.fg === 'inverse' ? theme.colors.textInverse : theme.colors.accent
-          }
-        />
+        <ActivityIndicator size="small" color={foregroundColor} />
       ) : (
         <>
-          {Icon === undefined ? null : (
-            <Icon
-              size={20}
-              color={
-                palette.fg === 'inverse'
-                  ? theme.colors.textInverse
-                  : theme.colors[palette.fg === 'accent' ? 'accent' : 'textPrimary']
-              }
-            />
-          )}
+          {Icon === undefined ? null : <Icon size={20} color={foregroundColor} />}
           <View>
             <Text variant="bodyStrong" color={palette.fg}>
               {label}

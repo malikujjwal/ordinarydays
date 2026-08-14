@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   Bowl,
   Diamond,
+  type IconProps,
   ListLines,
   MapPin,
   navIcons,
@@ -19,6 +20,7 @@ import { Avatar } from './Avatar';
 import { Button, type ButtonVariant } from './Button';
 import { Card } from './Card';
 import { Chip, type ChipTone } from './Chip';
+import { IconButton } from './IconButton';
 import { IconTile } from './IconTile';
 import { ProgressBar } from './ProgressBar';
 import { Row } from './Row';
@@ -37,6 +39,11 @@ const wrap = (ui: ReactNode, scheme: ColorScheme = 'light') =>
   render(<ThemeProvider scheme={scheme}>{ui}</ThemeProvider>);
 
 const schemes: ColorScheme[] = ['light', 'dark'];
+
+const cssRgb = (hex: string): string => {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${value >> 16}, ${(value >> 8) & 255}, ${value & 255})`;
+};
 
 describe.each(schemes)('%s scheme renders every variant', (scheme) => {
   it.each<ButtonVariant>(['primary', 'secondary', 'ghost', 'danger'])(
@@ -60,6 +67,7 @@ describe.each(schemes)('%s scheme renders every variant', (scheme) => {
     'textPrimary',
     'textSecondary',
     'textDisabled',
+    'textAction',
     'accent',
     'danger',
     'success',
@@ -87,6 +95,38 @@ describe.each(schemes)('%s scheme renders every variant', (scheme) => {
       expect(screen.getByTestId('tile')).toBeDefined();
     },
   );
+});
+
+describe.each(schemes)('%s scheme uses only readable action text', (scheme) => {
+  it('gives a ghost button the semantic action-text token', () => {
+    wrap(<Button label="Back" variant="ghost" />, scheme);
+
+    expect(getComputedStyle(screen.getByText('Back')).color).toBe(
+      cssRgb(colors[scheme].textAction),
+    );
+  });
+
+  it('uses primary text on an accent-surface chip', () => {
+    wrap(<Chip label="Tomorrow" tone="accent" />, scheme);
+
+    expect(getComputedStyle(screen.getByText('Tomorrow')).color).toBe(
+      cssRgb(colors[scheme].textPrimary),
+    );
+  });
+});
+
+describe.each(schemes)('%s scheme renders accent icon actions', (scheme) => {
+  it('uses the semantic accent token', () => {
+    const ColorProbe = ({ color }: IconProps) => <span data-color={color} />;
+    wrap(<IconButton icon={ColorProbe} label="Back" tone="accent" />, scheme);
+
+    expect(
+      screen
+        .getByRole('button', { name: 'Back' })
+        .querySelector('[data-color]')
+        ?.getAttribute('data-color'),
+    ).toBe(colors[scheme].accent);
+  });
 });
 
 /**

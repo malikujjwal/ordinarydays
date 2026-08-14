@@ -8,6 +8,7 @@ import {
   deleteActivity,
   deleteActivityForReplay,
   deleteReminder,
+  deleteReminderForReplay,
   duplicateActivity,
   listActivities,
   listReminders,
@@ -276,6 +277,25 @@ describe('activity reminders', () => {
     expect(calls[0]?.url).toBe(
       `https://api.test/v1/activities/${reminder.activityId}/reminders/${reminder.reminderId}`,
     );
+  });
+
+  it('treats a missing reminder as success only when replaying its queued removal', async () => {
+    const { client } = makeClient([
+      {
+        status: 404,
+        body: {
+          error: {
+            code: 'not_found',
+            message: 'not found',
+            requestId: REQUEST_ID,
+          },
+        },
+      },
+    ]);
+
+    await expect(
+      deleteReminderForReplay(client, reminder.activityId, reminder.reminderId),
+    ).resolves.toEqual({ reminderId: reminder.reminderId });
   });
 });
 

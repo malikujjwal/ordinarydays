@@ -38,14 +38,20 @@ export default defineConfig({
       },
       /**
        * `react-native-safe-area-context` is stubbed, not resolved — the reasoning is written
-       * out at the top of `test/safe-area-stub.tsx`. Short version: its package entry under
-       * the `react-native` condition is untranspiled TypeScript, and its compiled build
-       * reaches into `react-native`'s Flow source, so both routes end in a parse error
+       * out at the top of `packages/ui/test/safe-area-stub.tsx`. Short version: its package
+       * entry under the `react-native` condition is untranspiled TypeScript, and its compiled
+       * build reaches into `react-native`'s Flow source, so both routes end in a parse error
        * several modules from anything this repository wrote.
+       *
+       * Shared from `packages/ui` rather than copied, the same way the SVG stub is: `Sheet`
+       * reads the bottom inset now, so both workspaces need the same stand-in and two copies
+       * is two things to keep in step.
        */
       {
         find: /^react-native-safe-area-context$/,
-        replacement: fileURLToPath(new URL('./test/safe-area-stub.tsx', import.meta.url)),
+        replacement: fileURLToPath(
+          new URL('../../packages/ui/test/safe-area-stub.tsx', import.meta.url),
+        ),
       },
       /**
        * AsyncStorage's React Native entry reaches Flow-only source that Node cannot parse.

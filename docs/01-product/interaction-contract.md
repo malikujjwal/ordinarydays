@@ -273,6 +273,8 @@ themselves.
 | When/where block | Reschedule sheet. Owner only; for a participant the block is not interactive | — | — |
 | Address line within it | Open the platform maps app | — | Copy address |
 | Reminder row within it | Your own reminder's picker. Never shows or reaches anyone else's ([`notifications.md`](notifications.md#21-per-activity-reminder-control) §2.1) | — | — |
+| Functional capability disclosure | Toggle its inline content; the row exposes its expanded state and the chevron communicates the same change visually | — | — |
+| Unimplemented Plan capability discovery row (`Coming later`) | — (non-interactive; no chevron or disabled action) | — | — |
 | Date suggestion row | `Works for me` toggles your availability; `Use this date` (owner only) opens the reschedule sheet pre-filled ([`plans-and-lists.md`](plans-and-lists.md) §2.3) | Author or owner: `Delete` | — |
 | Participant row | Open that Person's view | Owner only: `Resend invite` · `Copy link` · `Remove` | — |
 | Prep task row | Open task detail (checkbox completes) | `Complete` / `Reschedule` · `Delete` | — |
@@ -362,6 +364,12 @@ there is one is §1a.1.
 
 ### 4.2 Toast rules
 
+- **A toast is for undo, not for applause** (2026-08-13). A routine mutation does **not** get a
+  success toast: the screen's own state is the confirmation, and a toast that only says "done"
+  interrupts to tell the user something they can already see. A toast appears when this contract
+  uses it to expose **undo** — which is exactly why completion has one, and why checking a task
+  is not an exception to this rule but the reason for it. The row's own check, strike and dimming
+  report the change; the toast carries the six seconds in which it can be taken back.
 - One toast at a time. A new action replaces the visible toast and **commits** the previous
   one immediately.
 - The toast sits above the tab bar, is swipe-dismissible, and dismissing it commits.

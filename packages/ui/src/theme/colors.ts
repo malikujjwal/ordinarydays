@@ -39,6 +39,8 @@ export interface SemanticColors {
   textMuted: string;
   textDisabled: string;
   textInverse: string;
+  /** Readable text actions: light accentDeep, dark textPrimary. */
+  textAction: string;
 
   border: string;
   /** Decorative field and chip outline. Never the sole control boundary or focus indicator. */
@@ -87,6 +89,7 @@ const light: SemanticColors = {
   textMuted: '#6E675F',
   textDisabled: '#978F84',
   textInverse: '#FFFDF9',
+  textAction: '#795565',
 
   border: '#E1DAD0',
   borderSubtle: '#D3C9BC',
@@ -134,6 +137,7 @@ const dark: SemanticColors = {
   /** Retained: unlisted safety semantics keep their existing dark values. */
   textDisabled: '#6E6C63',
   textInverse: '#171613',
+  textAction: '#F4F0E8',
 
   border: '#34312B',
   /** The supplied border serves both roles in dark; there is no second dark outline value. */

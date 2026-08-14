@@ -1,7 +1,7 @@
 import type { AgendaData, AgendaItem } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
-import { projectActivityWrite } from '@/lib/agendaCache';
+import { projectActivityWrite, projectOptimisticCompletion } from '@/lib/agendaCache';
 
 /**
  * The regression this file exists for.
@@ -61,6 +61,32 @@ const completion = (activityId: string, status: string) => ({
 });
 
 describe('a completion recorded anywhere reaches the agenda cache', () => {
+  it('crosses the Today row off before the detail request settles and can roll back', () => {
+    const client = seeded();
+
+    const rollback = projectOptimisticCompletion(client, {
+      activityId: 'act_STANDUP',
+      completed: true,
+    });
+
+    expect(statusOf(client, 'act_STANDUP')).toBe('completed');
+    rollback();
+    expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
+  });
+
+  it('restores an overdue row removed by an optimistic completion', () => {
+    const client = seeded(row({ overdueFromDate: '2026-08-11' }));
+
+    const rollback = projectOptimisticCompletion(client, {
+      activityId: 'act_STANDUP',
+      completed: true,
+    });
+
+    expect(statusOf(client, 'act_STANDUP')).toBeUndefined();
+    rollback();
+    expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
+  });
+
   it('marks the row completed, so Today crosses it off without a refetch', () => {
     const client = seeded();
 
@@ -146,5 +172,66 @@ describe('a completion recorded anywhere reaches the agenda cache', () => {
 
     expect(projectActivityWrite(client, ['activity', 'complete'], null, {})).toBe(false);
     expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
+  });
+});
+
+/**
+ * Reported 2026-08-13: "if you change the plan on a later date to today, it takes some time for
+ * it to show up on the Today page."
+ *
+ * `applyReschedule` moves a row the cached window already holds, and correctly does nothing for
+ * one it has never seen — which is precisely a plan arriving from next Friday. The projection
+ * was therefore a no-op and Today only gained the row when something else happened to refetch.
+ */
+describe('a plan rescheduled into today', () => {
+  const scheduleKey = ['activities', 'schedule'];
+  const arriving = {
+    activityId: 'act_DINNER',
+    ownerId: 'usr_1',
+    objectKind: 'plan',
+    type: 'event',
+    status: 'scheduled',
+    title: 'Dinner at Zahav',
+    schedule: { date: TODAY, time: '19:00', timezone: 'America/New_York' },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    details: { kind: 'event' },
+  };
+
+  it('appears immediately rather than waiting for a refetch', () => {
+    const client = seeded();
+    expect(statusOf(client, 'act_DINNER')).toBeUndefined();
+
+    projectActivityWrite(client, scheduleKey, arriving);
+
+    expect(statusOf(client, 'act_DINNER')).toBe('scheduled');
+  });
+
+  it('does not double the row when a refetch already won the race', () => {
+    const client = seeded();
+    projectActivityWrite(client, scheduleKey, arriving);
+    projectActivityWrite(client, scheduleKey, arriving);
+
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    const matches = (agenda?.days ?? []).flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (item) => item.activityId === 'act_DINNER',
+      ),
+    );
+    expect(matches).toHaveLength(1);
+  });
+
+  /** A date outside every cached window is still not this projection's to place. */
+  it('leaves a window that does not contain the destination alone', () => {
+    const client = seeded();
+
+    projectActivityWrite(client, scheduleKey, {
+      ...arriving,
+      schedule: { ...arriving.schedule, date: '2026-09-01' },
+    });
+
+    expect(statusOf(client, 'act_DINNER')).toBeUndefined();
   });
 });

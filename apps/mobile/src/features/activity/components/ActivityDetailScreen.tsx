@@ -4,24 +4,33 @@ import type { PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, PlanType } from '@od/shared/types';
 import {
   Button,
+  ChevronLeft,
   Chip,
+  DisclosureRow,
   EmptyState,
   Field,
   IconButton,
   MoreHorizontal,
-  SectionHeader,
+  RowGroup,
+  ScreenShell,
+  SettingRow,
   Skeleton,
   Text,
   useBreakpoint,
   useTheme,
 } from '@od/ui';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
+import {
+  ReminderSheet,
+  reminderSummary,
+} from '@/features/activity/components/ReminderSheet';
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
@@ -37,7 +46,12 @@ import {
 } from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
-import { completionVerb, passedPlanResolution } from '@/lib/passedPlanResolution';
+import { readOccurrenceStatus } from '@/lib/agendaCache';
+import {
+  completionVerb,
+  outcomeVerb,
+  passedPlanResolution,
+} from '@/lib/passedPlanResolution';
 import { planKindLabel } from '@/lib/planKinds';
 
 /**
@@ -76,6 +90,8 @@ export interface ActivityDetailScreenProps {
   onOpenActivity: (activityId: string) => void;
   /** Present only when navigation came from a passed, unresolved agenda row. */
   resolutionOccurrenceDate?: string | null;
+  /** The occurrence whose agenda row opened this route, independent of prompt visibility. */
+  occurrenceDate?: string;
   /** Keeps the route marker in sync with optimistic resolution, Undo, and request rollback. */
   onResolutionProjectionChange?: (resolved: boolean) => void;
 }
@@ -92,11 +108,13 @@ export function ActivityDetailScreen({
   onBack,
   onOpenActivity,
   resolutionOccurrenceDate,
+  occurrenceDate,
   onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
   const theme = useTheme();
   const breakpoint = useBreakpoint();
-  const insets = useSafeAreaInsets();
+  const _insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
   const detail = useActivityDetail(activityId);
   const actions = useActivityActions(activityId);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
@@ -107,8 +125,19 @@ export function ActivityDetailScreen({
   );
   const [pending, setPending] = useState<PendingChange | undefined>(undefined);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [remindersOpen, setRemindersOpen] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [resolutionDismissed, setResolutionDismissed] = useState(false);
+  /**
+   * This screen's own projection of the occurrence's resolution — `undefined` until the user
+   * acts here, at which point it outranks the cached agenda.
+   *
+   * Every path that projects a completion or reverses one moves it, including the rollbacks,
+   * which is why it is fed from one `onProjected` callback rather than set beside the calls.
+   */
+  const [occurrenceResolved, setOccurrenceResolved] = useState<boolean | undefined>(
+    undefined,
+  );
 
   /**
    * A kind change confirms **only when it would drop something** (`activities.md` §6.3 rule 6,
@@ -155,24 +184,70 @@ export function ActivityDetailScreen({
     activity?.status === 'scheduled' &&
     detail.detail?.capabilities?.complete === true &&
     !resolutionDismissed;
+  /**
+   * The occurrence every action on this screen targets.
+   *
+   * **A recurring activity always has one**, because the header is always showing one specific
+   * date — so completing "this" means completing the day on screen, and `POST /complete` never
+   * goes out without a scope. Sent bare it sets `status: 'completed'` on the series row itself
+   * and retires every future occurrence (verified against the local API), which is rule 3
+   * broken by one tap. Navigation supplies the date when the user came from a row; otherwise it
+   * is the date the schedule line is displaying, which is the only occurrence the user can be
+   * said to be looking at.
+   */
+  const actionOccurrenceDate =
+    occurrenceDate ??
+    resolutionOccurrenceDate ??
+    (activity?.recurrence === undefined ? undefined : activity.schedule?.date);
+
+  /**
+   * Resolution state for whatever is in scope.
+   *
+   * A one-off's is on the Activity. An occurrence's is not readable from its series at all, so
+   * it comes from this screen's own projection once the user has acted, and before that from
+   * the agenda — the only client-side surface holding expanded occurrences.
+   */
+  const resolved =
+    actionOccurrenceDate === undefined
+      ? RESOLVED_STATUSES.has(activity?.status ?? '')
+      : (occurrenceResolved ??
+        RESOLVED_STATUSES.has(
+          readOccurrenceStatus(queryClient, {
+            activityId,
+            occurrenceDate: actionOccurrenceDate,
+          }) ?? '',
+        ));
+
+  /** One callback for the optimistic flip, the Undo, and every rollback in between. */
+  function projectResolution(next: boolean) {
+    setResolutionDismissed(next);
+    setOccurrenceResolved(next);
+    onResolutionProjectionChange?.(next);
+  }
 
   /** The measure, per §8. `compact` is full width minus the gutters. */
-  const maxWidth =
+  const _maxWidth =
     breakpoint === 'compact' ? undefined : breakpoint === 'medium' ? 720 : 620;
+  const _framed = breakpoint !== 'compact';
 
-  return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.surface }}>
+  const detailContent = (
+    <>
       <View
         style={{
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
-          paddingTop: insets.top + theme.space[3],
-          paddingHorizontal: theme.space[5],
-          paddingBottom: theme.space[3],
+          paddingBottom: theme.space[5],
         }}
+        testID="detail-navigation"
       >
-        <Button label="Back" variant="ghost" onPress={onBack} testID="detail-back" />
+        <IconButton
+          icon={ChevronLeft}
+          label="Back"
+          tone="accent"
+          onPress={onBack}
+          testID="detail-back"
+        />
         {activity === undefined ? null : (
           <IconButton
             icon={MoreHorizontal}
@@ -183,65 +258,69 @@ export function ActivityDetailScreen({
         )}
       </View>
 
-      <ScrollView
-        contentContainerStyle={{
-          paddingHorizontal: theme.space[5],
-          paddingBottom: insets.bottom + theme.space[8],
-        }}
-      >
-        <View
-          style={{
-            gap: theme.space[7],
-            width: '100%',
-            alignSelf: 'center',
-            ...(maxWidth === undefined ? {} : { maxWidth }),
-          }}
-        >
-          {detail.status === 'pending' ? (
-            // A skeleton matching the real layout's shape, not a spinner (§5.1).
-            <View style={{ gap: theme.space[5] }} testID="detail-loading">
-              <Skeleton shape="text" count={2} />
-              <Skeleton shape="card" count={1} />
-              <Skeleton shape="row" count={3} />
-            </View>
-          ) : detail.status === 'error' || activity === undefined ? (
-            <View testID="detail-error">
-              <EmptyState
-                heading={detail.message ?? "Couldn't load this."}
-                {...(detail.requestId === undefined ? {} : { body: detail.requestId })}
-                action={{ label: 'Try again', onPress: detail.refetch }}
-              />
-            </View>
-          ) : (
-            <Loaded
-              activity={activity}
-              detail={detail}
-              today={today}
-              onOpenReschedule={() => setRescheduleOpen(true)}
-              onOpenRepeat={() => setRepeatOpen(true)}
-              showResolutionPrompt={showResolutionPrompt}
-              onOpenResolution={() => setResolutionOpen(true)}
-              canComplete={detail.detail?.capabilities?.complete === true}
-              completing={actions.isBusy}
-              onComplete={() => {
-                actions.resolvePassed(
-                  passedPlanResolution(activity.type).positive.outcome,
-                  resolutionOccurrenceDate ?? undefined,
-                  (resolved) => {
-                    setResolutionDismissed(resolved);
-                    onResolutionProjectionChange?.(resolved);
-                  },
-                );
-              }}
-              onUndoResolution={() => {
-                actions.undoResolution(resolutionOccurrenceDate ?? undefined);
-                setResolutionDismissed(false);
-                onResolutionProjectionChange?.(false);
-              }}
-            />
-          )}
+      {detail.status === 'pending' ? (
+        // A skeleton matching the real layout's shape, not a spinner (§5.1).
+        <View style={{ gap: theme.space[5] }} testID="detail-loading">
+          <Skeleton shape="text" count={2} />
+          <Skeleton shape="card" count={1} />
+          <Skeleton shape="row" count={3} />
         </View>
-      </ScrollView>
+      ) : detail.status === 'error' || activity === undefined ? (
+        <View testID="detail-error">
+          <EmptyState
+            heading={detail.message ?? "Couldn't load this."}
+            {...(detail.requestId === undefined ? {} : { body: detail.requestId })}
+            action={{ label: 'Try again', onPress: detail.refetch }}
+          />
+        </View>
+      ) : (
+        <Loaded
+          activity={activity}
+          detail={detail}
+          today={today}
+          onOpenReschedule={() => setRescheduleOpen(true)}
+          onOpenRepeat={() => setRepeatOpen(true)}
+          onOpenReminders={() => setRemindersOpen(true)}
+          showResolutionPrompt={showResolutionPrompt}
+          resolved={resolved}
+          onOpenResolution={() => setResolutionOpen(true)}
+          canComplete={detail.detail?.capabilities?.complete === true}
+          completing={actions.isCompleting}
+          undoing={actions.isUndoing}
+          onComplete={() => {
+            actions.resolvePassed(
+              passedPlanResolution(activity.type).positive.outcome,
+              actionOccurrenceDate,
+              projectResolution,
+            );
+          }}
+          onUndoResolution={() => {
+            actions.undoResolution(actionOccurrenceDate, projectResolution);
+          }}
+        />
+      )}
+    </>
+  );
+
+  return (
+    <View style={{ flex: 1 }}>
+      {/**
+       * `ScreenShell` owns the gutters, the centred column, the safe area and the vertical
+       * breathing room — the four things this screen used to answer for itself, and answered
+       * differently from the tabs. `reading` is §8's narrower measure: this screen is mostly
+       * running text, and it is why the cap here was 620 against the tabs' 720.
+       */}
+      {/**
+       * **No card around the screen.** From `medium` up this content used to sit inside an
+       * elevated `Card`, which made a whole screen a hero surface — §2 allows one hero at a
+       * time, and this screen's hero is its completion action. `ScreenShell` already gives the
+       * centred column the card was standing in for, and only cards, sheets and the one hero
+       * surface are rounded; rounding a page is the corporate-dashboard look the system exists
+       * to avoid.
+       */}
+      <ScreenShell measure="reading">
+        <View testID="detail-surface">{detailContent}</View>
+      </ScreenShell>
 
       {activity === undefined ? null : (
         <>
@@ -272,6 +351,19 @@ export function ActivityDetailScreen({
               {...(detail.editError === undefined ? {} : { error: detail.editError })}
             />
           )}
+          <ReminderSheet
+            open={remindersOpen}
+            onClose={() => setRemindersOpen(false)}
+            reminders={detail.detail?.reminders ?? []}
+            timed={activity.schedule?.time !== undefined}
+            busy={detail.isSavingReminder}
+            {...(detail.reminderError === undefined
+              ? {}
+              : { error: detail.reminderError })}
+            onAdd={detail.addReminder}
+            onRemove={detail.removeReminder}
+          />
+
           <OverflowMenu
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
@@ -338,14 +430,7 @@ export function ActivityDetailScreen({
             onClose={() => setResolutionOpen(false)}
             onResolve={(outcome) => {
               setResolutionOpen(false);
-              actions.resolvePassed(
-                outcome,
-                resolutionOccurrenceDate ?? undefined,
-                (resolved) => {
-                  setResolutionDismissed(resolved);
-                  onResolutionProjectionChange?.(resolved);
-                },
-              );
+              actions.resolvePassed(outcome, actionOccurrenceDate, projectResolution);
             }}
           />
         </>
@@ -360,16 +445,33 @@ interface LoadedProps {
   today: WallDate;
   onOpenReschedule: () => void;
   onOpenRepeat: () => void;
+  onOpenReminders: () => void;
   showResolutionPrompt: boolean;
+  resolved: boolean;
   onOpenResolution: () => void;
   /** Server-authored. The client never re-derives ownership (`today-and-tasks.md` §4.1). */
   canComplete: boolean;
   completing: boolean;
+  undoing: boolean;
   onComplete: () => void;
   onUndoResolution: () => void;
 }
 
-const RESOLVED_STATUSES = new Set(['completed', 'skipped']);
+/**
+ * Every status that means "this is already resolved", **including the occurrence variants**.
+ *
+ * An Activity's own status is only ever `completed`/`skipped`; an *occurrence* read back from
+ * the agenda is `completed_occurrence`/`skipped_occurrence` (`agenda.ts`). Checking only the
+ * first pair meant leaving a completed occurrence and returning to it showed the completion
+ * button again, because the cached agenda's answer was true but unrecognised. `AgendaRow` has
+ * always matched all four; this set had two.
+ */
+const RESOLVED_STATUSES = new Set([
+  'completed',
+  'completed_occurrence',
+  'skipped',
+  'skipped_occurrence',
+]);
 
 function Loaded({
   activity,
@@ -377,28 +479,21 @@ function Loaded({
   today,
   onOpenReschedule,
   onOpenRepeat,
+  onOpenReminders,
   showResolutionPrompt,
+  resolved,
   onOpenResolution,
   canComplete,
   completing,
+  undoing,
   onComplete,
   onUndoResolution,
 }: LoadedProps) {
   const theme = useTheme();
   const sections = sectionsFor(activity);
-  const resolved = RESOLVED_STATUSES.has(activity.status);
 
   return (
-    <>
-      {showResolutionPrompt ? (
-        <Chip
-          label={passedPlanResolution(activity.type).prompt}
-          accessibilityLabel={`${passedPlanResolution(activity.type).prompt} Choose an outcome for ${activity.title}`}
-          tone="neutral"
-          onPress={onOpenResolution}
-          testID="detail-resolution-prompt"
-        />
-      ) : null}
+    <View style={{ gap: theme.space[6] }} testID="detail-content">
       {detail.conflict === undefined ? null : (
         <View
           accessibilityRole="alert"
@@ -428,156 +523,199 @@ function Loaded({
         </View>
       )}
 
-      {/**
-       * The title is the screen's header, not a form row (`plans-and-lists.md` §2.1 row 1):
-       * serif `title`, no fill, no drawn label — and still inline-editable by the owner,
-       * committing on blur like every other field.
-       */}
-      <InlineText
-        label="Title"
-        value={activity.title}
-        hideLabel
-        appearance="bare"
-        textVariant="display"
-        onCommit={async (title) => {
-          await detail.patch({ title });
-        }}
-        testID="detail-title"
-      />
-      <Text variant="subhead" color="textSecondary" testID="detail-subtitle">
-        {subtitleFor(
-          activity,
-          activity.objectKind === 'plan' ? planKindLabel(activity.type) : '',
-        )}
-      </Text>
-
-      {detail.editError === undefined ? null : (
-        <Text variant="footnote" color="danger" testID="detail-edit-error">
-          {detail.editError}
-        </Text>
-      )}
-
-      {/**
-       * The schedule is part of the header grammar, not a section in the list
-       * (`design-system.md` §7.5): what it is, when it is, then what to do next. **U4 is
-       * unchanged** — it is a tap target that opens the reschedule sheet and never becomes a
-       * field.
-       */}
-      <WhenWhereBlock
-        schedule={activity.schedule}
-        location={activity.location}
-        reminders={detail.detail?.reminders ?? []}
-        {...(activity.schedule === undefined
-          ? {}
-          : {
-              recurrenceDescription:
-                activity.recurrence === undefined
-                  ? 'Never'
-                  : describeRecurrence(activity.recurrence, today),
-            })}
-        today={today}
-        onPressDate={onOpenReschedule}
-        onPressRepeat={onOpenRepeat}
-        onPressAddress={undefined}
-      />
-
-      {/**
-       * The primary completion action — the Phase 2 deliverable `phase-01-activity-core.md`
-       * deferred and that no other task claimed.
-       *
-       * **One component and one position for both object kinds**, with the label derived from
-       * the activity's type, so a Task, a Meal and an Event differ only in the verb. That verb
-       * comes from the same table the row's trailing slot and the passed-plan sheet read, so
-       * the three cannot disagree.
-       *
-       * **Absent, never disabled, when the caller lacks the capability.** That is how
-       * `today-and-tasks.md` §4.1's "a plan you did not create carries no completion control"
-       * is satisfied without the client re-deriving ownership from an owner id.
-       */}
-      {canComplete && !resolved ? (
-        <Button
-          label={completionVerb(activity.type)}
-          fullWidth
-          size="lg"
-          loading={completing}
-          onPress={onComplete}
-          testID="detail-complete"
-        />
-      ) : null}
-      {/**
-       * The resolved state, and the way back out of it.
-       *
-       * A completed row on Today keeps its `Undo` for as long as it is completed, so the one
-       * surface that can *record* a completion needs the same permanent affordance — the toast
-       * is a shortcut, not the mechanism. Secondary rather than primary: undoing is the rarer
-       * intent, and the outcome itself is what the screen is stating.
-       */}
-      {resolved ? (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: theme.space[4],
-          }}
-        >
-          <Text variant="bodyStrong" color="success" testID="detail-resolved">
-            {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
+      <View style={{ gap: theme.space[5] }} testID="detail-header">
+        {/** Title and type/audience are one header unit, not two unrelated form rows. */}
+        <View style={{ gap: theme.space[2] }}>
+          <InlineText
+            label="Title"
+            value={activity.title}
+            hideLabel
+            appearance="bare"
+            textVariant="display"
+            onCommit={async (title) => {
+              await detail.patch({ title });
+            }}
+            testID="detail-title"
+          />
+          <Text variant="subhead" color="textSecondary" testID="detail-subtitle">
+            {subtitleFor(
+              activity,
+              activity.objectKind === 'plan' ? planKindLabel(activity.type) : '',
+            )}
           </Text>
-          {canComplete ? (
-            <Button
-              label="Undo"
-              variant="secondary"
-              loading={completing}
-              onPress={onUndoResolution}
-              testID="detail-undo"
-            />
-          ) : null}
-        </View>
-      ) : null}
 
-      {sections.map((section) => {
-        if (section.key === 'whenWhere') return null;
-
-        if (section.key === 'notes') {
-          return (
-            <View
-              key={section.key}
-              style={{ gap: theme.space[3] }}
-              testID="section-notes"
-            >
-              <SectionHeader title="Notes" />
-              {/* `hideLabel`: the SectionHeader above already says NOTES. */}
-              <InlineText
-                label="Notes"
-                value={activity.notes ?? ''}
-                hideLabel
-                multiline
-                placeholder="Add notes"
-                onCommit={async (notes) => {
-                  await detail.patch({ notes });
-                }}
-                testID="detail-notes"
-              />
-            </View>
-          );
-        }
-
-        // Related plan — the parent link on a prep task (`today-and-tasks.md` §5.5).
-        return (
-          <View
-            key={section.key}
-            style={{ gap: theme.space[3] }}
-            testID="section-related"
-          >
-            <SectionHeader title="Related plan" />
-            <Text variant="body" color="textSecondary">
-              {activity.parentActivityId === undefined ? 'None' : 'Part of a plan'}
+          {detail.editError === undefined ? null : (
+            <Text variant="footnote" color="danger" testID="detail-edit-error">
+              {detail.editError}
             </Text>
+          )}
+        </View>
+
+        {/** U4: the schedule remains a tap target and never becomes an inline field. */}
+        <WhenWhereBlock
+          schedule={activity.schedule}
+          location={activity.location}
+          reminders={detail.detail?.reminders ?? []}
+          {...(activity.schedule === undefined
+            ? {}
+            : activity.recurrence === undefined
+              ? {}
+              : {
+                  recurrenceDescription: describeRecurrence(activity.recurrence, today),
+                })}
+          today={today}
+          onPressDate={onOpenReschedule}
+          onPressAddress={undefined}
+        />
+
+        {/** A passed-plan prompt replaces the primary action in the same visual position. */}
+        {showResolutionPrompt ? (
+          <Chip
+            label={passedPlanResolution(activity.type).prompt}
+            accessibilityLabel={`${passedPlanResolution(activity.type).prompt} Choose an outcome for ${activity.title}`}
+            tone="neutral"
+            onPress={onOpenResolution}
+            testID="detail-resolution-prompt"
+          />
+        ) : null}
+
+        {/** One type-derived completion component and position for both object kinds. */}
+        {canComplete && !resolved && !showResolutionPrompt ? (
+          <Button
+            label={completionVerb(activity.type)}
+            fullWidth
+            size="lg"
+            radius="md"
+            loading={completing}
+            onPress={onComplete}
+            testID="detail-complete"
+          />
+        ) : null}
+
+        {/** The outcome is stated before the control that reverses it, not after it. */}
+        {resolved ? (
+          <View style={{ gap: theme.space[3] }}>
+            <Text variant="bodyStrong" color="success" testID="detail-resolved">
+              {activity.status === 'skipped' ? 'Skipped' : outcomeVerb(activity.type)}
+            </Text>
+            {canComplete ? (
+              <Button
+                label="Undo"
+                variant="secondary"
+                size="lg"
+                fullWidth
+                radius="md"
+                loading={undoing}
+                onPress={onUndoResolution}
+                testID="detail-undo"
+              />
+            ) : null}
           </View>
-        );
-      })}
-    </>
+        ) : null}
+      </View>
+
+      {/**
+       * Capabilities and the bottom time action are **one ruled list**. They were two blocks
+       * with a gap between them, and since every row carries its own rule that rendered as two
+       * horizontal lines with an empty band trapped between — which reads as a mistake rather
+       * than as a grouping. Each row closes itself with a bottom rule, per the frames.
+       */}
+      <RowGroup testID="detail-sections">
+        {sections.map((section) => {
+          if (section.key === 'whenWhere') return null;
+
+          /** Reminder and Repeat are setting rows: value on the right, sheet on tap. */
+          if (section.key === 'reminders') {
+            return (
+              <SettingRow
+                key={section.key}
+                label="Reminder"
+                value={reminderSummary(
+                  detail.detail?.reminders ?? [],
+                  activity.schedule?.time !== undefined,
+                )}
+                onPress={onOpenReminders}
+                testID="section-reminders"
+              />
+            );
+          }
+
+          if (section.key === 'repeat') {
+            return (
+              <SettingRow
+                key={section.key}
+                label="Repeat"
+                value={
+                  activity.recurrence === undefined
+                    ? 'Does not repeat'
+                    : describeRecurrence(activity.recurrence, today)
+                }
+                onPress={onOpenRepeat}
+                testID="detail-edit-recurrence"
+              />
+            );
+          }
+
+          if (section.key === 'notes') {
+            return (
+              <DisclosureRow
+                key={section.key}
+                label="Notes"
+                summary={
+                  activity.notes?.trim() === '' || activity.notes === undefined
+                    ? 'Add notes'
+                    : activity.notes
+                }
+                testID="section-notes"
+              >
+                <InlineText
+                  label="Notes"
+                  value={activity.notes ?? ''}
+                  hideLabel
+                  appearance="bare"
+                  multiline
+                  placeholder="Add notes"
+                  onCommit={async (notes) => {
+                    await detail.patch({ notes });
+                  }}
+                  testID="detail-notes"
+                />
+              </DisclosureRow>
+            );
+          }
+
+          if (section.state === 'coming-later') {
+            return (
+              <SettingRow
+                key={section.key}
+                label={section.label ?? ''}
+                summary={section.summary ?? ''}
+                note="Coming later"
+                testID={`section-${section.key}`}
+              />
+            );
+          }
+
+          // Related plan — the parent link on a prep task (`today-and-tasks.md` §5.5).
+          return (
+            <DisclosureRow
+              key={section.key}
+              label="Related plan"
+              summary={
+                activity.parentActivityId === undefined ? 'None' : 'Part of a plan'
+              }
+              testID="section-related"
+            >
+              <Text variant="body" color="textSecondary">
+                {activity.parentActivityId === undefined
+                  ? 'A related plan appears here when this task is added from a plan.'
+                  : 'This task is part of a plan.'}
+              </Text>
+            </DisclosureRow>
+          );
+        })}
+      </RowGroup>
+    </View>
   );
 }
 

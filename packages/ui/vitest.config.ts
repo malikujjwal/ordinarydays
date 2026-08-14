@@ -62,6 +62,15 @@ export default defineConfig({
        * Only the fork-parity test reaches it — everything else resolves
        * `pickerSurface.web.tsx` through `extensions` below. Added in P1-22.
        */
+      /**
+       * `react-native-safe-area-context`, stubbed for the reason written at the top of
+       * `test/safe-area-stub.tsx`. Needed from the moment `Sheet` began reading the bottom
+       * inset so its last control clears the home indicator.
+       */
+      {
+        find: /^react-native-safe-area-context$/,
+        replacement: fileURLToPath(new URL('./test/safe-area-stub.tsx', import.meta.url)),
+      },
       {
         find: /^@react-native-community\/datetimepicker$/,
         replacement: fileURLToPath(

@@ -50,13 +50,26 @@ export function quickDates(today: WallDate): QuickDate[] {
   const saturday = base.getDay() === 6 ? base : nextSaturday(base);
   const monday = base.getDay() === 1 ? addDays(base, 7) : nextMonday(base);
 
+  /**
+   * **Named days, not vague spans.** The founder's frames are explicit: "concrete date
+   * shortcuts instead of ambiguous ones". `This weekend` on a Sunday and `Next week` on a
+   * Friday each mean at least two different things depending on who is reading, and the row
+   * renders the resolved date beside the label so the shortcut is never a guess.
+   */
   return [
     { key: 'today', label: 'Today', date: today },
     { key: 'tomorrow', label: 'Tomorrow', date: toWall(addDays(base, 1)) },
-    { key: 'weekend', label: 'This weekend', date: toWall(saturday) },
-    { key: 'nextWeek', label: 'Next week', date: toWall(monday) },
+    { key: 'weekend', label: format(saturday, 'EEEE'), date: toWall(saturday) },
+    { key: 'nextWeek', label: `Next ${format(monday, 'EEEE')}`, date: toWall(monday) },
     { key: 'pick', label: 'Pick a date' },
   ];
+}
+
+/** `Wed, Aug 12` — the resolved date a quick option commits to, shown beside its label. */
+export function formatQuickDate(date: WallDate, today: WallDate): string {
+  const parsed = toDate(date);
+  const sameYear = date.slice(0, 4) === today.slice(0, 4);
+  return format(parsed, sameYear ? 'EEE, MMM d' : 'EEE, MMM d yyyy');
 }
 
 /**
@@ -82,7 +95,7 @@ export function formatWallTime(time: string): string {
 }
 
 /**
- * The when/where block's one line: `Fri 14 Aug · 6:00 PM – 8:00 PM`, or `Not scheduled`.
+ * The detail header's one line: `Fri, Aug 14 · 6:00 PM – 8:00 PM`, or `Not scheduled`.
  *
  * `Not scheduled` rather than an empty row, because an undated plan is a plan and the row is
  * never hidden (`plans-and-lists.md` §2.2).
@@ -93,7 +106,9 @@ export function formatSchedule(
 ): string {
   if (schedule === undefined) return 'Not scheduled';
 
-  const parts = [formatWallDate(schedule.date, today)];
+  const parsed = toDate(schedule.date);
+  const sameYear = schedule.date.slice(0, 4) === today.slice(0, 4);
+  const parts = [format(parsed, sameYear ? 'EEE, MMM d' : 'EEE, MMM d, yyyy')];
   if (schedule.time !== undefined) {
     parts.push(
       schedule.endTime === undefined

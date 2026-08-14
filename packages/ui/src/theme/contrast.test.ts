@@ -43,6 +43,7 @@ const bodyTextTokens = [
   'textPrimary',
   'textSecondary',
   'textMuted',
+  'textAction',
   'success',
   'warning',
   'danger',

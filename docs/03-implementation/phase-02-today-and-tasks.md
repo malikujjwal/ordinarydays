@@ -205,6 +205,22 @@ Anytime list. This is the phase where the product becomes usable daily.
 >    design asks for belongs to P2-41, P2-42 or P2-43, all of which depend on P2-40 so that they
 >    are built in the real palette rather than against it.
 
+> **Founder clarification for P2-41 — 2026-08-13 (newer than decision 5 above).** The mock is
+> still a flow reference rather than a literal feature checklist, but a Plan detail may expose
+> the future People, Preparation, Related lists and Attachments capabilities as compact,
+> **non-interactive** discovery rows ending in `Coming later`; a Meal also shows Ingredients
+> this way because the interactive ingredient flow belongs to Phase 3. They have no chevron,
+> disabled action, expansion or tap behaviour. Recipe, Expenses and Updates remain absent.
+> Capabilities that work now are single disclosure rows: a trailing chevron communicates the
+> expansion, the row exposes its expanded state to assistive technology, and opening it shows
+> either the current content or the real add controls. The schedule renders as
+> `Fri, Jul 24 · 6:00 PM` with `Tap to edit` beside it and
+> `Repeats daily · No reminder` immediately below. The top schedule target owns rescheduling;
+> `Edit recurrence` sits in the bottom time-actions block, while Delete remains only in the
+> three-dot menu. P2-16 supplied reminder storage and delivery but no detail-screen management
+> control, so P2-41 wires its existing create/delete client paths into the Reminder disclosure;
+> this adds no endpoint or reminder model.
+
 > **Today-screen furniture and the Tomorrow preview — 2026-08-12 (newest note in this file).**
 > A read of the founder's `Planner` prototype (Claude Design project
 > `83c4a4eb-57cd-48a4-b6a6-705fbe0327ff`) against the built Today screen found that
@@ -344,6 +360,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 | P2-44 | Today day header and timeline furniture | mobile | P2-19, P2-20, P2-21, P2-40 | yes | M |
 | P2-45 | The Tomorrow preview on Today | mobile | P2-18, P2-44 | yes | M |
 | P2-47 | Occurrence actions on a series detail screen | mobile | P2-14, P2-15, P2-25, P2-41 | yes | M |
+| P2-51 | The shared layout layer: one row, one group, one screen shell, one sheet | ui/mobile | P2-40 | yes | L |
 
 P2-17, P2-30, P2-31 and P2-35 are mechanical; follow the canonical sections named in the
 table and skip the design discussion. P2-31's exact label is `+ Add a task`: it bypasses the
@@ -2967,6 +2984,20 @@ threshold may be removed or weakened.
 
 ### P2-41 — Activity detail restructure and the completion button
 
+> **Founder clarification — 2026-08-13.** The clarification near the top of this file is the
+> newest task text and supersedes the older absent-until-built and duplicate-action decisions
+> below wherever they disagree. In particular, the named future Plan capabilities render as
+> non-interactive `Coming later` discovery rows, reminder management is functional, and the
+> visible bottom time action is `Edit recurrence`; Delete remains in `⋯`.
+
+> **Later founder refinement — 2026-08-13.** Notes is the first capability row. Reminder
+> choices render as a bounded vertical scroll menu. The schedule and its recurrence/reminder
+> summary share one compact touch target, eliminating the empty hit-target gap between them.
+> `Edit recurrence` is a full-width row with `Tap to edit` and a chevron, and the completion
+> button matches the detail surface's `radius.xl`. Completing or undoing from detail projects
+> the targeted Today row optimistically and rolls it back on failure; the server response still
+> performs the existing central reconciliation.
+
 **Files.** `apps/mobile/src/features/activity/components/{ActivityDetailScreen.tsx,
 WhenWhereBlock.tsx,ComingSoonSection.tsx}`, `apps/mobile/src/features/activity/model/sections.ts`,
 and their existing tests. `ComingSoonSection.tsx` is **deleted**. Inventory is a minimum.
@@ -3016,8 +3047,35 @@ and their existing tests. `ComingSoonSection.tsx` is **deleted**. Inventory is a
 - Loading, empty, error and offline states, the `maxWidth` measure, and the conflict banner are
   preserved exactly as they are today.
 
+**Correction — 2026-08-13, after the first build.** Three things the first pass got wrong, all
+found by driving the real screen rather than the suite, which was green throughout.
+
+1. **The completion control's scope test was inverted.** It was hidden whenever an occurrence
+   date was in scope — the one case where the write is precise — and shown when none was, where
+   `POST /complete` sets `status: 'completed'` on the series row itself and retires every future
+   occurrence (verified against the local API). The rule is the other way round: **an occurrence
+   in scope gets the button; a series without one gets nothing**, because the third blocker this
+   task hands to **P2-47** is exactly "what should a series detail screen offer", and absence is
+   the honest answer until P2-47 gives one. Raise in the PR.
+2. **Resolving a passed occurrence left a dead screen.** The prompt left, and nothing replaced
+   it: no button, no outcome, no Undo — a six-second toast was the only trace of a write that
+   had landed. An `Occurrence` override never moves `ACT#/META` (rule 3), so nothing derived
+   from the series can show it; the screen holds that state, fed from the same `onProjected`
+   callback the optimistic projection and every rollback already use. `undoResolution` takes
+   that callback too, since the detail-cache restore behind it says nothing for an occurrence.
+3. **The collapsed disclosure summary rendered the whole value.** A 1,300-character note made a
+   1,465 pt "collapsed" Notes row and pushed every capability below it off the screen. One
+   truncated line, with the full text still in the accessible name.
+
+Also: `Coming later` rows now read as subordinate to working ones rather than identical to
+them, the capability list carries a closing rule, and the resolved state states the outcome
+before offering `Undo`. Anatomy in
+[`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.5.
+
 **Tests.** Component: the correct verb renders for each of the five types; the button is
-absent when `capabilities.complete` is false; `Snooze`/`Skip today` appear only on a series
+absent when `capabilities.complete` is false, and absent on a series with no occurrence in
+scope; resolving an occurrence leaves the outcome and a working `Undo`; a long note summarises
+to one line; `Snooze`/`Skip today` appear only on a series
 occurrence and only with their capabilities; the schedule line opens the reschedule sheet and
 does not become an editable field; the title still commits on blur and only when it changed;
 no rendered string contains `coming soon`. Unit: `sectionsFor` never returns a `coming-soon`
@@ -3025,10 +3083,80 @@ state for any input. **The P1-26 test `has no completion button anywhere on the 
 replaced by one asserting the type's verb is present — it is not deleted, and no other
 assertion in that file is weakened to accommodate this task.**
 
-**Scope guard.** Do not render People, Preparation, Related lists, Expenses or Attachments.
+**Scope guard.** Do not implement People, Preparation, Related lists, Attachments or Meal
+Ingredients; their discovery rows are non-interactive per the 2026-08-13 clarification. Do
+not render Expenses, Updates or Recipe.
 Do not add a colour outside P2-40's tables. Do not add an activity type. Do not touch the
-completion, skip or snooze endpoints, the `outcome` enum, or the agenda projection. Do not
-change the Today row or the passed-plan sheet.
+completion, skip or snooze endpoints or the `outcome` enum. Do not change the Today row or the
+passed-plan sheet. A targeted optimistic cache projection from the detail action is allowed by
+the later founder refinement above; it changes neither the row component nor the endpoint or
+agenda schema.
+
+---
+
+### P2-51 — The shared layout layer
+
+> **Founder decision — 2026-08-13.** Raised after a review of activity detail found the same
+> defect reported four different ways: rows of unequal height, screen padding that never
+> arrived, a sheet that could not be dragged down, and a `Done`/`Cancel` pair stacked in a
+> column. They are one defect. **Build the layer first and retrofit every screen onto it**, then
+> land P2-41 on top — chosen over landing P2-41 first precisely because the objection is that
+> per-screen fixes do not propagate, and a partial retrofit reproduces it.
+
+**The diagnosis.** `@od/ui` has a `Row` primitive, in the token gallery, encoding the row rules.
+It has **one consumer** — `ChooserRow`. `AgendaRow`, `DetailDisclosureRow`, `DetailActionRow`,
+`SheetOptionRow`, the reminder options and `TodayOverflowMenu` each hand-roll their own, with
+their own padding, minimum height, divider side and trailing treatment. Fifteen files set their
+own vertical screen padding.
+
+**Tokens stop invented values; they do not stop inconsistent assembly.** There is no layer
+between `tokens.ts` and a screen's JSX, so every screen re-derives what a row is, and a fix
+applied to one has no mechanism to reach the others. That is the whole of it.
+
+**Two row families, not five variants.** The distinction that turned out to be real:
+
+- **`Row` — content.** Something the user made. Title `body`, subtitle `subhead`, optional
+  leading control. Agenda rows, chooser rows. Already exists; unchanged.
+- **`SettingRow` — utility.** A control. Label `subhead`; its secondary text sits *below* as a
+  summary or *right* as a current value; trailing chevron, check, note or nothing; optional
+  selected tint; inert when it has no `onPress`. Replaces `DetailDisclosureRow`,
+  `DetailActionRow`, `SheetOptionRow` and the reminder option rows.
+
+**One height for every utility row** — `layout.rowHeight`, 72 pt (founder's decision,
+2026-08-13, **after seeing both built**). Uniform padding with content-derived height was tried
+first, on the reasoning that it is what the `Activity Detail Restructure` frames do. Rejected on
+sight: in a list mixing one-line settings with two-line capabilities, the short rows read as
+mistakes rather than as a rhythm, which was the original report restated. 72 is what a two-line
+row needs — `subhead` + `space[1]` + `footnote` inside `space[5]` — so a one-line row is
+deliberately airy. Applied as a `minHeight`, so a label that wraps at a large dynamic-type
+setting grows rather than clipping.
+
+**Content rows are exempt and stay content-sized.** An agenda row carries badges and a wrapping
+title; a fixed height there would cut off what the user wrote. The rule is statable: *utility
+rows share one measure, content rows are sized by their content.*
+
+**Files.** `packages/ui/src/primitives/{Row.tsx,SettingRow.tsx,RowGroup.tsx,ScreenShell.tsx,
+Sheet.tsx}`, the token gallery, and every screen and sheet that hand-rolls a row. Deletes
+`DetailDisclosureRow.tsx`, `DetailActionRow.tsx` and `SheetOptionRow.tsx`.
+
+**Also in scope, because each is the same gap:**
+
+- **`ScreenShell`** owns gutters, top and bottom padding, the `maxWidth` measure and the safe
+  area. "More padding top and bottom" becomes one edit for every screen rather than fifteen.
+- **`Sheet`** gains drag-to-dismiss and a single `actions` slot, so `Done`/`Cancel` is never
+  re-invented by a picker. Needs `react-native-gesture-handler` declared on `packages/ui` as a
+  peer plus dev dependency, the same shape as `react-native-safe-area-context` — with its line
+  in `tech-stack.md`.
+
+**The gate, without which this regresses.** Every variant of every layout component renders in
+the token gallery in both schemes, and `definition-of-done.md` gains one line: **a screen may
+not hand-roll a row, a group, a screen shell or a sheet footer.** The components are the design
+document; a prose spec that the code can drift from is what produced this task.
+
+**Scope guard.** No colour outside P2-40's tables and no new token. No change to what any screen
+*says* or *writes* — this is assembly only, and every existing behavioural assertion must still
+pass unchanged. `AgendaRow`'s badges, swipe actions and absolute-positioned time column stay as
+they are; only its row body moves onto the shared measure.
 
 ---
 

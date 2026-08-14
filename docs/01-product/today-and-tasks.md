@@ -164,7 +164,11 @@ The section sorts **descending** by that instant — clock time for the first ki
 completion time for the second — so the most recent is at the top.
 
 - Completed items render with their outcome verb in the trailing slot (`Had it`,
-  `Watched`, `Attended`, `Done`) and a struck-through or de-emphasised title.
+  `Watched`, `Attended`, `Done`) and a struck-through or de-emphasised title. **This list is
+  not the passed-plan sheet's**, whose positive button for a task is `Complete` (§8's table).
+  A task's *action* is `Complete`; the *state* it ends in is `Done`. One mapping served both
+  until 2026-08-13, so a finished task announced itself as `Complete` — an instruction where a
+  status belongs. `outcomeVerb` renders state, `completionVerb` renders the action.
 - Un-complete stays reachable from the row for every completed item here, timed or not:
   the checkbox un-ticks a task, and any row's detail screen offers un-complete after the
   6-second toast window closes.
@@ -407,11 +411,14 @@ of that plan.
 
 Task detail is the Activity detail screen, reduced. It follows the shared anatomy
 conventions in [`plans-and-lists.md`](plans-and-lists.md#21-anatomy) §2.1 and shows, top to
-bottom: title, the schedule row, the repeat row, the reminder row, notes, and a
+bottom: title, the schedule row with its combined repeat/reminder summary, the completion
+control, and the functional Reminder, Notes and
 `Related plan` row — the parent link, when it is a prep task (§5.5). Its actions are the
 standard complete, skip and snooze set (§4, §§5.3–5.4). It has no People, Expenses,
 Updates, or Attachments sections: tasks are solo (§5.1), so the coordination sections do
 not exist for them, and the screen renders no disabled placeholders for anything it lacks.
+Each functional capability is a single disclosure row with a trailing chevron and accessible
+expanded state; opening it shows either its current content or the real add controls.
 
 ---
 

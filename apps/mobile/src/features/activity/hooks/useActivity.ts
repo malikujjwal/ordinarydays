@@ -1,11 +1,13 @@
 import {
   ApiError,
+  type createReminder,
+  type deleteReminder,
   getActivity,
   patchActivity,
   type scheduleActivity,
 } from '@od/shared/client';
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
-import type { Activity, ActivityDetail } from '@od/shared/types';
+import type { Activity, ActivityDetail, Reminder } from '@od/shared/types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useState } from 'react';
@@ -18,6 +20,8 @@ import { apiClient } from '@/lib/apiClient';
 import {
   type PatchActivityVariables,
   patchChangeNames,
+  type ReminderCreateVariables,
+  type ReminderDeleteVariables,
   type ScheduleActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
@@ -51,6 +55,12 @@ export interface ActivityDetailView {
   patch: (input: PatchActivityInput) => Promise<boolean>;
   /** Sole scheduling mutation; its enqueue-time key is persisted with mutation variables. */
   schedule: (input: ScheduleActivityInput) => Promise<boolean>;
+  /** Adds one caller-owned reminder through P2-16's replay-safe mutation. */
+  addReminder: (offsetMinutes: number) => Promise<boolean>;
+  /** Removes one caller-owned reminder by its opaque id. */
+  removeReminder: (reminderId: string) => Promise<boolean>;
+  isSavingReminder: boolean;
+  reminderError?: string;
   /** The conflict banner, present only after a 409. Dismissed by `acknowledgeConflict`. */
   conflict?: { message: string; dropped?: string };
   acknowledgeConflict: () => void;
@@ -76,6 +86,7 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
   const queryClient = useQueryClient();
   const [conflict, setConflict] = useState<ActivityDetailView['conflict']>(undefined);
   const [editError, setEditError] = useState<string | undefined>(undefined);
+  const [reminderError, setReminderError] = useState<string | undefined>(undefined);
 
   const query = useQuery({
     queryKey: activityKey(activityId),
@@ -159,12 +170,57 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
     onError: (error: unknown) => setEditError(describe(error).message),
   });
 
+  const reminderCreateMutation = useMutation<
+    Awaited<ReturnType<typeof createReminder>>,
+    Error,
+    ReminderCreateVariables
+  >({
+    mutationKey: activityMutationKeys.reminderCreate,
+    onSuccess: (reminder) => {
+      setReminderError(undefined);
+      queryClient.setQueryData<ActivityDetail>(
+        activityKey(activityId),
+        (previous: ActivityDetail | undefined) =>
+          previous === undefined
+            ? previous
+            : { ...previous, reminders: [...previous.reminders, reminder] },
+      );
+    },
+    onError: (error: unknown) => setReminderError(describe(error).message),
+  });
+
+  const reminderDeleteMutation = useMutation<
+    Awaited<ReturnType<typeof deleteReminder>>,
+    Error,
+    ReminderDeleteVariables
+  >({
+    mutationKey: activityMutationKeys.reminderDelete,
+    onSuccess: ({ reminderId }) => {
+      setReminderError(undefined);
+      queryClient.setQueryData<ActivityDetail>(
+        activityKey(activityId),
+        (previous: ActivityDetail | undefined) =>
+          previous === undefined
+            ? previous
+            : {
+                ...previous,
+                reminders: previous.reminders.filter(
+                  (reminder: Reminder) => reminder.reminderId !== reminderId,
+                ),
+              },
+      );
+    },
+    onError: (error: unknown) => setReminderError(describe(error).message),
+  });
+
   const failure = query.error === null ? undefined : describe(query.error);
 
   return {
     status: query.status,
     refetch: () => void query.refetch(),
     isSaving: mutation.isPending || scheduleMutation.isPending,
+    isSavingReminder:
+      reminderCreateMutation.isPending || reminderDeleteMutation.isPending,
     patch: async (input) => {
       try {
         const current = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
@@ -195,6 +251,26 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
         return false;
       }
     },
+    addReminder: async (offsetMinutes) => {
+      try {
+        await reminderCreateMutation.mutateAsync({
+          activityId,
+          input: { offsetMinutes },
+          idempotencyKey: randomUUID(),
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    removeReminder: async (reminderId) => {
+      try {
+        await reminderDeleteMutation.mutateAsync({ activityId, reminderId });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     acknowledgeConflict: () => setConflict(undefined),
     ...(query.data === undefined ? {} : { detail: query.data }),
     ...(failure === undefined
@@ -205,5 +281,6 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
         }),
     ...(conflict === undefined ? {} : { conflict }),
     ...(editError === undefined ? {} : { editError }),
+    ...(reminderError === undefined ? {} : { reminderError }),
   };
 }

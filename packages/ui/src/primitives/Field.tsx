@@ -42,7 +42,8 @@ export interface FieldProps {
    * `boxed` is the form control: a `surfaceRaised` fill and a radius. `bare` has neither, for
    * text that is **content rather than input** — an inline-editable screen title, which
    * `plans-and-lists.md` §2.1 renders as the header and not as a labelled form row. It still
-   * focuses, still commits on blur, and still shows its focus ring.
+   * focuses, still commits on blur, and still shows its focus ring. A bare multiline field
+   * starts at one control row and grows with content instead of reserving a form-sized block.
    */
   appearance?: 'boxed' | 'bare';
   /** The type variant for the value. `body` unless the field *is* the screen's title. */
@@ -127,7 +128,7 @@ export function Field({
             borderRadius: bare ? theme.radius.none : theme.radius.lg,
             paddingHorizontal: bare ? theme.space[0] : theme.space[5],
             paddingVertical: bare ? theme.space[2] : theme.space[4],
-            minHeight: multiline ? 96 : theme.layout.hitTarget,
+            minHeight: multiline && !bare ? 96 : theme.layout.hitTarget,
             textAlignVertical: multiline ? 'top' : 'center',
             borderWidth: 1,
             borderColor:

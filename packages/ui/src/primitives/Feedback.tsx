@@ -163,7 +163,12 @@ export function Toast({
           testID="toast-action"
           style={{ paddingHorizontal: theme.space[2] }}
         >
-          <Text variant="footnoteStrong" color="accent">
+          {/**
+           * `textAction`, not `accent`. §5.1: `accent` is a fill and icon colour — 3.7:1 on dark
+           * `surfaceRaised` — and `Undo` on a toast is the most important word in the product to
+           * be able to read. Caught by §17's sweep, 2026-08-13.
+           */}
+          <Text variant="footnoteStrong" color="textAction">
             {action.label}
           </Text>
         </Touchable>

@@ -19,12 +19,18 @@ import {
 const WEDNESDAY = '2026-08-12';
 
 describe('quickDates', () => {
-  it('offers the five chips in their fixed order', () => {
+  /**
+   * **Named days, not vague spans.** The founder's frames call for "concrete date shortcuts
+   * instead of ambiguous ones": `This weekend` read on a Sunday and `Next week` read on a
+   * Friday each mean at least two different things, and the row shows the resolved date beside
+   * the label so neither is a guess. From `WEDNESDAY` those resolve to Saturday and Monday.
+   */
+  it('offers the five options in their fixed order, naming the days', () => {
     expect(quickDates(WEDNESDAY).map((c) => c.label)).toEqual([
       'Today',
       'Tomorrow',
-      'This weekend',
-      'Next week',
+      'Saturday',
+      'Next Monday',
       'Pick a date',
     ]);
   });
@@ -102,19 +108,25 @@ describe('formatSchedule', () => {
   });
 
   it('renders a date alone', () => {
-    expect(formatSchedule({ date: '2026-08-14' }, WEDNESDAY)).toBe('Fri 14 Aug');
+    expect(formatSchedule({ date: '2026-08-14' }, WEDNESDAY)).toBe('Fri, Aug 14');
   });
 
   it('renders a date and a start time', () => {
     expect(formatSchedule({ date: '2026-08-14', time: '19:00' }, WEDNESDAY)).toBe(
-      'Fri 14 Aug · 7:00 PM',
+      'Fri, Aug 14 · 7:00 PM',
+    );
+  });
+
+  it('includes the year when the schedule is outside the current year', () => {
+    expect(formatSchedule({ date: '2027-08-14', time: '19:00' }, WEDNESDAY)).toBe(
+      'Sat, Aug 14, 2027 · 7:00 PM',
     );
   });
 
   it('renders a time range when there is an end time', () => {
     expect(
       formatSchedule({ date: '2026-08-14', time: '19:00', endTime: '21:30' }, WEDNESDAY),
-    ).toBe('Fri 14 Aug · 7:00 PM – 9:30 PM');
+    ).toBe('Fri, Aug 14 · 7:00 PM – 9:30 PM');
   });
 });
 

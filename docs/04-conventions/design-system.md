@@ -10,6 +10,80 @@ cannot be got wrong by accident.
 Everything here lives in `packages/ui/src/theme/` and is consumed through
 `useTheme()` / `useStyles()` (`coding-standards.md` §8.7).
 
+---
+
+## 0. System invariants
+
+**Four rules. Everything below is how they are expressed** — added 2026-08-13 (P2-51), after a
+review found the same defect reported four different ways. The rest of this document is
+detailed enough to answer most questions and long enough that nobody reads it end to end; what
+it lacked was a short statement of which violations are *architectural* rather than matters of
+taste. These four are architectural. A change that breaks one of them is wrong even if it looks
+better.
+
+**1. Affordance truth.** Every visible affordance describes what will happen.
+
+| Sign | Means, and may not mean anything else |
+| --- | --- |
+| Chevron | Navigates, or discloses in place |
+| Check | Selected, or complete |
+| Accent text | An action |
+| Muted text | Information |
+| Reduced emphasis | Unavailable |
+| Nothing | Nothing happens |
+
+No symbol is ever placed for visual balance. An unchecked toggle that renders a chevron is a
+bug, not a style preference — it promises navigation that does not exist.
+
+**2. Ownership.** Screens compose primitives and supply content. **A screen decides which
+components appear, what they contain and in what order. A screen does not decide** row height,
+divider colour, card radius, chevron colour, the type scale, checkbox appearance, sheet padding,
+elevation, or button anatomy. Those belong to `packages/ui`. A screen that needs a shape the
+system lacks adds it to the system and to the gallery first.
+
+**3. Hierarchy.** Three visual levels — hero, content, controls — and ordinarily **one hero
+surface visible at a time**. Content is quieter than the hero; controls and metadata recede.
+Elevation, radius and accent are earned. A screen that wraps itself in a raised card has made
+the whole page a hero and has none.
+
+**4. Accessibility is a construction constraint, not a final check.** Body text meets 4.5:1,
+large text 3:1, control boundaries and focus indicators 3:1. `textDisabled` is the one
+deliberate exception and may never be the sole carrier of meaning — nor may colour, anywhere
+(completion is a check **and** a strike **and** a dimmed row). Hit targets are ≥ 44 pt, and the
+*hit area* grows rather than the glyph. **Rows are content-sized above their family minimum and
+are never fixed-height**; at accessibility text sizes a row may **reflow from horizontal to
+vertical composition** where necessary, rather than compressing, clipping, or leaning on
+aggressive truncation. Growth and reflow solve different problems and both stay legal — the
+acceptance criterion is *no clipping, no unusable truncation, no crushed controls, sensible
+reflow*, not "the row stops growing". The contrast matrix is CI-enforced in
+`packages/ui/src/theme/contrast.test.ts`, so a palette change that breaks it does not ship.
+
+> **A visible grabber is a behavioural promise.** A sheet that cannot be dragged must not render
+> one. This is invariant 1 applied to the surface that most often breaks it.
+
+**Two row families, two floors.** `layout.rowMinHeight` = **56** for the content `Row`;
+`layout.settingRowMinHeight` = **72** for `SettingRow`. There is no reason every family shares a
+floor: a settings group is a regular configuration measure, and at 56 its rhythm would be set by
+content length — `Repeat` alone beside `Notes`-with-summary. Both are minima; both grow.
+
+> **On "one value token for a role".** Semantic role first, contrast gate second, exact token
+> third — in that order. `SettingRow`'s value is `textSecondary` on `surface` and
+> `surfaceRaised`; the same role on light `accentSurface` takes `textPrimary`, because
+> `textSecondary` measures 4.45:1 there. A rule stated as a token rather than as a role is a
+> rule that will be applied where it fails.
+
+**Component families, not component sprawl.** One implementation per family; the roles are
+gallery states, not separate primitives. `Row` and `SettingRow` are the two row families —
+"navigation row", "choice row", "check row", "disclosure row", "content row" are *roles* of
+those. `TaskRow` is a domain composition of the row family, not a new visual primitive.
+`Button` is one component with `primary / secondary / ghost / danger`, and a "text action" is
+its `ghost` role rather than a separate component. `IconButton` stays separate because its
+geometry and accessibility contract genuinely differ. Six implementations independently
+remembering radius, pressed state, focus, disabled state and accessibility is the failure this
+rule exists to prevent, and it is the failure P2-51 was created to undo.
+
+---
+
 > **Decision — visual refresh from the founder's design reference (2026-08-08).** The
 > founder produced a Claude Design mock ("Planner", four screens: Today, Plans, Lists,
 > People) and directed the app to **loosely follow it**: adopt its visual language — the
@@ -181,8 +255,11 @@ Native Web.
 | `e3` | Sheets, menus, popovers, the UP NEXT card | `0 1px 2px rgba(38,42,40,0.04), 0 12px 24px -20px rgba(90,50,72,0.55)` on the UP NEXT card (mulberry-tinted); `0 10px 30px -12px rgba(38,42,40,0.35)` elsewhere |
 | `e4` | Toast | `0 12px 30px -14px rgba(38,42,40,0.45)` |
 
-The filled `primary` Button additionally carries the mock's accent glow —
-`0 8px 18px -8px rgba(150,93,120,0.85)` — defined once as `eAccent` and used nowhere else.
+**The accent glow belongs to the Add button, and to nothing else** (amended 2026-08-13,
+P2-51). `accentGlow` — `0 8px 18px -8px rgba(139,99,116,0.85)` — used to sit under every filled
+`primary` Button. No frame in either palette puts a glow under a filled control, and on a 52 pt
+primary it rendered as a smudge, so `Button` no longer applies it. The floating Add button keeps
+it: it is the one control with nothing behind it to sit on.
 
 > **Decision:** in dark mode, elevation is expressed as **surface lightening plus a 1 px
 > border**, not as a shadow. A shadow on a near-black background is invisible, so a dark UI
@@ -252,6 +329,7 @@ independently contrast-checked.
 | `textMuted` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Readable hints, placeholders and tertiary metadata; never a disabled state |
 | `textDisabled` | `#978F84` | `#6E6C63` | 2.7:1 / 3.1:1 | Disabled labels and nonessential decoration only — never carries meaning |
 | `textInverse` | `#FFFDF9` | `#171613` | — | On an accessible filled accent, sage, ochre, or danger surface |
+| `textAction` | `#795565` | `#F4F0E8` | 5.4:1 / 15.9:1 | Readable text actions: light `accentDeep`, dark `textPrimary`; semantic alias, no new palette value |
 | `border` | `#E1DAD0` | `#34312B` | — | Dividers, separators, hairlines and the timeline's connector line. Decorative only. |
 | `borderSubtle` | `#D3C9BC` | `#34312B` | — | Decorative light field/chip outline; never the sole control boundary or focus indicator |
 | `borderStrong` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Required control outlines and checkbox border |
@@ -365,15 +443,15 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 
 | Component | Props | States |
 | --- | --- | --- |
-| `Text` | `variant` (the nine type roles), `color` (`textDisplay` \| `textPrimary` \| `textSecondary` \| `textMuted` \| `textDisabled` \| `accent` \| `danger` \| `success` \| `warning` \| `inverse`), `numberOfLines`, `align` | — |
-| `Button` | `variant` (`primary` — accent pill with `eAccent` \| `secondary` \| `ghost` \| `danger`), `size` (`md` 44 \| `lg` 52), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth` | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
-| `IconButton` | `icon`, `label` (required — it is the accessible name), `onPress`, `variant` (`ghost` \| `filled`), `disabled` | default, pressed, disabled, focus-visible. Always 44 × 44. |
+| `Text` | `variant` (the nine type roles), `color` (`textDisplay` \| `textPrimary` \| `textSecondary` \| `textMuted` \| `textDisabled` \| `textAction` \| `accent` \| `danger` \| `success` \| `warning` \| `inverse`), `numberOfLines`, `align` | — |
+| `Button` | `variant` (`primary` — accent fill \| `secondary` \| `ghost` — the text-action role \| `danger`), `size` (`md` 44 \| `lg` 52), `radius` (**defaults to `md`**; `pill` is requested explicitly, and only by the controls the radius table reserves it for), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth` | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
+| `IconButton` | `icon`, `label` (required — it is the accessible name), `onPress`, `variant` (`ghost` \| `filled`), `tone` (`neutral` \| `accent`), `disabled` | default, pressed, disabled, focus-visible. Always 44 × 44. |
 | `Row` | `onPress?`, `leading?`, `title`, `subtitle?`, `trailing?`, `accent?`, `dimmed`, `struck`, `swipeActions?`, `accessibilityActions` | default, pressed, hovered (web), focused, dimmed (completed), disabled |
 | `Card` | `elevation` (`e1` \| `e2` \| `e3`), `radius` (`lg` \| `xl`), `padding` (a `space` token), `onPress?` | default, pressed, focused |
 | `IconTile` | `icon`, `tint` (a type or template accent), `size` (44) | The squircle on plan and list cards. Non-interactive; `accessibilityElementsHidden`. |
 | `SegmentedControl` | `segments` (`{ label, count? }[]`), `selectedIndex`, `onChange` | `surfaceSunken` pill track (`radius.md`), active segment `surfaceRaised` + `e1`. Counts render as a `footnote` beside the label. |
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
-| `Sheet` | `open`, `onClose`, `title?`, `detents` (`['medium','large']`), `dismissible` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. |
+| `Sheet` | `open`, `onClose`, `title?`, `detent` (`fit` \| `medium` \| `large`), `actions?`, `dismissible` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. **Behaviour is fixed by §6.1, not by the screen.** |
 | `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength` | default, focused, filled, error, disabled. `surfaceInput` fill, `radius.lg`, decorative `borderSubtle` at rest and the accessible `focusRing` on focus. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
 | `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Uses the same `surfaceInput` / `borderSubtle` / `focusRing` treatment as `Field`; native opens one accessible option sheet and web uses one styled platform `<select>`. |
 | `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
@@ -402,6 +480,111 @@ regardless of its visual size, and none of them reads the API or the navigation 
 > [`coding-standards.md`](coding-standards.md) §11 smell 6 names. The screen supplies the
 > user's own wall date in their own zone, because it is the only layer that knows it.
 
+### 6.1 The Sheet contract
+
+Added 2026-08-13 (P2-51). The primitive already existed; what it lacked was a behavioural
+contract, so two modals could satisfy the same API and behave differently. **These are not
+per-screen decisions.**
+
+**Presentation is decided by width, not by the screen.**
+
+| | `compact` | `medium` and above |
+| --- | --- | --- |
+| Form | Bottom sheet | Centred dialog, 480 pt |
+| Grabber | Yes — **and it drags** | No |
+| Drag | Between detents; swipe down from the lowest detent dismisses | None |
+| Close button | Yes | Yes |
+| Escape | — | Dismisses where available |
+| Overflow | Body scrolls | Body scrolls within a sensible max height |
+
+A pointer does not make a drag gesture, which is why the centred dialog has neither a grabber
+nor a drag. Swipe and the close button **run the same `onClose`** — two exits with subtly
+different cleanup is how a dirty-state bug is born.
+
+**The detent is decided by the task, not by taste.** A sheet ends shortly after its content; it
+does not extend to the bottom of the device because the room is there.
+
+| Task | Detent |
+| --- | --- |
+| A short control — Repeat, Snooze, a simple picker | `fit`: the smallest detent that comfortably holds it |
+| A choice list — reminder offsets, people, lists | `medium`, scrolling internally, expanding to `large` when content needs it |
+| An editor or keyboard-heavy form — notes, complex recurrence | `large` when necessary |
+| A long flow that is really a screen | **Not a sheet.** Navigate to a screen rather than disguising one as a tall modal |
+
+**Anatomy, and the actions slot belongs to `Sheet`.**
+
+```
+        ━━━            grabber — compact and draggable only
+ Title                 ×
+ ───────────────────────────────
+ content, scrolls
+ ───────────────────────────────
+ [ primary ]  secondary        fixed; reachable while the body scrolls
+```
+
+A screen **supplies** actions; it does not decide where they sit or how they relate. Left to
+each modal, `Done`, `Cancel` and `Apply` acquired a different arrangement every time — one of
+them stacked into a column because the content above it happened to grow.
+
+**Keep the close button even once swipe exists.** Swipe is the convenience; the button is what
+makes dismissal obvious and gives assistive technology and the keyboard a target.
+
+**Gesture priority, so the drag and the scroll do not fight** (§25). The pan lives on the
+**header**, not the whole surface, and engages only while the body is scrolled to its top. A drag
+starting on a row scrolls the row's list; a drag starting on the grabber or the title moves the
+sheet. Release past 96 pt — or flick faster than 0.6 px/ms — dismisses; anything less springs
+back, and Reduce Motion drops the spring while keeping the drag, because direct manipulation is
+not decorative motion.
+
+**Every exit converges on one `requestClose`.** Scrim, close button, hardware Back, Escape and
+the drag all pass through it, so `dirty` guards all five or none. `✕` asking while swipe silently
+discards is the divergence this shape exists to prevent; a screen supplies `dirty` and its own
+prompt, and cannot guard one path and forget another.
+
+> **Implementation status — 2026-08-13.** Detents, the actions slot, the keyboard contract, the
+> grabber, drag-to-dismiss, Android scroll-to-focused-field and the `dirty` guard are **built**.
+> `Repeat` is the first adopter of `dirty`, being the one sheet whose selection is not saved
+> until its commit; sheets that write on tap have nothing to discard and correctly pass nothing.
+> Remaining: §26's runtime gallery fixtures, and the drag's *feel*, which needs a device — the
+> geometry, gesture priority and dismissal thresholds are covered by tests, the finger is not.
+
+### 6.2 The keyboard contract
+
+Added 2026-08-13 (P2-51). **Keyboard handling belongs to the containers that own layout —
+`ScreenShell` and `Sheet` — and to no screen.** A screen supplies fields; it does not compute
+keyboard offsets, keyboard height, safe-area maths, or scroll-to-focused-field. An unexplained
+`keyboardVerticalOffset = 86` is right on one device and wrong on the next, and there is no
+review that reliably catches the difference.
+
+**A focused editable control is never hidden behind the keyboard.** When the keyboard opens, the
+focused field, its label, its current validation message, and enough surrounding context to know
+what is being edited all stay visible. The user never scrolls blind to find the caret.
+
+| Container | What it does when the keyboard opens |
+| --- | --- |
+| `ScreenShell` | Adds the keyboard's height to the scroll's bottom inset, so a field at the end of a long screen has somewhere to scroll *to*. Without it the last field cannot be brought into view at all. |
+| `Sheet` | Lifts the **whole surface** clear, so the fixed actions slot rides up with it. The percentage detents resolve against the remaining space, so a `medium` sheet shrinks rather than being pushed off the top. |
+
+**Lifting only the body is the failure this is written against** — it leaves `Save` behind the
+keyboard, which is the one control the edit cannot finish without.
+
+The safe-area inset is **dropped while the keyboard is up**: the home indicator is underneath it,
+so the space is no longer owed and paying it twice reads as a gap.
+
+`useKeyboardInset()` is the single source of the number. It has a `.web.ts` fork because React
+Native Web's `Keyboard` module never fires; the browser reports the same fact through
+`visualViewport`.
+
+**Dismissing the keyboard is not cancelling an edit.** Keyboard dismissal preserves the field's
+value. Sheet dismissal, `Cancel`, `Save` and keyboard dismissal are four distinct behaviours and
+are never bound to one event.
+
+> **Still open — 2026-08-13.** Scroll-to-focused-field currently relies on the platform
+> (`automaticallyAdjustKeyboardInsets` on iOS, the browser's native focus scrolling on web);
+> Android has no equivalent and needs an explicit measure-and-scroll. Dirty-state dismissal is
+> defined only for compose; every other sheet needs the §20 contract before drag-to-dismiss
+> lands, or `✕` and swipe will diverge.
+
 ---
 
 ## 7. Anatomies
@@ -425,16 +608,28 @@ the `base` width ease, and at `0 of n` it renders empty, not hidden.
 
 ```
  ┌────────────────────────────────────────────────────┐  radius.xl · e3 (mulberry shadow)
- │ UP NEXT · IN 2H 15M                                │  caption, accentDeep
+ │ UP NEXT · IN 2H 15M                                │  caption, textAction
  │  ◇  Dentist appointment                            │  type marker · bodyStrong, textDisplay
  │     2:30 PM · Jefferson Dental Center              │  subhead, textSecondary
- │     Directions   Snooze                            │  footnoteStrong text actions, accent
+ │     Directions   Snooze                            │  footnoteStrong text actions, textAction
  └────────────────────────────────────────────────────┘
    accentSurface fill · 3 pt accentDeep left border
 ```
 
 One card, always the next timed thing, per `today-and-tasks.md` §2.1. Its actions are the
 row's own quick actions as text buttons — no icons, no chrome.
+
+> **Annotation correction — 2026-08-13 (P2-51).** This diagram said the eyebrow was
+> `accentDeep` and the actions `accent`. Both were wrong against §5.1's own contract: `accent`
+> is never a text colour, and dark `accentDeep` is 4.4:1 on `surfaceRaised`. Both are
+> `textAction`, which resolves to light `accentDeep` and dark `textPrimary` and is therefore
+> readable in both schemes. The prose below the diagram already said this for the relative-time
+> label; the annotations had not been updated, and an implementer reading the picture rather
+> than the paragraph would have shipped the older rule.
+
+On the light `accentSurface`, the relative-time label uses `textAction` and the embedded
+row's subtitle uses `textPrimary`. The decorative `accent` token is never text, and
+`textSecondary` measures 4.45:1 on this tinted surface rather than the required 4.5:1.
 
 **Timeline rows.** Rows are not cards. A time rail on the left, a marker column with a
 hairline connector, content to the right:
@@ -528,8 +723,16 @@ header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutat
   detail's Updates section. A card never stacks notifications.
 - Undated (Needs a date) cards render `No date yet — 2 suggestions` in the date slot,
   `footnote`, `textSecondary`. Past cards render their outcome verb.
-- The plan card also remains the header of the plan detail screen and the public invite
-  page, as before — one plan, given room.
+- The plan card remains the header of the **public invite page** — one plan, given room.
+
+> **Amendment — 2026-08-13 (P2-51).** This bullet used to send the plan card to the plan
+> *detail* screen as well. §7.5 superseded that on 2026-08-12 with **one header grammar for
+> every activity type** — title, then type-and-audience, then the schedule as a tap target,
+> then the primary action — and a Plan is not a special case of it. §0's hierarchy rule settles
+> it independently: a card at the top of a detail screen makes the page its own hero, and the
+> hero on that screen is the completion action. The two sentences had been left for an
+> implementer to choose between; the invite page keeps the card because it is a shared,
+> standalone page rather than a screen inside the planner.
 
 ### 7.4 People
 
@@ -556,8 +759,8 @@ and the reference for every later task that adds a capability to this screen.
  ‹                                          ⋯     ← back, overflow
  Chicken tacos                                     ← display, serif
  Meal · Alice + 2                                  ← subhead, textSecondary
- Tonight · 7:30 PM                                 ← bodyStrong, tap target → reschedule
- Reminder 1 hour before                            ← footnote, textSecondary
+ Wed, Aug 12 · 7:30 PM  Tap to edit                ← bodyStrong, tap target → reschedule
+ Repeats daily · Reminder 1 hour before            ← footnote, textSecondary
  ┌───────────────────────────────────────────┐
  │                 Had it                    │     ← primary, type-derived verb
  └───────────────────────────────────────────┘
@@ -576,15 +779,59 @@ and the reference for every later task that adds a capability to this screen.
 1. **The top says what it is, when it is, and what to do next** — in that order, in one
    grammar, for every type. Title, then type-and-audience, then the schedule as a tap target,
    then the primary action. Nothing else competes for the top of the screen.
-2. **A capability is one compact row until it holds content, then a section.** Collapsed is
-   `label` / current value in `subhead` `textSecondary` / a trailing `+ Add`. Expanded is a
-   `caption` section header with a count and the content beneath. A capability that exists and
-   is empty collapses rather than disappearing, so it stays discoverable
-   (`plans-and-lists.md` §2).
-3. **A capability that is not built is absent, not disabled.** A row reading "coming soon" is a
-   dead affordance that teaches the user the app can do something it cannot. Rule 2 governs
-   *empty*; this governs *unbuilt*. The two are different states and only the first is
-   discoverable by design.
+2. **A capability is one compact disclosure row until opened.** The collapsed row presents its
+   label, current summary and a trailing chevron. Tapping the whole row expands it inline to
+   show either the current content or its real add controls, and the row exposes its expanded
+   state to assistive technology. Empty functional capabilities stay discoverable. **The
+   summary is one truncated line, never the value itself** — a collapsed row that renders a
+   long note in full is a disclosure that has disclosed everything while claiming to be shut,
+   and it pushes every capability under it off the screen. The accessible name carries the
+   whole text; the clamp is visual only.
+3. **A named future Plan capability may be discoverable without pretending to work.** People,
+   Preparation, Related lists and Attachments — plus Ingredients on a Meal — render as
+   non-interactive rows ending in `Coming later` until their owning phase builds them. They
+   have no chevron, disabled action, expansion or tap behaviour. All other unbuilt
+   capabilities remain absent. A task still renders no Plan-only future rows. They are also
+   **visibly subordinate**: `body` in `textSecondary` over `textMuted`, and shorter than
+   `layout.rowMinHeight`, which is a measure reserved for hit targets. A future row rendered
+   at the same weight as a working one makes a screen where most rows do nothing look like a
+   screen where most rows do something.
+
+Capability rows carry a top rule each, so **the list carries a closing rule** — without one it
+does not end, it stops, and the bottom time action's own rule reads as an orphan.
+
+**Founder refinement — 2026-08-13.** Notes is the first capability row for both Tasks and
+Plans. Reminder opens as a bounded, vertically scrollable choice menu; selected offsets remain
+available to remove. ~~The completion action uses `radius.xl`~~ — superseded below. The bottom
+recurrence action uses the same full-width row measure as the disclosures, with `Tap to edit`
+and a trailing chevron.
+
+**The element vocabulary comes from the frames — 2026-08-13, founder instruction.** The
+`Activity Detail Restructure` frames are **not a layout to copy**; they define what a button, a
+heading, a row and an editable value *look like* when placed on our own screens. Read off them,
+mapped onto tokens:
+
+| Element | Treatment |
+| --- | --- |
+| Capability row label | `subhead`, `textPrimary` — quiet, so the action is the loud thing |
+| Capability row value | `footnote`, one line, `textSecondary` (`textMuted` when inert) |
+| Live row trailing slot | chevron in **`textAction`** — the affordance, not decoration |
+| Inert row trailing slot | `Coming later`, `footnote`, `textMuted`, no chevron |
+| Row rule | `borderBottom` on each row, so a list closes on its last row |
+| Filled control | `radius.md`, **no glow**, full width |
+| Outlined control | `radius.md`, 1 pt `border` |
+| Editable value in place | dashed `borderStrong` underline plus a `textAction` hint |
+
+**A grey chevron on a heavy label is the failure this table exists to prevent.** Built that way,
+a screen where five of seven rows are inert read as seven headings and nothing on it looked like
+a control — which is the report that produced this table.
+
+**`radius.md`, not `radius.xl`, for the completion action.** The earlier refinement asked for
+`xl` to match the detail surface; at 22 pt on a 52 pt control the corners meet and it renders as
+a lozenge, and at `compact` there is no surface to match because the card only appears from
+`medium` up. The frames draw every filled control as a soft rectangle. The frames win, per the
+founder's instruction above. **`accentGlow` is removed from `Button` entirely** — no frame in
+either palette puts a glow under a filled control, and the token existed for that one use.
 
 **The completion action.** One component, one position, one accessibility pattern for both
 object kinds — there is no Task treatment and no Plan treatment. Its label is derived from the
@@ -594,12 +841,30 @@ and the passed-plan sheet render for the same activity. The button is **absent**
 caller lacks the completion capability; it is never shown disabled. On an occurrence of a
 series, `Snooze` and `Skip today` follow as a secondary pair.
 
-**The schedule line is a tap target and never an inline field** (U4). This holds wherever a
-date is rendered in the product; the detail screen is not an exception to it.
+It is **also absent on a series with no occurrence in scope**, because there is no safe write
+behind it: `POST /complete` without an `occurrenceDate` sets `status: 'completed'` on the
+series row itself and retires every future occurrence, which is rule 3 undone by one tap. The
+screen is given an occurrence date only when navigation came from a specific occurrence, so a
+series opened from Plans has nothing to complete. **P2-47** owns what that screen should offer
+instead; until then absence is the honest rendering.
 
-**Capability order**, when each is built: People, Preparation, Related lists, Expenses, Notes,
-Attachments. A task shows only Notes and Related plan and renders no placeholder for anything
-it lacks — a Task is not a Plan with things hidden (`today-and-tasks.md` §5.6).
+**Once resolved, the screen says so before it offers the reversal** — the outcome verb in
+`success`, then `Undo`. An occurrence's resolution is not readable from its series (`Occurrence`
+overrides never move `ACT#/META`), so the screen that recorded it holds that state; a screen
+that recorded an outcome and then showed no trace of it is the one failure this ordering exists
+to prevent.
+
+**The schedule line is a tap target and never an inline field** (U4). This holds wherever a
+date is rendered in the product; the detail screen is not an exception to it. It uses
+`EEE, MMM d · h:mm a` in the current year (adding the year otherwise), carries the visible
+hint `Tap to edit`, and is immediately followed by the combined recurrence/reminder summary.
+The bottom time-actions block contains `Edit recurrence` when recurrence is available.
+Delete remains only in the `⋯` menu.
+
+**Capability order**, when each is built: Notes, Reminder, People, Preparation, Related lists,
+Expenses, Attachments. A task shows only Notes, Reminder when scheduled, and Related plan and
+renders no placeholder for anything it lacks — a Task is not a Plan with things hidden
+(`today-and-tasks.md` §5.6).
 
 ---
 
@@ -610,7 +875,7 @@ map onto them:
 
 | Device class | Width | Breakpoint | Layout |
 | --- | --- | --- | --- |
-| Phone | 320–429 | `compact` | Single column, 16 pt gutters, bottom tab bar, modals as full-screen sheets. List cards 1-up. Verified at 320 with no horizontal scroll and no clipping. |
+| Phone | 320–429 | `compact` | Single column, 16 pt gutters, bottom tab bar. **Modal controls present as bottom sheets at the smallest detent that fits the task** (§6.1) — full-screen presentation is reserved for flows whose content requires it. List cards 1-up. Verified at 320 with no horizontal scroll and no clipping. |
 | Large phone | 430–767 | `compact` | Identical structure. The extra width goes to the title column, not to new elements. Avatar stack may show 4. |
 | Tablet | 768–1199 | `medium` | Single column capped at 720 pt and centred; 24 pt gutters; the tab bar becomes a left rail. List cards 2-up. Sheets present as centred cards at 480 pt wide. |
 | Web, wide | ≥ 1200 | `expanded` | **Two panes.** |

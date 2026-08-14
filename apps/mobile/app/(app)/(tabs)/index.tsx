@@ -18,19 +18,23 @@ export default function TodayTab() {
         router.push('/compose');
       }}
       onOpenAnytime={() => router.push('/anytime')}
+      /**
+       * The occurrence travels **whenever the row has one**, not only on the passed-plan path.
+       *
+       * It used to ride along only with `resolvePassed`, so detail opened from a recurring row
+       * knew which series it was looking at but not which day of it — and a completion recorded
+       * there had no occurrence to attach to. Scope is a property of the row that was tapped;
+       * the passed-plan prompt is a separate question about that same row.
+       */
       onOpenAgendaItem={({ activityId, occurrenceDate, isPast, status }) =>
-        router.push(
-          (isPast && status === 'scheduled'
-            ? {
-                pathname: '/activity/[id]',
-                params: {
-                  id: activityId,
-                  resolvePassed: '1',
-                  ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
-                },
-              }
-            : `/activity/${activityId}`) as Href,
-        )
+        router.push({
+          pathname: '/activity/[id]',
+          params: {
+            id: activityId,
+            ...(isPast && status === 'scheduled' ? { resolvePassed: '1' } : {}),
+            ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+          },
+        } as Href)
       }
     />
   );

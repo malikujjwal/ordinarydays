@@ -15,6 +15,7 @@ import {
   colors,
   DatePicker,
   Diamond,
+  DisclosureRow,
   EmptyState,
   Field,
   IconButton,
@@ -25,10 +26,12 @@ import {
   ProgressBar,
   Repeat,
   Row,
+  RowGroup,
   ratioOf,
   Search,
   SectionHeader,
   SegmentedControl,
+  SettingRow,
   Skeleton,
   space,
   Text,
@@ -283,6 +286,74 @@ function Gallery({ scheme }: { scheme: ColorScheme }) {
             }
           />
         </View>
+      </Section>
+
+      {/**
+       * **The layout layer (P2-51).** Every state of every shared layout component, which is
+       * what makes drift visible rather than discovered on a screen six weeks later. If a
+       * screen needs a row shape that is not on this page, the shape is added here first.
+       */}
+      <Section title="SettingRow — one measure, every state">
+        <RowGroup label="Navigates">
+          <SettingRow
+            label="Notes"
+            summary="Check-in is after 3 PM."
+            onPress={() => {}}
+          />
+          <SettingRow
+            label="Notes"
+            summary="A note long enough that it has to be truncated rather than wrapped, because a collapsed row summarises and never renders the whole value"
+            onPress={() => {}}
+          />
+          <SettingRow label="Related plan" summary="None" onPress={() => {}} />
+        </RowGroup>
+
+        <RowGroup label="States a setting">
+          <SettingRow label="Repeat" value="Every 3 days" onPress={() => {}} />
+          <SettingRow label="Reminder" value="15 minutes before" onPress={() => {}} />
+          <SettingRow label="Time" value="6:00 PM" onPress={() => {}} />
+        </RowGroup>
+
+        <RowGroup label="Picks one of a set">
+          <SettingRow label="Today" value="Wed, Aug 12" onPress={() => {}} />
+          <SettingRow label="Tomorrow" value="Thu, Aug 13" selected onPress={() => {}} />
+          <SettingRow label="Pick a date" onPress={() => {}} />
+        </RowGroup>
+
+        <RowGroup label="Toggles — checkbox role, not button">
+          <SettingRow label="At the time" role="checkbox" selected onPress={() => {}} />
+          <SettingRow label="15 minutes before" role="checkbox" onPress={() => {}} />
+          <SettingRow label="1 day before" role="checkbox" disabled onPress={() => {}} />
+        </RowGroup>
+
+        <RowGroup label="Inert — not a control at all">
+          <SettingRow
+            label="People"
+            summary="Sharing and participants"
+            note="Coming later"
+          />
+          <SettingRow
+            label="Attachments"
+            summary="Photos and files"
+            note="Coming later"
+          />
+        </RowGroup>
+      </Section>
+
+      <Section title="DisclosureRow — opens in place">
+        <RowGroup>
+          <DisclosureRow
+            label="Notes"
+            summary="Tap to open under its own label"
+            testID="gallery-disclosure"
+          >
+            <Text variant="body" color="textSecondary">
+              Content the user edits opens here. A bounded set of choices opens in a Sheet
+              instead — expanded in place it pushes every row beneath it down the screen.
+            </Text>
+          </DisclosureRow>
+          <SettingRow label="Repeat" value="Does not repeat" onPress={() => {}} />
+        </RowGroup>
       </Section>
 
       <Section title="The UP NEXT card — the one hero surface">

@@ -1,7 +1,13 @@
 import { type Instant, type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type { Activity, AgendaData, User } from '@od/shared/types';
 import type { MutationKey, QueryClient } from '@tanstack/react-query';
-import { applyCompletion } from '@/features/agenda/model/applyCompletion';
+import {
+  type AgendaMutationTarget,
+  type AgendaProjectionClock,
+  applyCompletion,
+  findAgendaItem,
+  replaceAgendaItem,
+} from '@/features/agenda/model/applyCompletion';
 import { applyCreate } from '@/features/agenda/model/applyCreate';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
@@ -39,13 +45,7 @@ export function projectActivityWrite(
   const activity = activityFrom(data);
   if (activity === undefined) return false;
 
-  const timezone = (client.getQueryData<User>(['me'])?.timezone ??
-    Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone;
-  const now = new Date().toISOString() as Instant;
-  const clock = {
-    today: toWallDate(now, timezone),
-    currentMinute: toWallTime(now, timezone),
-  };
+  const clock = agendaClock(client);
 
   if (name === 'create' || name === 'duplicate') {
     update(client, (agenda) => applyCreate(agenda, { activity, ...clock }));
@@ -54,8 +54,8 @@ export function projectActivityWrite(
 
   if (name === 'schedule') {
     const date = activity.schedule?.date ?? null;
-    update(client, (agenda) =>
-      applyReschedule(agenda, {
+    update(client, (agenda) => {
+      const moved = applyReschedule(agenda, {
         activityId: activity.activityId,
         date,
         ...(activity.schedule?.time === undefined
@@ -65,8 +65,24 @@ export function projectActivityWrite(
           ? {}
           : { endTime: activity.schedule.endTime }),
         ...clock,
-      }),
-    );
+      });
+      if (moved !== agenda) return moved;
+
+      /**
+       * **A row can also be rescheduled *into* a window it was never in.**
+       *
+       * `applyReschedule` moves a row the cached agenda already holds; asked about one it does
+       * not, it correctly does nothing. But moving a plan from next Friday to today is exactly
+       * that case — Today's cached window has never seen it — so the projection was a no-op and
+       * Today only gained the row when something else happened to refetch. Reported as "it takes
+       * some time to show up".
+       *
+       * `applyCreate` is the right fallback rather than a second insert path: it places a
+       * server-confirmed Activity only when the destination date is inside this window, and it
+       * is idempotent, so a refetch that won the race cannot double the row.
+       */
+      return applyCreate(agenda, { activity, ...clock });
+    });
     return true;
   }
 
@@ -130,6 +146,56 @@ export function projectActivityWrite(
   return false;
 }
 
+/**
+ * The cached status of one occurrence, for a screen that cannot read it from the Activity.
+ *
+ * An `Occurrence` override never moves `ACT#/META` (`data-model.md` §4.5), so opening a
+ * recurring activity's detail tells you the series is `scheduled` and nothing about the day you
+ * are looking at. The agenda already carries the expanded occurrence and is already reconciled
+ * by every completion path, so it is the one place the answer exists client-side. Absent when
+ * no agenda window is cached — a cold deep link — and the caller falls back to unresolved.
+ */
+export function readOccurrenceStatus(
+  client: QueryClient,
+  target: AgendaMutationTarget,
+): string | undefined {
+  for (const [, agenda] of client.getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })) {
+    const found = agenda === undefined ? undefined : findAgendaItem(agenda, target);
+    if (found !== undefined) return found.item.status;
+  }
+  return undefined;
+}
+
+/**
+ * Projects a detail-screen completion before its request settles and returns a targeted
+ * rollback. The rollback restores only the affected row in each cached agenda window, so an
+ * unrelated agenda write made while the completion is in flight is never overwritten.
+ */
+export function projectOptimisticCompletion(
+  client: QueryClient,
+  variables: AgendaMutationTarget &
+    ({ completed: true } | { completed: false; restoredStatus: 'saved' | 'scheduled' }),
+): () => void {
+  const clock = agendaClock(client);
+  const snapshots = client
+    .getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })
+    .map(([queryKey, agenda]) => ({
+      queryKey,
+      found: agenda === undefined ? undefined : findAgendaItem(agenda, variables),
+    }));
+
+  update(client, (agenda) => applyCompletion(agenda, { ...variables, ...clock }));
+
+  return () => {
+    for (const { queryKey, found } of snapshots) {
+      client.setQueryData<AgendaData>(queryKey, (agenda) => {
+        if (agenda === undefined || found === undefined) return agenda;
+        return replaceAgendaItem(agenda, variables, found.item, found.sourceDate, clock);
+      });
+    }
+  };
+}
+
 /** Occurrence scope travels in the request, not the response. */
 function occurrenceDateFrom(variables: unknown): string | undefined {
   if (typeof variables !== 'object' || variables === null) return undefined;
@@ -145,6 +211,16 @@ function activityFrom(data: unknown): Activity | undefined {
   const candidate = 'activity' in data ? (data as { activity: unknown }).activity : data;
   if (typeof candidate !== 'object' || candidate === null) return undefined;
   return 'activityId' in candidate ? (candidate as Activity) : undefined;
+}
+
+function agendaClock(client: QueryClient): AgendaProjectionClock {
+  const timezone = (client.getQueryData<User>(['me'])?.timezone ??
+    Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone;
+  const now = new Date().toISOString() as Instant;
+  return {
+    today: toWallDate(now, timezone),
+    currentMinute: toWallTime(now, timezone),
+  };
 }
 
 function update(client: QueryClient, project: (agenda: AgendaData) => AgendaData): void {

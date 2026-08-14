@@ -47,12 +47,13 @@ export function UpNextCard({
               <Text variant="heading">{formatWallTime(selection.time)}</Text>
             </Touchable>
           )}
-          <Text variant="footnoteStrong" color="accent">
+          <Text variant="footnoteStrong" color="textAction" testID="up-next-relative">
             {selection.relativeTime}
           </Text>
         </View>
         <SwipeableRow
           item={selection.item}
+          subtitleColor="textPrimary"
           onOpen={onOpen}
           {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
           {...(onAction === undefined ? {} : { onAction })}
