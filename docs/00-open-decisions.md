@@ -50,6 +50,7 @@ is settled; these are the judgement calls made underneath it that you have not l
 | --- | --- | --- | --- |
 | 9 | **The API accepts the Cognito ID token, not the access token.** | Simpler, and the app has no resource-server scopes. Contrary to common guidance — worth a look. | Phase 4 |
 | 10 | **Web refresh tokens live in an `HttpOnly` cookie**, exchanged via three new `/public/v1/auth/*` endpoints, rather than `localStorage`. | `localStorage` is materially weaker against XSS. Costs three endpoints and a cookie domain. | Phase 4 |
+| 11 | **Close the unscoped `uncomplete` exception before the first real deployment.** Added 2026-08-13. `complete` and `skip` now reject an unscoped write on a recurring activity (ADR-053); `uncomplete` still accepts one, deliberately, because it is the only route back for a series whose META was completed by the bug that guard closes. That recovery has exactly one beneficiary: local tables that already hold damaged rows. Production starts empty in Phase 4/5 and will never contain any, so shipping the exception puts a standing rule-3 violation in the public API for nobody. **Gate item:** confirm no series-META completions remain locally, then apply `assertOccurrenceScoped` to `uncompleteActivity` and delete the exemption note in `api-contract.md` §`/uncomplete`. | A recovery path with no data left to recover is just a hole. It has to close before the API is public, and after that there is no safe moment to remove it silently. | Phase 4 |
 
 ## Settle before Phase 5
 

@@ -2,6 +2,7 @@ import type { ChangeTarget } from '@od/shared';
 import { describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, PlanType } from '@od/shared/types';
+import { type ActivityScope, scopeFromWire } from '@od/shared/types';
 import {
   Button,
   ChevronLeft,
@@ -215,6 +216,13 @@ export function ActivityDetailScreen({
    * series detail screen *should* offer is **P2-47**'s open question, and absence is the honest
    * answer until it has one.
    */
+  /** One value the whole screen acts through, rather than a date each field re-reads. */
+  const actionScope: ActivityScope = scopeFromWire({
+    ...(actionOccurrenceDate === undefined
+      ? {}
+      : { occurrenceDate: actionOccurrenceDate }),
+  });
+
   const seriesWithoutOccurrence =
     activity?.recurrence !== undefined && actionOccurrenceDate === undefined;
 
@@ -306,12 +314,12 @@ export function ActivityDetailScreen({
           onComplete={() => {
             actions.resolvePassed(
               passedPlanResolution(activity.type).positive.outcome,
-              actionOccurrenceDate,
+              actionScope,
               projectResolution,
             );
           }}
           onUndoResolution={() => {
-            actions.undoResolution(actionOccurrenceDate, projectResolution);
+            actions.undoResolution(actionScope, projectResolution);
           }}
         />
       )}
@@ -459,7 +467,7 @@ export function ActivityDetailScreen({
             onClose={() => setResolutionOpen(false)}
             onResolve={(outcome) => {
               setResolutionOpen(false);
-              actions.resolvePassed(outcome, actionOccurrenceDate, projectResolution);
+              actions.resolvePassed(outcome, actionScope, projectResolution);
             }}
           />
         </>

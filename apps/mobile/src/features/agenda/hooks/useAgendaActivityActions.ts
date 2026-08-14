@@ -129,11 +129,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       };
       const original = {
         activityId: target.activityId,
-        input: {
-          ...(target.occurrenceDate === undefined
-            ? {}
-            : { occurrenceDate: target.occurrenceDate }),
-        },
+        input: { ...scopeToWire(scopeForRow(item)) },
         idempotencyKey: randomUUID(),
       };
       const compensation = { ...original, idempotencyKey: randomUUID() };
@@ -213,20 +209,12 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       };
       const original = {
         activityId: target.activityId,
-        input: {
-          outcome,
-          ...(target.occurrenceDate === undefined
-            ? {}
-            : { occurrenceDate: target.occurrenceDate }),
-        },
+        input: { outcome, ...scopeToWire(scopeForRow(item)) },
         idempotencyKey: randomUUID(),
       };
       const compensation = {
         activityId: target.activityId,
-        input:
-          target.occurrenceDate === undefined
-            ? {}
-            : { occurrenceDate: target.occurrenceDate },
+        input: scopeToWire(scopeForRow(item)),
         idempotencyKey: randomUUID(),
       };
 

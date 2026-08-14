@@ -1467,6 +1467,18 @@ shaped replay reuses the enqueue-time key and observes one committed schedule mu
 
 ### P2-13 — `complete` and `uncomplete`
 
+> **Amendment — 2026-08-13 (ADR-053).** An **unscoped** `complete` on a recurring activity is
+> now rejected. Without an `occurrenceDate` this path set `status` on `ACT#/META`, and
+> `agendaService`'s `mergeNominal` renders an occurrence with no override using
+> `entry.activity.status` — so one unscoped write crossed off every future occurrence of the
+> series. `snooze` (P2-15) had refused this since it was written; `complete` never grew the
+> guard. Scope now travels as an explicit `ActivityScope`, never as an optional
+> `occurrenceDate` at a write site.
+>
+> **`uncomplete` keeps accepting the unscoped form**, deliberately and temporarily: it is the
+> only route back for a series already completed this way. That exception has a closing date —
+> `00-open-decisions.md` item 11, a Phase 4 gate item, before the API is ever public.
+
 **Files.** `services/api/src/routes/activities.ts`,
 `services/api/src/services/completionService.ts`,
 `services/api/src/services/activityService.ts`,
@@ -1607,6 +1619,10 @@ proves the persisted variable carries the same key after process death.
 
 ### P2-14 — `skip`
 
+> **Amendment — 2026-08-13 (ADR-053).** An unscoped `skip` on a recurring activity is rejected,
+> for the reason recorded under P2-13: it set `status` on `ACT#/META` and repainted every
+> un-overridden occurrence. Scope is an explicit `ActivityScope` at every write site.
+
 **Files.** `services/api/src/services/completionService.ts`,
 `services/api/src/routes/activities.ts`,
 `packages/shared/src/client/endpoints/activities.ts` (skip method).
@@ -1665,6 +1681,11 @@ gets `403` with nothing written; a stranger gets `404`; replaying the same
 ---
 
 ### P2-15 — One-off and occurrence `snooze` / `unsnooze`
+
+> **Note — 2026-08-13 (ADR-053).** `resolveSnoozeTarget`'s refusal of an unscoped snooze on a
+> recurring activity was the **only** such guard in the service, and is the model P2-13 and
+> P2-14 were corrected to. It now asks the shared `targetsWholeSeries` rather than re-deriving
+> the condition.
 
 **Files.** `services/api/src/services/completionService.ts`,
 `services/api/src/routes/activities.ts`,
