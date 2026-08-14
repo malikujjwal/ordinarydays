@@ -12,7 +12,7 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "typecheck:e2e": "tsc -p e2e/tsconfig.json",
-    "test": "turbo run test",
+    "test": "turbo run test test:guards",
     "test:coverage": "turbo run test -- --coverage",
     "test:int": "docker compose up -d && turbo run test:int",
     "lint": "biome check .",

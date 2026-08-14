@@ -12,6 +12,11 @@ import { describe, expect, it } from 'vitest';
  * defects of 2026-08-13 were exactly that, and the suite was green through all of them —
  * so the guard has to be structural, in the spirit of P2-46's `mutationOptions` check.
  *
+ * **It runs as `test:guards`, uncached, and must stay that way.** This file reads source from
+ * every package at runtime, which turbo cannot see as an input: `@od/shared` does not depend
+ * on `apps/mobile`, so a mobile-only edit left a cached pass in place and the guard reported
+ * green while it was red. That is how `RepeatSheet` reintroduced the wire key unnoticed.
+ *
  * **This is deliberately not "the wire key appears only in `scope.ts`".** That invariant is
  * unreachable and would be dishonest to assert: the Zod schemas *define* the wire and must
  * name it, `AgendaItem` declares it as a response field, the API keys the `Occurrence` entity

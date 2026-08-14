@@ -63,7 +63,8 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b && tsc -p tsconfig.scripts.json && tsc -p tsconfig.test.json",
-    "test": "tsc -b && tsc -p tsconfig.test.json && vitest run",
+    "test": "tsc -b && tsc -p tsconfig.test.json && vitest run --exclude '**/scopeGuard.test.ts'",
+    "test:guards": "vitest run src/types/scopeGuard.test.ts",
     "gen:openapi": "tsx scripts/gen-openapi.ts"
   },
   "dependencies": {

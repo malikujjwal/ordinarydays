@@ -1,5 +1,6 @@
 import { describeRecurrence } from '@od/shared/recurrence';
 import type { Recurrence } from '@od/shared/types';
+import { type ActivityScope, activityScope, scopeDate } from '@od/shared/types';
 import { Button, DatePicker, Field, SelectField, Sheet, Text, useTheme } from '@od/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { InputAccessoryView, Keyboard, Platform, View } from 'react-native';
@@ -31,10 +32,10 @@ export interface RepeatSheetProps {
   /** First-segment schedule date, or the all-future effective date supplied by the caller. */
   anchorDate: string;
   /**
-   * The occurrence the caller is looking at. `Never` ends the series on this day, inclusive,
-   * so the row in view survives and everything after it stops.
+   * What the caller is acting on (ADR-053). `Never` ends the series on the occurrence in
+   * view, inclusive, so the row in view survives and everything after it stops.
    */
-  occurrenceDate?: string;
+  scope?: ActivityScope;
   value?: Recurrence;
   /** Required only for the history-loss confirmation on an existing series. */
   activityForConfirmation?: {
@@ -112,7 +113,7 @@ export function RepeatSheet({
   open,
   onClose,
   anchorDate,
-  occurrenceDate,
+  scope,
   value,
   activityForConfirmation,
   completedOccurrenceCount = 0,
@@ -207,7 +208,12 @@ export function RepeatSheet({
       close();
       return;
     }
-    if (await onCommit({ ...value, endDate: occurrenceDate ?? anchorDate })) {
+    if (
+      await onCommit({
+        ...value,
+        endDate: scopeDate(scope ?? activityScope()) ?? anchorDate,
+      })
+    ) {
       setConfirmNever(false);
       close();
     }
