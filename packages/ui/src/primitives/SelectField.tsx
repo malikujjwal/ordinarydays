@@ -73,6 +73,7 @@ export function SelectField<Value extends string>({
       )}
 
       <Sheet
+        detent="medium"
         open={open}
         onClose={() => setOpen(false)}
         title={label}
@@ -108,8 +109,9 @@ export function SelectField<Value extends string>({
                 <Text variant="body" color="textPrimary">
                   {option.label}
                 </Text>
+                {/** `textAction`, not `accent` — §17's sweep; `accent` is not readable text. */}
                 {active ? (
-                  <Text variant="bodyStrong" color="accent">
+                  <Text variant="bodyStrong" color="textAction">
                     Selected
                   </Text>
                 ) : null}

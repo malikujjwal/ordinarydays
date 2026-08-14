@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import type { IconProps } from '../icons/index';
-import { accentGlow } from '../theme/elevation';
 import { useTheme } from '../theme/index';
 import type { RadiusToken } from '../theme/tokens';
 import { Text } from './Text';
@@ -10,7 +9,7 @@ import { Touchable } from './Touchable';
 /**
  * `design-system.md` §6.
  *
- * `primary` is the accent pill carrying the mock's `eAccent` glow — the one surface in the
+ * `primary` is the accent fill — the one control in the
  * product that gets it, which is what makes the single primary action on a screen read as the
  * single primary action.
  */
@@ -28,7 +27,11 @@ export interface ButtonProps {
   loading?: boolean;
   disabled?: boolean;
   fullWidth?: boolean;
-  /** Defaults to the system pill; surface-aligned hero actions may match their container. */
+  /**
+   * `md` — the filled-control shape. **Not `pill`**, which the radius table reserves for things
+   * that behave like pills: the Add button, chips, filters. Defaulting to `pill` made every
+   * button a lozenge, which is the shape a control takes when nothing decided it should.
+   */
   radius?: RadiusToken;
   testID?: string;
 }
@@ -43,7 +46,7 @@ export function Button({
   loading = false,
   disabled = false,
   fullWidth = false,
-  radius = 'pill',
+  radius = 'md',
   testID,
 }: ButtonProps) {
   const theme = useTheme();
@@ -105,8 +108,6 @@ export function Button({
           gap: theme.space[3],
           alignSelf: fullWidth ? 'stretch' : 'flex-start',
         },
-        // The accent glow, defined once and used nowhere else.
-        variant === 'primary' && !inactive ? ({ boxShadow: accentGlow } as object) : null,
         inactive ? { opacity: 0.45 } : null,
       ]}
     >

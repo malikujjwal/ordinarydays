@@ -15,11 +15,13 @@ export {
   typeAccents,
 } from './colors';
 export {
-  accentGlow,
   type ElevationToken,
+  eFloatingAction,
   elevation,
   upNextShadow,
 } from './elevation';
+export { useKeyboardInset } from './keyboard';
+export { useScrollToFocusedInput } from './scrollToFocused';
 export {
   type Theme,
   ThemeProvider,

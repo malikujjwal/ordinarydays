@@ -211,6 +211,11 @@ module.exports = {
           '^packages/(shared|ui)/src/index\\.ts$',
           // Test fixtures exist to be read by a test, and tests are excluded below.
           '/(fixtures|__fixtures__)/',
+          // Platform forks (`tech-stack.md` §3.5). `./keyboard` resolves to the native file in
+          // this graph, so the `.web` sibling has no visible importer — the edge is the
+          // bundler's platform extension order, not an import. Same shape of invisibility as
+          // the vitest aliases above, and tightening `pathNot` is what this rule prescribes.
+          '.(web|ios|android|native).(ts|tsx)$',
           // Maestro flow scripts (P2-37). Reached by a `runScript:` string in a flow YAML,
           // never by an import, so the module graph cannot see the edge — the same shape of
           // invisibility as the vitest setup files above, and the same prescribed fix.

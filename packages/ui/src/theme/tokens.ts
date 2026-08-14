@@ -36,10 +36,18 @@ export type SpaceToken = keyof typeof space;
  * app has loaded it and the platform serif until then, so **text never blocks on a font**.
  */
 export const type = {
+  /**
+   * 29/34, down from 34/38 — the size the founder's `Activity Detail Restructure` frames draw
+   * their screen titles at, adopted 2026-08-13. At 34 a two-word plan title took two lines on a
+   * 390 pt phone and the header ate a third of the screen before saying anything.
+   *
+   * Weight stays 500: the frames set 600, but `apps/mobile` loads one Newsreader weight and a
+   * second is a font-loading change rather than a token one. Flagged, not silently taken.
+   */
   display: {
     family: 'serif',
-    size: 34,
-    lineHeight: 38,
+    size: 29,
+    lineHeight: 34,
     weight: '500',
     letterSpacing: -0.4,
   },
@@ -124,8 +132,22 @@ export const layout = {
   hitTarget: 44,
   /** Focus ring width. Never overridable by a prop. */
   focusRingWidth: 2,
-  /** Rows are content-sized above this. Fixed-height rows do not exist. */
+  /** Content rows are sized by what they hold, above this floor. */
   rowMinHeight: 56,
+  /**
+   * **`SettingRow`'s own floor** (founder's decision, 2026-08-13). Named rather than smuggled
+   * into the component as an unexplained 72.
+   *
+   * Two row families, two deliberate densities — not one system fighting itself. A settings
+   * group is a regular configuration measure, and at the generic 56 its rhythm would be decided
+   * by content length: `Repeat` alone at ~56 beside `Notes` with its summary at ~72. At 72 both
+   * belong unmistakably to the same family, which is the whole benefit the gallery demonstrated.
+   *
+   * The number is what a two-line row needs — `subhead` 20 + `space[1]` + `footnote` 18 inside
+   * `space[5]` top and bottom. **A minimum, never a fixed height**: longer content, and larger
+   * text, make the row taller.
+   */
+  settingRowMinHeight: 72,
   /** Minimum gap between adjacent interactive elements. */
   minTargetGap: space[3],
 } as const;

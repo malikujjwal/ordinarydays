@@ -276,7 +276,7 @@ describe('TimePicker', () => {
     const onChange = vi.fn();
     wrap(<TimePicker label="Time" value="19:30" onChange={onChange} />);
 
-    screen.getByRole('button', { name: 'Clear Time' }).click();
+    screen.getByRole('button', { name: 'Remove time' }).click();
     expect(onChange).toHaveBeenCalledExactlyOnceWith(null);
   });
 
@@ -284,7 +284,7 @@ describe('TimePicker', () => {
     wrap(
       <TimePicker label="Time" value="19:30" onChange={() => {}} allowClear={false} />,
     );
-    expect(screen.queryByRole('button', { name: 'Clear Time' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove time' })).toBeNull();
   });
 
   /**
@@ -295,7 +295,7 @@ describe('TimePicker', () => {
     const onChange = vi.fn();
     wrap(<TimePicker label="Time" value="19:30" onChange={onChange} disabled />);
 
-    screen.getByRole('button', { name: 'Clear Time' }).click();
+    screen.getByRole('button', { name: 'Remove time' }).click();
     expect(onChange).not.toHaveBeenCalled();
   });
 });

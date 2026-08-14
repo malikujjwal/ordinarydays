@@ -1,10 +1,8 @@
 import { useState } from 'react';
 import { View } from 'react-native';
-import { Close } from '../icons/index';
 import { useTheme } from '../theme/index';
 import { Button } from './Button';
 import { Chip } from './Chip';
-import { IconButton } from './IconButton';
 import { TimeSurface } from './pickerSurface';
 import { Sheet } from './Sheet';
 import { Text } from './Text';
@@ -74,8 +72,9 @@ export function TimePicker({
   };
 
   return (
-    <View testID={testID} style={{ gap: theme.space[2] }}>
-      <Text variant="footnoteStrong" color="textSecondary">
+    <View testID={testID} style={{ gap: theme.space[3] }}>
+      {/** `caption` — the frames' tracked uppercase section label above a group of controls. */}
+      <Text variant="caption" color="textMuted">
         {label}
       </Text>
 
@@ -97,10 +96,15 @@ export function TimePicker({
           onPress={() => setWheelOpen(true)}
         />
 
+        {/**
+         * **A named control, not a bare ✕.** The frames pair the value with `Remove time` as a
+         * second outlined pill; an unlabelled cross beside a pill is the exact ambiguity this
+         * screen was reported for — nothing on it said whether the glyph was a control, a
+         * status, or decoration.
+         */}
         {allowClear && value !== null ? (
-          <IconButton
-            icon={Close}
-            label={`Clear ${label}`}
+          <Chip
+            label={`Remove ${label.toLowerCase()}`}
             disabled={disabled}
             onPress={() => onChange(null)}
           />
@@ -117,12 +121,35 @@ export function TimePicker({
               fallback={openAt}
               onChange={onChange}
             />
-            <Button label="Done" onPress={confirm} />
-            <Button label="Cancel" variant="ghost" onPress={() => setWheelOpen(false)} />
+            {/**
+             * **A row, not a column.** `Done` and `Cancel` were two full-width buttons stacked
+             * on top of each other, which read as two unrelated decisions rather than as a
+             * commit and its escape. A confirm pair belongs on one line, commit first.
+             *
+             * When this picker is presented as its own `Sheet` the pair goes in the sheet's
+             * `actions` slot instead — §6.1 gives that placement to `Sheet`, not to the control
+             * inside it. Inline, there is no sheet to own it, so it sits here in the same shape.
+             */}
+            <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
+              <View style={{ flex: 1 }}>
+                <Button label="Done" fullWidth onPress={confirm} />
+              </View>
+              <Button
+                label="Cancel"
+                variant="ghost"
+                onPress={() => setWheelOpen(false)}
+              />
+            </View>
           </View>
         ) : null
       ) : (
-        <Sheet open={wheelOpen} onClose={() => setWheelOpen(false)} title={label}>
+        <Sheet
+          open={wheelOpen}
+          onClose={() => setWheelOpen(false)}
+          title={label}
+          detent="fit"
+          actions={<Button label="Done" fullWidth onPress={confirm} />}
+        >
           <TimeSurface
             label={label}
             value={value}
@@ -142,7 +169,6 @@ export function TimePicker({
           only closes — so the two exits mean different things, which is what makes committing
           here safe: `Done` is the only path that writes.
         */}
-          <Button label="Done" onPress={confirm} />
         </Sheet>
       )}
     </View>

@@ -27,6 +27,7 @@ export { Card, type CardProps } from './primitives/Card';
 export { Checkbox, type CheckboxProps } from './primitives/Checkbox';
 export { Chip, type ChipProps, type ChipTone } from './primitives/Chip';
 export { DatePicker, type DatePickerProps } from './primitives/DatePicker';
+export { DisclosureRow, type DisclosureRowProps } from './primitives/DisclosureRow';
 export {
   EmptyState,
   type EmptyStateProps,
@@ -42,6 +43,8 @@ export { IconButton, type IconButtonProps } from './primitives/IconButton';
 export { IconTile, type IconTileProps } from './primitives/IconTile';
 export { ProgressBar, type ProgressBarProps } from './primitives/ProgressBar';
 export { Row, type RowProps } from './primitives/Row';
+export { RowGroup, type RowGroupProps } from './primitives/RowGroup';
+export { ScreenShell, type ScreenShellProps } from './primitives/ScreenShell';
 export {
   type Segment,
   SegmentedControl,
@@ -52,6 +55,7 @@ export {
   type SelectFieldProps,
   type SelectOption,
 } from './primitives/SelectField';
+export { SettingRow, type SettingRowProps } from './primitives/SettingRow';
 export { Sheet, type SheetProps } from './primitives/Sheet';
 export { Text, type TextColor, type TextProps } from './primitives/Text';
 export { TimePicker, type TimePickerProps } from './primitives/TimePicker';

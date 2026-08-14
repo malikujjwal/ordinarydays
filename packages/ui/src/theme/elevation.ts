@@ -45,7 +45,19 @@ export const upNextShadow =
  * token and stays one value across schemes; it reads as a soft mulberry lift under either
  * `accentControl` fill.
  */
-export const accentGlow = '0 8px 18px -8px rgba(139,99,116,0.85)';
+/**
+ * **The floating Add control's shadow, and nothing else's.**
+ *
+ * Named for its exception rather than for its colour. As `eAccent`/`accentGlow` it sounded
+ * reusable by anything accent-tinted, and it duly ended up under every filled `primary` Button —
+ * where no approved frame puts a glow, and where on a 52 pt control it rendered as a smudge.
+ * P2-51 took it off `Button`; the name now says why the FAB keeps it. It is the one control with
+ * nothing behind it to sit on, and §7's Level 1 gives floating actions a soft shadow.
+ *
+ * **This is not a Button elevation.** A control that is not the floating Add control does not
+ * get it, whatever colour it is.
+ */
+export const eFloatingAction = '0 8px 18px -8px rgba(139,99,116,0.85)';
 
 /** iOS shadow equivalents, approximating the same soft falloff. */
 const nativeShadow: Record<ElevationToken, ViewStyle> = {
