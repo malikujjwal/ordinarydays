@@ -212,7 +212,7 @@ row does not move under the finger.
 | Task, untimed (Anytime) | Open task detail | Complete | `Complete` | Complete | `Schedule` · `Delete` | Schedule sheet | Preview + `⋯` menu |
 | Task, untimed (pushed Anytime screen) | Open task detail | Complete | `Complete` | Complete | `Schedule` · `Delete` | Schedule sheet | Preview + `⋯` menu |
 | Task, overdue (rolled forward) | Open task detail | Complete | `Complete` | Complete | `Do today` · `Reschedule` · `Delete` | Sets `schedule.date` to today | Preview + `⋯` menu |
-| Task, recurring occurrence | Open task detail (series) | Complete **this occurrence** | `Complete` | Complete this occurrence | `Snooze` · `Skip` · `Edit series` | Snooze sheet | Preview + `⋯` menu |
+| Task, recurring occurrence | Open occurrence-scoped task detail | Complete **this occurrence** | `Complete` | Complete this occurrence | `Snooze` · `Skip` · `Edit series` | Snooze sheet | Preview + `⋯` menu |
 | Meal | Open plan detail | — (no checkbox) | `Had it` | Had it | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | Watch | Open plan detail | — | `Watched` | Watched | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |
 | Event | Open plan detail | — | `Attended` | Attended | `Reschedule` · `Delete` | Reschedule sheet | Preview + `⋯` menu |

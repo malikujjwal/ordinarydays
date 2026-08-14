@@ -164,7 +164,7 @@ it('renders one card per recurring occurrence across a seven-day response', asyn
   expect(screen.getAllByText('Daily walk')).toHaveLength(7);
 });
 
-it("allows a future recurring task's occurrence to be completed", async () => {
+it("disables a future recurring task's checkbox until its occurrence date", async () => {
   stubFetch(
     response([
       day('2026-08-07', [
@@ -184,7 +184,7 @@ it("allows a future recurring task's occurrence to be completed", async () => {
   const checkbox = await screen.findByRole('checkbox', {
     name: 'Tomorrow stand-up, not completed',
   });
-  expect(checkbox.getAttribute('aria-disabled')).toBeNull();
+  expect(checkbox.getAttribute('aria-disabled')).toBe('true');
 });
 
 it('renders exact gap copy and opens a date picker pre-set to the first date without writing', async () => {

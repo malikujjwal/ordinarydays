@@ -57,12 +57,13 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
     await expect(futureCard).toBeVisible();
     await expect(
       futureCard.getByRole('checkbox', { name: `${title}, not completed` }),
-    ).toBeEnabled();
+    ).toBeDisabled();
 
     await page.clock.setFixedTime(new Date(`${tomorrow}T16:00:00.000Z`));
     await page.goto('/');
     const tomorrowRow = agendaRow(page, series.activityId).filter({ hasText: title });
     await expect(tomorrowRow.getByRole('checkbox')).not.toBeChecked();
+    await expect(tomorrowRow.getByRole('checkbox')).toBeEnabled();
 
     await tomorrowRow.locator('[data-testid="agenda-row-time"]').click();
     await expect(page.locator('[data-testid="reschedule-sheet"]')).toBeVisible();

@@ -567,7 +567,7 @@ function assertRecurring(activity: Activity): void {
  * The inverse of `assertRecurring`: a series may not be completed or skipped as a whole.
  *
  * **Why this had to exist.** Without an `occurrenceDate` both paths fell through to
- * `patchActivity` and set `status: 'completed'` on `ACT#/META` itself. That alone would be a
+ * `patchActivity` and set `status: 'completed'` on the series META itself. That alone would be a
  * quiet mistake; `agendaService`'s `mergeNominal` makes it loud, because an occurrence with no
  * override renders with `entry.activity.status` — so one unscoped write crossed off **every**
  * future occurrence of the series. Reported as "select complete on today's occurrence and it

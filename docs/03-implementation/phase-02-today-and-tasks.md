@@ -3061,9 +3061,10 @@ and their existing tests. `ComingSoonSection.tsx` is **deleted**. Inventory is a
   than let it widen P2-41. Three things block it: `useActivityActions` exposes no snooze or
   skip; `Snooze` needs a time, and `SnoozeSheet` lives in `features/agenda` where
   `dependency-cruiser`'s cross-feature rule puts it out of reach of `features/activity`; and
-  the detail screen usually has **no occurrence date at all** — `resolutionOccurrenceDate` is
-  set only when navigation came from a passed, unresolved row, so a series opened from Plans
-  has nothing for `Skip today` to skip. The third is a product question, not a wiring one.
+  the detail screen usually had **no occurrence date at all** — `resolutionOccurrenceDate`
+  was set only when navigation came from a passed, unresolved row, so at that task's point a
+  series opened from Plans had nothing for `Skip today` to skip. P2-53 later made every
+  agenda-projected Plans row carry its explicit occurrence target.
 - **`ComingSoonSection` is deleted, and this is a resolution to raise in the PR.**
   [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §2 says an empty
   section "collapses to a single add affordance rather than disappearing, so the plan's
@@ -3209,9 +3210,10 @@ blockers, and only the first two are wiring:
 1. `useActivityActions` exposes `duplicate`, `remove` and `resolvePassed` and nothing else.
 2. `Snooze` needs a time, and `SnoozeSheet` lives in `features/agenda`, which
    `dependency-cruiser`'s cross-feature rule puts out of reach of `features/activity`.
-3. **The detail screen usually has no occurrence date.** `resolutionOccurrenceDate` is set only
-   when navigation came from a passed, unresolved agenda row. A series opened from Plans or
-   from search has no occurrence in hand, so `Skip today` has nothing to skip.
+3. **The detail screen originally had no occurrence date.** `resolutionOccurrenceDate` was set
+   only when navigation came from a passed, unresolved agenda row. P2-53 later made Plans rows
+   occurrence-aware; direct/search series navigation remains series-only and has no day to
+   skip.
 
 **Settle the third before writing code.** Options are: act on today's occurrence whenever the
 series has one; act on the next upcoming occurrence; or show the pair only when an occurrence

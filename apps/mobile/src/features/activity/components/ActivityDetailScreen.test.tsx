@@ -96,9 +96,10 @@ const detailBody = (
 
 const occurrenceProjection = (
   status: NonNullable<ActivityDetail['occurrence']>['status'] = 'scheduled',
+  nominalDate = TODAY,
 ): NonNullable<ActivityDetail['occurrence']> => ({
-  nominalDate: TODAY,
-  date: TODAY,
+  nominalDate,
+  date: nominalDate,
   time: '08:00',
   status,
   isSnoozed: false,
@@ -853,9 +854,9 @@ describe('passed-plan resolution', () => {
    *
    * This used to fall back to the schedule line's date, on the reasoning that it is the only
    * occurrence the user can be said to be looking at. It is the series *anchor*, not the day on
-   * screen, so a series opened from Plans completed a day that may be months back while the row
-   * the user meant never moved. What a series detail screen should offer is P2-47's question;
-   * absence is the honest answer until it has one.
+   * screen, so a series-only route completed an anchor day that may be months back while the
+   * occurrence the user meant never moved. A series detail without an explicit occurrence
+   * therefore offers no completion control.
    */
   it('offers no completion control on a series with no occurrence in scope', async () => {
     const recurring = plan({
@@ -871,6 +872,66 @@ describe('passed-plan resolution', () => {
     expect(screen.queryByTestId('detail-complete')).toBeNull();
     expect(screen.queryByTestId('detail-resolution-prompt')).toBeNull();
     expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+  });
+
+  it('offers no Complete control before a future recurring occurrence reaches its day', async () => {
+    const future = '2026-08-13';
+    const recurring = task({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        recurring,
+        [],
+        undefined,
+        occurrenceProjection('scheduled', future),
+      ),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      future,
+    );
+    await loaded();
+
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+    expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+  });
+
+  it('keeps Undo available for an existing future occurrence completion', async () => {
+    const future = '2026-08-13';
+    const recurring = task({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        recurring,
+        [],
+        undefined,
+        occurrenceProjection('completed_occurrence', future),
+      ),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      future,
+    );
+    await loaded();
+
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+    expect(screen.getByTestId('detail-undo')).toBeDefined();
   });
 
   /**
@@ -917,7 +978,7 @@ describe('passed-plan resolution', () => {
         occurrenceProjection('completed_occurrence'),
       ),
     });
-    // Arriving from a Today row, which is the only navigation that carries an occurrence.
+    // Arriving from a Today or Plans occurrence row carries the explicit date.
     mount(
       () => {},
       () => {},

@@ -320,7 +320,8 @@ A task means *something I need to complete*. Tasks are the only type with a chec
 A generated future occurrence of a recurring task keeps its checkbox visible, but the
 checkbox is disabled until that occurrence's date. A person cannot pre-complete future
 generated occurrences; today's and past occurrences remain resolvable, and an existing
-future completion remains reversible for compatibility.
+future completion remains reversible for compatibility. Opening a future occurrence's detail
+does not bypass the rule: its primary completion action is absent until that date.
 
 Task creation is explicit. Global `+` asks **Task / Plan / List item**; choosing Task opens
 this form with `objectKind: 'task'`, `type: 'task'`. Today's contextual `+ Add a task` answers that choice in its

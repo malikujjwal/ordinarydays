@@ -2,6 +2,7 @@ import type { AgendaItem } from '@od/shared/types';
 import { Chip, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
 import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
+import { isFutureRecurringOccurrence } from '@/features/agenda/model/rowScope';
 import {
   canResolvePassedAgendaItem,
   outcomeVerb,
@@ -80,6 +81,8 @@ export function AgendaRow({
   const checked = COMPLETED_STATUSES.has(item.status);
   const dimmed = item.isPast || checked || SKIPPED_STATUSES.has(item.status);
   const formattedTime = item.time === undefined ? undefined : formatWallTime(item.time);
+  const futureRecurringCompletion =
+    !checked && today !== undefined && isFutureRecurringOccurrence(item, today);
 
   return (
     <View
@@ -107,6 +110,7 @@ export function AgendaRow({
           hasCheckbox={item.hasCheckbox}
           checked={checked}
           title={item.title}
+          disabled={futureRecurringCompletion}
           {...(onToggleComplete === undefined
             ? {}
             : { onChange: (next) => onToggleComplete(item, next) })}

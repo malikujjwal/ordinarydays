@@ -110,8 +110,8 @@ type ActivityDetailTarget =
 An occurrence-targeted read returns the effective occurrence schedule and resolution after
 applying its override. An activity-targeted read returns series state only. Delete
 `readOccurrenceDate` and every fallback that chooses an occurrence from cached agenda data.
-Navigation from an agenda row carries occurrence scope; navigation from Plans to the series
-does not.
+Navigation from every agenda-projected row, including Today and Plans, carries occurrence
+scope. Direct/search navigation to the Activity remains series-only and does not invent a day.
 
 Keep the existing wire-compatible `occurrenceDate` representation where changing it would
 invalidate persisted offline mutations. Convert once at each boundary through ADR-053's
@@ -176,7 +176,9 @@ row count. Repair requires both `--repair` and the table-bound confirmation prin
 refusal message, for example
 `--confirm REPAIR_RECURRING_STATUS:od-main-dev`. Each series META row and all of its discovered
 ActivityIndex rows are condition-checked and restored in one transaction; no Occurrence row
-is created or changed.
+is created or changed. Repair also clears the invalid series-level `completedAt` and `outcome`
+fields, matching the ordinary uncomplete invariant rather than leaving terminal metadata on a
+`scheduled` series.
 
 ## Acceptance criteria
 

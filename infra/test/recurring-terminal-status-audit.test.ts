@@ -13,6 +13,11 @@ const meta = (activityId: string, status: string, recurring = true) => ({
   activityId,
   status,
   ...(recurring ? { recurrence: { mode: 'fixed' } } : {}),
+  ...(status === 'completed'
+    ? { completedAt: '2026-08-14T11:00:00.000Z', outcome: 'done' }
+    : status === 'skipped'
+      ? { outcome: 'didnt_happen' }
+      : {}),
   updatedAt: '2026-08-14T12:00:00.000Z',
 });
 
@@ -124,7 +129,12 @@ describe('the recurring terminal-status audit', () => {
     expect(input.TransactItems).toHaveLength(3);
     expect(input.TransactItems?.[0]?.Update).toMatchObject({
       Key: { pk: 'activity-damaged', sk: 'meta' },
+      UpdateExpression: expect.stringContaining('REMOVE #completedAt, #outcome'),
       ConditionExpression: expect.stringContaining('attribute_exists(#recurrence)'),
+      ExpressionAttributeNames: expect.objectContaining({
+        '#completedAt': 'completedAt',
+        '#outcome': 'outcome',
+      }),
       ExpressionAttributeValues: expect.objectContaining({
         ':current': 'completed',
         ':scheduled': 'scheduled',

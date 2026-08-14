@@ -844,9 +844,10 @@ series, `Snooze` and `Skip today` follow as a secondary pair.
 It is **also absent on a series with no occurrence in scope**, because there is no safe write
 behind it: `POST /complete` without an `occurrenceDate` sets `status: 'completed'` on the
 series row itself and retires every future occurrence, which is rule 3 undone by one tap. The
-screen is given an occurrence date only when navigation came from a specific occurrence, so a
-series opened from Plans has nothing to complete. **P2-47** owns what that screen should offer
-instead; until then absence is the honest rendering.
+screen is given an occurrence date only when navigation came from a specific occurrence on
+Today or Plans. A direct/search series-only detail has nothing to complete; it never guesses
+today or the next cached occurrence. A generated future occurrence also suppresses the primary
+completion action until its date, while an existing future completion remains reversible.
 
 **Once resolved, the screen says so before it offers the reversal** — the outcome verb in
 `success`, then `Undo`. An occurrence's resolution is not readable from its series (`Occurrence`

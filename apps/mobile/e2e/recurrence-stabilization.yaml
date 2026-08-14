@@ -17,20 +17,22 @@ onFlowComplete:
     clearState: true
 - assertVisible: ${output.title}
 - assertVisible: Daily
-- tapOn: ${output.title + ', not completed'}
-- assertVisible: ${output.title + ', completed'}
 - tapOn: Plans
 - assertVisible:
-    id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
-- assertVisible: ${output.title}
-- assertVisible: ${output.originalTimeLabel + ', change time'}
-- tapOn: ${output.title + ', not completed'}
-- assertVisible: ${output.title + ', completed'}
-- tapOn: ${output.title + ', completed'}
-- assertVisible: ${output.title + ', not completed'}
-- tapOn: ${output.title}
+    id: ${'plans-card-' + output.activityId + ':' + output.today}
 - assertVisible:
-    id: detail-title
-- assertVisible: Daily
-- assertNotVisible:
+    id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
+- tapOn:
+    text: ${output.title}
+    index: 0
+- assertVisible:
     id: detail-complete
+- tapOn:
+    id: detail-complete
+- assertVisible:
+    id: detail-undo
+- tapOn:
+    id: detail-back
+- assertVisible:
+    id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
+- assertVisible: ${output.title + ', not completed'}

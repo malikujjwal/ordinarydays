@@ -244,6 +244,10 @@ export function ActivityDetailScreen({
 
   const seriesWithoutOccurrence =
     activity?.recurrence !== undefined && actionOccurrenceDate === undefined;
+  const futureRecurringOccurrence =
+    activity?.recurrence !== undefined &&
+    actionOccurrenceDate !== undefined &&
+    actionOccurrenceDate > today;
 
   /**
    * Resolution state for whatever is in scope.
@@ -323,7 +327,7 @@ export function ActivityDetailScreen({
           onOpenResolution={() => setResolutionOpen(true)}
           shownSchedule={shownSchedule}
           canComplete={detail.detail?.capabilities?.complete === true}
-          seriesWithoutOccurrence={seriesWithoutOccurrence}
+          completionUnavailable={seriesWithoutOccurrence || futureRecurringOccurrence}
           completing={actions.isCompleting}
           undoing={actions.isUndoing}
           onComplete={() => {
@@ -612,11 +616,11 @@ interface LoadedProps {
   /** Server-authored. The client never re-derives ownership (`today-and-tasks.md` §4.1). */
   canComplete: boolean;
   /**
-   * Client-side scope, not a capability: a series nothing narrowed to one day. It suppresses
-   * the completion button without touching `canComplete`, so an `Undo` still reaches a series
-   * that is already resolved.
+   * Client-side scope/date eligibility, not ownership: a series with no selected day and a
+   * generated future occurrence cannot start completion. This suppresses only the primary
+   * action, so Undo still reaches already-resolved compatibility data.
    */
-  seriesWithoutOccurrence: boolean;
+  completionUnavailable: boolean;
   completing: boolean;
   undoing: boolean;
   onComplete: () => void;
@@ -651,7 +655,7 @@ function Loaded({
   onOpenResolution,
   shownSchedule,
   canComplete,
-  seriesWithoutOccurrence,
+  completionUnavailable,
   completing,
   undoing,
   onComplete,
@@ -755,7 +759,7 @@ function Loaded({
         ) : null}
 
         {/** One type-derived completion component and position for both object kinds. */}
-        {canComplete && !seriesWithoutOccurrence && !resolved && !showResolutionPrompt ? (
+        {canComplete && !completionUnavailable && !resolved && !showResolutionPrompt ? (
           <Button
             label={completionVerb(activity.type)}
             fullWidth

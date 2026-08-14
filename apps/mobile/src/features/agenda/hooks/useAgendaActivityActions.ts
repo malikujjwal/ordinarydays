@@ -23,7 +23,11 @@ import { applyCompletion } from '../model/applyCompletion';
 import { applyReschedule } from '../model/applyReschedule';
 import { applySkip } from '../model/applySkip';
 import { applySnooze } from '../model/applySnooze';
-import { scopeForRow, wouldCompleteWholeSeries } from '../model/rowScope';
+import {
+  isFutureRecurringOccurrence,
+  scopeForRow,
+  wouldCompleteWholeSeries,
+} from '../model/rowScope';
 import type { AgendaSwipeAction } from '../model/swipeActions';
 
 interface ActivityListCache {
@@ -73,6 +77,12 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
        * carry the unscoped body to a server that will refuse it.
        */
       if (wouldCompleteWholeSeries(item)) return;
+
+      /**
+       * Generated future occurrences remain previews until their day. Keep Undo available
+       * for legacy data, but never create a future occurrence completion from any caller.
+       */
+      if (checked && isFutureRecurringOccurrence(item, options.today)) return;
 
       const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
       const anytimeSnapshots = queryClient.getQueriesData<ActivityListCache>({

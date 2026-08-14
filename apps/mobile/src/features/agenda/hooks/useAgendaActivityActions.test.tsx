@@ -340,20 +340,17 @@ describe('useAgendaActivityActions recurring scope', () => {
     );
   });
 
-  it('completes a future recurring occurrence with its explicit date', async () => {
+  it('does not complete a future recurring occurrence before its day', async () => {
     clientCalls.complete.mockResolvedValue(undefined);
     const future = { ...seriesRow, occurrenceDate: '2026-08-12' };
     const mounted = withSeries(future);
+    const before = mounted.client.getQueryData<AgendaData>(mounted.key);
 
     act(() => mounted.result.current.toggleComplete(future, true));
 
-    await waitFor(() => expect(clientCalls.complete).toHaveBeenCalledOnce());
-    expect(clientCalls.complete).toHaveBeenCalledWith(
-      expect.anything(),
-      'act_SERIES',
-      expect.objectContaining({ occurrenceDate: '2026-08-12' }),
-      expect.anything(),
-    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clientCalls.complete).not.toHaveBeenCalled();
+    expect(mounted.client.getQueryData(mounted.key)).toEqual(before);
   });
 
   /**

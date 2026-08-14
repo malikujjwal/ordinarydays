@@ -110,7 +110,8 @@ function repairTransaction(
     Update: {
       TableName: tableName,
       Key: candidate.metaKey,
-      UpdateExpression: 'SET #status = :scheduled, #updatedAt = :repairedAt',
+      UpdateExpression:
+        'SET #status = :scheduled, #updatedAt = :repairedAt REMOVE #completedAt, #outcome',
       ConditionExpression:
         '#activityId = :activityId AND #status = :current AND #updatedAt = :expected AND attribute_exists(#recurrence)',
       ExpressionAttributeNames: {
@@ -118,6 +119,8 @@ function repairTransaction(
         '#status': 'status',
         '#updatedAt': 'updatedAt',
         '#recurrence': 'recurrence',
+        '#completedAt': 'completedAt',
+        '#outcome': 'outcome',
       },
       ExpressionAttributeValues: commonValues,
     },
