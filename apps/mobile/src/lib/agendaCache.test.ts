@@ -809,3 +809,82 @@ describe('stopping a repeat keeps the activity', () => {
     expect(rowsOf(client)).toHaveLength(1);
   });
 });
+
+/**
+ * Ending a series, which is what the Repeat sheet's `Never` now does.
+ *
+ * `endDate` is inclusive (`expand.ts`), so the day it names survives and everything after it
+ * stops. Without projecting that, "stop repeating" left every future occurrence on screen: the
+ * patch said nothing about the end, and `refreshActivityLists` marks the agenda stale with
+ * `refetchType: 'none'`, so nothing refetched to correct it.
+ */
+describe('ending a series drops the occurrences after its last day', () => {
+  const patchKey = ['activity', 'patch'];
+  const laterDays = ['2026-08-14', '2026-08-15'];
+
+  const endedOn = (endDate: string) => ({
+    activityId: 'act_STANDUP',
+    type: 'task',
+    title: 'Stand-up',
+    status: 'scheduled',
+    schedule: { date: '2026-08-01', time: '09:30', timezone: 'America/New_York' },
+    recurrence: {
+      mode: 'fixed',
+      segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '09:30' }],
+      endDate,
+    },
+  });
+
+  const seededWindow = () => {
+    const client = new QueryClient();
+    client.setQueryData(KEY, {
+      days: [TODAY, ...laterDays].map((date) => ({
+        date,
+        schedule: [row({ isRecurring: true, occurrenceDate: date })],
+        anytime: [],
+        earlier: [],
+      })),
+      warnings: [],
+    } satisfies AgendaData);
+    return client;
+  };
+
+  const remaining = (client: QueryClient) => {
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    return (agenda?.days ?? []).flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier]
+        .filter((item) => item.activityId === 'act_STANDUP')
+        .map((item) => item.occurrenceDate),
+    );
+  };
+
+  it('keeps the day it ends on and drops everything later', () => {
+    const client = seededWindow();
+
+    projectActivityWrite(client, patchKey, endedOn(TODAY));
+
+    expect(remaining(client)).toEqual([TODAY]);
+  });
+
+  it('leaves a series with no end date untouched', () => {
+    const client = seededWindow();
+    const open = endedOn(TODAY);
+    const { endDate: _dropped, ...openRule } = open.recurrence;
+
+    projectActivityWrite(client, patchKey, { ...open, recurrence: openRule });
+
+    expect(remaining(client)).toEqual([TODAY, ...laterDays]);
+  });
+
+  /** The row on the end date is still a series row; ending is not flattening. */
+  it('leaves the surviving occurrence recurring', () => {
+    const client = seededWindow();
+
+    projectActivityWrite(client, patchKey, endedOn(TODAY));
+
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    const survivor = agenda?.days[0]?.schedule[0];
+    expect(survivor?.isRecurring).toBe(true);
+    expect(survivor?.occurrenceDate).toBe(TODAY);
+  });
+});

@@ -55,6 +55,7 @@ export function applyPatch(
 ): AgendaData {
   const { activity } = variables;
   const isRecurring = activity.recurrence !== undefined;
+  const endDate = activity.recurrence?.endDate;
   /** One surviving row per day bucket, so flattening can never empty a window. */
   const kept = new Set<string>();
   let changed = false;
@@ -79,6 +80,30 @@ export function applyPatch(
        * anchor is where the series *started*; it is not the occurrence anyone is looking at,
        * and this projection has no business relocating a row the user is watching.
        */
+      /**
+       * **A series that now ends drops the occurrences after its last day.**
+       *
+       * `endDate` is inclusive (`expand.ts`), so anything dated later is no longer emitted by
+       * the server. Removing rows the window already holds is fully derivable here — unlike
+       * *adding* occurrences for a newly widened rule, which needs the recurrence engine — and
+       * without it "stop repeating" left every future occurrence on screen: the patch
+       * projected nothing about the end, and `refreshActivityLists` marks the agenda stale
+       * with `refetchType: 'none'`, so nothing refetched to correct it.
+       *
+       * A series ending by `count` rather than by date is not handled: that needs a count
+       * across the whole series, which one cached window cannot see. It corrects on the next
+       * natural refetch.
+       */
+      if (
+        isRecurring &&
+        endDate !== undefined &&
+        item.occurrenceDate !== undefined &&
+        item.occurrenceDate > endDate
+      ) {
+        changed = true;
+        continue;
+      }
+
       if (!isRecurring) {
         if (kept.has(day.date)) {
           changed = true;
