@@ -55,7 +55,8 @@ export function applyPatch(
 ): AgendaData {
   const { activity } = variables;
   const isRecurring = activity.recurrence !== undefined;
-  const seriesDate = activity.schedule?.date;
+  /** One surviving row per day bucket, so flattening can never empty a window. */
+  const kept = new Set<string>();
   let changed = false;
 
   const days = agenda.days.map((day) => {
@@ -67,18 +68,23 @@ export function applyPatch(
       }
 
       /**
-       * A one-off lives on exactly one date, so only the occurrence for that date survives —
-       * matched on the occurrence itself, not just its day. Clearing `occurrenceDate` is what
-       * collapses two rows into one identity (`activityId\0occurrenceDate`), so a window
-       * holding two occurrences in the same day bucket would otherwise end up with duplicates.
+       * A one-off lives on exactly one date, so the surplus occurrences of a former series go.
+       * Clearing `occurrenceDate` collapses rows into one identity, so keeping them all would
+       * leave duplicates behind.
+       *
+       * **Which one survives is decided per day bucket, not against the series anchor.**
+       * Comparing the row's day to `activity.schedule.date` dropped every row in a window that
+       * did not contain the anchor — so stopping a repeat while looking at today made the task
+       * vanish, against the confirmation's own promise that it "keeps the activity". The
+       * anchor is where the series *started*; it is not the occurrence anyone is looking at,
+       * and this projection has no business relocating a row the user is watching.
        */
-      if (
-        !isRecurring &&
-        seriesDate !== undefined &&
-        !survivesFlattening(item, day.date, seriesDate)
-      ) {
-        changed = true;
-        continue;
+      if (!isRecurring) {
+        if (kept.has(day.date)) {
+          changed = true;
+          continue;
+        }
+        kept.add(day.date);
       }
 
       const next = refreshed(item, activity, day.date, isRecurring);
@@ -89,20 +95,6 @@ export function applyPatch(
   });
 
   return changed ? { ...agenda, days } : agenda;
-}
-
-/**
- * Whether a row of a former series is the one the surviving one-off is.
- *
- * An undated row has nothing to disambiguate and stands in for the activity itself.
- */
-function survivesFlattening(
-  item: AgendaItem,
-  dayDate: string,
-  seriesDate: string,
-): boolean {
-  if (dayDate !== seriesDate) return false;
-  return item.occurrenceDate === undefined || item.occurrenceDate === seriesDate;
 }
 
 /** The row's Activity-derived fields, left identical when the patch touched none of them. */

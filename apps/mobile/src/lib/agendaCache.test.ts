@@ -744,3 +744,68 @@ describe('reading the schedule one occurrence is on', () => {
     ).toBeUndefined();
   });
 });
+
+/**
+ * Switching a recurring task back to "never".
+ *
+ * The surviving one-off used to be chosen by comparing each row's day to
+ * `activity.schedule.date` — the series **anchor**, which is where the series started, not the
+ * occurrence anyone is looking at. Every row in a window that did not contain the anchor was
+ * therefore dropped, so stopping a repeat while looking at today made the task vanish, against
+ * the confirmation's own promise that it "keeps the activity".
+ */
+describe('stopping a repeat keeps the activity', () => {
+  const patchKey = ['activity', 'patch'];
+
+  /** The server's answer: a one-off, still anchored on its original schedule date. */
+  const flattened = {
+    activityId: 'act_STANDUP',
+    type: 'task',
+    title: 'Stand-up',
+    status: 'scheduled',
+    schedule: { date: '2026-08-01', time: '09:30', timezone: 'America/New_York' },
+  };
+
+  const rowsOf = (client: QueryClient) => {
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    return (agenda?.days ?? []).flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (item) => item.activityId === 'act_STANDUP',
+      ),
+    );
+  };
+
+  it('keeps the row on a day that is not the series anchor', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+
+    projectActivityWrite(client, patchKey, flattened);
+
+    const rows = rowsOf(client);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.isRecurring).toBe(false);
+    expect(rows[0]?.occurrenceDate).toBeUndefined();
+  });
+
+  /** Still exactly one per day bucket, since clearing the occurrence collapses identities. */
+  it('collapses two occurrences in one bucket to a single row', () => {
+    const client = new QueryClient();
+    client.setQueryData(KEY, {
+      days: [
+        {
+          date: TODAY,
+          schedule: [
+            row({ isRecurring: true, occurrenceDate: TODAY }),
+            row({ isRecurring: true, occurrenceDate: '2026-08-14', time: '09:31' }),
+          ],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    } satisfies AgendaData);
+
+    projectActivityWrite(client, patchKey, flattened);
+
+    expect(rowsOf(client)).toHaveLength(1);
+  });
+});
