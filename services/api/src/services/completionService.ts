@@ -99,6 +99,8 @@ export async function completeActivity(
     return result;
   }
 
+  assertOccurrenceScoped(activity);
+
   if (
     activity.status === 'cancelled' ||
     activity.status === 'completed' ||
@@ -226,6 +228,8 @@ export async function skipActivity(
     await commit(tx, receiptFor(result));
     return result;
   }
+
+  assertOccurrenceScoped(activity);
 
   if (activity.status === 'cancelled' || activity.status === 'skipped') {
     const result: ActivityCompletionResult = { activity };
@@ -552,6 +556,30 @@ function assertRecurring(activity: Activity): void {
   if (activity.recurrence !== undefined) return;
   throw new AppError('validation_failed', OCCURRENCE_NEEDS_SERIES, [
     { path: 'occurrenceDate', message: OCCURRENCE_NEEDS_SERIES },
+  ]);
+}
+
+/**
+ * The inverse of `assertRecurring`: a series may not be completed or skipped as a whole.
+ *
+ * **Why this had to exist.** Without an `occurrenceDate` both paths fell through to
+ * `patchActivity` and set `status: 'completed'` on `ACT#/META` itself. That alone would be a
+ * quiet mistake; `agendaService`'s `mergeNominal` makes it loud, because an occurrence with no
+ * override renders with `entry.activity.status` — so one unscoped write crossed off **every**
+ * future occurrence of the series. Reported as "select complete on today's occurrence and it
+ * marks the future ones complete".
+ *
+ * `snooze` has refused this since it was written (`resolveSnoozeTarget`); `complete` and `skip`
+ * simply never grew the same guard, and CLAUDE.md rule 3 covers all three equally: an
+ * occurrence action writes an `Occurrence` override and must never mutate the series.
+ *
+ * **Uncomplete is deliberately not guarded.** An unscoped uncomplete is what clears a series
+ * status this bug already set, and is the only route back for an activity in that state.
+ */
+function assertOccurrenceScoped(activity: Activity): void {
+  if (activity.recurrence === undefined) return;
+  throw new AppError('validation_failed', SERIES_NEEDS_OCCURRENCE, [
+    { path: 'occurrenceDate', message: SERIES_NEEDS_OCCURRENCE },
   ]);
 }
 
