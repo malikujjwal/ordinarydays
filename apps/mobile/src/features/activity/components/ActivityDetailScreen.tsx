@@ -407,6 +407,9 @@ export function ActivityDetailScreen({
               anchorDate={
                 activity.recurrence === undefined ? activity.schedule.date : today
               }
+              {...(actionOccurrenceDate === undefined
+                ? {}
+                : { occurrenceDate: actionOccurrenceDate })}
               {...(activity.recurrence === undefined
                 ? {}
                 : { value: activity.recurrence })}

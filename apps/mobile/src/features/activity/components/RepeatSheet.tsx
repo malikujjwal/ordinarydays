@@ -30,6 +30,11 @@ export interface RepeatSheetProps {
   onClose: () => void;
   /** First-segment schedule date, or the all-future effective date supplied by the caller. */
   anchorDate: string;
+  /**
+   * The occurrence the caller is looking at. `Never` ends the series on this day, inclusive,
+   * so the row in view survives and everything after it stops.
+   */
+  occurrenceDate?: string;
   value?: Recurrence;
   /** Required only for the history-loss confirmation on an existing series. */
   activityForConfirmation?: {
@@ -107,6 +112,7 @@ export function RepeatSheet({
   open,
   onClose,
   anchorDate,
+  occurrenceDate,
   value,
   activityForConfirmation,
   completedOccurrenceCount = 0,
@@ -175,8 +181,33 @@ export function RepeatSheet({
     }
   }, [anchorDate, customDaysValid, effectiveEnds, option, parsedCustomDays, value]);
 
+  /**
+   * **"Never" ends the series; it does not delete the rule.**
+   *
+   * `today-and-tasks.md` §6 line 584 has always defined this as `recurrence.endDate` set on
+   * the series row — forward only, with every past occurrence still rendering under the
+   * segment in force on its date. Removing the rule instead performed a *type change*, series
+   * to one-off, and that one operation is what required flattening surplus occurrences,
+   * choosing which day the survivor lives on, and clearing `completed_occurrence` from rows
+   * that were no longer occurrences. Each of those had a wrong answer available and several
+   * shipped; the question "which single day should the flattened one-off live on?" has no
+   * correct answer, which is the clearest sign the operation was wrong rather than merely
+   * unfinished.
+   *
+   * Ending needs none of it. One field moves on a row that stays a series, so no occurrence
+   * loses its identity and no history is rewritten.
+   *
+   * `endDate` is **inclusive** (`expand.ts`), so ending on the occurrence in view keeps that
+   * day and drops everything after it — which is what "stop repeating" means while looking at
+   * today's row.
+   */
   async function commitNever() {
-    if (await onCommit(undefined)) {
+    if (value === undefined) {
+      // Never was already the state; nothing to end.
+      close();
+      return;
+    }
+    if (await onCommit({ ...value, endDate: occurrenceDate ?? anchorDate })) {
       setConfirmNever(false);
       close();
     }
@@ -186,10 +217,9 @@ export function RepeatSheet({
     setLocalError(undefined);
     setSeriesLimit(false);
     if (option === 'never') {
-      if (value !== undefined && completedOccurrenceCount > 0) {
-        setConfirmNever(true);
-        return;
-      }
+      // No confirmation: ending a series removes nothing from view and is reversible by
+      // clearing `endDate`. The old dialog warned about losing past completions, which was
+      // true of deleting the rule and is not true of ending it.
       await commitNever();
       return;
     }

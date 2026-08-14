@@ -581,7 +581,7 @@ user has touched.
 | Reschedule this occurrence | `Occurrence { status: 'rescheduled', overrideTime and/or overrideDate }` | No |
 | Reschedule all future | A new rule segment appended to `recurrence`, `effectiveFrom` = the edited occurrence's date (§6.2) | **Yes, forward only**: past segments and existing `Occurrence` rows are untouched |
 | Delete this occurrence | `Occurrence { status: 'skipped' }` | No |
-| End series | `recurrence.endDate` set to today on the series row | **Yes, forward only**: no further occurrences are emitted; every past occurrence keeps rendering |
+| End series (`Never` in the Repeat sheet, since 2026-08-13) | `recurrence.endDate` set to the occurrence in view on the series row | **Yes, forward only**: no further occurrences are emitted; every past occurrence keeps rendering |
 | Delete whole series | Activity deleted, occurrences — and the history they hold — cascade, after the confirmation in [`activities.md`](activities.md#64-deleting) §6.4 names that history | n/a |
 
 `This occurrence only` moves are not limited to the clock. An `overrideDate` moves a
