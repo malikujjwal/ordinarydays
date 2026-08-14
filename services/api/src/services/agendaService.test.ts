@@ -1304,3 +1304,71 @@ describe('warnings and projection branches', () => {
     ).toBe('21:00');
   });
 });
+
+/**
+ * The read-path amplifier behind "clicking complete on any task of the series marks the whole
+ * series as complete".
+ *
+ * An occurrence's resolution lives on its `Occurrence` row and nowhere else (rule 3), so a
+ * series that reads `completed` says nothing about any particular day. Falling back to it
+ * crossed off every un-overridden occurrence at once — which is what kept the symptom alive
+ * for already-damaged rows after every write path was guarded, and what a completed one-off
+ * that later gains a recurrence still produces today.
+ */
+describe('a series status never resolves its occurrences', () => {
+  const dailySeries = (status: Activity['status']) =>
+    activity({
+      status,
+      schedule: { date: '2026-08-01', time: '18:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00' }],
+      },
+    });
+
+  const statusesFor = async (status: Activity['status']) => {
+    const series = dailySeries(status);
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-05', '2026-08-06', '2026-08-07'],
+      occurrences: { occurrences: [], markers: [] },
+      moved: [],
+    });
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-05',
+        to: '2026-08-07',
+        timezone: 'America/New_York',
+        now,
+      },
+      subject.dependencies,
+    );
+    return result.days
+      .flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier])
+      .map((row) => row.status);
+  };
+
+  it('renders un-overridden occurrences of a completed series as scheduled', async () => {
+    expect(await statusesFor('completed')).toEqual([
+      'scheduled',
+      'scheduled',
+      'scheduled',
+    ]);
+  });
+
+  /**
+   * `completed` is the only terminal status that reaches the merge at all — a `skipped` or
+   * `cancelled` series is filtered out before expansion and emits nothing. That asymmetry is
+   * why one unscoped completion was so visible while the equivalent skip was not, and it is
+   * worth pinning: if the filter ever admits them, `unresolvedSeriesStatus` decides what they
+   * render as rather than the fallback deciding by accident.
+   */
+  it.each([['skipped'], ['cancelled']] as const)(
+    'emits no rows at all for a %s series',
+    async (status) => {
+      expect(await statusesFor(status)).toEqual([]);
+    },
+  );
+});
