@@ -625,3 +625,66 @@ describe('a recurring occurrence rescheduled to a new time', () => {
     expect(rows.find((item) => item.occurrenceDate === '2026-08-14')?.time).toBe('09:30');
   });
 });
+
+/**
+ * A created or duplicated recurring activity is an occurrence too.
+ *
+ * `applyCreate` set `isRecurring` and no `occurrenceDate`, so the projected row named a
+ * series without naming a day. The Today checkbox reads that field to scope its write, so
+ * ticking the row sent an *unscoped* complete — which sets the status on the series row, and
+ * `agendaService.mergeNominal` renders every un-overridden occurrence with the series status.
+ * One tick, whole series crossed off.
+ */
+describe('a created recurring activity carries its occurrence date', () => {
+  /** The row lands in whichever bucket its time implies, so look in all three. */
+  const createdRow = (client: QueryClient): AgendaItem | undefined => {
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    for (const day of agenda?.days ?? []) {
+      for (const item of [...day.schedule, ...day.anytime, ...day.earlier]) {
+        if (item.activityId === 'act_NEW') return item;
+      }
+    }
+    return undefined;
+  };
+
+  it('names the day it was placed on', () => {
+    const client = new QueryClient();
+    client.setQueryData(KEY, {
+      days: [{ date: TODAY, schedule: [], anytime: [], earlier: [] }],
+      warnings: [],
+    } satisfies AgendaData);
+
+    projectActivityWrite(client, ['activity', 'create'], {
+      activityId: 'act_NEW',
+      type: 'task',
+      title: 'Stand-up',
+      status: 'scheduled',
+      schedule: { date: TODAY, time: '09:30', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '09:30' }],
+      },
+    });
+
+    expect(createdRow(client)?.isRecurring).toBe(true);
+    expect(createdRow(client)?.occurrenceDate).toBe(TODAY);
+  });
+
+  it('leaves a one-off without one', () => {
+    const client = new QueryClient();
+    client.setQueryData(KEY, {
+      days: [{ date: TODAY, schedule: [], anytime: [], earlier: [] }],
+      warnings: [],
+    } satisfies AgendaData);
+
+    projectActivityWrite(client, ['activity', 'create'], {
+      activityId: 'act_NEW',
+      type: 'task',
+      title: 'Buy milk',
+      status: 'scheduled',
+      schedule: { date: TODAY, time: '09:30', timezone: 'America/New_York' },
+    });
+
+    expect(createdRow(client)?.occurrenceDate).toBeUndefined();
+  });
+});

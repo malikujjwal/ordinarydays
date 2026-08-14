@@ -55,6 +55,19 @@ export function applyCreate(
     ...(time === undefined ? {} : { time }),
     ...(endTime === undefined ? {} : { endTime }),
     isRecurring: activity.recurrence !== undefined,
+    /**
+     * **A series row names the day it is on, not just that it repeats.**
+     *
+     * Every surface that writes against an occurrence reads this field for its scope, and the
+     * Today checkbox is the loudest: given a recurring row without one it sent an *unscoped*
+     * `POST /complete`, which sets the status on the series row — and `agendaService`'s
+     * `mergeNominal` renders every un-overridden occurrence with the series status. One tick
+     * crossed off the whole series. The server identifies an expanded occurrence by its day,
+     * and so does this.
+     */
+    ...(activity.recurrence === undefined || date === undefined
+      ? {}
+      : { occurrenceDate: date }),
     isSnoozed: false,
     hasCheckbox: activity.type === 'task',
     capabilities: {

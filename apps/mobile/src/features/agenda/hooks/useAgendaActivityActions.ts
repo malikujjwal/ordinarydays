@@ -57,6 +57,21 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
 
   const toggleComplete = useCallback(
     (item: AgendaItem, checked: boolean) => {
+      /**
+       * **A series row with no day is not something this checkbox may complete.**
+       *
+       * Omitting `occurrenceDate` turns a tick into an unscoped `POST /complete`, which sets
+       * the status on the series row itself — and `agendaService`'s `mergeNominal` renders
+       * every occurrence with no override using `entry.activity.status`. One tick therefore
+       * crossed off the whole series, which is CLAUDE.md rule 3 broken from the most ordinary
+       * gesture in the app. `snooze` below has always refused this; completion never did.
+       *
+       * The API rejects it too now, but that turns silent corruption into a visible error
+       * rather than into nothing happening, and an offline mutation queued here would still
+       * carry the unscoped body to a server that will refuse it.
+       */
+      if (item.isRecurring && item.occurrenceDate === undefined) return;
+
       const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
       const anytimeSnapshots = queryClient.getQueriesData<ActivityListCache>({
         queryKey: ['activities', 'saved'],

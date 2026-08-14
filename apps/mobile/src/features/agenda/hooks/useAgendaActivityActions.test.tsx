@@ -296,3 +296,61 @@ describe('useAgendaActivityActions completion undo', () => {
     });
   });
 });
+
+/**
+ * A series row with no day is not something this checkbox may complete.
+ *
+ * `snooze` has always refused it. `toggleComplete` merely omitted `occurrenceDate` when the
+ * row had none, which turns a tick into an unscoped `POST /complete` — that sets the status on
+ * the series row, and `agendaService.mergeNominal` renders every un-overridden occurrence with
+ * the series status. One tick crossed off the whole series.
+ */
+describe('useAgendaActivityActions recurring scope', () => {
+  const seriesRow: AgendaItem = {
+    ...first,
+    activityId: 'act_SERIES',
+    title: 'Stand-up',
+    isRecurring: true,
+    capabilities: { complete: true, skip: true, snooze: true },
+  };
+
+  /** The row has to be in the cached window, or nothing writes for an unrelated reason. */
+  const withSeries = (item: AgendaItem) => {
+    const mounted = setup();
+    mounted.client.setQueryData(mounted.key, {
+      ...cached,
+      days: [{ ...cached.days[0], date: '2026-08-11', schedule: [item] }],
+    });
+    return mounted;
+  };
+
+  it('still completes a recurring row that names its day, scoped to it', async () => {
+    clientCalls.complete.mockResolvedValue(undefined);
+    const scoped = { ...seriesRow, occurrenceDate: '2026-08-11' };
+    const mounted = withSeries(scoped);
+
+    act(() => mounted.result.current.toggleComplete(scoped, true));
+
+    await waitFor(() => expect(clientCalls.complete).toHaveBeenCalledOnce());
+    expect(clientCalls.complete).toHaveBeenCalledWith(
+      expect.anything(),
+      'act_SERIES',
+      expect.objectContaining({ occurrenceDate: '2026-08-11' }),
+      expect.anything(),
+    );
+  });
+
+  /**
+   * Asserted against the scoped case above: that one reaches the transport, so this one
+   * failing to is the guard and not the harness.
+   */
+  it('writes nothing when a recurring row carries no occurrence date', async () => {
+    clientCalls.complete.mockResolvedValue(undefined);
+    const mounted = withSeries(seriesRow);
+
+    act(() => mounted.result.current.toggleComplete(seriesRow, true));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clientCalls.complete).not.toHaveBeenCalled();
+  });
+});
