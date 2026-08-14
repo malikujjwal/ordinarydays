@@ -45,6 +45,16 @@ DNS. Everything that needs a registered domain is Phase 5.
       authenticated.
 - [ ] The local-versus-Lambda divergence checklist, executed, with each item either cleared
       or fixed, recorded in the pull request.
+- [ ] **The unscoped `uncomplete` exception is closed** (ADR-053, `00-open-decisions.md`
+      item 11). `complete` and `skip` already reject an unscoped write on a recurring
+      activity; `uncomplete` still accepts one as the only recovery route for a series whose
+      `ACT#/META` was completed by the bug that guard closes. That recovery has exactly one
+      beneficiary — a local table already holding damaged rows — and this environment starts
+      empty, so shipping the exception puts a standing rule-3 violation in a public API for
+      nobody. **Before deploying:** verify the local table holds no series-`META`
+      completions, then apply `assertOccurrenceScoped` to `uncompleteActivity` and delete the
+      exemption note in [`../02-architecture/api-contract.md`](../02-architecture/api-contract.md)
+      §`/uncomplete`. There is no safe moment to remove it after the API is public.
 - [ ] Cognito user pool `od-users-dev`: attributes, password policy, optional TOTP MFA,
       email-only recovery, and the token lifetimes in
       [`../02-architecture/auth.md`](../02-architecture/auth.md) §1.6.
