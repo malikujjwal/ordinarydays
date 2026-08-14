@@ -46,6 +46,15 @@ export type {
   Weekday,
 } from './recurrence.js';
 export type { Reminder } from './reminder.js';
+export type { ActivityScope } from './scope.js';
+export {
+  activityScope,
+  occurrenceScope,
+  scopeDate,
+  scopeFromWire,
+  scopeToWire,
+  targetsWholeSeries,
+} from './scope.js';
 export type {
   DefaultSlot,
   OnboardingState,

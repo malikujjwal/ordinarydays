@@ -8,11 +8,15 @@ import {
   type UncompleteActivityInput,
   type UnsnoozeActivityInput,
 } from '@od/shared/schemas';
-import type {
-  Activity,
-  ActivityOutcome,
-  ActivitySchedule,
-  Occurrence,
+import {
+  type Activity,
+  type ActivityOutcome,
+  type ActivitySchedule,
+  type ActivityScope,
+  activityScope,
+  type Occurrence,
+  scopeFromWire,
+  targetsWholeSeries,
 } from '@od/shared/types';
 import { differenceInCalendarDays, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -99,7 +103,7 @@ export async function completeActivity(
     return result;
   }
 
-  assertOccurrenceScoped(activity);
+  assertOccurrenceScoped(activity, scopeFromWire(input));
 
   if (
     activity.status === 'cancelled' ||
@@ -229,7 +233,7 @@ export async function skipActivity(
     return result;
   }
 
-  assertOccurrenceScoped(activity);
+  assertOccurrenceScoped(activity, scopeFromWire(input));
 
   if (activity.status === 'cancelled' || activity.status === 'skipped') {
     const result: ActivityCompletionResult = { activity };
@@ -576,8 +580,11 @@ function assertRecurring(activity: Activity): void {
  * **Uncomplete is deliberately not guarded.** An unscoped uncomplete is what clears a series
  * status this bug already set, and is the only route back for an activity in that state.
  */
-function assertOccurrenceScoped(activity: Activity): void {
-  if (activity.recurrence === undefined) return;
+function assertOccurrenceScoped(
+  activity: Activity,
+  scope: ActivityScope = activityScope(),
+): void {
+  if (!targetsWholeSeries(activity.recurrence !== undefined, scope)) return;
   throw new AppError('validation_failed', SERIES_NEEDS_OCCURRENCE, [
     { path: 'occurrenceDate', message: SERIES_NEEDS_OCCURRENCE },
   ]);
