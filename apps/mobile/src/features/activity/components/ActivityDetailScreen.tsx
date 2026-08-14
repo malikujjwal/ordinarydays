@@ -411,8 +411,6 @@ export function ActivityDetailScreen({
               {...(activity.recurrence === undefined
                 ? {}
                 : { value: activity.recurrence })}
-              activityForConfirmation={{ title: activity.title }}
-              completedOccurrenceCount={detail.detail?.completedOccurrenceCount ?? 0}
               onCommit={(recurrence) => detail.patch({ recurrence: recurrence ?? null })}
               busy={detail.isSaving}
               {...(detail.editError === undefined ? {} : { error: detail.editError })}

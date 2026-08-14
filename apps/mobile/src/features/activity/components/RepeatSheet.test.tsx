@@ -8,10 +8,7 @@ const TODAY = '2026-08-12';
 
 function mount(
   value?: Recurrence,
-  options: {
-    completedOccurrenceCount?: number;
-    onCommit?: ReturnType<typeof vi.fn>;
-  } = {},
+  options: { onCommit?: ReturnType<typeof vi.fn> } = {},
 ) {
   const onCommit = options.onCommit ?? vi.fn(async () => true);
   const onClose = vi.fn();
@@ -22,8 +19,6 @@ function mount(
         onClose={onClose}
         anchorDate={TODAY}
         {...(value === undefined ? {} : { value })}
-        activityForConfirmation={{ title: 'Gym' }}
-        completedOccurrenceCount={options.completedOccurrenceCount ?? 0}
         onCommit={onCommit}
       />
     </ThemeProvider>,
@@ -146,7 +141,7 @@ describe('RepeatSheet', () => {
       mode: 'fixed',
       segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' }],
     };
-    mount(stored, { completedOccurrenceCount: 40, onCommit });
+    mount(stored, { onCommit });
 
     fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));

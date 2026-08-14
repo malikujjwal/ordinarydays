@@ -1,11 +1,6 @@
 import type { Activity } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
-import {
-  deleteConfirmation,
-  kindChangeConfirmation,
-  kindLabel,
-  removeRecurrenceConfirmation,
-} from './confirmations';
+import { deleteConfirmation, kindChangeConfirmation, kindLabel } from './confirmations';
 
 /**
  * What the two destructive dialogs say (P1-27).
@@ -88,22 +83,6 @@ describe('deleteConfirmation', () => {
 
   it('omits the Keeps line when nothing survives', () => {
     expect(deleteConfirmation(plan(), 0).keeps).toBeUndefined();
-  });
-});
-
-describe('removeRecurrenceConfirmation', () => {
-  it('uses the real completed-occurrence count and names the history-preserving path', () => {
-    const confirmation = removeRecurrenceConfirmation({ title: 'Gym' }, 40);
-
-    expect(confirmation?.heading).toBe('Stop repeating "Gym"?');
-    expect(confirmation?.removes).toEqual([
-      'the repeat rule and 40 past completions from view.',
-    ]);
-    expect(confirmation?.keeps).toContain('End series instead');
-  });
-
-  it('does not confirm when there is no stored completion history', () => {
-    expect(removeRecurrenceConfirmation({ title: 'Gym' }, 0)).toBeUndefined();
   });
 });
 

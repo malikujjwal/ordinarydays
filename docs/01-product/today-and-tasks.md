@@ -438,7 +438,7 @@ history and have no UI of their own.
 
 | Option shown | `Recurrence` written | Notes |
 | --- | --- | --- |
-| Never | `recurrence` removed | Default. Confirms first on a series with stored completions — see below |
+| Never | On a series: `recurrence.endDate` set to the occurrence in view, inclusive (§6, End series). On an activity that does not repeat: nothing to write. | Default. **Amended 2026-08-13** — this used to remove `recurrence` entirely. Deleting the rule is a type change, series to one-off, which forces a choice of surviving date and destroys the history §6.2 exists to protect; ending needs neither. No confirmation, because nothing is removed from view and clearing `endDate` reverses it. |
 | Daily | `{ freq: 'daily', interval: 1 }` | |
 | Weekdays | `{ freq: 'weekdays' }` | Monday–Friday |
 | Weekends | `{ freq: 'weekly', interval: 1, byWeekday: [0, 6] }` | Saturday and Sunday |

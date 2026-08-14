@@ -4,8 +4,6 @@ import { type ActivityScope, activityScope, scopeDate } from '@od/shared/types';
 import { Button, DatePicker, Field, SelectField, Sheet, Text, useTheme } from '@od/ui';
 import { useEffect, useMemo, useState } from 'react';
 import { InputAccessoryView, Keyboard, Platform, View } from 'react-native';
-import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
-import { removeRecurrenceConfirmation } from '@/features/activity/model/confirmations';
 import {
   buildRepeatLimitAttempt,
   buildRepeatValue,
@@ -37,11 +35,6 @@ export interface RepeatSheetProps {
    */
   scope?: ActivityScope;
   value?: Recurrence;
-  /** Required only for the history-loss confirmation on an existing series. */
-  activityForConfirmation?: {
-    title: string;
-  };
-  completedOccurrenceCount?: number;
   onCommit: (value: Recurrence | undefined) => Promise<boolean>;
   busy?: boolean;
   error?: string;
@@ -115,8 +108,6 @@ export function RepeatSheet({
   anchorDate,
   scope,
   value,
-  activityForConfirmation,
-  completedOccurrenceCount = 0,
   onCommit,
   busy = false,
   error,
@@ -129,7 +120,6 @@ export function RepeatSheet({
   const [ends, setEnds] = useState<RepeatEnds>(() => endsForRecurrence(value));
   const [endDate, setEndDate] = useState(value?.endDate ?? anchorDate);
   const [endCount, setEndCount] = useState(value?.count ?? 1);
-  const [confirmNever, setConfirmNever] = useState(false);
   const [seriesLimit, setSeriesLimit] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [localError, setLocalError] = useState<string | undefined>();
@@ -141,7 +131,6 @@ export function RepeatSheet({
     setEnds(endsForRecurrence(value));
     setEndDate(value?.endDate ?? anchorDate);
     setEndCount(value?.count ?? 1);
-    setConfirmNever(false);
     setSeriesLimit(false);
     setLocalError(undefined);
   }, [anchorDate, open, value]);
@@ -214,7 +203,6 @@ export function RepeatSheet({
         endDate: scopeDate(scope ?? activityScope()) ?? anchorDate,
       })
     ) {
-      setConfirmNever(false);
       close();
     }
   }
@@ -279,10 +267,6 @@ export function RepeatSheet({
       : candidate === undefined
         ? 'Never'
         : describeRecurrence(candidate, anchorDate);
-  const confirmation =
-    activityForConfirmation === undefined
-      ? undefined
-      : removeRecurrenceConfirmation(activityForConfirmation, completedOccurrenceCount);
 
   function close() {
     Keyboard.dismiss();
@@ -478,17 +462,6 @@ export function RepeatSheet({
           </View>
         </InputAccessoryView>
       ) : null}
-
-      {confirmation === undefined ? null : (
-        <ConfirmDialog
-          open={confirmNever}
-          confirmation={confirmation}
-          busy={busy}
-          onCancel={() => setConfirmNever(false)}
-          onConfirm={() => void commitNever()}
-          testID="repeat-never-confirmation"
-        />
-      )}
     </>
   );
 }
