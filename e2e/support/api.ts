@@ -58,6 +58,37 @@ export async function createTask(
   return { activityId: body.data.activityId, title: input.title };
 }
 
+export async function createDailyTask(
+  request: APIRequestContext,
+  input: { title: string; date: string; time?: string },
+): Promise<E2EActivity> {
+  const response = await request.post(`${API}/v1/activities`, {
+    headers: e2eHeaders(randomUUID()),
+    data: {
+      objectKind: 'task',
+      type: 'task',
+      title: input.title,
+      details: { kind: 'task' },
+      schedule: {
+        date: input.date,
+        ...(input.time === undefined ? {} : { time: input.time }),
+        timezone: ZONE,
+      },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: input.date }],
+      },
+    },
+  });
+  if (!response.ok()) {
+    throw new Error(
+      `Could not create recurring E2E task: ${response.status()} ${await response.text()}`,
+    );
+  }
+  const body = (await response.json()) as { data: { activityId: string } };
+  return { activityId: body.data.activityId, title: input.title };
+}
+
 export async function deleteActivities(
   request: APIRequestContext,
   activityIds: readonly string[],

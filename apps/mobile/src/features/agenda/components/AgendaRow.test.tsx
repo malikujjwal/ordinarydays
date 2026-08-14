@@ -85,7 +85,7 @@ describe('AgendaRow affordances', () => {
     expect(onOpenReschedule).toHaveBeenCalledWith(expect.any(Object));
   });
 
-  it('keeps a future recurring task visible but prevents completing it early', () => {
+  it('allows completing a future recurring occurrence from Plans', () => {
     const onToggleComplete = vi.fn();
     mount(
       <AgendaRow
@@ -103,10 +103,10 @@ describe('AgendaRow affordances', () => {
     const checkbox = screen.getByRole('checkbox', {
       name: 'Tomorrow stand-up, not completed',
     });
-    expect(checkbox.getAttribute('aria-disabled')).toBe('true');
+    expect(checkbox.getAttribute('aria-disabled')).toBeNull();
 
     fireEvent.click(checkbox);
-    expect(onToggleComplete).not.toHaveBeenCalled();
+    expect(onToggleComplete).toHaveBeenCalledWith(expect.any(Object), true);
   });
 
   it("allows completing today's recurring occurrence", () => {

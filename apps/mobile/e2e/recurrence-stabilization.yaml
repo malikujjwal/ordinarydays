@@ -1,0 +1,36 @@
+appId: app.ordinarydays.ios.local
+name: P2-55 completing today leaves tomorrow's recurring occurrence live
+jsEngine: graaljs
+tags: [p2-55, ios, release]
+env:
+  API_BASE_URL: http://127.0.0.1:3000
+  PROXY_CONTROL_URL: http://127.0.0.1:8474
+onFlowStart:
+  - runScript:
+      file: scripts/setup.js
+      env:
+        FLOW: recurrence-stabilization
+onFlowComplete:
+  - runScript: scripts/cleanup.js
+---
+- launchApp:
+    clearState: true
+- assertVisible: ${output.title}
+- assertVisible: Daily
+- tapOn: ${output.title + ', not completed'}
+- assertVisible: ${output.title + ', completed'}
+- tapOn: Plans
+- assertVisible:
+    id: ${'plans-card-' + output.activityId + ':' + output.tomorrow}
+- assertVisible: ${output.title}
+- assertVisible: ${output.originalTimeLabel + ', change time'}
+- tapOn: ${output.title + ', not completed'}
+- assertVisible: ${output.title + ', completed'}
+- tapOn: ${output.title + ', completed'}
+- assertVisible: ${output.title + ', not completed'}
+- tapOn: ${output.title}
+- assertVisible:
+    id: detail-title
+- assertVisible: Daily
+- assertNotVisible:
+    id: detail-complete

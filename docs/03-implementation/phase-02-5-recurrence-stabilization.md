@@ -169,6 +169,15 @@ Application code still never scans.
 the META/OCC/index write sets. The audit is fixture-tested in report-only mode and against an
 explicit repair confirmation.
 
+**Operations audit.** Run `pnpm --filter @od/infra audit:recurrence-status` with
+`TABLE_NAME` and the normal AWS environment set. The default is report-only JSON: each row
+names the exact `activityId`, current terminal status, proposed `scheduled` status, and index
+row count. Repair requires both `--repair` and the table-bound confirmation printed by the
+refusal message, for example
+`--confirm REPAIR_RECURRING_STATUS:od-main-dev`. Each series META row and all of its discovered
+ActivityIndex rows are condition-checked and restored in one transaction; no Occurrence row
+is created or changed.
+
 ## Acceptance criteria
 
 1. The three visible phrases Does not repeat, No end and End series cannot invoke the same

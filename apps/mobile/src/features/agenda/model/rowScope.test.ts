@@ -1,11 +1,7 @@
 import type { AgendaItem } from '@od/shared/types';
 import { activityScope, occurrenceScope } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
-import {
-  isFutureRecurringOccurrence,
-  scopeForRow,
-  wouldCompleteWholeSeries,
-} from './rowScope';
+import { scopeForRow, wouldCompleteWholeSeries } from './rowScope';
 
 const row = (patch: Partial<AgendaItem> = {}): AgendaItem => ({
   activityId: 'act_STANDUP',
@@ -52,25 +48,5 @@ describe('wouldCompleteWholeSeries', () => {
 
   it('is false for a one-off, whose activity scope is the correct answer', () => {
     expect(wouldCompleteWholeSeries(row())).toBe(false);
-  });
-});
-
-describe('isFutureRecurringOccurrence', () => {
-  it('accepts only a recurring occurrence strictly after today', () => {
-    expect(
-      isFutureRecurringOccurrence(
-        row({ isRecurring: true, occurrenceDate: '2026-08-14' }),
-        '2026-08-13',
-      ),
-    ).toBe(true);
-    expect(
-      isFutureRecurringOccurrence(
-        row({ isRecurring: true, occurrenceDate: '2026-08-13' }),
-        '2026-08-13',
-      ),
-    ).toBe(false);
-    expect(
-      isFutureRecurringOccurrence(row({ occurrenceDate: '2026-08-14' }), '2026-08-13'),
-    ).toBe(false);
   });
 });

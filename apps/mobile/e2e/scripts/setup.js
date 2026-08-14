@@ -91,6 +91,20 @@ if (FLOW === 'add-and-complete') {
     segments: [{ freq: 'daily', effectiveFrom: wall.date }],
   });
   output.activityIds.push(output.activityId);
+} else if (FLOW === 'recurrence-stabilization') {
+  output.title = `P2-55 iOS recurrence ${stamp}`;
+  const occurrenceWall = parts(new Date(now.getTime() + 5 * 60 * 1000));
+  if (occurrenceWall.date !== wall.date) {
+    throw new Error(
+      'Run the recurrence flow outside the final five minutes of the local day.',
+    );
+  }
+  output.originalTimeLabel = timeLabel(occurrenceWall.time);
+  output.activityId = create(output.title, wall.date, occurrenceWall.time, {
+    mode: 'fixed',
+    segments: [{ freq: 'daily', effectiveFrom: wall.date }],
+  });
+  output.activityIds.push(output.activityId);
 } else if (FLOW === 'up-next-ticker') {
   const nextMinute = new Date(Math.floor(now.getTime() / 60000) * 60000 + 60000);
   const nextWall = parts(nextMinute);
@@ -108,7 +122,16 @@ if (FLOW === 'add-and-complete') {
     const title = `P2-37 iOS offline ${index} ${stamp}`;
     output.titles.push(title);
     output[`offlineTitle${index}`] = title;
-    output.activityIds.push(create(title, wall.date));
+    const activityId = create(
+      title,
+      wall.date,
+      undefined,
+      index === 1
+        ? { mode: 'fixed', segments: [{ freq: 'daily', effectiveFrom: wall.date }] }
+        : undefined,
+    );
+    if (index === 1) output.recurringOfflineId = activityId;
+    output.activityIds.push(activityId);
   }
 } else {
   throw new Error(`Unknown P2-37 flow: ${FLOW}`);

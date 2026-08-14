@@ -30,10 +30,3 @@ export function scopeForRow(item: AgendaItem): ActivityScope {
 export function wouldCompleteWholeSeries(item: AgendaItem): boolean {
   return targetsWholeSeries(item.isRecurring, scopeForRow(item));
 }
-
-/** A generated series occurrence strictly after the caller's wall-clock day. */
-export function isFutureRecurringOccurrence(item: AgendaItem, today: string): boolean {
-  if (!item.isRecurring) return false;
-  const scope = scopeForRow(item);
-  return scope.kind === 'occurrence' && scope.date > today;
-}

@@ -6,6 +6,6 @@
     "types": ["node"],
     "exactOptionalPropertyTypes": false
   },
-  "include": ["bin/**/*", "lib/**/*", "test/**/*"],
+  "include": ["bin/**/*", "lib/**/*", "scripts/**/*", "test/**/*"],
   "exclude": ["**/*.test.ts", "cdk.out", "dist"]
 }

@@ -164,7 +164,7 @@ it('renders one card per recurring occurrence across a seven-day response', asyn
   expect(screen.getAllByText('Daily walk')).toHaveLength(7);
 });
 
-it("disables a future recurring task's checkbox until its occurrence date", async () => {
+it("allows a future recurring task's occurrence to be completed", async () => {
   stubFetch(
     response([
       day('2026-08-07', [
@@ -184,7 +184,7 @@ it("disables a future recurring task's checkbox until its occurrence date", asyn
   const checkbox = await screen.findByRole('checkbox', {
     name: 'Tomorrow stand-up, not completed',
   });
-  expect(checkbox.getAttribute('aria-disabled')).toBe('true');
+  expect(checkbox.getAttribute('aria-disabled')).toBeNull();
 });
 
 it('renders exact gap copy and opens a date picker pre-set to the first date without writing', async () => {
@@ -234,13 +234,20 @@ it('uses sticky month sections and replaces August with September in document or
   expect(screen.getByTestId('plans-month-2026-09')).toBeDefined();
 });
 
-it('opens a card body without writing and keeps the global Add empty action', async () => {
+it("opens today's recurring task with its occurrence scope", async () => {
   const onOpen = vi.fn();
-  const calls = stubFetch(response([day('2026-08-19', [row(1)])]));
+  const todayOccurrence = row(1, {
+    type: 'task',
+    title: 'Today stand-up',
+    occurrenceDate: '2026-08-06',
+    isRecurring: true,
+    hasCheckbox: true,
+  });
+  const calls = stubFetch(response([day('2026-08-06', [todayOccurrence])]));
   mount(onOpen);
 
-  const cardBody = await screen.findByRole('button', { name: /Plan 1/ });
+  const cardBody = await screen.findByRole('button', { name: /Today stand-up/ });
   fireEvent.click(cardBody);
-  expect(onOpen).toHaveBeenCalledExactlyOnceWith(row(1).activityId);
+  expect(onOpen).toHaveBeenCalledExactlyOnceWith(todayOccurrence);
   expect(calls).toHaveLength(1);
 });

@@ -34,6 +34,10 @@ const DEV = 'usr_local_dev';
 const OTHER = 'usr_int_activities_other';
 const TEST_TODAY = new Date().toISOString().slice(0, 10);
 const TEST_TODAY_WEEKDAY = new Date(`${TEST_TODAY}T00:00:00.000Z`).getUTCDay();
+const TEST_TOMORROW_DATE = new Date(`${TEST_TODAY}T12:00:00.000Z`);
+TEST_TOMORROW_DATE.setUTCDate(TEST_TOMORROW_DATE.getUTCDate() + 1);
+const TEST_TOMORROW = TEST_TOMORROW_DATE.toISOString().slice(0, 10);
+const TEST_TOMORROW_WEEKDAY = TEST_TOMORROW_DATE.getUTCDay();
 
 beforeAll(async () => {
   base = await import('../../src/repositories/base.js');
@@ -838,6 +842,142 @@ describe('patching an activity', () => {
         (row) => row.entity === 'Occurrence',
       ),
     ).toEqual(occurrenceBefore);
+  });
+
+  it('runs the stabilized recurrence story without leaking occurrence state onto META', async () => {
+    const activity = await created({
+      ...TASK,
+      schedule: { date: TEST_TODAY, time: '18:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TEST_TODAY }],
+      },
+    });
+    const originalMeta = await repo.getActivityMeta(activity.activityId);
+
+    const completed = await withUser().fetch(
+      new Request(`http://localhost/v1/activities/${activity.activityId}/complete`, {
+        method: 'POST',
+        headers: authedHeaders({ idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ occurrenceDate: TEST_TODAY }),
+      }),
+    );
+    expect(completed.status).toBe(200);
+    expect(await repo.getActivityMeta(activity.activityId)).toEqual(originalMeta);
+
+    const tomorrowAgenda = await withUser().fetch(
+      new Request(
+        `http://localhost/v1/agenda?from=${TEST_TOMORROW}&to=${TEST_TOMORROW}&tz=UTC&include=anytime_unscheduled,overdue`,
+        { headers: authedHeaders({ timezone: 'UTC' }) },
+      ),
+    );
+    const tomorrowBody = await tomorrowAgenda.json();
+    const tomorrowRows = [
+      ...tomorrowBody.data.days[0].schedule,
+      ...tomorrowBody.data.days[0].anytime,
+      ...tomorrowBody.data.days[0].earlier,
+    ];
+    expect(tomorrowRows).toContainEqual(
+      expect.objectContaining({ activityId: activity.activityId, status: 'scheduled' }),
+    );
+
+    const rescheduled = await schedule(activity.activityId, {
+      date: TEST_TOMORROW,
+      time: '19:30',
+      timezone: 'UTC',
+      occurrenceDate: TEST_TOMORROW,
+    });
+    expect(rescheduled.status).toBe(200);
+    expect(await repo.getActivityMeta(activity.activityId)).toEqual(originalMeta);
+
+    const future = await patch(
+      activity.activityId,
+      {
+        recurrence: {
+          ...activity.recurrence,
+          segments: [
+            ...activity.recurrence.segments,
+            {
+              freq: 'weekly',
+              interval: 1,
+              byWeekday: [TEST_TOMORROW_WEEKDAY],
+              effectiveFrom: TEST_TOMORROW,
+            },
+          ],
+        },
+        editedFromDate: TEST_TOMORROW,
+      },
+      { ifMatch: activity.updatedAt },
+    );
+    const futureBody = await future.json();
+    expect(future.status).toBe(200);
+    expect(futureBody.data.recurrence.segments).toHaveLength(2);
+
+    const converted = await withUser().fetch(
+      new Request(
+        `http://localhost/v1/activities/${activity.activityId}/recurrence/convert`,
+        {
+          method: 'POST',
+          headers: authedHeaders({ idempotencyKey: crypto.randomUUID() }),
+          body: JSON.stringify({ occurrenceDate: TEST_TOMORROW }),
+        },
+      ),
+    );
+    const convertedBody = await converted.json();
+    expect(converted.status).toBe(200);
+    expect(convertedBody.data).not.toHaveProperty('recurrence');
+    expect(convertedBody.data.schedule).toEqual({
+      date: TEST_TOMORROW,
+      time: '19:30',
+      timezone: 'UTC',
+      scheduledAtUtc: `${TEST_TOMORROW}T19:30:00.000Z`,
+    });
+    expect(
+      (await repo.getActivityPartition(activity.activityId)).filter(
+        (row) => row.entity === 'Occurrence',
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sk: `OCC#${TEST_TODAY}`, status: 'completed' }),
+        expect.objectContaining({ sk: `OCC#${TEST_TOMORROW}`, status: 'rescheduled' }),
+      ]),
+    );
+    expect(
+      (await indexRows(DEV)).find((row) => row.activityId === activity.activityId),
+    ).toMatchObject({ gsi1pk: `U#${DEV}#S`, status: 'scheduled' });
+
+    const ending = await created({
+      ...TASK,
+      title: 'End and restart series',
+      schedule: { date: TEST_TODAY, time: '20:00', timezone: 'UTC' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TEST_TODAY }],
+      },
+    });
+    const ended = await patch(
+      ending.activityId,
+      { recurrence: { ...ending.recurrence, endDate: TEST_TODAY } },
+      { ifMatch: ending.updatedAt },
+    );
+    const endedBody = await ended.json();
+    expect(ended.status).toBe(200);
+    expect(endedBody.data.recurrence.endDate).toBe(TEST_TODAY);
+
+    const {
+      endDate: _endDate,
+      count: _count,
+      ...openRecurrence
+    } = endedBody.data.recurrence;
+    const restarted = await patch(
+      ending.activityId,
+      { recurrence: openRecurrence },
+      { ifMatch: endedBody.data.updatedAt },
+    );
+    const restartedBody = await restarted.json();
+    expect(restarted.status).toBe(200);
+    expect(restartedBody.data.recurrence).not.toHaveProperty('endDate');
+    expect(restartedBody.data.recurrence).not.toHaveProperty('count');
   });
 });
 

@@ -462,6 +462,7 @@ site after `deploy-dev.yml` (`infrastructure.md` §7.2), and locally against
 | Add a guest participant and open the invite link in a fresh context | `invite-rsvp.spec.ts` | The public surface, unauthenticated |
 | Add an expense, view the balance, drill down to the lines | `expenses.spec.ts` | "No unexplained numbers" (`overview.md` §4.5) |
 | Reschedule from the time column | `reschedule.spec.ts` | U4 across the whole stack |
+| Complete, reschedule, edit, convert, end and restart recurring occurrences | `recurrence-stabilization.spec.ts` | Explicit occurrence scope and eventually-consistent agenda reconciliation across the whole stack |
 | Keyboard-only pass over Today | `a11y-keyboard.spec.ts` | `interaction-contract.md` §7.2, §7.3 |
 
 Rules: no `waitForTimeout`; wait on a role or a network response. From Phase 4 onward, each
@@ -501,9 +502,10 @@ device before a TestFlight submission.
 | Sign in with email and reach Today | `sign-in.yaml` |
 | Add a task and complete it from the checkbox | `add-and-complete.yaml` |
 | Swipe a row to snooze, confirm the series is unchanged | `snooze-occurrence.yaml` |
+| Complete today and confirm tomorrow's recurring occurrence remains live | `recurrence-stabilization.yaml` |
 | Add a person to a plan and send an invite | `share-plan.yaml` |
 | Background, return, and confirm UP NEXT has advanced | `up-next-ticker.yaml` |
-| Queue three completions offline, kill/relaunch, reconnect, and land each exactly once | `offline-queue-relaunch.yaml` |
+| Queue three completions, including one recurring occurrence, offline; kill/relaunch, reconnect, and land each exactly once | `offline-queue-relaunch.yaml` |
 
 Maestro flows are YAML and readable by an agent, which is why they are the iOS choice
 (`tech-stack.md` §2.5). They assert on accessibility labels — the same labels

@@ -21,10 +21,20 @@ if (completions !== 3)
   throw new Error(`Expected exactly 3 completion requests, received ${completions}`);
 
 output.activityIds.forEach((activityId) => {
-  const response = http.get(`${API}/v1/activities/${activityId}`, { headers: headers() });
-  const activity = JSON.parse(response.body).data.activity;
-  if (activity.status !== 'completed')
-    throw new Error(`${activityId} is ${activity.status}, not completed`);
+  const recurring = activityId === output.recurringOfflineId;
+  const response = http.get(
+    `${API}/v1/activities/${activityId}${recurring ? `?occurrenceDate=${output.today}` : ''}`,
+    { headers: headers() },
+  );
+  const detail = JSON.parse(response.body).data;
+  if (recurring) {
+    if (detail.activity.status !== 'scheduled')
+      throw new Error(`${activityId} series changed to ${detail.activity.status}`);
+    if (detail.occurrence?.status !== 'completed_occurrence')
+      throw new Error(`${activityId} occurrence is ${detail.occurrence?.status}`);
+  } else if (detail.activity.status !== 'completed') {
+    throw new Error(`${activityId} is ${detail.activity.status}, not completed`);
+  }
 });
 
 const agenda = http.get(
@@ -44,3 +54,22 @@ output.activityIds.forEach((activityId) => {
   const count = rows.filter((candidate) => candidate === activityId).length;
   if (count !== 1) throw new Error(`${activityId} appears ${count} times in the agenda`);
 });
+
+const tomorrowAgenda = http.get(
+  `${API}/v1/agenda?from=${output.tomorrow}&to=${output.tomorrow}&tz=${encodeURIComponent(ZONE)}&include=anytime_unscheduled,overdue`,
+  { headers: headers() },
+);
+const tomorrowRows = [];
+(JSON.parse(tomorrowAgenda.body).data.days || []).forEach((day) => {
+  ['schedule', 'anytime', 'earlier'].forEach((section) => {
+    (day[section] || []).forEach((item) => {
+      tomorrowRows.push(item);
+    });
+  });
+});
+const nextOccurrence = tomorrowRows.find(
+  (item) => item.activityId === output.recurringOfflineId,
+);
+if (nextOccurrence?.status !== 'scheduled') {
+  throw new Error('The recurring offline completion leaked onto tomorrow.');
+}

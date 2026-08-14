@@ -1,7 +1,7 @@
 appId: app.ordinarydays.ios.local
-name: P2-37 offline queue survives process death
+name: P2-55 occurrence completion survives offline replay and process death
 jsEngine: graaljs
-tags: [p2-37, ios, release]
+tags: [p2-37, p2-55, ios, release]
 env:
   API_BASE_URL: http://127.0.0.1:3000
   PROXY_CONTROL_URL: http://127.0.0.1:8474

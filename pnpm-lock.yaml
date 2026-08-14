@@ -169,6 +169,12 @@ importers:
 
   infra:
     dependencies:
+      '@aws-sdk/client-dynamodb':
+        specifier: 3.1106.0
+        version: 3.1106.0
+      '@aws-sdk/lib-dynamodb':
+        specifier: 3.1106.0
+        version: 3.1106.0(@aws-sdk/client-dynamodb@3.1106.0)
       '@od/shared':
         specifier: workspace:*
         version: link:../packages/shared
@@ -185,6 +191,9 @@ importers:
       aws-cdk:
         specifier: 2.1135.1
         version: 2.1135.1
+      tsx:
+        specifier: 4.23.11
+        version: 4.23.11
       vitest:
         specifier: 3.2.7
         version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(jsdom@30.0.1)(lightningcss@1.33.0)(terser@5.49.2)(tsx@4.23.11)(yaml@2.9.0)

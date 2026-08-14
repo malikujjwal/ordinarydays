@@ -30,7 +30,8 @@ import {
 import { AgendaRow } from './AgendaRow';
 
 export interface PlansScreenProps {
-  onOpen: (activityId: string) => void;
+  /** Preserve occurrence scope when a generated recurring row opens detail. */
+  onOpen: (item: AgendaItem) => void;
   /** The global Add action. Plans never pre-selects an object kind. */
   onAdd: () => void;
 }
@@ -113,7 +114,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
                 showTime
                 divider={false}
                 untimedContextLabel={formatDateHeading(item.date)}
-                onOpen={(row) => onOpen(row.activityId)}
+                onOpen={onOpen}
                 onToggleComplete={actions.toggleComplete}
                 onOpenReschedule={(row) =>
                   setReschedule({ item: row, date: item.date as WallDate })

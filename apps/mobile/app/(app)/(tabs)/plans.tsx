@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { type Href, useRouter } from 'expo-router';
 import { PlansScreen } from '@/features/agenda/components/PlansScreen';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -13,7 +13,15 @@ export default function PlansTab() {
 
   return (
     <PlansScreen
-      onOpen={(activityId) => router.push(`/activity/${activityId}`)}
+      onOpen={({ activityId, occurrenceDate }) =>
+        router.push({
+          pathname: '/activity/[id]',
+          params: {
+            id: activityId,
+            ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
+          },
+        } as Href)
+      }
       onAdd={() => {
         openDraft();
         router.push('/compose');
