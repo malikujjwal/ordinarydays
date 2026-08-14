@@ -123,10 +123,16 @@ export const agendaDay = z.strictObject({
   earlier: z.array(agendaItem),
 });
 
+export const agendaProjectionVersion = z.strictObject({
+  activityId: ulidId('act'),
+  version: z.string().min(1),
+});
+
 export const agendaData = z
   .strictObject({
     days: z.array(agendaDay).max(MAX_AGENDA_DAYS),
     warnings: z.array(agendaWarning),
+    projectionVersions: z.array(agendaProjectionVersion).optional(),
   })
   .meta({ id: 'AgendaData' });
 

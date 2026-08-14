@@ -193,7 +193,19 @@ async function scheduleOccurrence(
       ? Promise.resolve(null)
       : getMoveMarker(previous.activityId, newDestination),
   ]);
-  const result: ScheduleActivityResult = { activity: projectActivity(previous) };
+  const result: ScheduleActivityResult = {
+    activity: projectActivity(previous),
+    occurrence: {
+      nominalDate: occurrenceDate,
+      date: input.date,
+      ...(requestedTime === undefined ? {} : { time: requestedTime }),
+      ...(previous.schedule.endTime === undefined
+        ? {}
+        : { endTime: previous.schedule.endTime }),
+      status: 'scheduled',
+      isSnoozed: false,
+    },
+  };
   const receipt = receiptFor(result);
   await writeOccurrenceSchedule({
     activityId: previous.activityId,

@@ -66,8 +66,8 @@ How it is built. Mechanics are decided here.
 
 ## 03 — Implementation
 
-The plan. Ten phases, 360 tasks. Phases 0–3 are local-first: nothing is deployed to AWS
-until Phase 4.
+The plan. Ten numbered phases plus the blocking Phase 2.5 recurrence-stabilization gate,
+375 tasks total. Phases 0–3 are local-first: nothing is deployed to AWS until Phase 4.
 
 | Document | Read it when |
 | --- | --- |
@@ -75,6 +75,7 @@ until Phase 4.
 | [phase-00-foundations.md](03-implementation/phase-00-foundations.md) | AWS account and budgets, the monorepo, CI, the eight CDK stacks written but not deployed, hello-world end to end on a laptop. |
 | [phase-01-activity-core.md](03-implementation/phase-01-activity-core.md) | The identity seam, the repository layer, Activity CRUD, explicit Add intent, per-user reminder rows, the Add screen and creation forms. |
 | [phase-02-today-and-tasks.md](03-implementation/phase-02-today-and-tasks.md) | The recurrence engine, the GSI1 bucket rule, `lastActivityAt`, the agenda endpoint, owner-only plan completion with the parent-participant rule for prep tasks, the reminder endpoints, the Today screen. |
+| [phase-02-5-recurrence-stabilization.md](03-implementation/phase-02-5-recurrence-stabilization.md) | The blocking recurrence correctness gate: explicit occurrence targets, distinct Does not repeat / No end / End series operations, authoritative detail projection, atomic writes, and cross-layer tests. |
 | [phase-03-plans-and-lists.md](03-implementation/phase-03-plans-and-lists.md) | Lists, the explicit private/shared list-item → Plan bridge, the three-stage Plans tab, plan detail, attachments. |
 | [phase-04-deploy-and-identity.md](03-implementation/phase-04-deploy-and-identity.md) | The first real deploy, Cognito, Sign in with Apple, token storage, the auth screens. |
 | [phase-05-ship-v1.md](03-implementation/phase-05-ship-v1.md) | Domain and DNS, prod, web hosting, EAS builds, push, TestFlight, App Store setup. |

@@ -9,21 +9,26 @@ import { MAX_TITLE_LEN } from '@od/shared/constants';
 import { expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
 import type {
   ActivityListQuery,
+  ConvertRecurrenceInput,
   CreateActivityInput,
   PatchActivityInput,
 } from '@od/shared/schemas';
 import {
+  occurrence as occurrenceSchema,
   recurrence as recurrenceSchema,
   reminderInputsForSchedule,
 } from '@od/shared/schemas';
 import type {
   Activity,
   ActivityDetail,
+  ActivityDetailTarget,
   ActivityFilter,
   ActivityListItem,
   ActivitySchedule,
   ActivityStatus,
   Gsi1Bucket,
+  Occurrence,
+  OccurrenceDetailProjection,
   Recurrence,
   RecurrenceSegment,
   Reminder,
@@ -37,6 +42,7 @@ import {
   getActivityMeta,
   getActivityPartition,
   listByBucket as listBucket,
+  listParticipants,
   newActivityId,
   newReminderId,
   createActivity as putActivity,
@@ -703,6 +709,71 @@ export async function patchActivity(
 }
 
 /**
+ * Converts one explicitly selected recurring occurrence into the surviving one-off.
+ * META, every user index and the idempotency receipt commit together; OCC history is read and
+ * condition-checked but never rewritten.
+ */
+export async function convertRecurrence(
+  userId: string,
+  activityId: string,
+  input: ConvertRecurrenceInput,
+  now: string,
+  receiptFor: (activity: Activity) => IdempotencyReceipt,
+): Promise<Activity> {
+  const { activity: current } = await assertActivityAccess(userId, activityId, 'owner');
+  if (current.recurrence === undefined || current.schedule === undefined) {
+    recurrenceFailure('This activity does not repeat.');
+  }
+
+  const [partition, participants] = await Promise.all([
+    getActivityPartition(activityId),
+    listParticipants(activityId),
+  ]);
+  const selected = projectOccurrenceDetail(current, partition, input.occurrenceDate);
+  const rawOccurrence = partition.find(
+    (row) =>
+      row.entity === 'Occurrence' &&
+      row.activityId === activityId &&
+      row.date === input.occurrenceDate,
+  );
+
+  const { recurrence: _removed, ...withoutRecurrence } = current;
+  const next: Activity = {
+    ...withoutRecurrence,
+    schedule: toSchedule({
+      date: selected.date,
+      timezone: current.schedule.timezone,
+      ...(selected.time === undefined ? {} : { time: selected.time }),
+      ...(selected.endTime === undefined ? {} : { endTime: selected.endTime }),
+    }),
+    status: current.status === 'cancelled' ? 'cancelled' : 'scheduled',
+    icsSequence: current.icsSequence + 1,
+    updatedAt: now,
+  } as Activity;
+
+  await putPatch(userId, next, current.updatedAt, {
+    previous: current,
+    indexedUserIds: [
+      current.ownerId,
+      ...participants.flatMap((row) =>
+        typeof row.userId === 'string' ? [row.userId] : [],
+      ),
+    ],
+    occurrenceGuard:
+      rawOccurrence === undefined
+        ? { date: input.occurrenceDate, kind: 'missing' }
+        : {
+            date: input.occurrenceDate,
+            kind: 'version',
+            updatedAt: String(rawOccurrence.updatedAt),
+          },
+    idempotencyReceipt: receiptFor(next),
+  });
+
+  return next;
+}
+
+/**
  * The patched activity, built field by field.
  *
  * ## Why the explicit patch wins over the kind change
@@ -1159,12 +1230,12 @@ async function releaseChildren(childIds: readonly string[], now: string): Promis
  */
 export async function getActivityDetail(
   userId: string,
-  activityId: string,
+  target: ActivityDetailTarget,
 ): Promise<ActivityDetail> {
-  const access = await assertActivityAccess(userId, activityId, 'read');
+  const access = await assertActivityAccess(userId, target.activityId, 'read');
 
   const mayAct = access.isOwner || access.viaParent;
-  return projectDetail(await getActivityPartition(activityId), userId, {
+  return projectDetail(await getActivityPartition(target.activityId), userId, target, {
     complete: mayAct,
     skip: mayAct,
     snooze: mayAct,
@@ -1201,12 +1272,18 @@ export async function getActivityDetail(
 export function projectDetail(
   partition: StoredItem[],
   userId: string,
+  target: ActivityDetailTarget,
   capabilities?: ActivityDetail['capabilities'],
 ): ActivityDetail {
   const meta = partition.find((row) => row.sk === 'META');
   if (meta === undefined) throw new AppError('not_found', 'Activity not found.');
   const projected = toActivity(meta);
   const ownerMayAct = projected.ownerId === userId;
+
+  const occurrence =
+    target.kind === 'occurrence'
+      ? projectOccurrenceDetail(projected, partition, target.date)
+      : undefined;
 
   return {
     activity: projected,
@@ -1218,9 +1295,82 @@ export function projectDetail(
     reminders: partition
       .filter((row) => isReminderRow(row) && row.userId === userId)
       .map(toReminder),
+    ...(occurrence === undefined ? {} : { occurrence }),
     completedOccurrenceCount: partition.filter(
       (row) => row.entity === 'Occurrence' && row.status === 'completed',
     ).length,
+  };
+}
+
+function projectOccurrenceDetail(
+  activity: Activity,
+  partition: StoredItem[],
+  nominalDate: string,
+): OccurrenceDetailProjection {
+  if (
+    activity.recurrence === undefined ||
+    activity.schedule === undefined ||
+    !expandRecurrence(
+      activity.recurrence,
+      nominalDate,
+      nominalDate,
+      activity.schedule.timezone,
+    ).includes(nominalDate)
+  ) {
+    throw new AppError(
+      'validation_failed',
+      'The occurrence target is not in this series.',
+      [
+        {
+          path: 'occurrenceDate',
+          message: 'The date is not emitted by this recurrence.',
+        },
+      ],
+    );
+  }
+
+  const raw = partition.find(
+    (row) =>
+      row.entity === 'Occurrence' &&
+      row.activityId === activity.activityId &&
+      row.date === nominalDate,
+  );
+  const override: Occurrence | undefined =
+    raw === undefined ? undefined : (occurrenceSchema.parse(raw) as Occurrence);
+  const segment = [...activity.recurrence.segments]
+    .reverse()
+    .find((candidate) => candidate.effectiveFrom <= nominalDate);
+
+  let date = override?.overrideDate ?? nominalDate;
+  let time =
+    override?.snoozedUntil ??
+    override?.overrideTime ??
+    segment?.time ??
+    activity.schedule.time;
+  if (time?.includes('T') === true) {
+    const instant = new Date(time);
+    date = formatInTimeZone(instant, activity.schedule.timezone, 'yyyy-MM-dd');
+    time = formatInTimeZone(instant, activity.schedule.timezone, 'HH:mm');
+  }
+
+  const status =
+    override?.status === 'completed'
+      ? ('completed_occurrence' as const)
+      : override?.status === 'skipped'
+        ? ('skipped_occurrence' as const)
+        : activity.status === 'completed' || activity.status === 'skipped'
+          ? ('scheduled' as const)
+          : activity.status;
+  const endTime = segment?.endTime ?? activity.schedule.endTime;
+
+  return {
+    nominalDate,
+    date,
+    ...(time === undefined ? {} : { time }),
+    ...(endTime === undefined ? {} : { endTime }),
+    status,
+    isSnoozed: override?.status === 'snoozed',
+    ...(override?.completedAt === undefined ? {} : { completedAt: override.completedAt }),
   };
 }
 

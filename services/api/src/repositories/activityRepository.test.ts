@@ -435,6 +435,24 @@ describe('patch', () => {
     });
   });
 
+  it('condition-checks the selected occurrence version during atomic conversion', async () => {
+    const previous = activity();
+    await patchActivity(ALICE, activity(), previous.updatedAt, {
+      previous,
+      occurrenceGuard: {
+        date: '2026-08-12',
+        kind: 'version',
+        updatedAt: '2026-08-12T10:00:00.000Z',
+      },
+    });
+
+    expect(sentItems().at(-1)?.ConditionCheck).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: 'OCC#2026-08-12' },
+      ConditionExpression: '#updatedAt = :expected',
+      ExpressionAttributeValues: { ':expected': '2026-08-12T10:00:00.000Z' },
+    });
+  });
+
   /**
    * **The one that matters, in its corrected form.** The index entry keeps its primary key
    * across a bucket change — only `gsi1pk`/`gsi1sk` move — so a whole-item `Put` is what

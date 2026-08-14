@@ -1,6 +1,29 @@
 import type { Activity } from './activity.js';
-import type { AgendaCapabilities } from './agenda.js';
+import type { AgendaCapabilities, AgendaItemStatus } from './agenda.js';
 import type { Reminder } from './reminder.js';
+
+/** An activity read is either the stored series/one-off or one named virtual occurrence. */
+export type ActivityDetailTarget =
+  | { readonly kind: 'activity'; readonly activityId: string }
+  | {
+      readonly kind: 'occurrence';
+      readonly activityId: string;
+      /** The recurrence's nominal date, even when the occurrence moved. */
+      readonly date: string;
+    };
+
+/** Server-authoritative effective state for one recurring occurrence. */
+export interface OccurrenceDetailProjection {
+  /** The recurrence identity used by every occurrence write. */
+  nominalDate: string;
+  /** Effective rendered date after a move or cross-day snooze. */
+  date: string;
+  time?: string;
+  endTime?: string;
+  status: AgendaItemStatus;
+  isSnoozed: boolean;
+  completedAt?: string;
+}
 
 /**
  * What `GET /v1/activities/:id` returns (`api-contract.md` §2.3). Schema in
@@ -40,6 +63,8 @@ export interface ActivityDetail {
    */
   reminders: Reminder[];
   activity: Activity;
+  /** Present exactly for an occurrence-targeted read. Never inferred from agenda cache. */
+  occurrence?: OccurrenceDetailProjection;
   /** Real stored completed-occurrence rows used by destructive recurrence confirmations. */
   completedOccurrenceCount?: number;
 }

@@ -45,6 +45,7 @@ describe('GET /v1/agenda', () => {
       data: {
         days: [{ date: '2026-08-01', schedule: [], anytime: [], earlier: [] }],
         warnings: [],
+        projectionVersions: [],
       },
       meta: { requestId: 'req_agenda_test' },
     });

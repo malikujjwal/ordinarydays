@@ -5,11 +5,18 @@ export interface RowLeadingProps {
   hasCheckbox: boolean;
   checked: boolean;
   title: string;
+  disabled?: boolean;
   onChange?: (checked: boolean) => void;
 }
 
 /** The projection's `hasCheckbox` flag is the sole leading-control decision. */
-export function RowLeading({ hasCheckbox, checked, title, onChange }: RowLeadingProps) {
+export function RowLeading({
+  hasCheckbox,
+  checked,
+  title,
+  disabled = false,
+  onChange,
+}: RowLeadingProps) {
   const theme = useTheme();
 
   if (hasCheckbox) {
@@ -17,6 +24,7 @@ export function RowLeading({ hasCheckbox, checked, title, onChange }: RowLeading
       <Checkbox
         checked={checked}
         label={`${title}, ${checked ? 'completed' : 'not completed'}`}
+        disabled={disabled}
         {...(onChange === undefined ? {} : { onChange })}
         testID="agenda-leading-checkbox"
       />

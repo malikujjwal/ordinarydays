@@ -59,8 +59,16 @@ export interface AgendaDay {
   earlier: AgendaItem[];
 }
 
+/** A GSI projection proven to match the canonical Activity version hydrated for the read. */
+export interface AgendaProjectionVersion {
+  activityId: string;
+  version: string;
+}
+
 /** The stable payload hashed for `GET /v1/agenda`'s ETag. */
 export interface AgendaData {
   days: AgendaDay[];
   warnings: AgendaWarning[];
+  /** Optional only for wire compatibility with agenda bodies cached before P2-54. */
+  projectionVersions?: AgendaProjectionVersion[];
 }

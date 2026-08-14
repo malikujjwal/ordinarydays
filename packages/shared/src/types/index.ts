@@ -23,7 +23,11 @@ export type {
   TaskActivity,
 } from './activity.js';
 /** Its own file so ADR-047's guard on `activity.ts` stays tight — see the note there. */
-export type { ActivityDetail } from './activityDetail.js';
+export type {
+  ActivityDetail,
+  ActivityDetailTarget,
+  OccurrenceDetailProjection,
+} from './activityDetail.js';
 export type {
   AgendaCapabilities,
   AgendaData,
@@ -32,6 +36,7 @@ export type {
   AgendaItem,
   AgendaItemStatus,
   AgendaParticipantAvatar,
+  AgendaProjectionVersion,
   AgendaWarning,
 } from './agenda.js';
 export { assertNever } from './assert.js';

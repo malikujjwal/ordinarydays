@@ -317,6 +317,11 @@ date chip, participant avatars (max 3 + `+n`), pending-RSVP badge.
 A task means *something I need to complete*. Tasks are the only type with a checkbox
 (§4).
 
+A generated future occurrence of a recurring task keeps its checkbox visible, but the
+checkbox is disabled until that occurrence's date. A person cannot pre-complete future
+generated occurrences; today's and past occurrences remain resolvable, and an existing
+future completion remains reversible for compatibility.
+
 Task creation is explicit. Global `+` asks **Task / Plan / List item**; choosing Task opens
 this form with `objectKind: 'task'`, `type: 'task'`. Today's contextual `+ Add a task` answers that choice in its
 label and opens the Task form directly. Words and capture cannot turn a selected Task into
@@ -438,7 +443,7 @@ history and have no UI of their own.
 
 | Option shown | `Recurrence` written | Notes |
 | --- | --- | --- |
-| Never | On a series: `recurrence.endDate` set to the occurrence in view, inclusive (§6, End series). On an activity that does not repeat: nothing to write. | Default. **Amended 2026-08-13** — this used to remove `recurrence` entirely. Deleting the rule is a type change, series to one-off, which forces a choice of surviving date and destroys the history §6.2 exists to protect; ending needs neither. No confirmation, because nothing is removed from view and clearing `endDate` reverses it. |
+| Does not repeat | New draft: no `recurrence` is written. Existing series: remove `recurrence` and retain the explicitly selected occurrence as the one-off Activity (§6.3). | Default on a new draft. On a series this is a type change, not an alias for End series. It is available only from an explicit occurrence target; series-only detail never guesses a surviving date. **Founder-confirmed 2026-08-14**, superseding the 2026-08-13 `Never` interpretation. |
 | Daily | `{ freq: 'daily', interval: 1 }` | |
 | Weekdays | `{ freq: 'weekdays' }` | Monday–Friday |
 | Weekends | `{ freq: 'weekly', interval: 1, byWeekday: [0, 6] }` | Saturday and Sunday |
@@ -450,19 +455,25 @@ history and have no UI of their own.
 | Yearly | `{ freq: 'yearly', byMonth: [<month of the anchor date>], byMonthDay: [<day of the anchor date>] }` | Explicit anchor. Label reads `Every year on 3 September` |
 | Custom | `{ freq: 'interval_days', interval: X }` | Reveals a typed `Days` input, integer 2–365. This is not the Phase 9 RFC 5545 rule. |
 
-Every repeating option additionally exposes an **Ends** dropdown: `Never` (default), `On a date`
-(`recurrence.endDate`), `After N times` (`recurrence.count`, 1–999). Ends belongs to the
+Every repeating option additionally exposes an **Ends** dropdown: `No end` (default), `On a
+date` (`recurrence.endDate`), `After N times` (`recurrence.count`, 1–999). `No end` clears
+both termination fields and means the series continues indefinitely. Ends belongs to the
 **series**, not to a segment: however many segments a series has accumulated, there is one
 Ends setting and it closes the whole series.
 
-`Never` needs one guard. Removing `recurrence` from a series that has stored past
-completions orphans its `OCC#` history from rendering — expansion is what puts those dates
-on screen. Choosing `Never` on such a series therefore confirms first, in the §1a.1 shape
+**End series** is a separate occurrence-targeted action. It keeps `recurrence` and sets its
+inclusive `endDate` to the explicit occurrence in view. It is not an option in the Repeat
+dropdown and it is not `No end`'s opposite write disguised under the same label.
+
+**Does not repeat** needs one guard on an existing series. Removing `recurrence` from a
+series that has stored past completions leaves its `OCC#` rows stored but removes them from
+rendering — expansion is what puts those dates on screen. Choosing Does not repeat on such a
+series therefore confirms first, in the §1a.1 shape
 ([`interaction-contract.md`](interaction-contract.md#1a1-additive-changes-happen-immediately-destructive-changes-explain-what-will-be-lost)),
 naming the real completion count — the same count and copy source as `Delete whole series`
 ([`activities.md`](activities.md#64-deleting) §6.4) — and pointing at `End series` as the
 alternative that stops future occurrences while keeping history rendering. On a series
-with no recorded completions, `Never` applies immediately.
+with no recorded completions, the conversion applies immediately.
 
 The **anchor date** in the table above is the segment's `effectiveFrom`. For the first
 segment it is always the activity's `schedule.date` at the moment recurrence is set; for an
@@ -581,7 +592,9 @@ user has touched.
 | Reschedule this occurrence | `Occurrence { status: 'rescheduled', overrideTime and/or overrideDate }` | No |
 | Reschedule all future | A new rule segment appended to `recurrence`, `effectiveFrom` = the edited occurrence's date (§6.2) | **Yes, forward only**: past segments and existing `Occurrence` rows are untouched |
 | Delete this occurrence | `Occurrence { status: 'skipped' }` | No |
-| End series (`Never` in the Repeat sheet, since 2026-08-13) | `recurrence.endDate` set to the occurrence in view on the series row | **Yes, forward only**: no further occurrences are emitted; every past occurrence keeps rendering |
+| Does not repeat | In one domain transaction, copy the selected occurrence's effective date, time and end time to the Activity schedule, retain its timezone, and remove `recurrence` | **Yes, type conversion**: the selected occurrence becomes the one-off; other generated occurrences stop rendering; stored `OCC#` rows are untouched |
+| End series | `recurrence.endDate` set inclusively to the explicit occurrence in view on the series row | **Yes, forward only**: no later occurrences are emitted; every past occurrence keeps rendering |
+| No end | Clear `recurrence.endDate` and `recurrence.count` on the series row | **Yes, forward only**: expansion continues indefinitely under the stored segments |
 | Delete whole series | Activity deleted, occurrences — and the history they hold — cascade, after the confirmation in [`activities.md`](activities.md#64-deleting) §6.4 names that history | n/a |
 
 `This occurrence only` moves are not limited to the clock. An `overrideDate` moves a
@@ -592,6 +605,9 @@ every other occurrence are untouched.
 `AgendaItem.occurrenceDate` is present if and only if the item came from a series
 expansion. The client must send it back on every occurrence-scoped call
 (`complete`, `skip`, `snooze`). Omitting it targets the series and is a bug.
+Navigation from that row carries the same explicit target into detail. A series-only detail
+screen cannot infer today, the next occurrence or the most recent occurrence from the agenda
+cache; it offers series actions only until the user opens a real occurrence.
 
 ### 6.4 Completing one occurrence
 

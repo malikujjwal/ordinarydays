@@ -23,7 +23,11 @@ import { applyCompletion } from '../model/applyCompletion';
 import { applyReschedule } from '../model/applyReschedule';
 import { applySkip } from '../model/applySkip';
 import { applySnooze } from '../model/applySnooze';
-import { scopeForRow, wouldCompleteWholeSeries } from '../model/rowScope';
+import {
+  isFutureRecurringOccurrence,
+  scopeForRow,
+  wouldCompleteWholeSeries,
+} from '../model/rowScope';
 import type { AgendaSwipeAction } from '../model/swipeActions';
 
 interface ActivityListCache {
@@ -73,6 +77,16 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
        * carry the unscoped body to a server that will refuse it.
        */
       if (wouldCompleteWholeSeries(item)) return;
+
+      /**
+       * A generated future occurrence is a preview of the series, not work that can be
+       * resolved ahead of its day. Keep undo available for any legacy completion, but never
+       * create a future `OCC#` completion from a checked row. This guard backs up the disabled
+       * checkbox so accessibility actions and future callers cannot bypass the UI rule.
+       */
+      if (checked && isFutureRecurringOccurrence(item, options.today)) {
+        return;
+      }
 
       const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
       const anytimeSnapshots = queryClient.getQueriesData<ActivityListCache>({

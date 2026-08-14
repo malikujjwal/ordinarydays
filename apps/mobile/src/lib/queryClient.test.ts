@@ -5,12 +5,14 @@ import { hydrate, type MutationKey, type QueryClient } from '@tanstack/react-que
 import { describe, expect, it, vi } from 'vitest';
 import {
   type ActivityPostVariables,
+  type ConvertRecurrenceVariables,
   type CreateActivityVariables,
   changesActivityLists,
   type DeleteActivityVariables,
   type DuplicateActivityVariables,
   type PatchActivityVariables,
   type ReminderDeleteVariables,
+  refreshActivityDetails,
   registerActivityMutationDefaults,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
@@ -43,6 +45,7 @@ const activity: Activity = {
 
 type Variables =
   | CreateActivityVariables
+  | ConvertRecurrenceVariables
   | DuplicateActivityVariables
   | DeleteActivityVariables
   | ReminderDeleteVariables
@@ -69,6 +72,14 @@ const cases: Array<{ key: MutationKey; variables: Variables }> = [
       input: { title: 'Dentist' },
       ifMatch: activity.updatedAt,
       changeNames: ['Title'],
+    },
+  },
+  {
+    key: activityMutationKeys.convertRecurrence,
+    variables: {
+      activityId: ACTIVITY_ID,
+      input: { selectedDate: '2026-08-12' },
+      idempotencyKey: IDEMPOTENCY_KEY,
     },
   },
   {
@@ -196,12 +207,13 @@ describe('the query client defaults', () => {
     });
   });
 
-  it('owns exactly the twelve stable persisted keys', () => {
+  it('owns exactly the thirteen stable persisted keys', () => {
     expect(Object.values(activityMutationKeys)).toEqual([
       ['activity', 'create'],
       ['activity', 'duplicate'],
       ['activity', 'delete'],
       ['activity', 'patch'],
+      ['activity', 'convert-recurrence'],
       ['activity', 'schedule'],
       ['activity', 'complete'],
       ['activity', 'uncomplete'],
@@ -217,14 +229,94 @@ describe('the query client defaults', () => {
     expect(changesActivityLists(activityMutationKeys.reminderCreate)).toBe(false);
     expect(changesActivityLists(activityMutationKeys.reminderDelete)).toBe(false);
   });
+
+  it('marks the series and every occurrence detail stale after an activity write', () => {
+    const client = createOfflineQueryClient();
+    const seriesKey = ['activity', ACTIVITY_ID] as const;
+    const firstOccurrenceKey = [
+      'activity',
+      ACTIVITY_ID,
+      'occurrence',
+      '2026-08-12',
+    ] as const;
+    const secondOccurrenceKey = [
+      'activity',
+      ACTIVITY_ID,
+      'occurrence',
+      '2026-08-13',
+    ] as const;
+    client.setQueryData(seriesKey, { activity });
+    client.setQueryData(firstOccurrenceKey, { activity });
+    client.setQueryData(secondOccurrenceKey, { activity });
+
+    expect(
+      refreshActivityDetails(client, activityMutationKeys.snooze, {
+        activityId: ACTIVITY_ID,
+      }),
+    ).toBe(true);
+
+    expect(client.getQueryState(seriesKey)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(firstOccurrenceKey)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(secondOccurrenceKey)?.isInvalidated).toBe(true);
+  });
+
+  it.each([
+    activityMutationKeys.patch,
+    activityMutationKeys.convertRecurrence,
+    activityMutationKeys.schedule,
+    activityMutationKeys.complete,
+    activityMutationKeys.uncomplete,
+    activityMutationKeys.skip,
+    activityMutationKeys.snooze,
+    activityMutationKeys.unsnooze,
+    activityMutationKeys.reminderCreate,
+    activityMutationKeys.reminderDelete,
+  ])('covers detail invalidation for %s/%s', (scope, name) => {
+    const client = createOfflineQueryClient();
+
+    expect(
+      refreshActivityDetails(client, [scope, name], { activityId: ACTIVITY_ID }),
+    ).toBe(true);
+  });
+
+  it.each([activityMutationKeys.create, activityMutationKeys.duplicate])(
+    'does not invent a detail target for %s/%s',
+    (scope, name) => {
+      const client = createOfflineQueryClient();
+      expect(
+        refreshActivityDetails(client, [scope, name], { activityId: ACTIVITY_ID }),
+      ).toBe(false);
+    },
+  );
+
+  it('marks a deleted detail stale without removing or refetching it', () => {
+    const client = createOfflineQueryClient('web');
+    const key = ['activity', ACTIVITY_ID, 'occurrence', '2026-08-12'] as const;
+    client.setQueryData(key, { activity });
+    const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
+    const removeQueries = vi.spyOn(client, 'removeQueries');
+
+    expect(
+      refreshActivityDetails(client, activityMutationKeys.delete, {
+        activityId: ACTIVITY_ID,
+      }),
+    ).toBe(true);
+
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ['activity', ACTIVITY_ID],
+      refetchType: 'none',
+    });
+    expect(removeQueries).not.toHaveBeenCalled();
+  });
 });
 
 describe('persisted mutation defaults', () => {
-  it('dehydrates, rehydrates and resolves all twelve iOS mutations', async () => {
+  it('dehydrates, rehydrates and resolves all thirteen iOS mutations', async () => {
     const source = createOfflineQueryClient();
     for (const entry of cases) addPausedMutation(source, entry.key, entry.variables);
     const state = dehydratePersistedClient(source, 'ios');
-    expect(state.mutations).toHaveLength(12);
+    expect(state.mutations).toHaveLength(13);
 
     const target = createOfflineQueryClient();
     const fake = fakeHttpClient();
@@ -237,8 +329,8 @@ describe('persisted mutation defaults', () => {
         .getMutationCache()
         .getAll()
         .map((mutation) => mutation.state.status),
-    ).toEqual(Array.from({ length: 12 }, () => 'success'));
-    expect(fake.request).toHaveBeenCalledTimes(12);
+    ).toEqual(Array.from({ length: 13 }, () => 'success'));
+    expect(fake.request).toHaveBeenCalledTimes(13);
   });
 
   it('refuses mutation 201 on iOS with the canonical offline message', async () => {

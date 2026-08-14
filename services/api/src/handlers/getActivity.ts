@@ -1,3 +1,5 @@
+import type { ActivityDetailQuery } from '@od/shared/schemas';
+import type { ActivityDetailTarget } from '@od/shared/types';
 import type { Context } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { requireUserId } from '../middleware/identity.js';
@@ -31,8 +33,14 @@ export const GET_ACTIVITY_PATH = '/:id';
 
 export async function getActivityHandler(
   c: Context<AppEnv, typeof GET_ACTIVITY_PATH>,
+  query: ActivityDetailQuery,
 ): Promise<Response> {
-  const detail = await getActivityDetail(requireUserId(c), c.req.param('id'));
+  const activityId = c.req.param('id');
+  const target: ActivityDetailTarget =
+    query.occurrenceDate === undefined
+      ? { kind: 'activity', activityId }
+      : { kind: 'occurrence', activityId, date: query.occurrenceDate };
+  const detail = await getActivityDetail(requireUserId(c), target);
 
   return c.json({
     data: detail,

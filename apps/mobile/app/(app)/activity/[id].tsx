@@ -1,3 +1,4 @@
+import type { ActivityDetailTarget } from '@od/shared/types';
 import { format } from 'date-fns';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityDetailScreen } from '@/features/activity/components/ActivityDetailScreen';
@@ -19,13 +20,17 @@ export default function ActivityDetailRoute() {
     occurrenceDate?: string;
   }>();
   const router = useRouter();
+  const activityId = id ?? '';
+  const target: ActivityDetailTarget =
+    occurrenceDate === undefined
+      ? { kind: 'activity', activityId }
+      : { kind: 'occurrence', activityId, date: occurrenceDate };
 
   return (
     <ActivityDetailScreen
-      activityId={id ?? ''}
+      target={target}
       today={format(new Date(), 'yyyy-MM-dd')}
       onBack={() => router.back()}
-      {...(occurrenceDate === undefined ? {} : { occurrenceDate })}
       {...(resolvePassed === '1'
         ? {
             resolutionOccurrenceDate: occurrenceDate ?? null,

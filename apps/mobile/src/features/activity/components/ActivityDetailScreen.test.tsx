@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
+import { createOfflineQueryClient } from '@/lib/queryClient';
 import { useToast } from '@/stores/toast';
 import { ActivityDetailScreen } from './ActivityDetailScreen';
 
@@ -80,13 +81,27 @@ const detailBody = (
     skip: true,
     snooze: true,
   },
+  occurrence?: ActivityDetail['occurrence'],
+  completedOccurrenceCount?: number,
 ) => ({
   data: {
     activity,
     capabilities,
     reminders,
+    ...(occurrence === undefined ? {} : { occurrence }),
+    ...(completedOccurrenceCount === undefined ? {} : { completedOccurrenceCount }),
   },
   meta: { requestId: 'req_test' },
+});
+
+const occurrenceProjection = (
+  status: NonNullable<ActivityDetail['occurrence']>['status'] = 'scheduled',
+): NonNullable<ActivityDetail['occurrence']> => ({
+  nominalDate: TODAY,
+  date: TODAY,
+  time: '08:00',
+  status,
+  isSnoozed: false,
 });
 
 const reminder = (reminderId: string, offsetMinutes: number) => ({
@@ -133,10 +148,13 @@ function mount(
   onOpenActivity: (id: string) => void = () => {},
   resolutionOccurrenceDate?: string | null,
   occurrenceDate?: string,
+  providedClient?: QueryClient,
 ) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
+  const queryClient =
+    providedClient ??
+    new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
   registerActivityMutationDefaults(queryClient);
   const wrap = (ui: ReactNode) => (
     <SafeAreaProvider>
@@ -148,12 +166,15 @@ function mount(
   const rendered = render(
     wrap(
       <ActivityDetailScreen
-        activityId={ID}
+        target={
+          occurrenceDate === undefined
+            ? { kind: 'activity', activityId: ID }
+            : { kind: 'occurrence', activityId: ID, date: occurrenceDate }
+        }
         today={TODAY}
         onBack={onBack}
         onOpenActivity={onOpenActivity}
         {...(resolutionOccurrenceDate === undefined ? {} : { resolutionOccurrenceDate })}
-        {...(occurrenceDate === undefined ? {} : { occurrenceDate })}
       />,
     ),
   );
@@ -749,7 +770,10 @@ describe('passed-plan resolution', () => {
       },
     });
     stubFetch(
-      { status: 200, body: detailBody(recurring) },
+      {
+        status: 200,
+        body: detailBody(recurring, [], undefined, occurrenceProjection()),
+      },
       {
         status: 200,
         body: {
@@ -761,6 +785,7 @@ describe('passed-plan resolution', () => {
     mount(
       () => {},
       () => {},
+      TODAY,
       TODAY,
     );
     await loaded();
@@ -793,7 +818,10 @@ describe('passed-plan resolution', () => {
       },
     });
     stubFetch(
-      { status: 200, body: detailBody(recurring) },
+      {
+        status: 200,
+        body: detailBody(recurring, [], undefined, occurrenceProjection()),
+      },
       {
         status: 200,
         body: {
@@ -871,8 +899,8 @@ describe('passed-plan resolution', () => {
     expect(screen.getByTestId('passed-plan-resolution-sheet')).toBeDefined();
   });
 
-  /** A completed occurrence is not readable from its series, so the agenda answers for it. */
-  it('opens an already-completed occurrence showing Undo rather than the verb', async () => {
+  /** A cold occurrence detail reads completion from its own authoritative projection. */
+  it('opens an already-completed occurrence showing Undo without an agenda cache', async () => {
     const recurring = plan({
       schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
       recurrence: {
@@ -880,32 +908,22 @@ describe('passed-plan resolution', () => {
         segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
       },
     });
-    stubFetch({ status: 200, body: detailBody(recurring) });
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        recurring,
+        [],
+        undefined,
+        occurrenceProjection('completed_occurrence'),
+      ),
+    });
     // Arriving from a Today row, which is the only navigation that carries an occurrence.
-    const { queryClient } = mount(
+    mount(
       () => {},
       () => {},
       undefined,
       TODAY,
     );
-    queryClient.setQueryData<AgendaData>(['agenda', 'occurrence-state'], {
-      days: [
-        {
-          date: TODAY,
-          schedule: [
-            {
-              ...agendaItem(),
-              status: 'completed',
-              isRecurring: true,
-              occurrenceDate: TODAY,
-            },
-          ],
-          anytime: [],
-          earlier: [],
-        },
-      ],
-      warnings: [],
-    });
     await loaded();
 
     await waitFor(() => expect(screen.getByTestId('detail-undo')).toBeDefined());
@@ -958,6 +976,63 @@ describe('U4 — tapping a date opens the reschedule sheet', () => {
     expect(sent.filter((s) => s.method === 'PATCH')).toHaveLength(0);
   });
 
+  it('adds a time to a newly created untimed occurrence with explicit scope', async () => {
+    const recurring = plan({
+      schedule: { date: TODAY, timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, interval: 1 }],
+      },
+    });
+    const occurrence = {
+      nominalDate: TODAY,
+      date: TODAY,
+      status: 'scheduled' as const,
+      isSnoozed: false,
+    };
+    stubFetch(
+      { status: 200, body: detailBody(recurring, [], undefined, occurrence) },
+      {
+        status: 200,
+        body: {
+          data: {
+            activity: recurring,
+            occurrence: { ...occurrence, time: '10:30' },
+          },
+          meta: { requestId: 'req_test' },
+        },
+      },
+    );
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.getByTestId('detail-complete')).toBeDefined();
+    fireEvent.click(screen.getByTestId('when-where-date'));
+    fireEvent.click(screen.getByRole('button', { name: 'This occurrence only' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set a time' }));
+    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '10:30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    await waitFor(() => expect(sent.filter((s) => s.method === 'POST')).toHaveLength(1));
+    expect(sent.find((s) => s.method === 'POST')).toMatchObject({
+      url: expect.stringMatching(new RegExp(`/v1/activities/${ID}/schedule$`)),
+      body: {
+        date: TODAY,
+        time: '10:30',
+        timezone: 'America/New_York',
+        occurrenceDate: TODAY,
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).toContain('10:30'),
+    );
+  });
+
   it('clears through POST /schedule and never PATCH', async () => {
     stubFetch(
       { status: 200, body: detailBody(plan()) },
@@ -982,6 +1057,60 @@ describe('U4 — tapping a date opens the reschedule sheet', () => {
 });
 
 describe('editing in place', () => {
+  it('targets the selected future occurrence when changing frequency', async () => {
+    const selectedDate = '2026-08-13';
+    const current = task({
+      schedule: { date: '2026-08-01', time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '08:00' }],
+      },
+    });
+    const changed = task({
+      ...current,
+      updatedAt: '2026-08-12T12:00:00.000Z',
+      recurrence: {
+        mode: 'fixed',
+        segments: [
+          { freq: 'daily', effectiveFrom: '2026-08-01', time: '08:00' },
+          { freq: 'weekdays', effectiveFrom: selectedDate, time: '08:00' },
+        ],
+      },
+    });
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(current, [], undefined, {
+          ...occurrenceProjection(),
+          nominalDate: selectedDate,
+          date: selectedDate,
+        }),
+      },
+      { status: 200, body: { data: changed, meta: { requestId: 'req_patch' } } },
+    );
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      selectedDate,
+    );
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Repeat/ }));
+    fireEvent.change(screen.getByTestId('repeat-option'), {
+      target: { value: 'weekdays' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
+
+    await waitFor(() =>
+      expect(sent.filter((request) => request.method === 'PATCH')).toHaveLength(1),
+    );
+    expect(sent.find((entry) => entry.method === 'PATCH')?.body).toEqual({
+      recurrence: changed.recurrence,
+      editedFromDate: selectedDate,
+    });
+  });
+
   it('applies a same-day repeat correction to an existing series and refreshes detail', async () => {
     const current = plan({
       schedule: {
@@ -1029,6 +1158,46 @@ describe('editing in place', () => {
     await waitFor(() =>
       expect(screen.getByText('Repeats every weekday · No reminder')).toBeDefined(),
     );
+  });
+
+  it('converts Does not repeat through the selected-occurrence operation', async () => {
+    const current = task({
+      schedule: { date: '2026-08-01', time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '08:00' }],
+      },
+    });
+    const converted = task({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      updatedAt: '2026-08-12T12:00:00.000Z',
+    });
+    stubFetch(
+      { status: 200, body: detailBody(current, [], undefined, occurrenceProjection()) },
+      { status: 200, body: { data: converted, meta: { requestId: 'req_convert' } } },
+    );
+    const onOpenActivity = vi.fn();
+    mount(() => {}, onOpenActivity, undefined, TODAY);
+    await loaded();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Repeat/ }));
+    fireEvent.change(screen.getByTestId('repeat-option'), {
+      target: { value: 'never' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
+
+    await waitFor(() =>
+      expect(
+        sent.filter((request) =>
+          request.url.endsWith(`/v1/activities/${ID}/recurrence/convert`),
+        ),
+      ).toHaveLength(1),
+    );
+    expect(sent.find((request) => request.method === 'POST')).toMatchObject({
+      body: { occurrenceDate: TODAY },
+      headers: { 'Idempotency-Key': 'idem-test-key' },
+    });
+    await waitFor(() => expect(onOpenActivity).toHaveBeenCalledWith(ID));
   });
 
   it('commits the title on blur with If-Match, and no Save button exists', async () => {
@@ -1499,6 +1668,175 @@ describe('the ⋯ actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(sent).toHaveLength(1);
+  });
+
+  it('separates occurrence removal, ending, and whole-series deletion', async () => {
+    const recurring = task({
+      notes: undefined,
+      schedule: { date: '2026-08-01', time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '08:00' }],
+      },
+    });
+    stubFetch({
+      status: 200,
+      body: detailBody(recurring, [], undefined, occurrenceProjection(), 3),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByTestId('recurring-delete-choices')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'This occurrence' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'End series' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Delete whole series' })).toBeDefined();
+    expect(screen.queryByTestId('delete-confirm')).toBeNull();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('deletes the whole series only after naming its stored history and clears Today immediately', async () => {
+    const onBack = vi.fn();
+    const recurring = task({
+      notes: undefined,
+      schedule: { date: '2026-08-01', time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '08:00' }],
+      },
+    });
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(recurring, [], undefined, occurrenceProjection(), 3),
+      },
+      {
+        status: 200,
+        body: { data: { activityId: ID }, meta: { requestId: 'req_delete' } },
+      },
+    );
+    const queryClient = createOfflineQueryClient('web');
+    queryClient.setQueryData<AgendaData>(['agenda', 'delete-series'], {
+      days: [
+        {
+          date: TODAY,
+          schedule: [
+            { ...agendaItem(), isRecurring: true, occurrenceDate: TODAY },
+            {
+              ...agendaItem(),
+              time: '10:00',
+              isRecurring: true,
+              occurrenceDate: '2026-08-13',
+            },
+          ],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    });
+    const removeQueries = vi.spyOn(queryClient, 'removeQueries');
+    mount(onBack, () => {}, undefined, TODAY, queryClient);
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete whole series' }));
+
+    expect(await screen.findByTestId('delete-series-confirm')).toBeDefined();
+    expect(
+      screen.getByText('This removes: the series and its 3 past completions.'),
+    ).toBeDefined();
+    expect(sent).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete series' }));
+
+    await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+    expect(sent[1]?.method).toBe('DELETE');
+    const agenda = queryClient.getQueryData<AgendaData>(['agenda', 'delete-series']);
+    expect(agenda?.days[0]?.schedule).toEqual([]);
+    expect(removeQueries).not.toHaveBeenCalled();
+  });
+
+  it('removes only the selected occurrence through the skip endpoint', async () => {
+    const onBack = vi.fn();
+    const recurring = task({
+      schedule: { date: '2026-08-01', time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '08:00' }],
+      },
+    });
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(recurring, [], undefined, occurrenceProjection()),
+      },
+      {
+        status: 200,
+        body: {
+          data: { activity: recurring, occurrenceDate: TODAY },
+          meta: { requestId: 'req_skip' },
+        },
+      },
+    );
+    mount(onBack, () => {}, undefined, TODAY);
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'This occurrence' }));
+
+    await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+    expect(sent[1]).toMatchObject({
+      method: 'POST',
+      body: { occurrenceDate: TODAY },
+    });
+    expect(sent[1]?.url).toMatch(/\/skip$/);
+  });
+
+  it('ends the series on the selected occurrence without deleting it', async () => {
+    const recurring = task({
+      schedule: { date: '2026-08-01', time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '08:00' }],
+      },
+    });
+    const ended = task({
+      ...recurring,
+      updatedAt: '2026-08-12T12:00:00.000Z',
+      recurrence: { ...recurring.recurrence, endDate: TODAY },
+    });
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(recurring, [], undefined, occurrenceProjection()),
+      },
+      { status: 200, body: { data: ended, meta: { requestId: 'req_end' } } },
+    );
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await openMenu();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'End series' }));
+
+    await waitFor(() =>
+      expect(sent.filter((request) => request.method === 'PATCH')).toHaveLength(1),
+    );
+    expect(sent[1]?.body).toEqual({
+      recurrence: { ...recurring.recurrence, endDate: TODAY },
+    });
+    expect(sent.some((request) => request.method === 'DELETE')).toBe(false);
   });
 
   /**

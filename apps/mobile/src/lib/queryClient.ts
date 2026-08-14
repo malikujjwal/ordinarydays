@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { projectActivityWrite } from '@/lib/agendaCache';
 import {
   changesActivityLists,
+  refreshActivityDetails,
   refreshActivityLists,
   registerActivityMutationDefaults,
 } from '@/lib/mutationDefaults';
@@ -53,6 +54,7 @@ export function createOfflineQueryClient(platform = Platform.OS): QueryClient {
        */
       onSuccess: (data, variables, _context, mutation) => {
         const { mutationKey } = mutation.options;
+        refreshActivityDetails(client, mutationKey, variables);
         if (!changesActivityLists(mutationKey)) return;
         projectActivityWrite(client, mutationKey, data, variables);
         refreshActivityLists(client);

@@ -1,5 +1,6 @@
 import {
   ApiError,
+  convertRecurrence,
   type createReminder,
   type deleteReminder,
   getActivity,
@@ -7,7 +8,13 @@ import {
   type scheduleActivity,
 } from '@od/shared/client';
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
-import type { Activity, ActivityDetail, Reminder } from '@od/shared/types';
+import type {
+  Activity,
+  ActivityDetail,
+  ActivityDetailTarget,
+  OccurrenceDetailProjection,
+  Reminder,
+} from '@od/shared/types';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useState } from 'react';
@@ -18,6 +25,7 @@ import {
 } from '@/features/activity/model/conflict';
 import { apiClient } from '@/lib/apiClient';
 import {
+  type ConvertRecurrenceVariables,
   type PatchActivityVariables,
   patchChangeNames,
   type ReminderCreateVariables,
@@ -25,7 +33,7 @@ import {
   type ScheduleActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
-import { activityKey } from '@/lib/queryKeys';
+import { activityDetailKey, activityKey } from '@/lib/queryKeys';
 
 /**
  * The activity detail read and its in-place edits (P1-26).
@@ -55,6 +63,8 @@ export interface ActivityDetailView {
   patch: (input: PatchActivityInput) => Promise<boolean>;
   /** Sole scheduling mutation; its enqueue-time key is persisted with mutation variables. */
   schedule: (input: ScheduleActivityInput) => Promise<boolean>;
+  /** Atomic Does-not-repeat conversion for one explicitly selected occurrence. */
+  convertToOneOff: (selectedDate: string) => Promise<boolean>;
   /** Adds one caller-owned reminder through P2-16's replay-safe mutation. */
   addReminder: (offsetMinutes: number) => Promise<boolean>;
   /** Removes one caller-owned reminder by its opaque id. */
@@ -82,15 +92,23 @@ function describe(error: unknown): { message: string; requestId?: string } {
   return { message: "Couldn't load this." };
 }
 
-export function useActivityDetail(activityId: string): ActivityDetailView {
+export function useActivityDetail(
+  targetInput: ActivityDetailTarget | string,
+): ActivityDetailView {
+  const target: ActivityDetailTarget =
+    typeof targetInput === 'string'
+      ? { kind: 'activity', activityId: targetInput }
+      : targetInput;
+  const activityId = target.activityId;
+  const queryKey = activityDetailKey(target);
   const queryClient = useQueryClient();
   const [conflict, setConflict] = useState<ActivityDetailView['conflict']>(undefined);
   const [editError, setEditError] = useState<string | undefined>(undefined);
   const [reminderError, setReminderError] = useState<string | undefined>(undefined);
 
   const query = useQuery({
-    queryKey: activityKey(activityId),
-    queryFn: ({ signal }) => getActivity(apiClient, activityId, signal),
+    queryKey,
+    queryFn: ({ signal }) => getActivity(apiClient, target, signal),
     /**
      * `always`, overriding the app-wide `offlineFirst`, for the reason written out in
      * `useHealth`: under `offlineFirst` a network-class failure pauses the query rather than
@@ -105,7 +123,7 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
   const mutation = useMutation<Activity, Error, PatchActivityVariables>({
     mutationKey: activityMutationKeys.patch,
     mutationFn: async ({ input, ifMatch }) => {
-      const current = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      const current = queryClient.getQueryData<ActivityDetail>(queryKey);
       if (current === undefined) throw new Error('No activity loaded to patch.');
 
       try {
@@ -119,8 +137,8 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
          * cache first so the screen shows the other person's version even if the re-apply
          * itself then fails.
          */
-        const fresh = await getActivity(apiClient, activityId);
-        queryClient.setQueryData(activityKey(activityId), fresh);
+        const fresh = await getActivity(apiClient, target);
+        queryClient.setQueryData(queryKey, fresh);
 
         const resolution = resolveConflict(current.activity, fresh.activity, input);
         setConflict({
@@ -144,7 +162,7 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
       // Write the server's version back rather than the optimistic one: `updatedAt` has
       // moved, and the next edit's `If-Match` is built from it.
       queryClient.setQueryData<ActivityDetail>(
-        activityKey(activityId),
+        queryKey,
         (previous: ActivityDetail | undefined) =>
           previous === undefined ? previous : { ...previous, activity },
       );
@@ -162,10 +180,37 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
       const activity = result.activity as Activity;
       setEditError(undefined);
       queryClient.setQueryData<ActivityDetail>(
-        activityKey(activityId),
+        queryKey,
         (previous: ActivityDetail | undefined) =>
-          previous === undefined ? previous : { ...previous, activity },
+          previous === undefined
+            ? previous
+            : {
+                ...previous,
+                activity,
+                ...(result.occurrence === undefined
+                  ? {}
+                  : { occurrence: result.occurrence as OccurrenceDetailProjection }),
+              },
       );
+    },
+    onError: (error: unknown) => setEditError(describe(error).message),
+  });
+
+  const convertMutation = useMutation<Activity, Error, ConvertRecurrenceVariables>({
+    mutationKey: activityMutationKeys.convertRecurrence,
+    mutationFn: ({ input, idempotencyKey }) =>
+      convertRecurrence(apiClient, activityId, input.selectedDate, idempotencyKey),
+    onSuccess: (activity) => {
+      setEditError(undefined);
+      const converted: ActivityDetail = {
+        ...(queryClient.getQueryData<ActivityDetail>(queryKey) ?? {
+          reminders: [],
+        }),
+        activity,
+      };
+      delete converted.occurrence;
+      queryClient.setQueryData(queryKey, converted);
+      queryClient.setQueryData(activityKey(activityId), converted);
     },
     onError: (error: unknown) => setEditError(describe(error).message),
   });
@@ -179,7 +224,7 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
     onSuccess: (reminder) => {
       setReminderError(undefined);
       queryClient.setQueryData<ActivityDetail>(
-        activityKey(activityId),
+        queryKey,
         (previous: ActivityDetail | undefined) =>
           previous === undefined
             ? previous
@@ -198,7 +243,7 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
     onSuccess: ({ reminderId }) => {
       setReminderError(undefined);
       queryClient.setQueryData<ActivityDetail>(
-        activityKey(activityId),
+        queryKey,
         (previous: ActivityDetail | undefined) =>
           previous === undefined
             ? previous
@@ -218,12 +263,13 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
   return {
     status: query.status,
     refetch: () => void query.refetch(),
-    isSaving: mutation.isPending || scheduleMutation.isPending,
+    isSaving:
+      mutation.isPending || scheduleMutation.isPending || convertMutation.isPending,
     isSavingReminder:
       reminderCreateMutation.isPending || reminderDeleteMutation.isPending,
     patch: async (input) => {
       try {
-        const current = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+        const current = queryClient.getQueryData<ActivityDetail>(queryKey);
         if (current === undefined) return false;
         await mutation.mutateAsync({
           activityId,
@@ -248,6 +294,18 @@ export function useActivityDetail(activityId: string): ActivityDetailView {
         return true;
       } catch {
         // The inline error state owns the failure; the enqueue-time key stays in variables.
+        return false;
+      }
+    },
+    convertToOneOff: async (selectedDate) => {
+      try {
+        await convertMutation.mutateAsync({
+          activityId,
+          input: { selectedDate },
+          idempotencyKey: randomUUID(),
+        });
+        return true;
+      } catch {
         return false;
       }
     },

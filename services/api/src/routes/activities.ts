@@ -1,7 +1,9 @@
 import { zValidator } from '@hono/zod-validator';
 import {
+  activityDetailQuery,
   activityListQuery,
   completeActivityInput,
+  convertRecurrenceInput,
   createActivityInput,
   patchActivityInput,
   reminderInput,
@@ -24,6 +26,10 @@ import {
   COMPLETE_ACTIVITY_PATH,
   completeActivityHandler,
 } from '../handlers/completeActivity.js';
+import {
+  CONVERT_RECURRENCE_PATH,
+  convertRecurrenceHandler,
+} from '../handlers/convertRecurrence.js';
 import { createActivityHandler } from '../handlers/createActivity.js';
 import {
   DELETE_ACTIVITY_PATH,
@@ -60,9 +66,10 @@ import {
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Fifteen routes: the six Phase 1 activity routes, P2-12's sole schedule write path,
+ * Sixteen routes: the six Phase 1 activity routes, P2-12's sole schedule write path,
  * P2-13's complete and uncomplete actions, P2-14's skip action, P2-15's snooze and
- * unsnooze actions, and P2-16's three caller-owned reminder-management routes. The agenda
+ * unsnooze actions, P2-16's three caller-owned reminder-management routes, and P2-54's
+ * atomic recurrence conversion. The agenda
  * that powers Today is its own endpoint. Each unavailable route is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
@@ -106,6 +113,10 @@ const validateSchedule = zValidator('json', scheduleActivityInput, (result) => {
   if (!result.success) throw result.error;
 });
 
+const validateConvertRecurrence = zValidator('json', convertRecurrenceInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
 const validateComplete = zValidator('json', completeActivityInput, (result) => {
   if (!result.success) throw result.error;
 });
@@ -141,6 +152,10 @@ const validateListQuery = zValidator('query', activityListQuery, (result) => {
   if (!result.success) throw result.error;
 });
 
+const validateDetailQuery = zValidator('query', activityDetailQuery, (result) => {
+  if (!result.success) throw result.error;
+});
+
 export const activities = new Hono<AppEnv>()
   .get(LIST_ACTIVITIES_PATH, validateListQuery, (c) =>
     listActivitiesHandler(c, c.req.valid('query'), new Date()),
@@ -159,12 +174,17 @@ export const activities = new Hono<AppEnv>()
    * `404`, and checking it first would turn one user-visible fact — "there is no such
    * activity for you" — into two different statuses.
    */
-  .get(GET_ACTIVITY_PATH, getActivityHandler)
+  .get(GET_ACTIVITY_PATH, validateDetailQuery, (c) =>
+    getActivityHandler(c, c.req.valid('query')),
+  )
   .patch(PATCH_ACTIVITY_PATH, validatePatch, (c) =>
     patchActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   .post(SCHEDULE_ACTIVITY_PATH, validateSchedule, (c) =>
     scheduleActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
+  .post(CONVERT_RECURRENCE_PATH, validateConvertRecurrence, (c) =>
+    convertRecurrenceHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   .get(REMINDERS_PATH, listRemindersHandler)
   .post(REMINDERS_PATH, validateReminder, (c) =>

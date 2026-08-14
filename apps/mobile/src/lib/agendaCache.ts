@@ -1,3 +1,5 @@
+import { getAgenda } from '@od/shared/client';
+import type { AgendaQuery } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type { Activity, AgendaData, User } from '@od/shared/types';
 import type { MutationKey, QueryClient } from '@tanstack/react-query';
@@ -13,10 +15,134 @@ import { applyDelete } from '@/features/agenda/model/applyDelete';
 import { applyPatch } from '@/features/agenda/model/applyPatch';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
+import { apiClient } from '@/lib/apiClient';
 import { type ActivityMutationTag, activityMutationKeys } from '@/lib/mutationKeys';
 import { activityKey } from '@/lib/queryKeys';
 
 const AGENDA_KEY = ['agenda'] as const;
+const RECONCILE_DELAYS_MS = [0, 150, 400, 900, 1_800, 3_200] as const;
+const pendingByClient = new WeakMap<QueryClient, Map<string, Map<string, string>>>();
+
+type AgendaQueryKey = readonly [
+  'agenda',
+  AgendaQuery['from'],
+  AgendaQuery['to'],
+  AgendaQuery['tz'],
+  AgendaQuery['include'] | null,
+];
+
+function keyId(key: readonly unknown[]): string {
+  return JSON.stringify(key);
+}
+
+function observed(data: AgendaData, activityId: string, version: string): boolean {
+  return (
+    data.projectionVersions?.some(
+      (entry) => entry.activityId === activityId && entry.version >= version,
+    ) === true
+  );
+}
+
+/** A deleted Activity can never emit the projection version an older reconciliation awaits. */
+function clearPendingActivity(client: QueryClient, activityId: string): void {
+  const windows = pendingByClient.get(client);
+  if (windows === undefined) return;
+  for (const [windowId, pending] of windows) {
+    pending.delete(activityId);
+    if (pending.size === 0) windows.delete(windowId);
+  }
+  if (windows.size === 0) pendingByClient.delete(client);
+}
+
+/** Prevents a stale GSI body from replacing a projection a successful write already proved. */
+export function guardAgendaResponse(
+  client: QueryClient,
+  queryKey: readonly unknown[],
+  incoming: AgendaData,
+): AgendaData {
+  const windows = pendingByClient.get(client);
+  const pending = windows?.get(keyId(queryKey));
+  if (pending === undefined) return incoming;
+
+  for (const [activityId, version] of pending) {
+    if (!observed(incoming, activityId, version)) {
+      return client.getQueryData<AgendaData>(queryKey) ?? incoming;
+    }
+  }
+  windows?.delete(keyId(queryKey));
+  return incoming;
+}
+
+export interface AgendaReconciliationVersion {
+  readonly activityId: string;
+  readonly version: string;
+  /** A one-off outside a cached window is authoritatively absent and needs no GSI proof. */
+  readonly relevantDate?: string;
+}
+
+type AgendaLoader = (query: AgendaQuery) => Promise<AgendaData>;
+
+/** Bounded, version-aware reconciliation for every mounted/cached agenda window. */
+export async function reconcileAgendaProjection(
+  client: QueryClient,
+  expected: AgendaReconciliationVersion,
+  load: AgendaLoader = (query) => getAgenda(apiClient, query, undefined, true),
+  wait: (ms: number) => Promise<void> = (ms) =>
+    new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<boolean> {
+  const keys = client
+    .getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })
+    .map(([key]) => key as AgendaQueryKey)
+    .filter(
+      ([, from, to]) =>
+        expected.relevantDate === undefined ||
+        (expected.relevantDate >= from && expected.relevantDate <= to),
+    );
+  if (keys.length === 0) return true;
+
+  let windows = pendingByClient.get(client);
+  if (windows === undefined) {
+    windows = new Map();
+    pendingByClient.set(client, windows);
+  }
+  for (const key of keys) {
+    const pending = windows.get(keyId(key)) ?? new Map<string, string>();
+    const current = pending.get(expected.activityId);
+    if (current === undefined || current < expected.version) {
+      pending.set(expected.activityId, expected.version);
+    }
+    windows.set(keyId(key), pending);
+  }
+
+  const remaining = new Set(keys.map(keyId));
+  for (const delay of RECONCILE_DELAYS_MS) {
+    if (delay > 0) await wait(delay);
+    await Promise.all(
+      keys
+        .filter((key) => remaining.has(keyId(key)))
+        .map(async (key) => {
+          try {
+            const [, from, to, tz, include] = key;
+            const incoming = await load({
+              from,
+              to,
+              tz,
+              ...(include === null ? {} : { include }),
+            });
+            const guarded = guardAgendaResponse(client, key, incoming);
+            if (guarded === incoming) {
+              client.setQueryData(key, incoming);
+              remaining.delete(keyId(key));
+            }
+          } catch {
+            // A bounded retry remains; ordinary query error handling owns the eventual UI.
+          }
+        }),
+    );
+    if (remaining.size === 0) return true;
+  }
+  return false;
+}
 
 /**
  * Writes a server-confirmed activity into the cached agenda windows (P2-46).
@@ -64,7 +190,49 @@ export function projectActivityWrite(
    * derivable here.
    */
   if (tag === 'patch') {
+    if (isRecurrenceWrite(variables)) {
+      if (typeof activity.updatedAt === 'string') {
+        /**
+         * The server has accepted a new recurrence rule, so every cached expansion of the
+         * previous rule is now known to be stale. Remove those rows immediately instead of
+         * displaying the old frequency during GSI convergence. We deliberately do not invent
+         * replacement occurrences here; the versioned reconciler below installs only the
+         * canonical expansion returned by the agenda endpoint.
+         */
+        update(client, (agenda) =>
+          applyDelete(agenda, { activityId: activity.activityId, ...clock }),
+        );
+        void reconcileAgendaProjection(client, {
+          activityId: activity.activityId,
+          version: activity.updatedAt,
+        });
+      }
+      return true;
+    }
     update(client, (agenda) => applyPatch(agenda, { activity, ...clock }));
+    return true;
+  }
+
+  /**
+   * Conversion has a complete server answer: remove every generated occurrence, then place
+   * the surviving one-off from the Activity schedule returned by the atomic operation.
+   */
+  if (tag === 'convert-recurrence') {
+    update(client, (agenda) =>
+      applyCreate(applyDelete(agenda, { activityId: activity.activityId, ...clock }), {
+        activity,
+        ...clock,
+      }),
+    );
+    if (typeof activity.updatedAt === 'string') {
+      void reconcileAgendaProjection(client, {
+        activityId: activity.activityId,
+        version: activity.updatedAt,
+        ...(activity.schedule?.date === undefined
+          ? {}
+          : { relevantDate: activity.schedule.date }),
+      });
+    }
     return true;
   }
 
@@ -73,6 +241,7 @@ export function projectActivityWrite(
    * returns to is already mounted and refetches nothing — so the deleted row stayed visible.
    */
   if (tag === 'delete') {
+    clearPendingActivity(client, activity.activityId);
     update(client, (agenda) =>
       applyDelete(agenda, { activityId: activity.activityId, ...clock }),
     );
@@ -249,90 +418,6 @@ const ACTIVITY_MUTATION_TAGS: ReadonlySet<string> = new Set(
 );
 
 /**
- * The cached status of one occurrence, for a screen that cannot read it from the Activity.
- *
- * An `Occurrence` override never moves `ACT#/META` (`data-model.md` §4.5), so opening a
- * recurring activity's detail tells you the series is `scheduled` and nothing about the day you
- * are looking at. The agenda already carries the expanded occurrence and is already reconciled
- * by every completion path, so it is the one place the answer exists client-side. Absent when
- * no agenda window is cached — a cold deep link — and the caller falls back to unresolved.
- */
-export function readOccurrenceStatus(
-  client: QueryClient,
-  target: AgendaMutationTarget,
-): string | undefined {
-  for (const [, agenda] of client.getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })) {
-    const found = agenda === undefined ? undefined : findAgendaItem(agenda, target);
-    if (found !== undefined) return found.item.status;
-  }
-  return undefined;
-}
-
-/**
- * The occurrence of a series this client can honestly say the user is looking at.
- *
- * **Not the series anchor.** An earlier version of the detail screen fell back to
- * `activity.schedule.date`, which is where the series *starts* — completing from Plans then
- * wrote an override for a day months back while the row the user meant never moved. This reads
- * the agenda instead, which holds occurrences the **server** expanded, so nothing is invented:
- * today's if the cache has it, otherwise the next one, otherwise the most recent past one.
- *
- * Absent when no agenda window is cached — a cold deep link — and the caller then offers no
- * completion control at all, which is the honest answer until P2-47 says what a series screen
- * should do.
- */
-export function readOccurrenceDate(
-  client: QueryClient,
-  activityId: string,
-  today: string,
-): string | undefined {
-  const dates = new Set<string>();
-  for (const [, agenda] of client.getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })) {
-    for (const day of agenda?.days ?? []) {
-      for (const item of [...day.schedule, ...day.anytime, ...day.earlier]) {
-        if (item.activityId === activityId && item.occurrenceDate !== undefined) {
-          dates.add(item.occurrenceDate);
-        }
-      }
-    }
-  }
-
-  if (dates.has(today)) return today;
-  const sorted = [...dates].sort();
-  return sorted.find((date) => date >= today) ?? sorted.at(-1);
-}
-
-/**
- * The schedule **one occurrence** is actually on, which is not the series' schedule.
- *
- * An `Occurrence` override never moves `ACT#/META` (`data-model.md` §4.5), so an activity
- * whose Thursday was retimed still reports the series time on its own record. The detail
- * screen read exactly that and showed the series value back to the user after they had
- * changed the day in front of them — an invitation to "correct" it again, which writes a
- * second override.
- *
- * The agenda holds the answer already: `mergeNominal` resolves an override into the row's
- * `time`, and the day bucket the row sits in is its effective date, including a cross-day
- * move where the row's own `occurrenceDate` is the *source* day. Absent when no window is
- * cached, and the caller falls back to the series schedule.
- */
-export function readOccurrenceSchedule(
-  client: QueryClient,
-  target: AgendaMutationTarget,
-): { date: string; time?: string; endTime?: string } | undefined {
-  for (const [, agenda] of client.getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })) {
-    const found = agenda === undefined ? undefined : findAgendaItem(agenda, target);
-    if (found === undefined) continue;
-    return {
-      date: found.sourceDate,
-      ...(found.item.time === undefined ? {} : { time: found.item.time }),
-      ...(found.item.endTime === undefined ? {} : { endTime: found.item.endTime }),
-    };
-  }
-  return undefined;
-}
-
-/**
  * Projects a detail-screen completion before its request settles and returns a targeted
  * rollback. The rollback restores only the affected row in each cached agenda window, so an
  * unrelated agenda write made while the completion is in flight is never overwritten.
@@ -399,6 +484,12 @@ function inputOf(variables: unknown): object | undefined {
   if (typeof variables !== 'object' || variables === null) return undefined;
   const input = (variables as { input?: unknown }).input;
   return typeof input === 'object' && input !== null ? input : undefined;
+}
+
+/** Whether this PATCH changes series projection rather than ordinary row text. */
+function isRecurrenceWrite(variables: unknown): boolean {
+  const input = inputOf(variables);
+  return input !== undefined && Object.hasOwn(input, 'recurrence');
 }
 
 /** Both a bare Activity and a `{ activity }` envelope reach this from different endpoints. */

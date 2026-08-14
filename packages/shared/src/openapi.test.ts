@@ -46,6 +46,7 @@ describe('the generated document', () => {
       '/v1/activities',
       '/v1/activities/{id}',
       '/v1/activities/{id}/schedule',
+      '/v1/activities/{id}/recurrence/convert',
       '/v1/activities/{id}/duplicate',
       '/v1/activities/{id}/complete',
       '/v1/activities/{id}/uncomplete',
@@ -94,6 +95,7 @@ describe('the generated document', () => {
       'CaptureLinkInput',
       'CaptureParseInput',
       'CompleteActivityInput',
+      'ConvertRecurrenceInput',
       'CreateActivityInput',
       'DeletedActivity',
       'DeletedDevice',
@@ -134,6 +136,7 @@ describe('the generated document', () => {
       'activity',
       'capabilities',
       'completedOccurrenceCount',
+      'occurrence',
       'reminders',
     ]);
     expect(detail.required).toEqual(expect.arrayContaining(['activity', 'reminders']));

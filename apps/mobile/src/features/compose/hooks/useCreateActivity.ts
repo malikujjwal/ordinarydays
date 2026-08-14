@@ -1,13 +1,12 @@
 import { ApiError, type CreationTarget } from '@od/shared/client';
 import type { Activity } from '@od/shared/types';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import {
   type DraftFields,
   toCreateActivityInput,
 } from '@/features/compose/model/targets';
 import type { CreateActivityVariables } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
-import { ACTIVITIES_KEY } from '@/lib/queryKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
 /**
@@ -66,7 +65,6 @@ function toFieldErrors(error: unknown): Record<string, string> {
 
 export function useCreateActivity(): CreateActivityResult {
   const takeIdempotencyKey = useComposeDraft((s) => s.takeIdempotencyKey);
-  const queryClient = useQueryClient();
 
   const mutation = useMutation<Activity, Error, CreateActivityVariables>({
     mutationKey: activityMutationKeys.create,
@@ -83,16 +81,10 @@ export function useCreateActivity(): CreateActivityResult {
      * The **root** key, not one stage: a new activity lands in whichever of the four its date
      * and kind imply, and this hook has no business working out which.
      *
-     * **This handler cannot be relied on, which is why it is no longer the only one.** Saving
-     * closes the compose surface, so this component unmounts and its `onSuccess` never runs —
-     * the invalidation that actually refreshes Today lives on the `MutationCache` in
-     * `queryClient.ts` (P2-46). What stays here is the activity-list refresh for the case
-     * where compose is still mounted; the cache handler is what makes the write reach Today
-     * either way.
+     * Saving closes the compose surface, so component callbacks cannot own cache refresh.
+     * The process-wide `MutationCache` in `queryClient.ts` projects and invalidates this write
+     * exactly once whether this component is mounted, unmounted, or replaying after restart.
      */
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ACTIVITIES_KEY });
-    },
   });
 
   const failure = mutation.error === null ? undefined : describe(mutation.error);

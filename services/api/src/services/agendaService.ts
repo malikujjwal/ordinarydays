@@ -80,6 +80,10 @@ export interface AgendaAssemblyDay {
 export interface AgendaAssembly {
   readonly days: readonly AgendaAssemblyDay[];
   readonly warnings: readonly AgendaWarning[];
+  readonly projectionVersions: readonly {
+    activityId: string;
+    version: string;
+  }[];
 }
 
 export interface AssembleAgendaInput {
@@ -234,7 +238,30 @@ export async function assembleAgenda(
     };
   });
 
-  return { days: partitionDays(input, complete), warnings };
+  const projectionVersions = observedProjectionVersions(
+    [scheduledIndex, seriesIndex, anytimeIndex],
+    [...scheduled, ...series, ...anytime],
+  );
+
+  return { days: partitionDays(input, complete), warnings, projectionVersions };
+}
+
+/** Only a GSI row whose stamped version matches META proves the projection caught up. */
+function observedProjectionVersions(
+  indexes: readonly ReadonlyMap<string, StoredItem>[],
+  activities: readonly Activity[],
+): { activityId: string; version: string }[] {
+  const rows = new Map<string, StoredItem>();
+  const observed = new Map<string, string>();
+  for (const index of indexes) {
+    for (const [activityId, row] of index) rows.set(activityId, row);
+  }
+  for (const activity of activities) {
+    if (rows.get(activity.activityId)?.updatedAt === activity.updatedAt) {
+      observed.set(activity.activityId, activity.updatedAt);
+    }
+  }
+  return [...observed].map(([activityId, version]) => ({ activityId, version }));
 }
 
 /**

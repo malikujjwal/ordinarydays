@@ -58,6 +58,7 @@ const sharedActions = {
   isSavingReminder: false,
   patch: vi.fn(async () => true),
   schedule: vi.fn(async () => true),
+  convertToOneOff: vi.fn(async () => true),
   addReminder: vi.fn(async () => true),
   removeReminder: vi.fn(async () => true),
   acknowledgeConflict: vi.fn(),

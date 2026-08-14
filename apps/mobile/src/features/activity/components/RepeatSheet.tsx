@@ -16,7 +16,7 @@ import {
 } from '@/features/activity/model/repeat';
 
 const endsOptions = [
-  { value: 'never', label: 'Never' },
+  { value: 'never', label: 'No end' },
   { value: 'date', label: 'On a date' },
   { value: 'count', label: 'After N times' },
 ] as const;
@@ -30,12 +30,14 @@ export interface RepeatSheetProps {
   /** First-segment schedule date, or the all-future effective date supplied by the caller. */
   anchorDate: string;
   /**
-   * What the caller is acting on (ADR-053). `Never` ends the series on the occurrence in
-   * view, inclusive, so the row in view survives and everything after it stops.
+   * What the caller is acting on (ADR-053). Does not repeat requires an occurrence target;
+   * End series uses that same explicit date as its inclusive end.
    */
   scope?: ActivityScope;
   value?: Recurrence;
   onCommit: (value: Recurrence | undefined) => Promise<boolean>;
+  onConvertToOneOff?: () => Promise<boolean>;
+  completedOccurrenceCount?: number;
   busy?: boolean;
   error?: string;
 }
@@ -109,6 +111,8 @@ export function RepeatSheet({
   scope,
   value,
   onCommit,
+  onConvertToOneOff,
+  completedOccurrenceCount = 0,
   busy = false,
   error,
 }: RepeatSheetProps) {
@@ -122,6 +126,7 @@ export function RepeatSheet({
   const [endCount, setEndCount] = useState(value?.count ?? 1);
   const [seriesLimit, setSeriesLimit] = useState(false);
   const [discarding, setDiscarding] = useState(false);
+  const [confirmingConversion, setConfirmingConversion] = useState(false);
   const [localError, setLocalError] = useState<string | undefined>();
 
   useEffect(() => {
@@ -172,49 +177,34 @@ export function RepeatSheet({
   }, [anchorDate, customDaysValid, effectiveEnds, option, parsedCustomDays, value]);
 
   /**
-   * **"Never" ends the series; it does not delete the rule.**
-   *
-   * `today-and-tasks.md` §6 line 584 has always defined this as `recurrence.endDate` set on
-   * the series row — forward only, with every past occurrence still rendering under the
-   * segment in force on its date. Removing the rule instead performed a *type change*, series
-   * to one-off, and that one operation is what required flattening surplus occurrences,
-   * choosing which day the survivor lives on, and clearing `completed_occurrence` from rows
-   * that were no longer occurrences. Each of those had a wrong answer available and several
-   * shipped; the question "which single day should the flattened one-off live on?" has no
-   * correct answer, which is the clearest sign the operation was wrong rather than merely
-   * unfinished.
-   *
-   * Ending needs none of it. One field moves on a row that stays a series, so no occurrence
-   * loses its identity and no history is rewritten.
-   *
-   * `endDate` is **inclusive** (`expand.ts`), so ending on the occurrence in view keeps that
-   * day and drops everything after it — which is what "stop repeating" means while looking at
-   * today's row.
+   * "Does not repeat" is a type conversion, not an ending alias. The server resolves the
+   * explicitly selected occurrence and atomically makes that effective schedule the one-off.
+   * End series remains the separate inclusive-end action below.
    */
-  async function commitNever() {
+  async function commitDoesNotRepeat() {
     if (value === undefined) {
-      // Never was already the state; nothing to end.
       close();
       return;
     }
     if (
-      await onCommit({
-        ...value,
-        endDate: scopeDate(scope ?? activityScope()) ?? anchorDate,
-      })
+      onConvertToOneOff === undefined ||
+      scopeDate(scope ?? activityScope()) === undefined
     ) {
-      close();
+      setLocalError('Open a specific occurrence to make it a one-off.');
+      return;
     }
+    if (completedOccurrenceCount > 0) {
+      setConfirmingConversion(true);
+      return;
+    }
+    if (await onConvertToOneOff()) close();
   }
 
   async function commit() {
     setLocalError(undefined);
     setSeriesLimit(false);
     if (option === 'never') {
-      // No confirmation: ending a series removes nothing from view and is reversible by
-      // clearing `endDate`. The old dialog warned about losing past completions, which was
-      // true of deleting the rule and is not true of ending it.
-      await commitNever();
+      await commitDoesNotRepeat();
       return;
     }
     if (option === 'custom' && !customDaysValid) return;
@@ -265,7 +255,7 @@ export function RepeatSheet({
     option === 'custom' && !customDaysValid
       ? 'Enter a number from 2 to 365 days.'
       : candidate === undefined
-        ? 'Never'
+        ? 'Does not repeat'
         : describeRecurrence(candidate, anchorDate);
 
   function close() {
@@ -280,7 +270,8 @@ export function RepeatSheet({
    * the prompt cannot be attached to one path and forgotten on another (§20).
    *
    * Dirty is measured against the option the sheet opened on, not against "the user touched
-   * something": selecting `Weekly` and selecting `Never` again is not an unsaved change, and
+   * something": selecting `Weekly` and selecting `Does not repeat` again is not an unsaved
+   * change, and
    * asking about it would train the user to dismiss the question.
    */
   const dirty =
@@ -412,6 +403,54 @@ export function RepeatSheet({
             {localError ?? error}
           </Text>
         )}
+
+        {!seriesLimit &&
+        value !== undefined &&
+        scopeDate(scope ?? activityScope()) !== undefined ? (
+          <Button
+            label="End series"
+            variant="secondary"
+            onPress={() => void endSeries()}
+            testID="repeat-end-series-action"
+          />
+        ) : null}
+      </Sheet>
+
+      <Sheet
+        open={confirmingConversion}
+        onClose={() => setConfirmingConversion(false)}
+        title="Make this a one-off?"
+        detent="fit"
+        actions={
+          <>
+            <Button
+              label="Cancel"
+              variant="ghost"
+              fullWidth
+              onPress={() => setConfirmingConversion(false)}
+            />
+            <Button
+              label="Make this a one-off"
+              variant="danger"
+              fullWidth
+              loading={busy}
+              onPress={() =>
+                void (async () => {
+                  if (await onConvertToOneOff?.()) {
+                    setConfirmingConversion(false);
+                    close();
+                  }
+                })()
+              }
+              testID="repeat-convert-confirm"
+            />
+          </>
+        }
+        testID="repeat-convert-confirmation"
+      >
+        <Text variant="body" color="textSecondary">
+          {`This keeps the selected occurrence as a one-off. ${completedOccurrenceCount} past ${completedOccurrenceCount === 1 ? 'completion' : 'completions'} stay stored but will no longer appear in the series history. End series instead to keep that history visible.`}
+        </Text>
       </Sheet>
 
       {/**

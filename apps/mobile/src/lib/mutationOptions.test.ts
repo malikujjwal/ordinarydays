@@ -42,7 +42,7 @@ describe('offline mutation option guard', () => {
     const source = sourceOf(relative);
 
     expect(source).not.toMatch(/refreshActivityLists/);
-    expect(source).not.toMatch(/invalidateQueries\(\{\s*queryKey:\s*\['agenda'\]/);
+    expect(source).not.toMatch(/invalidateQueries/);
   });
 
   it('keeps the agenda refresh on the MutationCache, where an unmount cannot cancel it', () => {
@@ -53,6 +53,9 @@ describe('offline mutation option guard', () => {
     );
 
     expect(cacheSurface).toMatch(/onSuccess/);
+    expect(cacheSurface).toMatch(
+      /refreshActivityDetails\(client, mutationKey, variables\)/,
+    );
     expect(cacheSurface).toMatch(/changesActivityLists/);
     expect(cacheSurface).toMatch(/refreshActivityLists\(client\)/);
   });

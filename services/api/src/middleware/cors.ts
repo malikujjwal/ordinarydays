@@ -38,6 +38,7 @@ export const corsMiddleware = cors({
     'X-Client-Version',
     'Idempotency-Key',
     'If-Match',
+    'Cache-Control',
   ],
   allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   exposeHeaders: ['X-Request-Id', 'Retry-After'],

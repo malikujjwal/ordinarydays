@@ -247,6 +247,57 @@ describe('occurrence scheduling', () => {
     },
   });
 
+  it('adds a time to an untimed occurrence without changing series META', async () => {
+    const untimed = stored({
+      status: 'scheduled',
+      schedule: { date: '2026-08-14', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-14', interval: 1 }],
+      },
+    });
+    mocks.assertActivityAccess.mockResolvedValue({
+      activity: untimed,
+      isOwner: true,
+      viaParent: false,
+    });
+
+    const result = await scheduleActivity(
+      USER,
+      ID,
+      {
+        date: '2026-08-14',
+        time: '10:30',
+        occurrenceDate: '2026-08-14',
+        timezone: 'America/New_York',
+      },
+      'America/New_York',
+      NOW,
+      receiptFor,
+    );
+
+    expect(result.activity).toEqual(untimed);
+    expect(result.occurrence).toEqual({
+      nominalDate: '2026-08-14',
+      date: '2026-08-14',
+      time: '10:30',
+      status: 'scheduled',
+      isSnoozed: false,
+    });
+    expect(mocks.writeSchedule).not.toHaveBeenCalled();
+    expect(mocks.writeOccurrenceSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activityId: ID,
+        sourceDate: '2026-08-14',
+        value: expect.objectContaining({
+          date: '2026-08-14',
+          status: 'rescheduled',
+          overrideTime: '10:30',
+        }),
+      }),
+    );
+  });
+
   it('accepts an exact 60-day cross-day move and leaves META as the response', async () => {
     mocks.assertActivityAccess.mockResolvedValue({
       activity: recurring,

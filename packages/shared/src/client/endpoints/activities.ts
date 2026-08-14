@@ -6,6 +6,7 @@ import {
   activityDetail,
   activityListItem,
   type CompleteActivityInput,
+  type ConvertRecurrenceInput,
   type CreateActivityInput,
   deletedActivity,
   type PatchActivityInput,
@@ -24,7 +25,7 @@ import {
   scheduleActivityResult,
 } from '../../schemas/schedule.js';
 import type { Activity } from '../../types/activity.js';
-import type { ActivityDetail } from '../../types/activityDetail.js';
+import type { ActivityDetail, ActivityDetailTarget } from '../../types/activityDetail.js';
 import type { Reminder } from '../../types/reminder.js';
 import { ApiError, type HttpClient } from '../http.js';
 
@@ -91,13 +92,17 @@ export function createActivity(
  */
 export function getActivity(
   client: HttpClient,
-  activityId: string,
+  target: ActivityDetailTarget,
   signal?: AbortSignal,
 ): Promise<ActivityDetail> {
+  const occurrenceQuery =
+    target.kind === 'occurrence'
+      ? `?occurrenceDate=${encodeURIComponent(target.date)}`
+      : '';
   return client
     .request({
       method: 'GET',
-      path: `/v1/activities/${activityId}`,
+      path: `/v1/activities/${target.activityId}${occurrenceQuery}`,
       schema: activityDetailResponse,
       ...(signal === undefined ? {} : { signal }),
     })
@@ -205,6 +210,26 @@ export function patchActivity(
     .then((response) => response.data as Activity);
 }
 
+/** Converts one explicitly selected series occurrence into the surviving one-off. */
+export function convertRecurrence(
+  client: HttpClient,
+  activityId: string,
+  selectedDate: ConvertRecurrenceInput['occurrenceDate'],
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<Activity> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/recurrence/convert`,
+      schema: activityResponse,
+      body: { occurrenceDate: selectedDate },
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data as Activity);
+}
+
 /**
  * Reconciles only a PATCH that this client previously enqueued.
  *
@@ -224,7 +249,7 @@ export async function patchActivityForReplay(
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 409) throw error;
 
-    const fresh = await getActivity(client, activityId, signal);
+    const fresh = await getActivity(client, { kind: 'activity', activityId }, signal);
     if (!activityContainsPatch(fresh.activity, input)) throw error;
     return fresh.activity;
   }

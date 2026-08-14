@@ -3,6 +3,7 @@ import type { FetchLike, HttpClientConfig } from '../http.js';
 import { ApiError, createHttpClient, nullTokenProvider } from '../http.js';
 import {
   completeActivity,
+  convertRecurrence,
   createActivity,
   createReminder,
   deleteActivity,
@@ -10,6 +11,7 @@ import {
   deleteReminder,
   deleteReminderForReplay,
   duplicateActivity,
+  getActivity,
   listActivities,
   listReminders,
   patchActivityForReplay,
@@ -110,6 +112,36 @@ const CREATED = {
   },
   meta: { requestId: REQUEST_ID },
 };
+
+describe('getActivity', () => {
+  it('puts the explicit nominal occurrence target on the detail request', async () => {
+    const occurrenceDate = '2026-08-14';
+    const detail = {
+      data: {
+        activity: CREATED.data,
+        reminders: [],
+        occurrence: {
+          nominalDate: occurrenceDate,
+          date: occurrenceDate,
+          status: 'scheduled',
+          isSnoozed: false,
+        },
+      },
+      meta: { requestId: REQUEST_ID },
+    };
+    const { client, calls } = makeClient([{ status: 200, body: detail }]);
+
+    await getActivity(client, {
+      kind: 'occurrence',
+      activityId: CREATED.data.activityId,
+      date: occurrenceDate,
+    });
+
+    expect(calls[0]?.url).toBe(
+      `https://api.test/v1/activities/${CREATED.data.activityId}?occurrenceDate=${occurrenceDate}`,
+    );
+  });
+});
 
 describe('createActivity', () => {
   it('sends objectKind and type exactly as the caller fixed them', async () => {
@@ -556,6 +588,29 @@ describe('the me endpoints', () => {
 });
 
 describe('the remaining activity endpoints', () => {
+  it('converts one selected occurrence with a required idempotency key', async () => {
+    const body = { data: CREATED.data, meta: CREATED.meta };
+    const { client, calls } = makeClient([{ status: 200, body }]);
+
+    await convertRecurrence(
+      client,
+      'act_01J0000000000000000000000A',
+      '2026-08-14',
+      'e6f2b0a4-0f3f-4f9e-9c1a-0d8f2a3b4c5d',
+    );
+
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.url).toBe(
+      'https://api.test/v1/activities/act_01J0000000000000000000000A/recurrence/convert',
+    );
+    expect(calls[0]?.headers['Idempotency-Key']).toBe(
+      'e6f2b0a4-0f3f-4f9e-9c1a-0d8f2a3b4c5d',
+    );
+    expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({
+      occurrenceDate: '2026-08-14',
+    });
+  });
+
   it('schedules with a required idempotency key', async () => {
     const body = { data: { activity: CREATED.data }, meta: CREATED.meta };
     const { client, calls } = makeClient([{ status: 200, body }]);

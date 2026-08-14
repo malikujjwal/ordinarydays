@@ -16,7 +16,7 @@ const ANCHOR = '2026-08-12'; // Wednesday
 describe('repeat options', () => {
   it('exposes the founder-approved dropdown order and labels', () => {
     expect(repeatOptions).toEqual([
-      { value: 'never', label: 'Never' },
+      { value: 'never', label: 'Does not repeat' },
       { value: 'daily', label: 'Daily' },
       { value: 'weekdays', label: 'Weekdays' },
       { value: 'weekends', label: 'Weekends' },

@@ -14,31 +14,39 @@ const NOW = '2026-08-06T12:00:00.000Z' as Instant;
 
 type Agenda = Parameters<typeof computeLocalNotifications>[0];
 type AgendaItem = Agenda['days'][number]['schedule'][number];
+type AgendaItemPatch = Omit<Partial<AgendaItem>, 'time'> & {
+  /** Test-only explicit removal of the fixture's default time. */
+  time?: string | undefined;
+};
 
-const item = (patch: Partial<AgendaItem> = {}): AgendaItem => ({
-  activityId: ACTIVITY_ID,
-  type: 'task',
-  title: 'Gym',
-  status: 'scheduled',
-  time: '18:00',
-  isRecurring: false,
-  isSnoozed: false,
-  hasCheckbox: true,
-  capabilities: { complete: true, skip: false, snooze: true },
-  participantAvatars: [],
-  participantCount: 0,
-  isPast: false,
-  reminders: [
-    {
-      reminderId: REMINDER_ID,
-      activityId: ACTIVITY_ID,
-      userId: USER_ID,
-      offsetMinutes: -15,
-      channel: 'push',
-    },
-  ],
-  ...patch,
-});
+const item = (patch: AgendaItemPatch = {}): AgendaItem => {
+  const next = {
+    activityId: ACTIVITY_ID,
+    type: 'task',
+    title: 'Gym',
+    status: 'scheduled',
+    time: '18:00',
+    isRecurring: false,
+    isSnoozed: false,
+    hasCheckbox: true,
+    capabilities: { complete: true, skip: false, snooze: true },
+    participantAvatars: [],
+    participantCount: 0,
+    isPast: false,
+    reminders: [
+      {
+        reminderId: REMINDER_ID,
+        activityId: ACTIVITY_ID,
+        userId: USER_ID,
+        offsetMinutes: -15,
+        channel: 'push',
+      },
+    ],
+    ...patch,
+  } as AgendaItem & { time?: string };
+  if (Object.hasOwn(patch, 'time') && patch.time === undefined) delete next.time;
+  return next;
+};
 
 const agenda = (date: string, entry: AgendaItem): Agenda => ({
   days: [{ date, upNext: entry, schedule: [entry], anytime: [], earlier: [] }],

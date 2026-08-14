@@ -37,6 +37,7 @@ export async function getAgenda(
       }),
     ),
     warnings: [...assembly.warnings],
+    projectionVersions: [...assembly.projectionVersions],
   };
 }
 

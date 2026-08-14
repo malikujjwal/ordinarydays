@@ -92,6 +92,12 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
     mutates: true,
   },
+  {
+    method: 'POST',
+    pattern: '/v1/activities/:id/recurrence/convert',
+    auth: 'authenticated',
+    mutates: true,
+  },
   { method: 'DELETE', pattern: '/v1/activities/:id', auth: 'authenticated' },
   {
     method: 'POST',

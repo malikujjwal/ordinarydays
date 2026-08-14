@@ -430,6 +430,10 @@ export interface PatchOptions extends CreateOptions {
   readonly updateChildPointer?: boolean;
   /** A same-day recurrence correction is valid only while that date has no stored history. */
   readonly requireMissingOccurrenceDate?: string;
+  /** Pins the selected occurrence read by an atomic series-to-one-off conversion. */
+  readonly occurrenceGuard?:
+    | { readonly date: string; readonly kind: 'missing' }
+    | { readonly date: string; readonly kind: 'version'; readonly updatedAt: string };
 }
 
 /**
@@ -523,6 +527,27 @@ export async function patchActivity(
     });
   }
 
+  const conversionGuardIndex =
+    options.occurrenceGuard === undefined ? undefined : items.length;
+  if (options.occurrenceGuard !== undefined) {
+    const guard = options.occurrenceGuard;
+    items.push({
+      ConditionCheck: {
+        Key: occurrence(next.activityId, guard.date),
+        ConditionExpression:
+          guard.kind === 'missing'
+            ? 'attribute_not_exists(pk)'
+            : '#updatedAt = :expected',
+        ...(guard.kind === 'missing'
+          ? {}
+          : {
+              ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
+              ExpressionAttributeValues: { ':expected': guard.updatedAt },
+            }),
+      },
+    });
+  }
+
   const builder = new TransactionBuilder(
     'patchActivity',
     options.idempotencyReceipt === undefined ? 0 : 1,
@@ -538,6 +563,12 @@ export async function patchActivity(
         return new AppError(
           'validation_failed',
           "Today's occurrence already has history. Change repeat from the next occurrence instead.",
+        );
+      }
+      if (index === conversionGuardIndex) {
+        return new AppError(
+          'conflict',
+          'This occurrence changed while repeat was being updated. Try again.',
         );
       }
       return options.idempotencyReceipt === undefined

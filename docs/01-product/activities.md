@@ -235,7 +235,7 @@ Rules that apply to every type's form.
    | End time | Only shown once a start time exists. Must be after the start time; a same-day end time before the start is a `validation_failed`. |
    | People | Opens the participant picker — see [`sharing-and-people.md`](sharing-and-people.md) §2. |
    | Reminder | Only enabled when a date is set. Sets **your own** reminder and nobody else's — reminders are per person, per activity ([`notifications.md`](notifications.md#21-per-activity-reminder-control) §2.1). Options in [`notifications.md`](notifications.md) §3. |
-  | Repeat | Only enabled when a date is set. A single dropdown provides the exact options in [`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1; `Custom` reveals a typed 2–365 Days field mapped to `interval_days`. On an existing series the sheet always shows and edits the **active rule segment**; an "all future" edit appends a segment and never rewrites the segments already written ([`today-and-tasks.md`](today-and-tasks.md#62-one-row-per-series) §6.2). Ends is also a dropdown and closes the whole series, whatever its segments. `Never` on a series with recorded completions confirms first, in the §1a.1 shape, because it stops that history rendering — count, copy and the `End series` alternative per [`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1. |
+  | Repeat | Only enabled when a date is set. A single dropdown provides the exact options in [`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1; `Custom` reveals a typed 2–365 Days field mapped to `interval_days`. On an existing series the sheet always shows and edits the **active rule segment**; an "all future" edit appends a segment and never rewrites the segments already written ([`today-and-tasks.md`](today-and-tasks.md#62-one-row-per-series) §6.2). **Does not repeat** converts an explicitly targeted occurrence to the one-off and confirms first when stored completion history will stop rendering. Ends is a separate dropdown whose indefinite value is **No end**. **End series** is a separate action that preserves recurrence and its history. |
    | Notes | Multi-line, max 4000 characters, no formatting. |
    | Location | Free-text label plus optional address. v1 has no map picker and no geocoding. |
 
@@ -267,7 +267,7 @@ Columns: **Field** (label as shown), **Control**, **Req.**, **Validation**, **De
 | Date | Date picker with quick chips | No | Valid `YYYY-MM-DD` | Today if the user came from Today's FAB; otherwise empty | `schedule.date` |
 | Time | Time picker, 5-min steps | No | `HH:mm`; requires a date | Empty | `schedule.time` |
 | Reminder | Select | No | Requires a date | User's explicitly saved `defaultReminderOffset` if a time is set; otherwise `Off`. New accounts ship Off. | `reminders[]` on input → your own `REM#` item |
-| Repeat | Select → recurrence sheet | No | Requires a date | `Never` | `recurrence` |
+| Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
 | Related plan | Plan picker (search over upcoming Activities) | No | Must be an Activity the user owns or participates in | Pre-filled when opened from a plan | `parentActivityId` |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
@@ -359,7 +359,7 @@ The former fifth Plan-kind form was merged into Event; this section number remai
 | Time | Time picker | No | `HH:mm`; requires a date | Empty | `schedule.time` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Reminder | Select | No | Requires a date | Explicitly saved default if set and a time exists; otherwise `Off` | `reminders[]` on input → your own `REM#` item |
-| Repeat | Select → recurrence sheet | No | Requires a date | `Never` | `recurrence` |
+| Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
 `details` is `{ kind: 'custom' }`. `details.shortcutId` exists in the model for a later

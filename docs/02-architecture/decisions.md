@@ -2107,3 +2107,47 @@ list growing meanwhile.
 problem that is not in the protocol. Separate scope types per operation, so the type could
 carry the `uncomplete` exception — worse than one honest guard, and it multiplies the
 vocabulary for a single exception with a scheduled end.
+
+---
+
+## ADR-054 — Does not repeat, No end and End series are three operations
+
+**Status:** Accepted · **Date:** 2026-08-14
+
+**Context.** The Repeat sheet used `Never` for two opposite ideas. In one description it
+removed `recurrence`, converting a series to a one-off and making stored occurrence history
+unreachable. In another it set `recurrence.endDate`, preserving the series and its history.
+The Ends control also used `Never` to mean the series had no termination. Code and tests could
+therefore agree on a label while performing different writes. The 2026-08-13 attempt to make
+Repeat → Never an alias for End series removed the ambiguity by discarding the conversion,
+but the founder confirmed on 2026-08-14 that conversion is required and is distinct.
+
+**Decision.** The product has three named operations:
+
+1. **Does not repeat** removes `recurrence`. On an existing series it requires an explicit
+   occurrence target. That occurrence's effective date, time and end time become the one-off
+   Activity schedule, with the Activity timezone retained.
+2. **End series** preserves `recurrence` and sets an explicit inclusive `endDate`.
+3. **No end** is the Ends value that clears `endDate` and `count`; it means indefinite
+   recurrence.
+
+An existing series cannot be converted from activity-only detail because the server cannot
+choose which virtual occurrence survives. The client may not guess today, next or most recent
+from its agenda cache. Navigation from an occurrence supplies the nominal date, and the server
+resolves its effective schedule authoritatively against the recurrence segment and occurrence
+override. Existing `OCC#` rows remain stored after conversion but no longer render; when
+completed history will disappear from view, confirmation names the actual count and offers
+End series as the history-preserving alternative.
+
+**Consequences.** Phase 2.5 is a blocking gate before the rest of Phase 2 and Phase 3. P2-52
+records this contract; P2-53 supplies explicit detail targets and authoritative projection;
+P2-54 implements atomic conversion, distinct ending writes and versioned agenda
+reconciliation; P2-55 proves the cross-layer matrix and audits series damaged by earlier
+scope errors. The temporary `Never` UI remains unchanged until P2-54 can change copy and
+behavior together; it must not be relabelled while still invoking the old write.
+
+**Alternatives rejected.** Keep one `Never` label and infer meaning from which control it
+appears in — the existing failure mode. Make conversion retain `schedule.date` — wrong when
+the user selected a moved or later occurrence. Pick an occurrence from cached agenda data —
+nondeterministic across cold start, request windows and timezone changes. Delete stored
+occurrence rows on conversion — destructive work with no benefit and no recovery path.

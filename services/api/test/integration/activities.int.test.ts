@@ -32,6 +32,8 @@ let tx: Tx;
 /** The id `LocalIdentityProvider` resolves, which is what the real app will read as. */
 const DEV = 'usr_local_dev';
 const OTHER = 'usr_int_activities_other';
+const TEST_TODAY = new Date().toISOString().slice(0, 10);
+const TEST_TODAY_WEEKDAY = new Date(`${TEST_TODAY}T00:00:00.000Z`).getUTCDay();
 
 beforeAll(async () => {
   base = await import('../../src/repositories/base.js');
@@ -712,10 +714,10 @@ describe('patching an activity', () => {
   it('replaces an active segment created today while no occurrence history exists', async () => {
     const activity = await created({
       ...TASK,
-      schedule: { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+      schedule: { date: TEST_TODAY, time: '18:00', timezone: 'UTC' },
       recurrence: {
         mode: 'fixed',
-        segments: [{ freq: 'daily', effectiveFrom: '2026-08-12' }],
+        segments: [{ freq: 'daily', effectiveFrom: TEST_TODAY }],
       },
     });
 
@@ -728,8 +730,8 @@ describe('patching an activity', () => {
             {
               freq: 'weekly',
               interval: 1,
-              byWeekday: [3],
-              effectiveFrom: '2026-08-12',
+              byWeekday: [TEST_TODAY_WEEKDAY],
+              effectiveFrom: TEST_TODAY,
             },
           ],
         },
@@ -743,8 +745,8 @@ describe('patching an activity', () => {
       {
         freq: 'weekly',
         interval: 1,
-        byWeekday: [3],
-        effectiveFrom: '2026-08-12',
+        byWeekday: [TEST_TODAY_WEEKDAY],
+        effectiveFrom: TEST_TODAY,
         time: '18:00',
       },
     ]);
@@ -753,17 +755,17 @@ describe('patching an activity', () => {
   it('rejects a same-day replacement after today has occurrence history', async () => {
     const activity = await created({
       ...TASK,
-      schedule: { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+      schedule: { date: TEST_TODAY, time: '18:00', timezone: 'UTC' },
       recurrence: {
         mode: 'fixed',
-        segments: [{ freq: 'daily', effectiveFrom: '2026-08-12' }],
+        segments: [{ freq: 'daily', effectiveFrom: TEST_TODAY }],
       },
     });
     const completed = await withUser().fetch(
       new Request(`http://localhost/v1/activities/${activity.activityId}/complete`, {
         method: 'POST',
         headers: authedHeaders({ idempotencyKey: crypto.randomUUID() }),
-        body: JSON.stringify({ occurrenceDate: '2026-08-12' }),
+        body: JSON.stringify({ occurrenceDate: TEST_TODAY }),
       }),
     );
     expect(completed.status).toBe(200);
@@ -773,7 +775,7 @@ describe('patching an activity', () => {
       {
         recurrence: {
           mode: 'fixed',
-          segments: [{ freq: 'weekdays', effectiveFrom: '2026-08-12' }],
+          segments: [{ freq: 'weekdays', effectiveFrom: TEST_TODAY }],
         },
       },
       { ifMatch: activity.updatedAt },

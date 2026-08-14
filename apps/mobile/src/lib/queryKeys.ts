@@ -39,3 +39,13 @@ export const ACTIVITIES_KEY = ['activities'] as const;
  * place.
  */
 export const activityKey = (activityId: string) => ['activity', activityId] as const;
+
+/** One authoritative detail projection; occurrence reads never alias the series cache. */
+export const activityDetailKey = (
+  target:
+    | { readonly kind: 'activity'; readonly activityId: string }
+    | { readonly kind: 'occurrence'; readonly activityId: string; readonly date: string },
+) =>
+  target.kind === 'activity'
+    ? activityKey(target.activityId)
+    : (['activity', target.activityId, 'occurrence', target.date] as const);

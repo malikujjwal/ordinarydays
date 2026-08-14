@@ -1,5 +1,6 @@
 import {
   completeActivity,
+  convertRecurrence,
   createActivity,
   createReminder,
   deleteActivityForReplay,
@@ -15,6 +16,7 @@ import {
 } from '@od/shared/client';
 import type {
   CompleteActivityInput,
+  ConvertRecurrenceInput,
   CreateActivityInput,
   PatchActivityInput,
   ReminderInput,
@@ -27,6 +29,7 @@ import type {
 import type { QueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { activityMutationKeys } from '@/lib/mutationKeys';
+import { activityKey } from '@/lib/queryKeys';
 
 export interface CreateActivityVariables {
   input: CreateActivityInput;
@@ -58,6 +61,9 @@ export interface PatchActivityVariables {
 
 export type ScheduleActivityVariables = ActivityPostVariables<ScheduleActivityInput>;
 export type CompleteActivityVariables = ActivityPostVariables<CompleteActivityInput>;
+export type ConvertRecurrenceVariables = ActivityPostVariables<{
+  selectedDate: ConvertRecurrenceInput[keyof ConvertRecurrenceInput];
+}>;
 export type UncompleteActivityVariables = ActivityPostVariables<UncompleteActivityInput>;
 export type SkipActivityVariables = ActivityPostVariables<SkipActivityInput>;
 export type SnoozeActivityVariables = ActivityPostVariables<SnoozeActivityInput>;
@@ -102,6 +108,41 @@ export function refreshActivityLists(client: QueryClient): void {
 }
 
 /**
+ * Marks every cached detail projection for one Activity stale without refetching it in place.
+ *
+ * Occurrence detail has its own key (`['activity', id, 'occurrence', date]`), so updating only
+ * `['activity', id]` leaves a previously opened occurrence looking current for the full
+ * 60-second stale window. Prefix invalidation covers the series and every occurrence. It uses
+ * `refetchType: 'none'` because the mutation's mounted caller writes its exact response into
+ * the open detail; starting another request here creates a cancellable fetch just as a sheet
+ * or screen is closing. Inactive variants refetch normally the next time they are opened.
+ *
+ * Delete is invalidated by the same no-refetch path. That prevents browser-back or a stale
+ * deep link from treating the deleted detail as fresh without destroying or cancelling the
+ * query while its screen is navigating away.
+ */
+export function refreshActivityDetails(
+  client: QueryClient,
+  mutationKey: unknown,
+  variables: unknown,
+): boolean {
+  if (!Array.isArray(mutationKey)) return false;
+  const [scope, name] = mutationKey as readonly unknown[];
+  if (scope !== 'activity' || name === 'create' || name === 'duplicate') {
+    return false;
+  }
+  if (typeof variables !== 'object' || variables === null) return false;
+  const activityId = (variables as { activityId?: unknown }).activityId;
+  if (typeof activityId !== 'string') return false;
+
+  void client.invalidateQueries({
+    queryKey: activityKey(activityId),
+    refetchType: 'none',
+  });
+  return true;
+}
+
+/**
  * Whether a successful mutation changes what a list or an agenda window contains.
  *
  * **Why this lives on the `MutationCache` and not on the mutations themselves (P2-46).** A
@@ -140,16 +181,14 @@ export function registerActivityMutationDefaults(
   client.setMutationDefaults(activityMutationKeys.delete, {
     mutationFn: ({ activityId }: DeleteActivityVariables) =>
       deleteActivityForReplay(httpClient, activityId),
-    onSuccess: (_data, { activityId }: DeleteActivityVariables) => {
-      client.removeQueries({ queryKey: ['activity', activityId] });
-    },
   });
   client.setMutationDefaults(activityMutationKeys.patch, {
     mutationFn: ({ activityId, input, ifMatch }: PatchActivityVariables) =>
       patchActivityForReplay(httpClient, activityId, input, ifMatch),
-    onSuccess: (activity) => {
-      void client.invalidateQueries({ queryKey: ['activity', activity.activityId] });
-    },
+  });
+  client.setMutationDefaults(activityMutationKeys.convertRecurrence, {
+    mutationFn: ({ activityId, input, idempotencyKey }: ConvertRecurrenceVariables) =>
+      convertRecurrence(httpClient, activityId, input.selectedDate, idempotencyKey),
   });
   client.setMutationDefaults(activityMutationKeys.schedule, {
     mutationFn: ({ activityId, input, idempotencyKey }: ScheduleActivityVariables) =>
@@ -178,16 +217,10 @@ export function registerActivityMutationDefaults(
   client.setMutationDefaults(activityMutationKeys.reminderCreate, {
     mutationFn: ({ activityId, input, idempotencyKey }: ReminderCreateVariables) =>
       createReminder(httpClient, activityId, input, idempotencyKey),
-    onSuccess: (_data, { activityId }: ReminderCreateVariables) => {
-      void client.invalidateQueries({ queryKey: ['activity', activityId] });
-    },
   });
   client.setMutationDefaults(activityMutationKeys.reminderDelete, {
     mutationFn: ({ activityId, reminderId }: ReminderDeleteVariables) =>
       deleteReminderForReplay(httpClient, activityId, reminderId),
-    onSuccess: (_data, { activityId }: ReminderDeleteVariables) => {
-      void client.invalidateQueries({ queryKey: ['activity', activityId] });
-    },
   });
 }
 

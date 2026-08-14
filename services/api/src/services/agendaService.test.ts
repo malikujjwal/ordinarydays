@@ -119,6 +119,47 @@ function emitted(result: Awaited<ReturnType<typeof assembleAgenda>>) {
   return result.days.flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier]);
 }
 
+describe('agenda projection versions', () => {
+  const assemble = async (indexUpdatedAt: string) => {
+    const subject = activity({
+      schedule: { date: '2026-08-06', time: '09:00', timezone: 'America/New_York' },
+      updatedAt: '2026-08-06T14:00:00.000Z',
+    });
+    const setup = fixture({
+      activities: [subject],
+      buckets: { S: [index(subject, { updatedAt: indexUpdatedAt })] },
+    });
+    return assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-06',
+        timezone: 'America/New_York',
+        now,
+      },
+      setup.dependencies,
+    );
+  };
+
+  it('proves a projection only when the selected index row matches canonical META', async () => {
+    const result = await assemble('2026-08-06T14:00:00.000Z');
+
+    expect(result.projectionVersions).toEqual([
+      {
+        activityId: emitted(result)[0]?.activity.activityId,
+        version: '2026-08-06T14:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('withholds proof while the selected index row is stale', async () => {
+    const result = await assemble('2026-08-06T13:59:00.000Z');
+
+    expect(emitted(result)).toHaveLength(1);
+    expect(result.projectionVersions).toEqual([]);
+  });
+});
+
 describe('hydration and bucket boundaries', () => {
   it('hydrates a thin series row before one complete-recurrence expansion and never queries #P', async () => {
     const recurrence: Recurrence = {

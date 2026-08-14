@@ -44,10 +44,14 @@ export type ActivityScope =
   | { readonly kind: 'occurrence'; readonly date: string };
 
 /** The Activity itself. Correct for every one-off, and a decision on a series. */
-export const activityScope = (): ActivityScope => ({ kind: 'activity' });
+export const activityScope = (): Extract<ActivityScope, { kind: 'activity' }> => ({
+  kind: 'activity',
+});
 
 /** One nominal occurrence of a recurring Activity, identified by the day it falls on. */
-export const occurrenceScope = (date: string): ActivityScope => ({
+export const occurrenceScope = (
+  date: string,
+): Extract<ActivityScope, { kind: 'occurrence' }> => ({
   kind: 'occurrence',
   date,
 });

@@ -2,10 +2,11 @@ import { getAgenda, getMe } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
 import type { AgendaQuery } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { useClock } from '@/hooks/useClock';
+import { guardAgendaResponse } from '@/lib/agendaCache';
 import { apiClient } from '@/lib/apiClient';
 import { agendaKey, TODAY_AGENDA_INCLUDE } from '../keys';
 
@@ -28,6 +29,7 @@ export interface UseAgendaOptions {
 
 /** The one hook used by Today and by every multi-day agenda consumer. */
 export function useAgenda(options: UseAgendaOptions = {}) {
+  const queryClient = useQueryClient();
   const clock = useClock();
   // Observe the existing profile query without starting a second screen-owned request.
   const me = useQuery({
@@ -64,9 +66,15 @@ export function useAgenda(options: UseAgendaOptions = {}) {
             tz: timezone,
           };
 
+  const queryKey = agendaKey(request.from, request.to, request.tz, request.include);
   const agenda = useQuery({
-    queryKey: agendaKey(request.from, request.to, request.tz, request.include),
-    queryFn: ({ signal }) => getAgenda(apiClient, request, signal),
+    queryKey,
+    queryFn: async ({ signal }) =>
+      guardAgendaResponse(
+        queryClient,
+        queryKey,
+        await getAgenda(apiClient, request, signal),
+      ),
   });
   const refetch = agenda.refetch;
 

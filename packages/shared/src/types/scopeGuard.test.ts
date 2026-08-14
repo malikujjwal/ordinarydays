@@ -51,18 +51,20 @@ const ALLOWED = new Set(
     'packages/shared/src/table/definition.ts',
     // Converts between the wire and `ActivityScope`. The boundary itself.
     'packages/shared/src/types/scope.ts',
+    'packages/shared/src/client/endpoints/activities.ts',
     'apps/mobile/src/features/agenda/model/rowScope.ts',
     // Server: reads parsed input, and keys the Occurrence entity by its date.
+    'services/api/src/handlers/getActivity.ts',
     'services/api/src/repositories/activityRepository.ts',
     'services/api/src/services/agendaProjection.ts',
     'services/api/src/services/agendaService.ts',
     'services/api/src/services/completionService.ts',
+    'services/api/src/services/activityService.ts',
     'services/api/src/services/scheduleService.ts',
     // Client: row identity in cached agenda windows, not a write scope. ADR-053 converts these.
     'apps/mobile/src/features/agenda/model/applyCompletion.ts',
     'apps/mobile/src/features/agenda/model/applyCreate.ts',
     'apps/mobile/src/features/agenda/model/applyDelete.ts',
-    'apps/mobile/src/features/agenda/model/applyPatch.ts',
     'apps/mobile/src/features/agenda/model/applySkip.ts',
     'apps/mobile/src/features/agenda/model/partition.ts',
     'apps/mobile/src/features/agenda/model/plansWindow.ts',

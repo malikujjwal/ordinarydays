@@ -24,7 +24,7 @@ export type RepeatEnds =
   | { kind: 'count'; count: number };
 
 export const repeatOptions: readonly { value: RepeatOption; label: string }[] = [
-  { value: 'never', label: 'Never' },
+  { value: 'never', label: 'Does not repeat' },
   { value: 'daily', label: 'Daily' },
   { value: 'weekdays', label: 'Weekdays' },
   { value: 'weekends', label: 'Weekends' },

@@ -4,6 +4,7 @@ export const activityMutationKeys = {
   duplicate: ['activity', 'duplicate'],
   delete: ['activity', 'delete'],
   patch: ['activity', 'patch'],
+  convertRecurrence: ['activity', 'convert-recurrence'],
   schedule: ['activity', 'schedule'],
   complete: ['activity', 'complete'],
   uncomplete: ['activity', 'uncomplete'],

@@ -358,6 +358,25 @@ export type CreateActivityInput = z.infer<typeof createActivityInput>;
  * shared plan has one schedule and many reminder sets; nobody sees anybody else's, not even
  * that they have any.
  */
+/** The server-authoritative effective state of one explicitly targeted occurrence. */
+export const occurrenceDetailProjection = z.strictObject({
+  nominalDate: isoDate,
+  date: isoDate,
+  time: hhmm.optional(),
+  endTime: hhmm.optional(),
+  status: z.enum([
+    'saved',
+    'scheduled',
+    'completed',
+    'skipped',
+    'cancelled',
+    'completed_occurrence',
+    'skipped_occurrence',
+  ]),
+  isSnoozed: z.boolean(),
+  completedAt: z.iso.datetime().optional(),
+});
+
 export const activityDetail = z
   .object({
     activity,
@@ -365,10 +384,22 @@ export const activityDetail = z
     capabilities: activityActionCapabilities.optional(),
     /** The caller's own. Never anybody else's — see above. */
     reminders: z.array(reminder),
+    /** Present exactly when the read explicitly targets one nominal occurrence. */
+    occurrence: occurrenceDetailProjection.optional(),
     /** Additive Phase 2 projection; absent only in an older cached response. */
     completedOccurrenceCount: z.number().int().nonnegative().optional(),
   })
   .meta({ id: 'ActivityDetail' });
+
+/** Optional wire query converted immediately into an `ActivityDetailTarget`. */
+export const activityDetailQuery = z.strictObject({ occurrenceDate: isoDate.optional() });
+export type ActivityDetailQuery = z.infer<typeof activityDetailQuery>;
+
+/** Atomic existing-series conversion; a series-only detail may never guess this date. */
+export const convertRecurrenceInput = z
+  .strictObject({ occurrenceDate: isoDate })
+  .meta({ id: 'ConvertRecurrenceInput' });
+export type ConvertRecurrenceInput = z.infer<typeof convertRecurrenceInput>;
 
 /**
  * `PATCH /v1/activities/:id` (`api-contract.md` §2.3).

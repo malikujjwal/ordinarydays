@@ -3,6 +3,7 @@ import type { Activity } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StoredItem } from '../repositories/migrate.js';
 import {
+  convertRecurrence,
   createActivity,
   deriveScheduleInstants,
   deriveStatus,
@@ -683,20 +684,21 @@ describe('projectDetail', () => {
   });
 
   const partition = [meta, reminderOf('usr_a', -15), reminderOf('usr_b', -90)];
+  const detailTarget = { kind: 'activity', activityId: PLAN } as const;
 
   it('authors action capability for the caller instead of exposing owner inference', () => {
-    expect(projectDetail(partition, 'usr_a').capabilities).toEqual({
+    expect(projectDetail(partition, 'usr_a', detailTarget).capabilities).toEqual({
       complete: true,
       skip: true,
       snooze: true,
     });
-    expect(projectDetail(partition, 'usr_b').capabilities).toEqual({
+    expect(projectDetail(partition, 'usr_b', detailTarget).capabilities).toEqual({
       complete: false,
       skip: false,
       snooze: false,
     });
     expect(
-      projectDetail(partition, 'usr_b', {
+      projectDetail(partition, 'usr_b', detailTarget, {
         complete: true,
         skip: true,
         snooze: true,
@@ -705,7 +707,7 @@ describe('projectDetail', () => {
   });
 
   it('returns the caller’s own reminder', () => {
-    const detail = projectDetail(partition, 'usr_a');
+    const detail = projectDetail(partition, 'usr_a', detailTarget);
 
     expect(detail.reminders).toHaveLength(1);
     expect(detail.reminders[0]).toMatchObject({ userId: 'usr_a', offsetMinutes: -15 });
@@ -717,7 +719,7 @@ describe('projectDetail', () => {
    * assert on individually.
    */
   it('leaves no trace of the other participant’s reminder', () => {
-    const serialised = JSON.stringify(projectDetail(partition, 'usr_a'));
+    const serialised = JSON.stringify(projectDetail(partition, 'usr_a', detailTarget));
 
     expect(serialised).not.toContain('usr_b');
     expect(serialised).not.toContain('-90');
@@ -725,7 +727,7 @@ describe('projectDetail', () => {
   });
 
   it('is symmetric — the other participant sees only theirs', () => {
-    const detail = projectDetail(partition, 'usr_b');
+    const detail = projectDetail(partition, 'usr_b', detailTarget);
 
     expect(detail.reminders).toHaveLength(1);
     expect(detail.reminders[0]?.userId).toBe('usr_b');
@@ -734,7 +736,7 @@ describe('projectDetail', () => {
 
   /** A participant with no reminder of their own sees an empty array, not everybody's. */
   it('returns nothing for a participant who set none', () => {
-    expect(projectDetail(partition, 'usr_c').reminders).toEqual([]);
+    expect(projectDetail(partition, 'usr_c', detailTarget).reminders).toEqual([]);
   });
 
   it('derives the real completed-occurrence count from the partition already read', () => {
@@ -760,12 +762,13 @@ describe('projectDetail', () => {
     ];
 
     expect(
-      projectDetail([...partition, ...occurrences], 'usr_a').completedOccurrenceCount,
+      projectDetail([...partition, ...occurrences], 'usr_a', detailTarget)
+        .completedOccurrenceCount,
     ).toBe(2);
   });
 
   it('never leaks the storage attributes', () => {
-    const detail = projectDetail(partition, 'usr_a');
+    const detail = projectDetail(partition, 'usr_a', detailTarget);
 
     expect(detail.activity).not.toHaveProperty('pk');
     expect(detail.activity).not.toHaveProperty('sk');
@@ -777,15 +780,15 @@ describe('projectDetail', () => {
   it('returns a body the shared detail schema accepts', async () => {
     const { activityDetail } = await import('@od/shared/schemas');
 
-    expect(activityDetail.safeParse(projectDetail(partition, 'usr_a')).success).toBe(
-      true,
-    );
+    expect(
+      activityDetail.safeParse(projectDetail(partition, 'usr_a', detailTarget)).success,
+    ).toBe(true);
   });
 
   it('throws not_found when the partition has no META row', () => {
-    expect(() => projectDetail([reminderOf('usr_a', -15)], 'usr_a')).toThrowError(
-      /Activity not found/,
-    );
+    expect(() =>
+      projectDetail([reminderOf('usr_a', -15)], 'usr_a', detailTarget),
+    ).toThrowError(/Activity not found/);
   });
 
   /**
@@ -818,7 +821,7 @@ describe('projectDetail', () => {
       outcome: 'attended',
     };
 
-    const { activity } = projectDetail([full], 'usr_a');
+    const { activity } = projectDetail([full], 'usr_a', detailTarget);
 
     expect(activity).toMatchObject({
       notes: 'Semi-skimmed',
@@ -853,7 +856,7 @@ describe('projectDetail', () => {
       listItemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1XC',
     };
 
-    const detail = projectDetail([withLinks], 'usr_a');
+    const detail = projectDetail([withLinks], 'usr_a', detailTarget);
 
     expect(detail.activity).not.toHaveProperty('listId');
     expect(detail.activity).not.toHaveProperty('listItemId');
@@ -864,7 +867,7 @@ describe('projectDetail', () => {
 
   /** …and omits each of them when the stored row has none, rather than emitting undefined. */
   it('omits every optional the stored row lacks', () => {
-    const { activity } = projectDetail(partition, 'usr_a');
+    const { activity } = projectDetail(partition, 'usr_a', detailTarget);
 
     for (const field of [
       'notes',
@@ -1441,5 +1444,97 @@ describe('patchActivity', () => {
     ).rejects.toMatchObject({ code: 'conflict' });
 
     expect(repository.patchActivity).not.toHaveBeenCalled();
+  });
+});
+
+describe('convertRecurrence', () => {
+  it('atomically keeps the selected effective schedule and leaves OCC history untouched', async () => {
+    const current = {
+      activityId: PLAN,
+      ownerId: USER,
+      status: 'scheduled',
+      objectKind: 'plan',
+      type: 'event',
+      title: 'Recurring dinner',
+      details: { kind: 'event' },
+      schedule: {
+        date: '2026-08-01',
+        time: '18:00',
+        endTime: '20:00',
+        timezone: 'America/New_York',
+        scheduledAtUtc: '2026-08-01T22:00:00.000Z',
+        endAtUtc: '2026-08-02T00:00:00.000Z',
+      },
+      recurrence: {
+        mode: 'fixed',
+        segments: [
+          { freq: 'daily', effectiveFrom: '2026-08-01', time: '18:00', endTime: '20:00' },
+        ],
+      },
+      participantCount: 0,
+      childCount: 0,
+      expenseTotalCents: 0,
+      visibility: 'private',
+      icsSequence: 0,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      lastActivityAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-10T00:00:00.000Z',
+      schemaVersion: 1,
+    } satisfies Activity;
+    const occurrence = {
+      pk: `ACT#${PLAN}`,
+      sk: 'OCC#2026-08-12',
+      entity: 'Occurrence',
+      activityId: PLAN,
+      date: '2026-08-12',
+      status: 'rescheduled',
+      overrideDate: '2026-08-13',
+      overrideTime: '19:30',
+      createdAt: '2026-08-11T00:00:00.000Z',
+      updatedAt: '2026-08-11T01:00:00.000Z',
+      schemaVersion: 1,
+    } satisfies StoredItem;
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(current as never);
+    vi.mocked(repository.getActivityPartition).mockResolvedValue([
+      { ...current, pk: `ACT#${PLAN}`, sk: 'META', entity: 'Activity' },
+      occurrence,
+    ]);
+    vi.mocked(repository.patchActivity).mockClear();
+
+    const result = await convertRecurrence(
+      USER,
+      PLAN,
+      { occurrenceDate: '2026-08-12' },
+      NOW,
+      () => ({
+        userId: USER,
+        key: '11111111-1111-4111-8111-111111111111',
+        route: 'POST /v1/activities/:id/recurrence/convert',
+        status: 200,
+        body: '{}',
+        createdAt: NOW,
+        ttl: 1,
+      }),
+    );
+
+    expect(result.recurrence).toBeUndefined();
+    expect(result.schedule).toMatchObject({
+      date: '2026-08-13',
+      time: '19:30',
+      endTime: '20:00',
+      timezone: 'America/New_York',
+    });
+    expect(repository.patchActivity).toHaveBeenCalledWith(
+      USER,
+      result,
+      current.updatedAt,
+      expect.objectContaining({
+        occurrenceGuard: {
+          date: '2026-08-12',
+          kind: 'version',
+          updatedAt: occurrence.updatedAt,
+        },
+      }),
+    );
   });
 });

@@ -155,10 +155,12 @@ describe('cors', () => {
       headers: {
         Origin: 'http://localhost:8081',
         'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'Cache-Control',
       },
     });
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:8081');
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBe('true');
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Cache-Control');
   });
 
   it('does not hand CORS headers to a disallowed origin', async () => {

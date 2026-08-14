@@ -340,6 +340,19 @@ describe('useAgendaActivityActions recurring scope', () => {
     );
   });
 
+  it('does not complete a future recurring occurrence before its day', async () => {
+    clientCalls.complete.mockResolvedValue(undefined);
+    const future = { ...seriesRow, occurrenceDate: '2026-08-12' };
+    const mounted = withSeries(future);
+    const before = mounted.client.getQueryData<AgendaData>(mounted.key);
+
+    act(() => mounted.result.current.toggleComplete(future, true));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(clientCalls.complete).not.toHaveBeenCalled();
+    expect(mounted.client.getQueryData(mounted.key)).toEqual(before);
+  });
+
   /**
    * Asserted against the scoped case above: that one reaches the transport, so this one
    * failing to is the guard and not the harness.

@@ -1,8 +1,8 @@
 import type { ChangeTarget } from '@od/shared';
 import { describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
-import type { Activity, PlanType } from '@od/shared/types';
-import { type ActivityScope, scopeFromWire } from '@od/shared/types';
+import type { Activity, ActivityDetailTarget, PlanType } from '@od/shared/types';
+import { type ActivityScope, activityScope, occurrenceScope } from '@od/shared/types';
 import {
   Button,
   ChevronLeft,
@@ -14,11 +14,11 @@ import {
   RowGroup,
   ScreenShell,
   SettingRow,
+  Sheet,
   Skeleton,
   Text,
   useTheme,
 } from '@od/ui';
-import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
@@ -43,12 +43,8 @@ import {
   kindChangeConfirmation,
 } from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
+import { endRepeatSeries } from '@/features/activity/model/repeat';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
-import {
-  readOccurrenceDate,
-  readOccurrenceSchedule,
-  readOccurrenceStatus,
-} from '@/lib/agendaCache';
 import {
   completionVerb,
   outcomeVerb,
@@ -84,7 +80,8 @@ import { planKindLabel } from '@/lib/planKinds';
  * §8 names as the `medium` fallback: "nothing is lost, only rearranged". Flagged in the PR.
  */
 export interface ActivityDetailScreenProps {
-  activityId: string;
+  /** Explicit route identity; there is no absent occurrence field to reinterpret. */
+  target: ActivityDetailTarget;
   /** The user's today, in their zone. Injected so the quick chips are testable (§4.3). */
   today: WallDate;
   onBack: () => void;
@@ -92,8 +89,6 @@ export interface ActivityDetailScreenProps {
   onOpenActivity: (activityId: string) => void;
   /** Present only when navigation came from a passed, unresolved agenda row. */
   resolutionOccurrenceDate?: string | null;
-  /** The occurrence whose agenda row opened this route, independent of prompt visibility. */
-  occurrenceDate?: string;
   /** Keeps the route marker in sync with optimistic resolution, Undo, and request rollback. */
   onResolutionProjectionChange?: (resolved: boolean) => void;
 }
@@ -105,17 +100,16 @@ interface PendingChange {
 }
 
 export function ActivityDetailScreen({
-  activityId,
+  target,
   today,
   onBack,
   onOpenActivity,
   resolutionOccurrenceDate,
-  occurrenceDate,
   onResolutionProjectionChange,
 }: ActivityDetailScreenProps) {
   const theme = useTheme();
-  const queryClient = useQueryClient();
-  const detail = useActivityDetail(activityId);
+  const activityId = target.activityId;
+  const detail = useActivityDetail(target);
   const actions = useActivityActions(activityId);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [repeatOpen, setRepeatOpen] = useState(false);
@@ -125,6 +119,7 @@ export function ActivityDetailScreen({
   );
   const [pending, setPending] = useState<PendingChange | undefined>(undefined);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteSeriesConfirmOpen, setDeleteSeriesConfirmOpen] = useState(false);
   const [remindersOpen, setRemindersOpen] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [resolutionDismissed, setResolutionDismissed] = useState(false);
@@ -179,6 +174,7 @@ export function ActivityDetailScreen({
   async function remove() {
     if (await actions.remove()) {
       setDeleteOpen(false);
+      setDeleteSeriesConfirmOpen(false);
       onBack();
     }
   }
@@ -189,28 +185,8 @@ export function ActivityDetailScreen({
     activity?.status === 'scheduled' &&
     detail.detail?.capabilities?.complete === true &&
     !resolutionDismissed;
-  /**
-   * The occurrence every action on this screen targets.
-   *
-   * Navigation supplies it when the user came from a row; Today does, Plans and the reminder
-   * notification do not. For a series reached without one, the **agenda** answers — it holds
-   * occurrences the server expanded, so `readOccurrenceDate` picks a real day rather than
-   * deriving one.
-   *
-   * It used to fall back to `activity.schedule.date`, which is where the series *starts*. A
-   * weekly series opened from Plans therefore completed its anchor — a day that may be months
-   * back — while the row the user meant never moved. The anchor is not an occurrence anyone is
-   * looking at, which is the distinction that fallback missed.
-   *
-   * Still `undefined` when no agenda window is cached, and the completion control is absent
-   * rather than pointed at a guess.
-   */
-  const actionOccurrenceDate =
-    occurrenceDate ??
-    resolutionOccurrenceDate ??
-    (activity?.recurrence === undefined
-      ? undefined
-      : readOccurrenceDate(queryClient, activityId, today));
+  /** The server echoes only the explicit nominal occurrence target supplied by navigation. */
+  const actionOccurrenceDate = detail.detail?.occurrence?.nominalDate;
 
   /**
    * A series reached without an occurrence offers no completion control.
@@ -221,11 +197,29 @@ export function ActivityDetailScreen({
    * answer until it has one.
    */
   /** One value the whole screen acts through, rather than a date each field re-reads. */
-  const actionScope: ActivityScope = scopeFromWire({
-    ...(actionOccurrenceDate === undefined
-      ? {}
-      : { occurrenceDate: actionOccurrenceDate }),
-  });
+  const actionScope: ActivityScope =
+    actionOccurrenceDate === undefined
+      ? activityScope()
+      : occurrenceScope(actionOccurrenceDate);
+
+  async function removeOccurrence() {
+    if (actionOccurrenceDate === undefined) return;
+    if (await actions.skipOccurrence(occurrenceScope(actionOccurrenceDate))) {
+      setDeleteOpen(false);
+      onBack();
+    }
+  }
+
+  async function endSeriesFromDelete() {
+    if (activity?.recurrence === undefined || actionOccurrenceDate === undefined) return;
+    if (
+      await detail.patch({
+        recurrence: endRepeatSeries(activity.recurrence, actionOccurrenceDate),
+      })
+    ) {
+      setDeleteOpen(false);
+    }
+  }
 
   /**
    * The schedule this screen is **about**.
@@ -236,12 +230,17 @@ export function ActivityDetailScreen({
    * time they had not set, inviting a second "correction" and a second override.
    */
   const shownSchedule =
-    actionOccurrenceDate === undefined
+    detail.detail?.occurrence === undefined
       ? activity?.schedule
-      : (readOccurrenceSchedule(queryClient, {
-          activityId,
-          occurrenceDate: actionOccurrenceDate,
-        }) ?? activity?.schedule);
+      : {
+          date: detail.detail.occurrence.date,
+          ...(detail.detail.occurrence.time === undefined
+            ? {}
+            : { time: detail.detail.occurrence.time }),
+          ...(detail.detail.occurrence.endTime === undefined
+            ? {}
+            : { endTime: detail.detail.occurrence.endTime }),
+        };
 
   const seriesWithoutOccurrence =
     activity?.recurrence !== undefined && actionOccurrenceDate === undefined;
@@ -251,20 +250,15 @@ export function ActivityDetailScreen({
    *
    * A one-off's is on the Activity. An occurrence's is not readable from its series at all, so
    * it comes from this screen's own projection once the user has acted, and before that from
-   * the agenda — the only client-side surface holding expanded occurrences. A projection
-   * captured under a different scope is ignored rather than believed.
+   * the authoritative occurrence detail response. A projection captured under a different
+   * scope is ignored rather than believed.
    */
   const resolved =
     projection !== undefined && projection.scope === actionOccurrenceDate
       ? projection.resolved
       : actionOccurrenceDate === undefined
         ? RESOLVED_STATUSES.has(activity?.status ?? '')
-        : RESOLVED_STATUSES.has(
-            readOccurrenceStatus(queryClient, {
-              activityId,
-              occurrenceDate: actionOccurrenceDate,
-            }) ?? '',
-          );
+        : RESOLVED_STATUSES.has(detail.detail?.occurrence?.status ?? '');
 
   /** One callback for the optimistic flip, the Undo, and every rollback in between. */
   function projectResolution(next: boolean) {
@@ -405,13 +399,36 @@ export function ActivityDetailScreen({
               open={repeatOpen}
               onClose={() => setRepeatOpen(false)}
               anchorDate={
-                activity.recurrence === undefined ? activity.schedule.date : today
+                activity.recurrence === undefined
+                  ? activity.schedule.date
+                  : (actionOccurrenceDate ?? today)
               }
               scope={actionScope}
               {...(activity.recurrence === undefined
                 ? {}
                 : { value: activity.recurrence })}
-              onCommit={(recurrence) => detail.patch({ recurrence: recurrence ?? null })}
+              onCommit={(recurrence) =>
+                detail.patch({
+                  recurrence: recurrence ?? null,
+                  ...(recurrence !== undefined &&
+                  activity.recurrence !== undefined &&
+                  recurrence.segments.length > activity.recurrence.segments.length &&
+                  actionOccurrenceDate !== undefined
+                    ? { editedFromDate: actionOccurrenceDate }
+                    : {}),
+                })
+              }
+              {...(actionOccurrenceDate === undefined
+                ? {}
+                : {
+                    onConvertToOneOff: async () => {
+                      const converted =
+                        await detail.convertToOneOff(actionOccurrenceDate);
+                      if (converted) onOpenActivity(activityId);
+                      return converted;
+                    },
+                  })}
+              completedOccurrenceCount={detail.detail?.completedOccurrenceCount ?? 0}
               busy={detail.isSaving}
               {...(detail.editError === undefined ? {} : { error: detail.editError })}
             />
@@ -475,17 +492,90 @@ export function ActivityDetailScreen({
             />
           )}
 
-          <ConfirmDialog
-            open={deleteOpen}
-            confirmation={deleteConfirmation(
-              activity,
-              detail.detail?.reminders.length ?? 0,
-            )}
-            busy={actions.isBusy}
-            onCancel={() => setDeleteOpen(false)}
-            onConfirm={() => void remove()}
-            testID="delete-confirm"
-          />
+          {activity.recurrence === undefined ? (
+            <ConfirmDialog
+              open={deleteOpen}
+              confirmation={deleteConfirmation(
+                activity,
+                detail.detail?.reminders.length ?? 0,
+              )}
+              busy={actions.isBusy}
+              onCancel={() => setDeleteOpen(false)}
+              onConfirm={() => void remove()}
+              testID="delete-confirm"
+            />
+          ) : (
+            <>
+              <Sheet
+                open={deleteOpen}
+                onClose={() => setDeleteOpen(false)}
+                title="Delete recurring activity"
+                detent="fit"
+                actions={
+                  <Button
+                    label="Cancel"
+                    variant="ghost"
+                    fullWidth
+                    onPress={() => setDeleteOpen(false)}
+                  />
+                }
+                testID="recurring-delete-choices"
+              >
+                <Text variant="body" color="textSecondary">
+                  Choose whether to remove one occurrence, stop future occurrences, or
+                  delete the whole series.
+                </Text>
+                {actionOccurrenceDate === undefined ? (
+                  <Text accessibilityRole="alert" color="textSecondary">
+                    Open a specific occurrence to remove it or end the series on that
+                    date.
+                  </Text>
+                ) : (
+                  <>
+                    <Button
+                      label="This occurrence"
+                      variant="secondary"
+                      fullWidth
+                      loading={actions.isBusy}
+                      onPress={() => void removeOccurrence()}
+                      testID="delete-this-occurrence"
+                    />
+                    <Button
+                      label="End series"
+                      variant="secondary"
+                      fullWidth
+                      loading={detail.isSaving}
+                      onPress={() => void endSeriesFromDelete()}
+                      testID="delete-end-series"
+                    />
+                  </>
+                )}
+                <Button
+                  label="Delete whole series"
+                  variant="danger"
+                  fullWidth
+                  onPress={() => {
+                    setDeleteOpen(false);
+                    setDeleteSeriesConfirmOpen(true);
+                  }}
+                  testID="delete-whole-series"
+                />
+              </Sheet>
+
+              <ConfirmDialog
+                open={deleteSeriesConfirmOpen}
+                confirmation={deleteConfirmation(
+                  activity,
+                  detail.detail?.reminders.length ?? 0,
+                  detail.detail?.completedOccurrenceCount ?? 0,
+                )}
+                busy={actions.isBusy}
+                onCancel={() => setDeleteSeriesConfirmOpen(false)}
+                onConfirm={() => void remove()}
+                testID="delete-series-confirm"
+              />
+            </>
+          )}
 
           <PassedPlanResolutionSheet
             open={resolutionOpen && showResolutionPrompt}

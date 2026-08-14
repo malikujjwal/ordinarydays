@@ -85,6 +85,50 @@ describe('AgendaRow affordances', () => {
     expect(onOpenReschedule).toHaveBeenCalledWith(expect.any(Object));
   });
 
+  it('keeps a future recurring task visible but prevents completing it early', () => {
+    const onToggleComplete = vi.fn();
+    mount(
+      <AgendaRow
+        item={item('task', {
+          title: 'Tomorrow stand-up',
+          isRecurring: true,
+          occurrenceDate: '2026-08-12',
+        })}
+        today="2026-08-11"
+        onOpen={() => {}}
+        onToggleComplete={onToggleComplete}
+      />,
+    );
+
+    const checkbox = screen.getByRole('checkbox', {
+      name: 'Tomorrow stand-up, not completed',
+    });
+    expect(checkbox.getAttribute('aria-disabled')).toBe('true');
+
+    fireEvent.click(checkbox);
+    expect(onToggleComplete).not.toHaveBeenCalled();
+  });
+
+  it("allows completing today's recurring occurrence", () => {
+    mount(
+      <AgendaRow
+        item={item('task', {
+          isRecurring: true,
+          occurrenceDate: '2026-08-11',
+        })}
+        today="2026-08-11"
+        onOpen={() => {}}
+        onToggleComplete={() => {}}
+      />,
+    );
+
+    expect(
+      screen
+        .getByRole('checkbox', { name: 'Evening plan, not completed' })
+        .getAttribute('aria-disabled'),
+    ).toBeNull();
+  });
+
   it('renders a plan marker as hidden, roleless, and non-interactive', () => {
     const onOpen = vi.fn();
     const { container } = mount(<AgendaRow item={item('event')} onOpen={onOpen} />);

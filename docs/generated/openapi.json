@@ -418,6 +418,27 @@
                 }
               ]
             }
+          },
+          "projectionVersions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "activityId": {
+                  "type": "string",
+                  "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "activityId",
+                "version"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -2844,6 +2865,53 @@
               "$ref": "#/components/schemas/Reminder"
             }
           },
+          "occurrence": {
+            "type": "object",
+            "properties": {
+              "nominalDate": {
+                "type": "string",
+                "format": "date"
+              },
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "time": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "endTime": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "saved",
+                  "scheduled",
+                  "completed",
+                  "skipped",
+                  "cancelled",
+                  "completed_occurrence",
+                  "skipped_occurrence"
+                ]
+              },
+              "isSnoozed": {
+                "type": "boolean"
+              },
+              "completedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "nominalDate",
+              "date",
+              "status",
+              "isSnoozed"
+            ],
+            "additionalProperties": false
+          },
           "completedOccurrenceCount": {
             "type": "integer",
             "minimum": 0
@@ -3152,6 +3220,53 @@
           "activity": {
             "$ref": "#/components/schemas/Activity"
           },
+          "occurrence": {
+            "type": "object",
+            "properties": {
+              "nominalDate": {
+                "type": "string",
+                "format": "date"
+              },
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "time": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "endTime": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "saved",
+                  "scheduled",
+                  "completed",
+                  "skipped",
+                  "cancelled",
+                  "completed_occurrence",
+                  "skipped_occurrence"
+                ]
+              },
+              "isSnoozed": {
+                "type": "boolean"
+              },
+              "completedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "nominalDate",
+              "date",
+              "status",
+              "isSnoozed"
+            ],
+            "additionalProperties": false
+          },
           "rsvpReset": {
             "type": "boolean",
             "enum": [
@@ -3200,6 +3315,19 @@
         },
         "required": [
           "date"
+        ],
+        "additionalProperties": false
+      },
+      "ConvertRecurrenceInput": {
+        "type": "object",
+        "properties": {
+          "occurrenceDate": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "occurrenceDate"
         ],
         "additionalProperties": false
       },
@@ -4270,7 +4398,7 @@
     "/v1/activities/{id}": {
       "get": {
         "summary": "One activity, with the caller’s own reminders",
-        "description": "Returns `{ activity, reminders }` — an object of named collections, so participants, expenses, updates, attachments, children and date suggestions are **added** as their phases land rather than changing the envelope. `reminders` is the caller’s own and nobody else’s: every participant’s rows live in the partition this reads, and the projection filters to the caller before responding — a shared plan has one schedule and many reminder sets, and nobody sees that anybody else has any. `listId` and `listItemId` are not returned: the contract gates them on a list-access check that arrives with lists in Phase 3. A caller with no relationship to the activity gets `404`, never `403`.",
+        "description": "Returns `{ activity, reminders, occurrence? }` — an object of named collections, so participants, expenses, updates, attachments, children and date suggestions are **added** as their phases land rather than changing the envelope. `reminders` is the caller’s own and nobody else’s: every participant’s rows live in the partition this reads, and the projection filters to the caller before responding — a shared plan has one schedule and many reminder sets, and nobody sees that anybody else has any. `listId` and `listItemId` are not returned: the contract gates them on a list-access check that arrives with lists in Phase 3. A caller with no relationship to the activity gets `404`, never `403`. Supplying `occurrenceDate` explicitly targets that nominal recurring occurrence and returns its authoritative effective date, time and status after overrides; without it the response is series/activity detail and never guesses an occurrence.",
         "tags": [
           "activities"
         ],
@@ -4283,6 +4411,15 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": false,
+            "name": "occurrenceDate",
+            "in": "query"
           }
         ],
         "responses": {
@@ -4319,6 +4456,16 @@
                     "data",
                     "meta"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed occurrence date, or a date that this recurrence does not emit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -4606,6 +4753,114 @@
           },
           "404": {
             "description": "No such activity, or the caller is a stranger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/activities/{id}/recurrence/convert": {
+      "post": {
+        "summary": "Convert one recurring occurrence to a one-off",
+        "description": "The atomic Does-not-repeat operation. The selected nominal occurrence supplies the effective schedule; recurrence is removed while stored occurrence history is retained. Requires `Idempotency-Key`.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConvertRecurrenceInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The converted one-off activity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Activity"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid occurrence target, a non-recurring activity, or missing key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A non-owner attempted to convert the series.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or the caller is a stranger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The activity or selected occurrence changed during conversion.",
             "content": {
               "application/json": {
                 "schema": {

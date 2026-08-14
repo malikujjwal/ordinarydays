@@ -84,6 +84,23 @@ describe('deleteConfirmation', () => {
   it('omits the Keeps line when nothing survives', () => {
     expect(deleteConfirmation(plan(), 0).keeps).toBeUndefined();
   });
+
+  it('names the entire recurring series and its real stored completion count', () => {
+    const confirmation = deleteConfirmation(
+      task({
+        schedule: { date: '2026-08-01', timezone: 'America/New_York' },
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+        },
+      }),
+      0,
+      40,
+    );
+
+    expect(confirmation.removes).toEqual(['the series and its 40 past completions.']);
+    expect(confirmation.confirmLabel).toBe('Delete series');
+  });
 });
 
 describe('kindChangeConfirmation', () => {

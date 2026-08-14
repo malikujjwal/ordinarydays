@@ -16,6 +16,14 @@ looking like unfinished work. One pure function decides which GSI1 bucket every 
 index entry lives in, so an undated plan with people on it goes to Plans and never to Today's
 Anytime list. This is the phase where the product becomes usable daily.
 
+> **Blocking stabilization gate — 2026-08-14.** The recurrence audit found that the pure
+> expansion engine was sound while optional scope, cache-derived occurrence targeting and
+> divergent client reconciliation made the feature unreliable across layers. The founder
+> created [Phase 2.5](phase-02-5-recurrence-stabilization.md) and confirmed that **Does not
+> repeat** removes recurrence, **End series** sets an inclusive end date, and **No end** means
+> indefinite recurrence. No remaining Phase 2 feature implementation and no Phase 3
+> implementation proceeds until P2-52 through P2-55 pass.
+
 > **Plan amendment — 2026-08-10.** Before any Phase 2 task was scheduled, the phase gate
 > was reconciled against the Phase 1 repository, including the Event/Outing kind merge.
 > The task scopes, dependencies, file paths, acceptance criteria and estimates below are the
@@ -2354,15 +2362,15 @@ does not live under `features/agenda`.
 
 **Approach.** The options list in
 [`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md#61-the-options-list)
-§6.1, exactly: Never, Daily, Weekdays, Weekly, Monthly, Yearly, Every X days (stepper,
+§6.1, exactly: Does not repeat, Daily, Weekdays, Weekly, Monthly, Yearly, Every X days (stepper,
 2–365), Selected weekdays (seven toggles, at least one on). `Custom` is not shown until
 Phase 9, and there is no mode control — `mode` is `'fixed'` (§6.7). Every option exposes
-**Ends**: `Never` / `On a date` (`recurrence.endDate`) / `After N times`
+**Ends**: `No end` / `On a date` (`recurrence.endDate`) / `After N times`
 (`recurrence.count`, 1–999). Ends belongs to the series and closes the whole series,
 however many segments it has.
 
 > **Founder amendment — 2026-08-12 (supersedes the older control and option text above).**
-> Repeats is one clean dropdown: Never, Daily, Weekdays, Weekends, Weekly, Biweekly,
+> Repeats is one clean dropdown: Does not repeat, Daily, Weekdays, Weekends, Weekly, Biweekly,
 > Monthly, Every 3 Months, Every 6 Months, Yearly, Custom. `Custom` maps to
 > `interval_days` and reveals a typed integer Days input (2–365), not a stepper. Ends is
 > also one dropdown; its conditional date/count controls remain. Monthly intervals 3 and 6
@@ -2377,6 +2385,12 @@ however many segments it has.
 > wins. The Repeat sheet must keep focused controls visible above the iOS keyboard, provide a
 > Done path for the number pad, and use the shared native `DatePicker` for End date rather
 > than a text field.
+
+> **Founder amendment — 2026-08-14 (supersedes every `Never` behavior below).** The visible
+> operations are **Does not repeat**, **No end**, and **End series**, with the distinct meanings
+> in ADR-054. P2-27's shipped `Never` path remains historical implementation context only.
+> Blocking Phase 2.5 P2-54 changes its label and behavior together after P2-53 supplies the
+> authoritative occurrence target; no copy-only relabel is allowed before then.
 
 - **The sheet writes one rule segment's fields**, validated by the same Zod schema the
   server uses (P2-04) — imported, never redefined. It always writes explicit anchors:
@@ -2394,13 +2408,14 @@ however many segments it has.
 - **The 21st segment**: the server returns `validation_failed`; the sheet explains it and
   suggests ending the series and starting a new one (§6.2), rather than surfacing a raw
   error string.
-- **`Never` removes `recurrence`** (§6.1), which moves the bucket `R → S` (P2-05
+- **Superseded by P2-54:** the old `Never` path removed `recurrence` (§6.1), which moved
+  the bucket `R → S` (P2-05
   transition 24). On a series with stored past completions this also stops those
   `OCC#` rows rendering anywhere, so the sheet shows the §1a.1-shape confirmation naming
   their real count — the same count and copy source as `Delete whole series`
   ([`../01-product/activities.md`](../01-product/activities.md#64-deleting) §6.4) — and
-  points at `End series` as the history-keeping alternative (decided 2026-08-07 —
-  `today-and-tasks.md` §6.1 now states the same `Never` guard).
+  pointed at `End series` as the history-keeping alternative. It did not authoritatively
+  choose the surviving occurrence and must not be reused for Does not repeat.
 - Repeat is only enabled when a date is set (§3.4 of `activities.md`); the sheet is never
   reachable without one, and the server rejects the combination anyway (P2-04).
 - `Every X days` with X = 1 is normalised to Daily at the schema layer (P2-04); the
@@ -2413,9 +2428,9 @@ matching §6.1's table (including the anchors); invalid Custom Days disables the
 each Ends variant lands on the series level, not the segment. Component: opened on
 a two-segment series, the sheet renders the active segment's values and nothing from the
 first; the 21-segment `validation_failed` renders the explanatory state with an
-`End series` path; `Never` on a series with seeded completions shows the confirmation with
-the real count, and on a never-completed series applies immediately. Integration for the
-append itself is P2-26's and P2-04's.
+`End series` path; the historical `Never` behavior remains covered until P2-54 replaces it
+with the three-operation component matrix. Integration for the append itself is P2-26's and
+P2-04's.
 
 ---
 

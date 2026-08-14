@@ -57,10 +57,17 @@ const plural = (count: number, one: string, many: string) =>
 export function deleteConfirmation(
   activity: Activity,
   reminderCount: number,
+  completedOccurrenceCount = 0,
 ): Confirmation {
-  const noun = activity.objectKind === 'task' ? 'task' : 'plan';
+  const recurring = activity.recurrence !== undefined;
+  const noun = recurring ? 'series' : activity.objectKind === 'task' ? 'task' : 'plan';
 
   const removes = [`the ${noun}`];
+  if (recurring && completedOccurrenceCount > 0) {
+    removes.push(
+      `its ${plural(completedOccurrenceCount, 'past completion', 'past completions')}`,
+    );
+  }
   if (activity.notes !== undefined && activity.notes !== '') removes.push('its notes');
   if (reminderCount > 0) {
     removes.push(plural(reminderCount, 'reminder', 'reminders'));
@@ -83,7 +90,11 @@ export function deleteConfirmation(
     removesLead: 'This removes:',
     removes: [`${sentenceList(removes)}.`],
     ...(keeps === undefined ? {} : { keeps: `${keeps}.` }),
-    confirmLabel: activity.objectKind === 'task' ? 'Delete task' : 'Delete plan',
+    confirmLabel: recurring
+      ? 'Delete series'
+      : activity.objectKind === 'task'
+        ? 'Delete task'
+        : 'Delete plan',
   };
 }
 

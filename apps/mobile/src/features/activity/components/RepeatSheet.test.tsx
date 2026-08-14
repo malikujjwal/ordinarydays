@@ -1,4 +1,5 @@
 import type { Recurrence, RecurrenceSegment } from '@od/shared/types';
+import { occurrenceScope } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -8,9 +9,14 @@ const TODAY = '2026-08-12';
 
 function mount(
   value?: Recurrence,
-  options: { onCommit?: ReturnType<typeof vi.fn> } = {},
+  options: {
+    onCommit?: ReturnType<typeof vi.fn>;
+    onConvertToOneOff?: ReturnType<typeof vi.fn>;
+    completedOccurrenceCount?: number;
+  } = {},
 ) {
   const onCommit = options.onCommit ?? vi.fn(async () => true);
+  const onConvertToOneOff = options.onConvertToOneOff ?? vi.fn(async () => true);
   const onClose = vi.fn();
   render(
     <ThemeProvider scheme="light">
@@ -18,12 +24,15 @@ function mount(
         open
         onClose={onClose}
         anchorDate={TODAY}
+        scope={occurrenceScope(TODAY)}
         {...(value === undefined ? {} : { value })}
         onCommit={onCommit}
+        onConvertToOneOff={onConvertToOneOff}
+        completedOccurrenceCount={options.completedOccurrenceCount ?? 0}
       />
     </ThemeProvider>,
   );
-  return { onCommit, onClose };
+  return { onCommit, onConvertToOneOff, onClose };
 }
 
 describe('RepeatSheet', () => {
@@ -79,6 +88,27 @@ describe('RepeatSheet', () => {
     ).toBe('date');
   });
 
+  it('No end clears both date and count termination without converting the series', async () => {
+    const onCommit = vi.fn(async (_value: Recurrence | undefined) => true);
+    mount(
+      {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+        endDate: '2026-08-30',
+      },
+      { onCommit },
+    );
+
+    fireEvent.change(screen.getByTestId('repeat-ends'), { target: { value: 'never' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
+
+    await waitFor(() => expect(onCommit).toHaveBeenCalledOnce());
+    expect(onCommit.mock.calls[0]?.[0]).toEqual({
+      mode: 'fixed',
+      segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+    });
+  });
+
   it('commits a same-day correction without appending a duplicate anchor', async () => {
     const onCommit = vi.fn(async (_value: Recurrence | undefined) => true);
     mount(
@@ -128,45 +158,57 @@ describe('RepeatSheet', () => {
     });
   });
 
-  /**
-   * `Never` **ends** the series; it does not delete the rule (`today-and-tasks.md` §6 line
-   * 584). Deleting it was a type change — series to one-off — and that single operation is
-   * what required flattening surplus occurrences, choosing which day the survivor lives on,
-   * and clearing occurrence statuses from rows that were no longer occurrences. Ending needs
-   * none of it: one field moves on a row that stays a series.
-   */
-  it('ends the series on the occurrence in view rather than deleting the rule', async () => {
+  /** Does not repeat is a dedicated conversion and never reuses the recurrence PATCH. */
+  it('uses the dedicated conversion operation for Does not repeat', async () => {
     const onCommit = vi.fn(async (_value: Recurrence | undefined) => true);
+    const onConvertToOneOff = vi.fn(async () => true);
     const stored: Recurrence = {
       mode: 'fixed',
       segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' }],
     };
-    mount(stored, { onCommit });
+    mount(stored, { onCommit, onConvertToOneOff });
 
     fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
 
-    // Segments are untouched, so history keeps rendering under the rule in force on its date.
+    await waitFor(() => expect(onConvertToOneOff).toHaveBeenCalledOnce());
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /** Conversion confirms only when real stored completion history stops rendering. */
+  it('confirms conversion only when stored completion history will stop rendering', async () => {
+    const onConvertToOneOff = vi.fn(async () => true);
+    mount(
+      {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' }],
+      },
+      { onConvertToOneOff, completedOccurrenceCount: 2 },
+    );
+
+    fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
+
+    expect(screen.getByTestId('repeat-convert-confirmation').textContent).toContain(
+      '2 past completions',
+    );
+    expect(onConvertToOneOff).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('repeat-convert-confirm'));
+    await waitFor(() => expect(onConvertToOneOff).toHaveBeenCalledOnce());
+  });
+
+  it('keeps End series separate and preserves recurrence segments', async () => {
+    const onCommit = vi.fn(async (_value: Recurrence | undefined) => true);
+    const stored: Recurrence = {
+      mode: 'fixed',
+      segments: [{ freq: 'daily', effectiveFrom: '2026-08-01' }],
+    };
+    mount(stored, { onCommit });
+
+    fireEvent.click(screen.getByTestId('repeat-end-series-action'));
+
     await waitFor(() =>
       expect(onCommit).toHaveBeenCalledWith({ ...stored, endDate: TODAY }),
     );
-  });
-
-  /**
-   * The old dialog warned that stopping a repeat removed past completions from view. That was
-   * true of deleting the rule and is not true of ending it, so a confirmation here would now
-   * be warning about something that does not happen.
-   */
-  it('needs no confirmation, because ending removes nothing', async () => {
-    const { onCommit } = mount({
-      mode: 'fixed',
-      segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-01' }],
-    });
-
-    fireEvent.change(screen.getByTestId('repeat-option'), { target: { value: 'never' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
-
-    await waitFor(() => expect(onCommit).toHaveBeenCalledOnce());
-    expect(screen.queryByTestId('repeat-never-confirmation')).toBeNull();
   });
 });

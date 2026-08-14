@@ -5,9 +5,11 @@ import {
   activity,
   activityCompletionResult,
   activityDetail,
+  activityDetailQuery,
   activityListItem,
   activityListQuery,
   completeActivityInput,
+  convertRecurrenceInput,
   createActivityInput,
   deletedActivity,
   patchActivityInput,
@@ -346,7 +348,7 @@ registry.registerPath({
   path: '/v1/activities/{id}',
   summary: 'One activity, with the caller’s own reminders',
   description:
-    'Returns `{ activity, reminders }` — an object of named collections, so participants, ' +
+    'Returns `{ activity, reminders, occurrence? }` — an object of named collections, so participants, ' +
     'expenses, updates, attachments, children and date suggestions are **added** as their ' +
     'phases land rather than changing the envelope. `reminders` is the caller’s own and ' +
     'nobody else’s: every participant’s rows live in the partition this reads, and the ' +
@@ -354,10 +356,13 @@ registry.registerPath({
     'and many reminder sets, and nobody sees that anybody else has any. `listId` and ' +
     '`listItemId` are not returned: the contract gates them on a list-access check that ' +
     'arrives with lists in Phase 3. A caller with no relationship to the activity gets ' +
-    '`404`, never `403`.',
+    '`404`, never `403`. Supplying `occurrenceDate` explicitly targets that nominal recurring ' +
+    'occurrence and returns its authoritative effective date, time and status after overrides; ' +
+    'without it the response is series/activity detail and never guesses an occurrence.',
   tags: ['activities'],
   request: {
     params: z.object({ id: activityId }),
+    query: activityDetailQuery,
   },
   responses: {
     200: {
@@ -368,6 +373,11 @@ registry.registerPath({
       description:
         'No such activity, or none this caller has any relationship to. The two are ' +
         'deliberately indistinguishable.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    400: {
+      description:
+        'Malformed occurrence date, or a date that this recurrence does not emit.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },
@@ -449,6 +459,43 @@ registry.registerPath({
     },
     404: {
       description: 'No such activity, or the caller is a stranger.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/recurrence/convert',
+  summary: 'Convert one recurring occurrence to a one-off',
+  description:
+    'The atomic Does-not-repeat operation. The selected nominal occurrence supplies the ' +
+    'effective schedule; recurrence is removed while stored occurrence history is retained. ' +
+    'Requires `Idempotency-Key`.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: convertRecurrenceInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The converted one-off activity.',
+      content: { 'application/json': { schema: activityResponse } },
+    },
+    400: {
+      description: 'Invalid occurrence target, a non-recurring activity, or missing key.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A non-owner attempted to convert the series.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or the caller is a stranger.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description: 'The activity or selected occurrence changed during conversion.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { activity } from './activity.js';
+import { activity, occurrenceDetailProjection } from './activity.js';
 import { hhmm, ianaTimezone, isoDate } from './common.js';
 
 /** The sole schedule mutation body (`POST /v1/activities/:id/schedule`). */
@@ -49,6 +49,8 @@ export type ScheduleActivityInput = z.infer<typeof scheduleActivityInput>;
 export const scheduleActivityResult = z
   .object({
     activity,
+    /** Present exactly for an occurrence-targeted schedule write. */
+    occurrence: occurrenceDetailProjection.optional(),
     rsvpReset: z.literal(true).optional(),
     reminderOffsetsNormalized: z.literal(true).optional(),
   })

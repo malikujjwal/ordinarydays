@@ -83,8 +83,14 @@ beforeEach(async () => {
   createApp = (await import('../app.js')).createApp;
 });
 
-const get = (app: ReturnType<typeof CreateApp>, id = ACT) =>
-  app.fetch(new Request(`http://localhost/v1/activities/${id}`));
+const get = (app: ReturnType<typeof CreateApp>, id = ACT, occurrenceDate?: string) =>
+  app.fetch(
+    new Request(
+      `http://localhost/v1/activities/${id}${
+        occurrenceDate === undefined ? '' : `?occurrenceDate=${occurrenceDate}`
+      }`,
+    ),
+  );
 
 const asUser = (userId: string) =>
   createApp({ identityProvider: { resolve: () => Promise.resolve(userId) } });
@@ -180,6 +186,125 @@ describe('reading an activity you own', () => {
 
     expect(ddbMock.commandCalls(GetCommand)).toHaveLength(1);
     expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1);
+  });
+});
+
+describe('an explicitly targeted recurring occurrence', () => {
+  const DATE = '2026-08-14';
+  const recurring = () =>
+    meta({
+      status: 'scheduled',
+      schedule: {
+        date: '2026-08-01',
+        time: '09:00',
+        endTime: '10:00',
+        timezone: 'America/New_York',
+      },
+      recurrence: {
+        mode: 'fixed',
+        segments: [
+          {
+            freq: 'daily',
+            interval: 1,
+            effectiveFrom: '2026-08-01',
+            time: '09:00',
+            endTime: '10:00',
+          },
+        ],
+      },
+    });
+  const occurrence = (overrides: Record<string, unknown>) => ({
+    pk: `ACT#${ACT}`,
+    sk: `OCC#${DATE}`,
+    entity: 'Occurrence',
+    activityId: ACT,
+    date: DATE,
+    ...overrides,
+  });
+
+  it('projects an untouched occurrence without requiring an agenda read', async () => {
+    seed([recurring()]);
+
+    const body = await (await get(createApp(), ACT, DATE)).json();
+
+    expect(body.data.occurrence).toEqual({
+      nominalDate: DATE,
+      date: DATE,
+      time: '09:00',
+      endTime: '10:00',
+      status: 'scheduled',
+      isSnoozed: false,
+    });
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1);
+  });
+
+  it('projects a moved occurrence from its nominal identity', async () => {
+    seed([
+      recurring(),
+      occurrence({
+        status: 'rescheduled',
+        overrideDate: '2026-08-16',
+        overrideTime: '18:30',
+      }),
+    ]);
+
+    const body = await (await get(createApp(), ACT, DATE)).json();
+
+    expect(body.data.occurrence).toMatchObject({
+      nominalDate: DATE,
+      date: '2026-08-16',
+      time: '18:30',
+      status: 'scheduled',
+      isSnoozed: false,
+    });
+  });
+
+  it('projects a cross-day snooze in the activity timezone', async () => {
+    seed([
+      recurring(),
+      occurrence({ status: 'snoozed', snoozedUntil: '2026-08-16T00:30:00.000Z' }),
+    ]);
+
+    const body = await (await get(createApp(), ACT, DATE)).json();
+
+    expect(body.data.occurrence).toMatchObject({
+      nominalDate: DATE,
+      date: '2026-08-15',
+      time: '20:30',
+      status: 'scheduled',
+      isSnoozed: true,
+    });
+  });
+
+  it('projects stored completion rather than the series status', async () => {
+    seed([
+      recurring(),
+      occurrence({
+        status: 'completed',
+        completedAt: '2026-08-14T14:00:00.000Z',
+      }),
+    ]);
+
+    const body = await (await get(createApp(), ACT, DATE)).json();
+
+    expect(body.data.occurrence).toMatchObject({
+      status: 'completed_occurrence',
+      completedAt: '2026-08-14T14:00:00.000Z',
+    });
+  });
+
+  it('rejects an occurrence query for a one-off instead of manufacturing a target', async () => {
+    seed([meta()]);
+
+    const res = await get(createApp(), ACT, DATE);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe('validation_failed');
+    expect(body.error.details).toContainEqual({
+      path: 'occurrenceDate',
+      message: 'The date is not emitted by this recurrence.',
+    });
   });
 });
 

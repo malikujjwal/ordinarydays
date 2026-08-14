@@ -1,0 +1,192 @@
+# Phase 2.5 — Recurrence stabilization
+
+## Goal
+
+Phase 2.5 is a blocking correctness gate between Today/tasks and all later product work.
+At its end, the words **series**, **occurrence**, **does not repeat**, **no end**, and
+**end series** each name one operation throughout the product, API and client. No write
+infers an occurrence from an optional field or from whichever agenda window happens to be
+cached, and the client no longer maintains a partial, divergent interpretation of a
+recurrence mutation.
+
+This gate was created after the 2026-08-13 recurrence audit found fifteen defects, twelve of
+which came from optional occurrence scope. The pure expansion engine was not the failing
+part: its property and boundary tests remained green. The failures lived at the seams between
+the series Activity, virtual agenda occurrences, stored Occurrence overrides, detail state and
+the eventually-consistent agenda index.
+
+No remaining Phase 2 feature work and no Phase 3 implementation work begins until P2-52
+through P2-55 are complete. Documentation and review may continue; code that consumes
+completion, recurrence or agenda state waits.
+
+## Founder decisions — 2026-08-14
+
+These decisions supersede the short-lived 2026-08-13 interpretation that made Repeat →
+`Never` an alias for End series.
+
+1. **Does not repeat** removes `recurrence`. On a new draft it means no rule is written. On an
+   existing series it is an explicit series-to-one-off conversion, never an alias for ending.
+2. **End series** preserves `recurrence` and sets its inclusive `endDate`. It is a separate
+   action.
+3. **No end** is the Ends value that clears `endDate`/`count` and lets the series continue
+   indefinitely. It is not labelled `Never`, because that word previously named two opposite
+   operations in one sheet.
+4. Converting an existing series to a one-off requires an explicit occurrence target. That
+   occurrence's effective date, start time and end time become the Activity schedule; the
+   stored timezone is retained. Every other generated occurrence stops rendering. Existing
+   Occurrence rows remain stored but are no longer reachable through recurrence expansion.
+5. If stored completion history will disappear from view, the standard destructive
+   confirmation names the real count. A separate End series action remains available because
+   it preserves history rendering.
+6. A series-only detail screen never chooses today, the next cached occurrence or the most
+   recent cached occurrence on the user's behalf. Occurrence actions require navigation with
+   an explicit occurrence target. Series actions state their date explicitly.
+
+## Deliverables
+
+- [ ] One canonical vocabulary and operation table in the product and architecture docs.
+- [ ] A discriminated target at every internal activity/occurrence call site; optional
+      `occurrenceDate` exists only at the current HTTP and persisted-mutation compatibility
+      boundaries.
+- [ ] An authoritative occurrence detail projection containing effective date, time, end time
+      and status, independent of agenda-cache warmth.
+- [ ] An atomic series-to-one-off conversion that retains the selected occurrence schedule.
+- [ ] A distinct End series write and a distinct No end setting.
+- [ ] Agenda reconciliation that cannot cache a pre-write GSI response over newer local state
+      and does not attempt partial recurrence expansion in `applyPatch`.
+- [ ] Cross-layer tests for create, edit-all-future, complete, reschedule, convert, end,
+      restart, cold entry and offline replay.
+- [ ] A one-time audit for recurring Activity rows carrying series-level `completed` or
+      `skipped` status, with no invented occurrence history.
+
+## Tasks
+
+| ID | Title | Area | Depends on | Parallel-safe | Size |
+| --- | --- | --- | --- | --- | --- |
+| P2-52 | Canonical recurrence actions and Phase 2.5 gate | docs | P2-47, ADR-053 | no | M |
+| P2-53 | Explicit occurrence detail target and authoritative projection | shared/api/mobile | P2-52 | no | L |
+| P2-54 | Atomic recurrence writes and versioned agenda reconciliation | shared/api/mobile | P2-53 | no | L |
+| P2-55 | Recurrence E2E matrix and damaged-series audit | api/mobile/ci | P2-54 | no | L |
+
+The IDs continue Phase 2's `P2-xx` sequence so branch, commit and task tooling keep the
+existing `P<phase>-<task>` contract. “2.5” is the execution gate and roadmap position, not a
+new task-ID grammar.
+
+---
+
+### P2-52 — Canonical recurrence actions and Phase 2.5 gate
+
+**Files.** This phase file, `docs/00-index.md`, `docs/03-implementation/roadmap.md`,
+`docs/01-product/today-and-tasks.md`, `docs/01-product/activities.md`,
+`docs/02-architecture/data-model.md`, and `docs/02-architecture/decisions.md`.
+
+**What to build.** Record the six founder decisions above in the canonical product and
+architecture documents. Reserve the visible choices **Does not repeat** and **No end** for
+their distinct operations. Specify the conversion survivor, because “remove recurrence”
+without saying which occurrence becomes the one-off is not an implementable operation.
+Specify that End series is separate and inclusive.
+
+This task does not add or relabel the write path. Until P2-54 lands, no UI may pretend an old
+ambiguous write is the new atomic conversion; P2-54 changes the visible copy and behavior in
+one reviewable unit.
+
+**Tests.** Documentation links resolve and the existing shared scope ratchet remains green.
+
+---
+
+### P2-53 — Explicit occurrence detail target and authoritative projection
+
+**Files.** Shared activity-detail schemas/types/client, activity detail and agenda navigation,
+the activity read route/service, occurrence repository reads, and their tests.
+
+**What to build.** Introduce a discriminated detail target:
+
+```ts
+type ActivityDetailTarget =
+  | { kind: 'activity'; activityId: string }
+  | { kind: 'occurrence'; activityId: string; date: string };
+```
+
+An occurrence-targeted read returns the effective occurrence schedule and resolution after
+applying its override. An activity-targeted read returns series state only. Delete
+`readOccurrenceDate` and every fallback that chooses an occurrence from cached agenda data.
+Navigation from an agenda row carries occurrence scope; navigation from Plans to the series
+does not.
+
+Keep the existing wire-compatible `occurrenceDate` representation where changing it would
+invalidate persisted offline mutations. Convert once at each boundary through ADR-053's
+helpers.
+
+**Tests.** Warm and cold caches produce the same detail target and values. A series detail
+offers no occurrence action. A moved, snoozed, completed and untouched occurrence each returns
+its authoritative effective projection.
+
+---
+
+### P2-54 — Atomic recurrence writes and versioned agenda reconciliation
+
+**Files.** Shared inputs/client/OpenAPI, activity and occurrence services/repositories/routes,
+mobile mutation defaults and agenda cache/models, and canonical API/data-model rows.
+
+**What to build.** Add one atomic conversion operation that removes recurrence and rewrites
+the Activity schedule to the selected occurrence's effective schedule in the same domain
+transaction. End series remains a recurrence patch that sets an explicit inclusive date; No
+end clears the series-level termination fields. Every write is explicitly activity- or
+occurrence-targeted and server-guarded.
+
+Replace “mark stale with no refetch for up to 60 seconds” with versioned reconciliation. A
+successful mutation supplies a version/token; the client retains its newer projection and
+retries the agenda read with bounded backoff until the returned projection has observed that
+version. A stale GSI response may never overwrite newer state. Once a recurrence write is
+acknowledged, remove the known-stale prior expansion immediately while reconciliation waits;
+do not leave obsolete frequencies interactive. Remove recurrence-specific partial expansion
+from `applyPatch`; the server remains the projection authority.
+
+**Tests.** The conversion transaction changes META and its index atomically, preserves the
+selected effective schedule, and leaves stored Occurrence history untouched. Inject two stale
+agenda responses before a current one and prove neither stale body replaces the projection.
+Count and date endings reconcile identically. Component tests distinguish Does not repeat,
+No end and End series and prove that each invokes only its named operation.
+
+---
+
+### P2-55 — Recurrence E2E matrix and damaged-series audit
+
+**Files.** Web Playwright and iOS Maestro flows, integration fixtures, an operations audit
+script/report, and test catalogues.
+
+**What to build.** Exercise the complete user story across real layers: create a daily task;
+complete today; verify tomorrow remains live; reschedule one occurrence; edit all future;
+convert a selected occurrence to a one-off; create another series; end it; set No end to
+restart it; replay one occurrence mutation from the offline queue.
+
+Add an operations-only audit for Activity rows where `recurrence` exists and series status is
+`completed` or `skipped`. It reports exact IDs and proposed restoration to `scheduled`; it
+does not invent an Occurrence date and does not mutate without an explicit operator command.
+Application code still never scans.
+
+**Tests.** Web and iOS flows assert visible behavior, while DynamoDB integration tests assert
+the META/OCC/index write sets. The audit is fixture-tested in report-only mode and against an
+explicit repair confirmation.
+
+## Acceptance criteria
+
+1. The three visible phrases Does not repeat, No end and End series cannot invoke the same
+   operation.
+2. No internal write call represents occurrence scope as optional.
+3. No activity or series detail action derives an occurrence date from cached agenda windows.
+4. Completing, skipping, snoozing or rescheduling one occurrence never writes series META.
+5. Converting a series retains exactly the explicitly selected occurrence as the one-off.
+6. End series preserves recurrence history and is inclusive; No end restarts future expansion.
+7. A stale agenda-index response never replaces state from a newer acknowledged mutation.
+8. The cross-layer recurrence E2E catalogue passes on web and iOS.
+9. `pnpm verify` and recurrence's 100% statement/branch gate pass.
+
+## Out of scope
+
+- Completion-relative recurrence (`mode: 'after_completion'`).
+- RFC 5545 custom `rrule` support.
+- Multiple occurrences of one series on one wall date.
+- Materialising future occurrences.
+- Changing persisted offline mutation-variable shapes before their compatibility migration.
+- Inventing occurrence history while repairing a damaged series-level status.

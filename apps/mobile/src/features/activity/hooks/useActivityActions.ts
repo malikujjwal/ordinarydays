@@ -11,6 +11,7 @@ import type {
   CompleteActivityVariables,
   DeleteActivityVariables,
   DuplicateActivityVariables,
+  SkipActivityVariables,
   UncompleteActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
@@ -34,6 +35,10 @@ import { activityKey } from './useActivity';
 export interface ActivityActions {
   duplicate: () => Promise<Activity | undefined>;
   remove: () => Promise<boolean>;
+  /** Stores a skip for one explicit occurrence; it never deletes the series Activity. */
+  skipOccurrence: (
+    scope: Extract<ActivityScope, { kind: 'occurrence' }>,
+  ) => Promise<boolean>;
   resolvePassed: (
     outcome: ActivityOutcome,
     scope: ActivityScope,
@@ -97,17 +102,6 @@ export function useActivityActions(activityId: string): ActivityActions {
 
   const duplicateMutation = useMutation<Activity, Error, DuplicateActivityVariables>({
     mutationKey: activityMutationKeys.duplicate,
-    /**
-     * A creating `POST`, so it carries an `Idempotency-Key` generated once per attempt
-     * (`api-contract.md` §1). Without it the transport refuses to retry at all, and a dropped
-     * response on a flaky connection becomes a failed duplicate rather than a recovered one.
-     */
-    onSuccess: () => {
-      // The copy is a new row in every list that could show it. Today and Plans are refreshed
-      // by the MutationCache handler in `queryClient.ts`, which runs whether or not this
-      // component is still mounted (P2-46).
-      void queryClient.invalidateQueries({ queryKey: ['activities'] });
-    },
   });
 
   const deleteMutation = useMutation<
@@ -116,10 +110,6 @@ export function useActivityActions(activityId: string): ActivityActions {
     DeleteActivityVariables
   >({
     mutationKey: activityMutationKeys.delete,
-    onSuccess: () => {
-      queryClient.removeQueries({ queryKey: ['activity', activityId] });
-      void queryClient.invalidateQueries({ queryKey: ['activities'] });
-    },
   });
 
   const completeMutation = useMutation<
@@ -134,8 +124,15 @@ export function useActivityActions(activityId: string): ActivityActions {
           ? previous
           : { ...previous, activity: activity as Activity },
       );
-      void queryClient.invalidateQueries({ queryKey: ['activities'] });
     },
+  });
+
+  const skipMutation = useMutation<
+    ActivityCompletionResult,
+    Error,
+    SkipActivityVariables
+  >({
+    mutationKey: activityMutationKeys.skip,
   });
 
   const uncompleteMutation = useMutation<
@@ -150,7 +147,6 @@ export function useActivityActions(activityId: string): ActivityActions {
           ? previous
           : { ...previous, activity: activity as Activity },
       );
-      void queryClient.invalidateQueries({ queryKey: ['activities'] });
     },
   });
 
@@ -158,6 +154,7 @@ export function useActivityActions(activityId: string): ActivityActions {
     duplicateMutation.error ??
     deleteMutation.error ??
     completeMutation.error ??
+    skipMutation.error ??
     uncompleteMutation.error;
 
   return {
@@ -176,6 +173,18 @@ export function useActivityActions(activityId: string): ActivityActions {
     remove: async () => {
       try {
         await deleteMutation.mutateAsync({ activityId });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    skipOccurrence: async (scope) => {
+      try {
+        await skipMutation.mutateAsync({
+          activityId,
+          input: scopeToWire(scope),
+          idempotencyKey: randomUUID(),
+        });
         return true;
       } catch {
         return false;
@@ -333,6 +342,7 @@ export function useActivityActions(activityId: string): ActivityActions {
       duplicateMutation.isPending ||
       deleteMutation.isPending ||
       completeMutation.isPending ||
+      skipMutation.isPending ||
       uncompleteMutation.isPending,
     isCompleting: completeMutation.isPending,
     isUndoing: uncompleteMutation.isPending,
@@ -342,6 +352,7 @@ export function useActivityActions(activityId: string): ActivityActions {
       duplicateMutation.reset();
       deleteMutation.reset();
       completeMutation.reset();
+      skipMutation.reset();
       uncompleteMutation.reset();
     },
   };

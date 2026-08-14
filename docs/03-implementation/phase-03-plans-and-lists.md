@@ -30,7 +30,7 @@ Today's Anytime list and is not a backlog with a counter on it.
 
 | # | Item | Notes |
 | --- | --- | --- |
-| 1 | Phases 1 and 2 complete and passing | The Activity CRUD, the agenda, and completion are all load-bearing here. |
+| 1 | Phases 1, 2 and blocking Phase 2.5 complete and passing | The Activity CRUD, agenda, completion, explicit occurrence targeting and recurrence reconciliation are all load-bearing here. Phase 3 implementation does not overlap the stabilization gate. |
 | 2 | [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) read in full | It is the specification for this phase, including the three worked examples in §9 which are the integration fixtures. |
 | 3 | [`../02-architecture/data-model.md#46-list-and-listitem`](../02-architecture/data-model.md#46-list-and-listitem) and [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists) read in full | The list model is behaviour plus capabilities plus templates, not a closed enum of list kinds. ADR-031 to ADR-035 in [`../02-architecture/decisions.md`](../02-architecture/decisions.md) record why, and are the reference when a task looks like it wants a new kind. |
 | 3a | [`../02-architecture/data-model.md#33-list-partition`](../02-architecture/data-model.md#33-list-partition) read | The canonical list is at `LIST#<l>`, not in the owner's partition, and the `USER#` row is a near-pure pointer. Building it the other way round works for one user and has to be migrated for two (ADR-041, ADR-042). |

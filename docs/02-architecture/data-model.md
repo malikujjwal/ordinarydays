@@ -595,6 +595,29 @@ March. See `../01-product/today-and-tasks.md` §6.1.
 the series. The agenda endpoint expands the series for the requested date window at read
 time and merges in `Occurrence` overrides. See §6.
 
+#### Recurrence-changing operations
+
+The three user-facing phrases below are separate domain operations. They must not share a
+generic `Never` branch:
+
+| Phrase | Required target | Stored result |
+| --- | --- | --- |
+| **Does not repeat** | An explicit nominal occurrence date for an existing series; no target is needed on a new draft | Resolve the selected occurrence through its active segment and `OCC#<date>` override, copy its effective date/time/end time to `ACT#/META.schedule`, retain the Activity timezone, then remove `recurrence`. Other virtual occurrences stop rendering. Existing `OCC#` rows remain stored. |
+| **End series** | An explicit occurrence date | Preserve `recurrence` and set its series-level `endDate` inclusively. Earlier occurrences and their override rows continue to render. |
+| **No end** | Activity/series scope | Preserve `recurrence` and clear both `endDate` and `count`, so expansion continues indefinitely. |
+
+Converting an existing series is an optimistic transaction, not a PATCH assembled from
+client cache state. The server consistently reads the Activity and selected `OCC#` row,
+resolves the effective schedule, then condition-checks the versions/absence it read while
+rewriting `ACT#/META` and every required `USER#/IDX#` row. A concurrent occurrence edit or
+series edit fails the conversion rather than choosing a different survivor. The occurrence
+row is not deleted; once recurrence is absent, agenda expansion simply cannot reach it.
+
+An Activity-only target returns series state and can perform only series actions. It never
+derives a nominal occurrence from today's date, the next cached agenda row, or the most recent
+cached row. Any operation whose result depends on one occurrence requires the date in its
+discriminated target.
+
 ### 4.3 Reminder
 
 ```ts
@@ -738,6 +761,13 @@ occurrence to target that date. Removing or undoing a move removes only its nomi
 the marker and deletes the marker row when the list becomes empty. Replacing one destination
 with another removes the old marker reference in the same transaction as the source and new
 marker writes.
+
+An occurrence-targeted detail read is an authoritative projection, not a lookup in the
+client's agenda window. It returns the nominal date plus the effective date, time, end time
+and status after applying the active recurrence segment and any `OCC#<date>` override. A moved
+or snoozed occurrence therefore has the same detail values whether the agenda cache is warm,
+cold or outside the requested day. Activity-targeted detail returns the Activity and series
+state without manufacturing an occurrence projection.
 
 `overrideDate` and a cross-day `snoozedUntil` are accepted only when the absolute calendar-day
 distance from the nominal `date` is at most **60 days**. The API returns
@@ -1335,6 +1365,8 @@ status/body.
 | Purge account | **Shared-plan financial records survive the purge — retain and anonymise, never unwind (decision 2026-08-07).** Expenses and Settlement audit rows, with their locators, on shared plans that still have surviving participants are retained for those participants, with the deleted user's display name replaced by `Deleted user` wherever those rows render it. Balances involving the deleted account become read-only history: no further settlement, no recompute against a partition that no longer exists. Owned **shared** plans are cancelled, with notification to the participants, before any removal, and their partitions are retained for the survivors. Checkpoint and run exact whole-Settlement Undo only for financial rows nothing retains — Settlements whose covered Expenses sit on plans with no surviving participant. Then cascade owned private Activities and owned Lists (all pointers/`LLINK#`/`LNK#`) and remove the user from other-owned Lists (`MEMBER#`, both links, pointer, counter, viewer links) while retaining other users' `PERSON#` rows. Only after cross-partition cleanup may the user partition be deleted; see `auth.md` §8. |
 | Patch a prep task's title | Child `ACT#/META`, every required index row, and parent `ACT#/SUB#<child>` in one transaction. P2-13 repairs the Phase 1 omission that updated the child title without rewriting this denormalised pointer. |
 | Correct a recurrence segment that starts today | `ACT#/META` plus every required `USER#/IDX#` row, with a condition in the same transaction that `ACT#/OCC#<today>` does not exist. No occurrence is written; any existing occurrence makes the correction fail without changing the series. |
+| Convert a selected series occurrence to **Does not repeat** | Resolve the explicitly targeted nominal occurrence from `ACT#/META` plus `ACT#/OCC#<date>`; condition-check the versions/absence read; then rewrite `ACT#/META` and every required `USER#/IDX#` row in one transaction. META keeps the selected effective schedule and timezone and drops `recurrence`; `OCC#` history is neither deleted nor invented. |
+| **End series** / set **No end** | Rewrite `ACT#/META.recurrence` plus every required recurring `USER#/IDX#` projection in one optimistic transaction. End series sets an explicit inclusive `endDate`; No end clears `endDate` and `count`. Neither operation writes an `OCC#` row. |
 | Complete / uncomplete / skip a non-occurrence | `ACT#/META` plus every owner/participant `USER#/IDX#` status and, for a prep task, parent `ACT#/SUB#<child>` in one transaction, following the Phase 1 PATCH transaction pattern |
 | Complete / skip an occurrence | `ACT#/OCC#<date>` only (put or delete as appropriate). Never the series. |
 | Cross-day occurrence reschedule / snooze / unsnooze | Nominal `ACT#/OCC#<date>` plus the destination `ACT#/MOVE#<date>` marker in one transaction; replacing a destination also removes the prior marker reference. Never the series. Same-day snooze remains one `OCC#` write. |
