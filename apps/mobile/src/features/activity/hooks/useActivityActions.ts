@@ -59,6 +59,25 @@ export interface ActivityActions {
   dismissError: () => void;
 }
 
+/**
+ * A completion that would land on a series rather than on one of its days.
+ *
+ * `POST /complete` sent without an `occurrenceDate` sets `status: 'completed'` on `ACT#/META`
+ * and retires every future occurrence — rule 3 broken by one tap, and unrecoverable in the
+ * sense that matters: the days the user had already resolved are gone with it. The detail
+ * screen no longer offers the control (P2-47 owns what a series *should* offer), and this is
+ * the same rule held one layer down, where no future call site can route around it.
+ *
+ * Deliberately not applied to `undoResolution`: a bare *uncomplete* reverses this damage
+ * rather than causing it, and is the only way back for a series already completed this way.
+ */
+function isUnscopedSeries(
+  snapshot: ActivityDetail | undefined,
+  occurrenceDate: string | undefined,
+): boolean {
+  return occurrenceDate === undefined && snapshot?.activity.recurrence !== undefined;
+}
+
 function describe(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 403) {
@@ -163,6 +182,7 @@ export function useActivityActions(activityId: string): ActivityActions {
     },
     resolvePassed: (outcome, occurrenceDate, onProjected) => {
       const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      if (isUnscopedSeries(snapshot, occurrenceDate)) return;
       let restoreAgenda = () => {};
       const original = {
         activityId,

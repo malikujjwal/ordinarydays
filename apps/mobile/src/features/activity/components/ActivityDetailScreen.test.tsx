@@ -821,46 +821,54 @@ describe('passed-plan resolution', () => {
   });
 
   /**
-   * A series reached without navigation context still completes — **the day the header is
-   * showing**, never the series.
+   * A series reached without navigation context offers **nothing**.
    *
-   * `POST /complete` with no `occurrenceDate` writes `status: 'completed'` onto the series row
-   * itself and retires every future occurrence, which is rule 3 broken by one tap. So the scope
-   * is never allowed to be absent on a recurring activity: it falls back to the date on the
-   * schedule line, which is the only occurrence the user can be said to be looking at.
+   * This used to fall back to the schedule line's date, on the reasoning that it is the only
+   * occurrence the user can be said to be looking at. It is the series *anchor*, not the day on
+   * screen, so a series opened from Plans completed a day that may be months back while the row
+   * the user meant never moved. What a series detail screen should offer is P2-47's question;
+   * absence is the honest answer until it has one.
    */
-  it('completes the occurrence on the schedule line when navigation carried no scope', async () => {
+  it('offers no completion control on a series with no occurrence in scope', async () => {
     const recurring = plan({
       recurrence: {
         mode: 'fixed',
         segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '19:00' }],
       },
     });
-    stubFetch(
-      { status: 200, body: detailBody(recurring) },
-      {
-        status: 200,
-        body: {
-          data: {
-            activity: recurring,
-            occurrenceDate: '2026-08-14',
-            outcome: 'attended',
-          },
-          meta: { requestId: 'req_resolution' },
-        },
-      },
-    );
+    stubFetch({ status: 200, body: detailBody(recurring) });
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByTestId('detail-complete'));
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+    expect(screen.queryByTestId('detail-resolution-prompt')).toBeNull();
+    expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(0);
+  });
 
-    await waitFor(() =>
-      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+  /**
+   * The prompt replaces the primary action, so it carries the primary action's anatomy.
+   *
+   * As a `Chip` it rendered `radius.pill`, `footnote` and `surfaceSunken` at hug width, and a
+   * passed plan's only offer was a small grey pill under the schedule — which §7.5 does not put
+   * at the top of a screen.
+   */
+  it('offers the passed-plan prompt in place of the completion button, and it opens the sheet', async () => {
+    stubFetch({ status: 200, body: detailBody(plan()) });
+    mount(
+      () => {},
+      () => {},
+      TODAY,
+      TODAY,
     );
-    // `plan()`'s schedule date, which is what the header rendered.
-    expect(sent[1]?.body).toEqual({ occurrenceDate: '2026-08-14', outcome: 'attended' });
-    expect(screen.getByTestId('detail-undo')).toBeDefined();
+    await loaded();
+
+    // It replaces the primary action rather than sitting beside it.
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+    const prompt = screen.getByTestId('detail-resolution-prompt');
+    expect(prompt.textContent).toContain('How did it go?');
+
+    fireEvent.click(prompt);
+    expect(screen.getByTestId('passed-plan-resolution-sheet')).toBeDefined();
   });
 
   /** A completed occurrence is not readable from its series, so the agenda answers for it. */
@@ -873,7 +881,13 @@ describe('passed-plan resolution', () => {
       },
     });
     stubFetch({ status: 200, body: detailBody(recurring) });
-    const { queryClient } = mount();
+    // Arriving from a Today row, which is the only navigation that carries an occurrence.
+    const { queryClient } = mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
     queryClient.setQueryData<AgendaData>(['agenda', 'occurrence-state'], {
       days: [
         {
