@@ -1,4 +1,4 @@
-import { accentGlow, Plus, Touchable, useTheme } from '@od/ui';
+import { eFloatingAction, Plus, Touchable, useTheme } from '@od/ui';
 import { GLOBAL_ADD_SIZE } from '@/components/globalAddLayout';
 import { ADD_LABEL } from '@/features/shell/model/tabs';
 
@@ -40,7 +40,7 @@ export function AddButton({ onPress, testID = 'global-add' }: AddButtonProps) {
           alignItems: 'center',
           justifyContent: 'center',
         },
-        { boxShadow: accentGlow } as object,
+        { boxShadow: eFloatingAction } as object,
       ]}
     >
       <Plus size={28} color={theme.colors.textInverse} />

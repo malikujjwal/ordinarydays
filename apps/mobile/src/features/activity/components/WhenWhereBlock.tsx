@@ -69,13 +69,35 @@ export function WhenWhereBlock({
                 gap: theme.space[3],
               }}
             >
-              <Text
-                variant="bodyStrong"
-                color={scheduled ? 'textPrimary' : 'textSecondary'}
+              {/**
+               * **The dashed underline is what makes this read as editable.** It is the
+               * founder's frames' one signal for an in-place editable value, and without it the
+               * date was bold text sitting beside a grey hint — the hint carrying the whole
+               * affordance on its own. `borderStrong` is P2-40's mapping for the frames'
+               * `#49443C` schedule underline; it clears the 3:1 control-boundary gate that the
+               * drawn value does not.
+               */}
+              <View
+                style={{
+                  borderBottomWidth: 1,
+                  borderBottomColor: theme.colors.borderStrong,
+                  borderStyle: 'dashed',
+                  paddingBottom: theme.space[1],
+                }}
               >
-                {formatSchedule(schedule, today)}
-              </Text>
-              <Text variant="footnote" color="textSecondary">
+                <Text
+                  variant="bodyStrong"
+                  color={scheduled ? 'textPrimary' : 'textSecondary'}
+                >
+                  {formatSchedule(schedule, today)}
+                </Text>
+              </View>
+              {/**
+               * Muted, not accented. The underline is the affordance; the hint only names it,
+               * and the frames draw it as the quietest thing in the header. Accenting both put
+               * two competing signals on one line.
+               */}
+              <Text variant="footnote" color="textMuted">
                 Tap to edit
               </Text>
             </View>

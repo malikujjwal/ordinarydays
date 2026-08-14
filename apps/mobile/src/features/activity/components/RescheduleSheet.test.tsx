@@ -179,7 +179,7 @@ describe('RescheduleSheet', () => {
   it('warns before clearing a shared plan date and names what stays', async () => {
     const { onSchedule } = mount(activity({ participantCount: 3 }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear the date' }));
+    fireEvent.click(screen.getByTestId('reschedule-clear'));
 
     expect(onSchedule).not.toHaveBeenCalled();
     expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(1);

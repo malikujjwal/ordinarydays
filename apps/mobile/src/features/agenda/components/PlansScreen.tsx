@@ -180,6 +180,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
         open={selectedGap !== undefined}
         onClose={() => setSelectedGap(undefined)}
         title="When?"
+        detent="medium"
         testID="plans-gap-date-picker"
       >
         {selectedGap === undefined ? null : (

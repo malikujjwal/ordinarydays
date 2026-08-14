@@ -2,7 +2,7 @@ import { describeRecurrence } from '@od/shared/recurrence';
 import type { Recurrence } from '@od/shared/types';
 import { Button, DatePicker, Field, SelectField, Sheet, Text, useTheme } from '@od/ui';
 import { useEffect, useMemo, useState } from 'react';
-import { InputAccessoryView, Keyboard, Platform, ScrollView, View } from 'react-native';
+import { InputAccessoryView, Keyboard, Platform, View } from 'react-native';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import { removeRecurrenceConfirmation } from '@/features/activity/model/confirmations';
 import {
@@ -124,6 +124,7 @@ export function RepeatSheet({
   const [endCount, setEndCount] = useState(value?.count ?? 1);
   const [confirmNever, setConfirmNever] = useState(false);
   const [seriesLimit, setSeriesLimit] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [localError, setLocalError] = useState<string | undefined>();
 
   useEffect(() => {
@@ -249,118 +250,39 @@ export function RepeatSheet({
 
   function close() {
     Keyboard.dismiss();
+    setDiscarding(false);
     onClose();
   }
 
+  /**
+   * **Nothing here is saved until `Apply repeat`**, so leaving with a changed selection throws
+   * it away. `Sheet` routes every exit — scrim, `✕`, Back, Escape, the drag — through this, so
+   * the prompt cannot be attached to one path and forgotten on another (§20).
+   *
+   * Dirty is measured against the option the sheet opened on, not against "the user touched
+   * something": selecting `Weekly` and selecting `Never` again is not an unsaved change, and
+   * asking about it would train the user to dismiss the question.
+   */
+  const dirty =
+    option !== initialOption(value) ||
+    (option === 'custom' && customDaysText !== String(initialCustomDays(value)));
+
   return (
     <>
-      <Sheet open={open} onClose={close} title="Repeat" testID="repeat-sheet">
-        <ScrollView
-          style={{ maxHeight: 620 }}
-          contentContainerStyle={{ gap: theme.space[5] }}
-          automaticallyAdjustKeyboardInsets
-          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-          keyboardShouldPersistTaps="handled"
-        >
-          <SelectField
-            label="Repeats"
-            value={option}
-            options={repeatOptions}
-            onChange={setOption}
-            testID="repeat-option"
-          />
-
-          {option === 'custom' ? (
-            <Field
-              label="Days"
-              value={customDaysText}
-              onChangeText={setCustomDaysText}
-              keyboardType="number-pad"
-              inputAccessoryViewID={DAYS_INPUT_ACCESSORY}
-              maxLength={3}
-              {...(customDaysValid ? {} : { error: 'Enter a number from 2 to 365.' })}
-              testID="repeat-interval"
-            />
-          ) : null}
-
-          {option === 'never' ? null : (
-            <View style={{ gap: theme.space[3] }}>
-              <SelectField
-                label="Ends"
-                value={ends.kind}
-                options={endsOptions}
-                onChange={(kind) =>
-                  setEnds(
-                    kind === 'date'
-                      ? { kind, date: endDate }
-                      : kind === 'count'
-                        ? { kind, count: endCount }
-                        : { kind },
-                  )
-                }
-                testID="repeat-ends"
-              />
-              {ends.kind === 'date' ? (
-                <DatePicker
-                  label="End date"
-                  value={endDate}
-                  onChange={(date) => {
-                    if (date !== null) setEndDate(date);
-                  }}
-                  today={anchorDate}
-                  min={anchorDate}
-                  quickOptions={PICK_DATE_ONLY}
-                  testID="repeat-end-date"
-                />
-              ) : ends.kind === 'count' ? (
-                <Stepper
-                  label="Times"
-                  value={endCount}
-                  min={1}
-                  max={999}
-                  onChange={setEndCount}
-                  testID="repeat-count"
-                />
-              ) : null}
-            </View>
-          )}
-
-          <View
-            style={{
-              gap: theme.space[2],
-              padding: theme.space[4],
-              borderRadius: theme.radius.lg,
-              backgroundColor: theme.colors.surfaceSunken,
-            }}
-            testID="repeat-summary"
-          >
-            <Text variant="footnote" color="textSecondary">
-              Summary
-            </Text>
-            <Text variant="bodyStrong" color="textPrimary">
-              {summary}
-            </Text>
-          </View>
-
-          {seriesLimit ? (
-            <View style={{ gap: theme.space[2] }} testID="repeat-series-limit">
-              <Text accessibilityRole="alert" color="danger" numberOfLines={0}>
-                This series already has 20 rule changes. End this series and start a new
-                one to keep its history intact.
-              </Text>
-              <Button
-                label="End series"
-                variant="secondary"
-                onPress={() => void endSeries()}
-                testID="repeat-end-series"
-              />
-            </View>
-          ) : localError === undefined && error === undefined ? null : (
-            <Text accessibilityRole="alert" color="danger" numberOfLines={0}>
-              {localError ?? error}
-            </Text>
-          )}
-
+      {/**
+       * `fit` — three controls and a commit. It used to set `maxHeight: 620` on its own body and
+       * occupy most of a phone for that; §6.1 makes the detent the sheet's decision and this one
+       * the smallest that holds the task. The scroll, the keyboard handling and the footer's
+       * position all moved into `Sheet` for the same reason.
+       */}
+      <Sheet
+        open={open}
+        onClose={close}
+        dirty={dirty}
+        onDiscardRequest={() => setDiscarding(true)}
+        title="Repeat"
+        detent="fit"
+        actions={
           <Button
             label="Apply repeat"
             fullWidth
@@ -369,7 +291,141 @@ export function RepeatSheet({
             onPress={() => void commit()}
             testID="repeat-apply"
           />
-        </ScrollView>
+        }
+        testID="repeat-sheet"
+      >
+        <SelectField
+          label="Repeats"
+          value={option}
+          options={repeatOptions}
+          onChange={setOption}
+          testID="repeat-option"
+        />
+
+        {option === 'custom' ? (
+          <Field
+            label="Days"
+            value={customDaysText}
+            onChangeText={setCustomDaysText}
+            keyboardType="number-pad"
+            inputAccessoryViewID={DAYS_INPUT_ACCESSORY}
+            maxLength={3}
+            {...(customDaysValid ? {} : { error: 'Enter a number from 2 to 365.' })}
+            testID="repeat-interval"
+          />
+        ) : null}
+
+        {option === 'never' ? null : (
+          <View style={{ gap: theme.space[3] }}>
+            <SelectField
+              label="Ends"
+              value={ends.kind}
+              options={endsOptions}
+              onChange={(kind) =>
+                setEnds(
+                  kind === 'date'
+                    ? { kind, date: endDate }
+                    : kind === 'count'
+                      ? { kind, count: endCount }
+                      : { kind },
+                )
+              }
+              testID="repeat-ends"
+            />
+            {ends.kind === 'date' ? (
+              <DatePicker
+                label="End date"
+                value={endDate}
+                onChange={(date) => {
+                  if (date !== null) setEndDate(date);
+                }}
+                today={anchorDate}
+                min={anchorDate}
+                quickOptions={PICK_DATE_ONLY}
+                testID="repeat-end-date"
+              />
+            ) : ends.kind === 'count' ? (
+              <Stepper
+                label="Times"
+                value={endCount}
+                min={1}
+                max={999}
+                onChange={setEndCount}
+                testID="repeat-count"
+              />
+            ) : null}
+          </View>
+        )}
+
+        <View
+          style={{
+            gap: theme.space[2],
+            padding: theme.space[4],
+            borderRadius: theme.radius.lg,
+            backgroundColor: theme.colors.surfaceSunken,
+          }}
+          testID="repeat-summary"
+        >
+          <Text variant="footnote" color="textSecondary">
+            Summary
+          </Text>
+          <Text variant="bodyStrong" color="textPrimary">
+            {summary}
+          </Text>
+        </View>
+
+        {seriesLimit ? (
+          <View style={{ gap: theme.space[2] }} testID="repeat-series-limit">
+            <Text accessibilityRole="alert" color="danger" numberOfLines={0}>
+              This series already has 20 rule changes. End this series and start a new one
+              to keep its history intact.
+            </Text>
+            <Button
+              label="End series"
+              variant="secondary"
+              onPress={() => void endSeries()}
+              testID="repeat-end-series"
+            />
+          </View>
+        ) : localError === undefined && error === undefined ? null : (
+          <Text accessibilityRole="alert" color="danger" numberOfLines={0}>
+            {localError ?? error}
+          </Text>
+        )}
+      </Sheet>
+
+      {/**
+       * The prompt `Sheet` asks for when `dirty`. Every exit reaches it, so `✕` and a swipe
+       * cannot disagree about whether the selection survives.
+       */}
+      <Sheet
+        open={discarding}
+        onClose={() => setDiscarding(false)}
+        title="Discard this repeat?"
+        detent="fit"
+        actions={
+          <>
+            <Button
+              label="Discard"
+              variant="danger"
+              fullWidth
+              onPress={close}
+              testID="repeat-discard"
+            />
+            <Button
+              label="Keep editing"
+              variant="ghost"
+              fullWidth
+              onPress={() => setDiscarding(false)}
+              testID="repeat-keep-editing"
+            />
+          </>
+        }
+        testID="repeat-discard-sheet"
+      >
+        <Text variant="body" color="textSecondary">
+          The repeat you chose has not been applied yet.
+        </Text>
       </Sheet>
 
       {Platform.OS === 'ios' && option === 'custom' ? (

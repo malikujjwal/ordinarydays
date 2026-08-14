@@ -164,7 +164,11 @@ The section sorts **descending** by that instant — clock time for the first ki
 completion time for the second — so the most recent is at the top.
 
 - Completed items render with their outcome verb in the trailing slot (`Had it`,
-  `Watched`, `Attended`, `Done`) and a struck-through or de-emphasised title.
+  `Watched`, `Attended`, `Done`) and a struck-through or de-emphasised title. **This list is
+  not the passed-plan sheet's**, whose positive button for a task is `Complete` (§8's table).
+  A task's *action* is `Complete`; the *state* it ends in is `Done`. One mapping served both
+  until 2026-08-13, so a finished task announced itself as `Complete` — an instruction where a
+  status belongs. `outcomeVerb` renders state, `completionVerb` renders the action.
 - Un-complete stays reachable from the row for every completed item here, timed or not:
   the checkbox un-ticks a task, and any row's detail screen offers un-complete after the
   6-second toast window closes.

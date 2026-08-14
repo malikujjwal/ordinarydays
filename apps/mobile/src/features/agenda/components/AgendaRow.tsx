@@ -4,7 +4,7 @@ import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
 import {
   canResolvePassedAgendaItem,
-  completionVerb,
+  outcomeVerb,
   passedPlanResolution,
 } from '@/lib/passedPlanResolution';
 import { RowBadges } from './RowBadges';
@@ -44,7 +44,7 @@ function bodyLabel(
   untimedContextLabel: string,
 ): string {
   const parts = [item.title];
-  if (checked) parts.push(completionVerb(item.type));
+  if (checked) parts.push(outcomeVerb(item.type));
   if (item.subtitle !== undefined) parts.push(item.subtitle);
   if (item.time === undefined) parts.push(untimedContextLabel, 'no time');
   else parts.push(formatWallTime(item.time));
@@ -179,7 +179,7 @@ export function AgendaRow({
           importantForAccessibility="no-hide-descendants"
         >
           <Text variant="footnoteStrong" color="textSecondary">
-            {completionVerb(item.type)}
+            {outcomeVerb(item.type)}
           </Text>
         </View>
       ) : null}

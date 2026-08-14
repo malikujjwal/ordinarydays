@@ -228,7 +228,7 @@ describe('reading', () => {
 
     expect(fieldValue('Title')).toBe('Zahav');
     expect(screen.getByText('Fri, Aug 14 · 7:00 PM')).toBeDefined();
-    expect(screen.getAllByText('Tap to edit')).toHaveLength(2);
+    expect(screen.getAllByText('Tap to edit')).toHaveLength(1);
     expect(screen.getByText('Does not repeat · No reminder')).toBeDefined();
     expect(
       screen
@@ -265,12 +265,14 @@ describe('reading', () => {
     mount();
     await loaded();
 
-    expect(screen.getByTestId('section-notes').style.borderTopWidth).toBe('1px');
+    // Each row closes itself, so the list ends on its last row rather than needing a rule
+    // bolted onto the container — which is what produced two lines with a gap between them.
+    expect(screen.getByTestId('section-notes').style.borderBottomWidth).toBe('1px');
     fireEvent.click(
       screen.getByRole('button', { name: 'Notes, Check-in is after 3 PM.' }),
     );
     expect(screen.getByLabelText('Notes').style.backgroundColor).toBe('rgba(0, 0, 0, 0)');
-    expect(screen.getByTestId('section-related').style.borderTopWidth).toBe('1px');
+    expect(screen.getByTestId('section-related').style.borderBottomWidth).toBe('1px');
   });
 
   it('puts Notes first and keeps every capability on the same row rhythm', async () => {
@@ -317,7 +319,11 @@ describe('reading', () => {
     expect(
       screen.getByText('Does not repeat · Reminder 15 minutes before'),
     ).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Reminder, 15 minutes before' }));
+    // The row states the current value; the choices live in the sheet it opens.
+    expect(screen.getByTestId('section-reminders').textContent).toContain(
+      '15 minutes before',
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
     expect(
       screen.getByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
     ).toBeDefined();
@@ -330,21 +336,24 @@ describe('reading', () => {
 
     expect(screen.queryByTestId('when-where-reminders')).toBeNull();
     expect(screen.queryByTestId('section-reminders')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Edit recurrence' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Repeat/ })).toBeNull();
   });
 
-  it('keeps recurrence editing at the bottom and Delete in the three-dot menu', async () => {
+  /**
+   * `Repeat` is a setting row that **states its value** rather than an `Edit recurrence` row
+   * that named an action — which had offered to edit a recurrence on activities whose own
+   * summary said `Does not repeat`. Delete stays in the `⋯` menu either way (U6).
+   */
+  it('states the repeat value in the row list and keeps Delete in the three-dot menu', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
     await loaded();
 
-    const sections = screen.getByTestId('detail-sections');
-    const recurrence = screen.getByRole('button', { name: 'Edit recurrence' });
-    expect(
-      sections.compareDocumentPosition(recurrence) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const repeat = screen.getByRole('button', { name: /^Repeat/ });
+    expect(screen.getByTestId('detail-sections').contains(repeat)).toBe(true);
+    expect(repeat.textContent).toContain('Does not repeat');
+    expect(screen.queryByRole('button', { name: 'Edit recurrence' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
-    expect(recurrence.textContent).toContain('Tap to edit');
 
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(screen.getByRole('button', { name: 'Delete' })).toBeDefined();
@@ -414,6 +423,30 @@ describe('the sections', () => {
     expect(screen.queryByText(/coming soon/i)).toBeNull();
   });
 
+  /**
+   * A collapsed row summarises; it does not render the value. Measured before this held: a
+   * 1,300-character note produced a 1,465 pt "collapsed" Notes row that pushed `Reminder` and
+   * every capability under it off the screen entirely.
+   */
+  it('summarises a long note in one line rather than rendering it collapsed', async () => {
+    const long = 'Lorem ipsum dolor sit amet. '.repeat(50).trim();
+    stubFetch({ status: 200, body: detailBody(task({ notes: long })) });
+    mount();
+    await loaded();
+
+    // React Native Web renders `numberOfLines={1}` as its one-line class rather than an
+    // inline clamp, so the assertion is on the resolved rule.
+    const summary = screen.getByText(long);
+    expect(getComputedStyle(summary).whiteSpace).toBe('nowrap');
+    expect(getComputedStyle(summary).textOverflow).toBe('ellipsis');
+    // The full text stays in the accessible name — the clamp is visual only.
+    expect(
+      screen
+        .getByRole('button', { name: `Notes, ${long}` })
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
   it('previews Ingredients as a noninteractive future row on Meal plans only', async () => {
     stubFetch({
       status: 200,
@@ -423,7 +456,7 @@ describe('the sections', () => {
     await loaded();
 
     expect(screen.getByText('Ingredients')).toBeDefined();
-    expect(screen.getByLabelText('Ingredients, coming later')).toBeDefined();
+    expect(screen.getByLabelText(/^Ingredients,.*Coming later$/)).toBeDefined();
     expect(screen.queryByRole('button', { name: /Ingredients/ })).toBeNull();
   });
 
@@ -451,7 +484,7 @@ describe('caller-owned reminders', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reminder, No reminder' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
     fireEvent.click(
       screen.getByRole('checkbox', { name: 'Add reminder 15 minutes before' }),
     );
@@ -483,7 +516,7 @@ describe('caller-owned reminders', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reminder, 15 minutes before' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
     fireEvent.click(
       screen.getByRole('checkbox', { name: 'Remove reminder 15 minutes before' }),
     );
@@ -510,7 +543,7 @@ describe('caller-owned reminders', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reminder, 3 reminders' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
     expect(screen.getByText('You can add up to 3 reminders.')).toBeDefined();
     expect(
       screen
@@ -529,7 +562,7 @@ describe('caller-owned reminders', () => {
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reminder, No reminder' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
     expect(
       screen.getByRole('checkbox', { name: 'Add reminder On the day' }),
     ).toBeDefined();
@@ -539,14 +572,25 @@ describe('caller-owned reminders', () => {
     expect(screen.queryByRole('checkbox', { name: /15 minutes/ })).toBeNull();
   });
 
-  it('renders reminder choices as a bounded vertical scroll menu', async () => {
+  /**
+   * The choices open in a sheet over the screen, not inline — expanded in place they pushed
+   * every capability below them down the page.
+   *
+   * **The sheet owns the bound, not this screen.** `Sheet`'s `medium` detent scrolls the body
+   * internally (§6.1); `ReminderSheet` used to set its own `maxHeight`, which is the ownership
+   * violation that let `Repeat` occupy most of a phone.
+   */
+  it('opens reminder choices in a sheet the sheet itself bounds', async () => {
     stubFetch({ status: 200, body: detailBody(plan()) });
     mount();
     await loaded();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reminder, No reminder' }));
-    const menu = screen.getByTestId('reminder-menu');
-    expect(Number.parseInt(menu.style.maxHeight, 10)).toBe(224);
+    expect(screen.queryByTestId('reminder-menu')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Reminder/ }));
+    const sheet = screen.getByTestId('reminder-sheet');
+    expect(sheet.style.height).toBe('58%');
+    expect(screen.getByTestId('reminder-menu').style.maxHeight).toBe('');
+    expect(screen.getByTestId('reminder-sheet-body')).toBeDefined();
     expect(screen.getAllByRole('checkbox')).toHaveLength(8);
   });
 });
@@ -728,11 +772,19 @@ describe('passed-plan resolution', () => {
       expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
     );
     expect(sent[1]?.body).toEqual({ occurrenceDate: TODAY, outcome: 'didnt_go' });
-    // Resolving one occurrence must not reveal a control that can mutate the whole series.
+    /**
+     * Resolving one occurrence must not leave the screen blank.
+     *
+     * An `Occurrence` override never moves `ACT#/META`, so the series row still reads
+     * `scheduled` and nothing derived from it can show the outcome. Before this, the prompt
+     * left and nothing replaced it: no completion button, no outcome, no Undo — the user had
+     * recorded something the screen then refused to admit.
+     */
     expect(screen.queryByTestId('detail-complete')).toBeNull();
+    expect(screen.getByTestId('detail-undo')).toBeDefined();
   });
 
-  it('does not widen to a series action after the route clears the prompt marker', async () => {
+  it('keeps the completion action occurrence-scoped after the route clears the marker', async () => {
     const recurring = plan({
       schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
       recurrence: {
@@ -740,7 +792,16 @@ describe('passed-plan resolution', () => {
         segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
       },
     });
-    stubFetch({ status: 200, body: detailBody(recurring) });
+    stubFetch(
+      { status: 200, body: detailBody(recurring) },
+      {
+        status: 200,
+        body: {
+          data: { activity: recurring, occurrenceDate: TODAY, outcome: 'attended' },
+          meta: { requestId: 'req_resolution' },
+        },
+      },
+    );
     mount(
       () => {},
       () => {},
@@ -750,6 +811,90 @@ describe('passed-plan resolution', () => {
     await loaded();
 
     expect(screen.queryByTestId('detail-resolution-prompt')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Attended' }));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+    );
+    // The occurrence, never the series.
+    expect(sent[1]?.body).toEqual({ occurrenceDate: TODAY, outcome: 'attended' });
+  });
+
+  /**
+   * A series reached without navigation context still completes — **the day the header is
+   * showing**, never the series.
+   *
+   * `POST /complete` with no `occurrenceDate` writes `status: 'completed'` onto the series row
+   * itself and retires every future occurrence, which is rule 3 broken by one tap. So the scope
+   * is never allowed to be absent on a recurring activity: it falls back to the date on the
+   * schedule line, which is the only occurrence the user can be said to be looking at.
+   */
+  it('completes the occurrence on the schedule line when navigation carried no scope', async () => {
+    const recurring = plan({
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '19:00' }],
+      },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(recurring) },
+      {
+        status: 200,
+        body: {
+          data: {
+            activity: recurring,
+            occurrenceDate: '2026-08-14',
+            outcome: 'attended',
+          },
+          meta: { requestId: 'req_resolution' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-complete'));
+
+    await waitFor(() =>
+      expect(sent.filter((entry) => entry.method === 'POST')).toHaveLength(1),
+    );
+    // `plan()`'s schedule date, which is what the header rendered.
+    expect(sent[1]?.body).toEqual({ occurrenceDate: '2026-08-14', outcome: 'attended' });
+    expect(screen.getByTestId('detail-undo')).toBeDefined();
+  });
+
+  /** A completed occurrence is not readable from its series, so the agenda answers for it. */
+  it('opens an already-completed occurrence showing Undo rather than the verb', async () => {
+    const recurring = plan({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch({ status: 200, body: detailBody(recurring) });
+    const { queryClient } = mount();
+    queryClient.setQueryData<AgendaData>(['agenda', 'occurrence-state'], {
+      days: [
+        {
+          date: TODAY,
+          schedule: [
+            {
+              ...agendaItem(),
+              status: 'completed',
+              isRecurring: true,
+              occurrenceDate: TODAY,
+            },
+          ],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    });
+    await loaded();
+
+    await waitFor(() => expect(screen.getByTestId('detail-undo')).toBeDefined());
     expect(screen.queryByTestId('detail-complete')).toBeNull();
   });
 });
@@ -851,7 +996,7 @@ describe('editing in place', () => {
     await loaded();
 
     expect(screen.getByText('Repeats daily · No reminder')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit recurrence' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Repeat/ }));
     fireEvent.change(screen.getByTestId('repeat-option'), {
       target: { value: 'weekdays' },
     });
@@ -1068,8 +1213,16 @@ describe('the overflow menu', () => {
 
       const button = screen.getByRole('button', { name: verb });
       expect(button).toBe(screen.getByTestId('detail-complete'));
-      expect(button.style.borderTopLeftRadius).toBe('22px');
-      expect(button.style.borderBottomRightRadius).toBe('22px');
+      /**
+       * `radius.md` — the frames' filled control is a soft rectangle, not a pill. At `xl` on a
+       * 52 pt button the corners meet in the middle and it read as a lozenge; the founder's
+       * 2026-08-13 refinement asking for `xl` predates the frames being taken as the reference
+       * for what a control looks like. Raised in the PR.
+       */
+      expect(button.style.borderTopLeftRadius).toBe('12px');
+      expect(button.style.borderBottomRightRadius).toBe('12px');
+      // The frames put no glow under any filled control, in either palette.
+      expect(button.style.boxShadow).toBe('');
       fireEvent.click(button);
 
       await waitFor(() =>

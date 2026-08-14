@@ -46,7 +46,10 @@ export interface ActivityActions {
    * completed, and the detail screen — the one surface that can *record* a completion — could
    * not reverse one at all.
    */
-  undoResolution: (occurrenceDate: string | undefined) => void;
+  undoResolution: (
+    occurrenceDate: string | undefined,
+    onProjected?: (resolved: boolean) => void,
+  ) => void;
   isBusy: boolean;
   /** The two halves stay separate so an optimistic Complete never disables its own Undo. */
   isCompleting: boolean;
@@ -226,7 +229,7 @@ export function useActivityActions(activityId: string): ActivityActions {
         compensationFailureMessage: "Couldn't undo that outcome.",
       });
     },
-    undoResolution: (occurrenceDate) => {
+    undoResolution: (occurrenceDate, onProjected) => {
       const toastId = resolutionToastId.current;
       const activeToast = useToast.getState().current;
 
@@ -242,6 +245,8 @@ export function useActivityActions(activityId: string): ActivityActions {
         activeToast.kind === 'undo'
       ) {
         resolutionToastId.current = undefined;
+        // `startUndoable`'s own `revert`/`apply` already drive the caller's projection through
+        // the `onProjected` it was given at completion time, including a failed compensation.
         useToast.getState().undo(toastId);
         return;
       }
@@ -281,6 +286,13 @@ export function useActivityActions(activityId: string): ActivityActions {
         });
       }
 
+      /**
+       * An occurrence's resolution is not readable from the series it belongs to, so the
+       * caller holds that state and this is the only thing that can move it. The detail cache
+       * restore above is enough for a one-off and says nothing at all for an occurrence.
+       */
+      onProjected?.(false);
+
       void uncompleteMutation
         .mutateAsync({
           activityId,
@@ -293,6 +305,7 @@ export function useActivityActions(activityId: string): ActivityActions {
           if (snapshot !== undefined)
             queryClient.setQueryData(activityKey(activityId), snapshot);
           restoreAgenda();
+          onProjected?.(true);
         });
     },
     isBusy:

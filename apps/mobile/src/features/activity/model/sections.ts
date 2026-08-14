@@ -74,12 +74,21 @@ const COMING_LATER: DetailSection[] = [
  * The remaining Plan capabilities keep `plans-and-lists.md` §2.1's relative order.
  */
 export function sectionsFor(activity: Activity): DetailSection[] {
+  /**
+   * `repeat` and `reminders` are **setting rows** and sit together, in the frames' order:
+   * the two things about *when* this happens, stated by value, each opening its own sheet.
+   * Both need a date to hang off — there is nothing to repeat or to count back from without
+   * one — so both appear only when the activity is scheduled.
+   */
+  const schedule =
+    activity.schedule === undefined ? [] : [{ key: 'repeat' }, { key: 'reminders' }];
+
   if (activity.objectKind === 'task') {
     // §5.6's list, and nothing else. No placeholders.
     return [
       { key: 'whenWhere' },
       { key: 'notes', label: 'Notes' },
-      ...(activity.schedule === undefined ? [] : [{ key: 'reminders' }]),
+      ...schedule,
       { key: 'relatedPlan', label: 'Related plan' },
     ];
   }
@@ -87,7 +96,7 @@ export function sectionsFor(activity: Activity): DetailSection[] {
   return [
     { key: 'whenWhere' },
     { key: 'notes', label: 'Notes' },
-    ...(activity.schedule === undefined ? [] : [{ key: 'reminders' }]),
+    ...schedule,
     ...COMING_LATER,
     ...(activity.type === 'meal'
       ? [

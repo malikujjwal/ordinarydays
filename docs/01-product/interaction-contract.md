@@ -364,6 +364,12 @@ there is one is §1a.1.
 
 ### 4.2 Toast rules
 
+- **A toast is for undo, not for applause** (2026-08-13). A routine mutation does **not** get a
+  success toast: the screen's own state is the confirmation, and a toast that only says "done"
+  interrupts to tell the user something they can already see. A toast appears when this contract
+  uses it to expose **undo** — which is exactly why completion has one, and why checking a task
+  is not an exception to this rule but the reason for it. The row's own check, strike and dimming
+  report the change; the toast carries the six seconds in which it can be taken back.
 - One toast at a time. A new action replaces the visible toast and **commits** the previous
   one immediately.
 - The toast sits above the tab bar, is swipe-dismissible, and dismissing it commits.

@@ -1,10 +1,11 @@
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import type { Activity, RecurrenceSegment } from '@od/shared/types';
-import { Button, Chip, Field, Sheet, Text, TimePicker, useTheme } from '@od/ui';
+import { Button, Field, SettingRow, Sheet, Text, TimePicker, useTheme } from '@od/ui';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import {
+  formatQuickDate,
   type QuickDate,
   quickDates,
   type WallDate,
@@ -158,11 +159,27 @@ export function RescheduleSheet({
     }
   };
 
+  /**
+   * **Removal language matches the object.** The frames are explicit that this is never a
+   * generic "clear the date": a Task without a date is still a task and moves to Anytime, while
+   * a Plan without one goes to Plans → Needs a date. `Clear the date` described the mechanic
+   * and left the user to work out where the thing went.
+   */
+  const removal =
+    activity.objectKind === 'task'
+      ? { label: 'Move to Anytime', hint: 'Keeps the task, drops the date' }
+      : { label: 'Remove date', hint: 'Moves this plan to “Needs a date”' };
+
+  /**
+   * §6's **action row**: the imperative label is itself the affordance, so it takes no chevron.
+   * A chevron here would promise navigation this does not do.
+   */
   const clearDateButton =
     activity.schedule === undefined || recurring ? null : (
-      <Button
-        label="Clear the date"
-        variant="ghost"
+      <SettingRow
+        label={removal.label}
+        summary={removal.hint}
+        accessibilityLabel={`${removal.label}. ${removal.hint}`}
         onPress={() => {
           if (activity.participantCount > 0) {
             setClearConfirmation(true);
@@ -227,13 +244,16 @@ export function RescheduleSheet({
         </View>
       ) : (
         <View style={{ gap: theme.space[5] }} testID="reschedule-occurrence-editor">
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] }}>
+          <View>
             {quickDates(today).map((chip) => (
-              <Chip
+              <SettingRow
                 key={chip.key}
                 label={chip.label}
-                onPress={() => choose(chip)}
+                {...(chip.date === undefined
+                  ? { opens: true }
+                  : { value: formatQuickDate(chip.date, today) })}
                 selected={chip.date !== undefined && chip.date === initialDate}
+                onPress={() => choose(chip)}
                 testID={`quick-date-${chip.key}`}
               />
             ))}
@@ -314,7 +334,13 @@ export function RescheduleSheet({
   if (embedded) return content;
 
   return (
-    <Sheet open={open} onClose={onClose} title="When?" testID="reschedule-sheet">
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="When?"
+      detent="medium"
+      testID="reschedule-sheet"
+    >
       {content}
     </Sheet>
   );

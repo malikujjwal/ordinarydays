@@ -19,12 +19,18 @@ import {
 const WEDNESDAY = '2026-08-12';
 
 describe('quickDates', () => {
-  it('offers the five chips in their fixed order', () => {
+  /**
+   * **Named days, not vague spans.** The founder's frames call for "concrete date shortcuts
+   * instead of ambiguous ones": `This weekend` read on a Sunday and `Next week` read on a
+   * Friday each mean at least two different things, and the row shows the resolved date beside
+   * the label so neither is a guess. From `WEDNESDAY` those resolve to Saturday and Monday.
+   */
+  it('offers the five options in their fixed order, naming the days', () => {
     expect(quickDates(WEDNESDAY).map((c) => c.label)).toEqual([
       'Today',
       'Tomorrow',
-      'This weekend',
-      'Next week',
+      'Saturday',
+      'Next Monday',
       'Pick a date',
     ]);
   });

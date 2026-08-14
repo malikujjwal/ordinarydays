@@ -565,9 +565,13 @@ describe('TodayScreen', () => {
     await waitFor(() =>
       expect(screen.getByTestId('reschedule-occurrence-editor')).toBeDefined(),
     );
-    expect(
-      screen.getByRole('button', { name: 'Today' }).getAttribute('aria-pressed'),
-    ).toBe('true');
+    /**
+     * `aria-pressed`, not `aria-selected`: ARIA does not allow the latter on `button`, and axe
+     * rejects it as critical — caught by the e2e accessibility sweep, not by this suite.
+     */
+    expect(screen.getByTestId('quick-date-today').getAttribute('aria-pressed')).toBe(
+      'true',
+    );
   });
 
   it('removes a completed overdue row without projecting it into Earlier today', async () => {

@@ -4,28 +4,33 @@ import type { PatchActivityInput } from '@od/shared/schemas';
 import type { Activity, PlanType } from '@od/shared/types';
 import {
   Button,
-  Card,
   ChevronLeft,
   Chip,
+  DisclosureRow,
   EmptyState,
   Field,
   IconButton,
   MoreHorizontal,
+  RowGroup,
+  ScreenShell,
+  SettingRow,
   Skeleton,
   Text,
   useBreakpoint,
   useTheme,
 } from '@od/ui';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
-import { DetailActionRow } from '@/features/activity/components/DetailActionRow';
-import { DetailDisclosureRow } from '@/features/activity/components/DetailDisclosureRow';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
-import { ReminderDisclosure } from '@/features/activity/components/ReminderDisclosure';
+import {
+  ReminderSheet,
+  reminderSummary,
+} from '@/features/activity/components/ReminderSheet';
 import { RepeatSheet } from '@/features/activity/components/RepeatSheet';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
 import { WhenWhereBlock } from '@/features/activity/components/WhenWhereBlock';
@@ -41,7 +46,12 @@ import {
 } from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
-import { completionVerb, passedPlanResolution } from '@/lib/passedPlanResolution';
+import { readOccurrenceStatus } from '@/lib/agendaCache';
+import {
+  completionVerb,
+  outcomeVerb,
+  passedPlanResolution,
+} from '@/lib/passedPlanResolution';
 import { planKindLabel } from '@/lib/planKinds';
 
 /**
@@ -103,7 +113,8 @@ export function ActivityDetailScreen({
 }: ActivityDetailScreenProps) {
   const theme = useTheme();
   const breakpoint = useBreakpoint();
-  const insets = useSafeAreaInsets();
+  const _insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
   const detail = useActivityDetail(activityId);
   const actions = useActivityActions(activityId);
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
@@ -114,8 +125,19 @@ export function ActivityDetailScreen({
   );
   const [pending, setPending] = useState<PendingChange | undefined>(undefined);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [remindersOpen, setRemindersOpen] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [resolutionDismissed, setResolutionDismissed] = useState(false);
+  /**
+   * This screen's own projection of the occurrence's resolution — `undefined` until the user
+   * acts here, at which point it outranks the cached agenda.
+   *
+   * Every path that projects a completion or reverses one moves it, including the rollbacks,
+   * which is why it is fed from one `onProjected` callback rather than set beside the calls.
+   */
+  const [occurrenceResolved, setOccurrenceResolved] = useState<boolean | undefined>(
+    undefined,
+  );
 
   /**
    * A kind change confirms **only when it would drop something** (`activities.md` §6.3 rule 6,
@@ -162,12 +184,51 @@ export function ActivityDetailScreen({
     activity?.status === 'scheduled' &&
     detail.detail?.capabilities?.complete === true &&
     !resolutionDismissed;
-  const actionOccurrenceDate = occurrenceDate ?? resolutionOccurrenceDate ?? undefined;
+  /**
+   * The occurrence every action on this screen targets.
+   *
+   * **A recurring activity always has one**, because the header is always showing one specific
+   * date — so completing "this" means completing the day on screen, and `POST /complete` never
+   * goes out without a scope. Sent bare it sets `status: 'completed'` on the series row itself
+   * and retires every future occurrence (verified against the local API), which is rule 3
+   * broken by one tap. Navigation supplies the date when the user came from a row; otherwise it
+   * is the date the schedule line is displaying, which is the only occurrence the user can be
+   * said to be looking at.
+   */
+  const actionOccurrenceDate =
+    occurrenceDate ??
+    resolutionOccurrenceDate ??
+    (activity?.recurrence === undefined ? undefined : activity.schedule?.date);
+
+  /**
+   * Resolution state for whatever is in scope.
+   *
+   * A one-off's is on the Activity. An occurrence's is not readable from its series at all, so
+   * it comes from this screen's own projection once the user has acted, and before that from
+   * the agenda — the only client-side surface holding expanded occurrences.
+   */
+  const resolved =
+    actionOccurrenceDate === undefined
+      ? RESOLVED_STATUSES.has(activity?.status ?? '')
+      : (occurrenceResolved ??
+        RESOLVED_STATUSES.has(
+          readOccurrenceStatus(queryClient, {
+            activityId,
+            occurrenceDate: actionOccurrenceDate,
+          }) ?? '',
+        ));
+
+  /** One callback for the optimistic flip, the Undo, and every rollback in between. */
+  function projectResolution(next: boolean) {
+    setResolutionDismissed(next);
+    setOccurrenceResolved(next);
+    onResolutionProjectionChange?.(next);
+  }
 
   /** The measure, per §8. `compact` is full width minus the gutters. */
-  const maxWidth =
+  const _maxWidth =
     breakpoint === 'compact' ? undefined : breakpoint === 'medium' ? 720 : 620;
-  const framed = breakpoint !== 'compact';
+  const _framed = breakpoint !== 'compact';
 
   const detailContent = (
     <>
@@ -219,8 +280,9 @@ export function ActivityDetailScreen({
           today={today}
           onOpenReschedule={() => setRescheduleOpen(true)}
           onOpenRepeat={() => setRepeatOpen(true)}
+          onOpenReminders={() => setRemindersOpen(true)}
           showResolutionPrompt={showResolutionPrompt}
-          occurrenceScoped={actionOccurrenceDate !== undefined}
+          resolved={resolved}
           onOpenResolution={() => setResolutionOpen(true)}
           canComplete={detail.detail?.capabilities?.complete === true}
           completing={actions.isCompleting}
@@ -229,49 +291,36 @@ export function ActivityDetailScreen({
             actions.resolvePassed(
               passedPlanResolution(activity.type).positive.outcome,
               actionOccurrenceDate,
-              (resolved) => {
-                setResolutionDismissed(resolved);
-                onResolutionProjectionChange?.(resolved);
-              },
+              projectResolution,
             );
           }}
           onUndoResolution={() => {
-            actions.undoResolution(actionOccurrenceDate);
-            setResolutionDismissed(false);
-            onResolutionProjectionChange?.(false);
+            actions.undoResolution(actionOccurrenceDate, projectResolution);
           }}
-          onAddReminder={detail.addReminder}
-          onRemoveReminder={detail.removeReminder}
         />
       )}
     </>
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.surface }}>
-      <ScrollView
-        contentContainerStyle={{
-          paddingHorizontal: theme.space[5],
-          paddingTop: insets.top + (framed ? theme.space[7] : theme.space[3]),
-          paddingBottom: insets.bottom + theme.space[8],
-        }}
-      >
-        <View
-          style={{
-            width: '100%',
-            alignSelf: 'center',
-            ...(maxWidth === undefined ? {} : { maxWidth }),
-          }}
-        >
-          {framed ? (
-            <Card elevation="e2" radius="xl" padding={7} testID="detail-surface">
-              {detailContent}
-            </Card>
-          ) : (
-            <View testID="detail-surface">{detailContent}</View>
-          )}
-        </View>
-      </ScrollView>
+    <View style={{ flex: 1 }}>
+      {/**
+       * `ScreenShell` owns the gutters, the centred column, the safe area and the vertical
+       * breathing room — the four things this screen used to answer for itself, and answered
+       * differently from the tabs. `reading` is §8's narrower measure: this screen is mostly
+       * running text, and it is why the cap here was 620 against the tabs' 720.
+       */}
+      {/**
+       * **No card around the screen.** From `medium` up this content used to sit inside an
+       * elevated `Card`, which made a whole screen a hero surface — §2 allows one hero at a
+       * time, and this screen's hero is its completion action. `ScreenShell` already gives the
+       * centred column the card was standing in for, and only cards, sheets and the one hero
+       * surface are rounded; rounding a page is the corporate-dashboard look the system exists
+       * to avoid.
+       */}
+      <ScreenShell measure="reading">
+        <View testID="detail-surface">{detailContent}</View>
+      </ScreenShell>
 
       {activity === undefined ? null : (
         <>
@@ -302,6 +351,19 @@ export function ActivityDetailScreen({
               {...(detail.editError === undefined ? {} : { error: detail.editError })}
             />
           )}
+          <ReminderSheet
+            open={remindersOpen}
+            onClose={() => setRemindersOpen(false)}
+            reminders={detail.detail?.reminders ?? []}
+            timed={activity.schedule?.time !== undefined}
+            busy={detail.isSavingReminder}
+            {...(detail.reminderError === undefined
+              ? {}
+              : { error: detail.reminderError })}
+            onAdd={detail.addReminder}
+            onRemove={detail.removeReminder}
+          />
+
           <OverflowMenu
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
@@ -368,10 +430,7 @@ export function ActivityDetailScreen({
             onClose={() => setResolutionOpen(false)}
             onResolve={(outcome) => {
               setResolutionOpen(false);
-              actions.resolvePassed(outcome, actionOccurrenceDate, (resolved) => {
-                setResolutionDismissed(resolved);
-                onResolutionProjectionChange?.(resolved);
-              });
+              actions.resolvePassed(outcome, actionOccurrenceDate, projectResolution);
             }}
           />
         </>
@@ -386,8 +445,9 @@ interface LoadedProps {
   today: WallDate;
   onOpenReschedule: () => void;
   onOpenRepeat: () => void;
+  onOpenReminders: () => void;
   showResolutionPrompt: boolean;
-  occurrenceScoped: boolean;
+  resolved: boolean;
   onOpenResolution: () => void;
   /** Server-authored. The client never re-derives ownership (`today-and-tasks.md` §4.1). */
   canComplete: boolean;
@@ -395,11 +455,23 @@ interface LoadedProps {
   undoing: boolean;
   onComplete: () => void;
   onUndoResolution: () => void;
-  onAddReminder: (offsetMinutes: number) => Promise<boolean>;
-  onRemoveReminder: (reminderId: string) => Promise<boolean>;
 }
 
-const RESOLVED_STATUSES = new Set(['completed', 'skipped']);
+/**
+ * Every status that means "this is already resolved", **including the occurrence variants**.
+ *
+ * An Activity's own status is only ever `completed`/`skipped`; an *occurrence* read back from
+ * the agenda is `completed_occurrence`/`skipped_occurrence` (`agenda.ts`). Checking only the
+ * first pair meant leaving a completed occurrence and returning to it showed the completion
+ * button again, because the cached agenda's answer was true but unrecognised. `AgendaRow` has
+ * always matched all four; this set had two.
+ */
+const RESOLVED_STATUSES = new Set([
+  'completed',
+  'completed_occurrence',
+  'skipped',
+  'skipped_occurrence',
+]);
 
 function Loaded({
   activity,
@@ -407,20 +479,18 @@ function Loaded({
   today,
   onOpenReschedule,
   onOpenRepeat,
+  onOpenReminders,
   showResolutionPrompt,
-  occurrenceScoped,
+  resolved,
   onOpenResolution,
   canComplete,
   completing,
   undoing,
   onComplete,
   onUndoResolution,
-  onAddReminder,
-  onRemoveReminder,
 }: LoadedProps) {
   const theme = useTheme();
   const sections = sectionsFor(activity);
-  const resolved = RESOLVED_STATUSES.has(activity.status);
 
   return (
     <View style={{ gap: theme.space[6] }} testID="detail-content">
@@ -510,64 +580,87 @@ function Loaded({
         ) : null}
 
         {/** One type-derived completion component and position for both object kinds. */}
-        {canComplete && !resolved && !showResolutionPrompt && !occurrenceScoped ? (
+        {canComplete && !resolved && !showResolutionPrompt ? (
           <Button
             label={completionVerb(activity.type)}
             fullWidth
             size="lg"
-            radius="xl"
+            radius="md"
             loading={completing}
             onPress={onComplete}
             testID="detail-complete"
           />
         ) : null}
 
+        {/** The outcome is stated before the control that reverses it, not after it. */}
         {resolved ? (
           <View style={{ gap: theme.space[3] }}>
+            <Text variant="bodyStrong" color="success" testID="detail-resolved">
+              {activity.status === 'skipped' ? 'Skipped' : outcomeVerb(activity.type)}
+            </Text>
             {canComplete ? (
               <Button
                 label="Undo"
                 variant="secondary"
                 size="lg"
                 fullWidth
-                radius="xl"
+                radius="md"
                 loading={undoing}
                 onPress={onUndoResolution}
                 testID="detail-undo"
               />
             ) : null}
-            <Text variant="bodyStrong" color="success" testID="detail-resolved">
-              {activity.status === 'skipped' ? 'Skipped' : completionVerb(activity.type)}
-            </Text>
           </View>
         ) : null}
       </View>
 
-      <View testID="detail-sections">
+      {/**
+       * Capabilities and the bottom time action are **one ruled list**. They were two blocks
+       * with a gap between them, and since every row carries its own rule that rendered as two
+       * horizontal lines with an empty band trapped between — which reads as a mistake rather
+       * than as a grouping. Each row closes itself with a bottom rule, per the frames.
+       */}
+      <RowGroup testID="detail-sections">
         {sections.map((section) => {
           if (section.key === 'whenWhere') return null;
 
+          /** Reminder and Repeat are setting rows: value on the right, sheet on tap. */
           if (section.key === 'reminders') {
             return (
-              <ReminderDisclosure
+              <SettingRow
                 key={section.key}
-                reminders={detail.detail?.reminders ?? []}
-                timed={activity.schedule?.time !== undefined}
-                busy={detail.isSavingReminder}
-                {...(detail.reminderError === undefined
-                  ? {}
-                  : { error: detail.reminderError })}
-                onAdd={onAddReminder}
-                onRemove={onRemoveReminder}
+                label="Reminder"
+                value={reminderSummary(
+                  detail.detail?.reminders ?? [],
+                  activity.schedule?.time !== undefined,
+                )}
+                onPress={onOpenReminders}
+                testID="section-reminders"
+              />
+            );
+          }
+
+          if (section.key === 'repeat') {
+            return (
+              <SettingRow
+                key={section.key}
+                label="Repeat"
+                value={
+                  activity.recurrence === undefined
+                    ? 'Does not repeat'
+                    : describeRecurrence(activity.recurrence, today)
+                }
+                onPress={onOpenRepeat}
+                testID="detail-edit-recurrence"
               />
             );
           }
 
           if (section.key === 'notes') {
             return (
-              <DetailDisclosureRow
+              <DisclosureRow
                 key={section.key}
-                title="Notes"
+                label="Notes"
                 summary={
                   activity.notes?.trim() === '' || activity.notes === undefined
                     ? 'Add notes'
@@ -587,16 +680,17 @@ function Loaded({
                   }}
                   testID="detail-notes"
                 />
-              </DetailDisclosureRow>
+              </DisclosureRow>
             );
           }
 
           if (section.state === 'coming-later') {
             return (
-              <DetailDisclosureRow
+              <SettingRow
                 key={section.key}
-                title={section.label ?? ''}
+                label={section.label ?? ''}
                 summary={section.summary ?? ''}
+                note="Coming later"
                 testID={`section-${section.key}`}
               />
             );
@@ -604,9 +698,9 @@ function Loaded({
 
           // Related plan — the parent link on a prep task (`today-and-tasks.md` §5.5).
           return (
-            <DetailDisclosureRow
+            <DisclosureRow
               key={section.key}
-              title="Related plan"
+              label="Related plan"
               summary={
                 activity.parentActivityId === undefined ? 'None' : 'Part of a plan'
               }
@@ -617,26 +711,10 @@ function Loaded({
                   ? 'A related plan appears here when this task is added from a plan.'
                   : 'This task is part of a plan.'}
               </Text>
-            </DetailDisclosureRow>
+            </DisclosureRow>
           );
         })}
-      </View>
-
-      {activity.schedule === undefined ? null : (
-        <View
-          style={{
-            paddingTop: theme.space[2],
-          }}
-          testID="detail-time-actions"
-        >
-          <DetailActionRow
-            title="Edit recurrence"
-            hint="Tap to edit"
-            onPress={onOpenRepeat}
-            testID="detail-edit-recurrence"
-          />
-        </View>
-      )}
+      </RowGroup>
     </View>
   );
 }

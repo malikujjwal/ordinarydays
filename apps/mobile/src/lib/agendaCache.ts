@@ -54,8 +54,8 @@ export function projectActivityWrite(
 
   if (name === 'schedule') {
     const date = activity.schedule?.date ?? null;
-    update(client, (agenda) =>
-      applyReschedule(agenda, {
+    update(client, (agenda) => {
+      const moved = applyReschedule(agenda, {
         activityId: activity.activityId,
         date,
         ...(activity.schedule?.time === undefined
@@ -65,8 +65,24 @@ export function projectActivityWrite(
           ? {}
           : { endTime: activity.schedule.endTime }),
         ...clock,
-      }),
-    );
+      });
+      if (moved !== agenda) return moved;
+
+      /**
+       * **A row can also be rescheduled *into* a window it was never in.**
+       *
+       * `applyReschedule` moves a row the cached agenda already holds; asked about one it does
+       * not, it correctly does nothing. But moving a plan from next Friday to today is exactly
+       * that case — Today's cached window has never seen it — so the projection was a no-op and
+       * Today only gained the row when something else happened to refetch. Reported as "it takes
+       * some time to show up".
+       *
+       * `applyCreate` is the right fallback rather than a second insert path: it places a
+       * server-confirmed Activity only when the destination date is inside this window, and it
+       * is idempotent, so a refetch that won the race cannot double the row.
+       */
+      return applyCreate(agenda, { activity, ...clock });
+    });
     return true;
   }
 
@@ -128,6 +144,26 @@ export function projectActivityWrite(
   }
 
   return false;
+}
+
+/**
+ * The cached status of one occurrence, for a screen that cannot read it from the Activity.
+ *
+ * An `Occurrence` override never moves `ACT#/META` (`data-model.md` §4.5), so opening a
+ * recurring activity's detail tells you the series is `scheduled` and nothing about the day you
+ * are looking at. The agenda already carries the expanded occurrence and is already reconciled
+ * by every completion path, so it is the one place the answer exists client-side. Absent when
+ * no agenda window is cached — a cold deep link — and the caller falls back to unresolved.
+ */
+export function readOccurrenceStatus(
+  client: QueryClient,
+  target: AgendaMutationTarget,
+): string | undefined {
+  for (const [, agenda] of client.getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })) {
+    const found = agenda === undefined ? undefined : findAgendaItem(agenda, target);
+    if (found !== undefined) return found.item.status;
+  }
+  return undefined;
 }
 
 /**

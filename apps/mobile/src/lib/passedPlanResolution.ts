@@ -55,6 +55,22 @@ export function completionVerb(type: ActivityType): string {
   return RESOLUTIONS[type].positive.label;
 }
 
+/**
+ * The verb a **already-resolved** activity renders — `Done`, `Had it`, `Watched`, `Attended`.
+ *
+ * Not the same list as `completionVerb`, and `today-and-tasks.md` §4 is explicit about both: the
+ * passed-plan sheet's positive button for a task is `Complete` (§4's table), while a completed
+ * item's trailing slot and the detail screen's resolved line render `Done` (§4 "Completed items
+ * render with their outcome verb (`Had it`, `Watched`, `Attended`, `Done`)"). One mapping served
+ * both and put the imperative on the state, so a finished task announced itself as `Complete` —
+ * an instruction where a status belongs.
+ *
+ * Only `task` differs; every other type completes with the verb it is described by.
+ */
+export function outcomeVerb(type: ActivityType): string {
+  return type === 'task' ? 'Done' : RESOLUTIONS[type].positive.label;
+}
+
 /** Server-authored authority plus clock/status state; no owner-id inference in the client. */
 export function canResolvePassedAgendaItem(item: AgendaItem): boolean {
   return item.isPast && item.status === 'scheduled' && item.capabilities.complete;

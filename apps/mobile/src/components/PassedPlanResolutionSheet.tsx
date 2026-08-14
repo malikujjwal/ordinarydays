@@ -29,6 +29,7 @@ export function PassedPlanResolutionSheet({
       open={open}
       onClose={onClose}
       title={resolution.prompt}
+      detent="fit"
       testID="passed-plan-resolution-sheet"
     >
       <Text variant="subhead" color="textSecondary">
