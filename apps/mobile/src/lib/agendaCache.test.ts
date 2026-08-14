@@ -1,7 +1,11 @@
 import type { AgendaData, AgendaItem } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
-import { projectActivityWrite, projectOptimisticCompletion } from '@/lib/agendaCache';
+import {
+  projectActivityWrite,
+  projectOptimisticCompletion,
+  readOccurrenceDate,
+} from '@/lib/agendaCache';
 
 /**
  * The regression this file exists for.
@@ -184,7 +188,13 @@ describe('a completion recorded anywhere reaches the agenda cache', () => {
  * was therefore a no-op and Today only gained the row when something else happened to refetch.
  */
 describe('a plan rescheduled into today', () => {
-  const scheduleKey = ['activities', 'schedule'];
+  /**
+   * `['activity', …]`, singular — the real key from `activityMutationKeys`. This fixture said
+   * `activities` and still passed, because the projector only ever read element 1 and never
+   * checked the scope; `changesActivityLists` does check it, so the key under test could not
+   * have reached the projector in production at all.
+   */
+  const scheduleKey = ['activity', 'schedule'];
   const arriving = {
     activityId: 'act_DINNER',
     ownerId: 'usr_1',
@@ -233,5 +243,385 @@ describe('a plan rescheduled into today', () => {
     });
 
     expect(statusOf(client, 'act_DINNER')).toBeUndefined();
+  });
+});
+
+/**
+ * The same invariant, for the write that did not have it.
+ *
+ * `changesActivityLists` returns true for every `['activity', *]` key, so a patch always
+ * reached `refreshActivityLists` — which marks the agenda stale with `refetchType: 'none'`.
+ * `projectActivityWrite` had no `patch` branch, so it returned false and wrote nothing. Net:
+ * no projection *and* no refetch, and Today kept the pre-patch row until a remount, a
+ * foreground, or the 60-second `staleTime` expired. Switching an activity from repeating to
+ * one-off left Today insisting it still repeated.
+ */
+describe('a patch reaches the agenda cache', () => {
+  const patchKey = ['activity', 'patch'];
+
+  const daily = {
+    mode: 'fixed',
+    segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '09:30' }],
+  };
+
+  const patched = (patch: Record<string, unknown>) => ({
+    activityId: 'act_STANDUP',
+    type: 'task',
+    title: 'Stand-up',
+    status: 'scheduled',
+    schedule: { date: TODAY, time: '09:30' },
+    ...patch,
+  });
+
+  const rowOf = (client: QueryClient): AgendaItem | undefined => {
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    for (const day of agenda?.days ?? []) {
+      for (const item of [...day.schedule, ...day.anytime, ...day.earlier]) {
+        if (item.activityId === 'act_STANDUP') return item;
+      }
+    }
+    return undefined;
+  };
+
+  it('clears the repeating flag when a series becomes a one-off', () => {
+    const client = seeded(
+      row({
+        isRecurring: true,
+        capabilities: { complete: true, skip: true, snooze: true },
+      }),
+    );
+
+    expect(projectActivityWrite(client, patchKey, patched({}))).toBe(true);
+
+    expect(rowOf(client)?.isRecurring).toBe(false);
+    // `Skip today` is a series-occurrence action and goes with the recurrence.
+    expect(rowOf(client)?.capabilities.skip).toBe(false);
+  });
+
+  it('sets the repeating flag when a one-off becomes a series', () => {
+    const client = seeded();
+
+    projectActivityWrite(
+      client,
+      patchKey,
+      patched({
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'daily', effectiveFrom: TODAY }],
+        },
+      }),
+    );
+
+    expect(rowOf(client)?.isRecurring).toBe(true);
+    expect(rowOf(client)?.capabilities.skip).toBe(true);
+  });
+
+  it('renames the row without touching the occurrence status it carries', () => {
+    const client = seeded(
+      row({ isRecurring: true, occurrenceDate: TODAY, status: 'completed_occurrence' }),
+    );
+
+    projectActivityWrite(
+      client,
+      patchKey,
+      patched({ title: 'Morning stand-up', recurrence: daily }),
+    );
+
+    expect(rowOf(client)?.title).toBe('Morning stand-up');
+    // An `Occurrence` override never moves `ACT#/META`, so a patch may not move it either.
+    expect(rowOf(client)?.status).toBe('completed_occurrence');
+  });
+
+  /**
+   * The founder's flow, steps 2–4: make a plan daily, then try to complete today from detail.
+   *
+   * An expanded occurrence is identified by the day it falls on, and the detail screen offers
+   * no completion control without one. Marking the row recurring while leaving it without an
+   * occurrence date hid the button until a real refetch arrived.
+   */
+  it('gives a newly recurring row the occurrence date its own day implies', () => {
+    const client = seeded();
+
+    projectActivityWrite(client, patchKey, patched({ recurrence: daily }));
+
+    expect(rowOf(client)?.occurrenceDate).toBe(TODAY);
+  });
+
+  /**
+   * The founder's flow, step 7: complete today, then switch the series back to a one-off.
+   *
+   * `completed_occurrence` describes an occurrence that no longer exists, so the row stayed
+   * crossed off with an `Undo` that targeted nothing — "stuck as completed, won't switch back".
+   */
+  it('clears occurrence state when a series becomes a one-off again', () => {
+    const client = seeded(
+      row({ isRecurring: true, occurrenceDate: TODAY, status: 'completed_occurrence' }),
+    );
+
+    projectActivityWrite(client, patchKey, patched({}));
+
+    expect(rowOf(client)?.status).toBe('scheduled');
+    expect(rowOf(client)?.occurrenceDate).toBeUndefined();
+    expect(rowOf(client)?.isRecurring).toBe(false);
+  });
+
+  /** A one-off exists on exactly one date, so the other days' occurrences go with the rule. */
+  it('drops surplus occurrences when the recurrence is removed', () => {
+    const client = new QueryClient();
+    client.setQueryData(KEY, {
+      days: [
+        {
+          date: TODAY,
+          schedule: [
+            row({ isRecurring: true, occurrenceDate: TODAY }),
+            row({ isRecurring: true, occurrenceDate: '2026-08-14', time: '09:31' }),
+          ],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    } satisfies AgendaData);
+
+    projectActivityWrite(client, patchKey, patched({}));
+
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    const rows = (agenda?.days ?? []).flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (item) => item.activityId === 'act_STANDUP',
+      ),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.occurrenceDate).toBeUndefined();
+  });
+
+  it('leaves a window that never held the activity alone', () => {
+    const client = seeded(row({ activityId: 'act_OTHER' }));
+
+    projectActivityWrite(client, patchKey, patched({ title: 'Renamed' }));
+
+    expect(rowOf(client)).toBeUndefined();
+  });
+});
+
+/**
+ * The other write that opted into the stale-marking and forgot the projection.
+ *
+ * The detail screen navigates away on a successful delete, but the Today tab it returns to is
+ * already mounted and refetches nothing — so the deleted row stayed on screen until a remount,
+ * a foreground, or the 60-second `staleTime` expired.
+ */
+describe('a delete reaches the agenda cache', () => {
+  const deleteKey = ['activity', 'delete'];
+
+  const holds = (client: QueryClient, activityId: string): number => {
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    return (agenda?.days ?? []).flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (item) => item.activityId === activityId,
+      ),
+    ).length;
+  };
+
+  it('removes the row, so Today drops it without a refetch', () => {
+    const client = seeded();
+
+    expect(projectActivityWrite(client, deleteKey, { activityId: 'act_STANDUP' })).toBe(
+      true,
+    );
+
+    expect(holds(client, 'act_STANDUP')).toBe(0);
+  });
+
+  /**
+   * `replaceAgendaItem` matches `activityId` *and* `occurrenceDate`, so a bare-id target would
+   * have removed only the undated row and left every expanded occurrence on screen.
+   */
+  it('removes every occurrence of a deleted series', () => {
+    const client = new QueryClient();
+    client.setQueryData(KEY, {
+      days: [
+        {
+          date: TODAY,
+          schedule: [
+            row({ isRecurring: true, occurrenceDate: TODAY }),
+            row({ isRecurring: true, occurrenceDate: '2026-08-14', time: '09:31' }),
+          ],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    } satisfies AgendaData);
+
+    projectActivityWrite(client, deleteKey, { activityId: 'act_STANDUP' });
+
+    expect(holds(client, 'act_STANDUP')).toBe(0);
+  });
+
+  it('leaves a window that never held the activity alone', () => {
+    const client = seeded(row({ activityId: 'act_OTHER' }));
+
+    projectActivityWrite(client, deleteKey, { activityId: 'act_STANDUP' });
+
+    expect(holds(client, 'act_OTHER')).toBe(1);
+  });
+});
+
+/**
+ * The writes that are deliberately unprojected. Named here so the opt-out stays a decision:
+ * snooze projects itself from the agenda screen, and reminder writes touch no agenda window.
+ */
+describe('writes that deliberately project nothing', () => {
+  it.each([['snooze'], ['unsnooze'], ['reminder-create'], ['reminder-delete']])(
+    '%s leaves the cached agenda untouched',
+    (tag) => {
+      const client = seeded();
+      const before = client.getQueryData<AgendaData>(KEY);
+
+      expect(
+        projectActivityWrite(client, ['activity', tag], { activityId: 'act_STANDUP' }),
+      ).toBe(false);
+
+      expect(client.getQueryData<AgendaData>(KEY)).toBe(before);
+    },
+  );
+
+  it('ignores a mutation key that is not an activity write at all', () => {
+    const client = seeded();
+
+    expect(projectActivityWrite(client, ['list', 'create'], { activityId: 'x' })).toBe(
+      false,
+    );
+  });
+});
+
+/**
+ * Which occurrence a detail screen reached without navigation context should act on.
+ *
+ * The old answer was `activity.schedule.date` — the series *anchor*, which is where it starts,
+ * not a day anyone is looking at. This reads occurrences the server expanded instead.
+ */
+describe('reading an occurrence date from the cached agenda', () => {
+  const occurrence = (date: string) =>
+    row({ isRecurring: true, occurrenceDate: date, time: '09:30' });
+
+  const windowOf = (client: QueryClient, dates: string[]) => {
+    client.setQueryData(KEY, {
+      days: dates.map((date) => ({
+        date,
+        schedule: [occurrence(date)],
+        anytime: [],
+        earlier: [],
+      })),
+      warnings: [],
+    } satisfies AgendaData);
+  };
+
+  it('prefers today when the window holds it', () => {
+    const client = new QueryClient();
+    windowOf(client, ['2026-08-12', TODAY, '2026-08-14']);
+
+    expect(readOccurrenceDate(client, 'act_STANDUP', TODAY)).toBe(TODAY);
+  });
+
+  it('takes the next occurrence when today has none', () => {
+    const client = new QueryClient();
+    windowOf(client, ['2026-08-15', '2026-08-20']);
+
+    expect(readOccurrenceDate(client, 'act_STANDUP', TODAY)).toBe('2026-08-15');
+  });
+
+  it('falls back to the most recent past occurrence when none is upcoming', () => {
+    const client = new QueryClient();
+    windowOf(client, ['2026-08-01', '2026-08-11']);
+
+    expect(readOccurrenceDate(client, 'act_STANDUP', TODAY)).toBe('2026-08-11');
+  });
+
+  /** A cold deep link has no agenda, and the caller offers no completion control at all. */
+  it('is absent when nothing is cached', () => {
+    expect(readOccurrenceDate(new QueryClient(), 'act_STANDUP', TODAY)).toBeUndefined();
+  });
+
+  it('never answers with a one-off row, which carries no occurrence', () => {
+    const client = seeded();
+
+    expect(readOccurrenceDate(client, 'act_STANDUP', TODAY)).toBeUndefined();
+  });
+});
+
+/**
+ * Rescheduling one occurrence of a series.
+ *
+ * Reachable only since the detail screen started sending `occurrenceDate` — before that the
+ * server rejected the write. `applyReschedule` matches `activityId` *and* `occurrenceDate`, and
+ * the projector passed none, so no row matched, the `applyCreate` fallback fired, and the
+ * window gained a **second** row: "I somehow managed to duplicate a task on UI".
+ */
+describe('a recurring occurrence rescheduled to a new time', () => {
+  const scheduleKey = ['activity', 'schedule'];
+
+  /** META is untouched by an occurrence override, so the response still carries the anchor. */
+  const seriesResponse = {
+    activityId: 'act_STANDUP',
+    type: 'task',
+    title: 'Stand-up',
+    status: 'scheduled',
+    schedule: { date: TODAY, time: '09:30', timezone: 'America/New_York' },
+    recurrence: {
+      mode: 'fixed',
+      segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '09:30' }],
+    },
+  };
+
+  const rowsFor = (client: QueryClient) => {
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    return (agenda?.days ?? []).flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (item) => item.activityId === 'act_STANDUP',
+      ),
+    );
+  };
+
+  it('moves the occurrence instead of adding a second row', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+
+    projectActivityWrite(client, scheduleKey, seriesResponse, {
+      activityId: 'act_STANDUP',
+      input: { date: TODAY, time: '18:00', occurrenceDate: TODAY },
+    });
+
+    const rows = rowsFor(client);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.time).toBe('18:00');
+    expect(rows[0]?.occurrenceDate).toBe(TODAY);
+  });
+
+  it('leaves the other occurrences of the series where they are', () => {
+    const client = new QueryClient();
+    client.setQueryData(KEY, {
+      days: [
+        {
+          date: TODAY,
+          schedule: [
+            row({ isRecurring: true, occurrenceDate: TODAY }),
+            row({ isRecurring: true, occurrenceDate: '2026-08-14', time: '09:30' }),
+          ],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    } satisfies AgendaData);
+
+    projectActivityWrite(client, scheduleKey, seriesResponse, {
+      activityId: 'act_STANDUP',
+      input: { date: TODAY, time: '18:00', occurrenceDate: TODAY },
+    });
+
+    const rows = rowsFor(client);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((item) => item.occurrenceDate === '2026-08-14')?.time).toBe('09:30');
   });
 });

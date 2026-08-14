@@ -70,7 +70,7 @@ function sectionFor(
   return item.time === undefined ? 'anytime' : 'schedule';
 }
 
-function uniqueItems(day: AgendaDay): AgendaItem[] {
+export function uniqueItems(day: AgendaDay): AgendaItem[] {
   const seen = new Set<string>();
   return [...day.schedule, ...day.anytime, ...day.earlier].filter((item) => {
     const key = identity(item);
@@ -80,7 +80,7 @@ function uniqueItems(day: AgendaDay): AgendaItem[] {
   });
 }
 
-function projectDay(
+export function projectDay(
   day: AgendaDay,
   items: readonly AgendaItem[],
   clock: AgendaProjectionClock,
