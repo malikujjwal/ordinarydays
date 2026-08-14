@@ -303,6 +303,36 @@ export function readOccurrenceDate(
 }
 
 /**
+ * The schedule **one occurrence** is actually on, which is not the series' schedule.
+ *
+ * An `Occurrence` override never moves `ACT#/META` (`data-model.md` §4.5), so an activity
+ * whose Thursday was retimed still reports the series time on its own record. The detail
+ * screen read exactly that and showed the series value back to the user after they had
+ * changed the day in front of them — an invitation to "correct" it again, which writes a
+ * second override.
+ *
+ * The agenda holds the answer already: `mergeNominal` resolves an override into the row's
+ * `time`, and the day bucket the row sits in is its effective date, including a cross-day
+ * move where the row's own `occurrenceDate` is the *source* day. Absent when no window is
+ * cached, and the caller falls back to the series schedule.
+ */
+export function readOccurrenceSchedule(
+  client: QueryClient,
+  target: AgendaMutationTarget,
+): { date: string; time?: string; endTime?: string } | undefined {
+  for (const [, agenda] of client.getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })) {
+    const found = agenda === undefined ? undefined : findAgendaItem(agenda, target);
+    if (found === undefined) continue;
+    return {
+      date: found.sourceDate,
+      ...(found.item.time === undefined ? {} : { time: found.item.time }),
+      ...(found.item.endTime === undefined ? {} : { endTime: found.item.endTime }),
+    };
+  }
+  return undefined;
+}
+
+/**
  * Projects a detail-screen completion before its request settles and returns a targeted
  * rollback. The rollback restores only the affected row in each cached agenda window, so an
  * unrelated agenda write made while the completion is in flight is never overwritten.

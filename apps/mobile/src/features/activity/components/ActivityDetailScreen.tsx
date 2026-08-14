@@ -44,7 +44,11 @@ import {
 } from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
-import { readOccurrenceDate, readOccurrenceStatus } from '@/lib/agendaCache';
+import {
+  readOccurrenceDate,
+  readOccurrenceSchedule,
+  readOccurrenceStatus,
+} from '@/lib/agendaCache';
 import {
   completionVerb,
   outcomeVerb,
@@ -223,6 +227,22 @@ export function ActivityDetailScreen({
       : { occurrenceDate: actionOccurrenceDate }),
   });
 
+  /**
+   * The schedule this screen is **about**.
+   *
+   * With an occurrence in scope that is the occurrence's own date and time, not the series'.
+   * An `Occurrence` override never moves `ACT#/META`, so `activity.schedule` keeps reporting
+   * the series value after the user has changed the day in front of them — which showed back a
+   * time they had not set, inviting a second "correction" and a second override.
+   */
+  const shownSchedule =
+    actionOccurrenceDate === undefined
+      ? activity?.schedule
+      : (readOccurrenceSchedule(queryClient, {
+          activityId,
+          occurrenceDate: actionOccurrenceDate,
+        }) ?? activity?.schedule);
+
   const seriesWithoutOccurrence =
     activity?.recurrence !== undefined && actionOccurrenceDate === undefined;
 
@@ -307,6 +327,7 @@ export function ActivityDetailScreen({
           showResolutionPrompt={showResolutionPrompt}
           resolved={resolved}
           onOpenResolution={() => setResolutionOpen(true)}
+          shownSchedule={shownSchedule}
           canComplete={detail.detail?.capabilities?.complete === true}
           seriesWithoutOccurrence={seriesWithoutOccurrence}
           completing={actions.isCompleting}
@@ -366,6 +387,14 @@ export function ActivityDetailScreen({
             {...(actionOccurrenceDate === undefined
               ? {}
               : { occurrenceDate: actionOccurrenceDate })}
+            {...(shownSchedule === undefined
+              ? {}
+              : {
+                  renderedDate: shownSchedule.date,
+                  ...(shownSchedule.time === undefined
+                    ? {}
+                    : { renderedTime: shownSchedule.time }),
+                })}
             onSchedule={detail.schedule}
             onPatch={detail.patch}
             busy={detail.isSaving}
@@ -486,6 +515,11 @@ interface LoadedProps {
   showResolutionPrompt: boolean;
   resolved: boolean;
   onOpenResolution: () => void;
+  /**
+   * The schedule the screen is about: the occurrence's when one is in scope, the Activity's
+   * otherwise. Passed in rather than read from `activity`, which only ever knows the series.
+   */
+  shownSchedule: { date: string; time?: string; endTime?: string } | undefined;
   /** Server-authored. The client never re-derives ownership (`today-and-tasks.md` §4.1). */
   canComplete: boolean;
   /**
@@ -526,6 +560,7 @@ function Loaded({
   showResolutionPrompt,
   resolved,
   onOpenResolution,
+  shownSchedule,
   canComplete,
   seriesWithoutOccurrence,
   completing,
@@ -597,7 +632,7 @@ function Loaded({
 
         {/** U4: the schedule remains a tap target and never becomes an inline field. */}
         <WhenWhereBlock
-          schedule={activity.schedule}
+          schedule={shownSchedule}
           location={activity.location}
           reminders={detail.detail?.reminders ?? []}
           {...(activity.schedule === undefined

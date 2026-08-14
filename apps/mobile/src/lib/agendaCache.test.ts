@@ -5,6 +5,7 @@ import {
   projectActivityWrite,
   projectOptimisticCompletion,
   readOccurrenceDate,
+  readOccurrenceSchedule,
 } from '@/lib/agendaCache';
 
 /**
@@ -686,5 +687,60 @@ describe('a created recurring activity carries its occurrence date', () => {
     });
 
     expect(createdRow(client)?.occurrenceDate).toBeUndefined();
+  });
+});
+
+/**
+ * What the detail screen is *about* when an occurrence is in scope.
+ *
+ * An `Occurrence` override never moves `ACT#/META`, so an activity whose Thursday was retimed
+ * still reports the series time on its own record. The detail header read exactly that and
+ * showed the series value back after the user had changed the day in front of them.
+ */
+describe('reading the schedule one occurrence is on', () => {
+  it('answers with the occurrence time, not the series time', () => {
+    const client = seeded(
+      row({ isRecurring: true, occurrenceDate: TODAY, time: '18:00' }),
+    );
+
+    expect(
+      readOccurrenceSchedule(client, {
+        activityId: 'act_STANDUP',
+        occurrenceDate: TODAY,
+      }),
+    ).toEqual({ date: TODAY, time: '18:00' });
+  });
+
+  /** A cross-day move keeps the source date as identity; the day it sits in is where it is. */
+  it('answers with the day the row sits in, not the day it came from', () => {
+    const client = new QueryClient();
+    client.setQueryData(KEY, {
+      days: [
+        { date: TODAY, schedule: [], anytime: [], earlier: [] },
+        {
+          date: '2026-08-14',
+          schedule: [row({ isRecurring: true, occurrenceDate: TODAY, time: '08:00' })],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    } satisfies AgendaData);
+
+    expect(
+      readOccurrenceSchedule(client, {
+        activityId: 'act_STANDUP',
+        occurrenceDate: TODAY,
+      }),
+    ).toEqual({ date: '2026-08-14', time: '08:00' });
+  });
+
+  it('is absent when no window holds the occurrence, so the caller keeps the series value', () => {
+    expect(
+      readOccurrenceSchedule(seeded(), {
+        activityId: 'act_STANDUP',
+        occurrenceDate: '2026-09-01',
+      }),
+    ).toBeUndefined();
   });
 });
