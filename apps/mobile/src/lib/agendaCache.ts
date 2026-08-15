@@ -403,8 +403,28 @@ export function projectActivityWrite(
      * Writing the server's own answer is what this module's opening note prescribes and what
      * makes the cache, rather than a component's state, the thing that remembers.
      */
+    /**
+     * **And symmetrically on the way back**, which is the half that made the disagreement
+     * durable rather than momentary.
+     *
+     * An occurrence `uncomplete` **deletes** the `OCC#` row and returns no `occurrence` at all —
+     * `data-model.md` §6.3: "the absence of an Occurrence row means scheduled, not yet acted
+     * on". Reading the response alone therefore left the cached occurrence still claiming
+     * `skipped_occurrence` after the skip had been undone. The screen looked right only while
+     * its own local projection applied; a remount, a back-and-forward, anything that dropped
+     * that projection and fell back to the cache brought the resolved block straight back. Both
+     * directions of the reported flicker are this one asymmetry.
+     *
+     * The early-return case — uncompleting something that was snoozed or untouched — does carry
+     * an `occurrence`, and is left alone, because nothing was deleted.
+     */
     const resolvedOccurrence = occurrenceFrom(data);
-    if (resolvedOccurrence !== undefined && occurrenceDate !== undefined) {
+    const clearsOccurrence =
+      tag === 'uncomplete' && !('occurrence' in (data as Record<string, unknown>));
+    if (
+      (resolvedOccurrence !== undefined || clearsOccurrence) &&
+      occurrenceDate !== undefined
+    ) {
       client.setQueryData<ActivityDetail>(
         activityDetailKey({
           kind: 'occurrence',
@@ -416,7 +436,12 @@ export function projectActivityWrite(
             ? previous
             : {
                 ...previous,
-                occurrence: { ...previous.occurrence, status: resolvedOccurrence.status },
+                occurrence: clearsOccurrence
+                  ? { ...previous.occurrence, status: 'scheduled', isSnoozed: false }
+                  : {
+                      ...previous.occurrence,
+                      status: (resolvedOccurrence as { status: AgendaItemStatus }).status,
+                    },
               },
       );
     }

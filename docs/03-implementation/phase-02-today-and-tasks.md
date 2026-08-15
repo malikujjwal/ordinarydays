@@ -3238,6 +3238,13 @@ untouched, which is `testing.md` §3.3's existing requirement, not a new one.
 **Scope guard.** Do not change the snooze option table (P2-25 owns it), the completion button
 (P2-41 owns it), or any endpoint. Do not add a colour outside P2-40's tables.
 
+> **Label amended 2026-08-15 (founder).** `Skip today` above is right for the occurrence case
+> this task was written for, and only for it. Both actions are offered on one-offs too — §5.3
+> and §5.4 always allowed that — and there the skip reads `Skip`, because `POST /skip` without an
+> occurrence sets `status: 'skipped'` on the Activity permanently rather than dropping a day.
+> [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §5.5 owns
+> both labels.
+
 ---
 
 ### P2-42 — Reschedule and snooze sheet restructure

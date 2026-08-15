@@ -454,6 +454,7 @@ export function ActivityDetailScreen({
           resolutionOutcome={resolutionOutcome}
           canSnooze={canSnoozeOccurrence(occurrenceContext)}
           canSkip={canSkipOccurrence(occurrenceContext)}
+          skipsOneDay={actionOccurrenceDate !== undefined}
           onSnooze={() => setSnoozeOpen(true)}
           onSkip={() => void skipToday()}
           onComplete={() => {
@@ -811,6 +812,8 @@ interface LoadedProps {
   /** The two occurrence actions, each gated on its own server-authored capability (P2-47). */
   canSnooze: boolean;
   canSkip: boolean;
+  /** Whether the skip drops one day of a series, rather than the activity itself. */
+  skipsOneDay: boolean;
   onComplete: () => void;
   onSnooze: () => void;
   onSkip: () => void;
@@ -866,6 +869,7 @@ function Loaded({
   resolutionOutcome,
   canSnooze,
   canSkip,
+  skipsOneDay,
   onComplete,
   onSnooze,
   onSkip,
@@ -1009,8 +1013,16 @@ function Loaded({
             ) : null}
             {canSkip ? (
               <View style={{ flex: 1 }}>
+                {/**
+                 * **`Skip today` only when there is a today to skip** (founder, 2026-08-15).
+                 * The label came from P2-47, where it always meant one day of a series; on a
+                 * one-off it promised a day scope the write does not have — `POST /skip` with no
+                 * occurrence sets `status: 'skipped'` on the Activity, permanently — and on an
+                 * undated task it named a day the task was never on. Copy follows the object,
+                 * the same rule the reschedule sheet's removal action follows.
+                 */}
                 <Button
-                  label="Skip today"
+                  label={skipsOneDay ? 'Skip today' : 'Skip'}
                   variant="secondary"
                   size="lg"
                   fullWidth

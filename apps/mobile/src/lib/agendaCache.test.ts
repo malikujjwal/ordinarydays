@@ -975,6 +975,71 @@ describe('an occurrence resolution reaches the occurrence detail entry', () => {
     ).toBe('skipped_occurrence');
   });
 
+  /**
+   * The other direction, which is what made the disagreement durable. An occurrence
+   * `uncomplete` deletes the row and returns no `occurrence`, so reading the response alone
+   * left the cache still claiming `skipped_occurrence` after the skip had been undone.
+   */
+  it('clears the status when an uncomplete deletes the occurrence', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    client.setQueryData(occurrenceKey, {
+      activity: { activityId: 'act_STANDUP' },
+      reminders: [],
+      occurrence: {
+        nominalDate: TODAY,
+        date: TODAY,
+        time: '09:30',
+        status: 'skipped_occurrence',
+        isSnoozed: true,
+      },
+    });
+
+    projectActivityWrite(
+      client,
+      ['activity', 'uncomplete'],
+      { ...completion('act_STANDUP', 'scheduled'), occurrenceDate: TODAY },
+      { activityId: 'act_STANDUP', input: { occurrenceDate: TODAY } },
+    );
+
+    const occurrence = client.getQueryData<{
+      occurrence: { status: string; isSnoozed: boolean };
+    }>(occurrenceKey)?.occurrence;
+    expect(occurrence?.status).toBe('scheduled');
+    expect(occurrence?.isSnoozed).toBe(false);
+  });
+
+  /** Uncompleting something that was only snoozed deletes nothing, so nothing is cleared. */
+  it('leaves a snoozed occurrence alone when the uncomplete returns it', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    client.setQueryData(occurrenceKey, {
+      activity: { activityId: 'act_STANDUP' },
+      reminders: [],
+      occurrence: {
+        nominalDate: TODAY,
+        date: TODAY,
+        time: '10:30',
+        status: 'scheduled',
+        isSnoozed: true,
+      },
+    });
+
+    projectActivityWrite(
+      client,
+      ['activity', 'uncomplete'],
+      {
+        ...completion('act_STANDUP', 'scheduled'),
+        occurrenceDate: TODAY,
+        occurrence: { activityId: 'act_STANDUP', date: TODAY, status: 'snoozed' },
+      },
+      { activityId: 'act_STANDUP', input: { occurrenceDate: TODAY } },
+    );
+
+    expect(
+      client.getQueryData<{ occurrence: { isSnoozed: boolean } }>(occurrenceKey)
+        ?.occurrence.isSnoozed,
+    ).toBe(true);
+  });
+
   /** A snooze is not a resolution and must not be written as one. */
   it('leaves the status alone for a snoozed occurrence', () => {
     const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));

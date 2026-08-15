@@ -2429,3 +2429,96 @@ describe('snooze then skip', () => {
     expect(screen.getByRole('button', { name: 'Undo skip' })).toBeDefined();
   });
 });
+
+/**
+ * `Skip today` names a day, so it is used only where there is one (founder, 2026-08-15). On a
+ * one-off the write is `POST /skip` with no occurrence — `status: 'skipped'` on the Activity,
+ * permanently — and on an undated task the word named a day it was never on.
+ */
+describe('the skip label follows its scope', () => {
+  const series = () =>
+    plan({
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+
+  it('says Skip today on a concrete recurring occurrence', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(series(), [], undefined, occurrenceProjection()),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.getByTestId('detail-skip').textContent).toBe('Skip today');
+  });
+
+  it.each([
+    ['dated', { date: TODAY, time: '08:00', timezone: 'America/New_York' }],
+    ['dated but untimed', { date: TODAY, timezone: 'America/New_York' }],
+    ['undated', undefined],
+  ])('says Skip on a %s one-off task', async (_name, schedule) => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        plan({
+          objectKind: 'task',
+          type: 'task',
+          details: { kind: 'task' },
+          schedule,
+          ...(schedule === undefined ? { status: 'saved' } : {}),
+        }),
+      ),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-skip').textContent).toBe('Skip');
+  });
+
+  /** And it writes at activity scope, with no occurrence in the body. */
+  it('skips a one-off at activity scope', async () => {
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(
+          plan({ objectKind: 'task', type: 'task', details: { kind: 'task' } }),
+        ),
+      },
+      {
+        status: 200,
+        body: {
+          data: {
+            activity: plan({
+              objectKind: 'task',
+              type: 'task',
+              details: { kind: 'task' },
+              status: 'skipped',
+            }),
+          },
+          meta: { requestId: 'r' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-skip'));
+
+    await waitFor(() => expect(sent.find((s) => s.url.includes('/skip'))).toBeDefined());
+    expect(sent.find((s) => s.url.includes('/skip'))?.body).not.toHaveProperty(
+      'occurrenceDate',
+    );
+  });
+});
