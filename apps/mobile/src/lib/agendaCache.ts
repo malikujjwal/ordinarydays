@@ -597,11 +597,31 @@ export function projectOptimisticSnooze(
           date: variables.occurrenceDate,
         });
   const detailBefore = client.getQueryData<ActivityDetail>(detailKey);
-  if (detailBefore?.occurrence !== undefined) {
-    client.setQueryData<ActivityDetail>(detailKey, {
-      ...detailBefore,
-      occurrence: { ...detailBefore.occurrence, time: variables.time, isSnoozed: true },
-    });
+  if (detailBefore !== undefined) {
+    /**
+     * **Both storage shapes**, because a snooze means one thing and is stored two ways: an
+     * `OCC#` override for a series, `snoozedUntil` on the Activity for a one-off
+     * (`snoozeActivity`'s two branches). Projecting only the occurrence shape left a snoozed
+     * one-off's detail screen on its scheduled time — and, because the snooze sheet computes
+     * its options from the time it is shown, made repeating a snooze compound on a series and
+     * not on a one-off. One fork, two visible behaviours.
+     */
+    client.setQueryData<ActivityDetail>(
+      detailKey,
+      detailBefore.occurrence === undefined
+        ? {
+            ...detailBefore,
+            activity: { ...detailBefore.activity, snoozedUntil: variables.time },
+          }
+        : {
+            ...detailBefore,
+            occurrence: {
+              ...detailBefore.occurrence,
+              time: variables.time,
+              isSnoozed: true,
+            },
+          },
+    );
   }
 
   return () => {

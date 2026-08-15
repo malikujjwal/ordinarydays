@@ -405,6 +405,19 @@ and its original time shown de-emphasised: `6:00 PM → 8:00 PM`. Snooze is repe
 `Undo snooze` is available in the row's swipe actions and restores the original time by
 deleting the `Occurrence`'s snooze fields.
 
+**A repeated snooze compounds** (amended 2026-08-15, founder report): the second `15 minutes` on
+an item already snoozed to 6:15 PM moves it to 6:30 PM, because the base is the later of now and
+the item's *effective* time and a snoozed item's effective time is the snoozed one. This
+supersedes the earlier "snoozes from now", which was written when the base was always the clock
+and which the 2026-08-15 base amendment above already replaced for the not-yet-due case; keeping
+it would have meant two rules for one control depending on whether the last press had landed.
+
+**The rule does not vary with how the snooze is stored.** A series keeps it on an `Occurrence`
+and a one-off on the Activity's own `snoozedUntil`
+([`../02-architecture/data-model.md`](../02-architecture/data-model.md) §4.1, §4.5); every
+surface reads the effective time, so both compound alike and both show the moved time wherever
+the activity is rendered, the detail screen included.
+
 ### 5.4 Skip
 
 Skip says "not this one, and I do not want to be asked again". It is available on any task

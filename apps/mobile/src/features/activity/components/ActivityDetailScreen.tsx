@@ -53,6 +53,7 @@ import type { WallDate } from '@/features/activity/model/dates';
 import {
   canSkipOccurrence,
   canSnoozeOccurrence,
+  effectiveSchedule,
   occurrenceAgendaItem,
 } from '@/features/activity/model/occurrenceActions';
 import { endRepeatSeries } from '@/features/activity/model/repeat';
@@ -258,18 +259,7 @@ export function ActivityDetailScreen({
    * the series value after the user has changed the day in front of them — which showed back a
    * time they had not set, inviting a second "correction" and a second override.
    */
-  const shownSchedule =
-    detail.detail?.occurrence === undefined
-      ? activity?.schedule
-      : {
-          date: detail.detail.occurrence.date,
-          ...(detail.detail.occurrence.time === undefined
-            ? {}
-            : { time: detail.detail.occurrence.time }),
-          ...(detail.detail.occurrence.endTime === undefined
-            ? {}
-            : { endTime: detail.detail.occurrence.endTime }),
-        };
+  const shownSchedule = effectiveSchedule(activity, detail.detail?.occurrence);
 
   const seriesWithoutOccurrence =
     activity?.recurrence !== undefined && actionOccurrenceDate === undefined;

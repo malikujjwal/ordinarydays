@@ -1,4 +1,9 @@
-import type { Activity, AgendaCapabilities, AgendaItem } from '@od/shared/types';
+import type {
+  Activity,
+  AgendaCapabilities,
+  AgendaItem,
+  OccurrenceDetailProjection,
+} from '@od/shared/types';
 
 /**
  * The occurrence-scoped actions a detail screen may offer, and the row shape the shared snooze
@@ -111,5 +116,55 @@ export function occurrenceAgendaItem(
     participantAvatars: [],
     participantCount: activity.participantCount,
     isPast: false,
+  };
+}
+
+/**
+ * The schedule a detail screen is **about**, with every override that moves it applied.
+ *
+ * ## One function, because a snooze is stored two ways and means one thing
+ *
+ * A series stores it as an `OCC#` row and a one-off as `snoozedUntil` on the Activity itself
+ * (`data-model.md` §4.5, and `snoozeActivity`'s two branches). The agenda service already reads
+ * both and hands the client one effective `time`; the detail screen read only the occurrence
+ * shape, so a snoozed one-off went on showing its *scheduled* time indefinitely — not stale
+ * cache, but a field no client surface consulted.
+ *
+ * That asymmetry is also why repeating a snooze behaved differently per kind. The sheet computes
+ * its options from the time it is shown, so a series compounded — 6:00 to 6:15 to 6:30 — while a
+ * one-off recomputed from a 6:00 that never moved and returned 6:15 every time. One storage
+ * detail, two visible behaviours, from a contract that describes one.
+ *
+ * Everything that needs "what time is this actually at" goes through here, so a third storage
+ * shape cannot quietly reach only some of them.
+ */
+export function effectiveSchedule(
+  activity: Activity | undefined,
+  occurrence: OccurrenceDetailProjection | undefined,
+): { date: string; time?: string; endTime?: string } | undefined {
+  if (occurrence !== undefined) {
+    return {
+      date: occurrence.date,
+      ...(occurrence.time === undefined ? {} : { time: occurrence.time }),
+      ...(occurrence.endTime === undefined ? {} : { endTime: occurrence.endTime }),
+    };
+  }
+  const schedule = activity?.schedule;
+  if (schedule === undefined) return undefined;
+
+  /**
+   * `snoozedUntil` is `HH:mm` on the same day for a one-off — the server rejects anything else
+   * with `ONE_OFF_SAME_DAY`. The instant form the type also allows belongs to a cross-day
+   * occurrence move, which never reaches this branch; it is ignored rather than parsed here, so
+   * this stays a pure wall-clock read with no zone conversion in it.
+   */
+  const snoozed = activity?.snoozedUntil;
+  const time =
+    snoozed !== undefined && /^\d{2}:\d{2}$/.test(snoozed) ? snoozed : schedule.time;
+
+  return {
+    date: schedule.date,
+    ...(time === undefined ? {} : { time }),
+    ...(schedule.endTime === undefined ? {} : { endTime: schedule.endTime }),
   };
 }

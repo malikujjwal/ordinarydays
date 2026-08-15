@@ -2522,3 +2522,74 @@ describe('the skip label follows its scope', () => {
     );
   });
 });
+
+/**
+ * The same two taps on both storage shapes. Reported as: a repeated snooze compounds on a
+ * recurring task and does not on a one-off, and a one-off's detail time never moves at all.
+ * Both are the one fork — the screen understood the `OCC#` shape and not `snoozedUntil`.
+ */
+describe('a snooze behaves the same whichever shape stores it', () => {
+  const oneOff = () =>
+    plan({
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+    });
+
+  const series = () =>
+    plan({
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+
+  it('moves a one-off’s displayed time, as it already did for an occurrence', async () => {
+    stubFetch(
+      { status: 200, body: detailBody(oneOff()) },
+      { status: 200, body: { data: { activity: oneOff() }, meta: { requestId: 'r' } } },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-snooze'));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze until 8:25 AM' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).toContain('8:25 AM'),
+    );
+  });
+
+  it.each([
+    ['a one-off', oneOff],
+    ['an occurrence', series],
+  ])('compounds a repeated snooze on %s', async (_name, activity) => {
+    const occurrence = activity === series ? occurrenceProjection() : undefined;
+    stubFetch(
+      { status: 200, body: detailBody(activity(), [], undefined, occurrence) },
+      { status: 200, body: { data: { activity: activity() }, meta: { requestId: 'r' } } },
+    );
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      occurrence === undefined ? undefined : TODAY,
+    );
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-snooze'));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze until 8:25 AM' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).toContain('8:25 AM'),
+    );
+
+    // The second press counts from where the first one left it, on both shapes.
+    fireEvent.click(screen.getByTestId('detail-snooze'));
+    expect(screen.getByRole('button', { name: 'Snooze until 8:40 AM' })).toBeDefined();
+  });
+});
