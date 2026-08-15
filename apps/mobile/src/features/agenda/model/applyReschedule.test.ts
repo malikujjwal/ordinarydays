@@ -211,3 +211,54 @@ describe('applyReschedule', () => {
     },
   );
 });
+
+/**
+ * The glyph rule (`today-and-tasks.md` §5.3). A snoozed row renders a snooze glyph and its
+ * original time de-emphasised; once the schedule itself moves there is no original time left to
+ * contrast against, so both go. The server clears the underlying snooze on the same write —
+ * `scheduleService` — and this is that fact projected, so the row stops claiming it without
+ * waiting for a refetch.
+ */
+describe('a reschedule ends the snooze it replaced', () => {
+  const snoozedDay: AgendaData = {
+    days: [
+      {
+        ...todayDay,
+        schedule: [{ ...moved, time: '18:15', isSnoozed: true, originalTime: '17:00' }],
+      },
+      tomorrowDay,
+    ],
+    warnings: [],
+  };
+  const rowOf = (agenda: AgendaData): AgendaItem | undefined =>
+    agenda.days
+      .flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier])
+      .find(({ activityId }) => activityId === moved.activityId);
+
+  it('clears the glyph and the original-time affix', () => {
+    const next = applyReschedule(snoozedDay, {
+      activityId: moved.activityId,
+      date: '2026-08-11',
+      time: '19:00',
+      ...clock,
+    });
+
+    const row = rowOf(next);
+    expect(row?.time).toBe('19:00');
+    expect(row?.isSnoozed).toBe(false);
+    expect(row?.originalTime).toBeUndefined();
+  });
+
+  it('clears them when the time is removed entirely', () => {
+    const next = applyReschedule(snoozedDay, {
+      activityId: moved.activityId,
+      date: '2026-08-11',
+      ...clock,
+    });
+
+    const row = rowOf(next);
+    expect(row?.time).toBeUndefined();
+    expect(row?.isSnoozed).toBe(false);
+    expect(row?.originalTime).toBeUndefined();
+  });
+});

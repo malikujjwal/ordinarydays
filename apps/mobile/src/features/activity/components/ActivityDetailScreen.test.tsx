@@ -2338,17 +2338,36 @@ describe('snooze visibility', () => {
       },
       { status: 500, body: { error: { code: 'internal', message: 'nope' } } },
     );
+    /**
+     * `networkMode: 'always'`, because a rollback can only be observed if the mutation is
+     * allowed to *settle*. React Query's `onlineManager` is a module singleton, and an earlier
+     * case in this file builds a real offline client; under the default `'online'` mode a
+     * mutation that inherits a paused manager never rejects, so the catch that rolls back never
+     * runs and the assertion sees the projected time forever. That made this pass alone and
+     * fail in the file — the failure was the harness, not the rollback.
+     */
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false, networkMode: 'always' },
+      },
+    });
     mount(
       () => {},
       () => {},
       undefined,
       TODAY,
+      queryClient,
     );
     await loaded();
 
     fireEvent.click(screen.getByTestId('detail-snooze'));
     fireEvent.click(screen.getByRole('button', { name: 'Snooze until 8:25 AM' }));
 
+    // Projected first, so the rollback below is asserting a transition and not the start state.
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).toContain('8:25 AM'),
+    );
     await waitFor(() =>
       expect(screen.getByTestId('when-where-date').textContent).toContain('8:00 AM'),
     );
@@ -2591,5 +2610,84 @@ describe('a snooze behaves the same whichever shape stores it', () => {
     // The second press counts from where the first one left it, on both shapes.
     fireEvent.click(screen.getByTestId('detail-snooze'));
     expect(screen.getByRole('button', { name: 'Snooze until 8:40 AM' })).toBeDefined();
+  });
+});
+
+/**
+ * `Remove time` reaching the detail screen. Reported as working on Today and not here — and it
+ * did work here, right up until the activity had been snoozed once, at which point a
+ * `snoozedUntil` the reschedule never cleared put the old time straight back.
+ */
+describe('removing the time', () => {
+  it('drops the time from the detail header', async () => {
+    const timed = plan({
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(timed) },
+      {
+        status: 200,
+        body: {
+          data: {
+            activity: plan({
+              objectKind: 'task',
+              type: 'task',
+              details: { kind: 'task' },
+              schedule: { date: TODAY, timezone: 'America/New_York' },
+            }),
+          },
+          meta: { requestId: 'r' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('when-where-date'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove time' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).not.toContain('8:00 AM'),
+    );
+  });
+
+  it('drops it after a snooze, whose deferral the reschedule has ended', async () => {
+    const snoozed = plan({
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      snoozedUntil: '08:25',
+    });
+    stubFetch(
+      { status: 200, body: detailBody(snoozed) },
+      {
+        status: 200,
+        body: {
+          data: {
+            activity: plan({
+              objectKind: 'task',
+              type: 'task',
+              details: { kind: 'task' },
+              schedule: { date: TODAY, timezone: 'America/New_York' },
+              snoozedUntil: '08:25',
+            }),
+          },
+          meta: { requestId: 'r' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('when-where-date'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove time' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).not.toContain('8:25 AM'),
+    );
   });
 });

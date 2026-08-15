@@ -286,6 +286,23 @@ export async function scheduleActivity(
   };
   if (newSchedule === undefined) delete (next as { schedule?: unknown }).schedule;
 
+  /**
+   * **A schedule write ends any snooze against the schedule it replaced.**
+   *
+   * A snooze defers *this* occurrence from the time it is currently at
+   * (`today-and-tasks.md` §5.3); rescheduling replaces that time, so the deferral has nothing
+   * left to defer and its glyph and `6:00 PM → 6:15 PM` affix are describing a schedule that no
+   * longer exists. The occurrence path a few lines above has always got this right for free —
+   * it writes a **fresh** `Occurrence` with `status: 'rescheduled'`, so the snoozed row is
+   * replaced rather than merged. The one-off path spreads `...previous` and so carried
+   * `snoozedUntil` across every reschedule, including a `Remove time` that left the activity
+   * with no time for it to be relative to.
+   *
+   * Guarded on `changed` so an idempotent replay, which writes the same schedule back, does not
+   * quietly answer a deferral the user still wants.
+   */
+  if (changed) delete (next as { snoozedUntil?: unknown }).snoozedUntil;
+
   const kinds: CleanupPhase['kind'][] = [];
   if (input.date === null) kinds.push('delete_reminders');
   if (normalised) kinds.push('normalise_untimed_reminders');

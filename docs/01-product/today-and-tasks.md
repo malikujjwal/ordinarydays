@@ -412,6 +412,14 @@ supersedes the earlier "snoozes from now", which was written when the base was a
 and which the 2026-08-15 base amendment above already replaced for the not-yet-due case; keeping
 it would have meant two rules for one control depending on whether the last press had landed.
 
+**Rescheduling ends the snooze** (amended 2026-08-15, founder report). A snooze defers this
+occurrence from the time it currently sits at; a reschedule replaces that time, so the deferral
+has nothing left to defer and the glyph and the `6:00 PM → 6:15 PM` affix would be describing a
+schedule that no longer exists. `Remove time` counts, and leaves nothing for a snooze to be
+relative to at all. The write that clears it is the schedule write itself, so every surface
+agrees without deriving anything; an idempotent replay, which writes the same schedule back,
+changes nothing and leaves the snooze alone.
+
 **The rule does not vary with how the snooze is stored.** A series keeps it on an `Occurrence`
 and a one-off on the Activity's own `snoozedUntil`
 ([`../02-architecture/data-model.md`](../02-architecture/data-model.md) §4.1, §4.5); every

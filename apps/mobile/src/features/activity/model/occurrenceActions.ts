@@ -159,8 +159,15 @@ export function effectiveSchedule(
    * this stays a pure wall-clock read with no zone conversion in it.
    */
   const snoozed = activity?.snoozedUntil;
+  /**
+   * A snooze only means anything against a time. `Remove time` leaves the activity with none, so
+   * a `snoozedUntil` that outlived it — as one did before the server learned to clear it — must
+   * not put a time back on a row the user just made untimed.
+   */
   const time =
-    snoozed !== undefined && /^\d{2}:\d{2}$/.test(snoozed) ? snoozed : schedule.time;
+    schedule.time !== undefined && snoozed !== undefined && /^\d{2}:\d{2}$/.test(snoozed)
+      ? snoozed
+      : schedule.time;
 
   return {
     date: schedule.date,

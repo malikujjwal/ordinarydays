@@ -39,6 +39,18 @@ export function applyReschedule(
   if (variables.time === undefined) delete next.time;
   if (variables.endTime === undefined) delete next.endTime;
   if (variables.date === null) delete next.overdueFromDate;
+
+  /**
+   * **A reschedule ends the snooze, so the glyph and the arrow go with it.**
+   *
+   * `today-and-tasks.md` §5.3 renders a snoozed row with a snooze glyph and its original time
+   * de-emphasised — `6:00 PM → 8:00 PM`. Once the schedule itself moves there is no original
+   * time left to contrast against: the affix would be describing a schedule that no longer
+   * exists. The server clears the underlying snooze on the same write; this is the same fact
+   * projected, so the row stops claiming it immediately rather than at the next refetch.
+   */
+  next.isSnoozed = false;
+  delete next.originalTime;
   next.isPast =
     variables.date !== null &&
     (variables.date < variables.today ||

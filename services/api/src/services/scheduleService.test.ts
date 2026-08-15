@@ -122,6 +122,100 @@ describe('whole-activity scheduling', () => {
     });
   });
 
+  /**
+   * The glyph rule at its source (`today-and-tasks.md` §5.3). A snooze defers this occurrence
+   * from the time it currently sits at; rescheduling replaces that time, so the deferral has
+   * nothing left to defer and the snooze glyph and `6:00 PM → 6:15 PM` affix would be
+   * describing a schedule that no longer exists. The occurrence path has always had this for
+   * free — it writes a fresh `Occurrence` — while this one spread `...previous` and carried
+   * `snoozedUntil` across every reschedule.
+   */
+  it('ends a snooze when the schedule moves', async () => {
+    mocks.assertActivityAccess.mockResolvedValue({
+      activity: stored({
+        snoozedUntil: '18:15',
+        schedule: {
+          date: '2026-08-12',
+          time: '18:00',
+          timezone: 'UTC',
+          scheduledAtUtc: '2026-08-12T18:00:00.000Z',
+        },
+      }),
+      isOwner: true,
+      viaParent: false,
+    });
+
+    const result = await scheduleActivity(
+      USER,
+      ID,
+      { date: '2026-08-12', time: '19:00', timezone: 'UTC' },
+      'UTC',
+      NOW,
+      receiptFor,
+    );
+
+    expect(result.activity).not.toHaveProperty('snoozedUntil');
+  });
+
+  /** `Remove time` leaves nothing for a snooze to be relative to, so it goes too. */
+  it('ends a snooze when the time is removed', async () => {
+    mocks.assertActivityAccess.mockResolvedValue({
+      activity: stored({
+        snoozedUntil: '18:15',
+        schedule: {
+          date: '2026-08-12',
+          time: '18:00',
+          timezone: 'UTC',
+          scheduledAtUtc: '2026-08-12T18:00:00.000Z',
+        },
+      }),
+      isOwner: true,
+      viaParent: false,
+    });
+
+    const result = await scheduleActivity(
+      USER,
+      ID,
+      { date: '2026-08-12', timezone: 'UTC' },
+      'UTC',
+      NOW,
+      receiptFor,
+    );
+
+    expect(result.activity).not.toHaveProperty('snoozedUntil');
+  });
+
+  /**
+   * An idempotent replay writes the same schedule back and must not quietly answer a deferral
+   * the user still wants — which is why the clear is guarded on the schedule actually changing.
+   */
+  it('keeps a snooze when the request changes nothing', async () => {
+    mocks.assertActivityAccess.mockResolvedValue({
+      activity: stored({
+        snoozedUntil: '18:15',
+        schedule: {
+          date: '2026-08-12',
+          time: '18:00',
+          timezone: 'UTC',
+          scheduledAtUtc: '2026-08-12T18:00:00.000Z',
+        },
+      }),
+      isOwner: true,
+      viaParent: false,
+    });
+
+    const result = await scheduleActivity(
+      USER,
+      ID,
+      { date: '2026-08-12', time: '18:00', timezone: 'UTC' },
+      'UTC',
+      NOW,
+      receiptFor,
+    );
+
+    expect(result.activity).toMatchObject({ snoozedUntil: '18:15' });
+  });
+
   it('does not bump sequence for an identical request and preserves terminal status', async () => {
     const current = stored({
       status: 'completed',
