@@ -2354,3 +2354,78 @@ describe('snooze visibility', () => {
     );
   });
 });
+
+/** Reported: snooze an occurrence, then skip it, and the resolved block never appears. */
+describe('snooze then skip', () => {
+  const series = () =>
+    plan({
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+
+  /**
+   * A **stateful** stub, because the fixed-response one cannot reproduce this: the defect only
+   * appears once a refetch returns what the server actually stored after the snooze, and the
+   * skip then lands on that.
+   */
+  function statefulStub() {
+    let occurrence: NonNullable<ActivityDetail['occurrence']> = occurrenceProjection();
+    vi.stubGlobal('fetch', (url: string, init?: Record<string, unknown>) => {
+      const method = (init?.method as string | undefined) ?? 'GET';
+      sent.push({
+        url,
+        method,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body: init?.body === undefined ? undefined : JSON.parse(init.body as string),
+      });
+      if (method === 'POST' && String(url).includes('/snooze')) {
+        const until = (JSON.parse(init?.body as string) as { until: string }).until;
+        occurrence = { ...occurrence, time: until, isSnoozed: true, status: 'scheduled' };
+      }
+      if (method === 'POST' && String(url).includes('/skip')) {
+        occurrence = { ...occurrence, status: 'skipped_occurrence' };
+      }
+      const body =
+        method === 'GET'
+          ? detailBody(series(), [], undefined, occurrence)
+          : { data: { activity: series() }, meta: { requestId: 'r' } };
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+      });
+    });
+  }
+
+  it('shows Undo skip after a snooze has already moved the occurrence', async () => {
+    statefulStub();
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-snooze'));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze until 8:25 AM' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).toContain('8:25 AM'),
+    );
+
+    fireEvent.click(screen.getByTestId('detail-skip'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('detail-resolved').textContent).toBe('Skipped'),
+    );
+    expect(screen.getByRole('button', { name: 'Undo skip' })).toBeDefined();
+  });
+});

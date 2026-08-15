@@ -380,8 +380,12 @@ base is dropped for the same reason, so `This evening (6 PM)` is not offered on 
 and `Pick a time` enforces the same boundary and names it. P2-25's "compute from the current
 minute" described the pruning case and is superseded for the not-yet-due one.
 
-Snooze is offered on **any** timed task today, whether or not its time has passed; the table
-above is the whole of the availability rule and there is no upcoming-only restriction.
+Snooze is offered on **any** timed task today, whether or not its time has passed and whether
+or not it repeats; the table above is the whole of the availability rule and there is no
+upcoming-only restriction. It is offered on the activity detail screen as well as from the row
+(amended 2026-08-15, founder report — the detail screen required an occurrence and so dropped
+the table's entire non-recurring row). `Tomorrow` there does what it does everywhere: a
+reschedule, not a snooze.
 
 The sheet names the activity it is moving and states the reach of the move above the options
 (amended 2026-08-14, P2-42): `Call the dentist · 3:00 PM`, then `Today only. Tomorrow stays
@@ -411,6 +415,9 @@ and on any recurring occurrence.
 - Recurring occurrence → `POST /v1/activities/:id/skip` with `occurrenceDate`, writing an
   `Occurrence` with `status: 'skipped'`. The series and every other occurrence are
   untouched.
+- The activity detail screen offers `Skip today` under the same rule as this section states —
+  any task, or any recurring occurrence (amended 2026-08-15, founder report). A **non-recurring
+  plan** is neither, and is resolved through its passed-plan prompt instead.
 - Skipping never notifies anyone and never appears in a shared plan's updates feed.
 - Skipped items are hidden from Today unless `Show skipped` is on (§3.2), and are undoable
   for the standard undo window plus, permanently, via `Show skipped` → `Undo skip`.

@@ -881,3 +881,119 @@ describe('ending a series drops the occurrences after its last day', () => {
     expect(survivor?.occurrenceDate).toBe(TODAY);
   });
 });
+
+/**
+ * A declined outcome is stored as a skip, and the response says so. Reported from the built
+ * app: answering `Didn't go` on Today settled on a struck-through row reading `Attended` —
+ * `resolvePassed` projected the skip correctly and this overwrote it a moment later.
+ */
+describe('a declined outcome projects as a skip, not a completion', () => {
+  it.each(['didnt_go', 'didnt_happen'] as const)('projects %s as skipped', (outcome) => {
+    const client = seeded();
+
+    projectActivityWrite(
+      client,
+      ['activity', 'complete'],
+      { ...completion('act_STANDUP', 'skipped'), outcome },
+      { activityId: 'act_STANDUP' },
+    );
+
+    expect(statusOf(client, 'act_STANDUP')).toBe('skipped');
+  });
+
+  it.each(['attended', 'done', 'had_it', 'watched'] as const)(
+    'leaves %s projecting as a completion',
+    (outcome) => {
+      const client = seeded();
+
+      projectActivityWrite(
+        client,
+        ['activity', 'complete'],
+        { ...completion('act_STANDUP', 'completed'), outcome },
+        { activityId: 'act_STANDUP' },
+      );
+
+      expect(statusOf(client, 'act_STANDUP')).toBe('completed');
+    },
+  );
+
+  /** No outcome at all — the checkbox path — still completes. */
+  it('projects a completion with no outcome as a completion', () => {
+    const client = seeded();
+
+    projectActivityWrite(
+      client,
+      ['activity', 'complete'],
+      completion('act_STANDUP', 'completed'),
+      { activityId: 'act_STANDUP' },
+    );
+
+    expect(statusOf(client, 'act_STANDUP')).toBe('completed');
+  });
+});
+
+/**
+ * The server's authoritative occurrence, written into the entry an occurrence-targeted detail
+ * screen actually reads. Dropping it left the resolved state existing only as that screen's own
+ * local projection, which a racing refetch could quietly replace.
+ */
+describe('an occurrence resolution reaches the occurrence detail entry', () => {
+  const occurrenceKey = ['activity', 'act_STANDUP', 'occurrence', TODAY];
+
+  const seedDetail = (client: QueryClient) => {
+    client.setQueryData(occurrenceKey, {
+      activity: { activityId: 'act_STANDUP' },
+      reminders: [],
+      occurrence: {
+        nominalDate: TODAY,
+        date: TODAY,
+        time: '09:30',
+        status: 'scheduled',
+        isSnoozed: false,
+      },
+    });
+  };
+
+  it('writes a skipped occurrence status, in the projection’s own vocabulary', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    seedDetail(client);
+
+    projectActivityWrite(
+      client,
+      ['activity', 'skip'],
+      {
+        ...completion('act_STANDUP', 'scheduled'),
+        occurrenceDate: TODAY,
+        occurrence: { activityId: 'act_STANDUP', date: TODAY, status: 'skipped' },
+      },
+      { activityId: 'act_STANDUP', input: { occurrenceDate: TODAY } },
+    );
+
+    expect(
+      client.getQueryData<{ occurrence: { status: string } }>(occurrenceKey)?.occurrence
+        .status,
+    ).toBe('skipped_occurrence');
+  });
+
+  /** A snooze is not a resolution and must not be written as one. */
+  it('leaves the status alone for a snoozed occurrence', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    seedDetail(client);
+
+    projectActivityWrite(
+      client,
+      ['activity', 'skip'],
+      {
+        ...completion('act_STANDUP', 'scheduled'),
+        occurrenceDate: TODAY,
+        occurrence: { activityId: 'act_STANDUP', date: TODAY, status: 'snoozed' },
+      },
+      { activityId: 'act_STANDUP', input: { occurrenceDate: TODAY } },
+    );
+
+    expect(
+      client.getQueryData<{ occurrence: { status: string } }>(occurrenceKey)?.occurrence
+        .status,
+    ).toBe('scheduled');
+  });
+});

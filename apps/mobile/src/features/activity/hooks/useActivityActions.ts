@@ -36,16 +36,21 @@ import { activityKey } from './useActivity';
 export interface ActivityActions {
   duplicate: () => Promise<Activity | undefined>;
   remove: () => Promise<boolean>;
-  /** Stores a skip for one explicit occurrence; it never deletes the series Activity. */
-  skipOccurrence: (
-    scope: Extract<ActivityScope, { kind: 'occurrence' }>,
-  ) => Promise<boolean>;
   /**
-   * Moves one occurrence later the same day. Like `skipOccurrence`, one `OCC#` row and no
-   * change to the series — the scope is explicit for the reason ADR-053 makes it explicit.
+   * Stores a skip at an explicit scope; it never deletes the Activity.
+   *
+   * Widened from occurrence-only because `today-and-tasks.md` §5.4 puts a skip on "any task"
+   * as well as any recurring occurrence — a one-off skips itself. The series guard that the
+   * narrower type used to give structurally is now the same runtime one completion uses.
    */
-  snoozeOccurrence: (
-    scope: Extract<ActivityScope, { kind: 'occurrence' }>,
+  skip: (scope: ActivityScope) => Promise<boolean>;
+  /**
+   * Moves this activity, or this occurrence, later the same day. One `OCC#` row for a series
+   * and META snooze fields for a one-off — the scope is explicit for the reason ADR-053 makes
+   * it explicit.
+   */
+  snooze: (
+    scope: ActivityScope,
     until: string,
     /** The day the row is rendered on, so the agenda projection can find it. */
     renderedDate: string,
@@ -194,7 +199,10 @@ export function useActivityActions(activityId: string): ActivityActions {
         return false;
       }
     },
-    skipOccurrence: async (scope) => {
+    skip: async (scope) => {
+      /** A bare skip on a series would retire every future occurrence. Same rule, same guard. */
+      const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      if (isUnscopedSeries(snapshot, scope)) return false;
       try {
         await skipMutation.mutateAsync({
           activityId,
@@ -206,7 +214,9 @@ export function useActivityActions(activityId: string): ActivityActions {
         return false;
       }
     },
-    snoozeOccurrence: async (scope, until, renderedDate) => {
+    snooze: async (scope, until, renderedDate) => {
+      const snapshot = queryClient.getQueryData<ActivityDetail>(activityKey(activityId));
+      if (isUnscopedSeries(snapshot, scope)) return false;
       /**
        * Projected before the request, like every other write on this screen. Snooze was the one
        * that waited: the detail screen moved because its own query refetched, and Today and

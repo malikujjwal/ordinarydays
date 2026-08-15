@@ -1,7 +1,14 @@
 import { getAgenda } from '@od/shared/client';
 import type { AgendaQuery } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
-import type { Activity, ActivityDetail, AgendaData, User } from '@od/shared/types';
+import type {
+  Activity,
+  ActivityDetail,
+  ActivityOutcome,
+  AgendaData,
+  AgendaItemStatus,
+  User,
+} from '@od/shared/types';
 import type { MutationKey, QueryClient } from '@tanstack/react-query';
 import {
   type AgendaMutationTarget,
@@ -381,13 +388,59 @@ export function projectActivityWrite(
       );
     }
 
+    /**
+     * **The occurrence the server just wrote, not only the Activity beside it.**
+     *
+     * `ActivityCompletionResult` carries the authoritative `occurrence` for an occurrence-scoped
+     * complete, uncomplete or skip, and this dropped it — so the cached occurrence went on
+     * reporting `status: 'scheduled'` after a skip, and the resolved state existed **only** as
+     * the screen's own local projection. That is invisible until something refetches: a stale
+     * mark left by an earlier write on the same activity — a snooze, say — makes the next
+     * window focus refetch, and a refetch that raced the write returns pre-skip data and caches
+     * it over the projection. A plain skip leaves no such pending mark, which is why the same
+     * two taps behave differently depending on what came before them.
+     *
+     * Writing the server's own answer is what this module's opening note prescribes and what
+     * makes the cache, rather than a component's state, the thing that remembers.
+     */
+    const resolvedOccurrence = occurrenceFrom(data);
+    if (resolvedOccurrence !== undefined && occurrenceDate !== undefined) {
+      client.setQueryData<ActivityDetail>(
+        activityDetailKey({
+          kind: 'occurrence',
+          activityId: activity.activityId,
+          date: occurrenceDate,
+        }),
+        (previous) =>
+          previous?.occurrence === undefined
+            ? previous
+            : {
+                ...previous,
+                occurrence: { ...previous.occurrence, status: resolvedOccurrence.status },
+              },
+      );
+    }
+
     const target = {
       activityId: activity.activityId,
       ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
       ...clock,
     };
 
-    if (tag === 'skip') {
+    /**
+     * **A declined outcome is a skip, and the server has already said so.**
+     *
+     * `POST /complete` carries the outcome, and `completionService` stores a negative one —
+     * `didnt_happen`, `didnt_go` — as `status: 'skipped'`. This branch projected every
+     * `complete` as a completion regardless, so the row went: optimistically skipped by
+     * `resolvePassed` (which does read the outcome), then **overwritten** by this the moment the
+     * response landed. Answering `Didn't go` on Today therefore settled on a struck-through row
+     * reading `Attended` — the founder's report, and the same defect the detail screen had.
+     *
+     * Read from the response rather than re-derived: the server's `outcome` is the fact, and for
+     * an occurrence the Activity's own status never moves and so cannot be consulted.
+     */
+    if (tag === 'skip' || isNegativeOutcome(outcomeFrom(data))) {
       update(client, (agenda) => applySkip(agenda, { ...target, skipped: true }));
       return true;
     }
@@ -583,6 +636,44 @@ function isRecurrenceWrite(variables: unknown): boolean {
 }
 
 /** Both a bare Activity and a `{ activity }` envelope reach this from different endpoints. */
+/**
+ * The occurrence a completion response reports, when it is occurrence-scoped.
+ *
+ * Only `status` is taken from it: the effective date and time on the detail projection are
+ * derived server-side from the override plus the series, and an `Occurrence` row carries the
+ * override alone. Copying its raw fields over would replace a resolved value with a partial one.
+ */
+function occurrenceFrom(data: unknown): { status: AgendaItemStatus } | undefined {
+  if (typeof data !== 'object' || data === null || !('occurrence' in data))
+    return undefined;
+  const value = (data as { occurrence: unknown }).occurrence;
+  if (typeof value !== 'object' || value === null || !('status' in value))
+    return undefined;
+  const status = (value as { status: unknown }).status;
+  /**
+   * **Mapped the way the server's own projection maps it**, not copied. A stored `Occurrence`
+   * says `completed`/`skipped`; the detail projection says `completed_occurrence`/
+   * `skipped_occurrence`, which is what tells a reader the resolution belongs to the day rather
+   * than to the series. A raw value written here would be a second, subtly different vocabulary
+   * in the cache. `snoozed` and `rescheduled` are not resolutions and leave the status alone.
+   */
+  if (status === 'completed') return { status: 'completed_occurrence' };
+  if (status === 'skipped') return { status: 'skipped_occurrence' };
+  return undefined;
+}
+
+/** The outcome a completion response reports, when it reports one. */
+function outcomeFrom(data: unknown): ActivityOutcome | undefined {
+  if (typeof data !== 'object' || data === null || !('outcome' in data)) return undefined;
+  const outcome = (data as { outcome: unknown }).outcome;
+  return typeof outcome === 'string' ? (outcome as ActivityOutcome) : undefined;
+}
+
+/** The two outcomes that mean the thing did not take place, and so store as a skip. */
+function isNegativeOutcome(outcome: ActivityOutcome | undefined): boolean {
+  return outcome === 'didnt_happen' || outcome === 'didnt_go';
+}
+
 function activityFrom(data: unknown): Activity | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const candidate = 'activity' in data ? (data as { activity: unknown }).activity : data;

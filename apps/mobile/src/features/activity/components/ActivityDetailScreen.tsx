@@ -1,5 +1,5 @@
 import type { ChangeTarget } from '@od/shared';
-import { describeRecurrence } from '@od/shared/recurrence';
+import { addWallDays, describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
 import { type TimeZone, toWallTime } from '@od/shared/time';
 import type {
@@ -233,7 +233,7 @@ export function ActivityDetailScreen({
 
   async function removeOccurrence() {
     if (actionOccurrenceDate === undefined) return;
-    if (await actions.skipOccurrence(occurrenceScope(actionOccurrenceDate))) {
+    if (await actions.skip(occurrenceScope(actionOccurrenceDate))) {
       setDeleteOpen(false);
       onBack();
     }
@@ -363,6 +363,8 @@ export function ActivityDetailScreen({
     occurrenceDate: actionOccurrenceDate,
     shownSchedule,
     capabilities: detail.detail?.capabilities,
+    objectKind: activity?.objectKind,
+    recurring: activity?.recurrence !== undefined,
   };
   const snoozeItem =
     activity === undefined
@@ -375,10 +377,15 @@ export function ActivityDetailScreen({
       Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone,
   );
 
+  /**
+   * `today-and-tasks.md` §5.4: a skip is "available on any task and on any recurring
+   * occurrence", so it runs at whatever scope the screen is about — the Activity itself for a
+   * one-off, the day in view for a series. Requiring an occurrence dropped every one-off.
+   */
   async function skipToday(): Promise<boolean> {
-    if (actionOccurrenceDate === undefined) return false;
+    if (!canSkipOccurrence(occurrenceContext)) return false;
     projectResolution(true, 'skipped');
-    const ok = await actions.skipOccurrence(occurrenceScope(actionOccurrenceDate));
+    const ok = await actions.skip(actionScope);
     // The screen must not claim a skip the server refused.
     if (!ok) projectResolution(false, 'completed');
     return ok;
@@ -491,23 +498,32 @@ export function ActivityDetailScreen({
             item={snoozeItem}
             currentMinute={currentMinute}
             onClose={() => setSnoozeOpen(false)}
-            onSnooze={(item, until) => {
-              if (item.occurrenceDate === undefined || shownSchedule === undefined)
-                return;
-              void actions.snoozeOccurrence(
-                occurrenceScope(item.occurrenceDate),
+            onSnooze={(_item, until) => {
+              if (shownSchedule === undefined) return;
+              void actions.snooze(
+                actionScope,
                 until,
                 // The day the row is rendered on, which an override can move off the nominal.
                 shownSchedule.date,
               );
             }}
             /**
-             * `Tomorrow` is absent on a recurring occurrence by P2-25's table, and this surface
-             * only ever opens on an occurrence — so the callback is unreachable here. It stays
-             * required rather than optional because the sheet is shared with Today, where
-             * `Tomorrow` is a reschedule and very much reachable.
+             * **`Tomorrow` is a reschedule, not a snooze** (§5.3): moving a one-off task to
+             * another day *is* one, so it goes through the same schedule write the reschedule
+             * sheet uses rather than a second path. P2-25's table omits it on a recurring
+             * occurrence, so the sheet never offers it there and this cannot fire for a series.
              */
-            onTomorrow={() => {}}
+            onTomorrow={() => {
+              if (shownSchedule === undefined) return;
+              void detail.schedule({
+                date: addWallDays(shownSchedule.date, 1),
+                ...(shownSchedule.time === undefined ? {} : { time: shownSchedule.time }),
+                timezone:
+                  activity.schedule?.timezone ??
+                  Intl.DateTimeFormat().resolvedOptions().timeZone,
+              });
+              setSnoozeOpen(false);
+            }}
           />
 
           <RescheduleSheet

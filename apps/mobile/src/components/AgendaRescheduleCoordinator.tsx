@@ -60,7 +60,7 @@ export function AgendaRescheduleCoordinator({
             ? {}
             : {
                 onSkipOccurrence: () =>
-                  actions.skipOccurrence(occurrenceScope(skippableOccurrence)),
+                  actions.skip(occurrenceScope(skippableOccurrence)),
               })}
           busy={detail.isSaving}
           {...(detail.editError === undefined ? {} : { error: detail.editError })}
