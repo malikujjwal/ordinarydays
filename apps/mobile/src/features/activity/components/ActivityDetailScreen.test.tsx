@@ -2199,6 +2199,9 @@ describe('resolved outcomes', () => {
 
     expect(screen.getByTestId('detail-resolved').textContent).toBe("Didn't go");
     expect(screen.queryByText('Attended')).toBeNull();
+    // Reversing an answer is `Undo`; `Undo skip` is §3.1's label for reversing a skip.
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDefined();
+    expect(screen.queryByText('It won’t appear on your day.')).toBeNull();
   });
 
   it('reports a completed event as Attended', async () => {

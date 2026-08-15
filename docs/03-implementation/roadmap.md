@@ -417,17 +417,17 @@ sizings did not support; those are corrected here.
 | 0 — Foundations | 31 | 9 / 17 / 5 | **63** | ~3 weeks |
 | 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
 | 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **119** | ~6.0 weeks |
-| 2.5 — Recurrence stabilization | 4 (P2-52…P2-55 — 2026-08-14) | 0 / 1 / 3 | **11** | ~0.6 weeks |
+| 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **13** | ~0.7 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **156** | **23 / 88 / 45** | **375** | **~18.8 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **157** | **23 / 89 / 45** | **377** | **~18.9 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **226** | **35 / 133 / 58** | **529** | **~26.5 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **227** | **35 / 134 / 58** | **531** | **~26.6 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9 plus Phase 2.5** | **375** | **48 / 224 / 103** | **904** | **~45.2 weeks (~10 months)** |
+| **Total 0–9 plus Phase 2.5** | **376** | **48 / 225 / 103** | **906** | **~45.3 weeks (~10 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -541,7 +541,14 @@ cache-derived occurrence targeting, makes conversion and reconciliation authorit
 adds the cross-layer matrix plus damaged-series audit before Phase 3 can start. That is
 **+4 tasks and +11 AWU**, giving **375 tasks and 904 AWU**.
 
-Use **904 AWU and ~45.2 weeks** (904 / 20 = 45.2) as the plan of record. Everything
+A founder report on **2026-08-15** adds **P2-56**, one M task, to the same phase: the stored
+resolution outcome reaches neither the occurrence detail projection nor `AgendaItem`, so a
+declined outcome — `Didn't happen`, `Didn't go` — cannot survive a reload on a series
+occurrence and cannot be rendered on any row at all. It completes a corner of P2-53's own
+deliverable and does **not** extend the Phase 2.5 blocking gate. That is **+1 task and
++2 AWU**, giving **376 tasks and 906 AWU**.
+
+Use **906 AWU and ~45.3 weeks** (906 / 20 = 45.3) as the plan of record. Everything
 through Phase 5 is now 529 AWU and ~26.5 weeks; the
 remaining ~18.8 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
@@ -681,7 +688,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-156 tasks, 375 AWU, ~18.8 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+157 tasks, 377 AWU, ~18.9 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -786,7 +793,7 @@ isolation, and it only holds if the isolation is real.
 **Phases 0 through 3, surfacing in Phase 4. New with the local-first ordering, and the price
 paid for it.**
 
-Nothing runs on AWS for 156 tasks. Every divergence between DynamoDB Local and DynamoDB,
+Nothing runs on AWS for 157 tasks. Every divergence between DynamoDB Local and DynamoDB,
 between the Hono Node adapter and an API Gateway v2 payload, and between a warm laptop
 process and a cold Lambda accumulates silently and is discovered in one phase — tangled up
 with a Cognito user pool, a first deploy and a new IAM surface, so that when something fails

@@ -1048,7 +1048,13 @@ function Loaded({
                     : outcomeVerb(activity.type, resolutionOutcome)
                   : outcomeVerb(activity.type, resolutionOutcome)}
               </Text>
-              {resolutionKind === 'skipped' ? (
+              {/**
+               * The second line explains a **skip** — what happens to the day and to the
+               * series. A declined outcome needs no explaining: `Didn't go` is already the
+               * whole statement, and following it with "it won't appear on your day" reads as
+               * a consequence being announced rather than an answer being recorded.
+               */}
+              {resolutionKind === 'skipped' && resolutionOutcome === undefined ? (
                 <Text variant="footnote" color="textMuted">
                   {activity.recurrence === undefined
                     ? 'It won’t appear on your day.'
@@ -1058,7 +1064,16 @@ function Loaded({
             </View>
             {canComplete ? (
               <Button
-                label={resolutionKind === 'skipped' ? 'Undo skip' : 'Undo'}
+                /**
+                 * `Undo skip` is §3.1's label for reversing a **skip**. A declined outcome is
+                 * stored the same way but is not one: the user answered a question, and the
+                 * reversal of an answer is `Undo`.
+                 */
+                label={
+                  resolutionKind === 'skipped' && resolutionOutcome === undefined
+                    ? 'Undo skip'
+                    : 'Undo'
+                }
                 variant="secondary"
                 size="lg"
                 fullWidth

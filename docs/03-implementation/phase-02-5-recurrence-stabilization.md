@@ -48,8 +48,10 @@ These decisions supersede the short-lived 2026-08-13 interpretation that made Re
 - [ ] A discriminated target at every internal activity/occurrence call site; optional
       `occurrenceDate` exists only at the current HTTP and persisted-mutation compatibility
       boundaries.
-- [ ] An authoritative occurrence detail projection containing effective date, time, end time
-      and status, independent of agenda-cache warmth.
+- [ ] An authoritative occurrence detail projection containing effective date, time, end time,
+      status **and outcome**, independent of agenda-cache warmth.
+- [ ] A resolved row and a resolved detail screen that report the outcome the user chose,
+      including a declined one, on a series occurrence as well as on a one-off.
 - [ ] An atomic series-to-one-off conversion that retains the selected occurrence schedule.
 - [ ] A distinct End series write and a distinct No end setting.
 - [ ] Agenda reconciliation that cannot cache a pre-write GSI response over newer local state
@@ -67,10 +69,16 @@ These decisions supersede the short-lived 2026-08-13 interpretation that made Re
 | P2-53 | Explicit occurrence detail target and authoritative projection | shared/api/mobile | P2-52 | no | L |
 | P2-54 | Atomic recurrence writes and versioned agenda reconciliation | shared/api/mobile | P2-53 | no | L |
 | P2-55 | Recurrence E2E matrix and damaged-series audit | api/mobile/ci | P2-54 | no | L |
+| P2-56 | The resolved outcome on the occurrence and agenda projections | shared/api/mobile | P2-53 | yes | M |
 
 The IDs continue Phase 2's `P2-xx` sequence so branch, commit and task tooling keep the
 existing `P<phase>-<task>` contract. “2.5” is the execution gate and roadmap position, not a
 new task-ID grammar.
+
+> **P2-56 added 2026-08-15 (founder), and it does not extend the gate.** The blocking sentence
+> above names P2-52 through P2-55 and still does. P2-56 completes a corner of P2-53's own
+> deliverable — "the effective occurrence schedule **and resolution**" — that the built
+> projection left out, and it is parallel-safe against everything else here.
 
 ---
 
@@ -180,6 +188,61 @@ is created or changed. Repair also clears the invalid series-level `completedAt`
 fields, matching the ordinary uncomplete invariant rather than leaving terminal metadata on a
 `scheduled` series.
 
+### P2-56 — The resolved outcome on the occurrence and agenda projections
+
+**Files.** `packages/shared/src/types/{activityDetail.ts,agenda.ts}`,
+`packages/shared/src/schemas/{activity.ts,agenda.ts}`,
+`services/api/src/services/agendaProjection.ts`, the activity read projection,
+`apps/mobile/src/features/agenda/components/AgendaRow.tsx`,
+`apps/mobile/src/features/activity/components/ActivityDetailScreen.tsx`,
+`docs/generated/openapi.json`, and their tests. Inventory is a minimum.
+
+**Why this exists.** Found on 2026-08-15 while fixing a founder report that answering
+`Didn't go` on an event still rendered `Attended`. The client half is fixed: `outcomeVerb` now
+reads the stored outcome, and the detail screen projects the chosen one optimistically. The
+server half is not, and it is the half that survives a reload.
+
+`completionService` stores a declined outcome as `status: 'skipped'` **plus** the outcome, on
+the Activity for a one-off and on the `Occurrence` row for a series. Two projections then drop
+it:
+
+1. `OccurrenceDetailProjection` carries `nominalDate`, `date`, `time`, `endTime`, `status`,
+   `isSnoozed` and `completedAt` — but no `outcome`. So a recurring occurrence resolved as
+   `Didn't happen` reads back as an indistinguishable plain skip the moment the server's answer
+   replaces the screen's own optimistic one. P2-53's deliverable says this projection carries
+   the occurrence's **resolution**; `status` alone is not that.
+2. `AgendaItem` has no `outcome` either, so no row can ever render a declined outcome. It shows
+   the dimmed `Skipped` tag instead, which is true but is not what the user said.
+
+**Approach.** One optional field on each, both additive
+([`../04-conventions/agent-playbook.md`](../04-conventions/agent-playbook.md) §8, so no
+`schemaVersion` bump), set from the stored value the services already write:
+
+- `OccurrenceDetailProjection.outcome?: ActivityOutcome` — the occurrence override's own.
+- `AgendaItem.outcome?: ActivityOutcome` — the one in force for that row, occurrence override
+  first, then the Activity. `AgendaItem` is a trimmed projection and adding to it is a
+  deliberate act (playbook §8 step 13); the justification is that the row already renders the
+  *positive* verb from `type`, so it is rendering an outcome it cannot see.
+
+Then the two client call sites stop inferring: `AgendaRow`'s trailing slot and its accessible
+name pass the row's outcome to `outcomeVerb`, and `ActivityDetailScreen` reads the occurrence's
+outcome ahead of the Activity's. Both already accept the argument.
+
+**Size.** M rather than L: no new key, no new access pattern, no new endpoint and no new query —
+two optional attributes already stored, carried through two projections that already run.
+
+**Tests.** Repository/service: a declined occurrence round-trips its outcome through the detail
+read and through the agenda projection. Route: the field is absent, not `null`, when nothing was
+declared. Component: a row and a detail screen each render `Didn't go` for an event and
+`Didn't happen` for the other four types, and `Skipped` when there is an outcome-free skip.
+Public projection: the field does not reach the invite surface (`security-privacy.md` §4.2).
+
+**Scope guard.** Do not add a status. Do not change what `completionService` writes or which
+statuses a declined outcome produces. Do not render an outcome on a row that has none. Do not
+add a colour outside P2-40's tables.
+
+---
+
 ## Acceptance criteria
 
 1. The three visible phrases Does not repeat, No end and End series cannot invoke the same
@@ -191,7 +254,10 @@ fields, matching the ordinary uncomplete invariant rather than leaving terminal 
 6. End series preserves recurrence history and is inclusive; No end restarts future expansion.
 7. A stale agenda-index response never replaces state from a newer acknowledged mutation.
 8. The cross-layer recurrence E2E catalogue passes on web and iOS.
-9. `pnpm verify` and recurrence's 100% statement/branch gate pass.
+9. A recurring occurrence resolved as `Didn't happen` or `Didn't go` reports those words on
+   its detail screen and on its agenda row after a cold reload, not `Skipped` and never the
+   type's positive verb.
+10. `pnpm verify` and recurrence's 100% statement/branch gate pass.
 
 ## Out of scope
 
