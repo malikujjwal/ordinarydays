@@ -2,7 +2,7 @@ import type { AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { SnoozeSheet } from './SnoozeSheet';
+import { SnoozeSheet } from '@/components/SnoozeSheet';
 
 const timed: AgendaItem = {
   activityId: 'act_01J0000000000000000000000A',

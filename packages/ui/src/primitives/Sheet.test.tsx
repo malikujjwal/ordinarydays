@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -140,5 +142,40 @@ describe('Sheet — dirty state guards every exit', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledOnce();
     expect(onDiscardRequest).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **Where the pan is attached, guarded at the source.**
+ *
+ * The reported bug was not a threshold and not a policy — both were right. It was that
+ * `panHandlers` hung on the header `View`, so a swipe starting anywhere else never reached the
+ * responder at all. React Native Web's responder system does not run on the synthetic touch
+ * events jsdom can produce, so a test that "drives a swipe" here would pass whether the sheet
+ * dismissed or not. This asserts the one fact a rendered test cannot: the handlers are on the
+ * surface, and the surface is the element the detent, the elevation and `testID` are on.
+ *
+ * The behaviour itself is covered by `sheetGesture.test.ts`, and was reproduced in a browser
+ * before and after the fix.
+ */
+describe('Sheet — the pan is on the surface, not the header (§6.1)', () => {
+  const source = readFileSync(resolve(__dirname, 'Sheet.tsx'), 'utf8');
+
+  it('spreads panHandlers onto the animated surface', () => {
+    const surface = source.slice(source.indexOf('<Animated.View'));
+    const beforeChildren = surface.slice(0, surface.indexOf('>'));
+
+    expect(beforeChildren).toContain('responder.panHandlers');
+    expect(beforeChildren).toContain('testID={testID}');
+  });
+
+  it('leaves no second copy of the handlers on an inner element', () => {
+    expect(source.match(/responder\.panHandlers/g)).toHaveLength(1);
+  });
+
+  /** Capture, or the ScrollView claims the gesture before the sheet is ever asked. */
+  it('claims the gesture in the capture phase', () => {
+    expect(source).toContain('onMoveShouldSetPanResponderCapture');
+    expect(source).not.toContain('onMoveShouldSetPanResponder:');
   });
 });

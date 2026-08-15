@@ -18,9 +18,9 @@ import { SectionList, View } from 'react-native';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
 import { GLOBAL_ADD_SCROLL_PADDING } from '@/components/globalAddLayout';
 import { TabScreen } from '@/components/TabScreen';
+import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { useAgenda } from '../hooks/useAgenda';
 import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
-import { useMinuteTicker } from '../hooks/useMinuteTicker';
 import {
   buildUpcomingSections,
   formatDateHeading,

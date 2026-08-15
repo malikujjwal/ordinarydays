@@ -12,6 +12,7 @@ import type {
   DeleteActivityVariables,
   DuplicateActivityVariables,
   SkipActivityVariables,
+  SnoozeActivityVariables,
   UncompleteActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
@@ -38,6 +39,14 @@ export interface ActivityActions {
   /** Stores a skip for one explicit occurrence; it never deletes the series Activity. */
   skipOccurrence: (
     scope: Extract<ActivityScope, { kind: 'occurrence' }>,
+  ) => Promise<boolean>;
+  /**
+   * Moves one occurrence later the same day. Like `skipOccurrence`, one `OCC#` row and no
+   * change to the series — the scope is explicit for the reason ADR-053 makes it explicit.
+   */
+  snoozeOccurrence: (
+    scope: Extract<ActivityScope, { kind: 'occurrence' }>,
+    until: string,
   ) => Promise<boolean>;
   resolvePassed: (
     outcome: ActivityOutcome,
@@ -135,6 +144,10 @@ export function useActivityActions(activityId: string): ActivityActions {
     mutationKey: activityMutationKeys.skip,
   });
 
+  const snoozeMutation = useMutation<unknown, Error, SnoozeActivityVariables>({
+    mutationKey: activityMutationKeys.snooze,
+  });
+
   const uncompleteMutation = useMutation<
     ActivityCompletionResult,
     Error,
@@ -155,6 +168,7 @@ export function useActivityActions(activityId: string): ActivityActions {
     deleteMutation.error ??
     completeMutation.error ??
     skipMutation.error ??
+    snoozeMutation.error ??
     uncompleteMutation.error;
 
   return {
@@ -183,6 +197,18 @@ export function useActivityActions(activityId: string): ActivityActions {
         await skipMutation.mutateAsync({
           activityId,
           input: scopeToWire(scope),
+          idempotencyKey: randomUUID(),
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    snoozeOccurrence: async (scope, until) => {
+      try {
+        await snoozeMutation.mutateAsync({
+          activityId,
+          input: { ...scopeToWire(scope), until },
           idempotencyKey: randomUUID(),
         });
         return true;
@@ -343,6 +369,7 @@ export function useActivityActions(activityId: string): ActivityActions {
       deleteMutation.isPending ||
       completeMutation.isPending ||
       skipMutation.isPending ||
+      snoozeMutation.isPending ||
       uncompleteMutation.isPending,
     isCompleting: completeMutation.isPending,
     isUndoing: uncompleteMutation.isPending,
@@ -353,6 +380,7 @@ export function useActivityActions(activityId: string): ActivityActions {
       deleteMutation.reset();
       completeMutation.reset();
       skipMutation.reset();
+      snoozeMutation.reset();
       uncompleteMutation.reset();
     },
   };

@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { AppState } from 'react-native';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
-import { useMinuteTicker } from './useMinuteTicker';
+import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 
 afterEach(() => {
   vi.useRealTimers();

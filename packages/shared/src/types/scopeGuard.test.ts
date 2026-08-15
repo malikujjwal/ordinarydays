@@ -66,6 +66,7 @@ const ALLOWED = new Set(
     'apps/mobile/src/features/agenda/model/applyCreate.ts',
     'apps/mobile/src/features/agenda/model/applyDelete.ts',
     'apps/mobile/src/features/agenda/model/applySkip.ts',
+    'apps/mobile/src/features/activity/model/occurrenceActions.ts',
     'apps/mobile/src/features/agenda/model/partition.ts',
     'apps/mobile/src/features/agenda/model/plansWindow.ts',
     'apps/mobile/src/features/agenda/model/upNext.ts',

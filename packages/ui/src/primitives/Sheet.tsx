@@ -20,6 +20,7 @@ import {
   useTheme,
 } from '../theme/index';
 import { IconButton } from './IconButton';
+import { shouldCaptureDrag, shouldDismissOnRelease } from './sheetGesture';
 import { Text } from './Text';
 
 /**
@@ -71,11 +72,6 @@ export interface SheetProps {
   onDiscardRequest?: () => void;
   testID?: string;
 }
-
-/** Past this, releasing dismisses. Below it the sheet springs back. */
-const DISMISS_DISTANCE = 96;
-/** A fast flick dismisses even from a short distance — px per ms. */
-const DISMISS_VELOCITY = 0.6;
 
 export function Sheet({
   open,
@@ -138,19 +134,32 @@ export function Sheet({
   const responder = useMemo(
     () =>
       PanResponder.create({
-        onMoveShouldSetPanResponder: (_event, gesture) =>
-          draggable &&
-          bodyAtTop.current &&
-          gesture.dy > 6 &&
-          Math.abs(gesture.dy) > Math.abs(gesture.dx),
+        /**
+         * **Capture, and on the whole surface** — not `onMoveShouldSetPanResponder` on the
+         * header alone.
+         *
+         * §6.1 says the drag "engages only while the body is scrolled to its top", and that
+         * clause was dead: bound to the header, which never scrolls, the condition could never
+         * decide anything, and a swipe down starting on a row — the gesture everyone actually
+         * makes — did nothing at all. Reported from the built sheet and reproduced: a touch
+         * drag on the title dismissed, the identical drag from a date row did not.
+         *
+         * Capturing is what makes `bodyAtTop` the arbiter rather than the scroll view. Without
+         * it the `ScrollView` claims the gesture first and a downward drag at offset zero is
+         * swallowed by a list with nowhere to go. With it, the two readings of one gesture
+         * separate cleanly: at the top the sheet moves, mid-scroll the body scrolls.
+         *
+         * The threshold still guards the child controls — a tap, or any drag under 6 pt, never
+         * reaches here, so a date row's press is unaffected.
+         */
+        onMoveShouldSetPanResponderCapture: (_event, gesture) =>
+          shouldCaptureDrag(gesture, { draggable, bodyAtTop: bodyAtTop.current }),
         onPanResponderMove: (_event, gesture) => {
           // Downward only. An upward drag on a bottom sheet has nowhere to go.
           if (gesture.dy > 0) translateY.setValue(gesture.dy);
         },
         onPanResponderRelease: (_event, gesture) => {
-          const dismissing =
-            gesture.dy > DISMISS_DISTANCE || gesture.vy > DISMISS_VELOCITY;
-          if (dismissing) {
+          if (shouldDismissOnRelease(gesture)) {
             translateY.setValue(0);
             requestClose();
             return;
@@ -211,6 +220,7 @@ export function Sheet({
 
         <Animated.View
           {...(Platform.OS === 'web' ? {} : { accessibilityViewIsModal: true })}
+          {...(draggable ? responder.panHandlers : {})}
           testID={testID}
           style={[
             {
@@ -243,11 +253,10 @@ export function Sheet({
            * appears exactly when there is one: a dismissible bottom sheet. The centred dialog
            * has neither, and a non-dismissible sheet has neither.
            *
-           * The gesture lives on the header rather than the whole surface, so a drag starting on
-           * a row or inside the body scrolls the body instead of moving the sheet — §25's
-           * "scrollable content should scroll normally".
+           * The gesture itself lives on the surface above, so a swipe down from anywhere on the
+           * sheet dismisses it while the body is at its top; the grabber says so.
            */}
-          <View {...(draggable ? responder.panHandlers : {})}>
+          <View>
             {draggable ? (
               <View
                 aria-hidden

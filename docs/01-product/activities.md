@@ -509,6 +509,13 @@ Activity. See [`overview.md`](overview.md#44-suggest-never-auto-create).
   `Keeps: the plan, everyone on it, and their replies.` and a `Remove the date` button. The
   plan is still a plan; it no longer has a day (§1.2 of
   [`plans-and-lists.md`](plans-and-lists.md#12-where-an-explicitly-chosen-object-with-no-date-appears)).
+- The date shortcuts are a set of **distinct days, listed nearest first** (amended 2026-08-15,
+  founder report). Each names a concrete weekday and shows its resolved date, and a shortcut
+  whose rule lands on a day an earlier one already offers moves on by a week rather than
+  repeating it: on a Saturday the weekend shortcut used to resolve to today, printing
+  `Today · Sat, Aug 15` and `Saturday · Sat, Aug 15` one above the other, both ticked. Because a
+  pushed shortcut can then fall after a later slot, the dated options are ordered by date rather
+  than by slot, so the list always reads as a timeline. No weekday is special-cased.
 - The removal action in that sheet names the object rather than the mechanism: a one-off task
   offers `Move to Anytime`, a plan offers `Remove date`, and one day of a series offers
   `Skip this occurrence` — a day of a series has no date to clear, and dropping it is a skip

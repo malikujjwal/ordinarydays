@@ -530,11 +530,21 @@ them stacked into a column because the content above it happened to grow.
 makes dismissal obvious and gives assistive technology and the keyboard a target.
 
 **Gesture priority, so the drag and the scroll do not fight** (§25). The pan lives on the
-**header**, not the whole surface, and engages only while the body is scrolled to its top. A drag
-starting on a row scrolls the row's list; a drag starting on the grabber or the title moves the
-sheet. Release past 96 pt — or flick faster than 0.6 px/ms — dismisses; anything less springs
-back, and Reduce Motion drops the spring while keeping the drag, because direct manipulation is
-not decorative motion.
+**whole surface** and engages only while the body is scrolled to its top, claiming the gesture in
+the capture phase so that arbitration is the sheet's and not the scroll view's. A drag started
+mid-scroll scrolls the list; the same drag at the top moves the sheet, wherever on the sheet the
+finger landed. Release past 96 pt — or flick faster than 0.6 px/ms — dismisses; anything less
+springs back, and Reduce Motion drops the spring while keeping the drag, because direct
+manipulation is not decorative motion.
+
+> **Amended 2026-08-15 (founder report).** This paragraph used to place the pan on the header
+> alone — "a drag starting on a row scrolls the row's list; a drag starting on the grabber or the
+> title moves the sheet". Built that way, the "scrolled to its top" condition could never decide
+> anything, because the header does not scroll, and the gesture everyone actually makes — swipe
+> down from the middle of the sheet — did nothing at all. Reproduced in a browser: a touch drag
+> on the title dismissed, the identical drag from a date row did not. The two clauses could not
+> both hold; the condition is the one worth keeping, because it is the one that separates the two
+> readings of a downward drag.
 
 **Every exit converges on one `requestClose`.** Scrim, close button, hardware Back, Escape and
 the drag all pass through it, so `dirty` guards all five or none. `✕` asking while swipe silently

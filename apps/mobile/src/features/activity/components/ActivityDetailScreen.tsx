@@ -1,6 +1,7 @@
 import type { ChangeTarget } from '@od/shared';
 import { describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
+import { type TimeZone, toWallTime } from '@od/shared/time';
 import type { Activity, ActivityDetailTarget, PlanType } from '@od/shared/types';
 import { type ActivityScope, activityScope, occurrenceScope } from '@od/shared/types';
 import {
@@ -22,6 +23,7 @@ import {
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
+import { SnoozeSheet } from '@/components/SnoozeSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
@@ -43,8 +45,14 @@ import {
   kindChangeConfirmation,
 } from '@/features/activity/model/confirmations';
 import type { WallDate } from '@/features/activity/model/dates';
+import {
+  canSkipOccurrence,
+  canSnoozeOccurrence,
+  occurrenceAgendaItem,
+} from '@/features/activity/model/occurrenceActions';
 import { endRepeatSeries } from '@/features/activity/model/repeat';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
+import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import {
   completionVerb,
   outcomeVerb,
@@ -122,6 +130,13 @@ export function ActivityDetailScreen({
   const [deleteSeriesConfirmOpen, setDeleteSeriesConfirmOpen] = useState(false);
   const [remindersOpen, setRemindersOpen] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  /**
+   * The snooze sheet prunes options that are already past, so the minute has to keep moving
+   * while the screen is open — a value captured at mount would start offering times the server
+   * rejects. The same ticker Today uses, which reads the injected clock rather than `Date.now`.
+   */
+  const tick = useMinuteTicker();
   const [resolutionDismissed, setResolutionDismissed] = useState(false);
   /**
    * This screen's own projection of the resolution — `undefined` until the user acts here, at
@@ -136,7 +151,7 @@ export function ActivityDetailScreen({
    * A projection whose scope no longer matches is stale, and stale falls back to the cache.
    */
   const [projection, setProjection] = useState<
-    { scope: string | undefined; resolved: boolean } | undefined
+    { scope: string | undefined; resolved: boolean; kind: ResolutionKind } | undefined
   >(undefined);
 
   /**
@@ -264,11 +279,69 @@ export function ActivityDetailScreen({
         ? RESOLVED_STATUSES.has(activity?.status ?? '')
         : RESOLVED_STATUSES.has(detail.detail?.occurrence?.status ?? '');
 
+  /**
+   * **Which resolution the screen is showing, not merely that there is one.**
+   *
+   * A skip and a completion are different outcomes with different reversals, and this used to
+   * read `activity.status === 'skipped'` alone — which is never true for an *occurrence*, whose
+   * skip lives on the `Occurrence` and leaves `ACT#/META` untouched. Skipping today's Gym
+   * therefore reported the completion verb, in the success colour, under a button labelled
+   * `Undo`. The status the screen is actually about is the same one `resolved` is read from.
+   */
+  const resolutionKind: ResolutionKind =
+    projection !== undefined && projection.scope === actionOccurrenceDate
+      ? projection.kind
+      : SKIPPED_STATUSES.has(
+            (actionOccurrenceDate === undefined
+              ? activity?.status
+              : detail.detail?.occurrence?.status) ?? '',
+          )
+        ? 'skipped'
+        : 'completed';
+
   /** One callback for the optimistic flip, the Undo, and every rollback in between. */
-  function projectResolution(next: boolean) {
+  function projectResolution(next: boolean, kind: ResolutionKind = 'completed') {
     setResolutionDismissed(next);
-    setProjection({ scope: actionOccurrenceDate, resolved: next });
+    setProjection({ scope: actionOccurrenceDate, resolved: next, kind });
     onResolutionProjectionChange?.(next);
+  }
+
+  /**
+   * Skipping from the reschedule sheet, projected before the request rather than after it.
+   *
+   * The write itself is one `OCC#` row and the agenda cache is corrected from the response, but
+   * the *screen* had nothing to show until that response landed — the reported lag, measured as
+   * the gap between the sheet closing and the resolved state appearing. Everything else on this
+   * screen already projects first; this was the one action that did not.
+   */
+  /**
+   * The occurrence in front of the user, as the shared snooze sheet and the two secondary
+   * actions read it. `shownSchedule` rather than `activity.schedule`, because an override moves
+   * the day in front of the user without moving `ACT#/META`.
+   */
+  const occurrenceContext = {
+    occurrenceDate: actionOccurrenceDate,
+    shownSchedule,
+    capabilities: detail.detail?.capabilities,
+  };
+  const snoozeItem =
+    activity === undefined
+      ? undefined
+      : occurrenceAgendaItem(activity, occurrenceContext);
+  const currentMinute = toWallTime(
+    tick.instant,
+    // The same branding the agenda hooks apply at this boundary; the zone is a plain IANA name.
+    (activity?.schedule?.timezone ??
+      Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone,
+  );
+
+  async function skipToday(): Promise<boolean> {
+    if (actionOccurrenceDate === undefined) return false;
+    projectResolution(true, 'skipped');
+    const ok = await actions.skipOccurrence(occurrenceScope(actionOccurrenceDate));
+    // The screen must not claim a skip the server refused.
+    if (!ok) projectResolution(false, 'completed');
+    return ok;
   }
 
   const detailContent = (
@@ -330,6 +403,11 @@ export function ActivityDetailScreen({
           completionUnavailable={seriesWithoutOccurrence || futureRecurringOccurrence}
           completing={actions.isCompleting}
           undoing={actions.isUndoing}
+          resolutionKind={resolutionKind}
+          canSnooze={canSnoozeOccurrence(occurrenceContext)}
+          canSkip={canSkipOccurrence(occurrenceContext)}
+          onSnooze={() => setSnoozeOpen(true)}
+          onSkip={() => void skipToday()}
           onComplete={() => {
             actions.resolvePassed(
               passedPlanResolution(activity.type).positive.outcome,
@@ -367,6 +445,24 @@ export function ActivityDetailScreen({
 
       {activity === undefined ? null : (
         <>
+          <SnoozeSheet
+            open={snoozeOpen}
+            item={snoozeItem}
+            currentMinute={currentMinute}
+            onClose={() => setSnoozeOpen(false)}
+            onSnooze={(item, until) => {
+              if (item.occurrenceDate === undefined) return;
+              void actions.snoozeOccurrence(occurrenceScope(item.occurrenceDate), until);
+            }}
+            /**
+             * `Tomorrow` is absent on a recurring occurrence by P2-25's table, and this surface
+             * only ever opens on an occurrence — so the callback is unreachable here. It stays
+             * required rather than optional because the sheet is shared with Today, where
+             * `Tomorrow` is a reschedule and very much reachable.
+             */
+            onTomorrow={() => {}}
+          />
+
           <RescheduleSheet
             open={rescheduleOpen}
             onClose={() => setRescheduleOpen(false)}
@@ -404,8 +500,7 @@ export function ActivityDetailScreen({
                    * there is no date to clear, and dropping the day is a skip. It reuses the
                    * same one-`OCC#`-row write the delete sheet's `This occurrence` makes.
                    */
-                  onSkipOccurrence: () =>
-                    actions.skipOccurrence(occurrenceScope(actionOccurrenceDate)),
+                  onSkipOccurrence: skipToday,
                 })}
             busy={detail.isSaving}
             {...(detail.editError === undefined ? {} : { error: detail.editError })}
@@ -635,7 +730,14 @@ interface LoadedProps {
   completionUnavailable: boolean;
   completing: boolean;
   undoing: boolean;
+  /** Which outcome the resolved state is showing; a skip reverses differently from a done. */
+  resolutionKind: ResolutionKind;
+  /** The two occurrence actions, each gated on its own server-authored capability (P2-47). */
+  canSnooze: boolean;
+  canSkip: boolean;
   onComplete: () => void;
+  onSnooze: () => void;
+  onSkip: () => void;
   onUndoResolution: () => void;
 }
 
@@ -655,6 +757,11 @@ const RESOLVED_STATUSES = new Set([
   'skipped_occurrence',
 ]);
 
+/** The subset of the above that means "deliberately not done", rather than done. */
+const SKIPPED_STATUSES = new Set(['skipped', 'skipped_occurrence']);
+
+type ResolutionKind = 'completed' | 'skipped';
+
 function Loaded({
   activity,
   detail,
@@ -670,7 +777,12 @@ function Loaded({
   completionUnavailable,
   completing,
   undoing,
+  resolutionKind,
+  canSnooze,
+  canSkip,
   onComplete,
+  onSnooze,
+  onSkip,
   onUndoResolution,
 }: LoadedProps) {
   const theme = useTheme();
@@ -783,15 +895,91 @@ function Loaded({
           />
         ) : null}
 
-        {/** The outcome is stated before the control that reverses it, not after it. */}
+        {/**
+         * **The two occurrence actions, beneath the primary and at its width** (P2-47).
+         *
+         * They are secondary because completing is what the screen is for, and three equal
+         * buttons make the user read all three to find the one they came for. They are still
+         * full-size and side by side rather than buried in the `⋯` menu: a snooze is an ordinary
+         * daily action, and the founder's report was that reaching it took too long. Each is
+         * gated on its own server-authored capability, so a shared plan the user does not own
+         * shows neither — and so does a series with no day in context, which has no occurrence
+         * to act on.
+         */}
+        {(canSnooze || canSkip) && !resolved && !showResolutionPrompt ? (
+          <View style={{ flexDirection: 'row', gap: theme.space[3] }}>
+            {canSnooze ? (
+              <View style={{ flex: 1 }}>
+                <Button
+                  label="Snooze"
+                  variant="secondary"
+                  size="lg"
+                  fullWidth
+                  radius="md"
+                  onPress={onSnooze}
+                  testID="detail-snooze"
+                />
+              </View>
+            ) : null}
+            {canSkip ? (
+              <View style={{ flex: 1 }}>
+                <Button
+                  label="Skip today"
+                  variant="secondary"
+                  size="lg"
+                  fullWidth
+                  radius="md"
+                  onPress={onSkip}
+                  testID="detail-skip"
+                />
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/**
+         * The outcome is stated before the control that reverses it, not after it — and a skip
+         * is stated as a skip.
+         *
+         * **A skip is not a success and does not read as one.** It used to render the same
+         * green line as a completion, one word, easy to miss on a screen that otherwise looks
+         * unchanged; the founder's report was that a skipped activity needs to be obvious. It
+         * now sits in its own panel, says what it means for the series, and its reversal is
+         * `Undo skip` — the label the gesture table already gives this exact action
+         * (`interaction-contract.md` §3.1), not the completion's `Undo`.
+         */}
         {resolved ? (
-          <View style={{ gap: theme.space[3] }}>
-            <Text variant="bodyStrong" color="success" testID="detail-resolved">
-              {activity.status === 'skipped' ? 'Skipped' : outcomeVerb(activity.type)}
-            </Text>
+          <View
+            style={{
+              gap: theme.space[3],
+              padding: theme.space[5],
+              borderRadius: theme.radius.md,
+              backgroundColor:
+                resolutionKind === 'skipped'
+                  ? theme.colors.surfaceSunken
+                  : theme.colors.successSurface,
+            }}
+            testID="detail-resolution"
+          >
+            <View style={{ gap: theme.space[1] }}>
+              <Text
+                variant="bodyStrong"
+                color={resolutionKind === 'skipped' ? 'textPrimary' : 'success'}
+                testID="detail-resolved"
+              >
+                {resolutionKind === 'skipped' ? 'Skipped' : outcomeVerb(activity.type)}
+              </Text>
+              {resolutionKind === 'skipped' ? (
+                <Text variant="footnote" color="textSecondary">
+                  {activity.recurrence === undefined
+                    ? 'It won’t appear on your day.'
+                    : 'This day only. The series carries on.'}
+                </Text>
+              ) : null}
+            </View>
             {canComplete ? (
               <Button
-                label="Undo"
+                label={resolutionKind === 'skipped' ? 'Undo skip' : 'Undo'}
                 variant="secondary"
                 size="lg"
                 fullWidth

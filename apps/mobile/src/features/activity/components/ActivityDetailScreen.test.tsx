@@ -122,9 +122,17 @@ interface Sent {
 
 const sent: Sent[] = [];
 
-function stubFetch(...responses: Array<{ status: number; body: unknown }>) {
+/**
+ * `wait` holds a response open until the test releases it. Without it there is no way to
+ * assert what the screen shows *while a write is in flight*, which is the whole of an
+ * optimistic projection: a test that only checks the settled state passes just as well against
+ * a screen that waits for the server.
+ */
+function stubFetch(
+  ...responses: Array<{ status: number; body: unknown; wait?: Promise<unknown> }>
+) {
   let call = 0;
-  vi.stubGlobal('fetch', (url: string, init?: Record<string, unknown>) => {
+  vi.stubGlobal('fetch', async (url: string, init?: Record<string, unknown>) => {
     sent.push({
       url,
       method: (init?.method as string | undefined) ?? 'GET',
@@ -134,6 +142,7 @@ function stubFetch(...responses: Array<{ status: number; body: unknown }>) {
     const outcome = responses[Math.min(call, responses.length - 1)];
     call += 1;
     if (outcome === undefined) throw new Error('no outcome');
+    if (outcome.wait !== undefined) await outcome.wait;
     return Promise.resolve({
       ok: outcome.status >= 200 && outcome.status < 300,
       status: outcome.status,
@@ -2003,5 +2012,172 @@ describe('the ⋯ actions', () => {
     const body = sent[1]?.body as Record<string, unknown>;
     expect('objectKind' in body).toBe(true);
     expect('type' in body).toBe(true);
+  });
+});
+
+/**
+ * The occurrence actions and the skipped state (P2-47, plus the founder's 2026-08-15 report).
+ *
+ * Three defects in one report: a skipped occurrence rendered the *completion* verb in green
+ * because the screen read `activity.status`, which an occurrence skip never moves; its reversal
+ * was labelled `Undo`; and the resolved state did not appear until the response landed.
+ */
+describe('occurrence actions', () => {
+  const series = () =>
+    plan({
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+
+  it('offers Snooze and Skip today on an occurrence, beneath the completion button', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(series(), [], undefined, occurrenceProjection()),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.getByTestId('detail-complete')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Snooze' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Skip today' })).toBeDefined();
+  });
+
+  /** A series reached without a day has no occurrence to act on, so it offers neither. */
+  it('offers neither on a series with no occurrence in context', async () => {
+    stubFetch({ status: 200, body: detailBody(series()) });
+    mount();
+    await loaded();
+
+    expect(screen.queryByTestId('detail-snooze')).toBeNull();
+    expect(screen.queryByTestId('detail-skip')).toBeNull();
+  });
+
+  /** Server-authored capabilities, never a client re-derivation of ownership. */
+  it('offers neither when the server withholds both capabilities', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(
+        series(),
+        [],
+        { complete: true, skip: false, snooze: false },
+        occurrenceProjection(),
+      ),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.queryByTestId('detail-snooze')).toBeNull();
+    expect(screen.queryByTestId('detail-skip')).toBeNull();
+  });
+
+  it('opens the shared snooze sheet, which names the activity and its blast radius', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(series(), [], undefined, occurrenceProjection()),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-snooze'));
+
+    expect(screen.getByTestId('snooze-subject').textContent).toContain('8:00 AM');
+    expect(screen.getByTestId('snooze-blast-radius').textContent).toBe(
+      'Today only. Tomorrow stays 8:00 AM.',
+    );
+  });
+
+  /**
+   * The skip is projected before the request, not after it — the reported lag. The assertion
+   * is that the resolved state is on screen while the POST is still outstanding.
+   */
+  it('shows the skipped state immediately, before the write comes back', async () => {
+    let release: ((value: unknown) => void) | undefined;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    stubFetch(
+      { status: 200, body: detailBody(series(), [], undefined, occurrenceProjection()) },
+      {
+        status: 200,
+        body: { data: { activity: series() }, meta: { requestId: 'req_test' } },
+        wait: pending,
+      },
+    );
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-skip'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('detail-resolved').textContent).toBe('Skipped'),
+    );
+    expect(screen.getByRole('button', { name: 'Undo skip' })).toBeDefined();
+    release?.(undefined);
+  });
+
+  /**
+   * A skipped **occurrence** never moves `ACT#/META`, so reading `activity.status` alone
+   * reported the completion verb. The status the screen is about is the occurrence's.
+   */
+  it('states a skipped occurrence as skipped, not as done', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(series(), [], undefined, occurrenceProjection('skipped')),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.getByTestId('detail-resolved').textContent).toBe('Skipped');
+    expect(screen.getByRole('button', { name: 'Undo skip' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+
+  /** And a completion still reads as a completion, with its own verb and its own label. */
+  it('leaves a completed occurrence saying Done under Undo', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(series(), [], undefined, occurrenceProjection('completed')),
+    });
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.getByTestId('detail-resolved').textContent).toBe('Done');
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDefined();
   });
 });

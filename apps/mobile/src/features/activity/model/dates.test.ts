@@ -47,11 +47,70 @@ describe('quickDates', () => {
   });
 
   /**
-   * The off-by-a-week case. `nextSaturday` on a Saturday returns the *following* one, so a
-   * user tapping `This weekend` on Saturday morning would be shown a date eight days out.
+   * **The collision case, reported from the built sheet.** On a Saturday the weekend shortcut
+   * used to resolve to today, so the list printed `Today - Sat, Aug 15` and
+   * `Saturday - Sat, Aug 15` one above the other, both ticked. Today already offers today; the
+   * weekend shortcut moves on by a week rather than repeating it.
    */
-  it('makes This weekend today when today is Saturday', () => {
-    expect(quickDates('2026-08-15')[2]?.date).toBe('2026-08-15');
+  it('moves the weekend option on a week when today is Saturday', () => {
+    const weekend = quickDates('2026-08-15').find((chip) => chip.key === 'weekend');
+    expect(weekend?.date).toBe('2026-08-22');
+  });
+
+  /** The same collision one day earlier, against Tomorrow rather than Today. */
+  it('moves the weekend option on a week when tomorrow is Saturday', () => {
+    const weekend = quickDates('2026-08-14').find((chip) => chip.key === 'weekend');
+    expect(weekend?.date).toBe('2026-08-22');
+  });
+
+  /** And the mirror on the other shortcut: on a Sunday, the coming Monday is Tomorrow. */
+  it('moves the next-week option on a week when tomorrow is Monday', () => {
+    const chips = quickDates('2026-08-16');
+    expect(chips.map((chip) => chip.date)).toEqual([
+      '2026-08-16',
+      '2026-08-17',
+      '2026-08-22',
+      '2026-08-24',
+      undefined,
+    ]);
+  });
+
+  /**
+   * Once a collision can push a shortcut a week out, slot order and calendar order stop
+   * agreeing. On a Saturday the weekend option lands after the coming Monday, so the list is
+   * ordered by date rather than by slot.
+   */
+  it('lists the dated options nearest first when a push reorders them', () => {
+    expect(quickDates('2026-08-15').map((chip) => [chip.label, chip.date])).toEqual([
+      ['Today', '2026-08-15'],
+      ['Tomorrow', '2026-08-16'],
+      ['Next Monday', '2026-08-17'],
+      ['Saturday', '2026-08-22'],
+      ['Pick a date', undefined],
+    ]);
+  });
+
+  /**
+   * The general rule, asserted over a whole week rather than at the two days that happened to
+   * be reported: no two options ever resolve to the same day, whatever today is.
+   */
+  it.each([
+    '2026-08-10',
+    '2026-08-11',
+    '2026-08-12',
+    '2026-08-13',
+    '2026-08-14',
+    '2026-08-15',
+    '2026-08-16',
+  ])('offers four distinct dates when today is %s', (day) => {
+    const dates = quickDates(day)
+      .map((chip) => chip.date)
+      .filter((date): date is string => date !== undefined);
+
+    expect(dates).toHaveLength(4);
+    expect(new Set(dates).size).toBe(4);
+    // And they stay in ascending order, so the list reads as a timeline.
+    expect([...dates].sort()).toEqual(dates);
   });
 
   it('makes Next week the coming Monday', () => {

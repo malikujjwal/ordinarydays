@@ -45,24 +45,54 @@ export interface QuickDate {
  * than the one eight days away — `nextSaturday` would skip it, so the same-day case is
  * handled before asking for the next one. `Next week` is the coming Monday, by the same rule.
  */
+/**
+ * The next date this shortcut's own rule produces that no earlier option already offers.
+ *
+ * **Two rows resolving to the same day is the bug this exists to prevent.** Every shortcut
+ * here repeats weekly, so a collision is resolved by advancing a whole week rather than by
+ * naming a day: on a Saturday the weekend shortcut used to resolve to *today*, printing
+ * `Today · Sat, Aug 15` and `Saturday · Sat, Aug 15` one above the other, both ticked. On a
+ * Friday it collided with Tomorrow, and on a Sunday `Next Monday` did. Nothing is special-cased
+ * per weekday; the rule is simply that the list is a set of distinct days.
+ */
+function firstUntakenDate(candidate: Date, taken: Set<WallDate>): Date {
+  let next = candidate;
+  while (taken.has(toWall(next))) next = addDays(next, 7);
+  return next;
+}
+
+/**
+ * **Named days, not vague spans.** The founder's frames are explicit: "concrete date
+ * shortcuts instead of ambiguous ones". `This weekend` on a Sunday and `Next week` on a
+ * Friday each mean at least two different things depending on who is reading, and the row
+ * renders the resolved date beside the label so the shortcut is never a guess.
+ *
+ * **The dated options are listed nearest first, not in slot order.** Once a collision can push
+ * a shortcut a week out, slot order and calendar order stop agreeing: on a Saturday the weekend
+ * shortcut lands on the following Saturday, which is *after* the coming Monday. Sorting is what
+ * keeps the list readable as a timeline on every day of the week rather than only on the ones
+ * where the two orders happen to match. `Pick a date` has no date and always closes the list.
+ */
 export function quickDates(today: WallDate): QuickDate[] {
   const base = toDate(today);
-  const saturday = base.getDay() === 6 ? base : nextSaturday(base);
-  const monday = base.getDay() === 1 ? addDays(base, 7) : nextMonday(base);
+  const tomorrow = addDays(base, 1);
+  const taken = new Set<WallDate>([today, toWall(tomorrow)]);
 
-  /**
-   * **Named days, not vague spans.** The founder's frames are explicit: "concrete date
-   * shortcuts instead of ambiguous ones". `This weekend` on a Sunday and `Next week` on a
-   * Friday each mean at least two different things depending on who is reading, and the row
-   * renders the resolved date beside the label so the shortcut is never a guess.
-   */
-  return [
+  const saturday = firstUntakenDate(nextSaturday(base), taken);
+  taken.add(toWall(saturday));
+  const monday = firstUntakenDate(nextMonday(base), taken);
+
+  const dated: QuickDate[] = [
     { key: 'today', label: 'Today', date: today },
-    { key: 'tomorrow', label: 'Tomorrow', date: toWall(addDays(base, 1)) },
+    { key: 'tomorrow', label: 'Tomorrow', date: toWall(tomorrow) },
     { key: 'weekend', label: format(saturday, 'EEEE'), date: toWall(saturday) },
     { key: 'nextWeek', label: `Next ${format(monday, 'EEEE')}`, date: toWall(monday) },
-    { key: 'pick', label: 'Pick a date' },
   ];
+
+  // `YYYY-MM-DD` sorts lexicographically in calendar order, which is why the format is used.
+  dated.sort((left, right) => (left.date ?? '').localeCompare(right.date ?? ''));
+
+  return [...dated, { key: 'pick', label: 'Pick a date' }];
 }
 
 /** `Wed, Aug 12` — the resolved date a quick option commits to, shown beside its label. */
