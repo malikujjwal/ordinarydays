@@ -3279,6 +3279,32 @@ edit.
 60-day cross-day cap, the 20-segment cap, or the optimistic and undo behaviour. Do not add a
 colour outside P2-40's tables.
 
+> **Implementation notes — 2026-08-14 (P2-42 as built).** Four things this task's prose left
+> open, settled here so the next reader does not re-derive them from the diff.
+>
+> 1. **`interaction-contract.md` §3 does not fix the ordering.** It is the gesture table plus
+>    the six universal rules; U4 says a date or time tap opens the reschedule sheet and never
+>    edits in place, and neither §3.1 nor U1–U6 says anything about when a sheet asks for a
+>    series scope. There is no conflict to raise. The strings this task changed are recorded in
+>    the new [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md)
+>    §5.5, which §5 had no row for.
+> 2. **"After Save" is the commit gesture, not a new Save button.** The sheet writes when a date
+>    row is tapped or the time wheel's `Done` is pressed; that is the save. Adding a pinned
+>    `Save` would have put a second tap in front of every one-off reschedule to serve a question
+>    only a series asks.
+> 3. **A date move is not asked about.** An appended rule segment carries a time, not a day
+>    (`data-model.md` §4.2), so `All future occurrences` cannot express "move this to Thursday".
+>    The old sheet had the same limit and hid it: choosing `All future occurrences` first made
+>    the date options disappear. A cross-day move now dispatches the same `overrideDate` write
+>    P2-26 built, with no question, and the scope step appears when the occurrence keeps its
+>    own date.
+> 4. **"Every existing dispatch test passes unmodified" holds for the assertions, not for the
+>    scripts.** Four P2-26 tests drove the scope buttons *before* the edit, which is the exact
+>    ordering this task inverts; their clicks are reordered and every assertion about what is
+>    dispatched — endpoint, payload, `editedFromDate`, segment identity — is byte-identical.
+>    No P2-25 test was modified. The claim in the task's Tests paragraph is unachievable as
+>    written for those four and is recorded here rather than quietly reinterpreted.
+
 ---
 
 ### P2-43 — Compose flow progressive disclosure

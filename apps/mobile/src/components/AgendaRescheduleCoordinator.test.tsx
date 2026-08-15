@@ -1,9 +1,17 @@
 import type { Activity, AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { expect, it, vi } from 'vitest';
 import type { ActivityDetailView } from '@/features/activity/hooks/useActivity';
 import { AgendaRescheduleCoordinator } from './AgendaRescheduleCoordinator';
+
+/**
+ * `expo-crypto` is a native module with no jsdom implementation, and the skip behind
+ * `Skip this occurrence` generates an idempotency key through it (P2-42).
+ */
+vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-test-key' }));
 
 const mockUseActivityDetail = vi.hoisted(() =>
   vi.fn<(activityId: string) => ActivityDetailView>(),
@@ -52,6 +60,18 @@ const activity: Activity = {
   schemaVersion: 1,
 };
 
+/**
+ * The coordinator now owns the skip behind `Skip this occurrence`, which is a real mutation
+ * even when the detail query is mocked, so the tree needs a client for it to register against.
+ */
+function Harness({ children }: { children: ReactNode }) {
+  return (
+    <QueryClientProvider client={new QueryClient()}>
+      <ThemeProvider scheme="light">{children}</ThemeProvider>
+    </QueryClientProvider>
+  );
+}
+
 const sharedActions = {
   refetch: vi.fn(),
   isSaving: false,
@@ -69,9 +89,9 @@ it('keeps one native sheet mounted while activity detail finishes loading', () =
   mockUseActivityDetail.mockImplementation(() => view);
 
   const rendered = render(
-    <ThemeProvider scheme="light">
+    <Harness>
       <AgendaRescheduleCoordinator item={item} today="2026-08-12" onClose={() => {}} />
-    </ThemeProvider>,
+    </Harness>,
   );
   const originalSheet = screen.getByTestId('reschedule-sheet');
 
@@ -81,9 +101,9 @@ it('keeps one native sheet mounted while activity detail finishes loading', () =
     ...sharedActions,
   };
   rendered.rerender(
-    <ThemeProvider scheme="light">
+    <Harness>
       <AgendaRescheduleCoordinator item={item} today="2026-08-12" onClose={() => {}} />
-    </ThemeProvider>,
+    </Harness>,
   );
 
   expect(screen.getByTestId('reschedule-sheet')).toBe(originalSheet);
@@ -98,14 +118,14 @@ it('passes the rendered future date into the shared reschedule editor', () => {
   });
 
   render(
-    <ThemeProvider scheme="light">
+    <Harness>
       <AgendaRescheduleCoordinator
         item={item}
         today="2026-08-12"
         renderedDate="2026-08-20"
         onClose={() => {}}
       />
-    </ThemeProvider>,
+    </Harness>,
   );
 
   fireEvent.click(screen.getByTestId('quick-date-pick'));

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatReminderOffset,
   formatSchedule,
+  formatScheduleChange,
   formatWallDate,
   formatWallTime,
   quickDates,
@@ -141,5 +142,33 @@ describe('formatReminderOffset', () => {
     [-90, '90 minutes before'],
   ])('renders %d as %s', (offset, expected) => {
     expect(formatReminderOffset(offset)).toBe(expected);
+  });
+});
+
+describe('formatScheduleChange', () => {
+  const at = (date: string, time: string | null) => ({ date, time });
+
+  it('renders a time-only move as the two clock values', () => {
+    expect(
+      formatScheduleChange(at(WEDNESDAY, '18:00'), at(WEDNESDAY, '19:00'), WEDNESDAY),
+    ).toBe('6:00 PM → 7:00 PM');
+  });
+
+  it('names both days once the date moves', () => {
+    expect(
+      formatScheduleChange(at(WEDNESDAY, '18:00'), at('2026-08-15', '18:00'), WEDNESDAY),
+    ).toBe('Wed, Aug 12 · 6:00 PM → Sat, Aug 15 · 6:00 PM');
+  });
+
+  it('renders a cleared time as Anytime', () => {
+    expect(
+      formatScheduleChange(at(WEDNESDAY, '18:00'), at(WEDNESDAY, null), WEDNESDAY),
+    ).toBe('6:00 PM → Anytime');
+  });
+
+  it('says nothing when nothing moved', () => {
+    expect(
+      formatScheduleChange(at(WEDNESDAY, '18:00'), at(WEDNESDAY, '18:00'), WEDNESDAY),
+    ).toBeUndefined();
   });
 });

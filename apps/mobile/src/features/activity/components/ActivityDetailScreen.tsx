@@ -395,6 +395,18 @@ export function ActivityDetailScreen({
                 })}
             onSchedule={detail.schedule}
             onPatch={detail.patch}
+            {...(actionOccurrenceDate === undefined ||
+            detail.detail?.capabilities?.skip !== true
+              ? {}
+              : {
+                  /**
+                   * `Skip this occurrence` is the removal action for a day of a series (P2-42):
+                   * there is no date to clear, and dropping the day is a skip. It reuses the
+                   * same one-`OCC#`-row write the delete sheet's `This occurrence` makes.
+                   */
+                  onSkipOccurrence: () =>
+                    actions.skipOccurrence(occurrenceScope(actionOccurrenceDate)),
+                })}
             busy={detail.isSaving}
             {...(detail.editError === undefined ? {} : { error: detail.editError })}
           />

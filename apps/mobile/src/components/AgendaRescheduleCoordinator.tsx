@@ -1,8 +1,10 @@
 import type { AgendaItem } from '@od/shared/types';
+import { occurrenceScope } from '@od/shared/types';
 import { EmptyState, Sheet, Skeleton } from '@od/ui';
 import { View } from 'react-native';
 import { RescheduleSheet } from '@/features/activity/components/RescheduleSheet';
 import { useActivityDetail } from '@/features/activity/hooks/useActivity';
+import { useActivityActions } from '@/features/activity/hooks/useActivityActions';
 import type { WallDate } from '@/features/activity/model/dates';
 
 export interface AgendaRescheduleCoordinatorProps {
@@ -21,6 +23,12 @@ export function AgendaRescheduleCoordinator({
   onClose,
 }: AgendaRescheduleCoordinatorProps) {
   const detail = useActivityDetail(item.activityId);
+  /**
+   * The skip behind `Skip this occurrence` (P2-42). It is the same write the detail screen makes
+   * — one `OCC#` row, the series untouched — rather than a second path built for this sheet.
+   */
+  const actions = useActivityActions(item.activityId);
+  const skippableOccurrence = item.capabilities.skip ? item.occurrenceDate : undefined;
 
   return (
     <Sheet open onClose={onClose} title="When?" testID="reschedule-sheet">
@@ -48,6 +56,12 @@ export function AgendaRescheduleCoordinator({
           {...(item.time === undefined ? {} : { renderedTime: item.time })}
           onSchedule={detail.schedule}
           onPatch={detail.patch}
+          {...(skippableOccurrence === undefined
+            ? {}
+            : {
+                onSkipOccurrence: () =>
+                  actions.skipOccurrence(occurrenceScope(skippableOccurrence)),
+              })}
           busy={detail.isSaving}
           {...(detail.editError === undefined ? {} : { error: detail.editError })}
         />

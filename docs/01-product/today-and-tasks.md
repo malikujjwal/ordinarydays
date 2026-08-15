@@ -367,6 +367,13 @@ Options are pruned to the future: an option that would land in the past — `Thi
 (6 PM)` opened at 9 PM — is hidden client-side, so the sheet never offers a time the
 server would reject.
 
+The sheet names the activity it is moving and states the reach of the move above the options
+(amended 2026-08-14, P2-42): `Call the dentist · 3:00 PM`, then `Today only. Tomorrow stays
+6:00 PM.` on a recurring occurrence and `Today only. Nothing else changes.` on a one-off. The
+time in that line is the **series** time, so re-snoozing an already-snoozed row still says what
+tomorrow keeps. The option table above is unchanged; the copy is
+[`interaction-contract.md`](interaction-contract.md#55-reschedule-and-snooze-sheet-copy) §5.5.
+
 > **Decision:** `Tomorrow` is deliberately absent for recurring occurrences. Snoozing
 > tomorrow's Gym into a day that already has a Gym would produce two rows for one series,
 > breaking the one-row-per-series rule (§5.4). To move a single occurrence to another day,

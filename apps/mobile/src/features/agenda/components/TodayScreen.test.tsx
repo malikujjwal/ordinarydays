@@ -809,7 +809,7 @@ describe('TodayScreen', () => {
     expect(screen.getByRole('button', { name: 'Snooze until 3:25 PM' })).toBeDefined();
   });
 
-  it('opens the shared recurring scope chooser when a rendered time is tapped', async () => {
+  it('opens the shared reschedule editor when a rendered time is tapped, and asks for the scope after the edit', async () => {
     const scheduled = row(1, {
       title: 'Recurring standup',
       time: '15:30',
@@ -849,9 +849,15 @@ describe('TodayScreen', () => {
       screen.getAllByRole('button', { name: '3:30 PM, change time' })[0] as Element,
     );
 
+    // P2-42: the editor is the opening state; the scope question follows the edit.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'This occurrence only' })).toBeDefined(),
+      expect(screen.getByTestId('reschedule-occurrence-editor')).toBeDefined(),
     );
+    expect(screen.queryByRole('button', { name: 'This occurrence only' })).toBeNull();
+
+    fireEvent.click(screen.getByTestId('quick-date-today'));
+
+    expect(screen.getByRole('button', { name: 'This occurrence only' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'All future occurrences' })).toBeDefined();
   });
 });

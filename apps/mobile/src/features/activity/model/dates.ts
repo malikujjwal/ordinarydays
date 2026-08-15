@@ -73,6 +73,36 @@ export function formatQuickDate(date: WallDate, today: WallDate): string {
 }
 
 /**
+ * The `6:00 PM → 7:00 PM` line the scope question carries (P2-42).
+ *
+ * **The question is asked after the edit, so the edit has to be visible while it is asked.**
+ * `Apply changes to` used to be the sheet's opening state, where there was nothing yet to
+ * apply — the user chose a scope for a change they had not made, then made it. Asking second
+ * only helps if the summary says what is being scoped, which is why this returns the smallest
+ * honest difference rather than the whole schedule.
+ *
+ * `undefined` when nothing moved: a summary reading `6:00 PM → 6:00 PM` is noise, and the two
+ * options still mean what their labels say.
+ */
+export function formatScheduleChange(
+  before: { date: WallDate; time: string | null },
+  after: { date: WallDate; time: string | null },
+  today: WallDate,
+): string | undefined {
+  const movedDate = before.date !== after.date;
+  const movedTime = before.time !== after.time;
+  if (!movedDate && !movedTime) return undefined;
+
+  // A time with no time is `Anytime` — the word the rest of the product uses for an all-day row.
+  const side = (value: { date: WallDate; time: string | null }): string => {
+    const time = value.time === null ? 'Anytime' : formatWallTime(value.time);
+    return movedDate ? `${formatQuickDate(value.date, today)} · ${time}` : time;
+  };
+
+  return `${side(before)} → ${side(after)}`;
+}
+
+/**
  * `Fri 14 Aug`, or `Fri 14 Aug 2027` when the year is not the current one.
  *
  * The year is dropped for the common case and restored when it matters, so a date in the

@@ -509,8 +509,20 @@ Activity. See [`overview.md`](overview.md#44-suggest-never-auto-create).
   `Keeps: the plan, everyone on it, and their replies.` and a `Remove the date` button. The
   plan is still a plan; it no longer has a day (§1.2 of
   [`plans-and-lists.md`](plans-and-lists.md#12-where-an-explicitly-chosen-object-with-no-date-appears)).
+- The removal action in that sheet names the object rather than the mechanism: a one-off task
+  offers `Move to Anytime`, a plan offers `Remove date`, and one day of a series offers
+  `Skip this occurrence` — a day of a series has no date to clear, and dropping it is a skip
+  ([`today-and-tasks.md`](today-and-tasks.md#54-skip) §5.4). The exact strings are
+  [`interaction-contract.md`](interaction-contract.md#55-reschedule-and-snooze-sheet-copy) §5.5.
 - Rescheduling a **recurring series** presents a two-option sheet: `This occurrence only` /
-  `All future occurrences`. The first writes an `Occurrence` with `overrideTime` and/or
+  `All future occurrences`. **The question is asked after the edit, not before it**
+  (amended 2026-08-14, P2-42): the user picks the date or time first, and the sheet then shows
+  `Apply changes to` with the before→after summary of what is being scoped. Asking first meant
+  choosing a scope for a change that did not exist yet, and the answer silently decided which
+  editor appeared. A move to a **different day** is not asked about: an appended rule segment
+  carries a time and not a date, so moving one occurrence to another day has only the
+  occurrence reading, which is the `overrideDate` write below. Changing which days a series
+  lands on is the Repeat sheet. The first writes an `Occurrence` with `overrideTime` and/or
   `overrideDate` and never touches the series — a single occurrence can move to another
   day, where it is emitted on its override date with a `moved from` affix
   ([`today-and-tasks.md`](today-and-tasks.md#63-occurrence-semantics) §6.3). The second **appends a rule segment** to `recurrence`, effective from

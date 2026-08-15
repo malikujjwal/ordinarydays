@@ -1,17 +1,31 @@
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import type { Activity, RecurrenceSegment } from '@od/shared/types';
-import { Button, Field, SettingRow, Sheet, Text, TimePicker, useTheme } from '@od/ui';
+import {
+  Button,
+  Field,
+  RowGroup,
+  SettingRow,
+  Sheet,
+  Text,
+  TimePicker,
+  useTheme,
+} from '@od/ui';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import {
   formatQuickDate,
+  formatScheduleChange,
   type QuickDate,
   quickDates,
   type WallDate,
 } from '@/features/activity/model/dates';
 
-type SeriesScope = 'occurrence' | 'future';
+/** The edit the user has committed to, held while the scope question is answered. */
+interface PendingEdit {
+  date: WallDate;
+  time: string | null;
+}
 
 export interface RescheduleSheetProps {
   open: boolean;
@@ -28,6 +42,11 @@ export interface RescheduleSheetProps {
   renderedTime?: string;
   onSchedule: (input: ScheduleActivityInput) => Promise<boolean>;
   onPatch: (input: PatchActivityInput) => Promise<boolean>;
+  /**
+   * Skips the occurrence in scope. Supplied by the surface that owns the write, so this sheet
+   * never acquires a second dispatch path for something Today and detail already do.
+   */
+  onSkipOccurrence?: () => Promise<boolean>;
   busy?: boolean;
   error?: string;
 }
@@ -65,7 +84,20 @@ function appendedSegment(
 
 /**
  * The single reschedule surface used by activity detail and agenda rows (U4, P2-26).
- * A recurring occurrence must choose its scope before a date or time can write anything.
+ *
+ * ## The scope question is asked after the edit, not before it (P2-42)
+ *
+ * `This occurrence only` / `All future occurrences` used to be the sheet's opening state, so a
+ * recurring occurrence asked which occurrences to apply a change to **before the user had made
+ * one** — and then showed a different editor depending on the answer, which meant the answer
+ * silently decided whether a date could be moved at all. The two options and what each writes
+ * are P2-26's and are unchanged; only when the question is asked has moved. It now arrives as
+ * an `Apply changes to` step carrying the before→after summary of the edit being scoped.
+ *
+ * **A date move is not asked about**, because it cannot be answered two ways: an appended rule
+ * segment carries a time, not a day (`data-model.md` §4.2), so moving one occurrence to another
+ * date is occurrence-scoped by construction and writes the same `overrideDate` P2-26 built.
+ * Changing which weekday a series lands on is the Repeat sheet's job, not this one's.
  */
 export function RescheduleSheet({
   open,
@@ -78,6 +110,7 @@ export function RescheduleSheet({
   renderedTime,
   onSchedule,
   onPatch,
+  onSkipOccurrence,
   busy = false,
   error,
 }: RescheduleSheetProps) {
@@ -86,7 +119,9 @@ export function RescheduleSheet({
   const active = segmentInForce(activity, occurrenceDate);
   const initialDate = renderedDate ?? occurrenceDate ?? activity.schedule?.date ?? today;
   const initialTime = renderedTime ?? active?.time ?? activity.schedule?.time ?? null;
-  const [scope, setScope] = useState<SeriesScope | undefined>();
+  /** One day of a series is in front of the user, so the series can be edited from it. */
+  const scopedOccurrence = recurring && occurrenceDate !== undefined;
+  const [pending, setPending] = useState<PendingEdit | undefined>();
   const [picking, setPicking] = useState(false);
   const [typed, setTyped] = useState(initialDate);
   const [pickedTime, setPickedTime] = useState<string | null>(initialTime);
@@ -95,15 +130,14 @@ export function RescheduleSheet({
 
   useEffect(() => {
     if (!open) return;
-    setScope(recurring && occurrenceDate === undefined ? 'future' : undefined);
+    setPending(undefined);
     setPicking(false);
     setTyped(initialDate);
     setPickedTime(initialTime);
     setClearConfirmation(false);
     setSeriesLimit(false);
-  }, [initialDate, initialTime, occurrenceDate, open, recurring]);
+  }, [initialDate, initialTime, open]);
 
-  const effectiveScope = recurring ? scope : 'occurrence';
   const scheduleInput = (date: WallDate, time: string | null): ScheduleActivityInput => ({
     date,
     ...(time === null ? {} : { time }),
@@ -139,17 +173,29 @@ export function RescheduleSheet({
     if (recurrence.segments.length >= 20) setSeriesLimit(true);
   };
 
+  /**
+   * The commit gesture. Every date option and the time wheel's `Done` arrive here, and this is
+   * the one place that decides whether the write goes out or the scope question is asked first.
+   */
+  const requestCommit = (date: WallDate, time: string | null) => {
+    if (scopedOccurrence && date === initialDate) {
+      setPending({ date, time });
+      return;
+    }
+    void commitOccurrence(date, time);
+  };
+
   const choose = (chip: QuickDate) => {
     if (chip.date === undefined) {
       setPicking(true);
       return;
     }
-    void commitOccurrence(chip.date, pickedTime);
+    requestCommit(chip.date, pickedTime);
   };
 
   const commitTyped = () => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(typed)) return;
-    void commitOccurrence(typed, pickedTime);
+    requestCommit(typed, pickedTime);
   };
 
   const clearDate = async () => {
@@ -159,58 +205,122 @@ export function RescheduleSheet({
     }
   };
 
+  const skipOccurrence = async () => {
+    if (onSkipOccurrence === undefined) return;
+    if (await onSkipOccurrence()) onClose();
+  };
+
   /**
-   * **Removal language matches the object.** The frames are explicit that this is never a
-   * generic "clear the date": a Task without a date is still a task and moves to Anytime, while
-   * a Plan without one goes to Plans → Needs a date. `Clear the date` described the mechanic
-   * and left the user to work out where the thing went.
+   * **Removal language matches the object, not the mechanism.** A Task without a date is still a
+   * task and moves to Anytime; a Plan without one goes to Plans → Needs a date; and one day of a
+   * series has no date to remove at all — dropping it is a skip (`today-and-tasks.md` §5.4).
+   * `Clear the date` described the mechanic for all three and left the user to work out where
+   * the thing went.
    */
-  const removal =
-    activity.objectKind === 'task'
+  const removal = scopedOccurrence
+    ? { label: 'Skip this occurrence', hint: 'Keeps the series, drops this day' }
+    : activity.objectKind === 'task'
       ? { label: 'Move to Anytime', hint: 'Keeps the task, drops the date' }
       : { label: 'Remove date', hint: 'Moves this plan to “Needs a date”' };
+
+  const removalPress = scopedOccurrence
+    ? () => void skipOccurrence()
+    : () => {
+        if (activity.participantCount > 0) {
+          setClearConfirmation(true);
+          return;
+        }
+        void clearDate();
+      };
 
   /**
    * §6's **action row**: the imperative label is itself the affordance, so it takes no chevron.
    * A chevron here would promise navigation this does not do.
    */
-  const clearDateButton =
-    activity.schedule === undefined || recurring ? null : (
-      <SettingRow
-        label={removal.label}
-        summary={removal.hint}
-        accessibilityLabel={`${removal.label}. ${removal.hint}`}
-        onPress={() => {
-          if (activity.participantCount > 0) {
-            setClearConfirmation(true);
-            return;
-          }
-          void clearDate();
-        }}
-        testID="reschedule-clear"
-      />
+  const removalOffered = scopedOccurrence
+    ? onSkipOccurrence !== undefined
+    : !recurring && activity.schedule !== undefined;
+
+  const removalRow = !removalOffered ? null : (
+    <SettingRow
+      label={removal.label}
+      summary={removal.hint}
+      accessibilityLabel={`${removal.label}. ${removal.hint}`}
+      onPress={removalPress}
+      testID="reschedule-clear"
+    />
+  );
+
+  /**
+   * The `Apply changes to` step (P2-42). It replaces the editor rather than stacking over it,
+   * for the reason §6.1 gives the sheet one surface: a second modal on top of an open one is
+   * two dismissal gestures and two `Close` buttons for one decision.
+   */
+  const scopeSummary =
+    pending === undefined
+      ? undefined
+      : formatScheduleChange({ date: initialDate, time: initialTime }, pending, today);
+
+  const scopeStep =
+    pending === undefined ? null : (
+      <View style={{ gap: theme.space[5] }} testID="reschedule-scope">
+        <View style={{ gap: theme.space[2] }}>
+          <Text variant="heading" color="textDisplay" accessibilityRole="header">
+            Apply changes to
+          </Text>
+          {scopeSummary === undefined ? null : (
+            <Text
+              variant="subhead"
+              color="textSecondary"
+              testID="reschedule-scope-summary"
+            >
+              {scopeSummary}
+            </Text>
+          )}
+        </View>
+
+        {/**
+         * No summary line on either row, and that is deliberate: the accessible name of the
+         * choice stays the choice. `This occurrence only, only Wed Aug 12` reads as a sentence
+         * about a date the line above already gave, and P2-26's dispatch tests name these two
+         * strings exactly because they are the copy `activities.md` §6.2 fixes.
+         */}
+        <RowGroup>
+          <SettingRow
+            label="This occurrence only"
+            onPress={() => void commitOccurrence(pending.date, pending.time)}
+            testID="reschedule-this-occurrence"
+          />
+          <SettingRow
+            label="All future occurrences"
+            onPress={() => void commitFuture(pending.time)}
+            testID="reschedule-all-future"
+          />
+        </RowGroup>
+
+        {seriesLimit ? (
+          <View style={{ gap: theme.space[2] }} testID="reschedule-series-limit">
+            <Text accessibilityRole="alert" color="danger" numberOfLines={0}>
+              This series already has 20 schedule changes. End this series and start a new
+              one to keep its history intact.
+            </Text>
+            <Text variant="subhead" color="textSecondary">
+              Use End series from the activity menu, then create a new series.
+            </Text>
+          </View>
+        ) : error === undefined ? null : (
+          <Text accessibilityRole="alert" color="danger">
+            {error}
+          </Text>
+        )}
+      </View>
     );
 
   const editor = (
     <>
-      {recurring && occurrenceDate !== undefined && effectiveScope === undefined ? (
-        <View style={{ gap: theme.space[3] }} testID="reschedule-scope">
-          <Button
-            label="This occurrence only"
-            variant="secondary"
-            fullWidth
-            onPress={() => setScope('occurrence')}
-            testID="reschedule-this-occurrence"
-          />
-          <Button
-            label="All future occurrences"
-            variant="secondary"
-            fullWidth
-            onPress={() => setScope('future')}
-            testID="reschedule-all-future"
-          />
-        </View>
-      ) : effectiveScope === 'future' ? (
+      {pending !== undefined ? (
+        scopeStep
+      ) : recurring && !scopedOccurrence ? (
         <View style={{ gap: theme.space[5] }} testID="reschedule-future-editor">
           <Text variant="subhead" color="textSecondary">
             Future dates keep their repeat pattern. Change the time from this point on.
@@ -244,7 +354,12 @@ export function RescheduleSheet({
         </View>
       ) : (
         <View style={{ gap: theme.space[5] }} testID="reschedule-occurrence-editor">
-          <View>
+          {/**
+           * **The resolved date sits on the trailing edge of its own label** (P2-42). As a chip
+           * row, `Saturday` was a shortcut the user had to decode before committing to it; as a
+           * two-part row it commits to a date it has already shown them.
+           */}
+          <RowGroup>
             {quickDates(today).map((chip) => (
               <SettingRow
                 key={chip.key}
@@ -257,7 +372,7 @@ export function RescheduleSheet({
                 testID={`quick-date-${chip.key}`}
               />
             ))}
-          </View>
+          </RowGroup>
 
           {picking ? (
             <View style={{ gap: theme.space[3] }}>
@@ -285,7 +400,7 @@ export function RescheduleSheet({
               setPickedTime(value);
               if (value === null) void commitOccurrence(initialDate, null);
             }}
-            onConfirm={(value) => void commitOccurrence(initialDate, value)}
+            onConfirm={(value) => requestCommit(initialDate, value)}
             openAt={initialTime ?? '09:00'}
             minuteInterval={5}
             allowClear={!recurring}
@@ -293,7 +408,7 @@ export function RescheduleSheet({
             testID="reschedule-time-picker"
           />
 
-          {clearDateButton}
+          {removalRow}
           {pickedTime !== null ? null : (
             <Text variant="footnote" color="textSecondary">
               Removing a time keeps reminders and moves sub-day reminders to the nearest
@@ -333,12 +448,20 @@ export function RescheduleSheet({
 
   if (embedded) return content;
 
+  /**
+   * `fit`, not `medium`. §6.1's detent table gives `medium` to a choice list that scrolls
+   * internally, and this one does not need to: five date rows, a time control and one action
+   * come to less than the 90% `fit` caps at, so a fixed 58% put `Skip this occurrence` and the
+   * time below the fold on a phone for no reason. It also settles a split — the agenda
+   * coordinator's outer sheet has always defaulted to `fit`, so one sheet had two heights
+   * depending on which surface opened it.
+   */
   return (
     <Sheet
       open={open}
       onClose={onClose}
       title="When?"
-      detent="medium"
+      detent="fit"
       testID="reschedule-sheet"
     >
       {content}

@@ -1074,10 +1074,11 @@ describe('U4 — tapping a date opens the reschedule sheet', () => {
 
     expect(screen.getByTestId('detail-complete')).toBeDefined();
     fireEvent.click(screen.getByTestId('when-where-date'));
-    fireEvent.click(screen.getByRole('button', { name: 'This occurrence only' }));
     fireEvent.click(screen.getByRole('button', { name: 'Set a time' }));
     fireEvent.change(screen.getByLabelText('Time'), { target: { value: '10:30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    // P2-42: the scope is chosen after the edit, carrying it into the question.
+    fireEvent.click(screen.getByRole('button', { name: 'This occurrence only' }));
 
     await waitFor(() => expect(sent.filter((s) => s.method === 'POST')).toHaveLength(1));
     expect(sent.find((s) => s.method === 'POST')).toMatchObject({

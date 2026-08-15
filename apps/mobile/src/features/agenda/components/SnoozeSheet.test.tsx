@@ -66,6 +66,37 @@ describe('SnoozeSheet', () => {
     expect(callbacks.onClose).toHaveBeenCalledOnce();
   });
 
+  it('names the activity it is about to move', () => {
+    mount();
+
+    expect(screen.getByTestId('snooze-subject').textContent).toBe(
+      'Call the dentist · 3:00 PM',
+    );
+  });
+
+  it('states the blast radius of a recurring snooze from the series time', () => {
+    mount({
+      ...timed,
+      isRecurring: true,
+      occurrenceDate: '2026-08-11',
+      isSnoozed: true,
+      time: '16:00',
+      originalTime: '15:00',
+    });
+
+    expect(screen.getByTestId('snooze-blast-radius').textContent).toBe(
+      'Today only. Tomorrow stays 3:00 PM.',
+    );
+  });
+
+  it('states the blast radius of a one-off snooze without inventing a series', () => {
+    mount();
+
+    expect(screen.getByTestId('snooze-blast-radius').textContent).toBe(
+      'Today only. Nothing else changes.',
+    );
+  });
+
   it('omits Tomorrow for a recurring occurrence', () => {
     mount({ ...timed, isRecurring: true, occurrenceDate: '2026-08-11' });
 

@@ -47,10 +47,12 @@ function mount(
     occurrenceDate?: string;
     onSchedule?: ReturnType<typeof vi.fn>;
     onPatch?: ReturnType<typeof vi.fn>;
+    onSkipOccurrence?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   const onSchedule = options.onSchedule ?? vi.fn(async () => true);
   const onPatch = options.onPatch ?? vi.fn(async () => true);
+  const onSkipOccurrence = options.onSkipOccurrence ?? vi.fn(async () => true);
   const onClose = vi.fn();
   render(
     <ThemeProvider scheme="light">
@@ -64,26 +66,56 @@ function mount(
           : { occurrenceDate: options.occurrenceDate })}
         onSchedule={onSchedule}
         onPatch={onPatch}
+        onSkipOccurrence={onSkipOccurrence}
       />
     </ThemeProvider>,
   );
-  return { onSchedule, onPatch, onClose };
+  return { onSchedule, onPatch, onSkipOccurrence, onClose };
 }
 
 describe('RescheduleSheet', () => {
-  it('requires an explicit scope before rescheduling a recurring occurrence', () => {
+  it('asks for the series scope after the edit, never as the opening state', () => {
     mount(recurring(), { occurrenceDate: TODAY });
 
+    // The editor is what opens; the question has nothing to scope until an edit exists.
+    expect(screen.getByTestId('reschedule-occurrence-editor')).toBeDefined();
+    expect(screen.queryByTestId('reschedule-scope')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'This occurrence only' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'All future occurrences' })).toBeNull();
+
+    fireEvent.click(screen.getByTestId('quick-date-today'));
+
+    expect(screen.getByTestId('reschedule-scope')).toBeDefined();
     expect(screen.getByRole('button', { name: 'This occurrence only' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'All future occurrences' })).toBeDefined();
-    expect(screen.queryByTestId('reschedule-occurrence-editor')).toBeNull();
+  });
+
+  it('never asks for a scope on a one-off, which has no other occurrences', () => {
+    const { onSchedule } = mount(activity());
+
+    fireEvent.click(screen.getByTestId('quick-date-tomorrow'));
+
+    expect(screen.queryByTestId('reschedule-scope')).toBeNull();
+    expect(onSchedule).toHaveBeenCalledOnce();
+  });
+
+  it('carries the pending edit into the scope question as a before → after line', () => {
+    mount(recurring(), { occurrenceDate: TODAY });
+
+    fireEvent.click(screen.getByRole('button', { name: '9:00 AM' }));
+    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '19:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    expect(screen.getByTestId('reschedule-scope-summary').textContent).toBe(
+      '9:00 AM → 7:00 PM',
+    );
   });
 
   it('sends a same-day occurrence reschedule through the sole schedule path', async () => {
     const { onSchedule, onPatch } = mount(recurring(), { occurrenceDate: TODAY });
 
-    fireEvent.click(screen.getByRole('button', { name: 'This occurrence only' }));
     fireEvent.click(screen.getByTestId('quick-date-today'));
+    fireEvent.click(screen.getByRole('button', { name: 'This occurrence only' }));
 
     await waitFor(() => expect(onSchedule).toHaveBeenCalledOnce());
     expect(onSchedule).toHaveBeenCalledWith({
@@ -98,13 +130,70 @@ describe('RescheduleSheet', () => {
   it('sends the nominal occurrence and moved date for a cross-day choice', async () => {
     const { onSchedule } = mount(recurring(), { occurrenceDate: TODAY });
 
-    fireEvent.click(screen.getByRole('button', { name: 'This occurrence only' }));
     fireEvent.click(screen.getByTestId('quick-date-tomorrow'));
 
+    // A move to another day is occurrence-scoped by construction: an appended rule segment
+    // carries a time, not a date, so there is no second reading of it to ask about.
+    expect(screen.queryByTestId('reschedule-scope')).toBeNull();
     await waitFor(() => expect(onSchedule).toHaveBeenCalledOnce());
     expect(onSchedule).toHaveBeenCalledWith(
       expect.objectContaining({ date: '2026-08-13', occurrenceDate: TODAY }),
     );
+  });
+
+  it('resolves every quick date against the injected today, on its own row', () => {
+    mount(activity());
+
+    expect(screen.getByTestId('quick-date-today').getAttribute('aria-label')).toBe(
+      'Today, Wed, Aug 12',
+    );
+    expect(screen.getByTestId('quick-date-tomorrow').getAttribute('aria-label')).toBe(
+      'Tomorrow, Thu, Aug 13',
+    );
+    expect(screen.getByTestId('quick-date-weekend').getAttribute('aria-label')).toBe(
+      'Saturday, Sat, Aug 15',
+    );
+    expect(screen.getByTestId('quick-date-nextWeek').getAttribute('aria-label')).toBe(
+      'Next Monday, Mon, Aug 17',
+    );
+  });
+
+  it('offers a one-off task Move to Anytime', () => {
+    mount(activity({ objectKind: 'task', type: 'task' }));
+
+    expect(screen.getByTestId('reschedule-clear').getAttribute('aria-label')).toBe(
+      'Move to Anytime. Keeps the task, drops the date',
+    );
+  });
+
+  it('offers a plan the Needs a date wording', () => {
+    mount(activity());
+
+    expect(screen.getByTestId('reschedule-clear').getAttribute('aria-label')).toBe(
+      'Remove date. Moves this plan to “Needs a date”',
+    );
+  });
+
+  it('offers a recurring occurrence Skip this occurrence, and dispatches it', async () => {
+    const { onSkipOccurrence, onSchedule, onClose } = mount(recurring(), {
+      occurrenceDate: TODAY,
+    });
+
+    expect(screen.getByTestId('reschedule-clear').getAttribute('aria-label')).toBe(
+      'Skip this occurrence. Keeps the series, drops this day',
+    );
+
+    fireEvent.click(screen.getByTestId('reschedule-clear'));
+
+    await waitFor(() => expect(onSkipOccurrence).toHaveBeenCalledOnce());
+    expect(onSchedule).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('offers no removal action on a series reached without an occurrence', () => {
+    mount(recurring());
+
+    expect(screen.queryByTestId('reschedule-clear')).toBeNull();
   });
 
   it('keeps the time wheel inside the one reschedule sheet', () => {
@@ -120,10 +209,10 @@ describe('RescheduleSheet', () => {
   it('appends one all-future segment with editedFromDate outside recurrence', async () => {
     const { onPatch, onSchedule } = mount(recurring(), { occurrenceDate: TODAY });
 
-    fireEvent.click(screen.getByRole('button', { name: 'All future occurrences' }));
     fireEvent.click(screen.getByRole('button', { name: '9:00 AM' }));
     fireEvent.change(screen.getByLabelText('Time'), { target: { value: '10:30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'All future occurrences' }));
 
     await waitFor(() => expect(onPatch).toHaveBeenCalledOnce());
     const sent = onPatch.mock.calls[0]?.[0];
@@ -163,10 +252,10 @@ describe('RescheduleSheet', () => {
     const onPatch = vi.fn(async () => false);
     mount(recurring(segments), { occurrenceDate: TODAY, onPatch });
 
-    fireEvent.click(screen.getByRole('button', { name: 'All future occurrences' }));
     fireEvent.click(screen.getByRole('button', { name: '9:00 AM' }));
     fireEvent.change(screen.getByLabelText('Time'), { target: { value: '10:30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'All future occurrences' }));
 
     await waitFor(() =>
       expect(screen.getByTestId('reschedule-series-limit')).toBeDefined(),
