@@ -139,10 +139,12 @@ export function ActivityDetailScreen({
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   /**
    * The snooze sheet prunes options that are already past, so the minute has to keep moving
-   * while the screen is open — a value captured at mount would start offering times the server
-   * rejects. The same ticker Today uses, which reads the injected clock rather than `Date.now`.
+   * **while that sheet is open** — a value captured at mount would start offering times the
+   * server rejects. Gated on the sheet, because a detail screen re-rendering every sixty
+   * seconds for a control nobody has opened is churn, and it put a visible one-minute beat on a
+   * screen whose updates are supposed to be driven by writes.
    */
-  const tick = useMinuteTicker();
+  const tick = useMinuteTicker(snoozeOpen);
   const [resolutionDismissed, setResolutionDismissed] = useState(false);
   /**
    * This screen's own projection of the resolution — `undefined` until the user acts here, at

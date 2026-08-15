@@ -1,7 +1,7 @@
 import { getAgenda } from '@od/shared/client';
 import type { AgendaQuery } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
-import type { Activity, AgendaData, User } from '@od/shared/types';
+import type { Activity, ActivityDetail, AgendaData, User } from '@od/shared/types';
 import type { MutationKey, QueryClient } from '@tanstack/react-query';
 import {
   type AgendaMutationTarget,
@@ -18,7 +18,7 @@ import { applySkip } from '@/features/agenda/model/applySkip';
 import { applySnooze } from '@/features/agenda/model/applySnooze';
 import { apiClient } from '@/lib/apiClient';
 import { type ActivityMutationTag, activityMutationKeys } from '@/lib/mutationKeys';
-import { activityKey } from '@/lib/queryKeys';
+import { activityDetailKey, activityKey } from '@/lib/queryKeys';
 
 const AGENDA_KEY = ['agenda'] as const;
 const RECONCILE_DELAYS_MS = [0, 150, 400, 900, 1_800, 3_200] as const;
@@ -355,13 +355,32 @@ export function projectActivityWrite(
      * activity still completed, sometimes for a full minute, and the completion button showed
      * the resolved state long after the row had gone back to normal. The server's response is
      * the activity, so there is nothing to derive.
+     *
+     * **Both keys, because an occurrence has its own** (P2-53): a screen opened on one day of a
+     * series reads `['activity', id, 'occurrence', date]` and never the series entry, so writing
+     * only the series one left that screen exactly as stale as writing nothing. Found while
+     * fixing the same mistake in `projectOptimisticSnooze`. The series entry is still written —
+     * a one-off, and any series detail also open, both read it.
      */
-    client.setQueryData<{ activity: Activity }>(
-      activityKey(activity.activityId),
-      (previous) => (previous === undefined ? previous : { ...previous, activity }),
-    );
-
     const occurrenceDate = occurrenceDateFrom(variables);
+    const resolvedKeys = [
+      activityKey(activity.activityId),
+      ...(occurrenceDate === undefined
+        ? []
+        : [
+            activityDetailKey({
+              kind: 'occurrence',
+              activityId: activity.activityId,
+              date: occurrenceDate,
+            }),
+          ]),
+    ];
+    for (const key of resolvedKeys) {
+      client.setQueryData<{ activity: Activity }>(key, (previous) =>
+        previous === undefined ? previous : { ...previous, activity },
+      );
+    }
+
     const target = {
       activityId: activity.activityId,
       ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
@@ -474,6 +493,39 @@ export function projectOptimisticSnooze(
     applySnooze(agenda, { ...variables, ...clock, snoozed: true }),
   );
 
+  /**
+   * **And the detail query, which is the screen the user is standing on.**
+   *
+   * `refreshActivityDetails` marks `['activity', id]` stale with `refetchType: 'none'` — right,
+   * and deliberately so: P2-46 established that a refetch racing an eventually-consistent index
+   * can cache pre-write data over newer local state. But "mark stale, do not refetch" only works
+   * when something *projects*. Snooze projected the agenda and not this, so the screen that
+   * raised the sheet kept its old time until an unrelated remount or window focus happened to
+   * refetch it — sometimes seconds, sometimes a minute, sometimes not until the user left and
+   * came back. That is the reported "long gap with an update after 1 min", and the
+   * unpredictability is the same defect: the trigger was incidental rather than the write.
+   *
+   * **The occurrence key, not the series key.** P2-53 gave an occurrence-targeted read its own
+   * cache entry — `['activity', id, 'occurrence', date]` — precisely so an occurrence never
+   * aliases the series. A projection written to `activityKey` therefore lands in an entry the
+   * screen showing that day is not reading, which looks exactly like no projection at all.
+   */
+  const detailKey =
+    variables.occurrenceDate === undefined
+      ? activityKey(variables.activityId)
+      : activityDetailKey({
+          kind: 'occurrence',
+          activityId: variables.activityId,
+          date: variables.occurrenceDate,
+        });
+  const detailBefore = client.getQueryData<ActivityDetail>(detailKey);
+  if (detailBefore?.occurrence !== undefined) {
+    client.setQueryData<ActivityDetail>(detailKey, {
+      ...detailBefore,
+      occurrence: { ...detailBefore.occurrence, time: variables.time, isSnoozed: true },
+    });
+  }
+
   return () => {
     for (const { queryKey, found } of snapshots) {
       client.setQueryData<AgendaData>(queryKey, (agenda) => {
@@ -481,6 +533,7 @@ export function projectOptimisticSnooze(
         return replaceAgendaItem(agenda, variables, found.item, found.sourceDate, clock);
       });
     }
+    if (detailBefore !== undefined) client.setQueryData(detailKey, detailBefore);
   };
 }
 

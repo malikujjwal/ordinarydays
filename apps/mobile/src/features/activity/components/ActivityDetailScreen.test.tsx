@@ -1,3 +1,4 @@
+import { fixedClock, type Instant } from '@od/shared/time';
 import type { Activity, ActivityDetail, AgendaData, AgendaItem } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -5,6 +6,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ClockProvider } from '@/hooks/useClock';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { createOfflineQueryClient } from '@/lib/queryClient';
 import { useToast } from '@/stores/toast';
@@ -166,11 +168,19 @@ function mount(
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
   registerActivityMutationDefaults(queryClient);
+  /**
+   * A fixed clock, because the snooze sheet's options are computed from the current minute and
+   * `useClock` otherwise falls through to the system one — which would make every option label
+   * in this file depend on the hour the suite happened to run. `08:10` in the fixture's own zone,
+   * ten minutes after the seeded occurrence.
+   */
   const wrap = (ui: ReactNode) => (
     <SafeAreaProvider>
-      <ThemeProvider scheme="light">
-        <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
-      </ThemeProvider>
+      <ClockProvider clock={fixedClock('2026-08-12T12:10:00.000Z' as Instant)}>
+        <ThemeProvider scheme="light">
+          <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+        </ThemeProvider>
+      </ClockProvider>
     </SafeAreaProvider>
   );
   const rendered = render(
@@ -2261,5 +2271,86 @@ describe('resolved outcomes', () => {
       expect(screen.getByTestId('detail-resolved').textContent).toBe("Didn't go"),
     );
     release?.(undefined);
+  });
+});
+
+/**
+ * The snooze had to be *seen*. Reported as: press Snooze, pick 15 minutes, and the screen sits
+ * on the old time for anything up to a minute — sometimes updating on a stray refocus, sometimes
+ * not until the user navigated away and back. `refreshActivityDetails` marks the detail query
+ * stale with `refetchType: 'none'`, which is correct and which only works when something
+ * projects; snooze projected the agenda and left this behind.
+ */
+describe('snooze visibility', () => {
+  const series = () =>
+    plan({
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+
+  it('shows the snoozed time before the write comes back', async () => {
+    let release: ((value: unknown) => void) | undefined;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(series(), [], undefined, occurrenceProjection()),
+      },
+      {
+        status: 200,
+        body: { data: { activity: series() }, meta: { requestId: 'req_test' } },
+        wait: pending,
+      },
+    );
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    expect(screen.getByTestId('when-where-date').textContent).toContain('8:00 AM');
+
+    fireEvent.click(screen.getByTestId('detail-snooze'));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze until 8:25 AM' }));
+
+    // The header, not a toast: the screen states the new time while the POST is outstanding.
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).toContain('8:25 AM'),
+    );
+    release?.(undefined);
+  });
+
+  it('puts the old time back when the write is refused', async () => {
+    stubFetch(
+      {
+        status: 200,
+        body: detailBody(series(), [], undefined, occurrenceProjection()),
+      },
+      { status: 500, body: { error: { code: 'internal', message: 'nope' } } },
+    );
+    mount(
+      () => {},
+      () => {},
+      undefined,
+      TODAY,
+    );
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-snooze'));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze until 8:25 AM' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('when-where-date').textContent).toContain('8:00 AM'),
+    );
   });
 });

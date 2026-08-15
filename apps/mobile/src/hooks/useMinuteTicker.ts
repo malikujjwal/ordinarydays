@@ -22,11 +22,18 @@ export interface MinuteTick {
   revision: number;
 }
 
-export function useMinuteTicker(): MinuteTick {
+/**
+ * `enabled` exists so a screen that needs the minute only while something is open does not pay
+ * for a re-render every sixty seconds while it is closed. Today ticks always — UP NEXT and
+ * EARLIER TODAY are defined against the current minute — whereas activity detail needs it only
+ * for the snooze sheet's option pruning.
+ */
+export function useMinuteTicker(enabled = true): MinuteTick {
   const clock = useClock();
   const [tick, setTick] = useState(() => ({ instant: clock.now(), revision: 0 }));
 
   useEffect(() => {
+    if (!enabled) return;
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
     const stop = () => {
@@ -55,7 +62,7 @@ export function useMinuteTicker(): MinuteTick {
       stop();
       subscription.remove();
     };
-  }, [clock]);
+  }, [clock, enabled]);
 
   return tick;
 }
