@@ -2,7 +2,11 @@ import type { AgendaItem } from '@od/shared/types';
 import { Chip, formatWallTime, Sheet, Text, TimePicker, useTheme } from '@od/ui';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import { isFutureWallTime, snoozeOptions } from '@/features/agenda/model/snoozeOptions';
+import {
+  isFutureWallTime,
+  minuteOfDay,
+  snoozeOptions,
+} from '@/features/agenda/model/snoozeOptions';
 
 export interface SnoozeSheetProps {
   open: boolean;
@@ -72,6 +76,16 @@ export function SnoozeSheet({
     ? `Today only. Tomorrow stays ${formatWallTime(scheduledTime)}.`
     : 'Today only. Nothing else changes.';
 
+  /**
+   * The error names the boundary the picker actually enforces. `Choose a time later than now.`
+   * was correct only while the base was the clock; on a task that has not come due yet the user
+   * would read it beside a 6:00 PM task and a rejected 5:00 PM pick and have no way to tell why.
+   */
+  const pickErrorMessage =
+    minuteOfDay(itemTime) > minuteOfDay(currentMinute)
+      ? `Choose a time after ${formatWallTime(itemTime)}.`
+      : 'Choose a time later than now.';
+
   const chooseTime = (until: string) => {
     onSnooze(item, until);
     onClose();
@@ -108,7 +122,7 @@ export function SnoozeSheet({
             gap: theme.space[3],
           }}
         >
-          {snoozeOptions(currentMinute, item.isRecurring).map((option) => {
+          {snoozeOptions(currentMinute, item.isRecurring, itemTime).map((option) => {
             if (option.key === 'pick') return null;
             if (option.key === 'tomorrow') {
               return (
@@ -151,8 +165,8 @@ export function SnoozeSheet({
               setPickError(undefined);
             }}
             onConfirm={(value) => {
-              if (!isFutureWallTime(value, currentMinute)) {
-                setPickError('Choose a time later than now.');
+              if (!isFutureWallTime(value, currentMinute, itemTime)) {
+                setPickError(pickErrorMessage);
                 return;
               }
               chooseTime(value);

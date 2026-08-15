@@ -1,6 +1,11 @@
 import type { ActivityType, AgendaItem } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
-import { canResolvePassedAgendaItem, passedPlanResolution } from './passedPlanResolution';
+import {
+  canResolvePassedAgendaItem,
+  isNegativeOutcome,
+  outcomeVerb,
+  passedPlanResolution,
+} from './passedPlanResolution';
 
 const item = (patch: Partial<AgendaItem> = {}): AgendaItem => ({
   activityId: 'act_01J8SEED000000000000000000',
@@ -47,5 +52,36 @@ describe('passed-plan resolution eligibility', () => {
         item({ capabilities: { complete: false, skip: false, snooze: false } }),
       ),
     ).toBe(false);
+  });
+});
+
+/**
+ * The stored outcome decides the state, not the type alone. Reported from the built app:
+ * answering `Didn't go` on an event still rendered `Attended` — the opposite of the choice.
+ */
+describe('outcomeVerb — declined outcomes', () => {
+  it('reports the words the user chose on an event', () => {
+    expect(outcomeVerb('event', 'didnt_go')).toBe("Didn't go");
+  });
+
+  it.each(['task', 'meal', 'watch', 'custom'] as const)(
+    'reports Didn\u2019t happen on a %s',
+    (type) => {
+      expect(outcomeVerb(type, 'didnt_happen')).toBe("Didn't happen");
+    },
+  );
+
+  it('is unchanged for a positive outcome, with or without one supplied', () => {
+    expect(outcomeVerb('event', 'attended')).toBe('Attended');
+    expect(outcomeVerb('event')).toBe('Attended');
+    expect(outcomeVerb('task', 'done')).toBe('Done');
+    expect(outcomeVerb('task')).toBe('Done');
+  });
+
+  it('classifies the two negative outcomes and nothing else', () => {
+    expect(isNegativeOutcome('didnt_go')).toBe(true);
+    expect(isNegativeOutcome('didnt_happen')).toBe(true);
+    expect(isNegativeOutcome('attended')).toBe(false);
+    expect(isNegativeOutcome('done')).toBe(false);
   });
 });

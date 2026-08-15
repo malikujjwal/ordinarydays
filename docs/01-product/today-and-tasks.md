@@ -164,7 +164,11 @@ The section sorts **descending** by that instant — clock time for the first ki
 completion time for the second — so the most recent is at the top.
 
 - Completed items render with their outcome verb in the trailing slot (`Had it`,
-  `Watched`, `Attended`, `Done`) and a struck-through or de-emphasised title. **This list is
+  `Watched`, `Attended`, `Done`) and a struck-through or de-emphasised title. **An outcome the
+  user declined renders the words they chose** — `Didn't happen`, `Didn't go` — not the type's
+  positive verb (amended 2026-08-15, founder report): a declined outcome is stored as
+  `status: 'skipped'` carrying that outcome, and reading the type alone reported `Attended` for
+  an event the user had just said they did not go to. **This list is
   not the passed-plan sheet's**, whose positive button for a task is `Complete` (§8's table).
   A task's *action* is `Complete`; the *state* it ends in is `Done`. One mapping served both
   until 2026-08-13, so a finished task announced itself as `Complete` — an instruction where a
@@ -248,7 +252,7 @@ local mutation produces the identical order.
 | Excluded | Rule |
 | --- | --- |
 | `cancelled` activities | Never shown on Today, on any date. |
-| `skipped` occurrences | Hidden by default. Today's overflow menu has `Show skipped`, a client-only toggle persisted per device, which renders them in EARLIER TODAY, de-emphasised, with an `Undo skip` action. |
+| `skipped` occurrences | Hidden by default. Today's overflow menu has `Show skipped`, a client-only toggle persisted per device, which renders them in EARLIER TODAY, de-emphasised **and tagged `Skipped` in `textMuted`** (amended 2026-08-15, founder report — de-emphasis alone made a skipped row indistinguishable from a merely past one), with an `Undo skip` action. |
 | Prep tasks with a `parentActivityId` | **Included** if they have their own `schedule.date` of today. A prep task is a task; it belongs on Today when it is due. It renders with the parent plan's title as its subtitle. |
 | Items belonging to a plan the user has declined | Excluded from Today and the agenda query. Declining rewrites the `ActivityIndex` entry as a declined read-only projection — it renders only as the durable Plans row with `Rejoin` ([`sharing-and-people.md`](sharing-and-people.md) §3.2), never on Today. |
 | **Undated plans — anything in the Needs-a-date stage** | Excluded, on every day, with no toggle to include them. `GET /v1/agenda` never returns the `#P` bucket, and `include=anytime_unscheduled` merges the `#N` bucket only ([`../02-architecture/api-contract.md#22-agenda--powers-today-and-plans`](../02-architecture/api-contract.md#22-agenda--powers-today-and-plans)). They live in Plans → Needs a date ([`plans-and-lists.md`](plans-and-lists.md) §1.3). |
@@ -366,6 +370,18 @@ series (§5.5).
 Options are pruned to the future: an option that would land in the past — `This evening
 (6 PM)` opened at 9 PM — is hidden client-side, so the sheet never offers a time the
 server would reject.
+
+**The relative options count from the later of now and the occurrence's own time** (amended
+2026-08-15, founder report). "Snooze moves *this occurrence* later" and "prune anything in the
+past" are the same rule only once an item is due; before that they disagree. Counted from the
+clock alone, a 6:00 PM task snoozed at 2:10 PM offered `15 minutes` → 2:25 PM, moving it nearly
+four hours **earlier** than it was already scheduled. A fixed option that does not clear the
+base is dropped for the same reason, so `This evening (6 PM)` is not offered on a 6:00 PM task,
+and `Pick a time` enforces the same boundary and names it. P2-25's "compute from the current
+minute" described the pruning case and is superseded for the not-yet-due one.
+
+Snooze is offered on **any** timed task today, whether or not its time has passed; the table
+above is the whole of the availability rule and there is no upcoming-only restriction.
 
 The sheet names the activity it is moving and states the reach of the move above the options
 (amended 2026-08-14, P2-42): `Call the dentist · 3:00 PM`, then `Today only. Tomorrow stays

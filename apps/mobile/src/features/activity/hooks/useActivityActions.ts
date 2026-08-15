@@ -6,7 +6,7 @@ import { type ActivityScope, scopeToWire, targetsWholeSeries } from '@od/shared/
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useRef } from 'react';
-import { projectOptimisticCompletion } from '@/lib/agendaCache';
+import { projectOptimisticCompletion, projectOptimisticSnooze } from '@/lib/agendaCache';
 import type {
   CompleteActivityVariables,
   DeleteActivityVariables,
@@ -47,6 +47,8 @@ export interface ActivityActions {
   snoozeOccurrence: (
     scope: Extract<ActivityScope, { kind: 'occurrence' }>,
     until: string,
+    /** The day the row is rendered on, so the agenda projection can find it. */
+    renderedDate: string,
   ) => Promise<boolean>;
   resolvePassed: (
     outcome: ActivityOutcome,
@@ -204,7 +206,18 @@ export function useActivityActions(activityId: string): ActivityActions {
         return false;
       }
     },
-    snoozeOccurrence: async (scope, until) => {
+    snoozeOccurrence: async (scope, until, renderedDate) => {
+      /**
+       * Projected before the request, like every other write on this screen. Snooze was the one
+       * that waited: the detail screen moved because its own query refetched, and Today and
+       * Plans kept the old time until something else refreshed them.
+       */
+      const restoreAgenda = projectOptimisticSnooze(queryClient, {
+        activityId,
+        ...scopeToWire(scope),
+        date: renderedDate,
+        time: until,
+      });
       try {
         await snoozeMutation.mutateAsync({
           activityId,
@@ -213,6 +226,7 @@ export function useActivityActions(activityId: string): ActivityActions {
         });
         return true;
       } catch {
+        restoreAgenda();
         return false;
       }
     },

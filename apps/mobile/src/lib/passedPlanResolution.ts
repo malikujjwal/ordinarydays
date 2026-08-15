@@ -55,8 +55,14 @@ export function completionVerb(type: ActivityType): string {
   return RESOLUTIONS[type].positive.label;
 }
 
+/** `didnt_happen` and `didnt_go` — the outcomes that mean the thing did not take place. */
+export function isNegativeOutcome(outcome: ActivityOutcome): boolean {
+  return outcome === 'didnt_happen' || outcome === 'didnt_go';
+}
+
 /**
- * The verb a **already-resolved** activity renders — `Done`, `Had it`, `Watched`, `Attended`.
+ * The verb an **already-resolved** activity renders — `Done`, `Had it`, `Watched`, `Attended`,
+ * and, when the user said it did not happen, `Didn't happen` or `Didn't go`.
  *
  * Not the same list as `completionVerb`, and `today-and-tasks.md` §4 is explicit about both: the
  * passed-plan sheet's positive button for a task is `Complete` (§4's table), while a completed
@@ -65,9 +71,19 @@ export function completionVerb(type: ActivityType): string {
  * both and put the imperative on the state, so a finished task announced itself as `Complete` —
  * an instruction where a status belongs.
  *
- * Only `task` differs; every other type completes with the verb it is described by.
+ * **The stored outcome decides, not the type alone.** Without it, answering `Didn't go` on an
+ * event still rendered `Attended`: the type's positive label was the only thing this function
+ * could see, so the screen reported the opposite of what the user had just said. The negative
+ * labels are the same two strings the resolution sheet offered, so the state echoes the choice
+ * rather than paraphrasing it.
+ *
+ * Only `task` differs on the positive side; every other type completes with the verb it is
+ * described by.
  */
-export function outcomeVerb(type: ActivityType): string {
+export function outcomeVerb(type: ActivityType, outcome?: ActivityOutcome): string {
+  if (outcome !== undefined && isNegativeOutcome(outcome)) {
+    return RESOLUTIONS[type].negative.label;
+  }
   return type === 'task' ? 'Done' : RESOLUTIONS[type].positive.label;
 }
 

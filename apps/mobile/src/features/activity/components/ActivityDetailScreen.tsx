@@ -2,7 +2,12 @@ import type { ChangeTarget } from '@od/shared';
 import { describeRecurrence } from '@od/shared/recurrence';
 import type { PatchActivityInput } from '@od/shared/schemas';
 import { type TimeZone, toWallTime } from '@od/shared/time';
-import type { Activity, ActivityDetailTarget, PlanType } from '@od/shared/types';
+import type {
+  Activity,
+  ActivityDetailTarget,
+  ActivityOutcome,
+  PlanType,
+} from '@od/shared/types';
 import { type ActivityScope, activityScope, occurrenceScope } from '@od/shared/types';
 import {
   Button,
@@ -55,6 +60,7 @@ import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import {
   completionVerb,
+  isNegativeOutcome,
   outcomeVerb,
   passedPlanResolution,
 } from '@/lib/passedPlanResolution';
@@ -151,7 +157,13 @@ export function ActivityDetailScreen({
    * A projection whose scope no longer matches is stale, and stale falls back to the cache.
    */
   const [projection, setProjection] = useState<
-    { scope: string | undefined; resolved: boolean; kind: ResolutionKind } | undefined
+    | {
+        scope: string | undefined;
+        resolved: boolean;
+        kind: ResolutionKind;
+        outcome?: ActivityOutcome;
+      }
+    | undefined
   >(undefined);
 
   /**
@@ -288,21 +300,47 @@ export function ActivityDetailScreen({
    * therefore reported the completion verb, in the success colour, under a button labelled
    * `Undo`. The status the screen is actually about is the same one `resolved` is read from.
    */
-  const resolutionKind: ResolutionKind =
+  const liveProjection =
     projection !== undefined && projection.scope === actionOccurrenceDate
-      ? projection.kind
-      : SKIPPED_STATUSES.has(
-            (actionOccurrenceDate === undefined
-              ? activity?.status
-              : detail.detail?.occurrence?.status) ?? '',
-          )
-        ? 'skipped'
-        : 'completed';
+      ? projection
+      : undefined;
+
+  const resolutionKind: ResolutionKind =
+    liveProjection?.kind ??
+    (SKIPPED_STATUSES.has(
+      (actionOccurrenceDate === undefined
+        ? activity?.status
+        : detail.detail?.occurrence?.status) ?? '',
+    )
+      ? 'skipped'
+      : 'completed');
+
+  /**
+   * The outcome the resolved block reports: the optimistic one while a write is in flight, the
+   * stored one afterwards.
+   *
+   * **Only the Activity's own.** `OccurrenceDetailProjection` carries `status` but not
+   * `outcome`, so a *recurring* occurrence resolved as `Didn't happen` reads back as a plain
+   * skip once the projection replaces this screen's own answer. The row is written and the
+   * server has the value; exposing it is a change to that projection and its schema, which is
+   * a server task and is raised rather than guessed at here.
+   */
+  const resolutionOutcome: ActivityOutcome | undefined =
+    liveProjection !== undefined ? liveProjection.outcome : activity?.outcome;
 
   /** One callback for the optimistic flip, the Undo, and every rollback in between. */
-  function projectResolution(next: boolean, kind: ResolutionKind = 'completed') {
+  function projectResolution(
+    next: boolean,
+    kind: ResolutionKind = 'completed',
+    outcome?: ActivityOutcome,
+  ) {
     setResolutionDismissed(next);
-    setProjection({ scope: actionOccurrenceDate, resolved: next, kind });
+    setProjection({
+      scope: actionOccurrenceDate,
+      resolved: next,
+      kind,
+      ...(outcome === undefined ? {} : { outcome }),
+    });
     onResolutionProjectionChange?.(next);
   }
 
@@ -404,6 +442,7 @@ export function ActivityDetailScreen({
           completing={actions.isCompleting}
           undoing={actions.isUndoing}
           resolutionKind={resolutionKind}
+          resolutionOutcome={resolutionOutcome}
           canSnooze={canSnoozeOccurrence(occurrenceContext)}
           canSkip={canSkipOccurrence(occurrenceContext)}
           onSnooze={() => setSnoozeOpen(true)}
@@ -451,8 +490,14 @@ export function ActivityDetailScreen({
             currentMinute={currentMinute}
             onClose={() => setSnoozeOpen(false)}
             onSnooze={(item, until) => {
-              if (item.occurrenceDate === undefined) return;
-              void actions.snoozeOccurrence(occurrenceScope(item.occurrenceDate), until);
+              if (item.occurrenceDate === undefined || shownSchedule === undefined)
+                return;
+              void actions.snoozeOccurrence(
+                occurrenceScope(item.occurrenceDate),
+                until,
+                // The day the row is rendered on, which an override can move off the nominal.
+                shownSchedule.date,
+              );
             }}
             /**
              * `Tomorrow` is absent on a recurring occurrence by P2-25's table, and this surface
@@ -696,7 +741,18 @@ export function ActivityDetailScreen({
             onClose={() => setResolutionOpen(false)}
             onResolve={(outcome) => {
               setResolutionOpen(false);
-              actions.resolvePassed(outcome, actionScope, projectResolution);
+              /**
+               * The chosen outcome travels with the projection. Without it `Didn't go` was
+               * projected as a plain completion and the screen answered `Attended` — the
+               * opposite of what the user had just tapped — until a refetch corrected it.
+               */
+              actions.resolvePassed(outcome, actionScope, (resolved) =>
+                projectResolution(
+                  resolved,
+                  isNegativeOutcome(outcome) ? 'skipped' : 'completed',
+                  outcome,
+                ),
+              );
             }}
           />
         </>
@@ -732,6 +788,8 @@ interface LoadedProps {
   undoing: boolean;
   /** Which outcome the resolved state is showing; a skip reverses differently from a done. */
   resolutionKind: ResolutionKind;
+  /** The stored or optimistic outcome, so a declined one reports the words the user chose. */
+  resolutionOutcome: ActivityOutcome | undefined;
   /** The two occurrence actions, each gated on its own server-authored capability (P2-47). */
   canSnooze: boolean;
   canSkip: boolean;
@@ -760,6 +818,15 @@ const RESOLVED_STATUSES = new Set([
 /** The subset of the above that means "deliberately not done", rather than done. */
 const SKIPPED_STATUSES = new Set(['skipped', 'skipped_occurrence']);
 
+/**
+ * What the resolved block says and how it reads.
+ *
+ * Three states, not two. A **completion** is the type's own verb in the success tone. A
+ * **declined outcome** — `Didn't go`, `Didn't happen` — is the user's own words back, and is
+ * stored as `status: 'skipped'` with that outcome, which is why it cannot be told apart from a
+ * plain skip by status alone. A bare **skip** has no outcome at all: nothing was declared about
+ * how it went, only that it is not happening today.
+ */
 type ResolutionKind = 'completed' | 'skipped';
 
 function Loaded({
@@ -778,6 +845,7 @@ function Loaded({
   completing,
   undoing,
   resolutionKind,
+  resolutionOutcome,
   canSnooze,
   canSkip,
   onComplete,
@@ -962,15 +1030,26 @@ function Loaded({
             testID="detail-resolution"
           >
             <View style={{ gap: theme.space[1] }}>
+              {/**
+               * **`textMuted` for a declined outcome, `success` for a completed one** (founder,
+               * 2026-08-15). A skip and a `Didn't go` are not achievements and stopped reading
+               * as one the moment they shared the completion's green; muted is the same token
+               * the skipped row on Today now uses, so the two surfaces agree.
+               */}
               <Text
                 variant="bodyStrong"
-                color={resolutionKind === 'skipped' ? 'textPrimary' : 'success'}
+                color={resolutionKind === 'skipped' ? 'textMuted' : 'success'}
                 testID="detail-resolved"
               >
-                {resolutionKind === 'skipped' ? 'Skipped' : outcomeVerb(activity.type)}
+                {resolutionKind === 'skipped'
+                  ? // The user's own words when they chose them; `Skipped` when they did not.
+                    resolutionOutcome === undefined
+                    ? 'Skipped'
+                    : outcomeVerb(activity.type, resolutionOutcome)
+                  : outcomeVerb(activity.type, resolutionOutcome)}
               </Text>
               {resolutionKind === 'skipped' ? (
-                <Text variant="footnote" color="textSecondary">
+                <Text variant="footnote" color="textMuted">
                   {activity.recurrence === undefined
                     ? 'It won’t appear on your day.'
                     : 'This day only. The series carries on.'}

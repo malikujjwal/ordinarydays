@@ -2181,3 +2181,82 @@ describe('occurrence actions', () => {
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDefined();
   });
 });
+
+/**
+ * The resolved block has three states, not two (founder, 2026-08-15). A declined outcome is
+ * stored as `status: 'skipped'` with that outcome, so it cannot be told from a plain skip by
+ * status alone — and reporting it as the type's positive verb told the user the opposite of
+ * what they had just tapped.
+ */
+describe('resolved outcomes', () => {
+  it('reports a declined event as the words the user chose, not as Attended', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan({ status: 'skipped', outcome: 'didnt_go' })),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-resolved').textContent).toBe("Didn't go");
+    expect(screen.queryByText('Attended')).toBeNull();
+  });
+
+  it('reports a completed event as Attended', async () => {
+    stubFetch({
+      status: 200,
+      body: detailBody(plan({ status: 'completed', outcome: 'attended' })),
+    });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-resolved').textContent).toBe('Attended');
+  });
+
+  /** A plain skip declared nothing about how it went, so it says only that. */
+  it('reports a skip with no outcome as Skipped', async () => {
+    stubFetch({ status: 200, body: detailBody(plan({ status: 'skipped' })) });
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-resolved').textContent).toBe('Skipped');
+  });
+
+  /**
+   * And optimistically, before the write lands — the projection carries the outcome, or the
+   * screen answers `Attended` for the whole round trip.
+   */
+  it('reports the declined outcome the moment it is chosen', async () => {
+    let release: ((value: unknown) => void) | undefined;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const passed = plan({
+      schedule: { date: '2026-08-11', time: '09:00', timezone: 'America/New_York' },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(passed) },
+      {
+        status: 200,
+        body: {
+          data: { activity: { ...passed, status: 'skipped', outcome: 'didnt_go' } },
+          meta: { requestId: 'req_test' },
+        },
+        wait: pending,
+      },
+    );
+    mount(
+      () => {},
+      () => {},
+      '2026-08-11',
+    );
+    await loaded();
+
+    fireEvent.click(screen.getByTestId('detail-resolution-prompt'));
+    fireEvent.click(screen.getByRole('button', { name: "Didn't go" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('detail-resolved').textContent).toBe("Didn't go"),
+    );
+    release?.(undefined);
+  });
+});

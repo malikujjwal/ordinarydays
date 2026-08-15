@@ -806,7 +806,12 @@ describe('TodayScreen', () => {
     fireEvent.click(screen.getAllByRole('menuitem', { name: 'Snooze' })[0] as Element);
 
     expect(screen.getByRole('heading', { name: 'Snooze' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Snooze until 3:25 PM' })).toBeDefined();
+    /**
+     * 3:45, not 3:25. The clock is 3:10 and the task is at 3:30, so `15 minutes` counts from the
+     * task — snoozing it to 3:25 would have moved it *earlier* than it was already due, which is
+     * the defect this assertion used to pin in place.
+     */
+    expect(screen.getByRole('button', { name: 'Snooze until 3:45 PM' })).toBeDefined();
   });
 
   it('opens the shared reschedule editor when a rendered time is tapped, and asks for the scope after the edit', async () => {

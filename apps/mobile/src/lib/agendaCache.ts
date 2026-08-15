@@ -15,6 +15,7 @@ import { applyDelete } from '@/features/agenda/model/applyDelete';
 import { applyPatch } from '@/features/agenda/model/applyPatch';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
+import { applySnooze } from '@/features/agenda/model/applySnooze';
 import { apiClient } from '@/lib/apiClient';
 import { type ActivityMutationTag, activityMutationKeys } from '@/lib/mutationKeys';
 import { activityKey } from '@/lib/queryKeys';
@@ -252,10 +253,11 @@ export function projectActivityWrite(
    * **Deliberately unprojected**, and the exhaustiveness check below is what makes that a
    * decision rather than an omission.
    *
-   * `snooze`/`unsnooze` are reachable only from the agenda screen, which projects them itself
-   * through `applySnooze` before the request goes out — projecting again here would be a second
-   * write of the same truth. Reminder writes change no list and no agenda window at all, which
-   * is why `changesActivityLists` already excludes them.
+   * `snooze`/`unsnooze` are projected by their **callers**, before the request goes out, through
+   * `applySnooze` — projecting again here would be a second write of the same truth and would
+   * arrive a round trip late. Today does it in `useAgendaActivityActions`; the detail screen
+   * does it through `projectOptimisticSnooze` below. Reminder writes change no list and no
+   * agenda window at all, which is why `changesActivityLists` already excludes them.
    */
   if (
     tag === 'snooze' ||
@@ -436,6 +438,41 @@ export function projectOptimisticCompletion(
     }));
 
   update(client, (agenda) => applyCompletion(agenda, { ...variables, ...clock }));
+
+  return () => {
+    for (const { queryKey, found } of snapshots) {
+      client.setQueryData<AgendaData>(queryKey, (agenda) => {
+        if (agenda === undefined || found === undefined) return agenda;
+        return replaceAgendaItem(agenda, variables, found.item, found.sourceDate, clock);
+      });
+    }
+  };
+}
+
+/**
+ * Projects a snooze into every cached agenda window, and returns the undo.
+ *
+ * The same shape as `projectOptimisticCompletion`, and here for the same reason: the detail
+ * screen can now snooze, and a write it does not project is a write Today and Plans do not show
+ * until something else refetches them. Reported as "snoozing changes the time on the activity
+ * details page but not on Today", with a visible delay before either agreed — the delay being
+ * the round trip this removes from the path.
+ */
+export function projectOptimisticSnooze(
+  client: QueryClient,
+  variables: AgendaMutationTarget & { date: string; time: string },
+): () => void {
+  const clock = agendaClock(client);
+  const snapshots = client
+    .getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })
+    .map(([queryKey, agenda]) => ({
+      queryKey,
+      found: agenda === undefined ? undefined : findAgendaItem(agenda, variables),
+    }));
+
+  update(client, (agenda) =>
+    applySnooze(agenda, { ...variables, ...clock, snoozed: true }),
+  );
 
   return () => {
     for (const { queryKey, found } of snapshots) {

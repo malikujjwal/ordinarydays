@@ -46,6 +46,8 @@ function bodyLabel(
 ): string {
   const parts = [item.title];
   if (checked) parts.push(outcomeVerb(item.type));
+  // Spoken as well as shown: dimming is not a state a screen reader can hear.
+  if (SKIPPED_STATUSES.has(item.status)) parts.push('Skipped');
   if (item.subtitle !== undefined) parts.push(item.subtitle);
   if (item.time === undefined) parts.push(untimedContextLabel, 'no time');
   else parts.push(formatWallTime(item.time));
@@ -79,7 +81,8 @@ export function AgendaRow({
 }: AgendaRowProps) {
   const theme = useTheme();
   const checked = COMPLETED_STATUSES.has(item.status);
-  const dimmed = item.isPast || checked || SKIPPED_STATUSES.has(item.status);
+  const skipped = SKIPPED_STATUSES.has(item.status);
+  const dimmed = item.isPast || checked || skipped;
   const formattedTime = item.time === undefined ? undefined : formatWallTime(item.time);
   const futureRecurringCompletion =
     !checked && today !== undefined && isFutureRecurringOccurrence(item, today);
@@ -130,6 +133,21 @@ export function AgendaRow({
           style={{ alignItems: 'flex-start' }}
         >
           <Text struck={checked}>{item.title}</Text>
+          {/**
+           * **A skipped row says so** (founder, 2026-08-15). `Show skipped` renders these in
+           * EARLIER TODAY "de-emphasised" (`today-and-tasks.md` §3.2), and de-emphasis was all
+           * they had: 0.62 opacity and nothing else, so a skipped row and a merely past one
+           * looked the same and the only way to tell them apart was to open the row.
+           *
+           * `textMuted` is the founder's ruling on the treatment, and it is the same token the
+           * detail screen's resolved block uses, so the tag reads identically wherever the
+           * state appears.
+           */}
+          {!skipped ? null : (
+            <Text variant="subhead" color="textMuted" testID="agenda-row-skipped">
+              Skipped
+            </Text>
+          )}
           {item.subtitle === undefined ? null : (
             <Text variant="subhead" color={subtitleColor} testID="agenda-row-subtitle">
               {item.subtitle}

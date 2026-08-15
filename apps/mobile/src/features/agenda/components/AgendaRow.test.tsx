@@ -367,3 +367,37 @@ describe('AgendaRow structural guards', () => {
     ).not.toContain('font-size: 0');
   });
 });
+
+/**
+ * A skipped row says so (founder, 2026-08-15). `Show skipped` renders these in EARLIER TODAY
+ * "de-emphasised" (`today-and-tasks.md` §3.2), and de-emphasis was all they had: a skipped row
+ * and a merely past one were both 0.62 opacity and nothing else.
+ */
+describe('AgendaRow — the skipped tag', () => {
+  it.each(['skipped', 'skipped_occurrence'] as const)(
+    'tags a %s row and keeps it de-emphasised',
+    (status) => {
+      mount(<AgendaRow item={item('task', { status })} showTime onOpen={() => {}} />);
+
+      expect(screen.getByTestId('agenda-row-skipped').textContent).toBe('Skipped');
+      expect(screen.getByTestId(/^agenda-row-act_/).style.opacity).toBe('0.62');
+    },
+  );
+
+  it('says nothing on a row that is merely past', () => {
+    mount(<AgendaRow item={item('task', { isPast: true })} showTime onOpen={() => {}} />);
+
+    expect(screen.queryByTestId('agenda-row-skipped')).toBeNull();
+  });
+
+  /** Dimming is not a state a screen reader can hear. */
+  it('speaks the state as well as showing it', () => {
+    mount(
+      <AgendaRow item={item('task', { status: 'skipped' })} showTime onOpen={() => {}} />,
+    );
+
+    expect(screen.getByTestId('agenda-row-body').getAttribute('aria-label')).toContain(
+      'Skipped',
+    );
+  });
+});
