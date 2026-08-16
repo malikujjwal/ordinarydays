@@ -1,10 +1,14 @@
+import type { ActivityType } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 import {
+  type FieldKey,
+  fieldRegions,
   fieldsByType,
   isFieldVisible,
   MEAL_SLOTS,
   slotForTime,
   timeForSlot,
+  UNBUILT_FIELDS,
   watchKind,
 } from './fields';
 
@@ -136,15 +140,112 @@ describe('conditional visibility', () => {
   it.each(['season', 'episode', 'episodeTitle'] as const)(
     '%s appears only when Kind is Show',
     (key) => {
-      expect(isFieldVisible(key, 'show')).toBe(true);
-      expect(isFieldVisible(key, 'movie')).toBe(false);
-      expect(isFieldVisible(key, undefined)).toBe(false);
+      expect(isFieldVisible(key, { mediaKind: 'show' })).toBe(true);
+      expect(isFieldVisible(key, { mediaKind: 'movie' })).toBe(false);
+      expect(isFieldVisible(key, {})).toBe(false);
     },
   );
 
+  /**
+   * §3.4's three interlocks, as **absence** rather than as a disabled control (P2-43). Each
+   * one used to render greyed with `Pick a date first.` beside it.
+   */
+  it.each(['time', 'reminder', 'repeat'] as const)(
+    '%s appears only once dated',
+    (key) => {
+      expect(isFieldVisible(key, {})).toBe(false);
+      expect(isFieldVisible(key, { hasDate: true })).toBe(true);
+    },
+  );
+
+  it('shows End time only once a start time exists', () => {
+    expect(isFieldVisible('endTime', { hasDate: true })).toBe(false);
+    expect(isFieldVisible('endTime', { hasDate: true, hasTime: true })).toBe(true);
+  });
+
   it('leaves every other field unconditional', () => {
-    expect(isFieldVisible('date', undefined)).toBe(true);
-    expect(isFieldVisible('notes', 'movie')).toBe(true);
+    expect(isFieldVisible('date', {})).toBe(true);
+    expect(isFieldVisible('notes', { mediaKind: 'movie' })).toBe(true);
+  });
+});
+
+/**
+ * The two regions the form renders (P2-43), and the three properties that make the split safe.
+ */
+describe('the More options split', () => {
+  const types: readonly ActivityType[] = ['task', 'meal', 'watch', 'event', 'custom'];
+  const dated = { hasDate: true, hasTime: true, mediaKind: 'show' } as const;
+  const keys = (specs: readonly { key: FieldKey }[]) => specs.map((spec) => spec.key);
+
+  /**
+   * §3 rule 3: "fields render top-to-bottom in the order given in §4". A disclosure holding a
+   * **contiguous suffix** folds the end of the list away without reordering anything; one
+   * holding an arbitrary subset would silently rewrite the spec.
+   */
+  it.each(types)('%s: More options is a contiguous suffix of the table', (type) => {
+    const { primary, more } = fieldRegions(type, dated);
+    const table = keys(fieldsByType[type]);
+    const positions = [...keys(primary), ...keys(more)].map((key) => table.indexOf(key));
+
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    const firstMore = table.indexOf(keys(more)[0] as FieldKey);
+    for (const key of keys(primary)) expect(table.indexOf(key)).toBeLessThan(firstMore);
+  });
+
+  it.each(types)('%s: renders no unbuilt field in either region', (type) => {
+    const { primary, more } = fieldRegions(type, dated);
+    for (const key of [...keys(primary), ...keys(more)]) {
+      expect(UNBUILT_FIELDS.has(key)).toBe(false);
+    }
+  });
+
+  /** The title is the frame's, above both regions, on every type. */
+  it.each(types)('%s: neither region carries the title', (type) => {
+    const { primary, more } = fieldRegions(type, dated);
+    expect([...keys(primary), ...keys(more)]).not.toContain('title');
+  });
+
+  it('keeps the schedule up front and folds the rest away', () => {
+    expect(keys(fieldRegions('task', { hasDate: true }).primary)).toEqual([
+      'date',
+      'time',
+    ]);
+    expect(keys(fieldRegions('task', { hasDate: true }).more)).toEqual([
+      'reminder',
+      'repeat',
+      'notes',
+    ]);
+  });
+
+  /** §4.2 makes the slot and the time two views of one value, so they stay together. */
+  it('keeps a Meal slot beside its time', () => {
+    expect(keys(fieldRegions('meal', { hasDate: true }).primary)).toContain('slot');
+  });
+
+  /** An undated draft has no time, reminder or repeat to offer, and offers none. */
+  it('drops the date-dependent fields entirely while undated', () => {
+    const { primary, more } = fieldRegions('task', {});
+    expect(keys(primary)).toEqual(['date']);
+    expect(keys(more)).toEqual(['notes']);
+  });
+
+  /**
+   * Removing an unbuilt field must not drag the boundary up with it. Event's split is at
+   * `location`; `people` sits below it and is unbuilt, and the fields after `people` must stay
+   * inside the disclosure.
+   */
+  it('anchors the split to the table position, not to what survived', () => {
+    const { primary, more } = fieldRegions('event', dated);
+    expect(keys(primary)).toEqual(['date', 'time', 'endTime']);
+    expect(keys(more)).toEqual([
+      'location',
+      'reservation',
+      'ticketsAndDetails',
+      'description',
+      'sourceImageLink',
+      'reminder',
+      'notes',
+    ]);
   });
 });
 

@@ -158,6 +158,113 @@ describe('the first screen', () => {
   });
 });
 
+/**
+ * **Progressive disclosure changes what is visible; it may never change what is selected**
+ * (P2-43, and `CLAUDE.md` rule 2 underneath it). These are the required assertions, not
+ * optional ones: the two choosers open with nothing chosen, and no revealed control arrives
+ * pre-filled because it became visible.
+ */
+describe('nothing is ever pre-selected', () => {
+  const chooserRow = (name: string) => screen.getByRole('button', { name });
+
+  it.each(['Task', 'Plan', 'List item'])(
+    'the object chooser opens %s unselected',
+    (name) => {
+      mount();
+      const row = chooserRow(name);
+      expect(row.getAttribute('aria-pressed')).toBeNull();
+      expect(row.getAttribute('aria-selected')).toBeNull();
+      expect(row.getAttribute('aria-checked')).toBeNull();
+    },
+  );
+
+  it.each(['General', 'Meal', 'Watch', 'Event'])(
+    'the Plan-kind chooser opens %s unselected',
+    (name) => {
+      mount();
+      tap('Plan');
+      const row = chooserRow(name);
+      expect(row.getAttribute('aria-pressed')).toBeNull();
+      expect(row.getAttribute('aria-selected')).toBeNull();
+      expect(row.getAttribute('aria-checked')).toBeNull();
+    },
+  );
+
+  it('leaves the draft with no target until a row is tapped', () => {
+    mount();
+    expect(useComposeDraft.getState().target).toBeUndefined();
+    tap('Plan');
+    expect(useComposeDraft.getState().target).toBeUndefined();
+    tap('General');
+    expect(useComposeDraft.getState().target).toEqual({
+      objectKind: 'plan',
+      type: 'custom',
+    });
+  });
+
+  /**
+   * The one that would be easy to get wrong: revealing Time when a date is picked must not also
+   * fill it, and revealing Reminder must not choose an offset. `+ Reminder` is an action, not a
+   * populated row, precisely so there is no value on screen the user did not put there.
+   */
+  it('reveals Time and Reminder empty when a date makes them relevant', () => {
+    mount();
+    tap('Task');
+    tap('Today');
+
+    expect(useComposeDraft.getState().schedule.time).toBeUndefined();
+    expect(useComposeDraft.getState().reminderOffset).toBeUndefined();
+
+    fireEvent.click(screen.getByRole('button', { name: /^More options/ }));
+    expect(screen.getByRole('button', { name: 'Add a reminder' })).toBeDefined();
+    expect(screen.queryByTestId('compose-reminder-row')).toBeNull();
+  });
+});
+
+/**
+ * §2.5's final-button table, on the screen rather than only in `targets.test.ts`. A generic
+ * `Save` here is a defect: the button is the last moment the user can see what will be written
+ * and where.
+ */
+describe('the pinned named write', () => {
+  it('reads Save task for a Task', () => {
+    mount();
+    tap('Task');
+    expect(screen.getByRole('button', { name: 'Save task' })).toBeDefined();
+  });
+
+  it.each(['General', 'Meal', 'Watch', 'Event'])(
+    'reads Save plan for a %s Plan',
+    (kind) => {
+      mount();
+      tap('Plan');
+      tap(kind);
+      expect(screen.getByRole('button', { name: 'Save plan' })).toBeDefined();
+    },
+  );
+
+  /**
+   * A List item has no Activity to write in Phase 2, so it has no write button at all — the
+   * destination its label would have to name does not exist yet (`saveLabel`'s third arm is
+   * pinned in `targets.test.ts`). A `Save` with nothing behind it would be the generic button
+   * §2.5 bans.
+   */
+  it('offers no write on the List item step', () => {
+    mount();
+    tap('List item');
+    expect(screen.queryByTestId('compose-save')).toBeNull();
+  });
+
+  /** Pinned, so it is reachable without scrolling the form it commits. */
+  it('sits in the screen shell footer, outside the scrolling form', () => {
+    mount();
+    tap('Task');
+
+    const save = screen.getByRole('button', { name: 'Save task' });
+    expect(screen.getByTestId('compose-form').contains(save)).toBe(false);
+  });
+});
+
 describe("Today's contextual Task entry", () => {
   it('bypasses both choosers and saves the fixed Task target on today without a time', async () => {
     useComposeDraft.getState().openTodayTask(TODAY as WallDate);
@@ -339,6 +446,8 @@ describe('Plan', () => {
     resolveDefaults?.({ reservationName: 'Ada', currency: 'USD' });
     await waitFor(() => expect(screen.getByLabelText('Title')).toBeDefined());
 
+    // Reservation and Tickets sit behind `More options` since P2-43.
+    fireEvent.click(screen.getByRole('button', { name: /^More options/ }));
     tap('Reservation');
     expect(screen.getByLabelText('Reservation name').getAttribute('value')).toBe('Ada');
     tap('Tickets & details');

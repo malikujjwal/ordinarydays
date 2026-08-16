@@ -20,6 +20,15 @@ export interface ScreenShellProps {
    * column and gutters, so it lines up with the body rather than being aligned by eye.
    */
   header?: ReactNode;
+  /**
+   * Fixed chrome **below** the scrolling body — a form's named write action.
+   *
+   * Added 2026-08-16 (P2-43), and here for the reason §6.1 gives the sheet's `actions` slot: a
+   * screen supplies the control and does not decide where it sits, how clear of the home
+   * indicator it is, or what happens to it when the keyboard opens. Left to each screen, the
+   * one control an edit cannot finish without is the one that ends up behind the keyboard.
+   */
+  footer?: ReactNode;
   /** A screen whose body is its own virtualised list scrolls itself; pass `false`. */
   scroll?: boolean;
   /**
@@ -52,6 +61,7 @@ const MEASURE = { standard: 720, reading: 620 } as const;
 export function ScreenShell({
   children,
   header,
+  footer,
   scroll = true,
   measure = 'standard',
   testID,
@@ -78,7 +88,19 @@ export function ScreenShell({
   const body = <View style={column}>{children}</View>;
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.surface }} testID={testID}>
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: theme.colors.surface,
+        /**
+         * **The footer rides above the keyboard, not behind it** (§6.2). Insetting the frame is
+         * what lifts it, and it lifts the body with it; the scroll's own keyboard padding is
+         * dropped below in the same branch so the room is not paid for twice.
+         */
+        ...(footer === undefined ? {} : { paddingBottom: keyboard }),
+      }}
+      testID={testID}
+    >
       {header === undefined ? null : (
         <View style={[column, { paddingTop: insets.top + theme.space[5] }]}>
           {header}
@@ -100,7 +122,10 @@ export function ScreenShell({
              * is nothing below it to scroll. The safe-area inset drops out while the keyboard
              * covers the home indicator.
              */
-            paddingBottom: (keyboard > 0 ? keyboard : insets.bottom) + theme.space[8],
+            paddingBottom:
+              footer === undefined
+                ? (keyboard > 0 ? keyboard : insets.bottom) + theme.space[8]
+                : theme.space[8],
           }}
           testID={testID === undefined ? undefined : `${testID}-body`}
         >
@@ -112,6 +137,22 @@ export function ScreenShell({
           testID={testID === undefined ? undefined : `${testID}-body`}
         >
           {body}
+        </View>
+      )}
+
+      {footer === undefined ? null : (
+        <View
+          style={{
+            borderTopWidth: 1,
+            borderTopColor: theme.colors.border,
+            backgroundColor: theme.colors.surface,
+            paddingTop: theme.space[5],
+            // The home indicator is irrelevant while the keyboard covers it (§6.2).
+            paddingBottom: theme.space[5] + (keyboard > 0 ? 0 : insets.bottom),
+          }}
+          testID={testID === undefined ? undefined : `${testID}-footer`}
+        >
+          <View style={column}>{footer}</View>
         </View>
       )}
     </View>

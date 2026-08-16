@@ -231,11 +231,11 @@ Rules that apply to every type's form.
    | Control | Behaviour |
    | --- | --- |
    | Date | Opens a date picker with quick chips: `Today`, `Tomorrow`, `This weekend`, `Next week`, `Pick a date`. Clearing it removes `schedule` entirely and returns the Activity to `saved`. |
-   | Time | Only enabled when a date is set. Opens a time picker in 5-minute increments. Clearing it makes the item all-day / Anytime. |
+   | Time | Only **shown** once a date is set. Opens a time picker in 5-minute increments. Clearing it makes the item all-day / Anytime. |
    | End time | Only shown once a start time exists. Must be after the start time; a same-day end time before the start is a `validation_failed`. |
    | People | Opens the participant picker — see [`sharing-and-people.md`](sharing-and-people.md) §2. |
-   | Reminder | Only enabled when a date is set. Sets **your own** reminder and nobody else's — reminders are per person, per activity ([`notifications.md`](notifications.md#21-per-activity-reminder-control) §2.1). Options in [`notifications.md`](notifications.md) §3. |
-  | Repeat | Only enabled when a date is set. A single dropdown provides the exact options in [`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1; `Custom` reveals a typed 2–365 Days field mapped to `interval_days`. On an existing series the sheet always shows and edits the **active rule segment**; an "all future" edit appends a segment and never rewrites the segments already written ([`today-and-tasks.md`](today-and-tasks.md#62-one-row-per-series) §6.2). **Does not repeat** converts an explicitly targeted occurrence to the one-off and confirms first when stored completion history will stop rendering. Ends is a separate dropdown whose indefinite value is **No end**. **End series** is a separate action that preserves recurrence and its history. |
+   | Reminder | Only **shown** once a date is set, and it begins as a `+ Reminder` action rather than a populated row. Sets **your own** reminder and nobody else's — reminders are per person, per activity ([`notifications.md`](notifications.md#21-per-activity-reminder-control) §2.1). Options in [`notifications.md`](notifications.md) §3, in a bottom-anchored menu. |
+  | Repeat | Only **shown** once a date is set. A single dropdown provides the exact options in [`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1; `Custom` reveals a typed 2–365 Days field mapped to `interval_days`. On an existing series the sheet always shows and edits the **active rule segment**; an "all future" edit appends a segment and never rewrites the segments already written ([`today-and-tasks.md`](today-and-tasks.md#62-one-row-per-series) §6.2). **Does not repeat** converts an explicitly targeted occurrence to the one-off and confirms first when stored completion history will stop rendering. Ends is a separate dropdown whose indefinite value is **No end**. **End series** is a separate action that preserves recurrence and its history. |
    | Notes | Multi-line, max 4000 characters, no formatting. |
    | Location | Free-text label plus optional address. v1 has no map picker and no geocoding. |
 
@@ -250,6 +250,40 @@ Rules that apply to every type's form.
 > `location.lng` and `location.mapUrl` exist in the model but are only populated by capture
 > extraction (Phase 8) or by a pasted maps URL. The form collects `label` and `address` as
 > plain text.
+
+> **Progressive disclosure — 2026-08-16 (P2-43, from the founder's `3A` frames).** Rule 1's
+> first sentence is the whole of this: *only relevant fields are shown*. Three consequences
+> that were previously the other way round, and one that is unchanged.
+>
+> 1. **A field the user's choices have not made relevant is absent, not disabled.** The three
+>    interlocks in rule 4 — Time needs a date, End time needs a start time, Reminder and Repeat
+>    need a date — are now expressed by the control not being there. `Pick a date first.` and
+>    `Add a date to repeat this.` are retired: a form with no disabled fields needs no copy
+>    explaining one. Rule 1 already required this of a field from another type's table; it now
+>    holds for a field of this type that has nothing to act on yet.
+> 2. **A field whose behaviour belongs to a later phase renders nothing at all.** People,
+>    Related plan, `Add selected ingredients to…` and `Also add to…` stay in §4's tables — the
+>    tables describe the product, not this phase's build — but the form draws no greyed
+>    placeholder for them. This is decision 5 of the 2026-08-12 amendment
+>    ([`../03-implementation/phase-02-today-and-tasks.md`](../03-implementation/phase-02-today-and-tasks.md)),
+>    and it **reverses P1-25's** "disabled with copy, never hidden". The 2026-08-13 founder
+>    clarification's inert `Coming later` row belongs to Plan **detail**, which is a discovery
+>    surface; a form is not one.
+> 3. **The tail of each table folds behind `More options`**, whose one-line summary names the
+>    fields inside it and only those — so the summary shrinks as the relevant set shrinks, and
+>    can never advertise something the form does not have. The disclosed region is always a
+>    **contiguous suffix** of the type's table, so rule 3's order is unaffected: `More options`
+>    hides the end of the list, it never reorders it. The split falls after the schedule block;
+>    Meal keeps `Slot` beside `Time` because §4.2 makes them two views of one value, and Watch
+>    keeps the identity fields its table puts above the date.
+> 4. **Unchanged:** what is *selected*. Both choosers still open with nothing chosen, no field
+>    acquires a default because it became visible, and no revealed control arrives pre-filled.
+>    Progressive disclosure changes what is visible and never what is selected (§2.4, §1a.3 of
+>    [`interaction-contract.md`](interaction-contract.md)).
+>
+> The named write in §2.5 is now **pinned above the safe area** rather than sitting at the foot
+> of the scrolling form. It says exactly what §2.5's table says it says; the change is that on a
+> long Event form it can no longer scroll out of reach.
 
 ---
 

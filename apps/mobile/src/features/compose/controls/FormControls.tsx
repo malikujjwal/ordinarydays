@@ -1,20 +1,21 @@
 import { MAX_INGREDIENTS, MAX_NOTES_LEN } from '@od/shared/constants';
 import {
+  Button,
   Checkbox,
-  ChevronRight,
-  Chip,
   Close as CloseIcon,
   DatePicker,
+  DisclosureRow,
   Field,
   IconButton,
   Plus,
   SegmentedControl,
+  SettingRow,
+  Sheet,
   Text,
   TimePicker,
-  Touchable,
   useTheme,
 } from '@od/ui';
-import { type ReactNode, useState } from 'react';
+import { useState } from 'react';
 import { View } from 'react-native';
 import {
   type DraftIngredient,
@@ -32,9 +33,13 @@ import { type ReminderOption, reminderOptions } from '@/features/compose/model/r
  * The controls the five forms share (`activities.md` §3.4, P1-25).
  *
  * "Common controls behave identically across types" is a rule, not an observation — so they
- * are one implementation each rather than six that agree today. The interlocks §3.4 states
- * are enforced here, once: **Time is enabled only when a date is set**, **End time appears
- * only once a start time exists**, and **Reminder needs a date**.
+ * are one implementation each rather than six that agree today.
+ *
+ * **The §3.4 interlocks are no longer expressed here** (P2-43). Time, Reminder and Repeat used
+ * to render disabled with `Pick a date first.` beside them; they are now simply absent until a
+ * date exists, and the one place that decides it is `fieldRegions` in `model/fields.ts`. A
+ * control that knew how to grey itself out is a control that can be asked to, so the knowledge
+ * lives with the field tables instead.
  */
 
 export interface DateControlProps {
@@ -64,33 +69,33 @@ export function DateControl({
 export interface TimeControlProps {
   value: string | undefined;
   onChange: (next: string | undefined) => void;
-  /** The date the time hangs off. Absent disables the control (§3.4). */
-  date: string | undefined;
   label?: string;
   openAt?: string;
   testID?: string;
 }
 
+/**
+ * The time, once there is a day for it to sit on.
+ *
+ * It takes no `date` any more: §3.4's "only enabled when a date is set" is now "only rendered
+ * when a date is set", and the field table decides that. A control that could be handed a
+ * missing date is a control that can be rendered inert.
+ */
 export function TimeControl({
   value,
   onChange,
-  date,
   label = 'Time',
   openAt,
   testID = 'compose-time',
 }: TimeControlProps) {
   return (
-    <View style={{ gap: 0 }}>
-      <TimePicker
-        label={label}
-        value={value ?? null}
-        onChange={(next) => onChange(next ?? undefined)}
-        disabled={date === undefined}
-        {...(openAt === undefined ? {} : { openAt })}
-        testID={testID}
-      />
-      {date === undefined ? <Hint>Pick a date first.</Hint> : null}
-    </View>
+    <TimePicker
+      label={label}
+      value={value ?? null}
+      onChange={(next) => onChange(next ?? undefined)}
+      {...(openAt === undefined ? {} : { openAt })}
+      testID={testID}
+    />
   );
 }
 
@@ -151,43 +156,80 @@ export function LocationControl({ label, address, onChange }: LocationControlPro
 export interface ReminderControlProps {
   value: number | undefined;
   onChange: (offsetMinutes: number | undefined) => void;
-  date: string | undefined;
   time: string | undefined;
 }
 
 /**
- * The reminder offset, as chips (`notifications.md` §3).
+ * The reminder offset (`notifications.md` §3, §4.1's `Select` control).
  *
- * Chips rather than a `Select`, because `design-system.md` §6 has no `Select` primitive and
- * inventing one for this is a design-system decision rather than a form's. The chips are the
- * same control the date quick options use, which is also why the list stays short: §3.2's
- * untimed list has four entries and §3's timed list nine.
+ * **It begins as an action, not as a populated row** (P2-43). With no reminder set there is no
+ * state to report, so the form offers `+ Reminder` and nothing else; once one is chosen the
+ * same control becomes a `SettingRow` stating it. The chips this replaced rendered nine options
+ * inline, permanently, with `Off` pre-selected among them — a row that looked answered before
+ * the user had answered anything.
+ *
+ * The options open in a **bottom-anchored menu over a dimmed form**, which is what the frames
+ * draw and what §4.1 has always called this control. `Off` is a real row in it, so removing a
+ * reminder is the same gesture as setting one.
  *
  * **A reminder is only ever your own** — it becomes a `REM#<userId>` row, never a field on the
- * Activity (ADR-047).
+ * Activity (ADR-047). Nothing here reads the title: `remind me` in the text of a draft cannot
+ * reach this control (`interaction-contract.md` §1a.3).
  */
-export function ReminderControl({ value, onChange, date, time }: ReminderControlProps) {
-  const theme = useTheme();
-  const disabled = date === undefined;
+export function ReminderControl({ value, onChange, time }: ReminderControlProps) {
+  const [open, setOpen] = useState(false);
   const options: readonly ReminderOption[] = reminderOptions(time !== undefined);
+  const current = options.find((option) => option.offsetMinutes === value);
 
   return (
-    <View style={{ gap: theme.space[2] }} testID="compose-reminder">
-      <Text variant="footnoteStrong" color="textSecondary">
-        Reminder
-      </Text>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space[3] }}>
-        {options.map((option) => (
-          <Chip
-            key={option.label}
-            label={option.label}
-            selected={option.offsetMinutes === value}
-            disabled={disabled}
-            onPress={() => onChange(option.offsetMinutes)}
-          />
-        ))}
-      </View>
-      {disabled ? <Hint>Pick a date first.</Hint> : null}
+    <View testID="compose-reminder">
+      {value === undefined ? (
+        <Button
+          label="+ Reminder"
+          accessibilityLabel="Add a reminder"
+          variant="ghost"
+          onPress={() => setOpen(true)}
+          testID="compose-add-reminder"
+        />
+      ) : (
+        <SettingRow
+          label="Reminder"
+          value={current?.label ?? 'Off'}
+          opens
+          onPress={() => setOpen(true)}
+          testID="compose-reminder-row"
+        />
+      )}
+
+      <Sheet
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Reminder"
+        detent="medium"
+        testID="compose-reminder-menu"
+      >
+        <View>
+          {options.map((option) => (
+            <SettingRow
+              key={option.label}
+              label={option.label}
+              /**
+               * **Nothing is ticked until the user has set one.** `Off` and "no reminder" are
+               * the same `undefined`, so a bare equality check put a check and an accent tint
+               * on `Off` the moment the menu opened — a menu that answered itself before it was
+               * asked, which is the one thing progressive disclosure may never do
+               * (`CLAUDE.md` rule 2).
+               */
+              selected={value !== undefined && option.offsetMinutes === value}
+              onPress={() => {
+                onChange(option.offsetMinutes);
+                setOpen(false);
+              }}
+              testID={`compose-reminder-option-${option.offsetMinutes ?? 'off'}`}
+            />
+          ))}
+        </View>
+      </Sheet>
     </View>
   );
 }
@@ -237,58 +279,6 @@ export function KindControl({ value, onChange }: KindControlProps) {
         selectedIndex={WATCH_KINDS.indexOf(value)}
         onChange={(next) => onChange(WATCH_KINDS[next] ?? 'movie')}
       />
-    </View>
-  );
-}
-
-export interface ComingSoonControlProps {
-  label: string;
-  /** The copy naming what fills it, per P1-25 — never a bare disabled control. */
-  hint: string;
-  testID: string;
-}
-
-/**
- * A field from `activities.md` §4 whose behaviour belongs to a later phase.
- *
- * Rendered **disabled with copy**, never hidden. P1-25 is explicit about why: hiding them
- * means the layout changes when the phase that fills them lands, and a user who cannot see
- * that a Plan can have people has been told the product is smaller than it is. Same reasoning
- * P1-26 applied to the detail screen's sections.
- */
-export function ComingSoonControl({ label, hint, testID }: ComingSoonControlProps) {
-  const theme = useTheme();
-  return (
-    <View style={{ gap: theme.space[2] }} testID={testID}>
-      <Text variant="footnoteStrong" color="textSecondary">
-        {label}
-      </Text>
-      <View
-        style={{
-          padding: theme.space[5],
-          borderRadius: theme.radius.md,
-          backgroundColor: theme.colors.surfaceSunken,
-        }}
-      >
-        {/*
-          `textSecondary`, not `textDisabled`.
-
-          `textDisabled` is deliberately below AA (`contrast.test.ts` asserts it), and that
-          exemption is real — WCAG 1.4.3 excuses an **inactive control's own label**. This is
-          not that. The hint is the copy naming what will fill the field, and P1-25 requires it
-          precisely so this is never a bare disabled control: it is the only thing telling the
-          user why the field is inert, which makes it informative prose that happens to sit
-          next to a disabled control.
-
-          At 2.53:1 it was unreadable for anyone who needs contrast, and P1-29's axe gate
-          reported it as a `serious` violation on the compose route — the first thing that flow
-          found. `textSecondary` on `surfaceSunken` is already pinned at AA by
-          `contrast.test.ts`, which is the pair the light `surfaceSunken` was nudged for.
-        */}
-        <Text variant="footnote" color="textSecondary">
-          {hint}
-        </Text>
-      </View>
     </View>
   );
 }
@@ -380,52 +370,18 @@ export interface ReservationControlProps {
   onChange: (patch: Partial<DraftReservation>) => void;
 }
 
-interface DisclosureGroupProps {
-  label: string;
-  testID: string;
-  children: ReactNode;
-}
-
-/** A compact, keyboard- and screen-reader-operable disclosure shared by Event groups. */
-function DisclosureGroup({ label, testID, children }: DisclosureGroupProps) {
-  const theme = useTheme();
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <View style={{ gap: theme.space[4] }} testID={testID}>
-      <Touchable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        accessibilityState={{ expanded }}
-        aria-expanded={expanded}
-        onPress={() => setExpanded((current) => !current)}
-        testID={`${testID}-toggle`}
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        <Text variant="footnoteStrong" color="textSecondary">
-          {label}
-        </Text>
-        <View
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-          style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
-        >
-          <ChevronRight size={20} color={theme.colors.textSecondary} />
-        </View>
-      </Touchable>
-      {expanded ? <View style={{ gap: theme.space[4] }}>{children}</View> : null}
-    </View>
-  );
-}
-
-/** The Event reservation disclosure group (`activities.md` §4.4). */
+/**
+ * The Event reservation disclosure group (`activities.md` §4.4).
+ *
+ * `DisclosureRow` rather than the local toggle this used to hand-roll: P2-51's gate is that a
+ * screen may not build its own row, and the hand-rolled one had its own type, its own chevron
+ * colour and its own spacing. It carries no summary — an empty reservation has no current
+ * content to report, and a line of copy describing the form would be exactly the invented
+ * summary that rule exists to prevent.
+ */
 export function ReservationControl({ value, onChange }: ReservationControlProps) {
   return (
-    <DisclosureGroup label="Reservation" testID="compose-reservation">
+    <DisclosureRow label="Reservation" testID="compose-reservation">
       <Field
         label="Reservation name"
         value={value.name}
@@ -452,7 +408,7 @@ export function ReservationControl({ value, onChange }: ReservationControlProps)
         onChangeText={(reference) => onChange({ reference })}
         maxLength={120}
       />
-    </DisclosureGroup>
+    </DisclosureRow>
   );
 }
 
@@ -473,7 +429,7 @@ export function TicketsAndDetailsControl({
   fieldErrors,
 }: TicketsAndDetailsControlProps) {
   return (
-    <DisclosureGroup label="Tickets & details" testID="compose-tickets-details">
+    <DisclosureRow label="Tickets & details" testID="compose-tickets-details">
       <Field
         label="Price"
         value={price}
@@ -498,7 +454,7 @@ export function TicketsAndDetailsControl({
         maxLength={120}
         testID="compose-organiser"
       />
-    </DisclosureGroup>
+    </DisclosureRow>
   );
 }
 

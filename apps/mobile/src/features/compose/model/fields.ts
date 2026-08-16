@@ -121,17 +121,119 @@ export const fieldsByType: Readonly<Record<ActivityType, readonly FieldSpec[]>> 
   });
 
 /**
+ * The fields whose behaviour belongs to a later phase, and which therefore **do not render**
+ * (P2-43).
+ *
+ * P1-25 drew each of these as a greyed control carrying `Adding people arrives in Phase 6.`,
+ * on the reasoning that hiding a capability tells the user the product is smaller than it is.
+ * The founder's 2026-08-12 amendment, decision 5, reversed that for the creation forms:
+ * *nothing unimplemented is drawn*. The 2026-08-13 clarification carves out the **Plan detail**
+ * screen, where a future capability may appear as an inert `Coming later` row — a discovery
+ * surface for something that already exists. A form is not that: a greyed field in the middle
+ * of a form the user is filling is a control that will not answer, which is what §3 rule 1
+ * bans in the neighbouring sentence.
+ *
+ * The row stays in `fieldsByType` because that table is `activities.md` §4, not a render list.
+ * The phase that builds the capability deletes its key from here and nothing else.
+ */
+export const UNBUILT_FIELDS: ReadonlySet<FieldKey> = new Set<FieldKey>([
+  'people', //           Participants and sharing — Phase 6
+  'relatedPlan', //      The plan picker — Phase 3
+  'addIngredientsTo', // The list bridge — Phase 3
+  'alsoAddTo', //        The list bridge — Phase 3
+]);
+
+/**
+ * Where a type's table splits into the form's two regions (P2-43).
+ *
+ * The value is the index of the first field that sits behind `More options`; everything before
+ * it renders directly. **It is always a suffix**, which is what keeps §3 rule 3 — "fields render
+ * top-to-bottom in the order given in §4" — true of the visible form: a disclosure holding a
+ * contiguous tail reorders nothing, it only folds the end of the list away.
+ *
+ * The split is after the schedule block, because a date and a time are what the user came to
+ * set. Meal keeps `Slot` up front with them: §4.2 makes the slot and the time two views of one
+ * value, and separating them would put the cause behind a disclosure and leave the effect
+ * outside it. Watch keeps its identity fields, which the table itself puts above the date.
+ */
+const MORE_OPTIONS_FROM: Readonly<Record<ActivityType, FieldKey>> = Object.freeze({
+  task: 'reminder',
+  meal: 'people',
+  watch: 'people',
+  event: 'location',
+  custom: 'people',
+});
+
+/** Everything a draft's own state decides about which fields exist right now. */
+export interface FieldVisibility {
+  mediaKind?: 'movie' | 'show';
+  hasDate?: boolean;
+  hasTime?: boolean;
+}
+
+export interface FieldRegions {
+  /** Rendered directly, in table order. */
+  primary: readonly FieldSpec[];
+  /** Rendered inside `More options`, in table order. */
+  more: readonly FieldSpec[];
+}
+
+/**
+ * The two regions for a type, with the unbuilt and currently irrelevant fields removed.
+ *
+ * Pure and total: the caller passes the draft state that decides the conditional fields, so a
+ * component never has to reproduce the "only once a date exists" rules and cannot disagree with
+ * the test that pins them. `title` is absent from both because the frame renders it, above
+ * everything this function describes.
+ */
+export function fieldRegions(
+  type: ActivityType,
+  state: FieldVisibility = {},
+): FieldRegions {
+  const table = fieldsByType[type];
+  const splitAt = table.findIndex((spec) => spec.key === MORE_OPTIONS_FROM[type]);
+  /**
+   * The boundary is a **position in the table**, never a count of what survived: removing an
+   * unbuilt field must not drag the split up by one and pull the next field out of the
+   * disclosure with it.
+   */
+  const boundary = splitAt < 0 ? table.length : splitAt;
+
+  const rendered = table
+    .map((spec, index) => ({ spec, index }))
+    .filter(
+      ({ spec }) =>
+        spec.key !== 'title' &&
+        !UNBUILT_FIELDS.has(spec.key) &&
+        isFieldVisible(spec.key, state),
+    );
+
+  return {
+    primary: rendered.filter((row) => row.index < boundary).map((row) => row.spec),
+    more: rendered.filter((row) => row.index >= boundary).map((row) => row.spec),
+  };
+}
+
+/**
  * Whether a field renders **right now**, given the draft's own state.
  *
- * The two conditions in §4 are both on Watch: `Season`, `Episode` and `Episode title` are
- * "shown only when Kind = Show". This is the one place §3 rule 1 admits a hidden field, and
- * it is hidden rather than disabled — a greyed Season on a Movie would be the "collapsed
- * behind a disclosure" the rule forbids, wearing a different hat.
+ * §4.3 hides `Season`, `Episode` and `Episode title` unless Kind is Show. §3.4's three
+ * interlocks are the rest: Time needs a date, End time needs a start time, Reminder and Repeat
+ * need a date. P1-25 rendered those three **disabled**, with `Pick a date first.` beside them;
+ * P2-43 makes them absent, because a form that shows what the user's choices have made relevant
+ * has no disabled fields and no copy explaining one.
+ *
+ * Every one of these is hidden rather than greyed, which is the same treatment §3 rule 1 already
+ * required of a field that does not belong to the type at all.
  */
-export function isFieldVisible(key: FieldKey, mediaKind: 'movie' | 'show' | undefined) {
+export function isFieldVisible(key: FieldKey, state: FieldVisibility) {
   if (key === 'season' || key === 'episode' || key === 'episodeTitle') {
-    return mediaKind === 'show';
+    return state.mediaKind === 'show';
   }
+  if (key === 'time' || key === 'reminder' || key === 'repeat') {
+    return state.hasDate === true;
+  }
+  if (key === 'endTime') return state.hasTime === true;
   return true;
 }
 

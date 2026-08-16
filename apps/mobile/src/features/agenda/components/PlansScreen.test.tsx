@@ -251,3 +251,37 @@ it("opens today's recurring task with its occurrence scope", async () => {
   expect(onOpen).toHaveBeenCalledExactlyOnceWith(todayOccurrence);
   expect(calls).toHaveLength(1);
 });
+
+/**
+ * Reported: a recurring plan shows only today's occurrence, none of the later ones.
+ *
+ * Plans asks for the full 62-day window and the server expands a recurring plan across it
+ * (`agendaService.test.ts`), so this closes the last untested link — that the screen renders
+ * every occurrence rather than collapsing a series to one row. `buildUpcomingSections` keys
+ * items by `activityId:occurrenceDate`, and a series shares one `activityId` across every day.
+ */
+it('renders one row per occurrence of a recurring plan across the window', async () => {
+  const occurrence = (date: string): AgendaItem =>
+    row(1, {
+      title: 'Book club',
+      time: '18:00',
+      isRecurring: true,
+      occurrenceDate: date,
+      recurrenceDescription: 'Every day',
+    });
+  const dates = ['2026-08-06', '2026-08-07', '2026-08-08', '2026-08-09'];
+  stubFetch(response(dates.map((date) => day(date, [occurrence(date)]))));
+
+  mount();
+
+  for (const date of dates) {
+    expect(await screen.findByTestId(`plans-date-${date}`)).toBeDefined();
+  }
+  // One card per day, each carrying the occurrence's own date in its key.
+  for (const date of dates) {
+    expect(
+      screen.getByTestId(`plans-card-${occurrence(date).activityId}:${date}`),
+    ).toBeDefined();
+  }
+  expect(screen.getAllByText('Book club')).toHaveLength(dates.length);
+});

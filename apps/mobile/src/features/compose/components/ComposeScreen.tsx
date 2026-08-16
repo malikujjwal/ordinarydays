@@ -1,8 +1,7 @@
-import { Button, Close, IconButton, useTheme } from '@od/ui';
+import { Button, Close, IconButton, ScreenShell, useTheme } from '@od/ui';
 import { useState } from 'react';
-import { ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ComposeForm } from '@/features/compose/components/ComposeForm';
+import { View } from 'react-native';
+import { ComposeForm, ComposeSaveBar } from '@/features/compose/components/ComposeForm';
 import { DiscardPrompt } from '@/features/compose/components/DiscardPrompt';
 import { ListItemPlaceholder } from '@/features/compose/components/ListItemPlaceholder';
 import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
@@ -52,7 +51,6 @@ export function ComposeScreen({
   loadEventDefaults,
 }: ComposeScreenProps) {
   const theme = useTheme();
-  const insets = useSafeAreaInsets();
   const draft = useComposeDraft();
   const showToast = useToast((s) => s.show);
   const create = useCreateActivity();
@@ -107,20 +105,22 @@ export function ComposeScreen({
   }
 
   const showBack = draft.step !== 'object';
+  /** The one step that has an Activity target to write, and so the one that has a footer. */
+  const activityForm =
+    draft.step === 'form' &&
+    draft.target !== undefined &&
+    draft.target.objectKind !== 'listItem';
 
-  return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.surface }}>
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingTop: insets.top + theme.space[3],
-          paddingHorizontal: theme.space[5],
-          paddingBottom: theme.space[3],
-        }}
-      >
-        {/*
+  const header = (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingBottom: theme.space[3],
+      }}
+    >
+      {/*
           `Back` on the later steps, and **nothing** on the first one.
 
           The first step used to carry a `Cancel` beside the `✕`, and the two called the same
@@ -132,92 +132,108 @@ export function ComposeScreen({
           The empty `View` holds the layout: this row is `space-between`, and dropping the
           child entirely would pull the close button to the left edge.
         */}
-        {showBack ? (
-          <Button
-            label="Back"
-            variant="ghost"
-            onPress={() => draft.back()}
-            testID="compose-back"
-          />
-        ) : (
-          <View />
-        )}
-        <IconButton
-          icon={Close}
-          label="Close"
-          onPress={requestClose}
-          testID="compose-close"
+      {showBack ? (
+        <Button
+          label="Back"
+          variant="ghost"
+          onPress={() => draft.back()}
+          testID="compose-back"
         />
-      </View>
+      ) : (
+        <View />
+      )}
+      <IconButton
+        icon={Close}
+        label="Close"
+        onPress={requestClose}
+        testID="compose-close"
+      />
+    </View>
+  );
 
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{
-          paddingHorizontal: theme.space[5],
-          paddingBottom: insets.bottom + theme.space[8],
-          gap: theme.space[5],
-        }}
-      >
-        {draft.step === 'object' ? (
-          <ObjectChooser onChoose={draft.chooseObject} />
-        ) : draft.step === 'planKind' ? (
-          <PlanKindChooser onChoose={choosePlanKind} />
-        ) : draft.target === undefined || draft.target.objectKind === 'listItem' ? (
-          // `form` with no Activity target is reachable by exactly one route: `List item`,
-          // which has no destination to fix in Phase 1. The store leaves `target` undefined
-          // there; the `listItem` arm is named as well so the narrowing below is the
-          // compiler's rather than a comment's.
-          <ListItemPlaceholder onBack={() => draft.back()} />
-        ) : (
-          <ComposeForm
-            target={draft.target}
-            fields={{
-              title: draft.title,
-              notes: draft.notes,
-              ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
-            }}
-            saveEnabled={canSave({ title: draft.title, notes: draft.notes })}
-            typedFields={
-              <TypedFields
-                type={draft.target.type}
-                title={draft.title}
-                schedule={draft.schedule}
-                location={draft.location}
-                reminderOffset={draft.reminderOffset}
-                {...(draft.recurrence === undefined
-                  ? {}
-                  : { recurrence: draft.recurrence })}
-                details={draft.details}
-                notes={draft.notes}
-                sourceUrl={draft.sourceUrl}
-                attachmentUri={draft.attachmentUri}
-                today={today}
-                onDateChange={draft.setDate}
-                onTimeChange={draft.setTime}
-                onSlotTimeChange={draft.setTimeFromSlot}
-                onEndTimeChange={draft.setEndTime}
-                onLocationChange={draft.setLocation}
-                onReminderChange={draft.setReminderOffset}
-                onRecurrenceChange={draft.setRecurrence}
-                onDetailsChange={draft.setDetails}
-                onNotesChange={draft.setNotes}
-                onSourceUrlChange={draft.setSourceUrl}
-                onAttach={draft.attachImage}
-                onClearAttachment={draft.clearAttachment}
-                fieldErrors={create.fieldErrors}
-              />
+  return (
+    <View style={{ flex: 1 }}>
+      {/**
+       * `ScreenShell` owns the gutters, the centred column, the safe area, the keyboard inset
+       * and — since P2-43 — the pinned footer the named write sits in. This screen used to
+       * answer all five for itself, and answered the last one by letting `Save plan` scroll
+       * away below an Event form.
+       */}
+      <ScreenShell
+        header={header}
+        measure="reading"
+        {...(activityForm && draft.target !== undefined
+          ? {
+              footer: (
+                <ComposeSaveBar
+                  target={draft.target}
+                  saveEnabled={canSave({ title: draft.title, notes: draft.notes })}
+                  attachmentUri={draft.attachmentUri}
+                  onSave={() => void save()}
+                  isSaving={create.isSaving}
+                />
+              ),
             }
-            attachmentUri={draft.attachmentUri}
-            onTitleChange={draft.setTitle}
-            onChangeTarget={() => draft.back()}
-            onSave={() => void save()}
-            isSaving={create.isSaving}
-            errorMessage={create.errorMessage}
-            errorRequestId={create.errorRequestId}
-            fieldErrors={create.fieldErrors}
-          />
-        )}
-      </ScrollView>
+          : {})}
+      >
+        <View style={{ gap: theme.space[5] }}>
+          {draft.step === 'object' ? (
+            <ObjectChooser onChoose={draft.chooseObject} />
+          ) : draft.step === 'planKind' ? (
+            <PlanKindChooser onChoose={choosePlanKind} />
+          ) : draft.target === undefined || draft.target.objectKind === 'listItem' ? (
+            // `form` with no Activity target is reachable by exactly one route: `List item`,
+            // which has no destination to fix in Phase 1. The store leaves `target` undefined
+            // there; the `listItem` arm is named as well so the narrowing below is the
+            // compiler's rather than a comment's.
+            <ListItemPlaceholder onBack={() => draft.back()} />
+          ) : (
+            <ComposeForm
+              target={draft.target}
+              fields={{
+                title: draft.title,
+                notes: draft.notes,
+                ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
+              }}
+              typedFields={
+                <TypedFields
+                  type={draft.target.type}
+                  title={draft.title}
+                  schedule={draft.schedule}
+                  location={draft.location}
+                  reminderOffset={draft.reminderOffset}
+                  {...(draft.recurrence === undefined
+                    ? {}
+                    : { recurrence: draft.recurrence })}
+                  details={draft.details}
+                  notes={draft.notes}
+                  sourceUrl={draft.sourceUrl}
+                  attachmentUri={draft.attachmentUri}
+                  today={today}
+                  onDateChange={draft.setDate}
+                  onTimeChange={draft.setTime}
+                  onSlotTimeChange={draft.setTimeFromSlot}
+                  onEndTimeChange={draft.setEndTime}
+                  onLocationChange={draft.setLocation}
+                  onReminderChange={draft.setReminderOffset}
+                  onRecurrenceChange={draft.setRecurrence}
+                  onDetailsChange={draft.setDetails}
+                  onNotesChange={draft.setNotes}
+                  onSourceUrlChange={draft.setSourceUrl}
+                  onAttach={draft.attachImage}
+                  onClearAttachment={draft.clearAttachment}
+                  fieldErrors={create.fieldErrors}
+                />
+              }
+              onTitleChange={draft.setTitle}
+              onChangeTarget={() => draft.back()}
+              errorMessage={create.errorMessage}
+              errorRequestId={create.errorRequestId}
+              fieldErrors={create.fieldErrors}
+            />
+          )}
+        </View>
+      </ScreenShell>
 
       <DiscardPrompt
         open={discardOpen}

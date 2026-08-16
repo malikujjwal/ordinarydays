@@ -1,10 +1,9 @@
 import type { ActivityType, Recurrence } from '@od/shared/types';
-import { Field } from '@od/ui';
+import { DisclosureRow, Field } from '@od/ui';
 import { Fragment } from 'react';
 import { RepeatControl } from '@/components/RepeatControl';
 import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import {
-  ComingSoonControl,
   DateControl,
   IngredientsControl,
   KindControl,
@@ -24,8 +23,8 @@ import type {
 } from '@/features/compose/model/draft';
 import {
   type FieldSpec,
+  fieldRegions,
   fieldsByType,
-  isFieldVisible,
   slotForTime,
   timeForSlot,
   watchKind,
@@ -41,9 +40,17 @@ import {
  * `Start time`. Five hand-written components would restate the tables in JSX, and a restatement
  * is a thing that can disagree.
  *
- * The phase file names one file per kind. This implementation keeps the same five forms in
- * one renderer, and the fixture test it
- * asks for reads the same module the screen does.
+ * ## Progressive disclosure (P2-43)
+ *
+ * The form shows what the user's choices have made relevant and nothing else. Three
+ * consequences, all decided by `fieldRegions` rather than here:
+ *
+ * - **No disabled field, anywhere.** Time, Reminder and Repeat are absent until a date exists
+ *   rather than greyed with `Pick a date first.` beside them.
+ * - **Nothing unimplemented is drawn.** People, Related plan and the two list bridges leave no
+ *   placeholder; the founder's 2026-08-12 amendment, decision 5.
+ * - **The tail of the table folds into `More options`**, whose summary names exactly what is
+ *   inside it. The region is a contiguous suffix, so §3 rule 3's order survives folding.
  */
 export interface TypedFieldsProps {
   type: ActivityType;
@@ -77,40 +84,64 @@ export interface TypedFieldsProps {
   fieldErrors: Record<string, string>;
 }
 
-/** The copy each deferred field carries, naming what fills it rather than going quiet. */
-const COMING_SOON = {
-  people: 'Adding people arrives in Phase 6.',
-  relatedPlan: 'Linking to a plan arrives in Phase 3.',
-  lists: 'Lists are coming soon.',
-} as const;
+/**
+ * The Event table's own name for the capture row (§4.4), reused as its name in the `More
+ * options` summary on the four types whose tables do not list it. Borrowed rather than
+ * invented: two names for one control is how a summary stops describing the form.
+ */
+const CAPTURE_LABEL = 'Source image / link';
+
+const filled = (value: string | undefined): boolean =>
+  value !== undefined && value !== '';
 
 export function TypedFields(props: TypedFieldsProps) {
-  const specs = fieldsByType[props.type];
   const kind = watchKind(
     props.details.mediaKind,
     props.details.season,
     props.details.episode,
   );
+  const regions = fieldRegions(props.type, {
+    ...(props.type === 'watch' ? { mediaKind: kind } : {}),
+    hasDate: filled(props.schedule.date),
+    hasTime: filled(props.schedule.time),
+  });
+
+  /** Event lists the capture row in its own table; the other four append it at the end. */
+  const capturesInTable = fieldsByType[props.type].some(
+    (spec) => spec.key === 'sourceImageLink',
+  );
+  const captureRow = (
+    <CaptureRow
+      sourceUrl={props.sourceUrl}
+      onSourceUrlChange={props.onSourceUrlChange}
+      attachmentUri={props.attachmentUri}
+      onAttach={props.onAttach}
+      onClearAttachment={props.onClearAttachment}
+    />
+  );
+
+  const summary = [
+    ...regions.more.map((spec) => spec.label),
+    ...(capturesInTable ? [] : [CAPTURE_LABEL]),
+  ].join(' · ');
 
   return (
     <>
-      {specs
-        .filter((spec) => spec.key !== 'title')
-        .filter((spec) =>
-          isFieldVisible(spec.key, props.type === 'watch' ? kind : undefined),
-        )
-        .map((spec) => (
+      {regions.primary.map((spec) => (
+        <Fragment key={spec.key}>{renderField(spec, props, kind)}</Fragment>
+      ))}
+
+      {/**
+       * The summary is built from the rows actually rendered inside, so it can never advertise
+       * a capability the form does not have — that is what "names only what is built" means
+       * once an unbuilt field simply is not in `regions.more`.
+       */}
+      <DisclosureRow label="More options" summary={summary} testID="compose-more-options">
+        {regions.more.map((spec) => (
           <Fragment key={spec.key}>{renderField(spec, props, kind)}</Fragment>
         ))}
-      {specs.some((spec) => spec.key === 'sourceImageLink') ? null : (
-        <CaptureRow
-          sourceUrl={props.sourceUrl}
-          onSourceUrlChange={props.onSourceUrlChange}
-          attachmentUri={props.attachmentUri}
-          onAttach={props.onAttach}
-          onClearAttachment={props.onClearAttachment}
-        />
-      )}
+        {capturesInTable ? null : captureRow}
+      </DisclosureRow>
     </>
   );
 }
@@ -140,7 +171,6 @@ function renderField(
         <TimeControl
           label={spec.label}
           value={schedule.time}
-          date={schedule.date}
           /**
            * Meal's slot → time rule (§4.2), applied **only when no time is set**. The
            * `openAt` prop is where the wheel starts, not a value: nothing is written until
@@ -162,11 +192,10 @@ function renderField(
 
     case 'endTime':
       // "Shown only once a start time exists" (§3.4) — absent, not disabled.
-      return schedule.time === undefined ? null : (
+      return (
         <TimeControl
           label="End time"
           value={schedule.endTime}
-          date={schedule.date}
           onChange={props.onEndTimeChange}
           testID="compose-end-time"
         />
@@ -177,13 +206,16 @@ function renderField(
         <ReminderControl
           value={props.reminderOffset}
           onChange={props.onReminderChange}
-          date={schedule.date}
           time={schedule.time}
         />
       );
 
     case 'repeat':
-      return (
+      /**
+       * `fieldRegions` already refuses this key without a date; the narrowing is the compiler's
+       * copy of that rule rather than a second one, because `RepeatControl` now requires a day.
+       */
+      return schedule.date === undefined ? null : (
         <RepeatControl
           date={schedule.date}
           value={props.recurrence}
@@ -192,23 +224,16 @@ function renderField(
         />
       );
 
+    /**
+     * The four fields in `UNBUILT_FIELDS`. They stay in the switch so it remains exhaustive
+     * over `FieldKey` — a field added to a table without a renderer is a compile error — and
+     * they draw nothing, because `fieldRegions` never yields them.
+     */
     case 'relatedPlan':
-      return (
-        <ComingSoonControl
-          label="Related plan"
-          hint={COMING_SOON.relatedPlan}
-          testID="compose-related-plan"
-        />
-      );
-
     case 'people':
-      return (
-        <ComingSoonControl
-          label="People"
-          hint={COMING_SOON.people}
-          testID="compose-people"
-        />
-      );
+    case 'addIngredientsTo':
+    case 'alsoAddTo':
+      return null;
 
     case 'slot':
       return (
@@ -234,21 +259,6 @@ function renderField(
         <IngredientsControl
           rows={details.ingredients}
           onChange={(ingredients) => props.onDetailsChange({ ingredients })}
-        />
-      );
-
-    case 'addIngredientsTo':
-    case 'alsoAddTo':
-      /**
-       * **Off in every context**, and in Phase 1 not even switchable. §4.3 is emphatic that
-       * nothing — a date, a title, a Watch kind, a capture result — turns this on; Phase 3
-       * resolves and visibly names a destination only after the user does.
-       */
-      return (
-        <ComingSoonControl
-          label={spec.label}
-          hint={COMING_SOON.lists}
-          testID={`compose-${spec.key}`}
         />
       );
 

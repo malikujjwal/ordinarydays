@@ -5,8 +5,14 @@ import { SettingRow } from './SettingRow';
 
 export interface DisclosureRowProps {
   label: string;
-  /** The current content, one line, while shut. */
-  summary: string;
+  /**
+   * The current content, one line, while shut.
+   *
+   * Optional, because a group whose content is a set of empty fields has no current content to
+   * summarise — `Reservation` on a blank Event form summarises nothing, and inventing a line
+   * of copy for it would be describing the form rather than reporting it.
+   */
+  summary?: string;
   children: ReactNode;
   testID: string;
 }
@@ -30,7 +36,7 @@ export function DisclosureRow({ label, summary, children, testID }: DisclosureRo
     <View>
       <SettingRow
         label={label}
-        summary={summary}
+        {...(summary === undefined ? {} : { summary })}
         opens
         expanded={expanded}
         onPress={() => setExpanded((current) => !current)}

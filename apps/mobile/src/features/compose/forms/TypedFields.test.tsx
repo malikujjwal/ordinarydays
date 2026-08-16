@@ -9,7 +9,7 @@ import {
   EMPTY_LOCATION,
   EMPTY_SCHEDULE,
 } from '@/features/compose/model/draft';
-import { fieldsByType } from '@/features/compose/model/fields';
+import { fieldRegions } from '@/features/compose/model/fields';
 import { TypedFields, type TypedFieldsProps } from './TypedFields';
 
 vi.mock('expo-image-picker', () => ({
@@ -20,14 +20,22 @@ vi.mock('expo-image-picker', () => ({
 }));
 
 /**
- * The five forms, asserted against the five tables (P1-25).
+ * The five forms, asserted against the five tables (P1-25) and against P2-43's disclosure.
  *
- * The expectation is **derived from `fieldsByType`** on purpose, and that is not circular:
- * `fields.test.ts` pins that module against `activities.md` §4 with literal lists, so a field
- * added in the wrong place fails there, and a field the renderer forgets to draw fails here.
- * Together they say "the table is the spec, and the form is the table".
+ * The expectation is **derived from `fieldRegions`** on purpose, and that is not circular:
+ * `fields.test.ts` pins the tables against `activities.md` §4 with literal lists and pins the
+ * split's three structural properties, so a field added in the wrong place fails there, and a
+ * field the renderer forgets to draw fails here. Together they say "the table is the spec, and
+ * the form is the table".
  */
 const TODAY = '2026-08-12';
+const DATED = {
+  date: '2026-08-15',
+  time: undefined,
+  endTime: undefined,
+  timeFromSlot: false,
+} as const;
+const TIMED = { ...DATED, time: '19:00' } as const;
 
 const wrap = (ui: ReactNode) =>
   render(
@@ -65,63 +73,274 @@ function mount(type: ActivityType, overrides: Partial<TypedFieldsProps> = {}) {
   return wrap(<TypedFields {...props} />);
 }
 
-/**
- * Which fields the renderer is expected to draw, given the state.
- *
- * `title` is the frame's, not the table's — `ComposeForm` renders it above this component for
- * every type. `sourceImageLink` names the shared capture-row component rather than a visible
- * field label, so its position is pinned by the field table and the renderer's map.
- * `endTime` appears only once a start time exists (§3.4), and the three Watch fields only when
- * Kind is Show (§4.3).
- */
-const IN_FRAME = new Set(['title', 'sourceImageLink']);
-
-function expected(type: ActivityType, opts: { time?: boolean; show?: boolean } = {}) {
-  return fieldsByType[type]
-    .filter((spec) => !IN_FRAME.has(spec.key))
-    .filter((spec) => (spec.key === 'endTime' ? opts.time === true : true))
-    .filter((spec) =>
-      spec.key === 'season' || spec.key === 'episode' || spec.key === 'episodeTitle'
-        ? opts.show === true
-        : true,
-    )
-    .map((spec) => spec.label);
-}
+/** `More options` starts shut, so opening it is how the tail of a table is read. */
+const openMore = () =>
+  fireEvent.click(screen.getByRole('button', { name: /^More options/ }));
 
 /**
  * Every field draws its label as text, so reading them off the tree in document order is
- * reading the form's field order. `getAllByText` is exact-match, which is what keeps
+ * reading the form's field order. `queryAllByText` is exact-match, which is what keeps
  * `Time` from matching `End time`.
  */
 function renderedLabels(labels: readonly string[]): string[] {
   return labels.filter((label) => screen.queryAllByText(label).length > 0);
 }
 
+const ALL_TYPES = ['task', 'meal', 'watch', 'event', 'custom'] as const;
+
 describe('every form renders its table, in order', () => {
-  it.each(['task', 'meal', 'watch', 'event', 'custom'] as const)('%s', (type) => {
-    mount(type);
-    const want = expected(type);
+  it.each(ALL_TYPES)('%s', (type) => {
+    mount(type, {
+      schedule: TIMED,
+      details: { ...EMPTY_DETAILS, mediaKind: 'show' },
+      // With one set, Reminder states itself under its table label rather than as `+ Reminder`.
+      reminderOffset: -15,
+    });
+    openMore();
+
+    const { primary, more } = fieldRegions(type, {
+      hasDate: true,
+      hasTime: true,
+      mediaKind: 'show',
+    });
+    const want = [...primary, ...more]
+      // The capture row has no visible label of its own; its position is pinned by the table.
+      .filter((spec) => spec.key !== 'sourceImageLink')
+      .map((spec) => spec.label);
+
     expect(renderedLabels(want)).toEqual(want);
   });
 
   /** The negative half: a field from another type's table must not appear on this one. */
   it('gives a Task no People, Slot or Location row', () => {
-    mount('task');
+    mount('task', { schedule: TIMED });
+    openMore();
     expect(screen.queryByTestId('compose-people')).toBeNull();
     expect(screen.queryByTestId('compose-slot')).toBeNull();
     expect(screen.queryByTestId('compose-location')).toBeNull();
   });
 
   it('gives a Meal no Reminder or Repeat row', () => {
-    mount('meal');
+    mount('meal', { schedule: TIMED });
+    openMore();
     expect(screen.queryByTestId('compose-reminder')).toBeNull();
     expect(screen.queryByTestId('compose-repeat')).toBeNull();
   });
 });
 
+describe('progressive disclosure', () => {
+  /** P2-43's headline: no time control before a date, and one after. */
+  it('renders no time control until a date exists', () => {
+    const { unmount } = mount('task');
+    openMore();
+    expect(screen.queryByTestId('compose-time')).toBeNull();
+    unmount();
+
+    mount('task', { schedule: DATED });
+    expect(screen.getByTestId('compose-time')).toBeDefined();
+  });
+
+  it.each(['reminder', 'repeat'] as const)(
+    'renders no %s control until a date exists',
+    (key) => {
+      const { unmount } = mount('task');
+      openMore();
+      expect(screen.queryByTestId(`compose-${key}`)).toBeNull();
+      unmount();
+
+      mount('task', { schedule: DATED });
+      openMore();
+      expect(screen.getByTestId(`compose-${key}`)).toBeDefined();
+    },
+  );
+
+  /** "Shown only once a start time exists" (§3.4) — absent, not disabled. */
+  it('shows End time on an Event only once a start time is set', () => {
+    const { unmount } = mount('event', { schedule: DATED });
+    expect(screen.queryByTestId('compose-end-time')).toBeNull();
+    unmount();
+
+    mount('event', { schedule: TIMED });
+    expect(screen.getByTestId('compose-end-time')).toBeDefined();
+  });
+
+  /** §4.3: Season, Episode and Episode title are shown only when Kind is Show. */
+  it('hides the Show fields on a Movie and shows them on a Show', () => {
+    const { unmount } = mount('watch');
+    expect(screen.queryByTestId('compose-season')).toBeNull();
+    unmount();
+
+    mount('watch', { details: { ...EMPTY_DETAILS, mediaKind: 'show' } });
+    expect(screen.getByTestId('compose-season')).toBeDefined();
+  });
+
+  /**
+   * Kind defaults to Show once a season is typed, so the fields that produced the default
+   * stay on screen rather than vanishing under the user's cursor.
+   */
+  it('keeps the Show fields visible when a typed season implied the kind', () => {
+    mount('watch', { details: { ...EMPTY_DETAILS, season: '2' } });
+    expect(screen.getByTestId('compose-season')).toBeDefined();
+  });
+
+  it('keeps More options shut until it is opened', () => {
+    mount('task', { schedule: DATED });
+    const row = screen.getByRole('button', { name: /^More options/ });
+
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('compose-notes')).toBeNull();
+
+    fireEvent.click(row);
+    expect(row.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('compose-notes')).toBeDefined();
+  });
+});
+
+/**
+ * "`More options` lists only what is built" — decision 5 of the 2026-08-12 amendment, applied
+ * to the summary as well as to the rows. The summary is generated from the rows inside, so
+ * these assertions fail the moment a placeholder is put back.
+ */
+describe('the More options summary', () => {
+  const summaryOf = () =>
+    screen.getByRole('button', { name: /^More options/ }).textContent ?? '';
+
+  it('names the built fields inside it, in order', () => {
+    mount('task', { schedule: DATED });
+    expect(summaryOf()).toContain('Reminder · Repeat · Notes · Source image / link');
+  });
+
+  it.each([
+    ['meal', 'People'],
+    ['watch', 'Also add to…'],
+    ['task', 'Related plan'],
+    ['meal', 'Add selected ingredients to…'],
+  ] as const)('%s never advertises %s', (type, label) => {
+    mount(type, { schedule: DATED });
+    expect(summaryOf()).not.toContain(label);
+  });
+
+  /** Undated, the only thing left on a Task is what does not need a day. */
+  it('shrinks to what is relevant while the draft is undated', () => {
+    mount('task');
+    expect(summaryOf()).toContain('Notes · Source image / link');
+    expect(summaryOf()).not.toContain('Reminder');
+  });
+});
+
+describe('nothing unimplemented is drawn', () => {
+  it.each([
+    ['compose-people', 'meal'],
+    ['compose-related-plan', 'task'],
+    ['compose-alsoAddTo', 'watch'],
+    ['compose-addIngredientsTo', 'meal'],
+  ] as const)('%s is absent on a %s', (testID, type) => {
+    mount(type, { schedule: TIMED });
+    openMore();
+    expect(screen.queryByTestId(testID)).toBeNull();
+  });
+
+  it.each([
+    'Adding people arrives in Phase 6.',
+    'Linking to a plan arrives in Phase 3.',
+    'Lists are coming soon.',
+    'Pick a date first.',
+    'Add a date to repeat this.',
+  ])('never says %s', (copy) => {
+    for (const type of ALL_TYPES) {
+      const { unmount } = mount(type, { schedule: TIMED });
+      openMore();
+      expect(screen.queryAllByText(copy)).toHaveLength(0);
+      unmount();
+    }
+  });
+
+  /**
+   * The structural version of the same rule: **no disabled control in any state**. A greyed
+   * field is a control that will not answer, and the form's whole organising idea is that it
+   * shows what the user's choices have made relevant and nothing else.
+   */
+  it.each(ALL_TYPES)('%s renders no disabled control, in any state', (type) => {
+    for (const schedule of [EMPTY_SCHEDULE, DATED, TIMED]) {
+      const { container, unmount } = mount(type, { schedule });
+      openMore();
+      expect(container.querySelectorAll('[aria-disabled="true"]')).toHaveLength(0);
+      expect(container.querySelectorAll('[disabled]')).toHaveLength(0);
+      unmount();
+    }
+  });
+});
+
+describe('the Reminder control', () => {
+  /** It begins as an action, not as a populated row with `Off` already chosen (P2-43). */
+  it('offers + Reminder before one is set, and states it after', () => {
+    const { unmount } = mount('task', { schedule: DATED });
+    openMore();
+    expect(screen.getByRole('button', { name: 'Add a reminder' })).toBeDefined();
+    expect(screen.queryByTestId('compose-reminder-row')).toBeNull();
+    unmount();
+
+    mount('task', { schedule: TIMED, reminderOffset: -15 });
+    openMore();
+    expect(screen.getByTestId('compose-reminder-row').textContent).toContain(
+      '15 minutes before',
+    );
+  });
+
+  /** §3.2: the untimed picker offers days, not minutes. */
+  it('offers the untimed list until a time is set', () => {
+    const { unmount } = mount('task', { schedule: DATED });
+    openMore();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a reminder' }));
+    expect(screen.getByRole('button', { name: /^On the day/ })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /^15 minutes before/ })).toBeNull();
+    unmount();
+
+    mount('task', { schedule: TIMED });
+    openMore();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a reminder' }));
+    expect(screen.getByRole('button', { name: /^15 minutes before/ })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /^On the day/ })).toBeNull();
+  });
+
+  /**
+   * `Off` and "no reminder" are the same `undefined`, so a bare equality check ticked `Off`
+   * the moment the menu opened — a menu that had answered itself before it was asked.
+   */
+  it('opens with nothing ticked, and ticks only what the user set', () => {
+    const { unmount } = mount('task', { schedule: TIMED });
+    openMore();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a reminder' }));
+    const menu = screen.getByTestId('compose-reminder-menu');
+    expect(menu.querySelectorAll('[aria-pressed="true"]')).toHaveLength(0);
+    unmount();
+
+    mount('task', { schedule: TIMED, reminderOffset: -60 });
+    openMore();
+    fireEvent.click(screen.getByTestId('compose-reminder-row'));
+    expect(
+      screen.getByTestId('compose-reminder-option--60').getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      screen.getByTestId('compose-reminder-option-off').getAttribute('aria-pressed'),
+    ).not.toBe('true');
+  });
+
+  it('writes the chosen offset and closes the menu', () => {
+    const onReminderChange = vi.fn();
+    mount('task', { schedule: TIMED, onReminderChange });
+    openMore();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a reminder' }));
+    fireEvent.click(screen.getByRole('button', { name: /^1 hour before/ }));
+
+    expect(onReminderChange).toHaveBeenCalledWith(-60);
+  });
+});
+
 describe('conditional fields', () => {
   it('keeps both Event disclosure groups collapsed until opened', () => {
-    mount('event');
+    mount('event', { schedule: TIMED });
+    openMore();
 
     const reservation = screen.getByRole('button', { name: 'Reservation' });
     const tickets = screen.getByRole('button', { name: 'Tickets & details' });
@@ -137,130 +356,5 @@ describe('conditional fields', () => {
     fireEvent.click(tickets);
     expect(tickets.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByLabelText('Price')).toBeDefined();
-  });
-
-  /** "Shown only once a start time exists" (§3.4) — absent, not disabled. */
-  it('shows End time on an Event only once a start time is set', () => {
-    const { unmount } = mount('event');
-    expect(screen.queryByTestId('compose-end-time')).toBeNull();
-    unmount();
-
-    mount('event', {
-      schedule: {
-        date: '2026-08-15',
-        time: '19:00',
-        endTime: undefined,
-        timeFromSlot: false,
-      },
-    });
-    expect(screen.getByTestId('compose-end-time')).toBeDefined();
-  });
-
-  /** §4.3: Season, Episode and Episode title are shown only when Kind is Show. */
-  it('hides the Show fields on a Movie and shows them on a Show', () => {
-    const { unmount } = mount('watch');
-    expect(screen.queryByTestId('compose-season')).toBeNull();
-    unmount();
-
-    mount('watch', { details: { ...EMPTY_DETAILS, mediaKind: 'show' } });
-    const want = expected('watch', { show: true });
-    expect(renderedLabels(want)).toEqual(want);
-  });
-
-  /**
-   * Kind defaults to Show once a season is typed, so the fields that produced the default
-   * stay on screen rather than vanishing under the user's cursor.
-   */
-  it('keeps the Show fields visible when a typed season implied the kind', () => {
-    mount('watch', { details: { ...EMPTY_DETAILS, season: '2' } });
-    expect(screen.getByTestId('compose-season')).toBeDefined();
-  });
-});
-
-describe('fields whose behaviour is a later phase', () => {
-  /**
-   * Rendered **disabled with copy naming the phase**, never hidden. P1-25 is explicit: hiding
-   * them means the layout changes when that phase lands, and a user who cannot see that a Plan
-   * can have people has been told the product is smaller than it is.
-   */
-  it.each([
-    ['compose-people', 'meal', 'Adding people arrives in Phase 6.'],
-    ['compose-related-plan', 'task', 'Linking to a plan arrives in Phase 3.'],
-    ['compose-alsoAddTo', 'watch', 'Lists are coming soon.'],
-    ['compose-addIngredientsTo', 'meal', 'Lists are coming soon.'],
-  ] as const)('%s renders with its copy', (testID, type, copy) => {
-    mount(type);
-    expect(screen.getByTestId(testID)).toBeDefined();
-    expect(screen.getAllByText(copy).length).toBeGreaterThan(0);
-  });
-});
-
-describe('the interlocks in §3.4', () => {
-  it('disables Repeat until a date is set and enables it when dated', () => {
-    const { unmount } = mount('task');
-    expect(screen.getByText('Add a date to repeat this.')).toBeDefined();
-    expect(screen.getByTestId('compose-repeat').getAttribute('aria-disabled')).toBe(
-      'true',
-    );
-    unmount();
-
-    mount('task', {
-      schedule: {
-        date: '2026-08-15',
-        time: undefined,
-        endTime: undefined,
-        timeFromSlot: false,
-      },
-    });
-    expect(screen.getByTestId('compose-repeat').getAttribute('aria-disabled')).toBeNull();
-  });
-
-  it('disables Time until a date is set, and says why', () => {
-    const { unmount } = mount('task');
-    expect(screen.getAllByText('Pick a date first.').length).toBeGreaterThan(0);
-    unmount();
-
-    mount('task', {
-      schedule: {
-        date: '2026-08-15',
-        time: undefined,
-        endTime: undefined,
-        timeFromSlot: false,
-      },
-    });
-    expect(screen.queryByText('Pick a date first.')).toBeNull();
-  });
-
-  /** A reminder is an offset from a date; without one there is nothing to offset from. */
-  it('disables Reminder until a date is set', () => {
-    mount('task');
-    const off = screen.getByRole('button', { name: 'Off' });
-    expect(off.getAttribute('aria-disabled')).toBe('true');
-  });
-
-  /** §3.2: the untimed picker offers days, not minutes. */
-  it('offers the untimed reminder list until a time is set', () => {
-    const { unmount } = mount('task', {
-      schedule: {
-        date: '2026-08-15',
-        time: undefined,
-        endTime: undefined,
-        timeFromSlot: false,
-      },
-    });
-    expect(screen.getByRole('button', { name: 'On the day' })).toBeDefined();
-    expect(screen.queryByRole('button', { name: '15 minutes before' })).toBeNull();
-    unmount();
-
-    mount('task', {
-      schedule: {
-        date: '2026-08-15',
-        time: '09:00',
-        endTime: undefined,
-        timeFromSlot: false,
-      },
-    });
-    expect(screen.getByRole('button', { name: '15 minutes before' })).toBeDefined();
-    expect(screen.queryByRole('button', { name: 'On the day' })).toBeNull();
   });
 });

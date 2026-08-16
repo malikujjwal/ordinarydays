@@ -72,6 +72,18 @@ content length — `Repeat` alone beside `Notes`-with-summary. Both are minima; 
 > `textSecondary` measures 4.45:1 there. A rule stated as a token rather than as a role is a
 > rule that will be applied where it fails.
 
+> **The selected tint — 2026-08-16 (P2-43).** A `SettingRow` whose `selected` is `true` carries
+> an `accentSurface` fill **and** the trailing check, and its secondary ink steps up to
+> `textPrimary` by the rule above. Two carriers, never one: colour is not a meaning-carrier
+> anywhere in this system. It lives on the component rather than on the three screens that pick
+> one of a set — the reschedule sheet, the reminder menu, the Add form's menus — because that is
+> the whole point of having a row family. There is **no radio column**: the check is the mark.
+>
+> `ScreenShell` gains a **`footer`** slot in the same task, the screen-level counterpart of
+> §6.1's `actions`. A screen supplies the control; the shell decides where it sits, how clear of
+> the home indicator it is, and that the keyboard lifts it rather than covering it. A named write
+> that scrolls away with the form it commits is the failure it exists against.
+
 **Component families, not component sprawl.** One implementation per family; the roles are
 gallery states, not separate primitives. `Row` and `SettingRow` are the two row families —
 "navigation row", "choice row", "check row", "disclosure row", "content row" are *roles* of
@@ -459,7 +471,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `Checkbox` | `checked`, `onChange`, `label` (accessible name), `disabled` | unchecked (borderStrong ring), checked (olive fill, white check, spring), disabled, focus-visible. 44 × 44 target, 24 × 24 visual. |
 | `Avatar` | `displayName`, `imageUrl?`, `size` (`sm` 24 \| `md` 28 \| `lg` 48) | image, **tinted-initials fallback** (two letters, `footnoteStrong`, disc filled with a stable per-person tint drawn from the `*Surface` family), loading |
 | `AvatarStack` | `people`, `max` (4), `size` | Renders up to `max` overlapped by 6 pt plus a `+n` disc. Non-interactive on rows. |
-| `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (accent tint fill), pressed, disabled. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
+| `Chip` | `label`, `accessibilityLabel?`, `icon?`, `tone` (`neutral` \| `accent` \| `warning` \| `danger` \| `success`), `onPress?`, `selected` | default, selected (`accentSurface` fill with a decorative `accentBorder` rim — P2-43), pressed, disabled. Every chip reserves the rim's 1 pt in transparent, so choosing one does not move the row. Default neutral chips may use decorative `borderSubtle`; focus still uses `focusRing`. Also carries provenance labels (`From screenshot`, `From link`) in `neutral`, `surfaceSunken` fill. |
 | `SectionHeader` | `title`, `count?`, `action?` | default only. `caption` type, uppercase, wide-tracked, `accessibilityRole="header"`. |
 | `EmptyState` | `heading`, `body?`, `action?` | One heading line, at most one body line, at most one action. No illustration. |
 | `Toast` | `message`, `action?` (`{ label, onPress }`), `tone` (`neutral` \| `error`), `duration` (6000 \| 10000) | entering, visible, exiting. One at a time; a new one commits the previous. `accessibilityLiveRegion="polite"`. |

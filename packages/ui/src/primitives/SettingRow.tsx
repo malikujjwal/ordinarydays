@@ -33,6 +33,17 @@ import { Touchable } from './Touchable';
  * `summary` sits **below** the label and is the row's current content, clamped to one line — a
  * collapsed row summarises, it never renders the value. `value` sits **right** of the label and
  * is the setting's current state. They are mutually exclusive; a row is one shape or the other.
+ *
+ * ## The selected tint
+ *
+ * Added 2026-08-16 (P2-43). A selected row carries an `accentSurface` fill **and** the check —
+ * two carriers, because colour is never the only one. It is here rather than in the three
+ * screens that pick one of a set, so a menu in the Add flow and a menu in the reschedule sheet
+ * cannot disagree about what "chosen" looks like.
+ *
+ * On that fill the secondary ink moves to `textPrimary`: light `textSecondary` measures 4.45:1
+ * against `accentSurface` and misses the gate, which `design-system.md` §0 states as the rule
+ * and `contrast.test.ts` pins.
  */
 export interface SettingRowProps {
   label: string;
@@ -96,6 +107,8 @@ export function SettingRow({
 }: SettingRowProps) {
   const theme = useTheme();
   const interactive = onPress !== undefined;
+  /** The chosen row of a set. Its ink answers to `accentSurface`, not to `surface`. */
+  const tinted = selected === true;
 
   const content = (
     <View
@@ -105,6 +118,8 @@ export function SettingRow({
         // The ≥ 8 pt rule between adjacent targets, applied here so no caller has to.
         gap: theme.space[4],
         paddingVertical: theme.space[5],
+        // Full-bleed, so the tint is the row rather than a badge sitting inside one.
+        ...(tinted ? { backgroundColor: theme.colors.accentSurface } : {}),
         // One measure for every utility row, inert ones included — a list that changed height
         // depending on which rows happened to be controls would be the same defect again.
         minHeight: theme.layout.settingRowMinHeight,
@@ -118,7 +133,7 @@ export function SettingRow({
         {summary === undefined ? null : (
           <Text
             variant="footnote"
-            color={interactive ? 'textSecondary' : 'textMuted'}
+            color={tinted ? 'textPrimary' : interactive ? 'textSecondary' : 'textMuted'}
             numberOfLines={1}
           >
             {summary}
@@ -137,7 +152,7 @@ export function SettingRow({
        * `textSecondary` is 4.45:1 and the correct token there is `textPrimary`.
        */}
       {value === undefined ? null : (
-        <Text variant="subhead" color="textSecondary">
+        <Text variant="subhead" color={tinted ? 'textPrimary' : 'textSecondary'}>
           {value}
         </Text>
       )}

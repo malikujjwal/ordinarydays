@@ -28,6 +28,7 @@ import {
   Row,
   RowGroup,
   ratioOf,
+  ScreenShell,
   Search,
   SectionHeader,
   SegmentedControl,
@@ -356,6 +357,25 @@ function Gallery({ scheme }: { scheme: ColorScheme }) {
         </RowGroup>
       </Section>
 
+      {/**
+       * **`ScreenShell`'s footer slot (P2-43).** Bounded to a fixed height so the real
+       * component renders inside the gallery's own scroll; everything about it — the gutters,
+       * the top rule, the safe-area clearance under the button — is the shipped one.
+       */}
+      <Section title="ScreenShell — the pinned named write">
+        <View style={{ height: 220 }}>
+          <ScreenShell
+            measure="reading"
+            footer={<Button label="Save task" size="lg" fullWidth onPress={() => {}} />}
+          >
+            <Text variant="body" color="textSecondary">
+              The body scrolls; the write does not. A named write that scrolls away is a
+              named write the user has to go looking for.
+            </Text>
+          </ScreenShell>
+        </View>
+      </Section>
+
       <Section title="The UP NEXT card — the one hero surface">
         <Card hero radius="xl" elevation="e3">
           <Text variant="caption" color="accent">
@@ -438,8 +458,9 @@ function Gallery({ scheme }: { scheme: ColorScheme }) {
       <Section title="DatePicker and TimePicker">
         <DatePicker label="Date" value={date} onChange={setDate} today={TODAY} />
         <TimePicker label="Time" value={time} onChange={setTime} />
-        {/* Time is disabled until a date is set, which is the form's rule, not the
-            picker's (`activities.md` §3.4) — shown here so the state is reviewable. */}
+        {/* The disabled state, shown so it stays reviewable. **The creation forms no longer
+            reach it** (P2-43): Time is absent until a date exists rather than greyed with
+            `Pick a date first.` beside it. */}
         <TimePicker label="End time" value={null} onChange={() => {}} disabled />
       </Section>
 

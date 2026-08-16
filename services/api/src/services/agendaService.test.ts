@@ -1413,3 +1413,106 @@ describe('a series status never resolves its occurrences', () => {
     },
   );
 });
+
+/**
+ * Reported: a recurring plan shows today's occurrence and none of the later ones.
+ *
+ * Every recurrence case above uses the `task` fixture, so nothing asserted that expansion is
+ * blind to `objectKind` — which is exactly the axis a plan differs on. A series is a series;
+ * `deriveGsi1Bucket` puts any recurring Activity in `#R`, and the window is the window.
+ */
+describe('a recurring plan expands like any other series', () => {
+  const dailyEvent = () =>
+    activity({
+      objectKind: 'plan',
+      type: 'event',
+      details: { kind: 'event' },
+      schedule: { date: '2026-08-06', time: '18:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: '2026-08-06', time: '18:00' }],
+      },
+    });
+
+  it('emits one row per date across a multi-day window', async () => {
+    const series = dailyEvent();
+    const dates = ['2026-08-06', '2026-08-07', '2026-08-08', '2026-08-09'];
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: dates,
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-09',
+        timezone: 'America/New_York',
+        now,
+      },
+      subject.dependencies,
+    );
+
+    expect(
+      result.days.map((day) => day.schedule.map((row) => row.activity.activityId)),
+    ).toEqual(dates.map(() => [series.activityId]));
+  });
+
+  it('queries the recurring bucket for it, not the undated-plan one', async () => {
+    const series = dailyEvent();
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: ['2026-08-06', '2026-08-07'],
+    });
+
+    await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-07',
+        timezone: 'America/New_York',
+        now,
+      },
+      subject.dependencies,
+    );
+
+    expect(subject.calls).toContain('R');
+    expect(subject.calls).not.toContain('P');
+  });
+
+  /** The projection has to carry the plan through too, or the rows exist and never render. */
+  it('projects every occurrence with its own date and no checkbox', async () => {
+    const series = dailyEvent();
+    const dates = ['2026-08-06', '2026-08-07', '2026-08-08'];
+    const subject = fixture({
+      activities: [series],
+      buckets: { R: [index(series)] },
+      expanded: dates,
+    });
+
+    const result = await assembleAgenda(
+      {
+        userId: 'usr_alice',
+        from: '2026-08-06',
+        to: '2026-08-08',
+        timezone: 'America/New_York',
+        now,
+      },
+      subject.dependencies,
+    );
+
+    const projected = result.days.map((day) =>
+      projectAgendaItems(day.schedule, {
+        now,
+        timezone: 'America/New_York',
+        today: '2026-08-06',
+      }),
+    );
+
+    expect(projected.map((day) => day[0]?.occurrenceDate)).toEqual(dates);
+    expect(projected.every((day) => day[0]?.hasCheckbox === false)).toBe(true);
+    expect(projected.every((day) => day[0]?.isRecurring === true)).toBe(true);
+  });
+});

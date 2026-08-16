@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { describe, expect, it, vi } from 'vitest';
 import {
   Bowl,
@@ -24,6 +25,8 @@ import { IconButton } from './IconButton';
 import { IconTile } from './IconTile';
 import { ProgressBar } from './ProgressBar';
 import { Row } from './Row';
+import { ScreenShell } from './ScreenShell';
+import { SettingRow } from './SettingRow';
 import { Sheet } from './Sheet';
 import { Text, type TextColor } from './Text';
 
@@ -211,6 +214,93 @@ describe('Row', () => {
       />,
     );
     expect(screen.getByRole('button', { name: 'Gym' })).toBeDefined();
+  });
+});
+
+/**
+ * The selected tint (P2-43). Two carriers, never one: the fill **and** the check, so the state
+ * survives a user who cannot tell the two surfaces apart. The ink on the tint is asserted in
+ * both schemes because light `textSecondary` measures 4.45:1 against `accentSurface` and must
+ * step up to `textPrimary` there — the rule `design-system.md` §0 states and
+ * `contrast.test.ts` pins.
+ */
+describe.each(schemes)('%s scheme — a selected SettingRow', (scheme) => {
+  it('carries the accent tint and readable ink', () => {
+    wrap(
+      <SettingRow label="Tomorrow" value="Thu, Aug 13" selected onPress={() => {}} />,
+      scheme,
+    );
+
+    const value = screen.getByText('Thu, Aug 13');
+    expect(getComputedStyle(value).color).toBe(cssRgb(colors[scheme].textPrimary));
+    expect(getComputedStyle(value.parentElement as HTMLElement).backgroundColor).toBe(
+      cssRgb(colors[scheme].accentSurface),
+    );
+  });
+
+  it('leaves an unselected row on the page surface, with its own ink', () => {
+    wrap(<SettingRow label="Today" value="Wed, Aug 12" onPress={() => {}} />, scheme);
+
+    const value = screen.getByText('Wed, Aug 12');
+    expect(getComputedStyle(value).color).toBe(cssRgb(colors[scheme].textSecondary));
+    expect(getComputedStyle(value.parentElement as HTMLElement).backgroundColor).toBe(
+      'rgba(0, 0, 0, 0)',
+    );
+  });
+});
+
+/**
+ * The selected pill's rim (P2-43). Unselected pills carry the same width in transparent, so
+ * choosing one does not move the row under the finger.
+ */
+describe.each(schemes)('%s scheme — a selected Chip', (scheme) => {
+  it('rims the selected pill and reserves the width on the rest', () => {
+    wrap(<Chip label="Tomorrow" selected onPress={() => {}} />, scheme);
+    const selected = screen.getByText('Tomorrow').parentElement as HTMLElement;
+    expect(getComputedStyle(selected).borderColor).toBe(
+      cssRgb(colors[scheme].accentBorder),
+    );
+    expect(getComputedStyle(selected).borderWidth).toBe('1px');
+
+    wrap(<Chip label="Today" onPress={() => {}} />, scheme);
+    const plain = screen.getByText('Today').parentElement as HTMLElement;
+    expect(getComputedStyle(plain).borderColor).toBe('rgba(0, 0, 0, 0)');
+    expect(getComputedStyle(plain).borderWidth).toBe('1px');
+  });
+});
+
+/**
+ * `ScreenShell`'s footer slot (P2-43): the container owns where a named write sits, so no
+ * screen has to answer it and answer it differently.
+ */
+describe('ScreenShell', () => {
+  it('renders the footer outside the scrolling body', () => {
+    wrap(
+      <SafeAreaProvider>
+        <ScreenShell
+          testID="shell"
+          footer={<Button label="Save task" onPress={() => {}} />}
+        >
+          <Text variant="body">A form</Text>
+        </ScreenShell>
+      </SafeAreaProvider>,
+    );
+
+    const save = screen.getByRole('button', { name: 'Save task' });
+    expect(screen.getByTestId('shell-footer').contains(save)).toBe(true);
+    expect(screen.getByTestId('shell-body').contains(save)).toBe(false);
+  });
+
+  it('renders no footer chrome when a screen supplies none', () => {
+    wrap(
+      <SafeAreaProvider>
+        <ScreenShell testID="shell">
+          <Text variant="body">A list</Text>
+        </ScreenShell>
+      </SafeAreaProvider>,
+    );
+
+    expect(screen.queryByTestId('shell-footer')).toBeNull();
   });
 });
 

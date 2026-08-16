@@ -3347,6 +3347,38 @@ no disabled field is rendered in any state; `More options` lists only built capa
 Do not add a field, an activity type, or a colour outside P2-40's tables. Do not pre-select
 anything.
 
+> **Implementation notes — 2026-08-16 (P2-43 as built).** Five things this task's prose left
+> open, settled here so the next reader does not re-derive them from the diff.
+>
+> 1. **`More options` holds a contiguous suffix of the type's table, and the split is a
+>    position rather than a count.** `activities.md` §3 rule 3 makes the §4 order part of the
+>    spec, so a disclosure holding an arbitrary subset would rewrite it silently. Folding the
+>    tail away reorders nothing. The split falls after the schedule block, with two named
+>    exceptions that the tables themselves force: Meal keeps `Slot` up front, because §4.2 makes
+>    the slot and the time two views of one value, and Watch keeps the identity fields its table
+>    puts *above* the date. Removing an unbuilt field never drags the boundary — that is a unit
+>    test, because it is the one way this could go wrong invisibly.
+> 2. **"No disabled field" retires P1-25's `ComingSoonControl` outright.** People, Related plan
+>    and the two list-bridge rows now render nothing; §3.4's three interlocks now express
+>    themselves as absence. `activities.md` §3 gains a dated note in this PR recording the
+>    reversal and its bounds, because §4's tables and §3.4's "only enabled when a date is set"
+>    both said otherwise. The 2026-08-13 clarification's inert `Coming later` row is untouched:
+>    it belongs to Plan **detail**, a discovery surface, and a form is not one.
+> 3. **The pinned Save is a `ScreenShell` slot, not a screen's own footer.** P2-51's gate says a
+>    screen may not hand-roll a screen shell or a sheet footer, and compose was one of the
+>    fifteen files still setting its own gutters and bottom padding. The slot is the screen-level
+>    counterpart of §6.1's `actions` and owns the same three things: position, safe-area
+>    clearance and what the keyboard does to it. `design-system.md` §0 records it.
+> 4. **The bottom-anchored menu is `Sheet`, and the selected tint is `SettingRow`'s.** The task
+>    asks for `accentSurface` and a check with no radio column; that is one line on the row
+>    family rather than a treatment in the Add flow, so the reschedule sheet and the reminder
+>    menu cannot disagree with it. `accentBorder` on the selected `When` pill is likewise on
+>    `Chip`. Both are recorded in `design-system.md` and pinned in both schemes.
+> 5. **Repeat's empty summary reads `Does not repeat`, not `Never`.** The compose control said
+>    `Never`, which `today-and-tasks.md` §6.1's 2026-08-14 founder note had already superseded
+>    everywhere else; the detail screen and the repeat sheet were already correct. Not new copy —
+>    the removal of a stale second name for one option.
+
 ---
 
 ### P2-44 — Today day header and timeline furniture

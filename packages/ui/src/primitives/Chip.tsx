@@ -57,6 +57,17 @@ export function Chip({
         paddingVertical: theme.space[2],
         borderRadius: theme.radius.pill,
         backgroundColor: palette.bg,
+        /**
+         * The selected pill's rim (P2-43): `accentSurface` with `accentBorder`, which is what
+         * the founder's frames draw a chosen `When` pill as. It is **decorative** — the fill,
+         * the `Check`-free label and `aria-pressed` already carry the state, and `accentBorder`
+         * is under 3:1 by design (`contrast.test.ts`), so it may never be the only indicator.
+         *
+         * The unselected pill carries the same width in transparent, so choosing one does not
+         * move the row under the finger.
+         */
+        borderWidth: 1,
+        borderColor: selected ? theme.colors.accentBorder : 'transparent',
         opacity: disabled ? 0.45 : 1,
       }}
     >
