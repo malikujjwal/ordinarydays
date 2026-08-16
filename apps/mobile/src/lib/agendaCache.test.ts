@@ -1148,3 +1148,71 @@ describe('a snooze projects into both cache shapes and rolls both back', () => {
     expect(timeOf()).toBe('09:30');
   });
 });
+
+/**
+ * Reported: create a Meal that repeats daily and only today's occurrence appears, without the
+ * repeat glyph. Reproduced against the local API, which returned all seven days correctly for
+ * the same activity — so the row was right on the wire and wrong in the cache.
+ *
+ * `applyCreate` writes one row on the activity's own date, which is all a one-off has and the
+ * first day of all a series has. Nothing asked for the rest, and the glyph is driven by
+ * `recurrenceDescription`, which the server authors and an optimistic row cannot invent.
+ */
+describe('creating a series asks for the expansion it cannot derive', () => {
+  const series = {
+    activityId: 'act_STANDUP',
+    objectKind: 'plan',
+    type: 'meal',
+    title: 'Dinner plan',
+    status: 'scheduled',
+    schedule: { date: TODAY, time: '18:00', timezone: 'UTC' },
+    recurrence: { mode: 'fixed', segments: [{ freq: 'daily', effectiveFrom: TODAY }] },
+    updatedAt: '2026-08-14T10:00:00.000Z',
+  };
+
+  it('projects the first day immediately and reconciles the rest', async () => {
+    const client = seeded();
+    const expanded: AgendaData = {
+      days: [
+        {
+          date: TODAY,
+          schedule: [row({ title: 'Dinner plan' })],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+      projectionVersions: [{ activityId: 'act_STANDUP', version: series.updatedAt }],
+    };
+
+    projectActivityWrite(client, ['activity', 'create'], { activity: series }, {});
+
+    // The optimistic row is there at once, on its own date.
+    expect(
+      client.getQueryData<AgendaData>(KEY)?.days[0]?.schedule.map((r) => r.activityId),
+    ).toContain('act_STANDUP');
+
+    // And the canonical expansion is requested rather than waited for.
+    const reconciled = await reconcileAgendaProjection(
+      client,
+      { activityId: 'act_STANDUP', version: series.updatedAt },
+      async () => expanded,
+      async () => {},
+    );
+    expect(reconciled).toBe(true);
+  });
+
+  /** A one-off has nothing to expand, so it must not pay for a reconciliation round trip. */
+  it('does not reconcile a one-off create', () => {
+    const client = seeded();
+    const { recurrence: _recurrence, ...oneOff } = series;
+
+    expect(
+      projectActivityWrite(client, ['activity', 'create'], { activity: oneOff }, {}),
+    ).toBe(true);
+    expect(guardAgendaResponse(client, KEY, { days: [], warnings: [] })).toEqual({
+      days: [],
+      warnings: [],
+    });
+  });
+});

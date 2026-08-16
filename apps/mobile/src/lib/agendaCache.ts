@@ -187,6 +187,32 @@ export function projectActivityWrite(
 
   if (tag === 'create' || tag === 'duplicate') {
     update(client, (agenda) => applyCreate(agenda, { activity, ...clock }));
+
+    /**
+     * **A new series needs the server's expansion, not just its first day.**
+     *
+     * `applyCreate` writes one row on the activity's own date, which is everything a one-off
+     * has and the first day of everything a series has. Nothing then asked for the rest: this
+     * branch returned, and `refreshActivityLists` marks the agenda stale with
+     * `refetchType: 'none'`. So a plan created to repeat daily showed exactly one occurrence,
+     * on its anchor date, until something incidental refetched — and showed it without the
+     * repeat glyph, because that is driven by `recurrenceDescription`, which the server authors
+     * and an optimistic row cannot invent.
+     *
+     * Reported for a Meal and reproduced against the local API, which returned all seven days
+     * correctly for the same activity — the row was right on the wire and wrong in the cache.
+     * The convert branch below has always done this; create was the one recurrence-producing
+     * write that never asked.
+     */
+    if (activity.recurrence !== undefined && typeof activity.updatedAt === 'string') {
+      void reconcileAgendaProjection(client, {
+        activityId: activity.activityId,
+        version: activity.updatedAt,
+        ...(activity.schedule?.date === undefined
+          ? {}
+          : { relevantDate: activity.schedule.date }),
+      });
+    }
     return true;
   }
 
