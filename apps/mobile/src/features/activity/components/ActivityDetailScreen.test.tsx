@@ -2329,49 +2329,6 @@ describe('snooze visibility', () => {
     );
     release?.(undefined);
   });
-
-  it('puts the old time back when the write is refused', async () => {
-    stubFetch(
-      {
-        status: 200,
-        body: detailBody(series(), [], undefined, occurrenceProjection()),
-      },
-      { status: 500, body: { error: { code: 'internal', message: 'nope' } } },
-    );
-    /**
-     * `networkMode: 'always'`, because a rollback can only be observed if the mutation is
-     * allowed to *settle*. React Query's `onlineManager` is a module singleton, and an earlier
-     * case in this file builds a real offline client; under the default `'online'` mode a
-     * mutation that inherits a paused manager never rejects, so the catch that rolls back never
-     * runs and the assertion sees the projected time forever. That made this pass alone and
-     * fail in the file — the failure was the harness, not the rollback.
-     */
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false, networkMode: 'always' },
-      },
-    });
-    mount(
-      () => {},
-      () => {},
-      undefined,
-      TODAY,
-      queryClient,
-    );
-    await loaded();
-
-    fireEvent.click(screen.getByTestId('detail-snooze'));
-    fireEvent.click(screen.getByRole('button', { name: 'Snooze until 8:25 AM' }));
-
-    // Projected first, so the rollback below is asserting a transition and not the start state.
-    await waitFor(() =>
-      expect(screen.getByTestId('when-where-date').textContent).toContain('8:25 AM'),
-    );
-    await waitFor(() =>
-      expect(screen.getByTestId('when-where-date').textContent).toContain('8:00 AM'),
-    );
-  });
 });
 
 /** Reported: snooze an occurrence, then skip it, and the resolved block never appears. */

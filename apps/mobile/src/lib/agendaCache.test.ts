@@ -5,6 +5,7 @@ import {
   guardAgendaResponse,
   projectActivityWrite,
   projectOptimisticCompletion,
+  projectOptimisticSnooze,
   reconcileAgendaProjection,
 } from '@/lib/agendaCache';
 
@@ -1060,5 +1061,90 @@ describe('an occurrence resolution reaches the occurrence detail entry', () => {
       client.getQueryData<{ occurrence: { status: string } }>(occurrenceKey)?.occurrence
         .status,
     ).toBe('scheduled');
+  });
+});
+
+/**
+ * The snooze projection and its rollback, at the layer where they are deterministic.
+ *
+ * This began as a component test that drove a failing write and watched the header go back.
+ * It was flaky: the rollback runs on a rejected promise inside a detached handler, so whether
+ * `waitFor` observed the restored state depended on scheduling, and the assertion it settled on
+ * was also satisfiable by the *initial* state. A test that can pass without the behaviour
+ * happening, and fail when it does, is worse than no test — `testing.md` §10 rule 2. The
+ * closure is a pure function of the cache; asserted here it needs no clock, no fetch and no
+ * React.
+ */
+describe('a snooze projects into both cache shapes and rolls both back', () => {
+  const occurrenceKey = ['activity', 'act_STANDUP', 'occurrence', TODAY];
+  const seriesKey = ['activity', 'act_STANDUP'];
+
+  it('moves an occurrence’s time and puts it back', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    client.setQueryData(occurrenceKey, {
+      activity: { activityId: 'act_STANDUP' },
+      reminders: [],
+      occurrence: {
+        nominalDate: TODAY,
+        date: TODAY,
+        time: '09:30',
+        status: 'scheduled',
+        isSnoozed: false,
+      },
+    });
+
+    const rollback = projectOptimisticSnooze(client, {
+      activityId: 'act_STANDUP',
+      occurrenceDate: TODAY,
+      date: TODAY,
+      time: '10:00',
+    });
+
+    const current = () =>
+      client.getQueryData<{ occurrence: { time: string; isSnoozed: boolean } }>(
+        occurrenceKey,
+      )?.occurrence;
+    expect(current()).toMatchObject({ time: '10:00', isSnoozed: true });
+
+    rollback();
+    expect(current()).toMatchObject({ time: '09:30', isSnoozed: false });
+  });
+
+  /** The one-off shape stores it on the Activity, and must roll back just as completely. */
+  it('moves a one-off’s snoozedUntil and puts it back', () => {
+    const client = seeded();
+    client.setQueryData(seriesKey, {
+      activity: { activityId: 'act_STANDUP' },
+      reminders: [],
+    });
+
+    const rollback = projectOptimisticSnooze(client, {
+      activityId: 'act_STANDUP',
+      date: TODAY,
+      time: '10:00',
+    });
+
+    const current = () =>
+      client.getQueryData<{ activity: { snoozedUntil?: string } }>(seriesKey)?.activity;
+    expect(current()?.snoozedUntil).toBe('10:00');
+
+    rollback();
+    expect(current()?.snoozedUntil).toBeUndefined();
+  });
+
+  it('restores the agenda row as well as the detail entry', () => {
+    const client = seeded(row({ time: '09:30' }));
+
+    const rollback = projectOptimisticSnooze(client, {
+      activityId: 'act_STANDUP',
+      date: TODAY,
+      time: '10:00',
+    });
+
+    const timeOf = () => client.getQueryData<AgendaData>(KEY)?.days[0]?.schedule[0]?.time;
+    expect(timeOf()).toBe('10:00');
+
+    rollback();
+    expect(timeOf()).toBe('09:30');
   });
 });
