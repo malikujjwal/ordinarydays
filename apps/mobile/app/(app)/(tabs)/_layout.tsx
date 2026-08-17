@@ -1,6 +1,7 @@
 import { navIcons, useBreakpoint, useTheme } from '@od/ui';
 import { type Href, Tabs, useRouter, useSegments } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { tabBarBottomOffset } from '@/components/globalAddLayout';
 import { ShellFrame } from '@/features/shell/components/ShellFrame';
 import { tabs } from '@/features/shell/model/tabs';
 import { useComposeDraft } from '@/stores/composeDraft';
@@ -87,13 +88,22 @@ export default function TabsLayout() {
             : {
                 position: 'absolute',
                 /**
-                 * Inset further and sitting lower than the first attempt — founder, 2026-08-17:
-                 * "it's a bit higher and occupies the full width". A capsule has to read as a
-                 * detached control resting near the edge, not as a bar with rounded ends.
+                 * **A margin, not `left`/`right`** — the fix for the founder's 2026-08-18 report
+                 * that the capsule was still full-width on an iPhone while correct on web.
+                 *
+                 * `BottomTabBar` puts `styles.bottom` — `{ start: 0, end: 0, bottom: 0 }` — in
+                 * the style array before this object. Yoga resolves the *logical* edges `start`
+                 * and `end` ahead of the physical `left` and `right`, so on native `start: 0`
+                 * won and the `left`/`right` written here were discarded. React Native Web maps
+                 * `start`/`end` to `inset-inline-*`, a different CSS property that our `left`
+                 * and `right` outrank — which is exactly why this looked fixed in a browser and
+                 * unchanged on the device.
+                 *
+                 * A horizontal margin has no such contest: it insets a `start: 0, end: 0` box
+                 * identically under Yoga and CSS, so both platforms now get one capsule.
                  */
-                left: theme.space[7],
-                right: theme.space[7],
-                bottom: insets.bottom + theme.space[2],
+                marginHorizontal: theme.space[7],
+                bottom: tabBarBottomOffset(insets.bottom),
                 backgroundColor: theme.colors.surfaceRaised,
                 borderTopWidth: 0,
                 borderRadius: theme.radius.pill,

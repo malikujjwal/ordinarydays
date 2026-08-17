@@ -988,6 +988,24 @@ carried on a `surfaceSunken` pill (`radius.md`). The signed-in name sits at the 
 foot in `footnote`, `textDisabled`. At `compact` the same three tabs render as the bottom
 tab bar and People stays under Profile.
 
+**The bottom tab bar is a floating capsule** (added 2026-08-17, geometry fixed 2026-08-18). At
+`compact` it does not span the width and has no rule above it: `radius.pill`, 64 pt tall,
+`surfaceRaised` at `e2`, inset `space[7]` from each side, its bottom edge `space[4]` above the
+screen. Because it floats it no longer occupies layout, so **every scrolling tab reserves its
+height plus that gap** — a row left underneath it is visible and unclickable, which is not a row
+bug. That reservation and the bar's own offset are one value, `tabBarBottomOffset`, and must not
+be restated anywhere.
+
+Two platform rules the capsule depends on, both learned the hard way:
+
+- **Inset it with `marginHorizontal`, never `left`/`right`.** React Navigation's `BottomTabBar`
+  already applies `{ start: 0, end: 0 }`, and Yoga resolves those logical edges *ahead of* the
+  physical ones — so `left`/`right` are silently discarded on device while React Native Web,
+  which maps `start`/`end` to `inset-inline-*`, honours them. That divergence renders correctly
+  in a browser and full-width on an iPhone, and no web screenshot can catch it.
+- **Cap the safe-area inset into the gap; do not add it.** A home indicator reports 34 pt and web
+  reports 0, so adding it floats the same capsule 38 pt up on device and 4 pt up in a browser.
+
 **What the web layout does differently at `expanded` (≥ 1200 px):**
 
 | Aspect | Behaviour |

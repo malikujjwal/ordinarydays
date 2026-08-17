@@ -20,6 +20,23 @@ export const TAB_BAR_HEIGHT = space[11];
 export const GLOBAL_ADD_SCROLL_PADDING = space[5] + GLOBAL_ADD_SIZE + space[3];
 
 /**
+ * The gap between the floating tab bar's bottom edge and the bottom of the screen.
+ *
+ * **The home-indicator inset is capped here, not added on top** — amended 2026-08-18 on the
+ * founder's report that the capsule "is above a certain height" on an iPhone while looking
+ * right on web. A phone with a home indicator reports `insets.bottom` of 34 pt and web reports
+ * 0, so adding the inset to a fixed gap floated the same component 38 pt up on device and 4 pt
+ * up in a browser — one capsule reading as two different designs. Capping keeps the web value
+ * exactly where it is and brings the device down to a gap that still clears the indicator glyph.
+ *
+ * This is the **only** statement of that offset. It used to be written twice — as
+ * `insets.bottom + space[2]` where the bar is drawn and `insetBottom + space[3]` where scrolling
+ * content reserves room for it — two copies of one position, already disagreeing by 4 pt.
+ */
+export const tabBarBottomOffset = (insetBottom: number): number =>
+  Math.min(insetBottom + space[2], space[4]);
+
+/**
  * The room a scrolling tab must leave beneath its last row — added 2026-08-17.
  *
  * **The tab bar overlays the scroll view; it does not sit below it.** On web React Navigation
@@ -28,10 +45,9 @@ export const GLOBAL_ADD_SCROLL_PADDING = space[5] + GLOBAL_ADD_SIZE + space[3];
  * returns the tab's `<a>`. The founder's report was that rows behind the tabs do not respond,
  * and this is why: nothing was broken about the row, it was simply underneath something.
  *
- * Reserving the bar's height plus the safe-area inset means the last row can always be scrolled
+ * Reserving the bar's height plus the gap it floats by means the last row can always be scrolled
  * clear of both it and the floating Add control. The inset is a runtime value, so this is a
  * function rather than a constant.
  */
 export const bottomChromeScrollPadding = (insetBottom: number): number =>
-  // The bar floats since 2026-08-17, so its own bottom margin is reserved alongside its height.
-  GLOBAL_ADD_SCROLL_PADDING + TAB_BAR_HEIGHT + insetBottom + space[3];
+  GLOBAL_ADD_SCROLL_PADDING + TAB_BAR_HEIGHT + tabBarBottomOffset(insetBottom);
