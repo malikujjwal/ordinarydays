@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { agendaRow } from '../support/agenda';
+import { agendaRow, openEarlierToday } from '../support/agenda';
 import { createDailyTask, deleteActivities, wallDate } from '../support/api';
 
 test('keeps occurrence actions scoped while a daily series becomes a one-off', async ({
@@ -19,6 +19,12 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
     await page.clock.setFixedTime(now);
     await page.goto('/');
     await expect(page.locator('[data-testid="today-agenda"]')).toBeVisible();
+    /**
+     * The series is at 18:00, so whether its row sits in SCHEDULE or in EARLIER TODAY depends on
+     * the wall clock when the suite runs — and EARLIER TODAY is collapsed by default (P2-44).
+     * Opening it makes the spec time-of-day independent instead of passing only before 6 PM.
+     */
+    await openEarlierToday(page);
     const todayRow = agendaRow(page, series.activityId).filter({ hasText: title });
     await expect(
       todayRow.locator('[data-testid="agenda-badge-recurrence"]'),
@@ -61,6 +67,7 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
 
     await page.clock.setFixedTime(new Date(`${tomorrow}T16:00:00.000Z`));
     await page.goto('/');
+    await openEarlierToday(page);
     const tomorrowRow = agendaRow(page, series.activityId).filter({ hasText: title });
     await expect(tomorrowRow.getByRole('checkbox')).not.toBeChecked();
     await expect(tomorrowRow.getByRole('checkbox')).toBeEnabled();

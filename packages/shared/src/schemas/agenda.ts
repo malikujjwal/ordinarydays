@@ -43,6 +43,11 @@ export const agendaItem = z
     participantCount: z.number().int().nonnegative(),
     locationLabel: z.string().max(MAX_FREE_TEXT_LEN).optional(),
     subtitle: z.string().max(MAX_TITLE_LEN).optional(),
+    /**
+     * Bounded at `MAX_TITLE_LEN`, not `MAX_NOTES_LEN`: this is one clamped line for a row, and a
+     * schema that accepted 4,000 characters would invite the whole note onto the agenda.
+     */
+    noteExcerpt: z.string().max(MAX_TITLE_LEN).optional(),
     isPast: z.boolean(),
     reminders: z.array(reminder).optional(),
     overdueFromDate: isoDate.optional(),

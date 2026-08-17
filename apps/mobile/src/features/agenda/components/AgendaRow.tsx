@@ -1,5 +1,12 @@
 import type { AgendaItem } from '@od/shared/types';
-import { Chip, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
+import {
+  Chip,
+  formatWallTime,
+  Text,
+  Touchable,
+  type as typeScale,
+  useTheme,
+} from '@od/ui';
 import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
 import { isFutureRecurringOccurrence } from '@/features/agenda/model/rowScope';
@@ -45,11 +52,12 @@ export interface AgendaRowProps {
    * The timeline connector (`design-system.md` §7.1, P2-44) — "it is what makes the day read as
    * a timeline".
    *
-   * One flag, not two halves: a row draws the link **beneath** it, and the section's last row
-   * draws none. It was a pair meeting at the marker's centre, which ran the line through every
-   * glyph. Purely decorative, so it is hidden from assistive technology — a screen reader hears
-   * the rows, not the line between them.
+   * Two halves, because the rule is about a section's ends: nothing renders above the **first**
+   * marker or below the **last**. The section owns that knowledge; the row only knows how to draw
+   * its own column. Purely decorative, so both are hidden from assistive technology — a screen
+   * reader hears the rows, not the line between them.
    */
+  connectorAbove?: boolean;
   connectorBelow?: boolean;
   onOpen: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
@@ -78,6 +86,7 @@ function bodyLabel(
   if (checked) parts.push(outcomeVerb(item.type));
   // Spoken as well as shown: dimming is not a state a screen reader can hear.
   if (SKIPPED_STATUSES.has(item.status)) parts.push('Skipped');
+  if (item.noteExcerpt !== undefined) parts.push(item.noteExcerpt);
   if (item.subtitle !== undefined) parts.push(item.subtitle);
   if (item.time === undefined) parts.push(untimedContextLabel, 'no time');
   else parts.push(formatWallTime(item.time));
@@ -101,6 +110,7 @@ export function AgendaRow({
   subtitlePrefix,
   divider = true,
   dense = false,
+  connectorAbove = false,
   connectorBelow = false,
   onOpen,
   onToggleComplete,
@@ -159,36 +169,123 @@ export function AgendaRow({
   const railWidth = theme.space[11];
   const railOffset = showTime ? railWidth : theme.space[0];
   const markerCentreX = railOffset + theme.layout.hitTarget / 2;
-  const markerCentreY = theme.space[5] + theme.layout.hitTarget / 2;
+  /**
+   * **One value, four uses.** The row's vertical padding also positions the time column, the
+   * overdue chip and the connector's origin, and those three were carrying `space[5]` as a
+   * literal. Tightening the padding to `space[3]` therefore left the time sitting 8 pt below the
+   * title it belongs to and started the connector 8 pt below the marker it hangs from — one
+   * change, three symptoms, because the same number was written in four places.
+   */
+  /**
+   * `space[4]`, up from `space[3]` — founder, 2026-08-17: with the rules gone, "spacing is doing
+   * the job the borders used to do", and a row carrying a two-line title plus a recurrence badge
+   * ran too close to the next one. 12 either side puts 24 pt between one row's last line and the
+   * next row's first, against 4 pt between a title and its own badge — a 6:1 ratio, so the eye
+   * reads the grouping without a separator to help it.
+   */
+  const rowPaddingY = dense ? theme.space[0] : theme.space[4];
+  /**
+   * **How far the leading control is lifted**, so its 44 pt box centres on the title's first
+   * line rather than on the row (founder, 2026-08-17).
+   */
+  /**
+   * The title's own variant: a resolved row settles to `subhead`, an open one is `bodyStrong`.
+   * The lift below is computed **from this**, not from `bodyStrong` — hard-coding the open
+   * variant left every completed row's glyph half a point out, which is the same
+   * duplicated-position mistake in miniature.
+   */
+  const titleVariant = dimmed ? 'subhead' : 'bodyStrong';
+  const leadingLift = (theme.layout.hitTarget - typeScale[titleVariant].lineHeight) / 2;
+  /**
+   * **Where anything that must sit on the title's line starts.**
+   *
+   * The leading control, the time column and the overdue chip are all 44 pt targets that centre
+   * their content, so each one needs the same lift to land on the title rather than 11 pt below
+   * it. Lifting them one at a time is what produced four separate misalignments in this task —
+   * the marker, then the time, then the connector's origin, then the chip. One value, and they
+   * move together or not at all.
+   */
+  const railTop = rowPaddingY - leadingLift;
+  /**
+   * **The marker's real centre, lift included.**
+   *
+   * This is the connector's origin, and it was still computing the *unlifted* position — so the
+   * thread was drawn for a marker 11 pt below where the marker actually is: a stub above each
+   * glyph and a gap beneath it, which is the founder's "attached to the top of the checkbox
+   * instead of drawing down". The same failure as the time column carrying `space[5]` after the
+   * padding changed: a second copy of a position that moved.
+   */
+  const markerCentreY = rowPaddingY - leadingLift + theme.layout.hitTarget / 2;
 
+  /**
+   * **One secondary line, not two** — founder, 2026-08-17: "as you add more metadata, I'd combine
+   * those two secondary lines when possible". A Meal was spending three lines on
+   * `Dinner` / `Meal · Dinner` / `↻ Daily`; joined, a plan row is the same height as a task's.
+   *
+   * The recurrence run keeps its own `Text` inside the line so it retains the testID and the
+   * accessible label the agenda specs read, and so the pre-snooze time can stay `textMuted`.
+   */
+  /**
+   * **Three roles, three treatments** — founder, 2026-08-17: "what → context → system
+   * information". The note used to share the metadata's token, so a row's second and third lines
+   * carried equal weight and the note competed with the title.
+   *
+   * A **resolved** row dims the whole stack, not just its title: a completed row whose note was
+   * still at full strength went on demanding attention after it was done.
+   *
+   * The `subtitleColor` override stays ahead of all of it — the UP NEXT card's tinted ground
+   * needs `textPrimary` for AA, which is a contrast requirement rather than a hierarchy choice.
+   */
+  const noteColor =
+    subtitleColor === 'textPrimary'
+      ? 'textPrimary'
+      : dimmed
+        ? 'textMuted'
+        : 'textSecondary';
+  const metaColor = subtitleColor === 'textPrimary' ? 'textPrimary' : 'textMuted';
+  const recurrenceMeta =
+    item.isSnoozed && item.originalTime !== undefined && item.time !== undefined
+      ? `${formatWallTime(item.originalTime)} → ${formatWallTime(item.time)}`
+      : (item.recurrenceDescription ?? undefined);
+  const showsRecurrence = item.isRecurring && item.recurrenceDescription !== undefined;
   const subtitleLine =
     subtitlePrefix === undefined
       ? item.subtitle
       : [subtitlePrefix, item.subtitle].filter((part) => part !== undefined).join(' · ');
 
   /**
-   * The timeline's spine (founder, 2026-08-17): **from just below this row's marker to just above
-   * the next row's top edge**, and absent on a section's last row.
+   * The timeline's spine — **two halves with a halo round the marker**.
    *
-   * It used to be two halves that met at the marker's centre, so the line ran *through* every
-   * glyph and butted straight into each divider. Starting it clear of the marker and stopping it
-   * clear of the rule is what makes the markers read as beads on a thread rather than as circles
-   * with a line drawn over them.
+   * It began as two halves meeting at the marker's centre, so the line ran *through* every glyph.
+   * Fixing that by drawing only the lower half broke the other way: on a 60 pt row the segment
+   * came out a few pixels tall, and the thread disappeared between rows entirely — the founder's
+   * report that "the vertical line is disconnected".
+   *
+   * Both halves are back, each stopping `space[2]` clear of the marker, so the glyph sits in a
+   * gap on a continuous thread. `above` is suppressed on a section's first row and `below` on its
+   * last, which is what keeps the spine inside the section rather than trailing out of it.
    */
-  const connector = () => (
+  const connector = (half: 'above' | 'below') => (
     <View
       aria-hidden
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       pointerEvents="none"
-      testID="agenda-row-connector-below"
+      testID={`agenda-row-connector-${half}`}
       style={{
         position: 'absolute',
         left: markerCentreX,
         width: 1,
         backgroundColor: theme.colors.border,
-        top: markerCentreY + theme.layout.hitTarget / 2 - theme.space[2],
-        bottom: theme.space[2],
+        ...(half === 'above'
+          ? {
+              top: 0,
+              height: Math.max(markerCentreY - theme.layout.hitTarget / 2, 0),
+            }
+          : {
+              top: markerCentreY + theme.layout.hitTarget / 2,
+              bottom: 0,
+            }),
       }}
     />
   );
@@ -200,13 +297,37 @@ export function AgendaRow({
         minHeight: dense ? undefined : theme.layout.rowMinHeight,
         flexDirection: 'row',
         alignItems: 'flex-start',
-        paddingVertical: dense ? theme.space[0] : theme.space[5],
+        /**
+         * `space[3]`, down from `space[5]` — founder, 2026-08-17, once the row rules came off:
+         * without a divider the old padding read as loose rather than as separation.
+         *
+         * A row's height is set by its **leading control**, not by its text: the checkbox is a
+         * 44 pt target (`interaction-contract.md` §2) with the padding either side, so 16+44+16
+         * made every one-line row 76 pt. At 8 it is 60, and two stacked checkboxes sit 44 pt
+         * apart — well over §6.1's 8 pt minimum between adjacent targets, which is the number
+         * that stops this going lower.
+         */
+        paddingTop: rowPaddingY,
+        /**
+         * **Two points more below than above** (founder, 2026-08-17: "add extra 2pts of space
+         * after every row"). It goes on the row's own padding rather than on the section's gap so
+         * the connector, which runs to the row's bottom edge, still meets the next row's marker —
+         * a gap between rows would break the thread by exactly this much.
+         */
+        paddingBottom: rowPaddingY + theme.space[1],
         borderBottomWidth: divider ? 1 : 0,
         borderBottomColor: theme.colors.border,
-        opacity: dimmed ? 0.62 : 1,
+        /**
+         * **No opacity.** `interaction-contract.md` §6.4 is explicit that de-emphasis "is
+         * achieved with weight and size, not by dropping contrast below the threshold", and
+         * 0.62 did exactly that: it blends the ink toward the background, which took a
+         * `textSecondary` subtitle from 4.77:1 to roughly 3.3:1 — under AA on every completed
+         * row. The quieter treatment now lives on the title itself, below.
+         */
       }}
     >
-      {connectorBelow ? connector() : null}
+      {connectorAbove ? connector('above') : null}
+      {connectorBelow ? connector('below') : null}
 
       {/**
        * **Every pixel that is not a control opens the row** (founder, 2026-08-17: "I have got
@@ -241,7 +362,27 @@ export function AgendaRow({
         <View />
       </Touchable>
 
-      <View style={{ marginLeft: railOffset }}>
+      {/**
+       * **The glyph's centre meets the title's first line** — founder, 2026-08-17: the plan
+       * markers "are not in a straight line horizontally".
+       *
+       * They measured identical in x (centre 102, width 44); the mismatch is vertical. A leading
+       * control is a 44 pt target that centres its 24 pt visual, so its centre sits 22 pt below
+       * the row's content top — while the title's first line centres at half its 21 pt leading,
+       * about 10. Every marker therefore sat ~11 pt below the word it belongs to, which reads as
+       * crooked on a row whose title wraps and merely low on one that does not.
+       *
+       * The offset is derived from the two tokens rather than typed in, so it follows the type
+       * scale. The 44 pt target is untouched — it simply overlaps the row's padding by 11 pt,
+       * and rows are 68 pt or taller, so adjacent targets stay far past §6.1's 8 pt minimum.
+       */}
+      <View
+        testID="agenda-row-leading"
+        style={{
+          marginLeft: railOffset,
+          marginTop: -leadingLift,
+        }}
+      >
         <RowLeading
           hasCheckbox={item.hasCheckbox}
           checked={checked}
@@ -291,6 +432,19 @@ export function AgendaRow({
             alignItems: 'flex-start',
             alignSelf: 'stretch',
             paddingLeft: theme.space[2],
+            /**
+             * **The title starts at the top, it is not centred in the tap target.**
+             *
+             * `Touchable` gives every pressable a 44 pt `minHeight` and centres its content, which
+             * is right for a button and wrong for a row body: a one-line title was centred inside
+             * those 44 pt and sat 11 pt below the checkbox, while a title with a metadata line
+             * under it was tall enough that the centring did nothing. That is why only rows
+             * *without* metadata looked crooked — the founder's "Single Task" case.
+             *
+             * The 44 pt minimum stays; only the alignment changes, so the first line lands on the
+             * same centre as the marker and the time whatever else the row carries.
+             */
+            justifyContent: 'flex-start',
           }}
         >
           {/**
@@ -299,7 +453,21 @@ export function AgendaRow({
            * regular weight and the subtitle sat at `subhead`, which put only two points between
            * them and made every row read as two equal lines.
            */}
-          <Text variant="bodyStrong" struck={checked}>
+          {/**
+           * **A resolved row recedes a notch further** — founder, 2026-08-17: three struck
+           * two-line titles in a row dominated the screen even though they were finished, and
+           * the eye could not find the unfinished one beneath them.
+           *
+           * The check and the strike stay; what changes is the title's weight and ink —
+           * `bodyStrong`/`textPrimary` becomes `body`/`textMuted`, which is 4.77:1 light and
+           * 6.33:1 dark, so it is quieter **and** compliant where the old 0.62 opacity was
+           * neither.
+           */}
+          <Text
+            variant={titleVariant}
+            color={dimmed ? 'textMuted' : 'textPrimary'}
+            struck={checked}
+          >
             {item.title}
           </Text>
           {/**
@@ -317,22 +485,73 @@ export function AgendaRow({
               Skipped
             </Text>
           )}
-          {subtitleLine === undefined ? null : (
-            <Text variant="footnote" color={subtitleColor} testID="agenda-row-subtitle">
-              {subtitleLine}
+          {/**
+           * **The note takes its own line, above the metadata** (founder, 2026-08-17).
+           *
+           * It is the user's own words, so it does not join `Meal · Dinner · ↻ Daily` — that line
+           * is server-composed type metadata plus recurrence, and merging the two would read as
+           * one sentence made of two unrelated things. A row carrying both is therefore three
+           * lines; that is the founder's own sketch and the cost of showing a note at all.
+           *
+           * The server sends one clamped line (`noteExcerpt`), so this renders it verbatim rather
+           * than slicing 4,000 characters on the client.
+           */}
+          {item.noteExcerpt === undefined ? null : (
+            <Text
+              /**
+               * **Size carries the hierarchy; colour reinforces it where the palette can.**
+               *
+               * In light, `textSecondary` and `textMuted` are the *same hex* — P2-40 collapsed
+               * them because the founder's supplied muted is 2.7:1 and cannot be readable text.
+               * So a three-tier colour ladder exists only in dark, and the note/metadata step has
+               * to be a type step in both: `subhead` over `footnote`.
+               *
+               * A resolved row drops the note to `footnote` as well, so the struck `subhead`
+               * title still leads a stack that is otherwise one flat muted colour.
+               */
+              variant={dimmed ? 'footnote' : 'subhead'}
+              color={noteColor}
+              numberOfLines={1}
+              testID="agenda-row-note"
+            >
+              {item.noteExcerpt}
+            </Text>
+          )}
+          {subtitleLine === undefined && recurrenceMeta === undefined ? null : (
+            <Text variant="footnote" color={metaColor} numberOfLines={1}>
+              {subtitleLine === undefined ? null : (
+                <Text variant="footnote" color={metaColor} testID="agenda-row-subtitle">
+                  {subtitleLine}
+                </Text>
+              )}
+              {subtitleLine === undefined || recurrenceMeta === undefined ? null : ' · '}
+              {recurrenceMeta === undefined ? null : (
+                <Text
+                  variant="footnote"
+                  color={metaColor}
+                  accessibilityLabel={
+                    showsRecurrence
+                      ? (item.recurrenceDescription ?? '')
+                      : `Snoozed from ${formatWallTime(item.originalTime ?? '')} to ${formatWallTime(item.time ?? '')}`
+                  }
+                  testID="agenda-badge-recurrence"
+                >
+                  {showsRecurrence ? `↻ ${recurrenceMeta}` : recurrenceMeta}
+                </Text>
+              )}
             </Text>
           )}
         </Touchable>
 
+        {/**
+         * **Recurrence and snooze are not passed here any more** — they render inside the
+         * metadata line above (founder, 2026-08-17). Passing them as well rendered `↻ Daily`
+         * twice and made the row taller than before the merge, which was the opposite of the
+         * point. What is left for this strip is the overdue chip, the avatars and the RSVP slot,
+         * in their canonical order.
+         */}
         {dense ? null : (
           <RowBadges
-            {...(!item.isRecurring || item.recurrenceDescription === undefined
-              ? {}
-              : { recurrenceDescription: item.recurrenceDescription })}
-            {...(!item.isSnoozed || item.originalTime === undefined
-              ? {}
-              : { originalTime: item.originalTime })}
-            {...(item.time === undefined ? {} : { effectiveTime: item.time })}
             {...(item.overdueFromDate === undefined || showTime
               ? {}
               : { overdueFromDate: item.overdueFromDate })}
@@ -353,7 +572,7 @@ export function AgendaRow({
           testID="agenda-row-time"
           style={{
             position: 'absolute',
-            top: theme.space[5],
+            top: railTop,
             left: theme.space[0],
             width: railWidth,
             alignItems: 'flex-start',
@@ -381,7 +600,7 @@ export function AgendaRow({
         <View
           style={{
             position: 'absolute',
-            top: theme.space[5],
+            top: railTop,
             left: theme.space[0],
             width: railWidth,
           }}

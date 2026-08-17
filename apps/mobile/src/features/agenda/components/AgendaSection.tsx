@@ -61,8 +61,14 @@ export function AgendaSection({
 }: AgendaSectionProps) {
   const theme = useTheme();
 
+  /**
+   * **No gap between rows.** Each row already carries its own vertical padding, and the 4 pt that
+   * used to sit between them was the last break in the connector: one row's lower segment ended
+   * at its own bottom edge and the next row's upper segment began at its top, so the thread
+   * showed a hairline gap at every boundary. The rows abut now and the spine runs unbroken.
+   */
   return (
-    <View testID={testID} style={{ gap: theme.space[2] }}>
+    <View testID={testID} style={{ gap: theme.space[0] }}>
       <SectionHeader
         title={title}
         {...(headerCount === undefined ? {} : { count: headerCount })}
@@ -78,7 +84,16 @@ export function AgendaSection({
         const row = (
           <SwipeableRow
             item={item}
+            /**
+             * **No rule under a row on Today** (founder, 2026-08-17). The timeline already has a
+             * separator — the connector hairline running between the markers — and a horizontal
+             * rule under every row cut across it, so the day read as a table rather than as a
+             * thread. §7.1 says as much in its own words: "separator is the connector line, not
+             * a horizontal rule".
+             */
+            divider={false}
             showTime={showTime}
+            connectorAbove={index > 0}
             connectorBelow={index < items.length - 1}
             {...(today === undefined ? {} : { today })}
             onOpen={onOpen}

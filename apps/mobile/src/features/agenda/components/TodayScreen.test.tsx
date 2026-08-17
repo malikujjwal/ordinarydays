@@ -35,17 +35,30 @@ const row = (index: number, patch: Partial<AgendaItem> = {}): AgendaItem => ({
   ...patch,
 });
 
-function response(items: AgendaItem[], upNext?: AgendaItem) {
+/**
+ * `tomorrowItems` populates `days[1]`, which is what the two-day window Today now requests
+ * returns (P2-45). Omitting it leaves the response one day long, exactly as before, so every
+ * test written against the old shape still describes the same screen.
+ */
+function response(
+  items: AgendaItem[],
+  upNext?: AgendaItem,
+  tomorrowItems: AgendaItem[] = [],
+) {
+  const day = (date: string, rows: AgendaItem[]) => ({
+    date,
+    schedule: rows.filter((item) => item.time !== undefined),
+    anytime: rows.filter((item) => item.time === undefined),
+    earlier: [],
+  });
   return {
     data: {
       days: [
         {
-          date: '2026-08-06',
+          ...day('2026-08-06', items),
           ...(upNext === undefined ? {} : { upNext }),
-          schedule: items.filter((item) => item.time !== undefined),
-          anytime: items.filter((item) => item.time === undefined),
-          earlier: [],
         },
+        ...(tomorrowItems.length === 0 ? [] : [day('2026-08-07', tomorrowItems)]),
       ],
       warnings: [],
     },
@@ -1025,6 +1038,167 @@ describe('TodayScreen day header', () => {
  * The marker connector (§7.1: "it is what makes the day read as a timeline") and the UP NEXT
  * quick actions (P2-44).
  */
+/**
+ * P2-45's look-ahead. Every assertion here is about what the preview **is not**: it is not a
+ * second Today, it does not feed any figure Today states, and it does not exist on a quiet day.
+ */
+describe('Today rows carry no rule', () => {
+  /**
+   * The timeline already has a separator — the connector hairline between markers — and a
+   * horizontal rule under every row cut across it (founder, 2026-08-17). §7.1 says the same:
+   * "separator is the connector line, not a horizontal rule".
+   */
+  it('renders every section row without a bottom border', async () => {
+    stubFetch(
+      response([
+        row(1, { title: 'Timed', time: '18:00' }),
+        row(2, { title: 'Untimed' }),
+        row(3, { title: 'Passed', time: '06:00', isPast: true }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('today-agenda')).toBeDefined());
+    for (const node of screen.getAllByTestId(/^agenda-row-act_/)) {
+      expect(node.style.borderBottomWidth).toBe('0px');
+    }
+  });
+});
+
+describe('the Tomorrow preview', () => {
+  it('is absent when tomorrow holds nothing', async () => {
+    stubFetch(response([row(1, { title: 'Only today', time: '18:00' })]));
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('today-agenda')).toBeDefined());
+    expect(screen.queryByTestId('today-tomorrow')).toBeNull();
+  });
+
+  it('renders tomorrow’s rows as time and title, with nothing to press', async () => {
+    stubFetch(
+      response([row(1, { title: 'Today thing', time: '18:00' })], undefined, [
+        row(2, { title: 'Tomorrow thing', time: '09:00' }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    const preview = within(await screen.findByTestId('today-tomorrow'));
+    expect(preview.getByText('Tomorrow thing')).toBeDefined();
+    expect(preview.getByText('9:00 AM')).toBeDefined();
+    /**
+     * **Nothing in it is interactive** (founder, 2026-08-17: "no click and open task is required
+     * on it"). Not a disabled control anywhere — no control at all, which is why this asserts
+     * across every interactive role rather than on one testID.
+     */
+    expect(preview.queryAllByRole('checkbox')).toHaveLength(0);
+    expect(preview.queryAllByRole('button')).toHaveLength(0);
+    expect(preview.queryAllByRole('link')).toHaveLength(0);
+  });
+
+  it('labels an untimed row Anytime rather than leaving its column blank', async () => {
+    stubFetch(
+      response([row(1, { title: 'Today thing', time: '18:00' })], undefined, [
+        row(2, { title: 'Dry cleaning' }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    const preview = within(await screen.findByTestId('today-tomorrow'));
+    expect(preview.getByText('Anytime')).toBeDefined();
+    expect(preview.getByText('Dry cleaning')).toBeDefined();
+  });
+
+  /** Undated tasks are pinned to `days[0]` by the server, so they can only render once. */
+  it('leaves an undated task in Anytime and out of the preview', async () => {
+    stubFetch(
+      response([row(1, { title: 'Loose end' })], undefined, [
+        row(2, { title: 'Tomorrow thing', time: '09:00' }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await screen.findByTestId('today-tomorrow');
+    expect(screen.getAllByText('Loose end')).toHaveLength(1);
+    expect(
+      within(screen.getByTestId('today-anytime')).getByText('Loose end'),
+    ).toBeDefined();
+  });
+
+  it('changes no figure Today states', async () => {
+    stubFetch(
+      response([row(1, { title: 'Today thing', time: '18:00' })], undefined, [
+        row(2, { title: 'Tomorrow one', time: '09:00' }),
+        row(3, { title: 'Tomorrow two', time: '10:00' }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await screen.findByTestId('today-tomorrow');
+    // One item today, none done — tomorrow's two are counted nowhere.
+    expect(screen.getByTestId('today-day-count').textContent).toBe('0 of 1 done');
+  });
+
+  /** P2-20's rule must not start reaching into tomorrow to find a candidate. */
+  it('leaves UP NEXT absent when today’s timed items are all past', async () => {
+    stubFetch(
+      response([row(1, { title: 'Long gone', time: '06:00', isPast: true })], undefined, [
+        row(2, { title: 'Tomorrow thing', time: '09:00' }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await screen.findByTestId('today-tomorrow');
+    expect(screen.queryByTestId('today-up-next')).toBeNull();
+  });
+});
+
 describe('TodayScreen timeline furniture', () => {
   const openToday = async (items: AgendaItem[], upNext?: AgendaItem) => {
     stubFetch(response(items, upNext));
@@ -1049,18 +1223,19 @@ describe('TodayScreen timeline furniture', () => {
 
     const schedule = within(screen.getByTestId('today-schedule'));
     /**
-     * **One segment per link, not two halves** (founder, 2026-08-17). It used to be drawn as an
-     * `above` half and a `below` half meeting at the marker's centre, so the line ran *through*
-     * every glyph. Each row below the last now draws a single segment that starts clear of its
-     * own marker and stops clear of the rule beneath it — three rows, two links, two segments.
+     * **Two halves with a halo round each marker.** Drawing only the lower half left a few
+     * pixels of line on a 60 pt row and broke the thread between rows entirely; both halves are
+     * back, each stopping clear of the glyph. Three rows: no `above` on the first, no `below` on
+     * the last, so two of each.
      */
-    expect(schedule.queryAllByTestId('agenda-row-connector-above')).toHaveLength(0);
+    expect(schedule.queryAllByTestId('agenda-row-connector-above')).toHaveLength(2);
     expect(schedule.queryAllByTestId('agenda-row-connector-below')).toHaveLength(2);
   });
 
   it('draws no connector on a lone row', async () => {
     await openToday([row(1, { title: 'Only', time: '18:00' })]);
     const schedule = within(screen.getByTestId('today-schedule'));
+    expect(schedule.queryAllByTestId('agenda-row-connector-above')).toHaveLength(0);
     expect(schedule.queryAllByTestId('agenda-row-connector-below')).toHaveLength(0);
   });
 

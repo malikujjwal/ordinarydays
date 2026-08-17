@@ -3594,10 +3594,21 @@ contain. Do not add a colour outside P2-40's tables.
     writes nominal `OCC#` + destination `MOVE#` atomically and renders exactly once; 60 days
     from nominal is accepted, 61 is `validation_failed`, and undo removes both references.
 6. A cold open of Today issues **exactly one** data request, with
-    `from=today`, `to=today` and
-    `include=anytime_unscheduled,overdue`; Today renders that one-day response. This is
+    `from=today`, `to=tomorrow` and
+    `include=anytime_unscheduled,overdue`; Today renders that two-day response. This is
     asserted by a Playwright network-count assertion (success criterion S2). It does not
     trigger or await P2-34's independently-cadenced background refresh.
+
+   > **Window widened to two days — 2026-08-17 (P2-45).** This criterion has now said
+   > `to=tomorrow` twice with a spell of `to=today` between, so the history is worth stating
+   > plainly. The **original** `to=tomorrow` was retired in 2026-08-11 because it was left over
+   > from a design in which Today hydrated reminders and read beyond the current day for its own
+   > sections; the correction below is about that design and remains right. P2-45's `to=tomorrow`
+   > is a different thing: the four Today sections still partition `days[0]` alone, and the second
+   > day exists solely to feed the read-only Tomorrow preview
+   > ([`../01-product/today-and-tasks.md`](../01-product/today-and-tasks.md) §2). `include` is
+   > unchanged and reminders are still P2-34's separate request. **The count of one is the part
+   > that has never moved**, and it is what this criterion exists to protect.
 
    > **Today success-criterion correction — 2026-08-11.** The former `to=tomorrow` and
    > `include=reminders` wording was the retired pre-amendment design. No Today-screen path

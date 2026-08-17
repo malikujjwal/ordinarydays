@@ -55,8 +55,24 @@ export function useAgenda(options: UseAgendaOptions = {}) {
         }
       : options.days === undefined
         ? {
+            /**
+             * **Two days, one request** (P2-45). Today's window reaches tomorrow so the
+             * look-ahead at the foot of the screen comes out of the same response — Today is the
+             * most loaded screen in the product, and a second query would mean a second cache
+             * entry and a second `ETag` for one section.
+             *
+             * The `include` tokens stay day-scoped by construction: the server pins an undated
+             * task to `input.from` and a rolled-forward overdue task to *today*
+             * (`agendaService.ts`), and `partitionDays` files each candidate under exactly one
+             * `viewerDate`. So widening the window cannot make either appear twice, and the
+             * client needs no de-duplication of its own — which is the thing P2-45 said to
+             * establish before writing anything.
+             *
+             * The query key carries the window, so the first launch after this ships refetches.
+             * That is expected, not a cache bug.
+             */
             from: today,
-            to: today,
+            to: addWallDays(today, 1),
             tz: timezone,
             include: TODAY_AGENDA_INCLUDE,
           }

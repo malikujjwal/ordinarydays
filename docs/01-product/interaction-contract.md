@@ -241,6 +241,15 @@ Additional taps available on these rows:
 | Overdue date chip | Reschedule sheet, pre-set to today |
 | `+n more overdue` | Expands in place |
 
+| Tomorrow preview row (Today) | — | — | — | — | — | — | — |
+
+**The Tomorrow preview has no gestures at all** — the one row in this document with a fully
+empty line, and deliberately so. It is a time-and-title overview, not a row: no checkbox, no
+swipe, no long-press, no resolution prompt, and **no tap**, so it is absent from the tab order
+and carries no `accessibilityRole`. The day it describes is not today's to act on; tomorrow is
+reached through Plans ([`today-and-tasks.md`](today-and-tasks.md) §2). Added 2026-08-12
+(founder), narrowed to non-interactive 2026-08-17, built by P2-45.
+
 The pushed **Anytime** route uses the same AgendaRow actions, swipe gestures,
 accessibility actions and undo policy as an untimed Today row. Only Today's group-3
 footer navigates to it; back returns to the same bounded Today list. The three-tabs-only

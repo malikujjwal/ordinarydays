@@ -29,9 +29,23 @@ test('creates, completes, and compensates a task without changing its prior posi
     await page.goto('/');
     await agendaResponse;
     await expect(page.locator('[data-testid="today-agenda"]')).toBeVisible();
+    /**
+     * Acceptance criterion 6 / S2. **The count of one is what this protects** — "a second
+     * request creeps into Today's cold open" is the failure it was written against, and that has
+     * not moved.
+     *
+     * The window is now two days (P2-45): the four Today sections still partition `days[0]`
+     * alone, and `days[1]` feeds the read-only Tomorrow preview out of this same response rather
+     * than a second query. Asserted as *exactly* one day apart so widening it further would fail
+     * here, which is the part worth pinning.
+     */
     expect(agendaRequests).toHaveLength(1);
     const coldOpen = new URL(agendaRequests[0] ?? '');
-    expect(coldOpen.searchParams.get('from')).toBe(coldOpen.searchParams.get('to'));
+    const from = coldOpen.searchParams.get('from') ?? '';
+    const to = coldOpen.searchParams.get('to') ?? '';
+    const dayAfter = new Date(`${from}T00:00:00.000Z`);
+    dayAfter.setUTCDate(dayAfter.getUTCDate() + 1);
+    expect(to).toBe(dayAfter.toISOString().slice(0, 10));
     expect(coldOpen.searchParams.get('include')).toBe('anytime_unscheduled,overdue');
     await expectNoSeriousA11yViolations(page, '/');
 

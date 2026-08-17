@@ -41,6 +41,19 @@ export interface AgendaItem {
   participantCount: number;
   locationLabel?: string;
   subtitle?: string;
+  /**
+   * The **first line** of the activity's own notes, for the row's secondary line — added
+   * 2026-08-17 on the founder's instruction.
+   *
+   * `AgendaItem` is a trimmed projection and stays trimmed (`agent-playbook.md` §8 step 13), so
+   * this is not `Activity.notes`: notes are up to 4,000 characters and the agenda must not carry
+   * them across the wire for every row of a 62-day window. The server sends one clamped line and
+   * the row renders exactly that; the full note lives on the detail screen.
+   *
+   * Distinct from {@link subtitle}, which is server-composed **type metadata** (`Meal · Dinner`,
+   * `S2 E4`, a parent plan's title). This is the user's own words.
+   */
+  noteExcerpt?: string;
   isPast: boolean;
   reminders?: Reminder[];
   /** Original stored date when an incomplete task is rolled forward onto Today. */

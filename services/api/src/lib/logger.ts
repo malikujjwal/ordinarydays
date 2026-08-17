@@ -23,6 +23,14 @@ export const REDACTED_PATHS = [
   '*.*.title',
   'notes',
   '*.notes',
+  /**
+   * The agenda row's clamped first line of a note (2026-08-17). It is user content derived from
+   * `notes`, which is redacted directly above — a shorter copy of a redacted field is still the
+   * user's words, and `coding-standards.md` §7.3 is about the content, not the field name.
+   */
+  'noteExcerpt',
+  '*.noteExcerpt',
+  '*.*.noteExcerpt',
   'description',
   '*.description',
   'mediaTitle',

@@ -102,9 +102,14 @@ describe('useAgenda', () => {
     );
 
     await waitFor(() => expect(result.current.status).toBe('success'));
+    /**
+     * **One request, two days** (P2-45). The window reaches tomorrow so the look-ahead at the
+     * foot of Today comes out of this same response; the count stays at one, which is the half
+     * of acceptance criterion 6 that has not moved.
+     */
     expect(calls).toEqual([
       {
-        url: `http://localhost:3000/v1/agenda?from=2026-08-06&to=2026-08-06&tz=America%2FNew_York&include=${encodeURIComponent(TODAY_AGENDA_INCLUDE)}`,
+        url: `http://localhost:3000/v1/agenda?from=2026-08-06&to=2026-08-07&tz=America%2FNew_York&include=${encodeURIComponent(TODAY_AGENDA_INCLUDE)}`,
         headers: expect.any(Object),
       },
     ]);
@@ -125,9 +130,15 @@ describe('useAgenda', () => {
     const { result } = renderHook(() => useAgenda({ now: instant }), { wrapper });
 
     await waitFor(() => expect(result.current.status).toBe('success'));
+    const deviceTomorrow = new Intl.DateTimeFormat('en-CA', {
+      timeZone: deviceTimezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(Date.parse(instant) + 24 * 60 * 60 * 1000));
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe(
-      `http://localhost:3000/v1/agenda?from=${deviceDate}&to=${deviceDate}&tz=${encodeURIComponent(deviceTimezone)}&include=${encodeURIComponent(TODAY_AGENDA_INCLUDE)}`,
+      `http://localhost:3000/v1/agenda?from=${deviceDate}&to=${deviceTomorrow}&tz=${encodeURIComponent(deviceTimezone)}&include=${encodeURIComponent(TODAY_AGENDA_INCLUDE)}`,
     );
   });
 
@@ -171,7 +182,7 @@ describe('useAgenda', () => {
       queryClient.getQueryData([
         'agenda',
         '2026-08-06',
-        '2026-08-06',
+        '2026-08-07',
         'UTC',
         TODAY_AGENDA_INCLUDE,
       ]),

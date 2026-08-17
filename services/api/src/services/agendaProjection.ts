@@ -15,6 +15,27 @@ export interface AgendaProjectionClock {
   readonly today: string;
 }
 
+/**
+ * The first line of a note, clamped to a row's worth.
+ *
+ * The agenda serves up to 62 days of rows and notes run to 4,000 characters, so the whole field
+ * never goes on the wire — the row shows one line and the detail screen owns the rest. Clamping
+ * **here** rather than in the client is what keeps the payload bounded; a client-side `slice`
+ * would have shipped every byte first.
+ */
+export function firstNoteLine(notes: string | undefined): string | undefined {
+  if (notes === undefined) return undefined;
+  const [first] = notes.split('\n');
+  const trimmed = first?.trim();
+  if (trimmed === undefined || trimmed === '') return undefined;
+  return trimmed.length <= NOTE_EXCERPT_LEN
+    ? trimmed
+    : `${trimmed.slice(0, NOTE_EXCERPT_LEN - 1).trimEnd()}…`;
+}
+
+/** One row's worth. Longer than a phone shows, short enough that 62 days stays bounded. */
+const NOTE_EXCERPT_LEN = 120;
+
 /** Builds the trimmed, caller-specific API row from an already-hydrated agenda candidate. */
 export function projectAgendaItem(
   candidate: AgendaCandidate,
@@ -23,6 +44,7 @@ export function projectAgendaItem(
   const { activity } = candidate;
   const subtitle = deriveSubtitle(activity, candidate.actionContext.parentTitle);
   const locationLabel = activity.location?.label;
+  const noteExcerpt = firstNoteLine(activity.notes);
 
   return {
     activityId: activity.activityId,
@@ -51,6 +73,7 @@ export function projectAgendaItem(
     participantCount: activity.participantCount,
     ...(locationLabel === undefined ? {} : { locationLabel }),
     ...(subtitle === undefined ? {} : { subtitle }),
+    ...(noteExcerpt === undefined ? {} : { noteExcerpt }),
     isPast: isPast(candidate, clock),
     ...(candidate.reminders === undefined
       ? {}

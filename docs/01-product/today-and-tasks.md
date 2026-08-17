@@ -56,6 +56,27 @@ request to render Today is rejected.
 > (§2.4), and the section **collapses by default above four rows** (§2.4), because it now sits
 > between the user and the part of the day they can still act on.
 
+> **The Tomorrow preview — 2026-08-12 (founder ruling), built by P2-45.** Beneath the four
+> sections Today carries a short, **read-only** look-ahead at tomorrow. It appears in no earlier
+> version of this document because it is a new surface rather than catch-up, which is why it
+> arrives with its own amendment rather than inside P2-44's.
+>
+> - It renders tomorrow's **dated** rows only, capped at three, as a plain time-and-title list:
+>   `7:30 PM  Dinner at Zahav`, and `Anytime` in the time column for a dated-but-untimed row.
+> - **Nothing in it is interactive** (narrowed 2026-08-17, founder: *"no need to open a task or
+>   anything, its just to show the stuff for tomorrow"*). No checkbox, no swipe, no completion, no
+>   resolution prompt, no snooze — and no tap target either, so rule 6 does not arise. It is an
+>   overview, not a list you work from; tomorrow's day is reached through Plans.
+> - **It is hidden entirely when tomorrow holds nothing** — no empty state and no heading. A
+>   look-ahead that says "nothing tomorrow" is a nag about an empty day (§8.3).
+> - **It changes no aggregate.** `2 of 6 done` and the progress bar count Today alone, and
+>   UP NEXT stays today's next timed item.
+> - Undated tasks never appear: they are already on Today under ANYTIME, and the server pins them
+>   to the window's first day, so they cannot render twice.
+>
+> Today's request widens to **two days** to serve it — one request, one cache entry, one `ETag`.
+> The `include` tokens stay day-scoped by construction, so nothing attaches to both days.
+
 Today has exactly four sections, in this fixed order. A section with no items is not
 rendered at all except where §2.5 says otherwise. If the local date changes while Today is
 open, the client re-issues the agenda request for the new date; the one-minute ticker only
@@ -85,6 +106,10 @@ SCHEDULE
 ANYTIME
   □  Submit insurance form
   □  Call apartment office                Tue
+
+TOMORROW                                             3
+  9:00 AM  ◇  Coffee with Dan
+  1:00 PM  ◇  Standup
 ```
 
 ### 2.1 UP NEXT
@@ -198,6 +223,15 @@ Two kinds of row share this section:
 The section sorts **ascending** by that instant — clock time for the first kind, completion time
 for the second — so the earliest is at the top and the most recent sits closest to the NOW
 divider beneath it (amended 2026-08-17; see the decision below).
+
+> **Resolved rows recede by weight and ink, not by opacity — 2026-08-17 (founder).** A completed,
+> skipped or passed row carried `opacity: 0.62`, which is the one thing
+> [`interaction-contract.md`](interaction-contract.md) §6.4 forbids: de-emphasis "is achieved with
+> weight and size, not by dropping contrast below the threshold", and blending toward the
+> background took a `textSecondary` subtitle from 4.77:1 to about 3.3:1. The check and the strike
+> are unchanged; the title drops from `bodyStrong`/`textPrimary` to `body`/`textMuted`, which
+> reads quieter **and** clears AA. Three struck two-line titles in succession no longer out-shout
+> the unfinished row beneath them.
 
 - Completed items render with their outcome verb in the trailing slot (`Had it`,
   `Watched`, `Attended`, `Done`) and a struck-through or de-emphasised title. **An outcome the

@@ -1,6 +1,6 @@
 import type { Activity } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
-import { projectAgendaItem } from './agendaProjection.js';
+import { firstNoteLine, projectAgendaItem } from './agendaProjection.js';
 import type { AgendaCandidate } from './agendaService.js';
 
 const clock = {
@@ -50,6 +50,33 @@ function candidate(
     ...overrides,
   };
 }
+
+/**
+ * The excerpt is clamped **server-side** so the agenda's payload stays bounded: notes run to
+ * 4,000 characters and a 62-day window can hold hundreds of rows. Slicing on the client would
+ * have shipped every byte first.
+ */
+describe('firstNoteLine', () => {
+  it('takes the first line and leaves a short note whole', () => {
+    expect(firstNoteLine('Ask about the crown estimate')).toBe(
+      'Ask about the crown estimate',
+    );
+    expect(firstNoteLine('First line\nSecond line')).toBe('First line');
+  });
+
+  it('is absent for an empty or whitespace-only note', () => {
+    expect(firstNoteLine(undefined)).toBeUndefined();
+    expect(firstNoteLine('')).toBeUndefined();
+    expect(firstNoteLine('   \n  ')).toBeUndefined();
+  });
+
+  it('clamps a long first line rather than sending the whole note', () => {
+    const long = 'x'.repeat(400);
+    const excerpt = firstNoteLine(long);
+    expect(excerpt?.length).toBeLessThanOrEqual(120);
+    expect(excerpt?.endsWith('…')).toBe(true);
+  });
+});
 
 describe('AgendaItem presentation', () => {
   it('projects the parent id only for a seeded prep task', () => {
@@ -160,7 +187,7 @@ describe('AgendaItem presentation', () => {
     const subject = activity({
       participantCount: 2,
       location: { label: 'Theatre', address: 'Not part of the row' },
-      notes: 'Never leave the detail projection',
+      notes: 'Ask about the crown estimate\nAnd the second line, which stays behind',
     });
     const row = projectAgendaItem(
       candidate(subject, {
@@ -181,8 +208,18 @@ describe('AgendaItem presentation', () => {
       locationLabel: 'Theatre',
     });
     expect(row).not.toHaveProperty('ownerId');
-    expect(row).not.toHaveProperty('notes');
     expect(row).not.toHaveProperty('activity');
+    /**
+     * **`notes` still never ships; `noteExcerpt` deliberately does** — amended 2026-08-17 on the
+     * founder's instruction that the row show a note.
+     *
+     * This fixture used to read `Never leave the detail projection`, and that intent is only
+     * half retired. The **raw field** is still barred: notes run to 4,000 characters and the
+     * agenda serves up to 62 days of rows, so shipping it would be an unbounded payload. What
+     * crosses now is one line, clamped server-side — enough for a row, nothing like the note.
+     */
+    expect(row).not.toHaveProperty('notes');
+    expect(row.noteExcerpt).toBe('Ask about the crown estimate');
   });
 });
 

@@ -65,29 +65,50 @@ export function RowBadges({
         gap: theme.space[3],
       }}
     >
-      {recurrenceDescription === undefined ? null : (
+      {/**
+       * **One metadata line, and it says something** — founder, 2026-08-17.
+       *
+       * The glyph rendered alone with its description hidden in an `accessibilityLabel`, so a
+       * recurring row was a whole line taller than a non-recurring one and carried a single
+       * character of information for it. The line now reads `↻ Repeats daily`, or
+       * `↻ 6:00 PM → 7:00 PM` when a snooze has moved the occurrence — the change being the more
+       * useful of the two whenever there is one.
+       *
+       * Same height as before, earning it. `footnote` keeps it below the title in the hierarchy.
+       */}
+      {recurrenceDescription === undefined &&
+      (original === undefined || effective === undefined) ? null : (
         <View
           accessible
-          accessibilityLabel={recurrenceDescription}
+          accessibilityLabel={
+            original !== undefined && effective !== undefined
+              ? `Snoozed from ${original} to ${effective}`
+              : (recurrenceDescription ?? '')
+          }
           testID="agenda-badge-recurrence"
         >
-          <Text variant="subhead" color="textSecondary">
-            ↻
-          </Text>
-        </View>
-      )}
-      {original === undefined || effective === undefined ? null : (
-        <View
-          accessible
-          accessibilityLabel={`Snoozed from ${original} to ${effective}`}
-          testID="agenda-badge-snooze"
-        >
-          <Text variant="footnote" color="textSecondary">
-            {/* The pre-snooze time carries meaning, so it is muted, never disabled (§5.1). */}
-            <Text testID="agenda-snooze-original" variant="footnote" color="textMuted">
-              {original}
-            </Text>
-            {` → ${effective}`}
+          <Text variant="footnote" color="textSecondary" numberOfLines={1}>
+            {/**
+             * **The glyph only when the row actually recurs.** A one-off can be snoozed too, and
+             * leading its line with `↻` would say "this repeats" about something that does not —
+             * `design-system.md` §0's first rule, that every sign means one thing and no other.
+             */}
+            {recurrenceDescription === undefined ? '' : '↻  '}
+            {original !== undefined && effective !== undefined ? (
+              <Text variant="footnote" color="textSecondary">
+                {/* The pre-snooze time carries meaning, so it is muted, never disabled. */}
+                <Text
+                  testID="agenda-snooze-original"
+                  variant="footnote"
+                  color="textMuted"
+                >
+                  {original}
+                </Text>
+                {` → ${effective}`}
+              </Text>
+            ) : (
+              recurrenceDescription
+            )}
           </Text>
         </View>
       )}

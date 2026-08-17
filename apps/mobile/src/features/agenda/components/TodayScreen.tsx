@@ -42,6 +42,7 @@ import { AgendaSection, agendaItemKey } from './AgendaSection';
 import { NowDivider } from './NowDivider';
 import { OverdueCollapse } from './OverdueCollapse';
 import { TodayOverflowMenu } from './TodayOverflowMenu';
+import { TomorrowPreview } from './TomorrowPreview';
 import { UpNextCard } from './UpNextCard';
 
 export interface TodayScreenProps {
@@ -255,6 +256,18 @@ export function TodayScreen({
   const day = data.days[0];
   const items = day === undefined ? [] : agendaItemsForDay(day);
   const sections = partitionAgenda(items, currentMinute, showSkipped);
+  /**
+   * **The four sections still partition `days[0]` alone** (P2-45's scope guard). The preview
+   * reads `days[1]` and nothing else, so widening the window cannot change what Today contains.
+   *
+   * Both of tomorrow's buckets are dated to tomorrow — `schedule` holds its timed rows and
+   * `anytime` its dated-but-untimed ones. An **undated** task cannot appear in either: the
+   * server pins those to `input.from`, which is today, so they stay in Today's ANYTIME and
+   * render exactly once.
+   */
+  const tomorrow = data.days[1];
+  const tomorrowItems =
+    tomorrow === undefined ? [] : [...tomorrow.schedule, ...tomorrow.anytime];
   const activeCompletionTransitions = completionTransitions.filter((transition) => {
     const sourceItems =
       transition.source === 'schedule' ? sections.schedule : sections.anytime;
@@ -406,13 +419,26 @@ export function TodayScreen({
     visibleItems.every(
       (item) => item.status === 'completed' || item.status === 'completed_occurrence',
     );
+  /**
+   * **Aligned with the task column, not centred** — founder, 2026-08-17: centred under the list
+   * it "feels slightly detached", reading as a page action rather than as "add another item to
+   * this group". The indent is the rail plus the leading control, which is where every title in
+   * the section starts.
+   */
   const anytimeFooter = (
-    <View testID="today-anytime-actions" style={{ gap: theme.space[2] }}>
+    <View
+      testID="today-anytime-actions"
+      style={{
+        gap: theme.space[2],
+        paddingLeft: theme.space[11] + theme.space[2] + theme.layout.hitTarget,
+        alignItems: 'flex-start',
+      }}
+    >
       {anytime.savedCount > TODAY_ANYTIME_SAVED_LIMIT ? (
         <Button
           label={`See all (${anytime.savedCount})`}
           variant="ghost"
-          fullWidth
+          flush
           onPress={onOpenAnytime}
           testID="today-anytime-see-all"
         />
@@ -420,7 +446,7 @@ export function TodayScreen({
       <Button
         label="+ Add a task"
         variant="ghost"
-        fullWidth
+        flush
         onPress={() => onAddTask(today)}
         testID="today-add-task"
       />
@@ -622,6 +648,7 @@ export function TodayScreen({
           />
         )}
         {visibleAnytime.length === 0 ? anytimeFooter : null}
+        <TomorrowPreview items={tomorrowItems} />
       </ScrollView>
       <SnoozeSheet
         open={snoozeItem !== undefined}

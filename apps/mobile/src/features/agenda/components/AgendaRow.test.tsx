@@ -1,13 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { ActivityType, AgendaItem } from '@od/shared/types';
-import { colors, ThemeProvider } from '@od/ui';
+import { colors, space, ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgendaRow } from './AgendaRow';
 import { RowBadges } from './RowBadges';
 
 const TYPES: ActivityType[] = ['task', 'meal', 'watch', 'event', 'custom'];
+
+const cssColor = (hex: string): string => {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${value >> 16}, ${(value >> 8) & 255}, ${value & 255})`;
+};
 
 function item(type: ActivityType, patch: Partial<AgendaItem> = {}): AgendaItem {
   return {
@@ -244,7 +249,14 @@ describe('AgendaRow affordances', () => {
 });
 
 describe('RowBadges', () => {
-  it('renders all five badge slots in canonical order', () => {
+  /**
+   * **Four slots, not five** — recurrence and snooze merged into one metadata line on
+   * 2026-08-17. A recurring row used to spend a whole line on a bare `↻` whose description was
+   * hidden in an `accessibilityLabel`; the line now reads `↻ Repeats daily`, or
+   * `↻ 6:00 PM → 8:00 PM` when a snooze has moved the occurrence, which is the more useful of the
+   * two whenever there is one. The relative order of what remains is unchanged.
+   */
+  it('renders the badge slots in canonical order', () => {
     mount(
       <RowBadges
         recurrenceDescription="Weekdays"
@@ -264,7 +276,6 @@ describe('RowBadges', () => {
 
     const order = [
       'agenda-badge-recurrence',
-      'agenda-badge-snooze',
       'agenda-badge-overdue',
       'agenda-badge-participants',
       'agenda-badge-pending-rsvp',
@@ -295,6 +306,7 @@ describe('RowBadges', () => {
      */
     const colorProbe = document.createElement('span');
     colorProbe.style.color = colors.light.textMuted;
+    /** No `↻` here: this row is snoozed but not recurring, and the glyph means recurrence alone. */
     expect(badge.textContent).toBe('6:00 PM → 8:00 PM');
     expect(original.style.color).toBe(colorProbe.style.color);
     expect(colors.light.textMuted).not.toBe(colors.light.textPrimary);
@@ -326,6 +338,144 @@ describe('RowBadges', () => {
     );
     fireEvent.click(chip);
     expect(onOpenOverdue).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * **The three columns sit on one line, and this is why there is a test for it.**
+ *
+ * The leading control, the time column and the overdue chip are each 44 pt targets that centre
+ * their own content, while the title's first line centres at half its 21 pt leading. Every one of
+ * them therefore needs the same lift, and lifting them one at a time produced four separate
+ * misalignments in this task — the marker, then the time, then the connector's origin, then the
+ * chip — each caught by eye on a screenshot rather than by CI.
+ *
+ * Asserting the geometry directly is what turns "it looks right today" into something that fails
+ * when the padding or the type scale next moves.
+ */
+describe('the note line', () => {
+  /**
+   * The note is the user's own words, so it gets its own line above the metadata rather than
+   * joining `Meal · Dinner · ↻ Daily` — that line is server-composed type metadata plus
+   * recurrence, and merging the two would read as one sentence made of two unrelated things.
+   * A row carrying both is therefore three lines, which is the founder's own sketch.
+   */
+  it('renders above the metadata line and is spoken in the row', () => {
+    mount(
+      <AgendaRow
+        item={item('meal', {
+          title: 'Call the dentist',
+          noteExcerpt: 'Ask about the crown estimate',
+          subtitle: 'Meal · Dinner',
+          recurrenceDescription: 'Daily',
+          isRecurring: true,
+        })}
+        onOpen={() => {}}
+      />,
+    );
+
+    const note = screen.getByTestId('agenda-row-note');
+    const meta = screen.getByTestId('agenda-badge-recurrence');
+    expect(note.textContent).toBe('Ask about the crown estimate');
+    expect(note.compareDocumentPosition(meta) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // Spoken as well as shown — a row's accessible name carries its content.
+    expect(
+      screen.getByRole('button', { name: /Ask about the crown estimate/ }),
+    ).toBeDefined();
+  });
+
+  it('is absent when the activity has no note', () => {
+    mount(<AgendaRow item={item('task')} onOpen={() => {}} />);
+    expect(screen.queryByTestId('agenda-row-note')).toBeNull();
+  });
+
+  /** One line only: the server already clamped it, and a row is not the place for a paragraph. */
+  it('never wraps to a second line', () => {
+    mount(
+      <AgendaRow
+        item={item('task', { noteExcerpt: 'A note long enough to want a second line' })}
+        onOpen={() => {}}
+      />,
+    );
+    /**
+     * React Native Web renders a single line through a class rather than an inline
+     * `-webkit-line-clamp`, so what is checkable is that the two-line row-title default did not
+     * apply to it. Verified by asserting the note is not clamped at the title's 2.
+     */
+    expect(screen.getByTestId('agenda-row-note').style.webkitLineClamp).not.toBe('2');
+  });
+});
+
+describe('AgendaRow vertical alignment', () => {
+  /**
+   * Read off the **inline styles**, not `getBoundingClientRect`.
+   *
+   * jsdom lays nothing out, so every rect is zero and a geometry assertion passes whatever the
+   * code does — verified by breaking the lift on purpose and watching the test stay green. What
+   * jsdom does expose is what React Native Web wrote, and the invariant is expressible there:
+   * both columns must be lifted by the **same amount**, which is the thing that was wrong four
+   * separate times in this task.
+   */
+  const liftOf = (element: HTMLElement, property: 'top' | 'marginTop'): number =>
+    Math.abs(Number.parseFloat(element.style[property] || '0'));
+
+  it('lifts the time column and the leading control by the same amount', () => {
+    mount(
+      <AgendaRow
+        item={item('task', { title: 'Gym' })}
+        showTime
+        onOpen={() => {}}
+        onToggleComplete={() => {}}
+      />,
+    );
+
+    const leadingLift = liftOf(screen.getByTestId('agenda-row-leading'), 'marginTop');
+    const railTop = liftOf(screen.getByTestId('agenda-row-time'), 'top');
+
+    // The row's own padding minus the shared lift is where the rail starts.
+    expect(leadingLift).toBeGreaterThan(0);
+    expect(railTop + leadingLift).toBeCloseTo(space[4], 1);
+  });
+
+  /**
+   * **A row with no metadata is the case that broke**, because `Touchable` centres its content in
+   * the 44 pt target it guarantees: a lone title sat 11 pt low, while a title with a line beneath
+   * it was tall enough for the centring to do nothing. Asserted on the body's own alignment, so
+   * the two cases cannot diverge again.
+   */
+  it('starts the title at the top of the body rather than centring it', () => {
+    const plain = item('task', { title: 'Single Task' });
+    delete plain.recurrenceDescription;
+    mount(
+      <AgendaRow item={plain} showTime onOpen={() => {}} onToggleComplete={() => {}} />,
+    );
+
+    expect(screen.getByTestId('agenda-row-body').style.justifyContent).toBe('flex-start');
+  });
+
+  /** The chip takes the rail on an untimed row, which is the only time it renders there. */
+  it('lifts the overdue chip onto the same line', () => {
+    const overdue = item('task', { overdueFromDate: '2026-08-04' });
+    delete overdue.time;
+    mount(
+      <AgendaRow
+        item={overdue}
+        today="2026-08-06"
+        showTime
+        onOpen={() => {}}
+        onToggleComplete={() => {}}
+      />,
+    );
+
+    const leadingLift = liftOf(screen.getByTestId('agenda-row-leading'), 'marginTop');
+    const chipTop = liftOf(
+      screen.getByTestId('agenda-badge-overdue').parentElement as HTMLElement,
+      'top',
+    );
+
+    expect(chipTop + leadingLift).toBeCloseTo(space[4], 1);
   });
 });
 
@@ -372,6 +522,12 @@ describe('AgendaRow structural guards', () => {
  * A skipped row says so (founder, 2026-08-15). `Show skipped` renders these in EARLIER TODAY
  * "de-emphasised" (`today-and-tasks.md` §3.2), and de-emphasis was all they had: a skipped row
  * and a merely past one were both 0.62 opacity and nothing else.
+ *
+ * **The opacity is gone as of 2026-08-17.** `interaction-contract.md` §6.4 requires de-emphasis
+ * "with weight and size, not by dropping contrast below the threshold", and 0.62 did the second
+ * thing — it took a `textSecondary` subtitle from 4.77:1 to roughly 3.3:1 on every resolved row.
+ * The row now recedes through its title's weight and ink instead, which is both quieter and
+ * compliant, so that is what these assert.
  */
 describe('AgendaRow — the skipped tag', () => {
   it.each(['skipped', 'skipped_occurrence'] as const)(
@@ -380,7 +536,10 @@ describe('AgendaRow — the skipped tag', () => {
       mount(<AgendaRow item={item('task', { status })} showTime onOpen={() => {}} />);
 
       expect(screen.getByTestId('agenda-row-skipped').textContent).toBe('Skipped');
-      expect(screen.getByTestId(/^agenda-row-act_/).style.opacity).toBe('0.62');
+      expect(screen.getByTestId(/^agenda-row-act_/).style.opacity).toBe('');
+      expect(screen.getByText('Evening plan').style.color).toBe(
+        cssColor(colors.light.textMuted),
+      );
     },
   );
 
