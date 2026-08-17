@@ -491,6 +491,82 @@ agenda is a server-computed projection; reimplementing recurrence expansion agai
 local store would duplicate the hardest logic in the product. Offline means "read what you
 had, queue what you did", not "work indefinitely disconnected".
 
+**4. Client-minted canonical identity and the durable intent log (Phase 2.6, ADR-055).**
+The three mechanisms above make a write *survive a retry*; they do not make it durable or
+visible. This one does.
+
+```
+                 ┌──────────────────────────────┐
+   user action ─►│  durable intent log          │  what must reach the server
+                 │  (own key, own schemaVersion)│
+                 │            │                 │
+                 │            ▼                 │
+                 │  query cache / projection    │  what the UI shows
+                 └────────────┬─────────────────┘
+                              │ ordered replay on reconnect
+                              ▼
+                    server: canonical entities, ownership,
+                    versions, capabilities, derived state
+```
+
+**Identity is client-minted; authority never is.** The client generates the real
+`act_<ULID>` / `rem_<ULID>` (`data-model.md` §8) before the request leaves the device, so an
+offline-created entity is identity-complete from birth — no temporary id, no reconciliation
+pipeline. The server still owns `ownerId`, `createdAt`, versions, capabilities and every
+derived field, and the `201` reconciles them into the projection: identity never changes,
+authority still arrives late.
+
+**Four invariants.**
+
+1. **Identity is client-mintable; authority is not.** An id addresses nothing its principal
+   does not own; authorization is tenancy, never id unpredictability.
+2. **Every queued intent is replay-safe and idempotent, preferring absolute desired state
+   over relative transformation.** `checked: true`, never `checked: !checked`; `complete`
+   and `uncomplete` as separate sets, never a toggle; absolute `lexoRank`. `CREATE` gets the
+   property from client id + persisted `Idempotency-Key` + conditional write.
+3. **Chronology comes from explicit timestamp fields, never from an id.** `gsi1sk` leads
+   with `localDateTime`/`createdAt`/`lastActivityAt`; the ULID is a stable tiebreaker. A
+   wrong device clock therefore cannot corrupt ordering.
+4. **The client projects only what it can compute correctly.** Its own unacknowledged
+   creates: yes — no server state can contradict them. Occurrence overrides, roll-forward,
+   balances, or expansion of a server-known series: never.
+
+**Two stores, two durability contracts.**
+
+| | Query cache | Intent log |
+| --- | --- | --- |
+| Contains | Server responses | Accepted user actions not yet acknowledged |
+| Reconstructable | Yes, from the server | **No. It is the only copy.** |
+| Age expiry | Yes (`MAX_AGE`) | **Never.** Age only bounds *automation* |
+| Cache-buster | Discards freely | **Never silently discarded** — migrate or surface |
+| Account boundary | Cleared on sign-out | Namespaced by `userId`, quarantined on sign-out |
+
+An intent is persisted **before** the user is told the action was accepted and before the
+request is attempted — a write-ahead record, not a replica. Lifecycle:
+`queued → in_flight → acknowledged → removed`; transient failure → `queued`; permanent
+failure → `failed`, surfaced, retained until dismissed. After
+`MAX_AUTOMATIC_INTENT_AGE_DAYS` (`packages/shared`, shared with the server's deletion
+tombstones so the two windows cannot be tuned apart), or whenever the persisted timestamp is
+implausible or clock rollback is detected, an intent moves to `needs_confirmation`: **clock
+uncertainty reduces automation, never extends the replay window.** Cancellation is valid in
+`queued` only.
+
+**TanStack is the execution layer, not the durability boundary.** On cold start the log is
+authoritative and pending work is rebuilt from it — including mutations that were mid-flight
+rather than paused when the process died.
+
+**Pending is not synced.** A client-minted id is not server acceptance. §5.4's `Pending`
+indicator and offline bar are entity-generic and copy-parameterised (Phase 3's
+`Plan will finish syncing` is a parameter of the same mechanism, not a second system); a
+pending entity accepts no server-directed mutation until acknowledged (P2-58 would change
+this and is parked), and which capabilities exist before acknowledgement is declared per
+feature, defaulting to online-only. Sharing, invitations, expenses and settlements stay
+online-only by nature.
+
+**Platforms.** iOS only, exactly as the §3.5 table and ADR-024 already rule: a browser tab
+is closed, not backgrounded, and a queue that never flushes is worse than an error toast.
+The web keeps the persisted read cache and no mutation queue.
+
 ### 3.5 One codebase, two platforms
 
 **Platform-specific files.** Metro and the web bundler resolve `.ios.tsx` / `.web.tsx` /

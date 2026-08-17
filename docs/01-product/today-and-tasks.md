@@ -326,9 +326,15 @@ means SCHEDULE ordering is exactly the natural order of the GSI1 query
 so the server does no extra sorting for the common case and the client's re-sort after a
 local mutation produces the identical order.
 
-> **Decision:** the tie-break is creation order, not type priority and not alphabetical.
-> Two things at 6:00 PM have no meaningful precedence, and a type-priority rule would be a
-> hidden ranking of types, which contradicts "types guide, never restrict".
+> **Decision (wording amended 2026-08-17, Phase 2.6):** the tie-break is **stable id
+> order**, not type priority and not alphabetical. Two things at 6:00 PM have no meaningful
+> precedence, and a type-priority rule would be a hidden ranking of types, which contradicts
+> "types guide, never restrict". This note used to say "creation order", which the id
+> approximated while every id was server-minted; a client-minted id
+> ([`../02-architecture/data-model.md`](../02-architecture/data-model.md#8-ids) §8) carries
+> a device clock, so id order remains deterministic and stable but is no longer a creation
+> chronology. Any surface that genuinely needs "the one I added first" must sort on
+> `createdAt`, which stays server-set.
 
 ### 3.2 What is excluded from Today
 

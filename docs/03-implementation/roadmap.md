@@ -5,9 +5,11 @@ intent is owned by [`../01-product/`](../01-product/), architecture by
 [`../02-architecture/`](../02-architecture/). This document does not restate either; it says
 what gets built, in what order, by how many agents at once, and what "done" means.
 
-Ten numbered phases, 0 through 9, plus the blocking Phase 2.5 correctness gate. **The integer
-numbering is fixed.** Existing phases are not renumbered or merged. Phase 2.5 is an explicit
-exception created after the recurrence audit; its tasks retain `P2-xx` IDs so branch, commit
+Ten numbered phases, 0 through 9, plus two blocking gates: the Phase 2.5 correctness gate
+and the Phase 2.6 sync-hardening gate. **The integer
+numbering is fixed.** Existing phases are not renumbered or merged. Phases 2.5 and 2.6 are
+explicit exceptions — one created by the recurrence audit, the other by the offline
+durability review; their tasks retain `P2-xx` IDs so branch, commit
 and task tooling keep one grammar. A piece of work that does not fit its phase moves to the
 phase that owns it — every phase document carries an explicit "out of scope for this phase"
 table naming the owner, and those tables are the arbiter.
@@ -27,6 +29,7 @@ build the multi-player half and launch it.** Section 3 states the boundary exact
 | **1** | [The activity core](phase-01-activity-core.md) | A place to put things — on the developer's laptop only. Explicitly choose Task or Plan and, for a Plan, General / Meal / Watch / Event; find it again; edit it; delete it. | `pnpm dev`. Tap Add → Plan → Event, type `Dentist`, add a date, location and reservation, Save. Open it, change the type to Watch, and the app names the reservation and Event fields it will drop before it drops them. The same words entered through Add → Task create a Task instead; text never changes the selected target. No account, no network, no AWS. |
 | **2** | [Today and tasks](phase-02-today-and-tasks.md) | A planner you open every morning. | Today at 3 PM on a real day: UP NEXT, SCHEDULE, ANYTIME, EARLIER TODAY. Tick today's Gym; tomorrow's is still at six. Snooze tonight's task to eight; tomorrow's is unchanged. Airplane mode, tick three things, kill the app, come back online, and all three land exactly once. |
 | **2.5** | [Recurrence stabilization](phase-02-5-recurrence-stabilization.md) | Recurring activities behave as one coherent system before more features depend on them. | Open an occurrence from a cold start; complete or move only that occurrence; convert an explicitly selected occurrence to a one-off; separately end and restart a series; stale agenda reads never undo an acknowledged write. |
+| **2.6** | [Sync hardening](phase-02-6-sync-hardening.md) | What you create offline survives, is visible, is cancellable — and still reminds you. | In airplane mode, create a task with a reminder, kill the app, relaunch still offline: the row shows `Pending`, the reminder fires at its time. Reconnect: exactly one server entity and the `Pending` state clears. A create whose response was lost replays a day later without a duplicate; an activity deleted from another device is never resurrected. |
 | **3** | [Plans and lists](phase-03-plans-and-lists.md) | The full personal loop. Save things with no date; explicitly turn a list item into a Plan when you decide; let a plan suggest the lists it needs. | Create a list by choosing **TV shows** from the unselected style catalogue, add `Severance` at S2 E4, then tap **Plan this item** and explicitly choose **Watch**; the form offers S2 E5 as a field pre-fill, not as a type guess. Watch it and accept the separate progress suggestion. Create a New York trip, add two prep tasks, explicitly choose **Packing** for its list, and see `Book hotel` land on Today with `New York Trip` underneath it. |
 | **4** | [Deploy and identity](phase-04-deploy-and-identity.md) | An account of their own, on a system that runs on AWS rather than on your laptop. | Sign up on the simulator, receive the code, confirm, sign in. Sign in with Apple on a physical device, including Hide My Email. `curl "$API_URL/v1/health"` against the dev `execute-api` endpoint returns the SHA of the commit you merged five minutes ago. Ask for another user's activity by ID and get `404` with nothing in the body. |
 | **5** | [Ship v1](phase-05-ship-v1.md) | The app on their phone from TestFlight, at a real domain, with reminders that fire. | Send someone a TestFlight link. They install, sign in with Apple in one Face ID prompt, set a reminder two minutes out, lock the phone, and the push arrives with the task's own words in it. Then they delete the account from inside the app and sign back in the next day to find everything restored. |
@@ -95,6 +98,19 @@ requires explicit occurrence targets; adds an authoritative occurrence detail pr
 makes conversion and agenda reconciliation atomic/version-aware; and closes with a real
 cross-layer matrix plus a report-only damaged-series audit. No remaining Phase 2 feature work
 and no Phase 3 implementation starts until all four tasks pass. **4 tasks.**
+
+### 1.3b Phase 2.6 — Sync hardening
+
+The offline durability gate (2026-08-17, ADR-055). The client mints the real `act_`/`rem_`
+ULID before the request leaves the device; accepted actions persist to an account-scoped
+durable intent log **before** the UI reports them accepted; the query cache stays a
+disposable projection and TanStack stops being the durability boundary. Pending entities are
+visible, inert and cancellable; automatic replay is bounded at 30 days with a
+`needs_confirmation` state beyond it; deletion tombstones share that same constant so replay
+can never resurrect a deletion; and the reminder projection makes an offline-created
+reminder actually fire. Phase 3's queued list-item and Plan-bridge work consumes this
+mechanism, which is why the gate sits before it. **4 tasks** (a fifth, P2-58, is specified
+and parked).
 
 ### 1.4 Phase 3 — Plans and lists
 
@@ -257,7 +273,8 @@ graph TD
     P0["Phase 0 · Foundations<br/>local · 31 tasks · 63 AWU"]
     P1["Phase 1 · Activity core<br/>local · 30 tasks · 72 AWU"]
     P2["Phase 2 · Today and tasks<br/>local · 48 tasks · 119 AWU"]
-    P25["Phase 2.5 · Recurrence stabilization<br/>local · 4 tasks · 11 AWU"]
+    P25["Phase 2.5 · Recurrence stabilization<br/>local · 5 tasks · 13 AWU"]
+    P26["Phase 2.6 · Sync hardening<br/>local · 4 tasks · 14 AWU"]
     P3["Phase 3 · Plans and lists<br/>local · 43 tasks · 110 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
     P5["Phase 5 · Ship v1<br/>TestFlight · 37 tasks · 82 AWU"]
@@ -270,7 +287,8 @@ graph TD
     P1 ==> P2
     P1 ==> P3
     P2 ==> P25
-    P25 ==> P3
+    P25 ==> P26
+    P26 ==> P3
     P3 ==> P4
     P4 ==> P5
     P5 ==> P6
@@ -289,17 +307,20 @@ graph TD
 
     classDef local fill:#eef2f5,stroke:#7b8794,color:#1f2933
     classDef ship fill:#1f2933,stroke:#7b8794,color:#ffffff
-    class P0,P1,P2,P25,P3 local
+    class P0,P1,P2,P25,P26,P3 local
     class P4,P5,P9 ship
 ```
 
 Four edges deserve explanation because they are not obvious.
 
-- **Phase 3 depends on Phase 2.5, not only on Phases 1 and 2.** The link lifecycle in
-  [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §6.3 is defined in
-  terms of completion, un-completion and skip, which do not exist until Phase 2. Building
+- **Phase 3 depends on Phases 2.5 and 2.6, not only on Phases 1 and 2.** The link lifecycle
+  in [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §6.3 is defined
+  in terms of completion, un-completion and skip, which do not exist until Phase 2. Building
   lists first would mean building the bridge twice; Phase 2.5 additionally proves those
-  operations cannot target a whole recurring series accidentally.
+  operations cannot target a whole recurring series accidentally. Phase 2.6 sits between
+  because P3-13's queued offline creates and its `Plan will finish syncing` state are
+  consumers of the intent log and the pending indicator — built without them, they would sit
+  on the persistence layer whose three silent data-loss paths the 2026-08-13 review found.
 - **Phase 4 depends on Phase 0 by interface, not by artefact.** Phase 0 writes eight stacks
   and deploys none of them. Phase 4's first task after bootstrap is to make `ApiStack`
   deployable without a custom domain, because `cdk synth` being green has never been
@@ -418,16 +439,17 @@ sizings did not support; those are corrected here.
 | 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
 | 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **119** | ~6.0 weeks |
 | 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **13** | ~0.7 weeks |
+| 2.6 — Sync hardening | 4 (P2-48…P2-50, P2-57 — 2026-08-17; P2-58 specified, parked, uncounted) | 0 / 1 / 3 | **14** | ~0.7 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **157** | **23 / 89 / 45** | **377** | **~18.9 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **161** | **23 / 90 / 48** | **391** | **~19.6 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **227** | **35 / 134 / 58** | **531** | **~26.6 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **231** | **35 / 135 / 61** | **545** | **~27.3 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9 plus Phase 2.5** | **376** | **48 / 225 / 103** | **906** | **~45.3 weeks (~10 months)** |
+| **Total 0–9 plus Phases 2.5 and 2.6** | **380** | **48 / 226 / 106** | **920** | **~46 weeks (~10.5 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -548,8 +570,17 @@ occurrence and cannot be rendered on any row at all. It completes a corner of P2
 deliverable and does **not** extend the Phase 2.5 blocking gate. That is **+1 task and
 +2 AWU**, giving **376 tasks and 906 AWU**.
 
-Use **906 AWU and ~45.3 weeks** (906 / 20 = 45.3) as the plan of record. Everything
-through Phase 5 is now 529 AWU and ~26.5 weeks; the
+**Phase 2.6 — Sync hardening — is added on 2026-08-17** (ADR-055), after the offline
+durability review found `interaction-contract.md` §5.4's promised `Pending` indicator and
+offline bar unbuilt, and queued user writes stored inside the disposable query-cache
+envelope with three silent data-loss paths. Four tasks — the account-scoped intent log
+(P2-48 L), durable creation with client-minted ids, replay, collision and tombstones
+(P2-49 L), pending-entity behaviour (P2-50 M), and the local reminder projection (P2-57 L) —
+with a fifth (P2-58, acting on pending entities) specified and parked, uncounted. That is
+**+4 tasks and +14 AWU**, giving **380 tasks and 920 AWU**.
+
+Use **920 AWU and ~46 weeks** (920 / 20 = 46) as the plan of record. Everything
+through Phase 5 is now 545 AWU and ~27.3 weeks; the
 remaining ~18.8 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
 participant can act on.
@@ -688,7 +719,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-157 tasks, 377 AWU, ~18.9 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+161 tasks, 391 AWU, ~19.6 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -700,7 +731,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-226 tasks, 529 AWU, ~26.5 weeks. External testers who are not the founder are using it on
+231 tasks, 545 AWU, ~27.3 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -712,7 +743,7 @@ after the first TestFlight build, migrations are mandatory in both environments.
 
 ### 6.3 End of Phase 7 — the full multi-player product, before any AI spend
 
-305 tasks, 718 AWU, ~35.9 weeks. Sharing, guests, invites, shared lists, date suggestions,
+309 tasks, 732 AWU, ~36.6 weeks. Sharing, guests, invites, shared lists, date suggestions,
 expenses, balances and settlement all work. Every marginal cost in the system is still a fraction of a cent per
 request, and every AWS line item is either free-tier or the domain.
 
@@ -793,7 +824,7 @@ isolation, and it only holds if the isolation is real.
 **Phases 0 through 3, surfacing in Phase 4. New with the local-first ordering, and the price
 paid for it.**
 
-Nothing runs on AWS for 157 tasks. Every divergence between DynamoDB Local and DynamoDB,
+Nothing runs on AWS for 161 tasks. Every divergence between DynamoDB Local and DynamoDB,
 between the Hono Node adapter and an API Gateway v2 payload, and between a warm laptop
 process and a cold Lambda accumulates silently and is discovered in one phase — tangled up
 with a Cognito user pool, a first deploy and a new IAM surface, so that when something fails

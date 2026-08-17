@@ -480,6 +480,28 @@ message can name it.
 | Queue limits | 200 pending mutations; beyond that, new writes are refused with `You're offline and there's a lot waiting to sync.` |
 | Undo while offline | Works — it is a compensating local operation and a queued call. |
 
+**A pending entity is visible and inert — amended 2026-08-17 (Phase 2.6).** *"Applied
+optimistically"* above describes a write against an entity the server already knows.
+Something **created** offline is different: until its create is acknowledged it renders with
+the `Pending` indicator and accepts **no server-directed mutation** — it cannot be
+completed, rescheduled, edited, shared, or given an expense. **Local cancellation stays
+available**, because cancelling an unsent create removes an intent that never left the
+device; it is offered only while the intent is still queued, since a request already on the
+wire cannot be retracted. The row says why in words; disabled controls are never the only
+signal (§6.4). This boundary is deliberate — acting on an unsynced entity is P2-58, parked —
+and a reminder on a pending activity states its true armed state (not armed until sync;
+armed locally once P2-57 lands).
+
+**Queued writes are user data, not cache.** They do not expire on cache age and are never
+discarded by a cache-version change; each is persisted before the action is reported as
+accepted (`tech-stack.md` §3.4 mechanism 4). After 30 days without acknowledgement — or
+whenever the device clock proves untrustworthy — an intent stops replaying automatically and
+enters **`needs_confirmation`**: no automatic write; for a create, an online read-only check
+may resolve it silently in the user's favour; otherwise the row asks
+`This never synced — retry or discard?` where **Retry** performs the action now as a fresh
+write and **Discard** requires the explicit tap. A permanently rejected write surfaces
+through the `<n> changes couldn't be applied.` banner above and is removed only by the user.
+
 ### 5.5 Reschedule and snooze sheet copy
 
 Added 2026-08-14 (P2-42). The two sheets that move something in time say what they are moving

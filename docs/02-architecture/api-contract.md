@@ -479,6 +479,17 @@ endpoint whose handler guesses what the user meant.
 | List inline `Add item` | List-item target, fixed by the list path | `POST /v1/lists/:listId/items` |
 | List item `Plan this item` | Plan target, with Plan kind and audience explicitly confirmed in the creation sheet | `POST /v1/lists/:listId/items/:itemId/schedule` |
 
+**Client-minted ids — added 2026-08-17 (Phase 2.6, ADR-055).** `POST /v1/activities`
+accepts an optional `activityId: act_<ULID>`, and the reminder-create path an optional
+`reminderId: rem_<ULID>`, so an offline create can carry the permanent id the client already
+projected. The server validates prefix and encoding (`validation_failed` otherwise), derives
+ownership from the authenticated principal exactly as before, and writes conditionally —
+transactionally checked against the deletion tombstone (`data-model.md` §4, §8). A collision
+returns a generic error with no owner or entity metadata; the client's documented recovery
+is a `GET` of its own id, never an automatic re-mint. Omitting the field keeps today's
+server-minted behaviour byte-identical, and the `Idempotency-Key` requirement is unchanged —
+the client id is identity, not replay protection.
+
 `fromListItem`, `listId`, and `itemId` are not accepted by `POST /v1/activities`. Only the
 list-scoped scheduling endpoint may establish that relationship, after list access has been
 checked.

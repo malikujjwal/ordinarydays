@@ -2151,3 +2151,45 @@ appears in — the existing failure mode. Make conversion retain `schedule.date`
 the user selected a moved or later occurrence. Pick an occurrence from cached agenda data —
 nondeterministic across cold start, request windows and timezone changes. Delete stored
 occurrence rows on conversion — destructive work with no benefit and no recovery path.
+
+---
+
+## ADR-055 — The durable intent log and client-minted canonical ids
+
+**Status:** Accepted · **Date:** 2026-08-17 · **Amends ADR-024**
+
+**Context.** ADR-024's three mechanisms left the durability boundary at TanStack Query's
+persisted mutation cache, which the 2026-08-13 review showed shares the query cache's
+envelope: a cache-buster bump, a seven-day age check, or a slow storage restore each
+silently destroys queued user writes. Separately, `interaction-contract.md` §5.4's promised
+`Pending` indicator and offline bar were never built, and offline *creation* had no design
+at all — the client cannot show a row the server has not yet named. An earlier draft
+resolved that with temporary ids reconciled after sync; `data-model.md` §8's own rationale
+("no coordination needed") makes the reconciliation layer unnecessary.
+
+**Decision.** A fourth mechanism joins ADR-024's three, specified in `tech-stack.md` §3.4:
+a **durable intent log** — account-scoped, separately keyed and versioned, never
+age-expired, written before the action is reported accepted — with **client-minted canonical
+ULIDs** for `act_` and `rem_`, conditional server creation checked against a deletion
+tombstone whose lifetime shares `MAX_AUTOMATIC_INTENT_AGE_DAYS` with the client's bounded
+automatic replay. Pending entities are visible, inert and cancellable. TanStack remains the
+execution machinery; it stops being the durability boundary.
+
+**What ADR-024 keeps.** Everything else, explicitly including the web rule: the mutation
+queue — and therefore the intent log — is iOS-only, because a browser tab is closed rather
+than backgrounded and a queue that never flushes is worse than an error toast. The scope
+guard also stands: the log is a write-ahead record of intents, not a replica; the reminder
+projection (P2-57) is a bounded derived projection for one device capability, expanded
+locally only for entities the server has never seen.
+
+**Consequences.** Offline creation becomes safe to build (Phase 2.6) and Phase 3's queued
+list-item promises inherit a real foundation; sign-out gains a quarantine step (`auth.md`
+§3.4); deletion writes a tombstone; `POST /v1/activities` accepts an optional client id; and
+two windows that must never be tuned apart are one shared constant.
+
+**Alternatives rejected.** Temporary ids with canonicalization — rebuilt coordination that
+ULIDs exist to avoid, and required id rewriting inside queued mutations. Making the
+TanStack persisted cache the durable store with a longer TTL — retention is not the defect;
+sharing a disposal policy with a cache is. Extending the log to web — rejected for
+ADR-024's original reason. Unbounded automatic replay — a create surfacing months later
+without confirmation, and an account-lifetime tombstone obligation, for no user benefit.

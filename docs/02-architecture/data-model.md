@@ -188,6 +188,7 @@ pattern 8b and `security-privacy.md` §1 row 15a).
 | Expense id → activity | `EXPENSE#<expenseId>` | `META` | thin `ExpenseLocator`; resolves a globally unique expense id to `activityId`, then the service authorises the caller against that Activity |
 | Settlement id → history row | `SETTLEMENT#<settlementId>` | `META` | thin `SettlementLocator`; resolves to `ownerId` + the exact `SETTLE#…` sort key for guarded undo |
 | Idempotency record | `IDEM#<userId>#<key>` | `META` | Stored successful response status + body and optional cleanup reference; `ttl` = now + 24 h; conditionally written in the main domain transaction |
+| Deletion tombstone (Phase 2.6) | `ACT#<activityId>` | `TOMBSTONE` | Written in the delete transaction; carries `ownerId`, `deletedAt`; `ttl = deletedAt + MAX_AUTOMATIC_INTENT_AGE_DAYS` (`packages/shared`) — the same constant that bounds client auto-replay, imported by both, so the two windows cannot be tuned apart. A client-minted create is a `TransactWriteItems`: `ConditionCheck` on this item's absence + conditional `Put` on `META`. `GET` for a tombstoned id stays `404`. Removed at account purge. DynamoDB's lazy TTL deletion is slack, never the margin |
 | Rate-limit counter | `RATE#<scope>#<subject>` | `<windowStart>` | `ttl` = window end |
 
 > Idempotency keys are **user-scoped**. A bare `IDEM#<key>` partition would let one user's
@@ -1425,6 +1426,25 @@ storing it would force a data migration every time somebody picks a date.
 - Invite tokens are **not** ULIDs (they'd leak creation order and be guessable). Use
   `crypto.randomBytes(16)` base62-encoded.
 - Never expose raw DynamoDB `pk`/`sk` over the API. The API speaks in IDs.
+- **`act_` and `rem_` may be client-minted (Phase 2.6, ADR-055).** *"No coordination
+  needed"* above is why: a device offline can generate the real, permanent id rather than a
+  placeholder it later reconciles. The server validates the prefix and ULID encoding,
+  refuses an id that already exists (conditional write, transactionally checked against the
+  deletion tombstone in §4's lookup table), and derives ownership from the authenticated
+  principal — **an id is an identifier, never a credential and never a claim.** Authority
+  fields (`ownerId`, `createdAt`) stay server-set and are not accepted on input.
+- **The collision response is honestly an existence signal.** Success versus failure reveals
+  whether an id exists no matter how generic the error copy is. That residual is accepted
+  and bounded: 80 random bits are not enumerable, authorization is tenancy rather than id
+  secrecy, and the error body carries no owner or entity metadata. The client's recovery is
+  a read of its **own** id: `200` → its earlier create landed (acknowledge on identity and
+  ownership; the server entity wins wholesale); `404` → foreign collision or tombstoned
+  create-then-delete, surfaced to the user — never an automatic re-mint, which could bypass
+  a tombstone.
+- **Never derive business chronology from a ULID timestamp.** A client-minted id carries a
+  device clock. Ordering comes from the explicit timestamp leading each `gsi1sk`; the id is
+  uniqueness and a **stable tie-break**, nothing more. `monotonicFactory` orders ids within
+  one generator only — concurrent Lambdas already made cross-instance order approximate.
 
 ---
 

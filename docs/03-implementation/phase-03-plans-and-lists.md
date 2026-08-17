@@ -1854,7 +1854,10 @@ pointer. The queued combined operation stores a stable bridge idempotency key di
 the item-create key, so retrying the bridge cannot create a duplicate Plan. If the item write
 succeeds while scheduling is offline, the item remains a valid saved ListItem and the queued
 bridge visibly shows `Plan will finish syncing`; the UI does not claim the Plan exists until
-that request succeeds.
+that request succeeds. `Plan will finish syncing` is **not a new mechanism**: it is the
+copy-parameterised pending indicator from the Phase 2.6 intent log
+([`phase-02-6-sync-hardening.md`](phase-02-6-sync-hardening.md) P2-48), and this task's
+queued writes ride that log — implementing a second pending system here is a defect.
 
 **Edge cases.**
 

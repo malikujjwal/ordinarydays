@@ -32,6 +32,27 @@ export const MAX_ACTIVE_SERIES = 200;
 /** Paused iOS writes retained in the process-death mutation queue. */
 export const MAX_OFFLINE_MUTATIONS = 200;
 
+/**
+ * How long a persisted offline intent may replay **without asking the user** (P2-48/P2-49).
+ *
+ * **One constant, two consumers, and they must never diverge.** The client stops replaying an
+ * intent automatically this many days after the intent was *created*; the server keeps a
+ * deletion tombstone this many days after the entity was *deleted*. Deletion happens at or
+ * after creation, so the tombstone provably outlives the replay window — but only because
+ * these are the same number. Tune one alone and the hole reopens silently: a create whose
+ * response was lost replays after its tombstone has gone, the conditional write succeeds, and
+ * an activity the user deleted weeks ago comes back.
+ *
+ * **DynamoDB's lazy TTL deletion is not part of the safety margin.** It removes expired items
+ * late — typically within 48 hours, with no guarantee — so a tombstone usually survives
+ * longer than this. That slack is a bonus, never load-bearing.
+ *
+ * The intent itself is **never deleted** on reaching this age — it moves to
+ * `needs_confirmation` and waits for the user (`interaction-contract.md` §5.4). Retention is
+ * indefinite; only automation is bounded.
+ */
+export const MAX_AUTOMATIC_INTENT_AGE_DAYS = 30;
+
 /** How far back `include=overdue` rolls incomplete tasks forward. */
 export const OVERDUE_WINDOW_DAYS = 30;
 

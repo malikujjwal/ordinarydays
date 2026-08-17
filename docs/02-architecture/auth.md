@@ -444,7 +444,16 @@ expired session is how a client generates thousands of requests per minute.
 5. `queryClient.clear()` — remove every cached server response, including the persisted
    cache on disk. TanStack Query's persister must be purged explicitly; clearing the store
    in memory is not enough.
-6. Route to `(auth)/sign-in`.
+6. **The durable intent log is quarantined, not cleared** (Phase 2.6). Unacknowledged
+   offline writes are user data — destroying them at sign-out would silently lose work, and
+   an offline sign-out is exactly when unsynced writes exist. The log is namespaced by
+   immutable `userId` and every intent stores its `ownerUserId`; after sign-out it is
+   neither hydrated nor replayed until the **same** account signs back in. A different
+   account signing in on the device sees nothing from it and can trigger nothing in it —
+   replay under a different authenticated principal would create entities the server owns to
+   the wrong person. Account deletion purges the quarantined log
+   (`security-privacy.md` §3).
+7. Route to `(auth)/sign-in`.
 
 Steps 3 through 5 run even if step 1 fails (offline sign-out must work). Step 1 is retried
 opportunistically on next launch.

@@ -646,11 +646,16 @@ token with `expo-notifications` and keep the server's row true for the life of t
 4. Deletion on account deletion (P5-21) and on `DeviceNotRegistered` receipts (P5-13) is
    server-side and already specified.
 
-**Server push replaces local notifications.** Once this task lands, P2-34's local scheduling
-module is retired entirely — a registered device would otherwise receive every reminder
-twice, once from the OS-local schedule and once from Expo Push. The reminder controls and the
-no-permission behaviour are unchanged; only the delivery mechanism moves server-side.
-(decision recorded here — raise in PR if wrong)
+**Server push replaces local notifications — for server-known entities only (amended
+2026-08-17, Phase 2.6).** Once this task lands, local scheduling is retired for every
+reminder the server knows about — a registered device would otherwise receive it twice, once
+from the OS-local schedule and once from Expo Push. It is **retained for pending local
+intents**: an activity created offline has never reached the server, so the server cannot
+push its reminder, and P2-57's local projection is the only thing that can fire it. The
+transition is part of this task's contract: on intent acknowledgement the local request is
+cancelled and ownership moves to server push, with a test asserting **no double delivery**
+across that handoff — a reminder acknowledged between its local schedule time and its push
+delivers exactly once. The reminder controls and the no-permission behaviour are unchanged.
 
 **Edge cases.**
 
