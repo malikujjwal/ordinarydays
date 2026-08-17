@@ -131,12 +131,28 @@ export function Field({
             minHeight: multiline && !bare ? 96 : theme.layout.hitTarget,
             textAlignVertical: multiline ? 'top' : 'center',
             borderWidth: 1,
+            /**
+             * **The rest border is `borderStrong`** — amended 2026-08-16 (P2-43), on the
+             * founder's report that in light mode you cannot tell where the input is.
+             *
+             * It was `'transparent'`, which left the `surfaceInput` fill as the field's only
+             * boundary — and that fill is **1.02:1 against `surface`** in light and 1.05:1 in
+             * dark. So a text input had no perceivable edge in either scheme, which is WCAG
+             * 1.4.11's 3:1 control-boundary requirement missed outright rather than narrowly.
+             *
+             * `design-system.md` §5.1 already answers it: `borderSubtle` "may never be the sole
+             * required control indicator" and required boundaries take `borderStrong`. This is
+             * that rule applied, not a new one — 4.77:1 light, 6.33:1 dark. A `bare` field is
+             * exempt: it is inline text on a detail screen, not a boxed control.
+             */
             borderColor:
               error !== undefined
                 ? theme.colors.danger
                 : focused
                   ? theme.colors.focusRing
-                  : 'transparent',
+                  : bare
+                    ? 'transparent'
+                    : theme.colors.borderStrong,
           },
         ]}
       />

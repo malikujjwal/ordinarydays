@@ -131,6 +131,14 @@ afterEach(() => {
 
 const tap = (name: string) => fireEvent.click(screen.getByRole('button', { name }));
 
+/**
+ * A chooser row's accessible name carries its subtitle, §6.2's comma-joined grammar — so the
+ * queries match on the label prefix rather than restating copy that `targets.test.ts` pins.
+ */
+const chooser = (label: string) =>
+  screen.getByRole('button', { name: new RegExp(`^${label},`) });
+const tapChoice = (label: string) => fireEvent.click(chooser(label));
+
 describe('the first screen', () => {
   it('asks the question and offers exactly Task, Plan, List item', () => {
     mount();
@@ -138,9 +146,27 @@ describe('the first screen', () => {
     expect(
       screen.getByRole('heading', { name: 'What would you like to add?' }),
     ).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Task' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Plan' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'List item' })).toBeDefined();
+    expect(chooser('Task')).toBeDefined();
+    expect(chooser('Plan')).toBeDefined();
+    expect(chooser('List item')).toBeDefined();
+  });
+
+  /**
+   * Every row says what it is for (founder, 2026-08-16), rendered **and** spoken — the sentence
+   * goes to `accessibilityHint` rather than into the accessible name, so the row is still
+   * announced `Task, button` and the one word the user is listening for arrives first.
+   */
+  it('says what each choice is for', () => {
+    mount();
+    for (const [name, subtitle] of [
+      ['Task', 'Something you need to do'],
+      ['Plan', 'Something you intend to make happen'],
+      ['List item', 'Something you want to keep track of'],
+    ] as const) {
+      expect(screen.getByText(subtitle)).toBeDefined();
+      // Spoken as well as shown: the sentence is inside the row's accessible name.
+      expect(chooser(name).getAttribute('aria-label')).toBe(`${name}, ${subtitle}`);
+    }
   });
 
   /**
@@ -165,13 +191,11 @@ describe('the first screen', () => {
  * pre-filled because it became visible.
  */
 describe('nothing is ever pre-selected', () => {
-  const chooserRow = (name: string) => screen.getByRole('button', { name });
-
   it.each(['Task', 'Plan', 'List item'])(
     'the object chooser opens %s unselected',
     (name) => {
       mount();
-      const row = chooserRow(name);
+      const row = chooser(name);
       expect(row.getAttribute('aria-pressed')).toBeNull();
       expect(row.getAttribute('aria-selected')).toBeNull();
       expect(row.getAttribute('aria-checked')).toBeNull();
@@ -182,8 +206,8 @@ describe('nothing is ever pre-selected', () => {
     'the Plan-kind chooser opens %s unselected',
     (name) => {
       mount();
-      tap('Plan');
-      const row = chooserRow(name);
+      tapChoice('Plan');
+      const row = chooser(name);
       expect(row.getAttribute('aria-pressed')).toBeNull();
       expect(row.getAttribute('aria-selected')).toBeNull();
       expect(row.getAttribute('aria-checked')).toBeNull();
@@ -193,9 +217,9 @@ describe('nothing is ever pre-selected', () => {
   it('leaves the draft with no target until a row is tapped', () => {
     mount();
     expect(useComposeDraft.getState().target).toBeUndefined();
-    tap('Plan');
+    tapChoice('Plan');
     expect(useComposeDraft.getState().target).toBeUndefined();
-    tap('General');
+    tapChoice('General');
     expect(useComposeDraft.getState().target).toEqual({
       objectKind: 'plan',
       type: 'custom',
@@ -209,15 +233,14 @@ describe('nothing is ever pre-selected', () => {
    */
   it('reveals Time and Reminder empty when a date makes them relevant', () => {
     mount();
-    tap('Task');
+    tapChoice('Task');
     tap('Today');
 
     expect(useComposeDraft.getState().schedule.time).toBeUndefined();
     expect(useComposeDraft.getState().reminderOffset).toBeUndefined();
 
-    fireEvent.click(screen.getByRole('button', { name: /^More options/ }));
-    expect(screen.getByRole('button', { name: 'Add a reminder' })).toBeDefined();
-    expect(screen.queryByTestId('compose-reminder-row')).toBeNull();
+    expect(screen.getByTestId('compose-time')).toBeDefined();
+    expect(screen.getByTestId('compose-reminder-row').textContent).toContain('Off');
   });
 });
 
@@ -229,7 +252,7 @@ describe('nothing is ever pre-selected', () => {
 describe('the pinned named write', () => {
   it('reads Save task for a Task', () => {
     mount();
-    tap('Task');
+    tapChoice('Task');
     expect(screen.getByRole('button', { name: 'Save task' })).toBeDefined();
   });
 
@@ -237,8 +260,8 @@ describe('the pinned named write', () => {
     'reads Save plan for a %s Plan',
     (kind) => {
       mount();
-      tap('Plan');
-      tap(kind);
+      tapChoice('Plan');
+      tapChoice(kind);
       expect(screen.getByRole('button', { name: 'Save plan' })).toBeDefined();
     },
   );
@@ -251,14 +274,14 @@ describe('the pinned named write', () => {
    */
   it('offers no write on the List item step', () => {
     mount();
-    tap('List item');
+    tapChoice('List item');
     expect(screen.queryByTestId('compose-save')).toBeNull();
   });
 
   /** Pinned, so it is reachable without scrolling the form it commits. */
   it('sits in the screen shell footer, outside the scrolling form', () => {
     mount();
-    tap('Task');
+    tapChoice('Task');
 
     const save = screen.getByRole('button', { name: 'Save task' });
     expect(screen.getByTestId('compose-form').contains(save)).toBe(false);
@@ -296,14 +319,14 @@ describe("Today's contextual Task entry", () => {
 describe('Task', () => {
   it('opens the form with the target named in the header', () => {
     mount();
-    tap('Task');
+    tapChoice('Task');
     expect(screen.getByText('Task')).toBeDefined();
     expect(screen.getByLabelText('Title')).toBeDefined();
   });
 
   it('names the write on its button', () => {
     mount();
-    tap('Task');
+    tapChoice('Task');
     expect(screen.getByRole('button', { name: 'Save task' })).toBeDefined();
   });
 
@@ -314,7 +337,7 @@ describe('Task', () => {
    */
   it('enables the write as soon as the title is non-empty after trimming', () => {
     mount();
-    tap('Task');
+    tapChoice('Task');
 
     const disabledState = () =>
       screen.getByRole('button', { name: 'Save task' }).getAttribute('aria-disabled');
@@ -335,7 +358,7 @@ describe('Task', () => {
     const onClose = vi.fn();
     mount(onClose);
 
-    tap('Task');
+    tapChoice('Task');
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Call the dentist' },
     });
@@ -352,7 +375,7 @@ describe('Task', () => {
 
   it('names where it landed in the toast, after the form dismisses', async () => {
     mount();
-    tap('Task');
+    tapChoice('Task');
     fireEvent.change(screen.getByLabelText('Title'), {
       target: { value: 'Call the dentist' },
     });
@@ -367,23 +390,29 @@ describe('Task', () => {
 describe('Plan', () => {
   it('requires a second choice, with nothing selected', () => {
     mount();
-    tap('Plan');
+    tapChoice('Plan');
 
     expect(screen.getByRole('heading', { name: 'What kind of plan?' })).toBeDefined();
     for (const label of ['General', 'Meal', 'Watch', 'Event']) {
-      expect(screen.getByRole('button', { name: label })).toBeDefined();
+      expect(chooser(label)).toBeDefined();
     }
+    // Each kind says what it is for, from §1.1's own "Guides creation of" column.
+    expect(screen.getByText('Something to eat or cook')).toBeDefined();
+    expect(screen.getByText('A movie, show, or episode')).toBeDefined();
     expect(screen.queryByLabelText('Title')).toBeNull();
   });
 
   it('posts objectKind plan with the chosen kind', async () => {
     mount();
-    tap('Plan');
-    tap('Watch');
+    tapChoice('Plan');
+    tapChoice('Watch');
 
     expect(screen.getByText('Plan · Watch')).toBeDefined();
 
-    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Severance' } });
+    // §4.3's own name for the title row. The frame asks the table rather than saying `Title`.
+    fireEvent.change(screen.getByLabelText('Movie or show'), {
+      target: { value: 'Severance' },
+    });
     tap('Save plan');
 
     await waitFor(() => expect(sent).toHaveLength(1));
@@ -397,8 +426,8 @@ describe('Plan', () => {
 
   it('treats General as an explicit choice that stores custom', async () => {
     mount();
-    tap('Plan');
-    tap('General');
+    tapChoice('Plan');
+    tapChoice('General');
 
     expect(screen.getByText('Plan · General')).toBeDefined();
 
@@ -413,16 +442,16 @@ describe('Plan', () => {
 
   it('Change returns to the kind chooser and keeps the title', () => {
     mount();
-    tap('Plan');
-    tap('Meal');
-    fireEvent.change(screen.getByLabelText('Title'), {
+    tapChoice('Plan');
+    tapChoice('Meal');
+    fireEvent.change(screen.getByLabelText('Meal'), {
       target: { value: 'Chicken tacos' },
     });
 
     tap('Change');
 
     expect(screen.getByRole('heading', { name: 'What kind of plan?' })).toBeDefined();
-    tap('Event');
+    tapChoice('Event');
     expect(screen.getByLabelText('Title').getAttribute('value')).toBe('Chicken tacos');
   });
 
@@ -438,8 +467,8 @@ describe('Plan', () => {
     );
     mount(() => {}, { loadEventDefaults });
 
-    tap('Plan');
-    tap('Event');
+    tapChoice('Plan');
+    tapChoice('Event');
     expect(loadEventDefaults).toHaveBeenCalledOnce();
     expect(screen.queryByLabelText('Title')).toBeNull();
 
@@ -472,7 +501,7 @@ describe('Plan', () => {
 describe('List item', () => {
   it('is honoured as a choice and creates nothing in Phase 1', () => {
     mount();
-    tap('List item');
+    tapChoice('List item');
 
     expect(screen.getByText('Lists are coming soon.')).toBeDefined();
     expect(screen.queryByLabelText('Title')).toBeNull();
@@ -484,7 +513,7 @@ describe('closing', () => {
   it('closes straight away when nothing has been typed', () => {
     const onClose = vi.fn();
     mount(onClose);
-    tap('Task');
+    tapChoice('Task');
     // The form's close control, not the chooser's Cancel.
     tap('Close');
     expect(onClose).toHaveBeenCalledOnce();
@@ -494,7 +523,7 @@ describe('closing', () => {
   it('asks Discard this? when there is content, and Keep editing returns to the draft', () => {
     const onClose = vi.fn();
     mount(onClose);
-    tap('Task');
+    tapChoice('Task');
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Something' } });
 
     tap('Close');
@@ -509,7 +538,7 @@ describe('closing', () => {
   it('Discard clears the draft and closes, writing nothing', () => {
     const onClose = vi.fn();
     mount(onClose);
-    tap('Task');
+    tapChoice('Task');
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Something' } });
 
     tap('Close');
@@ -538,7 +567,7 @@ describe('a failed save', () => {
     });
     mount(onClose);
 
-    tap('Task');
+    tapChoice('Task');
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'x' } });
     tap('Save task');
 

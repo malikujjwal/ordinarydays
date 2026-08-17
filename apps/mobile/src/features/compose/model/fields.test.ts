@@ -42,6 +42,8 @@ describe('the field tables', () => {
       'date',
       'time',
       'slot',
+      'reminder',
+      'repeat',
       'people',
       'ingredients',
       'addIngredientsTo',
@@ -59,6 +61,8 @@ describe('the field tables', () => {
       'episodeTitle',
       'date',
       'time',
+      'reminder',
+      'repeat',
       'people',
       'service',
       'alsoAddTo',
@@ -72,13 +76,14 @@ describe('the field tables', () => {
       'date',
       'time',
       'endTime',
+      'reminder',
+      'repeat',
       'location',
       'people',
       'reservation',
       'ticketsAndDetails',
       'description',
       'sourceImageLink',
-      'reminder',
       'notes',
     ]);
   });
@@ -88,9 +93,9 @@ describe('the field tables', () => {
       'title',
       'date',
       'time',
-      'people',
       'reminder',
       'repeat',
+      'people',
       'notes',
     ]);
   });
@@ -125,15 +130,33 @@ describe('the field tables', () => {
     }
   });
 
-  /** §2.1 of `notifications.md`: the Meal and Watch forms show none. */
-  it('shows Reminder on Task, Event and General only', () => {
-    for (const type of ['task', 'event', 'custom'] as const) {
+  /**
+   * **Every form carries both** — founder decision, 2026-08-16 (P2-43).
+   *
+   * The per-type exclusion produced a live contradiction: `activities.md` §4.4 listed a
+   * Reminder on Event while `notifications.md` §2.1 said "the Meal, Watch and Event forms show
+   * none". One rule replaces the exception, and both documents were amended to it in the same
+   * pull request. A weekly taco night is ordinary, and `recurrence` and `REM#` are type-blind
+   * in the model — the restriction was never in the data, only in these two tables.
+   */
+  it.each(['task', 'meal', 'watch', 'event', 'custom'] as const)(
+    '%s carries Reminder and Repeat',
+    (type) => {
       expect(keysOf(type)).toContain('reminder');
-    }
-    for (const type of ['meal', 'watch'] as const) {
-      expect(keysOf(type)).not.toContain('reminder');
-    }
-  });
+      expect(keysOf(type)).toContain('repeat');
+    },
+  );
+
+  /** They sit with the schedule, not at the tail: the user sets them while setting *when*. */
+  it.each(['task', 'meal', 'watch', 'event', 'custom'] as const)(
+    '%s puts Reminder and Repeat after the date and before the rest',
+    (type) => {
+      const keys = keysOf(type);
+      expect(keys.indexOf('reminder')).toBeGreaterThan(keys.indexOf('date'));
+      expect(keys.indexOf('repeat')).toBe(keys.indexOf('reminder') + 1);
+      expect(keys.indexOf('repeat')).toBeLessThan(keys.length - 1);
+    },
+  );
 });
 
 describe('conditional visibility', () => {
@@ -205,16 +228,18 @@ describe('the More options split', () => {
     expect([...keys(primary), ...keys(more)]).not.toContain('title');
   });
 
-  it('keeps the schedule up front and folds the rest away', () => {
+  /**
+   * The when block stays visible and the rest folds away — the founder's 2026-08-16 report
+   * that Repeat and Reminder did not belong behind a disclosure.
+   */
+  it('keeps the whole when block up front and folds the rest away', () => {
     expect(keys(fieldRegions('task', { hasDate: true }).primary)).toEqual([
       'date',
       'time',
-    ]);
-    expect(keys(fieldRegions('task', { hasDate: true }).more)).toEqual([
       'reminder',
       'repeat',
-      'notes',
     ]);
+    expect(keys(fieldRegions('task', { hasDate: true }).more)).toEqual(['notes']);
   });
 
   /** §4.2 makes the slot and the time two views of one value, so they stay together. */
@@ -236,14 +261,13 @@ describe('the More options split', () => {
    */
   it('anchors the split to the table position, not to what survived', () => {
     const { primary, more } = fieldRegions('event', dated);
-    expect(keys(primary)).toEqual(['date', 'time', 'endTime']);
+    expect(keys(primary)).toEqual(['date', 'time', 'endTime', 'reminder', 'repeat']);
     expect(keys(more)).toEqual([
       'location',
       'reservation',
       'ticketsAndDetails',
       'description',
       'sourceImageLink',
-      'reminder',
       'notes',
     ]);
   });

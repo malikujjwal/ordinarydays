@@ -46,6 +46,7 @@ export function ObjectChooser({ onChoose }: ObjectChooserProps) {
           <ChooserRow
             key={choice.value}
             label={choice.label}
+            subtitle={choice.subtitle}
             onPress={() => onChoose(choice.value)}
             testID={`object-choice-${choice.value}`}
           />

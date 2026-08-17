@@ -142,17 +142,34 @@ export function SettingRow({
       </View>
 
       {/**
-       * **The value is state, not an action — `textSecondary` in both schemes.** In
-       * `textAction` it resolved plum in light and near-white in dark, so the two themes
-       * disagreed about which part of the row was the loud one. The value communicates state;
-       * the chevron communicates navigation. That reads the same at any time of day.
+       * **The value takes `textAction` when the row opens, and `textSecondary` when it does
+       * not** — amended 2026-08-16 (P2-43, founder: *"would having the choices on the right in
+       * a different colour be more readable?"*).
        *
-       * This is a rule about *this* row on `surface`/`surfaceRaised`, not a universal one:
-       * semantic role first, contrast gate second, token third. On light `accentSurface`,
-       * `textSecondary` is 4.45:1 and the correct token there is `textPrimary`.
+       * The earlier rule was `textSecondary` unconditionally, on the reasoning that a value
+       * reports state while the chevron reports navigation, and that `textAction` "resolved
+       * plum in light and near-white in dark, so the two themes disagreed about which part of
+       * the row was the loud one". **That second half is now false**: P2-43 gave dark
+       * `textAction` a readable mulberry, so the token means the same thing in both schemes and
+       * the objection it rested on is gone.
+       *
+       * What survives is the distinction, and `opens` is exactly it (§0's affordance table:
+       * accent text means an action). A row that opens something is offering to change the
+       * value beside it, so the value is part of the affordance and is inked as one. A row that
+       * *commits* — the reschedule sheet's date rows — renders no chevron and no accent, and its
+       * value stays the state report it is. That is also what keeps this safe on an overlay:
+       * dark `textAction` clears 4.5:1 on every surface, asserted in `contrast.test.ts`.
+       *
+       * On a selected row the ground is `accentSurface` and the ink steps up to `textPrimary`:
+       * semantic role first, contrast gate second, exact token third.
        */}
       {value === undefined ? null : (
-        <Text variant="subhead" color={tinted ? 'textPrimary' : 'textSecondary'}>
+        <Text
+          variant="subhead"
+          color={
+            tinted ? 'textPrimary' : opens && interactive ? 'textAction' : 'textSecondary'
+          }
+        >
           {value}
         </Text>
       )}

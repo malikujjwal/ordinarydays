@@ -21,16 +21,31 @@ import { View } from 'react-native';
  */
 export interface ChooserRowProps {
   label: string;
+  /**
+   * One line saying what the choice is for (founder, 2026-08-16).
+   *
+   * It is rendered **and spoken, inside the accessible name** — `Task, Something you need to
+   * do` — which is §6.2's own comma-joined grammar for every other row in the product.
+   *
+   * `accessibilityHint` was tried first and is the textbook answer, but React Native Web drops
+   * it, and an explicit `accessibilityLabel` also suppresses the rendered subtitle from the
+   * name. The result was a sentence that only iOS users heard. A subtitle the founder added so
+   * "the user can tell what the option is for" cannot be one that half the users never get.
+   */
+  subtitle: string;
   onPress: () => void;
   testID?: string;
 }
 
-export function ChooserRow({ label, onPress, testID }: ChooserRowProps) {
+export function ChooserRow({ label, subtitle, onPress, testID }: ChooserRowProps) {
   const theme = useTheme();
 
   return (
     <Row
       title={label}
+      subtitle={subtitle}
+      subtitleTone="explanatory"
+      accessibilityLabel={`${label}, ${subtitle}`}
       onPress={onPress}
       {...(testID === undefined ? {} : { testID })}
       trailing={

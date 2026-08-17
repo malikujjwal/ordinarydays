@@ -137,7 +137,22 @@ const dark: SemanticColors = {
   /** Retained: unlisted safety semantics keep their existing dark values. */
   textDisabled: '#6E6C63',
   textInverse: '#171613',
-  textAction: '#F4F0E8',
+  /**
+   * **Mulberry, not white — founder decision, 2026-08-16 (P2-43).**
+   *
+   * This was `#F4F0E8`, which made `Back`, `Change` and every other text action in dark mode
+   * indistinguishable from a heading; the founder's report was that they "should not be white
+   * in color". `accentDeep` `#AD748C` is the natural candidate and the one the frames draw, but
+   * it is 4.06:1 on `surfaceOverlay` — a text action inside a sheet would have missed the gate,
+   * and P2-40's rule is that the gate is never lowered to make a colour pass.
+   *
+   * `#B58298` is that same mulberry lifted 10% toward white, which is the smallest change that
+   * clears 4.5:1 on **every** dark surface a text action can land on: 5.70 on `surface`, 5.18 on
+   * `surfaceRaised`, 4.75 on `surfaceOverlay`, 5.42 on `surfaceInput`, 4.91 on `accentSurface`.
+   * Asserted across all five in `contrast.test.ts` rather than on the two §5.1 names, because
+   * the reason this value exists is the surfaces the old rule did not cover.
+   */
+  textAction: '#B58298',
 
   border: '#34312B',
   /** The supplied border serves both roles in dark; there is no second dark outline value. */

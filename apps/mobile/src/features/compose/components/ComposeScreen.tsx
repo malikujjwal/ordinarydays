@@ -8,6 +8,7 @@ import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
+import { titleLabel } from '@/features/compose/model/fields';
 import { canSave, successToast } from '@/features/compose/model/targets';
 import {
   type EventDraftDefaults,
@@ -136,6 +137,7 @@ export function ComposeScreen({
         <Button
           label="Back"
           variant="ghost"
+          flush
           onPress={() => draft.back()}
           testID="compose-back"
         />
@@ -195,6 +197,7 @@ export function ComposeScreen({
                 notes: draft.notes,
                 ...(draft.sourceUrl === undefined ? {} : { sourceUrl: draft.sourceUrl }),
               }}
+              titleLabel={titleLabel(draft.target.type)}
               typedFields={
                 <TypedFields
                   type={draft.target.type}

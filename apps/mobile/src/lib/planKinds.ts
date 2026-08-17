@@ -28,13 +28,30 @@ import type { PlanType } from '@od/shared/types';
 export interface PlanKindChoice {
   value: PlanType;
   label: string;
+  /**
+   * One line saying what the kind is for (founder, 2026-08-16: *"I need subtexts on these
+   * screens, so that the user can tell what the option is for"*).
+   *
+   * Taken from §1.1's **"Guides creation of"** column rather than written fresh, so the chooser
+   * and the table that defines the kinds say the same thing. Event's is abridged — §1.1 lists
+   * seven examples, which is a paragraph rather than a row subtitle.
+   */
+  subtitle: string;
 }
 
 export const planKindChoices: readonly PlanKindChoice[] = Object.freeze([
-  { value: 'custom', label: 'General' },
-  { value: 'meal', label: 'Meal' },
-  { value: 'watch', label: 'Watch' },
-  { value: 'event', label: 'Event' },
+  {
+    value: 'custom',
+    label: 'General',
+    subtitle: 'A plan that does not fit the guided kinds',
+  },
+  { value: 'meal', label: 'Meal', subtitle: 'Something to eat or cook' },
+  { value: 'watch', label: 'Watch', subtitle: 'A movie, show, or episode' },
+  {
+    value: 'event',
+    label: 'Event',
+    subtitle: 'A concert, appointment, restaurant, or trip',
+  },
 ]);
 
 const labels = new Map(planKindChoices.map((c) => [c.value, c.label]));

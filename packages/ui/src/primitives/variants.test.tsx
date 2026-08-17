@@ -17,6 +17,7 @@ import type { ColorScheme } from '../theme/colors';
 import { colors } from '../theme/colors';
 import { elevation } from '../theme/elevation';
 import { ThemeProvider, useBreakpoint, useTheme } from '../theme/ThemeProvider';
+import { space } from '../theme/tokens';
 import { Avatar } from './Avatar';
 import { Button, type ButtonVariant } from './Button';
 import { Card } from './Card';
@@ -203,6 +204,40 @@ describe('Row', () => {
     expect(screen.getByRole('button', { name: 'Dinner' })).toBeDefined();
   });
 
+  /**
+   * Two subtitle roles (P2-43). An agenda row's subtitle is the user's own data and §7.1 pins
+   * it at `textSecondary`; a chooser row's is copy explaining the control, which §0 calls
+   * information. In dark the difference is real — 11.01:1 against 6.33:1 — which is the
+   * founder's report that the subtext read almost as loud as the label.
+   */
+  it.each(['light', 'dark'] as const)(
+    '%s: content subtitles stay textSecondary',
+    (scheme) => {
+      wrap(
+        <Row title="Chicken tacos" subtitle="Meal · Dinner" onPress={() => {}} />,
+        scheme,
+      );
+      expect(getComputedStyle(screen.getByText('Meal · Dinner')).color).toBe(
+        cssRgb(colors[scheme].textSecondary),
+      );
+    },
+  );
+
+  it.each(['light', 'dark'] as const)('%s: explanatory subtitles step down', (scheme) => {
+    wrap(
+      <Row
+        title="Task"
+        subtitle="Something you need to do"
+        subtitleTone="explanatory"
+        onPress={() => {}}
+      />,
+      scheme,
+    );
+    expect(getComputedStyle(screen.getByText('Something you need to do')).color).toBe(
+      cssRgb(colors[scheme].textMuted),
+    );
+  });
+
   it('exposes swipe actions as accessibility actions', () => {
     const onAction = vi.fn();
     wrap(
@@ -246,6 +281,63 @@ describe.each(schemes)('%s scheme — a selected SettingRow', (scheme) => {
     expect(getComputedStyle(value.parentElement as HTMLElement).backgroundColor).toBe(
       'rgba(0, 0, 0, 0)',
     );
+  });
+});
+
+/**
+ * §0's affordance table, applied to the value slot (P2-43): accent text means an action. A row
+ * that **opens** is offering to change the value beside it; a row that **commits** — the
+ * reschedule sheet's date rows, which render no chevron — is only reporting one.
+ */
+describe.each(schemes)(
+  '%s scheme — the value slot says whether it is editable',
+  (scheme) => {
+    it('inks the value of a row that opens as an action', () => {
+      wrap(
+        <SettingRow label="Repeat" value="Every 3 days" opens onPress={() => {}} />,
+        scheme,
+      );
+      expect(getComputedStyle(screen.getByText('Every 3 days')).color).toBe(
+        cssRgb(colors[scheme].textAction),
+      );
+    });
+
+    it('leaves the value of a row that commits as a state report', () => {
+      wrap(<SettingRow label="Today" value="Wed, Aug 12" onPress={() => {}} />, scheme);
+      expect(getComputedStyle(screen.getByText('Wed, Aug 12')).color).toBe(
+        cssRgb(colors[scheme].textSecondary),
+      );
+    });
+
+    /** An inert row is not a control, so its value is never an action either. */
+    it('leaves an inert row alone', () => {
+      wrap(<SettingRow label="People" value="Coming later" opens />, scheme);
+      expect(getComputedStyle(screen.getByText('Coming later')).color).toBe(
+        cssRgb(colors[scheme].textSecondary),
+      );
+    });
+  },
+);
+
+/**
+ * `flush` (P2-43): the ghost button's invisible padding stops indenting its label out of the
+ * text column, and becomes hit target reaching into the gutter instead. The 44 pt floor is why
+ * the padding is offset rather than removed.
+ */
+describe('a flush ghost button', () => {
+  it('offsets exactly its own horizontal padding', () => {
+    wrap(<Button label="Back" variant="ghost" flush onPress={() => {}} />);
+    const style = getComputedStyle(screen.getByRole('button', { name: 'Back' }));
+    expect(style.paddingLeft).toBe(`${space[6]}px`);
+    expect(style.marginLeft).toBe(`-${space[6]}px`);
+    expect(style.minHeight).toBe('44px');
+  });
+
+  it('leaves an ordinary ghost button indented', () => {
+    wrap(<Button label="Change" variant="ghost" onPress={() => {}} />);
+    expect(
+      getComputedStyle(screen.getByRole('button', { name: 'Change' })).marginLeft,
+    ).toBe('0px');
   });
 });
 

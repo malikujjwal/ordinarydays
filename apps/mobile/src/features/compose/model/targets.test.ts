@@ -48,9 +48,20 @@ describe('the Plan-kind chooser', () => {
     ]);
   });
 
+  /**
+   * Every row says what it is for (founder, 2026-08-16). Asserted as a property rather than as
+   * fixed strings: the point is that no row can be added without one, and copy that is pinned
+   * twice is copy that drifts in one of the two places.
+   */
+  it('gives every plan kind a subtitle', () => {
+    for (const choice of planKindChoices) {
+      expect(choice.subtitle.length).toBeGreaterThan(0);
+    }
+  });
+
   /** `General` is the visible label for the stored type `custom`, and is a real choice. */
   it('maps General to custom and never to a fallback', () => {
-    expect(planKindChoices[0]).toEqual({ value: 'custom', label: 'General' });
+    expect(planKindChoices[0]).toMatchObject({ value: 'custom', label: 'General' });
     expect(planKindLabel('custom')).toBe('General');
   });
 

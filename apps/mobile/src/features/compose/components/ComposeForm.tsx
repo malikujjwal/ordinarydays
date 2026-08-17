@@ -36,6 +36,8 @@ export interface ComposeFormProps {
   fields: CommonDraftFields;
   /** `activities.md` §4's table for this target, rendered in order (P1-25). */
   typedFields: React.ReactNode;
+  /** §4's own name for the title row — `Meal`, `Movie or show`, `Title`. */
+  titleLabel: string;
   onTitleChange: (title: string) => void;
   onChangeTarget: () => void;
   errorMessage: string | undefined;
@@ -54,6 +56,7 @@ export function ComposeForm({
   target,
   fields,
   typedFields,
+  titleLabel,
   onTitleChange,
   onChangeTarget,
   errorMessage,
@@ -83,13 +86,14 @@ export function ComposeForm({
         <Button
           label="Change"
           variant="ghost"
+          flush
           onPress={onChangeTarget}
           testID="compose-change-target"
         />
       </View>
 
       <Field
-        label="Title"
+        label={titleLabel}
         value={fields.title}
         onChangeText={onTitleChange}
         required

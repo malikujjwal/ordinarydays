@@ -3,6 +3,21 @@ import type { ActivityType } from '@od/shared/types';
 /**
  * The five field tables from `activities.md` §4, as data (P1-25).
  *
+ * > **Reminder and Repeat are on all five — founder decision, 2026-08-16 (P2-43).** The tables
+ * > gave Repeat to Task and General only, and Reminder to Task, General and Event; the founder
+ * > reported that Meal, Watch and Event were "missing Repeat, Reminder". A weekly taco night and
+ * > a Friday film are ordinary, `Activity.recurrence` and the per-user `REM#` row are type-blind
+ * > in the model, and the recurrence engine has never branched on `type`. The per-type exclusion
+ * > was also the source of a live contradiction between two rank-2 documents: `activities.md`
+ * > §4.4 listed a Reminder on Event while `notifications.md` §2.1 said "the Meal, Watch and Event
+ * > forms show none". Both are amended in this task's pull request; one rule replaces the
+ * > exception, which is what removed the contradiction rather than picking a side of it.
+ * >
+ * > The two rows sit with the schedule block, after `Slot` on a Meal and after `End time` on an
+ * > Event, because they are things you set about *when* — which is also where the founder's `3A`
+ * > frames draw them. That moves Event's Reminder up from the tail of §4.4's table, so §4.4's
+ * > order is amended too rather than being quietly departed from.
+ *
  * **The order is part of the spec, not a suggestion** (§3 rule 3), and a field absent from a
  * type's table does not appear, is not collapsed behind a disclosure and is not greyed out
  * (§3 rule 1). Holding the tables here rather than in six JSX files is what lets one test
@@ -65,6 +80,8 @@ const MEAL: readonly FieldSpec[] = [
   field('date', 'Date'),
   field('time', 'Time'),
   field('slot', 'Slot'),
+  field('reminder', 'Reminder'),
+  field('repeat', 'Repeat'),
   field('people', 'People'),
   field('ingredients', 'Ingredients'),
   field('addIngredientsTo', 'Add selected ingredients to…'),
@@ -80,6 +97,8 @@ const WATCH: readonly FieldSpec[] = [
   field('episodeTitle', 'Episode title'),
   field('date', 'Date'),
   field('time', 'Time'),
+  field('reminder', 'Reminder'),
+  field('repeat', 'Repeat'),
   field('people', 'People'),
   field('service', 'Streaming service'),
   field('alsoAddTo', 'Also add to…'),
@@ -91,13 +110,14 @@ const EVENT: readonly FieldSpec[] = [
   field('date', 'Date'),
   field('time', 'Start time'),
   field('endTime', 'End time'),
+  field('reminder', 'Reminder'),
+  field('repeat', 'Repeat'),
   field('location', 'Location'),
   field('people', 'People'),
   field('reservation', 'Reservation'),
   field('ticketsAndDetails', 'Tickets & details'),
   field('description', 'Description'),
   field('sourceImageLink', 'Source image / link'),
-  field('reminder', 'Reminder'),
   field('notes', 'Notes'),
 ];
 
@@ -105,9 +125,9 @@ const CUSTOM: readonly FieldSpec[] = [
   field('title', 'Title'),
   field('date', 'Date'),
   field('time', 'Time'),
-  field('people', 'People'),
   field('reminder', 'Reminder'),
   field('repeat', 'Repeat'),
+  field('people', 'People'),
   field('notes', 'Notes'),
 ];
 
@@ -151,18 +171,30 @@ export const UNBUILT_FIELDS: ReadonlySet<FieldKey> = new Set<FieldKey>([
  * top-to-bottom in the order given in §4" — true of the visible form: a disclosure holding a
  * contiguous tail reorders nothing, it only folds the end of the list away.
  *
- * The split is after the schedule block, because a date and a time are what the user came to
- * set. Meal keeps `Slot` up front with them: §4.2 makes the slot and the time two views of one
- * value, and separating them would put the cause behind a disclosure and leave the effect
- * outside it. Watch keeps its identity fields, which the table itself puts above the date.
+ * The split is after the **when block** — date, time, end time, slot, reminder, repeat — because
+ * that is what the user came to set, and because the founder's report on the first build was
+ * that Repeat and Reminder did not belong behind a disclosure: *"I like the current behaviour of
+ * them appearing after the date/time have selected"*. Meal keeps `Slot` inside it because §4.2
+ * makes the slot and the time two views of one value, and Watch keeps the identity fields its
+ * own table puts above the date.
  */
 const MORE_OPTIONS_FROM: Readonly<Record<ActivityType, FieldKey>> = Object.freeze({
-  task: 'reminder',
+  task: 'relatedPlan',
   meal: 'people',
   watch: 'people',
   event: 'location',
   custom: 'people',
 });
+
+/**
+ * The label §4 gives a type's title row — `Meal` on a Meal, `Movie or show` on a Watch.
+ *
+ * The frame renders the title field, so it has to ask the table for its name; it had been
+ * hard-coding `Title` for all five, which `fields.test.ts` has pinned as wrong since P1-25
+ * without anything rendering the pinned value. Found 2026-08-16 while capturing the Meal form.
+ */
+export const titleLabel = (type: ActivityType): string =>
+  fieldsByType[type][0]?.label ?? 'Title';
 
 /** Everything a draft's own state decides about which fields exist right now. */
 export interface FieldVisibility {

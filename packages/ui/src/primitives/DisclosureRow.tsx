@@ -44,7 +44,16 @@ export function DisclosureRow({ label, summary, children, testID }: DisclosureRo
       />
       {expanded ? (
         <View
-          style={{ gap: theme.space[4], paddingBottom: theme.space[6] }}
+          /**
+           * **The content is padded top and bottom.** Without the top pad the first revealed
+           * row's own hairline sat almost on top of the disclosure row's, reading as a doubled
+           * rule rather than as a group opening — reported on the built Add form, 2026-08-16.
+           */
+          style={{
+            gap: theme.space[4],
+            paddingTop: theme.space[5],
+            paddingBottom: theme.space[6],
+          }}
           testID={`${testID}-content`}
         >
           {children}

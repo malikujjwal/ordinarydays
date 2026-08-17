@@ -120,11 +120,16 @@ describe('every form renders its table, in order', () => {
     expect(screen.queryByTestId('compose-location')).toBeNull();
   });
 
-  it('gives a Meal no Reminder or Repeat row', () => {
+  /**
+   * Reversed 2026-08-16 on the founder's report that Meal, Watch and Event were "missing
+   * Repeat, Reminder". `notifications.md` §2.1 and `activities.md` §4.2–§4.4 are amended to
+   * match in the same pull request; the assertion is kept, pointing the other way, so the
+   * decision is pinned rather than merely deleted.
+   */
+  it('gives a Meal both a Reminder and a Repeat row', () => {
     mount('meal', { schedule: TIMED });
-    openMore();
-    expect(screen.queryByTestId('compose-reminder')).toBeNull();
-    expect(screen.queryByTestId('compose-repeat')).toBeNull();
+    expect(screen.getByTestId('compose-reminder')).toBeDefined();
+    expect(screen.getByTestId('compose-repeat')).toBeDefined();
   });
 });
 
@@ -144,12 +149,10 @@ describe('progressive disclosure', () => {
     'renders no %s control until a date exists',
     (key) => {
       const { unmount } = mount('task');
-      openMore();
       expect(screen.queryByTestId(`compose-${key}`)).toBeNull();
       unmount();
 
       mount('task', { schedule: DATED });
-      openMore();
       expect(screen.getByTestId(`compose-${key}`)).toBeDefined();
     },
   );
@@ -206,8 +209,19 @@ describe('the More options summary', () => {
     screen.getByRole('button', { name: /^More options/ }).textContent ?? '';
 
   it('names the built fields inside it, in order', () => {
+    mount('event', { schedule: TIMED });
+    expect(summaryOf()).toContain(
+      'Location · Reservation · Tickets & details · Description · Source image / link · Notes',
+    );
+  });
+
+  /** The when block is not in it — it renders above, whatever the state (founder, 2026-08-16). */
+  it('never folds Reminder or Repeat away', () => {
     mount('task', { schedule: DATED });
-    expect(summaryOf()).toContain('Reminder · Repeat · Notes · Source image / link');
+    expect(summaryOf()).not.toContain('Reminder');
+    expect(summaryOf()).not.toContain('Repeat');
+    expect(screen.getByTestId('compose-reminder')).toBeDefined();
+    expect(screen.getByTestId('compose-repeat')).toBeDefined();
   });
 
   it.each([
@@ -224,7 +238,6 @@ describe('the More options summary', () => {
   it('shrinks to what is relevant while the draft is undated', () => {
     mount('task');
     expect(summaryOf()).toContain('Notes · Source image / link');
-    expect(summaryOf()).not.toContain('Reminder');
   });
 });
 
@@ -271,17 +284,58 @@ describe('nothing unimplemented is drawn', () => {
   });
 });
 
-describe('the Reminder control', () => {
-  /** It begins as an action, not as a populated row with `Off` already chosen (P2-43). */
-  it('offers + Reminder before one is set, and states it after', () => {
-    const { unmount } = mount('task', { schedule: DATED });
+/**
+ * The founder's 2026-08-16 report: the rows had more air above their labels than below, and the
+ * gap between the last picker and the first row was bigger again. Both come from a flow gap
+ * landing on top of `SettingRow`'s own padding, so both are asserted structurally — the rows
+ * share one parent, and nothing sits between the picker above and that parent.
+ */
+describe('the when block is one even group', () => {
+  it('puts Reminder, Repeat and More options in the same container', () => {
+    mount('task', { schedule: DATED });
+
+    const reminder = screen.getByTestId('compose-reminder');
+    const repeat = screen.getByTestId('compose-repeat');
+    const more = screen.getByTestId('compose-more-options');
+
+    const group = reminder.parentElement;
+    expect(group).not.toBeNull();
+    expect(group?.contains(repeat)).toBe(true);
+    expect(group?.contains(more)).toBe(true);
+  });
+
+  /**
+   * The capture row is two buttons, not a row. Folded into the `RowGroup` it inherited a row's
+   * zero top margin and landed against the Notes box above it — the founder's 2026-08-16 report.
+   */
+  it('spaces the capture row from the field above it', () => {
+    mount('task', { schedule: DATED });
     openMore();
-    expect(screen.getByRole('button', { name: 'Add a reminder' })).toBeDefined();
-    expect(screen.queryByTestId('compose-reminder-row')).toBeNull();
+
+    const capture = screen.getByTestId('capture-photos').parentElement?.parentElement;
+    const block = capture?.parentElement as HTMLElement;
+    expect(getComputedStyle(block).marginTop).not.toBe('0px');
+  });
+
+  it('leaves no spacer between the time picker and the group', () => {
+    mount('task', { schedule: DATED });
+    const group = screen.getByTestId('compose-reminder').parentElement?.parentElement;
+    expect(getComputedStyle(group as HTMLElement).marginTop).toBe('0px');
+  });
+});
+
+describe('the Reminder control', () => {
+  /**
+   * **One row in every state, matching Repeat** — founder decision, 2026-08-16, replacing the
+   * `+ Reminder` action P2-43 shipped first. `Off` is a state report, not a selection: the
+   * menu underneath still opens with nothing ticked, asserted below.
+   */
+  it('reads Off before one is set, and states the offset after', () => {
+    const { unmount } = mount('task', { schedule: DATED });
+    expect(screen.getByTestId('compose-reminder-row').textContent).toContain('Off');
     unmount();
 
     mount('task', { schedule: TIMED, reminderOffset: -15 });
-    openMore();
     expect(screen.getByTestId('compose-reminder-row').textContent).toContain(
       '15 minutes before',
     );
@@ -290,15 +344,13 @@ describe('the Reminder control', () => {
   /** §3.2: the untimed picker offers days, not minutes. */
   it('offers the untimed list until a time is set', () => {
     const { unmount } = mount('task', { schedule: DATED });
-    openMore();
-    fireEvent.click(screen.getByRole('button', { name: 'Add a reminder' }));
+    fireEvent.click(screen.getByTestId('compose-reminder-row'));
     expect(screen.getByRole('button', { name: /^On the day/ })).toBeDefined();
     expect(screen.queryByRole('button', { name: /^15 minutes before/ })).toBeNull();
     unmount();
 
     mount('task', { schedule: TIMED });
-    openMore();
-    fireEvent.click(screen.getByRole('button', { name: 'Add a reminder' }));
+    fireEvent.click(screen.getByTestId('compose-reminder-row'));
     expect(screen.getByRole('button', { name: /^15 minutes before/ })).toBeDefined();
     expect(screen.queryByRole('button', { name: /^On the day/ })).toBeNull();
   });
@@ -309,14 +361,12 @@ describe('the Reminder control', () => {
    */
   it('opens with nothing ticked, and ticks only what the user set', () => {
     const { unmount } = mount('task', { schedule: TIMED });
-    openMore();
-    fireEvent.click(screen.getByRole('button', { name: 'Add a reminder' }));
+    fireEvent.click(screen.getByTestId('compose-reminder-row'));
     const menu = screen.getByTestId('compose-reminder-menu');
     expect(menu.querySelectorAll('[aria-pressed="true"]')).toHaveLength(0);
     unmount();
 
     mount('task', { schedule: TIMED, reminderOffset: -60 });
-    openMore();
     fireEvent.click(screen.getByTestId('compose-reminder-row'));
     expect(
       screen.getByTestId('compose-reminder-option--60').getAttribute('aria-pressed'),
@@ -329,8 +379,7 @@ describe('the Reminder control', () => {
   it('writes the chosen offset and closes the menu', () => {
     const onReminderChange = vi.fn();
     mount('task', { schedule: TIMED, onReminderChange });
-    openMore();
-    fireEvent.click(screen.getByRole('button', { name: 'Add a reminder' }));
+    fireEvent.click(screen.getByTestId('compose-reminder-row'));
     fireEvent.click(screen.getByRole('button', { name: /^1 hour before/ }));
 
     expect(onReminderChange).toHaveBeenCalledWith(-60);

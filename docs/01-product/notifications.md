@@ -64,11 +64,20 @@ suppress the in-app inbox entry (§5) — the record still exists; only the inte
 
 ### 2.1 Per-activity reminder control
 
+> **Amended 2026-08-16 (founder, P2-43).** This section used to say *"the Meal, Watch and Event
+> forms show none"*, while
+> [`activities.md`](activities.md#44-event) §4.4's Event table listed a Reminder — two canonical
+> documents contradicting each other about one control, which the implementation resolved by
+> silently following §4.4. The founder's ruling is that **all five creation forms carry Reminder
+> and Repeat**; §4.2, §4.3, §4.4 and §4.6 are amended to match in the same pull request. A
+> reminder is a per-user `REM#` item and recurrence is a field on the Activity, neither of which
+> ever knew the activity's `type` — the exclusion was presentational and is gone.
+
 Independent of the category toggle:
 
 | Level | Control | Effect |
 | --- | --- | --- |
-| Profile default | Settings → `Default reminder`, writing `me.defaultReminderOffset` | Ships **Off** (`unset`). The user may explicitly save any picker value—including `At the time` (`0`)—and that saved offset is then visibly pre-selected on new timed activities **whose creation form shows a Reminder control**. The Meal, Watch and Event forms show none, so the default does not apply at their creation; those activities gain reminders from plan detail, where the saved offset is what the reminder row pre-selects when one is added. Choosing `Off` again clears it. |
+| Profile default | Settings → `Default reminder`, writing `me.defaultReminderOffset` | Ships **Off** (`unset`). The user may explicitly save any picker value—including `At the time` (`0`)—and that saved offset is then visibly pre-selected on new timed activities. **Every creation form shows a Reminder control** (amended 2026-08-16), so the default applies at creation on all five. Choosing `Off` again clears it. |
 | Per activity, per person | The `Reminder` field on the creation form and the reminder row on plan detail | Writes **your own** `Reminder` items. Up to **3 per person per activity** ([`../02-architecture/api-contract.md#24a-reminders--per-user`](../02-architecture/api-contract.md#24a-reminders--per-user)). |
 | Per occurrence | Not supported | A recurring series has one reminder set per person; individual occurrences inherit it. Snoozing an occurrence moves that occurrence's reminder with it (§3.4). |
 | Mute one plan | Plan detail → `⋯` → `Mute this plan` | Suppresses every push for that activity — reminders, changes, expenses, feed — without changing anyone else's. Stored per user per activity. |

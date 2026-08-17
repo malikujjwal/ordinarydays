@@ -34,9 +34,10 @@ const textSurfaces = ['surface', 'surfaceRaised'] as const;
  * graphics bar it does have to meet. Moving it back here would not make the palette safer; it
  * would make the gate fail for a token nothing renders text in.
  *
- * `accentDeep` is light-only for the same reason in reverse: §5.1 gives dark text actions to
- * `textPrimary`/`textSecondary`, and dark `accentDeep` is 4.43:1 on `surfaceRaised`. In light
- * it is the readable accent-text token at 5.4:1 and is asserted as one.
+ * `accentDeep` is light-only for the same reason in reverse: dark `accentDeep` is 4.43:1 on
+ * `surfaceRaised` and 4.06:1 on `surfaceOverlay`, which is why P2-43 gave the dark text action
+ * its own lifted value rather than promoting `accentDeep` into a text role. In light it is the
+ * readable accent-text token at 5.4:1 and is asserted as one.
  */
 const bodyTextTokens = [
   'textDisplay',
@@ -61,6 +62,32 @@ describe.each(schemes)('%s scheme — body text meets AA 4.5:1', (scheme) => {
     expect(
       ratio,
       `${scheme}: ${token} (${palette[token]}) on ${surface} (${palette[surface]}) is ${ratioOf(palette[token], palette[surface])}:1`,
+    ).toBeGreaterThanOrEqual(AA_BODY);
+  });
+});
+
+/**
+ * **`textAction` on every surface it can land on** — added 2026-08-16 (P2-43).
+ *
+ * The two-surface matrix above is §5.1's promise, and it is not enough for this token: a text
+ * action is a ghost `Button`, and ghost buttons sit inside sheets (`surfaceOverlay`), on a
+ * selected row (`accentSurface`) and beside inputs (`surfaceInput`) as well as on the page. The
+ * dark value was chosen to clear the gate on all five, so all five are asserted — a later
+ * "simplify it back to `accentDeep`" then fails here rather than shipping a 4.06:1 label.
+ */
+describe.each(schemes)('%s scheme — text actions are readable anywhere', (scheme) => {
+  const palette = colors[scheme];
+
+  it.each([
+    'surface',
+    'surfaceRaised',
+    'surfaceOverlay',
+    'surfaceInput',
+    'accentSurface',
+  ] as const)('textAction on %s', (surface) => {
+    expect(
+      contrastRatio(palette.textAction, palette[surface]),
+      `${scheme}: textAction (${palette.textAction}) on ${surface} (${palette[surface]}) is ${ratioOf(palette.textAction, palette[surface])}:1`,
     ).toBeGreaterThanOrEqual(AA_BODY);
   });
 });

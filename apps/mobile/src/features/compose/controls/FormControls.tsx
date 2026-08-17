@@ -1,6 +1,5 @@
 import { MAX_INGREDIENTS, MAX_NOTES_LEN } from '@od/shared/constants';
 import {
-  Button,
   Checkbox,
   Close as CloseIcon,
   DatePicker,
@@ -162,11 +161,16 @@ export interface ReminderControlProps {
 /**
  * The reminder offset (`notifications.md` §3, §4.1's `Select` control).
  *
- * **It begins as an action, not as a populated row** (P2-43). With no reminder set there is no
- * state to report, so the form offers `+ Reminder` and nothing else; once one is chosen the
- * same control becomes a `SettingRow` stating it. The chips this replaced rendered nine options
- * inline, permanently, with `Off` pre-selected among them — a row that looked answered before
- * the user had answered anything.
+ * **One row, in every state, matching Repeat** — founder decision, 2026-08-16. The first P2-43
+ * build made this a `+ Reminder` action until an offset was set, per the task's own prose; the
+ * founder's report was that it "is not looking good" and that the version matching Repeat was
+ * better. Two adjacent controls that do the same thing — state a setting, open a menu — reading
+ * as two different kinds of control was the whole of it, and §0's component-family rule says the
+ * same thing in the abstract.
+ *
+ * `Off` in the value slot is a **state report, not a selection**: no `REM#` row is written and
+ * nothing is pre-chosen, exactly as `Repeat` reads `Does not repeat` before any rule exists. The
+ * menu underneath still opens with nothing ticked.
  *
  * The options open in a **bottom-anchored menu over a dimmed form**, which is what the frames
  * draw and what §4.1 has always called this control. `Off` is a real row in it, so removing a
@@ -183,23 +187,13 @@ export function ReminderControl({ value, onChange, time }: ReminderControlProps)
 
   return (
     <View testID="compose-reminder">
-      {value === undefined ? (
-        <Button
-          label="+ Reminder"
-          accessibilityLabel="Add a reminder"
-          variant="ghost"
-          onPress={() => setOpen(true)}
-          testID="compose-add-reminder"
-        />
-      ) : (
-        <SettingRow
-          label="Reminder"
-          value={current?.label ?? 'Off'}
-          opens
-          onPress={() => setOpen(true)}
-          testID="compose-reminder-row"
-        />
-      )}
+      <SettingRow
+        label="Reminder"
+        value={value === undefined ? 'Off' : (current?.label ?? 'Off')}
+        opens
+        onPress={() => setOpen(true)}
+        testID="compose-reminder-row"
+      />
 
       <Sheet
         open={open}

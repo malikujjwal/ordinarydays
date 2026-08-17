@@ -41,6 +41,15 @@ const formatWallDate = (date: string): string => format(parseISO(date), 'EEE, d 
 export interface Choice<T> {
   value: T;
   label: string;
+  /**
+   * One line saying what the row is for (founder, 2026-08-16, copy supplied verbatim in the
+   * `CREATE/01` frame).
+   *
+   * It never carries an example of *content* — `Buy milk`, `Dinner with Alice` — because a row
+   * that shows what people usually put there is a row that nudges. It says what the **object**
+   * is, which is the distinction the whole chooser exists to make explicit.
+   */
+  subtitle: string;
 }
 
 /**
@@ -51,9 +60,13 @@ export interface Choice<T> {
  * most-recently-used experiment would get written.
  */
 export const objectChoices: readonly Choice<ObjectChoice>[] = Object.freeze([
-  { value: 'task', label: 'Task' },
-  { value: 'plan', label: 'Plan' },
-  { value: 'listItem', label: 'List item' },
+  { value: 'task', label: 'Task', subtitle: 'Something you need to do' },
+  { value: 'plan', label: 'Plan', subtitle: 'Something you intend to make happen' },
+  {
+    value: 'listItem',
+    label: 'List item',
+    subtitle: 'Something you want to keep track of',
+  },
 ]);
 
 /**

@@ -51,7 +51,7 @@ export function SelectField<Value extends string>({
               ? theme.colors.danger
               : focused
                 ? theme.colors.focusRing
-                : theme.colors.borderSubtle,
+                : theme.colors.borderStrong,
           borderRadius: theme.radius.lg,
           paddingBlock: theme.space[4],
           paddingInlineStart: theme.space[5],

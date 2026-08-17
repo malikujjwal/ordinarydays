@@ -33,6 +33,20 @@ export interface ButtonProps {
    * button a lozenge, which is the shape a control takes when nothing decided it should.
    */
   radius?: RadiusToken;
+  /**
+   * **A text action whose label lines up with the text column** — added 2026-08-16 (P2-43).
+   *
+   * A `ghost` button has no fill, so its horizontal padding is invisible ink that pushes the
+   * label 20 pt in from whatever column it sits in. On the Add screen that put `Back` and
+   * `Change` out of line with the `Title` beneath them, which the founder reported as the
+   * buttons "not being inline".
+   *
+   * `flush` pulls the box outward by exactly that padding, so the **label** aligns and the
+   * padding becomes hit target extending into the gutter rather than an indent. Removing the
+   * padding instead would have taken a short label like `Back` below the 44 pt minimum
+   * (`interaction-contract.md` §2), which is the trade this shape avoids.
+   */
+  flush?: boolean;
   testID?: string;
 }
 
@@ -47,6 +61,7 @@ export function Button({
   disabled = false,
   fullWidth = false,
   radius = 'md',
+  flush = false,
   testID,
 }: ButtonProps) {
   const theme = useTheme();
@@ -98,6 +113,7 @@ export function Button({
         {
           height: size === 'lg' ? 52 : theme.layout.hitTarget,
           paddingHorizontal: theme.space[6],
+          ...(flush ? { marginHorizontal: -theme.space[6] } : {}),
           borderRadius: theme.radius[radius],
           backgroundColor: palette.bg,
           borderWidth: variant === 'secondary' ? 1 : 0,

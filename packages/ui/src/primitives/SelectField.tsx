@@ -42,8 +42,13 @@ export function SelectField<Value extends string>({
           paddingVertical: theme.space[4],
           borderRadius: theme.radius.lg,
           borderWidth: 1,
+          /**
+           * `borderStrong`, not `borderSubtle` — amended 2026-08-16 (P2-43) for the reason
+           * `Field` records: `surfaceInput` is 1.02:1 against `surface`, so the outline is the
+           * control's only boundary and §5.1 forbids `borderSubtle` from being that.
+           */
           borderColor:
-            error === undefined ? theme.colors.borderSubtle : theme.colors.danger,
+            error === undefined ? theme.colors.borderStrong : theme.colors.danger,
           backgroundColor: theme.colors.surfaceInput,
           flexDirection: 'row',
           alignItems: 'center',

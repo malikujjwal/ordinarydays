@@ -19,6 +19,20 @@ import { Touchable } from './Touchable';
 export interface RowProps {
   title: string;
   subtitle?: string;
+  /**
+   * Which ink the subtitle takes — added 2026-08-16 (P2-43).
+   *
+   * `content` is `textSecondary` and is the default, because an agenda row's subtitle is the
+   * **user's own data** — `Meal · Dinner`, the location, `S2 E4` — and `design-system.md` §7.1
+   * pins it there by name.
+   *
+   * `explanatory` is `textMuted`: a line that describes the *control* rather than reporting its
+   * content, which §0's affordance table calls information. A chooser row's `Something you need
+   * to do` is that. It is a real step down in dark (6.33:1 against the title's 15.92) and the
+   * same value in light, where the palette deliberately collapses muted into secondary — the
+   * founder's supplied `#978F84` is 2.7:1 and is decoration, not readable text (§5.1).
+   */
+  subtitleTone?: 'content' | 'explanatory';
   /** The leading control — a `Checkbox` for tasks, a type marker otherwise. */
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
@@ -30,6 +44,11 @@ export interface RowProps {
   /** Completed rows additionally strike the title. */
   struck?: boolean;
   accessibilityLabel?: string;
+  /**
+   * Spoken after the name, on a pause (iOS). **Not a substitute for the name**: React Native
+   * Web drops it, so anything a web user must hear belongs in `accessibilityLabel`.
+   */
+  accessibilityHint?: string;
   accessibilityActions?: { name: string; label: string }[];
   onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
   testID?: string;
@@ -38,6 +57,7 @@ export interface RowProps {
 export function Row({
   title,
   subtitle,
+  subtitleTone = 'content',
   leading,
   trailing,
   onPress,
@@ -45,6 +65,7 @@ export function Row({
   dimmed = false,
   struck = false,
   accessibilityLabel,
+  accessibilityHint,
   accessibilityActions,
   onAccessibilityAction,
   testID,
@@ -61,7 +82,11 @@ export function Row({
         {title}
       </Text>
       {subtitle === undefined ? null : (
-        <Text variant="subhead" color="textSecondary" numberOfLines={1}>
+        <Text
+          variant="subhead"
+          color={subtitleTone === 'explanatory' ? 'textMuted' : 'textSecondary'}
+          numberOfLines={1}
+        >
           {subtitle}
         </Text>
       )}
@@ -114,6 +139,7 @@ export function Row({
     <Touchable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
+      {...(accessibilityHint === undefined ? {} : { accessibilityHint })}
       {...(accessibilityActions === undefined ? {} : { accessibilityActions })}
       {...(onAccessibilityAction === undefined ? {} : { onAccessibilityAction })}
       onPress={onPress}

@@ -3379,6 +3379,59 @@ anything.
 >    everywhere else; the detail screen and the repeat sheet were already correct. Not new copy —
 >    the removal of a stale second name for one option.
 
+> **Founder review of the built screen — 2026-08-16 (supersedes points 1 and 2 above in part).**
+> Six reports against the first build, and what each settled.
+>
+> 1. **Every form carries Reminder and Repeat.** The report was that Meal, Watch and Event were
+>    "missing Repeat, Reminder". They were, but so was the contract: §4.1 and §4.6 gave Repeat to
+>    Task and General alone. Acting on it surfaced a **live contradiction between two rank-2
+>    documents** — `activities.md` §4.4 listed a Reminder on Event while `notifications.md` §2.1
+>    said "the Meal, Watch and Event forms show none", and the implementation had been quietly
+>    following §4.4 while its own test comment cited §2.1. One rule for all five replaces the
+>    exception that produced it. `Activity.recurrence` and the per-user `REM#` item are type-blind
+>    and the recurrence engine never branched on `type`, so nothing below the form changed;
+>    §4.2, §4.3, §4.4, §4.6 and `notifications.md` §2.1 are amended in the same pull request.
+> 2. **Reminder and Repeat are not behind `More options`.** The split moves from "after the
+>    schedule" to "after the **when block**" — date, time, end time, slot, reminder, repeat. It is
+>    still a contiguous suffix, so §3 rule 3 still holds. This moves Event's Reminder up from the
+>    tail of §4.4, so that table's order is amended rather than departed from.
+> 3. **Reminder is one row in every state, matching Repeat** — the `+ Reminder` action this task's
+>    prose asked for is withdrawn. `Off` in the value slot is a state report, not a selection: no
+>    `REM#` row is written, exactly as `Repeat` reads `Does not repeat` before any rule exists, and
+>    the menu underneath still opens with nothing ticked.
+> 4. **Dark text actions are mulberry, not white.** `textAction` was `textPrimary` in dark, which
+>    made `Back` and `Change` read as headings. `accentDeep` is what the frames draw but is 4.06:1
+>    on `surfaceOverlay`, and P2-40's rule is that the gate is never lowered to make a colour pass
+>    — so the value is that hue lifted 10%, clearing 4.5:1 on all five surfaces a text action
+>    reaches. A palette **value**, not a new token; recorded in `design-system.md` §5.1.
+> 5. **`Button` gains `flush`, and the value beside an opening row takes `textAction`.** The
+>    ghost button's invisible padding was indenting `Back` and `Change` out of line with the
+>    column; and with dark `textAction` now readable, the P2-51 objection to accent values ("the
+>    two themes disagree about which part of the row is loud") no longer holds, so a row that
+>    *opens* inks its value as part of that affordance. A row that *commits* does not.
+> 6. **`DisclosureRow` pads its content top and bottom.** Without the top pad the first revealed
+>    row's hairline sat on the disclosure row's own, reading as a doubled rule.
+
+> **Second founder review — 2026-08-16.** Three more, two of which were defects rather than taste.
+>
+> 1. **Even spacing, part two.** The first fix grouped the rows; it did not stop the form's flow
+>    gap landing *above* the group, on top of `SettingRow`'s own padding. The group now sits flush
+>    against what precedes it and `TypedFields` spaces its non-row controls itself. Recorded in
+>    `design-system.md` §0.
+> 2. **The input had no boundary at all.** Reported as "in light mode I can't tell where the Title
+>    box is". `Field`'s rest border was `transparent`, so `surfaceInput` was the whole edge — and
+>    it is **1.02:1** against `surface` in light, 1.05:1 in dark. That is WCAG 1.4.11 missed
+>    outright in **both** schemes, not a light-mode preference. `borderStrong` now, per §5.1's own
+>    rule that `borderSubtle` may never be the sole required control indicator. `SelectField` too.
+> 3. **Chooser rows carry a subtitle**, and `Row` gains two subtitle roles for it. The founder's
+>    frame supplied the three object subtitles verbatim; the four plan kinds take theirs from
+>    §1.1's "Guides creation of" column so the chooser and the table cannot drift.
+>
+> **Three things in that frame were not taken, and are raised rather than resolved:** `Outing`
+> (decision 1 of the 2026-08-12 amendment forbids it), `Custom` in place of `General` (§1.1: the
+> stored name is `custom`, the read name is `General`, "never an omitted value or a hidden
+> default"), and the heading `What are you planning?` (§2.2 fixes `What kind of plan?`).
+
 ---
 
 ### P2-44 — Today day header and timeline furniture

@@ -84,6 +84,52 @@ content length — `Repeat` alone beside `Notes`-with-summary. Both are minima; 
 > the home indicator it is, and that the keyboard lifts it rather than covering it. A named write
 > that scrolls away with the form it commits is the failure it exists against.
 
+> **The value takes `textAction` when the row opens — 2026-08-16 (P2-43).** The rule above used
+> to end "the value is state, not an action — `textSecondary` in both schemes", on the reasoning
+> that `textAction` "resolved plum in light and near-white in dark, so the two themes disagreed
+> about which part of the row was the loud one". **The second half is no longer true**: §5.1's
+> dark `textAction` is now a readable mulberry, so the token means one thing in both schemes and
+> the objection it rested on is gone.
+>
+> What survives is the distinction, and `opens` is exactly it, per §0's affordance table —
+> accent text means an action. A row that **opens** something is offering to change the value
+> beside it, so the value is inked as part of that affordance. A row that **commits** — the
+> reschedule sheet's date rows, which render no chevron — keeps `textSecondary`, because its
+> value is a report and not a thing the row will edit. On a selected row the ground is
+> `accentSurface` and the ink steps up to `textPrimary`.
+
+> **Two subtitle roles on `Row` — 2026-08-16 (P2-43, founder report).** §7.1 pins the timeline
+> row's subtitle at `subhead`, `textSecondary`, and that stays: an agenda subtitle is the user's
+> own data — `Meal · Dinner`, the location, `S2 E4`. A **chooser** row's subtitle is not content;
+> it is a line explaining the control, which §0's affordance table calls information. That takes
+> `textMuted` (`subtitleTone="explanatory"`). In dark it is a real step down — 6.33:1 against the
+> title's 15.92 — which is the report: the subtext read almost as loud as the label. In light the
+> two tokens are the same value, because §5.1 collapses muted into secondary rather than ship the
+> supplied `#978F84` at 2.7:1.
+
+> **A `RowGroup` sits flush against what precedes it — 2026-08-16 (P2-43, founder report).** A
+> form gap and a row group cannot share one container. `SettingRow` already carries `space[5]`
+> and centres its label inside `layout.settingRowMinHeight`, so a flow gap above the group lands
+> **on top of** that padding: the first row gets far more air above its label than below, while
+> every row beneath it is even. The group's own padding is the separation, and a screen laying out
+> mixed controls spaces the non-row ones and leaves the group alone.
+
+> **An input's rest border is `borderStrong` — 2026-08-16 (P2-43, founder report).** Both
+> primitives drew it in `borderSubtle` — and `Field` drew it in **`transparent`**, leaving the
+> `surfaceInput` fill as the whole boundary. That fill is **1.02:1 against `surface`** in light
+> and 1.05:1 in dark, so a text input had no perceivable edge in either scheme: WCAG 1.4.11's
+> 3:1 control-boundary requirement missed outright, not narrowly. §5.1 already answered it —
+> `borderSubtle` "may never be the sole required control indicator" — so this is that rule
+> applied rather than a new one. 4.77:1 light, 6.33:1 dark. A `bare` field stays borderless: it
+> is inline text on a detail screen, not a boxed control.
+
+> **`Button` gains `flush` — 2026-08-16 (P2-43).** A `ghost` button has no fill, so its
+> `space[6]` horizontal padding is invisible ink that indents the label from whatever column it
+> sits in; on the Add screen `Back` and `Change` were 20 pt out of line with the `Title` beneath
+> them. `flush` pulls the box outward by exactly that padding, so the **label** aligns and the
+> padding becomes hit target reaching into the gutter. Dropping the padding instead would have
+> taken a short label like `Back` under the 44 pt minimum, which is the trade this avoids.
+
 **Component families, not component sprawl.** One implementation per family; the roles are
 gallery states, not separate primitives. `Row` and `SettingRow` are the two row families —
 "navigation row", "choice row", "check row", "disclosure row", "content row" are *roles* of
@@ -341,7 +387,7 @@ independently contrast-checked.
 | `textMuted` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Readable hints, placeholders and tertiary metadata; never a disabled state |
 | `textDisabled` | `#978F84` | `#6E6C63` | 2.7:1 / 3.1:1 | Disabled labels and nonessential decoration only — never carries meaning |
 | `textInverse` | `#FFFDF9` | `#171613` | — | On an accessible filled accent, sage, ochre, or danger surface |
-| `textAction` | `#795565` | `#F4F0E8` | 5.4:1 / 15.9:1 | Readable text actions: light `accentDeep`, dark `textPrimary`; semantic alias, no new palette value |
+| `textAction` | `#795565` | `#B58298` | 5.4:1 / 5.7:1 | Readable text actions. Light is `accentDeep`; **dark is a lifted mulberry, amended 2026-08-16 (P2-43)** — it was `textPrimary` `#F4F0E8`, which made every text action in dark mode indistinguishable from a heading. `accentDeep` `#AD748C` is what the frames draw but is 4.06:1 on `surfaceOverlay`, so the value is that hue lifted 10% toward white: the smallest change clearing 4.5:1 on **every** surface a text action lands on — 5.70 `surface`, 5.18 `surfaceRaised`, 4.75 `surfaceOverlay`, 5.42 `surfaceInput`, 4.91 `accentSurface`, all asserted |
 | `border` | `#E1DAD0` | `#34312B` | — | Dividers, separators, hairlines and the timeline's connector line. Decorative only. |
 | `borderSubtle` | `#D3C9BC` | `#34312B` | — | Decorative light field/chip outline; never the sole control boundary or focus indicator |
 | `borderStrong` | `#6E675F` | `#9F988D` | 4.8:1 / 6.3:1 | Required control outlines and checkbox border |
@@ -456,7 +502,7 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | Component | Props | States |
 | --- | --- | --- |
 | `Text` | `variant` (the nine type roles), `color` (`textDisplay` \| `textPrimary` \| `textSecondary` \| `textMuted` \| `textDisabled` \| `textAction` \| `accent` \| `danger` \| `success` \| `warning` \| `inverse`), `numberOfLines`, `align` | — |
-| `Button` | `variant` (`primary` — accent fill \| `secondary` \| `ghost` — the text-action role \| `danger`), `size` (`md` 44 \| `lg` 52), `radius` (**defaults to `md`**; `pill` is requested explicitly, and only by the controls the radius table reserves it for), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth` | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
+| `Button` | `variant` (`primary` — accent fill \| `secondary` \| `ghost` — the text-action role \| `danger`), `size` (`md` 44 \| `lg` 52), `radius` (**defaults to `md`**; `pill` is requested explicitly, and only by the controls the radius table reserves it for), `label`, `icon?`, `onPress`, `loading`, `disabled`, `fullWidth`, `flush` (a `ghost` whose label aligns with the text column — §0) | default, pressed, loading (spinner after 400 ms), disabled, focus-visible |
 | `IconButton` | `icon`, `label` (required — it is the accessible name), `onPress`, `variant` (`ghost` \| `filled`), `tone` (`neutral` \| `accent`), `disabled` | default, pressed, disabled, focus-visible. Always 44 × 44. |
 | `Row` | `onPress?`, `leading?`, `title`, `subtitle?`, `trailing?`, `accent?`, `dimmed`, `struck`, `swipeActions?`, `accessibilityActions` | default, pressed, hovered (web), focused, dimmed (completed), disabled |
 | `Card` | `elevation` (`e1` \| `e2` \| `e3`), `radius` (`lg` \| `xl`), `padding` (a `space` token), `onPress?` | default, pressed, focused |
@@ -464,8 +510,8 @@ people (`repo-structure.md` §2.2). Props below are the required surface; each a
 | `SegmentedControl` | `segments` (`{ label, count? }[]`), `selectedIndex`, `onChange` | `surfaceSunken` pill track (`radius.md`), active segment `surfaceRaised` + `e1`. Counts render as a `footnote` beside the label. |
 | `ProgressBar` | `value` (0–1), `tone` (`accent` \| `neutral`) | 4 pt tall, `radius.pill`, track `border`, fill `accent`. No animation beyond `base` width easing; no percentage text of its own. |
 | `Sheet` | `open`, `onClose`, `title?`, `detent` (`fit` \| `medium` \| `large`), `actions?`, `dismissible` | closed, presenting, open, dismissing. `radius.sheet` top corners. Focus trapped; returns focus on close. **Behaviour is fixed by §6.1, not by the screen.** |
-| `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength` | default, focused, filled, error, disabled. `surfaceInput` fill, `radius.lg`, decorative `borderSubtle` at rest and the accessible `focusRing` on focus. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
-| `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Uses the same `surfaceInput` / `borderSubtle` / `focusRing` treatment as `Field`; native opens one accessible option sheet and web uses one styled platform `<select>`. |
+| `Field` | `label`, `value`, `onChangeText`, `placeholder?`, `error?`, `hint?`, `required`, `multiline`, `keyboardType`, `inputAccessoryViewID?`, `maxLength` | default, focused, filled, error, disabled. `surfaceInput` fill, `radius.lg`, **`borderStrong` at rest** and the accessible `focusRing` on focus. A number-pad field in a sheet links an iOS Done accessory because that keyboard has no Return key. |
+| `SelectField` | `label`, `value`, `options`, `onChange`, `error?`, `hint?`, `disabled` | collapsed, focused, open, selected, error, disabled. Uses the same `surfaceInput` / `borderStrong` / `focusRing` treatment as `Field`; native opens one accessible option sheet and web uses one styled platform `<select>`. |
 | `DatePicker` | `label`, `value` (`WallDate \| null`), `onChange`, **`today`**, `quickOptions`, `min?`, `max?`, `disabled` | default, open, cleared. Native wheel on iOS, `<input type="date">` on web. |
 | `TimePicker` | `label`, `value` (`WallTime \| null`), `onChange`, `minuteInterval` (5), `allowClear`, `openAt?`, `presentation?` (`sheet` \| `inline`), `disabled` | default, open, cleared (meaning "anytime that day"). A picker inside an existing native sheet uses `inline`, so it never presents a nested modal. |
 | `Checkbox` | `checked`, `onChange`, `label` (accessible name), `disabled` | unchecked (borderStrong ring), checked (olive fill, white check, spring), disabled, focus-visible. 44 × 44 target, 24 × 24 visual. |
@@ -644,8 +690,8 @@ row's own quick actions as text buttons — no icons, no chrome.
 > **Annotation correction — 2026-08-13 (P2-51).** This diagram said the eyebrow was
 > `accentDeep` and the actions `accent`. Both were wrong against §5.1's own contract: `accent`
 > is never a text colour, and dark `accentDeep` is 4.4:1 on `surfaceRaised`. Both are
-> `textAction`, which resolves to light `accentDeep` and dark `textPrimary` and is therefore
-> readable in both schemes. The prose below the diagram already said this for the relative-time
+> `textAction`, which is readable in both schemes — light `accentDeep`, and since 2026-08-16 a
+> lifted mulberry in dark rather than `textPrimary` (§5.1). The prose below the diagram already said this for the relative-time
 > label; the annotations had not been updated, and an implementer reading the picture rather
 > than the paragraph would have shipped the older rule.
 

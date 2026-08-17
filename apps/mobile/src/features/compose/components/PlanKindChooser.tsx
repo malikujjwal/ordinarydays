@@ -46,6 +46,7 @@ export function PlanKindChooser({ onChoose }: PlanKindChooserProps) {
           <ChooserRow
             key={choice.value}
             label={choice.label}
+            subtitle={choice.subtitle}
             onPress={() => onChoose(choice.value)}
             testID={`plan-kind-${choice.value}`}
           />

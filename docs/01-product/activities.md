@@ -84,16 +84,25 @@ in its label and skips only that already-answered choice.
 Opening global `+` or pressing `N` presents one required, unselected choice:
 
 ```
-┌──────────────────────────────────────┐
-│  Cancel                              │
-│                                      │
-│  What would you like to add?         │
-│                                      │
-│  Task                              › │
-│  Plan                              › │
-│  List item                         › │
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Cancel                                          │
+│                                                  │
+│  What would you like to add?                     │
+│                                                  │
+│  Task                                          › │
+│  Something you need to do                        │
+│  Plan                                          › │
+│  Something you intend to make happen             │
+│  List item                                     › │
+│  Something you want to keep track of             │
+└──────────────────────────────────────────────────┘
 ```
+
+**Each row says what the object is** (founder, 2026-08-16), in the copy above, verbatim. The
+subtitle names the **kind of thing**, never an example of content: a row reading `Buy milk` or
+`Dinner with Alice` would be a suggestion, and this screen exists precisely so the choice is the
+user's. It is spoken as well as shown — the row's accessible name is `Task, Something you need to
+do`, §6.2's comma-joined grammar.
 
 No row is selected, recommended, reordered from history, or bypassed by typed or shared
 content. Each row determines the stored object before capture starts:
@@ -108,17 +117,25 @@ The Plan-kind step asks `What kind of plan?` and lists the four kinds in the ord
 with nothing selected:
 
 ```
-┌──────────────────────────────────────┐
-│  Back                                │
-│                                      │
-│  What kind of plan?                  │
-│                                      │
-│  General                           › │
-│  Meal                              › │
-│  Watch                             › │
-│  Event                             › │
-└──────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Back                                            │
+│                                                  │
+│  What kind of plan?                              │
+│                                                  │
+│  General                                       › │
+│  A plan that does not fit the guided kinds       │
+│  Meal                                          › │
+│  Something to eat or cook                        │
+│  Watch                                         › │
+│  A movie, show, or episode                       │
+│  Event                                         › │
+│  A concert, appointment, restaurant, or trip     │
+└──────────────────────────────────────────────────┘
 ```
+
+The four subtitles are §1.1's **"Guides creation of"** column, so the chooser and the table that
+defines the kinds cannot drift apart. Event's is abridged: §1.1 lists seven examples, which is a
+paragraph rather than a row subtitle.
 
 General is a real, visible choice. The app must not silently use it when no Plan kind was
 selected. Back returns to the chooser without writing. Closing a non-empty form prompts
@@ -285,6 +302,30 @@ Rules that apply to every type's form.
 > of the scrolling form. It says exactly what §2.5's table says it says; the change is that on a
 > long Event form it can no longer scroll out of reach.
 
+> **Every form carries Reminder and Repeat — founder decision, 2026-08-16 (P2-43).** §4.1 and
+> §4.6 gave Repeat to Task and General alone; Reminder went to Task, General and Event. The
+> founder's report on the first P2-43 build was that Meal, Watch and Event were *"missing Repeat,
+> Reminder"*. The five tables in §4 now carry both.
+>
+> **This resolves a live contradiction rather than creating one.** §4.4's Event table listed a
+> Reminder while [`notifications.md`](notifications.md#21-per-activity-reminder-control) §2.1 said
+> in as many words that *"the Meal, Watch and Event forms show none"* — two rank-2 documents
+> disagreeing about the same control on the same form, with the implementation following §4.4 and
+> its own test comment citing §2.1. One rule for all five replaces the exception that produced it;
+> §2.1 is amended in the same pull request and the profile-backed `defaultReminderOffset` now
+> applies wherever a form shows the control, which is everywhere.
+>
+> Nothing in the model had to change. `Activity.recurrence` and the per-user `REM#` item are
+> type-blind ([`../02-architecture/data-model.md#41-activity`](../02-architecture/data-model.md#41-activity),
+> ADR-047), and the recurrence engine has never branched on `type` — the restriction lived only
+> in these tables. A weekly taco night and a Friday film are the ordinary cases it was refusing.
+>
+> **Both rows sit with the schedule**, after `Slot` on a Meal and after `End time` on an Event,
+> because they are things the user sets about *when*. That moves Event's Reminder up from the tail
+> of §4.4, so its order is amended here rather than departed from silently: rule 3 above makes the
+> order part of the spec, and a form whose order disagrees with its table is the drift that rule
+> exists to catch.
+
 ---
 
 ## 4. Field tables per type
@@ -326,6 +367,8 @@ Columns: **Field** (label as shown), **Control**, **Req.**, **Validation**, **De
 | Date | Date picker | No | Valid date | Empty | `schedule.date` |
 | Time | Time picker | No | `HH:mm`; requires a date | Set from the slot **every time the slot changes, unless the user chose the time themselves**: breakfast 08:00, lunch 12:30, dinner 19:00, snack unset — and choosing Snack *clears* a slot-derived time. Once the user picks a time, no slot change touches it again | `schedule.time` |
 | Slot | Segmented: Breakfast / Lunch / Dinner / Snack | No | One of the four | Inferred from Time if a time is set and no slot chosen: < 11:00 breakfast, < 15:00 lunch, < 17:00 snack, else dinner | `details.mealSlot` |
+| Reminder | Select | No | Requires a date | `Off` | `reminders[]` on input → your own `REM#` item |
+| Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Ingredients | Repeating rows: name + optional quantity, each with a checkbox | No | Name 1–120; max 60 rows | Empty | `details.ingredients[]` (`name`, `quantity`) |
 | Add selected ingredients to… | Toggle + destination dropdown, shown only when ≥ 1 ingredient row exists. The destination is named in the label (`Add selected ingredients to Groceries`) | No | Any list the user picks; the dropdown offers lists holding the `groceries` slot first, then the rest | Off. The destination resolves through the **`groceries` slot** by the four-step rule in [`plans-and-lists.md`](plans-and-lists.md) §5.8 — never "the first groceries list", never the most recently used one. With no eligible list the row reads `Choose or create a list`; New list opens the unselected style catalogue and returns here after the separate `Create list` action | After an existing or newly created destination is visibly confirmed, `POST /v1/lists/:id/items/bulk`; sets `details.ingredients[].addedToListId` |
@@ -349,6 +392,8 @@ the flow and §5.8 for how the destination is chosen.
 | Episode title | Single-line text | No | 0–120; shown only when Kind = Show | Empty | `details.episodeTitle` |
 | Date | Date picker | No | Valid date | Empty | `schedule.date` |
 | Time | Time picker | No | `HH:mm`; requires a date | Empty | `schedule.time` |
+| Reminder | Select | No | Requires a date | `Off` | `reminders[]` on input → your own `REM#` item |
+| Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Streaming service | Single-line text with recent-values suggestions | No | 0–120, free text | The service last used by this user | `details.service` |
 | Also add to… | Toggle + destination dropdown. Once resolved, the label names both the object and list (`Also add a list item to Movies to watch`) | No | Destination must be a list whose behaviour is `watch` | **Off in every context.** The destination resolves through the **`watch` slot** by the four-step rule in [`plans-and-lists.md`](plans-and-lists.md) §5.8. It never assumes a single list named `Watchlist` exists; with none eligible the row reads `Choose or create a Watch list`. `New list` shows exactly **Watchlist / Movies to watch / TV shows** in their canonical relative order, with nothing selected; this eligibility filter follows the user's explicit Watch destination choice, never the title. `Create list` and the later `Save plan and add…` are separate confirmations | The named final action first creates the ListItem with `POST /v1/lists/:id/items`, then submits the reviewed Watch Plan through that item's `/schedule` bridge, which creates the Plan and viewer-local `LNK#<viewer>#<itemId>` pointer. The ListItem carries no global link field |
@@ -367,13 +412,14 @@ second-object control, the final button reads, for example,
 | Date | Date picker | No | Valid date | Empty | `schedule.date` |
 | Start time | Time picker | No | `HH:mm`; requires a date | Empty | `schedule.time` |
 | End time | Time picker | No | After start; requires a start | Empty | `schedule.endTime` |
+| Reminder | Select | No | Requires a date | Explicitly saved default if set and a time exists; otherwise `Off` | `reminders[]` on input → your own `REM#` item |
+| Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
 | Location | Text label + optional address | No | Label 0–120, address 0–300 | Empty | `location.label`, `location.address` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Reservation | Disclosure group: name, time, party size, reference | No | Party size 1–99; reservation time `HH:mm` | Reservation name = user's display name; reservation time = `schedule.time` | `details.reservation.{name,time,partySize,reference}` |
 | Tickets & details | Disclosure group: Price, Ticket link, Organiser | No | Price ≥ 0 in integer minor units; ticket link is an absolute `http(s)` URL; organiser 0–120 | Empty; currency comes from profile | `details.priceCents`, `details.currency`, `details.ticketUrl`, `details.organiser` |
 | Description | Multi-line text | No | 0–4000 | Empty | `details.description` |
 | Source image / link | Attachment thumbnail + URL row | No | Image ≤ 10 MB, image MIME only | Populated by photo/link capture | `attachmentIds[]`, `sourceUrl` |
-| Reminder | Select | No | Requires a date | Explicitly saved default if set and a time exists; otherwise `Off` | `reminders[]` on input → your own `REM#` item |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
 `details.description` and `notes` are distinct: description is shown on the public invite
@@ -391,9 +437,9 @@ The former fifth Plan-kind form was merged into Event; this section number remai
 | Title | Single-line text | Yes | 1–200 | Text from the Add screen | `title` |
 | Date | Date picker | No | Valid date | Empty | `schedule.date` |
 | Time | Time picker | No | `HH:mm`; requires a date | Empty | `schedule.time` |
-| People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Reminder | Select | No | Requires a date | Explicitly saved default if set and a time exists; otherwise `Off` | `reminders[]` on input → your own `REM#` item |
 | Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
+| People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
 `details` is `{ kind: 'custom' }`. `details.shortcutId` exists in the model for a later
