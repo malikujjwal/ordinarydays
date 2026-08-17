@@ -2568,6 +2568,15 @@ a persisted query cache via `@tanstack/query-async-storage-persister`; optimisti
 (P2-23); and a persisted mutation cache resumed with `resumePausedMutations()` on reconnect,
 driven by `@react-native-community/netinfo`.
 
+> **Superseded as the durability boundary — 2026-08-17 (Phase 2.6, ADR-055).** This task's
+> description is the accurate record of what it built, and what it built remains the
+> **execution layer**. It is no longer where durability lives: the 2026-08-13 review found
+> the persisted mutation cache shares the query cache's disposal rules (buster, age,
+> slow-restore overwrite), so accepted user actions now persist first to the account-scoped
+> intent log of [`phase-02-6-sync-hardening.md`](phase-02-6-sync-hardening.md) P2-48, and
+> the mechanism below replays what that log says must reach the server. Read this section as
+> history plus execution detail, never as the durability contract.
+
 The root provider is hydration-gated: restoration of the persisted client completes before
 feature queries mount, default mutation functions are registered before paused mutations can
 resume, and the app renders the existing neutral loading shell during that bounded restore.
