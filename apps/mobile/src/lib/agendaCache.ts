@@ -29,7 +29,23 @@ import { activityDetailKey, activityKey } from '@/lib/queryKeys';
 
 const AGENDA_KEY = ['agenda'] as const;
 const RECONCILE_DELAYS_MS = [0, 150, 400, 900, 1_800, 3_200] as const;
-const pendingByClient = new WeakMap<QueryClient, Map<string, Map<string, string>>>();
+/**
+ * What a window is still waiting to see before it will accept a body from the index.
+ *
+ * - `version` — a write happened; the body must prove the index has observed it.
+ * - `absent` — the Activity was **deleted**; the body must no longer contain it at all.
+ *
+ * The second exists because a deletion has no version to wait for: the row it would have been
+ * stamped on is gone, so "has the index caught up" can only be asked as "is it still there".
+ */
+type PendingExpectation =
+  | { readonly kind: 'version'; readonly version: string }
+  | { readonly kind: 'absent' };
+
+const pendingByClient = new WeakMap<
+  QueryClient,
+  Map<string, Map<string, PendingExpectation>>
+>();
 
 type AgendaQueryKey = readonly [
   'agenda',
@@ -51,15 +67,41 @@ function observed(data: AgendaData, activityId: string, version: string): boolea
   );
 }
 
-/** A deleted Activity can never emit the projection version an older reconciliation awaits. */
-function clearPendingActivity(client: QueryClient, activityId: string): void {
-  const windows = pendingByClient.get(client);
-  if (windows === undefined) return;
-  for (const [windowId, pending] of windows) {
-    pending.delete(activityId);
-    if (pending.size === 0) windows.delete(windowId);
+/** Whether a body still carries any row for this Activity, on any day of the window. */
+function contains(data: AgendaData, activityId: string): boolean {
+  return data.days.some((day) =>
+    [...day.schedule, ...day.anytime, ...day.earlier].some(
+      (item) => item.activityId === activityId,
+    ),
+  );
+}
+
+/**
+ * **A delete arms the guard; it does not disarm it.**
+ *
+ * This used to clear the Activity's pending entry, on the reasoning that a deleted row can
+ * never emit the projection version an older reconciliation is waiting for. True, and it left
+ * the window with nothing to reject a stale body *with* — so the next read that still carried
+ * the deleted Activity was accepted, and the row came back. Tapping it then `404`s into
+ * "Couldn't load this", which is the worst version of this: not stale data, deleted data,
+ * leading to a dead end.
+ *
+ * Replacing the version expectation with `absent` keeps the same machinery and inverts the
+ * question. It converges monotonically — a deleted Activity never returns — so the first body
+ * without it clears the entry, which in the ordinary case is the very next read.
+ */
+function expectAbsent(client: QueryClient, activityId: string): void {
+  let windows = pendingByClient.get(client);
+  if (windows === undefined) {
+    windows = new Map();
+    pendingByClient.set(client, windows);
   }
-  if (windows.size === 0) pendingByClient.delete(client);
+  for (const [key] of client.getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })) {
+    const id = keyId(key);
+    const pending = windows.get(id) ?? new Map<string, PendingExpectation>();
+    pending.set(activityId, { kind: 'absent' });
+    windows.set(id, pending);
+  }
 }
 
 /** Prevents a stale GSI body from replacing a projection a successful write already proved. */
@@ -72,10 +114,12 @@ export function guardAgendaResponse(
   const pending = windows?.get(keyId(queryKey));
   if (pending === undefined) return incoming;
 
-  for (const [activityId, version] of pending) {
-    if (!observed(incoming, activityId, version)) {
-      return client.getQueryData<AgendaData>(queryKey) ?? incoming;
-    }
+  for (const [activityId, expectation] of pending) {
+    const satisfied =
+      expectation.kind === 'absent'
+        ? !contains(incoming, activityId)
+        : observed(incoming, activityId, expectation.version);
+    if (!satisfied) return client.getQueryData<AgendaData>(queryKey) ?? incoming;
   }
   windows?.delete(keyId(queryKey));
   return incoming;
@@ -114,10 +158,17 @@ export async function reconcileAgendaProjection(
     pendingByClient.set(client, windows);
   }
   for (const key of keys) {
-    const pending = windows.get(keyId(key)) ?? new Map<string, string>();
+    const pending = windows.get(keyId(key)) ?? new Map<string, PendingExpectation>();
     const current = pending.get(expected.activityId);
-    if (current === undefined || current < expected.version) {
-      pending.set(expected.activityId, expected.version);
+    /**
+     * A pending deletion outranks any version: the Activity is gone, so waiting for it to be
+     * stamped would wedge the window on a proof that can never arrive.
+     */
+    if (
+      current?.kind !== 'absent' &&
+      (current === undefined || current.version < expected.version)
+    ) {
+      pending.set(expected.activityId, { kind: 'version', version: expected.version });
     }
     windows.set(keyId(key), pending);
   }
@@ -275,7 +326,7 @@ export function projectActivityWrite(
    * returns to is already mounted and refetches nothing — so the deleted row stayed visible.
    */
   if (tag === 'delete') {
-    clearPendingActivity(client, activity.activityId);
+    expectAbsent(client, activity.activityId);
     update(client, (agenda) =>
       applyDelete(agenda, { activityId: activity.activityId, ...clock }),
     );

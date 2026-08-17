@@ -1216,3 +1216,77 @@ describe('creating a series asks for the expansion it cannot derive', () => {
     });
   });
 });
+
+/**
+ * Reported from an iPhone: a deleted plan stayed on the Plans screen, and opening it gave
+ * "Couldn't load this" plus `Try again` — the detail read `404`s because the Activity really is
+ * gone. Deleted data, shown, leading to a dead end.
+ *
+ * The delete branch *cleared* the Activity's pending entry, on the sound reasoning that a
+ * deleted row can never emit the projection version a reconciliation waits for. What it left
+ * behind was a window with nothing to reject a stale body with, so the next read that still
+ * carried the row put it straight back.
+ */
+describe('a delete keeps the row out until the index agrees', () => {
+  const deleted = { activityId: 'act_STANDUP' };
+  const withRow = (): AgendaData => ({
+    days: [{ date: TODAY, schedule: [row({ title: 'Gone' })], anytime: [], earlier: [] }],
+    warnings: [],
+  });
+  const withoutRow = (): AgendaData => ({
+    days: [{ date: TODAY, schedule: [], anytime: [], earlier: [] }],
+    warnings: [],
+  });
+
+  it('rejects a stale body that still carries the deleted activity', () => {
+    const client = seeded(row({ title: 'Gone' }));
+
+    projectActivityWrite(client, ['activity', 'delete'], deleted, deleted);
+
+    // Projected out of the cache immediately...
+    expect(client.getQueryData<AgendaData>(KEY)?.days[0]?.schedule).toHaveLength(0);
+    // ...and an index that has not caught up cannot put it back.
+    expect(guardAgendaResponse(client, KEY, withRow())).not.toEqual(withRow());
+    expect(
+      guardAgendaResponse(client, KEY, withRow()).days[0]?.schedule ?? [],
+    ).toHaveLength(0);
+  });
+
+  it('accepts the first body that has caught up, and stops guarding after it', () => {
+    const client = seeded(row({ title: 'Gone' }));
+    projectActivityWrite(client, ['activity', 'delete'], deleted, deleted);
+
+    const converged = withoutRow();
+    expect(guardAgendaResponse(client, KEY, converged)).toBe(converged);
+
+    // The guard has cleared, so an unrelated later body is no longer inspected.
+    const later = withRow();
+    expect(guardAgendaResponse(client, KEY, later)).toBe(later);
+  });
+
+  /**
+   * A deletion outranks a version expectation from an earlier write on the same Activity —
+   * otherwise the window waits for a stamp that can never arrive.
+   */
+  it('is not downgraded by an earlier pending version on the same activity', async () => {
+    const client = seeded(row({ title: 'Gone' }));
+    const behind: AgendaData = {
+      ...withRow(),
+      projectionVersions: [
+        { activityId: 'act_STANDUP', version: '2026-08-14T09:00:00.000Z' },
+      ],
+    };
+    await reconcileAgendaProjection(
+      client,
+      { activityId: 'act_STANDUP', version: '2026-08-14T10:00:00.000Z' },
+      async () => behind,
+      async () => {},
+    );
+
+    projectActivityWrite(client, ['activity', 'delete'], deleted, deleted);
+
+    expect(guardAgendaResponse(client, KEY, withoutRow()).days[0]?.schedule).toHaveLength(
+      0,
+    );
+  });
+});
