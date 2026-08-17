@@ -320,31 +320,36 @@ list, drops its queued mutations and shows the removal banner exactly once.
 
 ---
 
-### P9-07 — Offline: the mutation queue
+### P9-07 — Offline: list-mutation queueing semantics
 
-**What to build.** The queue in
-[`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §5.4.
+**What to build.** The queueing rules in
+[`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §5.4,
+extended to the list and shared-list mutations that exist by this phase.
 
-**Approach.** TanStack Query's persisted mutation cache with
-`queryClient.resumePausedMutations()` on reconnect, driven by
-`@react-native-community/netinfo` through `onlineManager`.
+**Approach — amended 2026-08-17 (Phase 2.6, ADR-055).** This task no longer builds a queue.
+The durable queue exists: the account-scoped intent log from
+[`phase-02-6-sync-hardening.md`](phase-02-6-sync-hardening.md) P2-48/P2-49, in which
+durability lives in the log — written before the action is reported accepted — and TanStack
+Query is the execution layer (`resumePausedMutations()` on reconnect, `netinfo` through
+`onlineManager`). Building a second queue on TanStack's persisted mutation cache here would
+reintroduce exactly the architecture ADR-055 retired. What this task adds is the **semantics
+layer** for list mutations riding that log:
 
-The details that make it actually work:
-
-- **Mutation defaults must be registered at app start**, before rehydration:
-  `queryClient.setMutationDefaults(['activity','complete'], { mutationFn })` for every mutation
-  key. A rehydrated mutation carries only its key and variables, not its function; without the
-  defaults it resumes as a no-op and the write is silently lost. This is the single most common
-  way this feature is shipped broken.
-- **The `Idempotency-Key` is generated once, at `onMutate`, and persisted with the
-  variables.** It is never regenerated on retry. This is why the server's `IDEM#` records
-  exist.
+- **Mutation defaults must be registered at app start**, before rehydration, for every list
+  mutation key — the execution half still needs its functions, and a rehydrated mutation
+  without them resumes as a no-op. (Durability no longer depends on this: the intent log,
+  not the rehydrated mutation cache, is the record of what must reach the server.)
+- **The `Idempotency-Key` is generated once and persisted in the intent** at enqueue,
+  exactly as P2-48 already does for activity writes. It is never regenerated on retry.
 - **Serialisation is per entity.** `mutationKey` is `[resource, id, verb]`, and the queue runs
   with concurrency 4 across distinct ids and strictly FIFO within one id. Two edits to the same
   activity never interleave; edits to different activities do not block each other.
 - **Occurrence writes collapse.** A queued `complete`/`skip`/`snooze` for the same
   `(activityId, occurrenceDate)` replaces the earlier one rather than queueing behind it — the
-  last intent is the only one that matters.
+  last intent is the only one that matters. This is the **deliberate home of queue
+  compaction**, deferred out of Phase 2.6 on the correctness-before-optimisation rule: it is
+  safe precisely because these verbs are absolute sets (ADR-055 invariant 2), and it extends
+  no further — `EDIT A, EDIT B, EDIT C` stays three intents.
 - **Date values are captured in the variables at `onMutate`**, never derived at flush time. A
   completion queued on Tuesday and flushed on Wednesday still names Tuesday.
 - **Cap: 200 pending mutations.** Beyond it, new writes are refused with `You're offline and
@@ -380,9 +385,10 @@ private at flush time.
 > is what keeps one implementation of the ordering. One offline gesture is a smaller loss
 > than a second rank generator.
 
-> **Decision — web has no mutation queue.** A browser tab is closed, not backgrounded, so a
-> queue that never flushes is worse than an error at the moment of failure. Web keeps the queue
-> in memory for the session and warns on unload when it is non-empty.
+> **Decision — web has no persisted mutation queue** (ADR-024, upheld by ADR-055). A browser
+> tab is closed, not backgrounded, so a queue that never flushes is worse than an error at the
+> moment of failure. Web keeps the queue in memory for the session and warns on unload when it
+> is non-empty — a session-scoped refinement, not a durable log; nothing survives the tab.
 
 **Tests.** A queued mutation survives an app kill and flushes on relaunch; defaults are
 registered before rehydration (asserted by a test that rehydrates a mutation and checks it has
