@@ -30,9 +30,48 @@ export interface TabScreenProps {
   children: ReactNode;
   testID: string;
   headerAction?: ReactNode;
+  /**
+   * The date line **above** the serif title (`design-system.md` §7.1, P2-44).
+   *
+   * It lives here rather than in a `TodayHeader` the screen renders itself, because §7.1 puts
+   * it above the title and this component owns that position — a screen rendering its own
+   * caption would have to render it below, or reach around the header, and the phase task is
+   * explicit that reordering the header is a thing to raise rather than do.
+   *
+   * Today is the only caller. Plans and Lists pass neither this nor {@link belowHeader} and
+   * render byte-identically to before, which is a test.
+   */
+  caption?: string;
+  /** The slot beneath the header row — Today's day progress bar, and nothing else so far. */
+  belowHeader?: ReactNode;
+  /**
+   * Drops the body's horizontal padding so a scrolling child can own it instead — added
+   * 2026-08-17.
+   *
+   * With the padding on the container, a `ScrollView` child is inset by it and **its scrollbar
+   * rides inside the content area**, over the right-hand edge of every card and row. Moving the
+   * gutter into the scroll's own content lets the bar sit at the true edge with the content
+   * still inset from it, which is what the founder meant by "apps have a slight margin on both
+   * left and right sides".
+   */
+  bleedBody?: boolean;
 }
 
-export function TabScreen({ title, children, testID, headerAction }: TabScreenProps) {
+/** The horizontal gutter a tab's own scroll content must apply when it bleeds the body. */
+export function useTabGutter(): number {
+  const theme = useTheme();
+  return useBreakpoint() === 'compact' ? theme.space[5] : theme.space[7];
+}
+
+export function TabScreen({
+  title,
+  children,
+  testID,
+  headerAction,
+  caption,
+  belowHeader,
+  bleedBody = false,
+}: TabScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const compact = useBreakpoint() === 'compact';
@@ -48,9 +87,14 @@ export function TabScreen({ title, children, testID, headerAction }: TabScreenPr
           ...(compact ? {} : { maxWidth: 720 }),
           paddingTop: insets.top + theme.space[5],
           paddingHorizontal: gutter,
-          paddingBottom: theme.space[3],
+          paddingBottom: theme.space[4],
         }}
       >
+        {caption === undefined ? null : (
+          <Text variant="caption" color="textSecondary" testID={`${testID}-caption`}>
+            {caption}
+          </Text>
+        )}
         <View
           style={{
             minHeight: theme.layout.hitTarget,
@@ -65,6 +109,13 @@ export function TabScreen({ title, children, testID, headerAction }: TabScreenPr
           </Text>
           {headerAction}
         </View>
+        {belowHeader === undefined ? null : (
+          /**
+           * The same step above the bar as the header block leaves below it, so the bar sits
+           * evenly between the title and the first card rather than hugging the title.
+           */
+          <View style={{ paddingTop: theme.space[4] }}>{belowHeader}</View>
+        )}
       </View>
 
       <View
@@ -74,7 +125,7 @@ export function TabScreen({ title, children, testID, headerAction }: TabScreenPr
           width: '100%',
           alignSelf: 'center',
           ...(compact ? {} : { maxWidth: 720 }),
-          paddingHorizontal: gutter,
+          ...(bleedBody ? {} : { paddingHorizontal: gutter }),
         }}
       >
         {children}

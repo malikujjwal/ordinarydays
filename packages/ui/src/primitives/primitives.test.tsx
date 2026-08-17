@@ -326,6 +326,38 @@ describe('accessibility details that are easy to get wrong', () => {
   });
 });
 
+/**
+ * The two-line clamp belongs to the **row-title role**, not to one variant name. It was written
+ * against `body` alone, so moving the agenda row's title to `bodyStrong` silently dropped it and
+ * long titles ran to four lines — `interaction-contract.md` §6.1 allows two. Both are asserted so
+ * the next variant switch fails here rather than on screen.
+ */
+describe('row titles clamp to two lines', () => {
+  it.each(['body', 'bodyStrong'] as const)('%s clamps by default', (variant) => {
+    wrap(<Text variant={variant}>A title long enough to wrap several times over</Text>);
+    expect(screen.getByText(/A title long enough/).style.webkitLineClamp).toBe('2');
+  });
+
+  it('lets a caller override it', () => {
+    wrap(
+      <Text variant="bodyStrong" numberOfLines={1}>
+        Single line only
+      </Text>,
+    );
+    /**
+     * React Native Web renders a single line through a class rather than an inline
+     * `-webkit-line-clamp`, so what is checkable here is that the two-line default did **not**
+     * win. That is the property worth pinning: an explicit `numberOfLines` is honoured.
+     */
+    expect(screen.getByText('Single line only').style.webkitLineClamp).not.toBe('2');
+  });
+
+  it('leaves a subtitle unclamped', () => {
+    wrap(<Text variant="footnote">Meal · Dinner</Text>);
+    expect(screen.getByText('Meal · Dinner').style.webkitLineClamp).toBe('');
+  });
+});
+
 describe('initials', () => {
   it.each([
     ['Alex Rivera', 'AR'],

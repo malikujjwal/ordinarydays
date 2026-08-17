@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { expectNoSeriousA11yViolations } from '../support/a11y';
-import { agendaRow, agendaRowBodies } from '../support/agenda';
+import { agendaRow, agendaRowBodies, openEarlierToday } from '../support/agenda';
 import {
   API,
   createTask,
@@ -113,6 +113,8 @@ test('an ignored passed plan disappears tomorrow without fault styling in Plans'
   try {
     await page.clock.setFixedTime(now);
     await page.goto('/');
+    // A passed plan lands in EARLIER TODAY, which is collapsed by default (§2.4).
+    await openEarlierToday(page);
     const row = agendaRow(page, activityId);
     await expect(row).toContainText(title);
     await expect(

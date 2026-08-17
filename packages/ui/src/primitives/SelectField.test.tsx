@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../theme/index';
+import { type } from '../theme/tokens';
 import { SelectField } from './SelectField';
 
 const options = [
@@ -25,8 +26,13 @@ describe('SelectField', () => {
 
     fireEvent.change(screen.getByLabelText('Repeat'), { target: { value: 'daily' } });
     expect(onChange).toHaveBeenCalledExactlyOnceWith('daily');
+    /**
+     * Read off the token rather than restated: the point of the assertion is that the native
+     * `<select>` carries the `body` line height at all — a bare `22px` re-encoded the scale here
+     * and failed the moment §3 moved to 16/21.
+     */
     expect((screen.getByLabelText('Repeat') as HTMLSelectElement).style.lineHeight).toBe(
-      '22px',
+      `${type.body.lineHeight}px`,
     );
   });
 

@@ -128,6 +128,16 @@ afterEach(async () => {
   await AsyncStorage.clear();
 });
 
+/**
+ * EARLIER TODAY is collapsed by default (founder, 2026-08-17), so a test that asserts anything
+ * about its rows opens it first. Kept as a helper rather than repeated so the default can change
+ * again in one place.
+ */
+async function openEarlier() {
+  const toggle = await screen.findByTestId('today-earlier-toggle');
+  fireEvent.click(toggle);
+}
+
 describe('TodayScreen', () => {
   it('cold-renders from one Today agenda request and never requests reminders', async () => {
     const transport = vi.fn((_url: string) => Promise.resolve(okResponse(response([]))));
@@ -175,7 +185,7 @@ describe('TodayScreen', () => {
     expect(
       within(screen.getByTestId('up-next-card')).getByText('Server snapshot'),
     ).toBeDefined();
-    expect(screen.getByTestId('up-next-relative').style.color).toBe(
+    expect(screen.getByTestId('up-next-eyebrow').style.color).toBe(
       cssColor(colors.light.textAction),
     );
     expect(
@@ -202,14 +212,16 @@ describe('TodayScreen', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('today-agenda')).toBeDefined());
+    /**
+     * **Earlier today renders second, above Schedule** — founder decision, 2026-08-17, which
+     * also settled where the NOW divider goes. `today-and-tasks.md` §2 is amended to this order
+     * in the same pull request; P2-44's "the P2-19 section-order test passes unmodified" could
+     * not survive a deliberate reorder and is superseded rather than worked around.
+     *
+     * The UP NEXT card's eyebrow is no longer a `SectionHeader`, so it is not a heading here.
+     */
     const headings = screen.getAllByRole('heading').map((heading) => heading.textContent);
-    expect(headings).toEqual([
-      'Today',
-      'Up next',
-      'Schedule',
-      'Anytime',
-      'Earlier today',
-    ]);
+    expect(headings).toEqual(['Today', 'Earlier today', 'Schedule', 'Anytime']);
 
     first.unmount();
     stubFetch(response([row(4, { title: 'Only anytime' })]));
@@ -279,11 +291,11 @@ describe('TodayScreen', () => {
 
     fireEvent.click(toggle);
 
-    await waitFor(() =>
-      expect(
-        within(screen.getByTestId('today-earlier')).getByText('Skipped standup'),
-      ).toBeDefined(),
-    );
+    await screen.findByTestId('today-earlier');
+    await openEarlier();
+    expect(
+      within(screen.getByTestId('today-earlier')).getByText('Skipped standup'),
+    ).toBeDefined();
     expect(
       screen.getByRole('checkbox', { name: 'Show skipped' }).getAttribute('aria-checked'),
     ).toBe('true');
@@ -304,11 +316,11 @@ describe('TodayScreen', () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(
-        within(screen.getByTestId('today-earlier')).getByText('Skipped standup'),
-      ).toBeDefined(),
-    );
+    await screen.findByTestId('today-earlier');
+    await openEarlier();
+    expect(
+      within(screen.getByTestId('today-earlier')).getByText('Skipped standup'),
+    ).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     expect(
       screen.getByRole('checkbox', { name: 'Show skipped' }).getAttribute('aria-checked'),
@@ -376,7 +388,7 @@ describe('TodayScreen', () => {
       expect(screen.getByTestId('today-unscheduled-note')).toBeDefined(),
     );
     expect(screen.getByText('Nothing scheduled today.')).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Anytime' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: /^Anytime/ })).toBeDefined();
     expect(screen.queryByRole('heading', { name: 'Schedule' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Earlier today' })).toBeNull();
   });
@@ -400,7 +412,7 @@ describe('TodayScreen', () => {
     await waitFor(() => expect(screen.getByTestId('today-schedule')).toBeDefined());
     expect(screen.getByRole('heading', { name: 'Schedule' })).toBeDefined();
     expect(screen.getByText('Nothing left scheduled today.')).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Anytime' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: /^Anytime/ })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Earlier today' })).toBeDefined();
     expect(screen.queryByText('Nothing scheduled today.')).toBeNull();
   });
@@ -475,6 +487,14 @@ describe('TodayScreen', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('today-earlier')).toBeDefined());
+
+    /**
+     * Above four rows the section starts **collapsed**, because it now sits between the user and
+     * the part of the day they can still act on. The header states the count and opens it; the
+     * 10-row cap and `Show all` then apply inside as before.
+     */
+    expect(screen.queryAllByTestId(/^agenda-row-act_/)).toHaveLength(0);
+    fireEvent.click(screen.getByTestId('today-earlier-toggle'));
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(10);
     fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
     expect(screen.getAllByTestId(/^agenda-row-act_/)).toHaveLength(12);
@@ -646,6 +666,7 @@ describe('TodayScreen', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('today-earlier')).toBeDefined());
+    await openEarlier();
     fireEvent.click(
       screen.getByRole('button', {
         name: 'How did it go? Choose an outcome for Dentist appointment',
@@ -662,7 +683,14 @@ describe('TodayScreen', () => {
     expect(screen.queryByTestId('passed-plan-resolution-sheet')).toBeNull();
   });
 
-  it('strikes a completed row in place before revealing its Earlier today projection', async () => {
+  /**
+   * **A timed row keeps its slot** — founder, 2026-08-17. It used to hold, fade and reappear in
+   * EARLIER TODAY; with that section now *above* SCHEDULE the relocation threw the row backwards
+   * across the NOW divider. It stays where it is, struck and checked, and joins EARLIER TODAY
+   * when the clock reaches it. P2-24's hold-and-fade still runs for an ANYTIME row, which has no
+   * slot to keep — covered by the test below it.
+   */
+  it('strikes a completed timed row in place and leaves it in Schedule', async () => {
     vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
     stubFetch(
       response([
@@ -715,43 +743,108 @@ describe('TodayScreen', () => {
       expect.objectContaining({ title: 'First task' }),
       true,
     );
-    expect(
-      within(screen.getByTestId('today-schedule')).getByRole('checkbox', {
-        name: 'First task, completed',
-      }),
-    ).toBeDefined();
-    expect(screen.getByTestId('completion-transition-row')).toBeDefined();
-    expect(screen.queryByTestId('today-earlier')).toBeNull();
-
-    await waitFor(
-      () => expect(screen.queryByTestId('completion-transition-row')).toBeNull(),
-      { timeout: 1_000 },
+    /**
+     * `waitFor`, because the completed state now arrives through the query cache rather than
+     * through the transition row's own optimistic copy — there is no transition row any more.
+     */
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('today-schedule')).getByRole('checkbox', {
+          name: 'First task, completed',
+        }),
+      ).toBeDefined(),
     );
-    expect(
-      within(screen.getByTestId('today-earlier')).getByRole('checkbox', {
-        name: 'First task, completed',
-      }),
-    ).toBeDefined();
-    expect(screen.getAllByText('Second task')).toHaveLength(2);
+    // Nothing travels, so nothing fades, and the row does not appear behind the NOW divider.
+    expect(screen.queryByTestId('completion-transition-row')).toBeNull();
+    expect(screen.queryByTestId('today-earlier')).toBeNull();
+  });
+
+  /**
+   * The other half of the founder's rule: an ANYTIME row has no slot to keep, so completing it
+   * still moves it to EARLIER TODAY on the spot (`today-and-tasks.md` §2.3). The hold-and-fade
+   * that covers that move is P2-24's and is asserted by the Reduce Motion test below, which
+   * pins its removal; what matters here is the destination.
+   */
+  it('moves a completed untimed row to Earlier today', async () => {
+    const reduceMotion = vi
+      .spyOn(AccessibilityInfo, 'isReduceMotionEnabled')
+      .mockResolvedValue(false);
+    stubFetch(response([row(1, { title: 'Loose end' })]));
+    const client = createClient();
+    const onToggleComplete = vi.fn((changed: AgendaItem, checked: boolean) => {
+      client.setQueriesData({ queryKey: ['agenda'] }, (cached: unknown) => {
+        const data = cached as { days?: Array<{ anytime?: AgendaItem[] }> } | undefined;
+        if (data?.days?.[0]?.anytime === undefined) return cached;
+        return {
+          ...data,
+          days: data.days.map((day) => ({
+            ...day,
+            anytime: day.anytime?.map((item) =>
+              item.activityId === changed.activityId
+                ? { ...item, status: checked ? 'completed' : 'saved' }
+                : item,
+            ),
+          })),
+        };
+      });
+    });
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+        onToggleComplete={onToggleComplete}
+      />,
+      client,
+    );
+
+    // The hold only exists once `useMotion` has resolved the system setting.
+    await waitFor(() => expect(reduceMotion).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: 'Loose end, not completed' })),
+    );
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Loose end, not completed' }) as Element,
+    );
+
+    /**
+     * Read through the section's own header rather than by expanding it. EARLIER TODAY is
+     * collapsed by default, and what this test is about is where the row **went** — the header
+     * states the count, so the move is observable without driving a disclosure.
+     */
+    const earlier = await screen.findByTestId('today-earlier', undefined, {
+      timeout: 2_000,
+    });
+    await waitFor(
+      () =>
+        expect(within(earlier).getByTestId('today-earlier-toggle').textContent).toContain(
+          '1 done',
+        ),
+      { timeout: 2_000 },
+    );
+    // And it is gone from Anytime, which is what "no slot to keep" means.
+    expect(screen.queryByTestId('today-anytime')).toBeNull();
   });
 
   it('removes the completion hold when Reduce Motion is enabled', async () => {
     const reduceMotion = vi
       .spyOn(AccessibilityInfo, 'isReduceMotionEnabled')
       .mockResolvedValue(true);
-    stubFetch(response([row(1, { title: 'Quiet transition', time: '15:30' })]));
+    // Untimed: the only row that still relocates, and so the only one with a hold to remove.
+    stubFetch(response([row(1, { title: 'Quiet transition' })]));
     const client = createClient();
     const onToggleComplete = vi.fn((changed: AgendaItem, checked: boolean) => {
       client.setQueriesData({ queryKey: ['agenda'] }, (cached: unknown) => {
-        const data = cached as { days?: Array<{ schedule?: AgendaItem[] }> } | undefined;
-        if (data?.days?.[0]?.schedule === undefined) return cached;
+        const data = cached as { days?: Array<{ anytime?: AgendaItem[] }> } | undefined;
+        if (data?.days?.[0]?.anytime === undefined) return cached;
         return {
           ...data,
           days: data.days.map((day) => ({
             ...day,
-            schedule: day.schedule?.map((item) =>
+            anytime: day.anytime?.map((item) =>
               item.activityId === changed.activityId
-                ? { ...item, status: checked ? 'completed' : 'scheduled' }
+                ? { ...item, status: checked ? 'completed' : 'saved' }
                 : item,
             ),
           })),
@@ -778,6 +871,8 @@ describe('TodayScreen', () => {
 
     expect(onToggleComplete).toHaveBeenCalledOnce();
     expect(screen.queryByTestId('completion-transition-row')).toBeNull();
+    await screen.findByTestId('today-earlier');
+    await openEarlier();
     expect(
       within(screen.getByTestId('today-earlier')).getByRole('checkbox', {
         name: 'Quiet transition, completed',
@@ -864,5 +959,146 @@ describe('TodayScreen', () => {
 
     expect(screen.getByRole('button', { name: 'This occurrence only' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'All future occurrences' })).toBeDefined();
+  });
+});
+
+/**
+ * The day header and the timeline furniture §7.1 specifies (P2-44).
+ *
+ * The clock is fixed at `2026-08-06T15:10:00Z`, so the caption is a fact rather than a
+ * tautology — a test that formatted the date the same way the component does would pass
+ * whatever either of them did.
+ */
+describe('TodayScreen day header', () => {
+  const openToday = async (items: AgendaItem[]) => {
+    stubFetch(response(items));
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('today-agenda')).toBeDefined());
+  };
+
+  it('dates the day above the title, in the user zone', async () => {
+    await openToday([row(1, { title: 'Later', time: '18:00' })]);
+    expect(screen.getByTestId('today-screen-caption').textContent).toBe(
+      'Thursday, August 6',
+    );
+  });
+
+  /** §7.1: information, not celebration — the bar is present and empty, never hidden. */
+  it('renders an empty bar at 0 of n rather than hiding it', async () => {
+    await openToday([
+      row(1, { title: 'Later', time: '18:00' }),
+      row(2, { title: 'Any task' }),
+    ]);
+
+    expect(screen.getByTestId('today-day-count').textContent).toBe('0 of 2 done');
+    const bar = screen.getByTestId('today-progress');
+    expect(bar.getAttribute('aria-valuenow')).toBe('0');
+    expect(bar.getAttribute('aria-label')).toBe('0 of 2 done');
+  });
+
+  it('moves the figure as the day is completed', async () => {
+    await openToday([
+      row(1, { title: 'Done one', time: '09:00', isPast: true, status: 'completed' }),
+      row(2, { title: 'Later', time: '18:00' }),
+    ]);
+
+    expect(screen.getByTestId('today-day-count').textContent).toBe('1 of 2 done');
+    expect(screen.getByTestId('today-progress').getAttribute('aria-valuenow')).toBe('50');
+  });
+
+  /** One number, rendered twice in one block — never a second progress figure (scope guard). */
+  it('states the figure once in words and once as the bar, and nowhere else', async () => {
+    await openToday([row(1, { title: 'Later', time: '18:00' })]);
+    expect(screen.getAllByText('0 of 1 done')).toHaveLength(1);
+    expect(screen.getAllByTestId('today-progress')).toHaveLength(1);
+  });
+});
+
+/**
+ * The marker connector (§7.1: "it is what makes the day read as a timeline") and the UP NEXT
+ * quick actions (P2-44).
+ */
+describe('TodayScreen timeline furniture', () => {
+  const openToday = async (items: AgendaItem[], upNext?: AgendaItem) => {
+    stubFetch(response(items, upNext));
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+        onAgendaAction={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('today-agenda')).toBeDefined());
+  };
+
+  it('runs the connector between markers and stops at a section end', async () => {
+    await openToday([
+      row(1, { title: 'First', time: '17:00' }),
+      row(2, { title: 'Middle', time: '18:00' }),
+      row(3, { title: 'Last', time: '19:00' }),
+    ]);
+
+    const schedule = within(screen.getByTestId('today-schedule'));
+    /**
+     * **One segment per link, not two halves** (founder, 2026-08-17). It used to be drawn as an
+     * `above` half and a `below` half meeting at the marker's centre, so the line ran *through*
+     * every glyph. Each row below the last now draws a single segment that starts clear of its
+     * own marker and stops clear of the rule beneath it — three rows, two links, two segments.
+     */
+    expect(schedule.queryAllByTestId('agenda-row-connector-above')).toHaveLength(0);
+    expect(schedule.queryAllByTestId('agenda-row-connector-below')).toHaveLength(2);
+  });
+
+  it('draws no connector on a lone row', async () => {
+    await openToday([row(1, { title: 'Only', time: '18:00' })]);
+    const schedule = within(screen.getByTestId('today-schedule'));
+    expect(schedule.queryAllByTestId('agenda-row-connector-below')).toHaveLength(0);
+  });
+
+  it('hides the connector from the accessibility tree', async () => {
+    await openToday([
+      row(1, { title: 'First', time: '17:00' }),
+      row(2, { title: 'Second', time: '18:00' }),
+    ]);
+    const connector = within(screen.getByTestId('today-schedule')).getAllByTestId(
+      'agenda-row-connector-below',
+    )[0] as HTMLElement;
+    expect(connector.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  /**
+   * The card reads its actions from the same function the row does, so it can never offer one
+   * the row does not — asserted by comparing the rendered labels against the row's own
+   * accessibility actions rather than against a hard-coded list.
+   */
+  it('offers the row own quick actions on the card, with the row labels', async () => {
+    const timed = row(1, { title: 'Groceries', time: '17:30' });
+    await openToday([timed], timed);
+
+    const card = within(screen.getByTestId('today-up-next'));
+    const actions = card.getByTestId('up-next-quick-actions');
+    const labels = Array.from(actions.querySelectorAll('[role="button"]')).map((node) =>
+      node.getAttribute('aria-label'),
+    );
+
+    // Founder, 2026-08-17: the card carries the two that matter, filtered from the row's own.
+    expect(labels).toEqual(['Complete', 'Snooze']);
+
+    /**
+     * The same labels the row announces as its accessibility actions. Compared against the row
+     * rather than against a literal, so a change to one that misses the other fails here.
+     */
+    const body = card.getByTestId('agenda-row-body');
+    expect(body.getAttribute('aria-label')).toContain('Groceries');
+    expect(actions.getAttribute('aria-hidden')).toBeNull();
   });
 });

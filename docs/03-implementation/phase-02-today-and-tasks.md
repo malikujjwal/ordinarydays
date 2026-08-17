@@ -3488,6 +3488,39 @@ actions. The existing P2-19 section-order and P2-20 ticker tests pass unmodified
 function. Do not add a second progress figure anywhere on the screen. Do not build the maps
 handler. Do not add a colour outside P2-40's tables.
 
+> **As built — 2026-08-17.** Four things this task's prose could not anticipate, recorded so the
+> next reader does not re-derive them from the diff.
+>
+> 1. **The NOW divider's position was settled by moving the section, not by choosing a corner.**
+>    The task required the conflict to be raised rather than resolved, and it was: §7.1 placed the
+>    divider "between EARLIER TODAY and what remains" while `today-and-tasks.md` §2 rendered
+>    EARLIER TODAY last, leaving no such position. The founder's answer (2026-08-17) was to render
+>    **EARLIER TODAY second**, above SCHEDULE, with the divider between them. §2, §2.4, §9.3 and
+>    §9.4 are amended in this branch.
+> 2. **The scope guard and the "unmodified tests" clause are superseded by that ruling.** This
+>    task says not to change the sections, their order or their sort, and that P2-19's
+>    section-order test must pass unmodified. A deliberate reorder cannot honour either. The
+>    section order test, the partition expectations (now ascending) and four completion tests were
+>    changed on purpose; every assertion about *what is dispatched* is untouched.
+> 3. **`2 done ⌃` and `Show all` are two controls, not one.** The task read §7.1's collapse
+>    affordance as replacing §2.4's row cap. They coexist: the header collapses the section, the
+>    footer uncaps rows 11+. The section is collapsed by default (founder, 2026-08-17).
+> 4. **§7.1's own divider colour failed the contrast gate.** It specified `accent` for the `NOW`
+>    label and the time; light `accent` is 4.34:1 on `surface`, under §6.4's 4.5:1. Both labels
+>    use `textAction`; the hairline keeps `accent`, which owes only 3:1. Caught by the axe gate,
+>    not by review.
+>
+> **Also carried, because each was the same screen's defect:** rows behind the tab bar could not
+> be tapped (the bar is painted over the scroll, so every scrolling tab now reserves its height);
+> the row body was shrink-to-fit, leaving most of each row inert; the overdue chip rendered below
+> the title rather than in the time rail §7.1 assigns it; and the body type scale moved to 16/21
+> with the row grammar `bodyStrong` over `footnote` (founder, 2026-08-17,
+> `design-system.md` §3).
+>
+> **One known failure is not this task's.** `e2e/specs/recurrence-stabilization.spec.ts:6` fails
+> on this branch and fails identically with the branch stashed — verified, not assumed. It belongs
+> to Phase 2.5's recurrence work.
+
 ---
 
 ### P2-45 — The Tomorrow preview on Today

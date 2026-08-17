@@ -9,9 +9,13 @@ import { fixedClock, toWallDate, toWallTime, type WallDate } from '@od/shared/ti
 import type { ActivityOutcome, AgendaData, AgendaItem } from '@od/shared/types';
 import {
   Button,
+  ChevronDown,
+  ChevronUp,
   EmptyState,
+  formatDayCaption,
   IconButton,
   MoreHorizontal,
+  ProgressBar,
   SectionHeader,
   Skeleton,
   Text,
@@ -20,19 +24,22 @@ import {
 } from '@od/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
-import { GLOBAL_ADD_SCROLL_PADDING } from '@/components/globalAddLayout';
+import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { SnoozeSheet } from '@/components/SnoozeSheet';
-import { TabScreen } from '@/components/TabScreen';
+import { TabScreen, useTabGutter } from '@/components/TabScreen';
 import { useAgenda } from '@/features/agenda/hooks/useAgenda';
 import { useAgendaActivityActions } from '@/features/agenda/hooks/useAgendaActivityActions';
 import { useShowSkippedPreference } from '@/features/agenda/hooks/useShowSkippedPreference';
+import { dayCount, dayCountLabel } from '@/features/agenda/model/dayCount';
 import { agendaItemsForDay, partitionAgenda } from '@/features/agenda/model/partition';
 import type { AgendaSwipeAction } from '@/features/agenda/model/swipeActions';
 import { selectUpNext, toUpNextSelection } from '@/features/agenda/model/upNext';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { AgendaSection, agendaItemKey } from './AgendaSection';
+import { NowDivider } from './NowDivider';
 import { OverdueCollapse } from './OverdueCollapse';
 import { TodayOverflowMenu } from './TodayOverflowMenu';
 import { UpNextCard } from './UpNextCard';
@@ -115,12 +122,16 @@ export function TodayScreen({
   onResolvePassed,
 }: TodayScreenProps) {
   const theme = useTheme();
+  const gutter = useTabGutter();
+  const insets = useSafeAreaInsets();
   const motion = useMotion();
   const tick = useMinuteTicker();
   const agenda = useAgenda({ now: tick.instant });
   const { showSkipped, setShowSkipped } = useShowSkippedPreference();
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [showAllEarlier, setShowAllEarlier] = useState(false);
+  /** `undefined` until the user touches it, so the default can follow the day's own length. */
+  const [collapseEarlier, setCollapseEarlier] = useState<boolean | undefined>(undefined);
   const [showAllOverdue, setShowAllOverdue] = useState(false);
   const [snoozeItem, setSnoozeItem] = useState<AgendaItem>();
   const [rescheduleItem, setRescheduleItem] = useState<AgendaItem>();
@@ -161,7 +172,7 @@ export function TodayScreen({
   });
   const effectiveToggleComplete = onToggleComplete ?? activityActions.toggleComplete;
   const effectiveResolvePassed = onResolvePassed ?? activityActions.resolvePassed;
-  const headerAction = (
+  const overflowTrigger = (
     <IconButton
       icon={MoreHorizontal}
       label="More"
@@ -169,6 +180,25 @@ export function TodayScreen({
       testID="today-overflow-trigger"
     />
   );
+  /**
+   * The day's count on the title's trailing edge (§7.1). It is **not** a second progress
+   * figure — it is the bar's own value in words, which is what the scope guard's "no second
+   * progress figure" means: one number, rendered twice in one block, never two numbers.
+   */
+  const headerActionWith = (count: string | undefined) =>
+    count === undefined ? (
+      overflowTrigger
+    ) : (
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[3] }}>
+        <Text variant="footnoteStrong" color="textSecondary" testID="today-day-count">
+          {count}
+        </Text>
+        {overflowTrigger}
+      </View>
+    );
+  const headerAction = headerActionWith(undefined);
+  /** The date is known before the response is; the loading and error days are dated too. */
+  const dayCaption = formatDayCaption(today);
   const overflowMenu = (
     <TodayOverflowMenu
       open={overflowOpen}
@@ -181,7 +211,12 @@ export function TodayScreen({
   if (agenda.status === 'pending') {
     return (
       <>
-        <TabScreen title="Today" testID="today-screen" headerAction={headerAction}>
+        <TabScreen
+          title="Today"
+          testID="today-screen"
+          caption={dayCaption}
+          headerAction={headerAction}
+        >
           <View testID="today-loading">
             <Skeleton shape="row" count={5} />
           </View>
@@ -195,7 +230,12 @@ export function TodayScreen({
     const failure = errorDetails(agenda.error);
     return (
       <>
-        <TabScreen title="Today" testID="today-screen" headerAction={headerAction}>
+        <TabScreen
+          title="Today"
+          testID="today-screen"
+          caption={dayCaption}
+          headerAction={headerAction}
+        >
           <View testID="today-error">
             <EmptyState
               heading={failure.message}
@@ -223,16 +263,23 @@ export function TodayScreen({
   const completionTransitionKeys = new Set(
     activeCompletionTransitions.map(({ key }) => key),
   );
+  /**
+   * **Only an untimed row still travels** — founder decision, 2026-08-17.
+   *
+   * P2-24's hold-and-fade exists to cover a row *relocating* to EARLIER TODAY. A timed row no
+   * longer relocates on completion: it keeps its slot, struck and dimmed, until the clock
+   * reaches it. Running the transition there would fade a row out and back into the same
+   * position for no reason. An ANYTIME row has no slot to keep, so it moves — and the
+   * acknowledgement is exactly as `today-and-tasks.md` §2.4's 2026-08-11 amendment describes.
+   */
   const beginCompletionTransition = (item: AgendaItem, commit: () => void): void => {
     const key = agendaItemKey(item);
-    const scheduleIndex = sections.schedule.findIndex(
-      (candidate) => agendaItemKey(candidate) === key,
-    );
     const anytimeIndex = sections.anytime.findIndex(
       (candidate) => agendaItemKey(candidate) === key,
     );
+    const scheduleIndex = -1;
 
-    if (scheduleIndex >= 0 || anytimeIndex >= 0) {
+    if (anytimeIndex >= 0) {
       finishCompletionTransition(key);
       setCompletionTransitions((current) => [
         ...current.filter((transition) => transition.key !== key),
@@ -324,8 +371,28 @@ export function TodayScreen({
   const earlier = showAllEarlier
     ? projectedEarlier
     : projectedEarlier.slice(0, TODAY_EARLIER_COLLAPSED_LIMIT);
+  /**
+   * **Collapsed by default, at any length** — founder, 2026-08-17.
+   *
+   * It began as "collapsed above four rows", on the reasoning that hiding two rows saves
+   * nothing. The founder's ruling is simpler and better: EARLIER TODAY now sits between the user
+   * and the part of the day they can still act on, and what is behind you is reference rather
+   * than something to work from. It opens on a tap and its header always states the count, so
+   * nothing is hidden — only folded.
+   */
+  const earlierCollapsed = collapseEarlier ?? true;
+  const earlierVisible = earlierCollapsed ? [] : earlier;
+  const earlierDoneCount = projectedEarlier.filter(
+    (item) => item.status === 'completed' || item.status === 'completed_occurrence',
+  ).length;
   const visibleItems = [...sections.schedule, ...sections.anytime, ...projectedEarlier];
   const isFullyEmpty = visibleItems.length === 0;
+  /**
+   * `2 of 6 done` over the day as rendered. UP NEXT is excluded by construction: it duplicates a
+   * SCHEDULE row (`today-and-tasks.md` §2.1) and `visibleItems` holds that row once.
+   */
+  const count = dayCount(visibleItems);
+  const countLabel = dayCountLabel(count);
   const hasOnlyUndatedTasks =
     schedule.length === 0 &&
     projectedEarlier.length === 0 &&
@@ -363,7 +430,12 @@ export function TodayScreen({
   if (isFullyEmpty) {
     return (
       <>
-        <TabScreen title="Today" testID="today-screen" headerAction={headerAction}>
+        <TabScreen
+          title="Today"
+          testID="today-screen"
+          caption={dayCaption}
+          headerAction={headerAction}
+        >
           <EmptyState
             heading="Nothing planned today"
             body="Add something you want to do, or check your Lists."
@@ -377,7 +449,21 @@ export function TodayScreen({
   }
 
   return (
-    <TabScreen title="Today" testID="today-screen" headerAction={headerAction}>
+    <TabScreen
+      title="Today"
+      testID="today-screen"
+      caption={dayCaption}
+      bleedBody
+      headerAction={headerActionWith(countLabel)}
+      belowHeader={
+        /**
+         * **Empty at `0 of n`, never hidden** (§7.1) — a bar that disappeared at zero would make
+         * "nothing done yet" look like "nothing to do". It carries the same figure the header
+         * states, as its accessible name, so the bar is never announced bare.
+         */
+        <ProgressBar value={count.fraction} label={countLabel} testID="today-progress" />
+      }
+    >
       <ScrollView
         ref={scrollView}
         testID="today-agenda"
@@ -386,9 +472,21 @@ export function TodayScreen({
         }}
         scrollEventThrottle={16}
         contentContainerStyle={{
-          gap: theme.space[8],
+          /**
+           * **One gap between every block on the screen** (founder, 2026-08-17: "make sure the
+           * gaps between all different components is equal").
+           *
+           * It was `space[8]` (32), and the NOW divider added 12 of its own padding on each
+           * side, so the earlier → now → schedule joins measured 44 while every other join
+           * measured 32. `space[7]` is the section step, the divider contributes none of its
+           * own, and the screen now steps at one interval from the header to the last row.
+           */
+          gap: theme.space[7],
+          // The gutter lives here, not on the body, so the scrollbar rides outside the content.
+          paddingHorizontal: gutter,
           // The final row scrolls above the global Add button without shrinking the viewport.
-          paddingBottom: GLOBAL_ADD_SCROLL_PADDING,
+          // Clear of the floating Add control *and* the tab bar painted over the scroll.
+          paddingBottom: bottomChromeScrollPadding(insets.bottom),
         }}
       >
         {hasOnlyUndatedTasks ? (
@@ -409,6 +507,60 @@ export function TodayScreen({
             onToggleComplete={handleToggleComplete}
             onAction={effectiveAgendaAction}
           />
+        )}
+        {/**
+         * **EARLIER TODAY renders first** — founder decision, 2026-08-17, which also settled the
+         * NOW divider's position. It rendered last under `today-and-tasks.md` §2's original
+         * order, and §7.1's divider "between EARLIER TODAY and what remains" then had nowhere to
+         * go. Moving the section above SCHEDULE makes the screen one timeline read downward —
+         * the morning, the present, then what is still coming — and §2 and §2.4 are amended to
+         * it in this pull request.
+         */}
+        {earlier.length === 0 ? null : (
+          <AgendaSection
+            title="Earlier today"
+            items={earlierVisible}
+            testID="today-earlier"
+            showTime
+            headerAction={
+              <Button
+                label={`${earlierDoneCount} done`}
+                accessibilityLabel={
+                  earlierCollapsed
+                    ? `Show ${projectedEarlier.length} earlier items`
+                    : 'Hide earlier items'
+                }
+                variant="ghost"
+                size="sm"
+                flush
+                icon={earlierCollapsed ? ChevronDown : ChevronUp}
+                iconPosition="trailing"
+                onPress={() => setCollapseEarlier(!earlierCollapsed)}
+                testID="today-earlier-toggle"
+              />
+            }
+            onOpen={onOpenAgendaItem}
+            onOpenReschedule={setRescheduleItem}
+            onToggleComplete={handleToggleComplete}
+            onAction={effectiveAgendaAction}
+            onOpenResolution={setResolutionItem}
+            footer={
+              !earlierCollapsed &&
+              !showAllEarlier &&
+              projectedEarlier.length > TODAY_EARLIER_COLLAPSED_LIMIT ? (
+                <Button
+                  label="Show all"
+                  variant="ghost"
+                  fullWidth
+                  onPress={() => setShowAllEarlier(true)}
+                  testID="today-earlier-show-all"
+                />
+              ) : null
+            }
+          />
+        )}
+        {earlier.length === 0 || schedule.length === 0 ? null : (
+          <NowDivider currentMinute={currentMinute} />
         )}
         {schedule.length === 0 && showEmptySchedule ? (
           <View testID="today-schedule" style={{ gap: theme.space[2] }}>
@@ -438,6 +590,14 @@ export function TodayScreen({
         {visibleAnytime.length === 0 ? null : (
           <AgendaSection
             title="Anytime"
+            /**
+             * **Everything the section holds**, not what is currently on screen — a count that
+             * moved when the overdue collapse opened would be reporting the viewport rather than
+             * the day. `anytime.items` is the capped set the section owns; the `See all (n)`
+             * footer already states the figure beyond the cap.
+             */
+            headerCount={anytime.items.length}
+            showTime
             items={visibleAnytime}
             testID="today-anytime"
             onOpen={onOpenAgendaItem}
@@ -462,31 +622,6 @@ export function TodayScreen({
           />
         )}
         {visibleAnytime.length === 0 ? anytimeFooter : null}
-        {earlier.length === 0 ? null : (
-          <AgendaSection
-            title="Earlier today"
-            items={earlier}
-            testID="today-earlier"
-            showTime
-            onOpen={onOpenAgendaItem}
-            onOpenReschedule={setRescheduleItem}
-            onToggleComplete={handleToggleComplete}
-            onAction={effectiveAgendaAction}
-            onOpenResolution={setResolutionItem}
-            footer={
-              !showAllEarlier &&
-              sections.earlier.length > TODAY_EARLIER_COLLAPSED_LIMIT ? (
-                <Button
-                  label="Show all"
-                  variant="ghost"
-                  fullWidth
-                  onPress={() => setShowAllEarlier(true)}
-                  testID="today-earlier-show-all"
-                />
-              ) : null
-            }
-          />
-        )}
       </ScrollView>
       <SnoozeSheet
         open={snoozeItem !== undefined}

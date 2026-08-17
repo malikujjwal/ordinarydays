@@ -43,6 +43,20 @@ const compareAnytime = (left: AgendaItem, right: AgendaItem): number => {
   return -compareIdentity(left, right);
 };
 
+/**
+ * EARLIER TODAY sorts **ascending**, oldest first — founder decision, 2026-08-17.
+ *
+ * It sorted descending while the section rendered last, and `today-and-tasks.md` §2.4 gave the
+ * reason: "the two sections point in opposite directions from 'now', which is what makes the
+ * screen readable as a timeline centred on the present moment." That reasoning was sound for a
+ * section **below** SCHEDULE. The founder has moved EARLIER TODAY **above** it, with the NOW
+ * divider between the two, and under that order the same goal inverts the sort: reading down the
+ * screen must run 9:00 AM → 11:00 AM → NOW → 2:30 PM, so the past ascends into the present
+ * instead of retreating from it.
+ *
+ * §2.4 is amended in the same pull request; this comment is not the rule, it is why the rule
+ * changed.
+ */
 const compareEarlier = (
   left: { item: AgendaItem; sourceIndex: number },
   right: { item: AgendaItem; sourceIndex: number },
@@ -51,8 +65,8 @@ const compareEarlier = (
   const rightTime = right.item.time;
   if (leftTime !== undefined || rightTime !== undefined) {
     return (
-      (rightTime ?? '').localeCompare(leftTime ?? '') ||
-      -compareIdentity(left.item, right.item)
+      (leftTime ?? '').localeCompare(rightTime ?? '') ||
+      compareIdentity(left.item, right.item)
     );
   }
 
@@ -78,10 +92,21 @@ export function partitionAgenda(
         item.status !== 'cancelled' && (showSkipped || !SKIPPED.has(item.status)),
     );
 
+  /**
+   * **A completed row keeps its slot until its time passes** — founder decision, 2026-08-17.
+   *
+   * With EARLIER TODAY moved above SCHEDULE, relocating on completion threw the row *upward*
+   * across the NOW divider — a task you finished early jumped backwards past "now", which reads
+   * as the screen rewriting the day rather than recording it. It now stays where it is, struck
+   * and dimmed, and joins EARLIER TODAY when the clock reaches it like everything else.
+   *
+   * An **untimed** item is the stated exception, and has to be: it has no slot to stay in, so
+   * completing it moves it out of ANYTIME immediately — which is `today-and-tasks.md` §2.3's
+   * existing rule and the reason §2.4 admits untimed completions at all.
+   */
   const schedule = visible
     .filter(
       ({ item }) =>
-        !COMPLETED.has(item.status) &&
         !SKIPPED.has(item.status) &&
         item.time !== undefined &&
         (item.endTime ?? item.time) >= currentMinute,
@@ -102,9 +127,13 @@ export function partitionAgenda(
   const earlier = visible
     .filter(
       ({ item }) =>
-        COMPLETED.has(item.status) ||
-        SKIPPED.has(item.status) ||
-        (item.time !== undefined && (item.endTime ?? item.time) < currentMinute),
+        // Its time has passed — completed or not; the section is "what is behind you".
+        (item.time !== undefined && (item.endTime ?? item.time) < currentMinute) ||
+        // Or it never had a time and is resolved, so ANYTIME can no longer hold it (§2.3).
+        (item.time === undefined &&
+          (COMPLETED.has(item.status) || SKIPPED.has(item.status))) ||
+        // A skipped timed row stays revealed where `Show skipped` put it.
+        (SKIPPED.has(item.status) && item.time !== undefined),
     )
     .sort(compareEarlier)
     .map(({ item }) => item);

@@ -22,8 +22,27 @@ export interface ButtonProps {
   accessibilityLabel?: string;
   onPress?: () => void;
   variant?: ButtonVariant;
-  size?: 'md' | 'lg';
+  /**
+   * `md` 44 · `lg` 52 · **`sm`** — added 2026-08-16 (P2-44).
+   *
+   * `sm` is the quick-action text button `design-system.md` §7.1 draws on the UP NEXT card:
+   * `footnoteStrong`, no icon, no chrome. Its **visual** height is 32 and its **hit target**
+   * stays 44 through `Touchable`'s `hitSlop`, so §2's minimum holds while three actions still
+   * fit across a 390 pt card. It is a size, not a new component: §0's component-family rule is
+   * that a text action is `Button`'s ghost role, and a second component for a smaller one is
+   * exactly the sprawl that rule exists to prevent.
+   */
+  size?: 'sm' | 'md' | 'lg';
   icon?: (props: IconProps) => React.ReactElement;
+  /**
+   * Which side the icon sits on. `leading` is the default and is right for almost everything —
+   * the icon prefigures the label.
+   *
+   * `trailing` exists for a control whose icon reports **state rather than kind**: EARLIER
+   * TODAY's `2 done ⌃`, where the chevron says which way the section will move and therefore
+   * belongs after the thing it is describing (`design-system.md` §7.1 draws it that way).
+   */
+  iconPosition?: 'leading' | 'trailing';
   loading?: boolean;
   disabled?: boolean;
   fullWidth?: boolean;
@@ -57,6 +76,7 @@ export function Button({
   variant = 'primary',
   size = 'md',
   icon: Icon,
+  iconPosition = 'leading',
   loading = false,
   disabled = false,
   fullWidth = false,
@@ -81,6 +101,7 @@ export function Button({
   }, [loading]);
 
   const inactive = disabled || loading;
+  const height = size === 'lg' ? 52 : size === 'sm' ? 32 : theme.layout.hitTarget;
 
   const palette = {
     // `accentControl`, not `accent`: the dark `accent` carries an inverse label at only
@@ -106,14 +127,18 @@ export function Button({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ disabled: inactive, busy: loading }}
+      // Below 44 the visual shrinks and the target does not (§2).
+      {...(size === 'sm' ? { visualSize: height } : {})}
       disabled={inactive}
       onPress={onPress}
       testID={testID}
       style={[
         {
-          height: size === 'lg' ? 52 : theme.layout.hitTarget,
-          paddingHorizontal: theme.space[6],
-          ...(flush ? { marginHorizontal: -theme.space[6] } : {}),
+          height,
+          paddingHorizontal: size === 'sm' ? theme.space[3] : theme.space[6],
+          ...(flush
+            ? { marginHorizontal: -(size === 'sm' ? theme.space[3] : theme.space[6]) }
+            : {}),
           borderRadius: theme.radius[radius],
           backgroundColor: palette.bg,
           borderWidth: variant === 'secondary' ? 1 : 0,
@@ -131,12 +156,20 @@ export function Button({
         <ActivityIndicator size="small" color={foregroundColor} />
       ) : (
         <>
-          {Icon === undefined ? null : <Icon size={20} color={foregroundColor} />}
+          {Icon === undefined || iconPosition === 'trailing' ? null : (
+            <Icon size={20} color={foregroundColor} />
+          )}
           <View>
-            <Text variant="bodyStrong" color={palette.fg}>
+            <Text
+              variant={size === 'sm' ? 'footnoteStrong' : 'bodyStrong'}
+              color={palette.fg}
+            >
               {label}
             </Text>
           </View>
+          {Icon === undefined || iconPosition === 'leading' ? null : (
+            <Icon size={20} color={foregroundColor} />
+          )}
         </>
       )}
     </Touchable>

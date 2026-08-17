@@ -40,6 +40,22 @@ request to render Today is rejected.
 
 ## 2. Sections
 
+> **Section order amended — 2026-08-17 (founder, P2-44).** EARLIER TODAY now renders **second**,
+> directly beneath the UP NEXT card and **above** SCHEDULE, with the NOW divider between it and
+> SCHEDULE. The order is UP NEXT → EARLIER TODAY → *NOW* → SCHEDULE → ANYTIME.
+>
+> The founder's report: *"The earlier today section makes more sense on the top so that it feels
+> like we have a timeline. The current section makes things a little confusing."* Reading down the
+> screen now runs morning → present → what is still coming, which is one timeline rather than two
+> lists pointing away from each other. It also resolves a conflict this document had with
+> [`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.1, which has always
+> placed the NOW divider "between EARLIER TODAY and what remains" — under the old order there was
+> no such position, because nothing remained after it.
+>
+> Two consequences recorded where they belong: EARLIER TODAY's sort inverts to **ascending**
+> (§2.4), and the section **collapses by default above four rows** (§2.4), because it now sits
+> between the user and the part of the day they can still act on.
+
 Today has exactly four sections, in this fixed order. A section with no items is not
 rendered at all except where §2.5 says otherwise. If the local date changes while Today is
 open, the client re-issues the agenda request for the new date; the one-minute ticker only
@@ -47,10 +63,18 @@ recomputes UP NEXT and EARLIER TODAY between fetches and never carries the scree
 midnight.
 
 ```
-TODAY                                     Thu, 6 August
+THURSDAY, AUGUST 6
+Today                                        2 of 6 done
+━━━━━━━━━━──────────────────────────────────────────────
 
-UP NEXT
-  5:30 PM  □  Pick up groceries
+UP NEXT · IN 2H 15M
+  ◇  Dentist appointment
+     2:30 PM · Jefferson Dental Center
+     Attended   Snooze
+
+EARLIER TODAY                                  2 done  ⌄
+
+NOW ──────────────────────────────────────────  12:15 PM
 
 SCHEDULE
   5:30 PM  □  Pick up groceries
@@ -61,10 +85,6 @@ SCHEDULE
 ANYTIME
   □  Submit insurance form
   □  Call apartment office                Tue
-
-EARLIER TODAY
-  2:30 PM  ◇  Dentist appointment       How did it go?
-  8:00 AM  ◇  Overnight oats            Had it
 ```
 
 ### 2.1 UP NEXT
@@ -95,7 +115,15 @@ If every timed item today is in the past, UP NEXT is not rendered (see §2.5).
 ### 2.2 SCHEDULE
 
 Every item for today that has a clock time and has **not** yet passed, ascending by
-effective start time. An item passes at the moment its **end time** is reached, or, if it
+effective start time.
+
+> **A completed row keeps its slot — amended 2026-08-17 (founder, P2-44).** Completing a timed
+> item no longer moves it: it stays here, checked and struck, and joins EARLIER TODAY when the
+> clock reaches its time like everything else. With EARLIER TODAY now rendering **above**
+> SCHEDULE (§2), relocating on completion threw the row *upward* across the NOW divider — a task
+> finished early jumped backwards past "now", which reads as the screen rewriting the day rather
+> than recording it. An **untimed** item is the exception and has to be: it has no slot to stay
+> in, so completing it leaves ANYTIME immediately (§2.3). An item passes at the moment its **end time** is reached, or, if it
 has no end time, at the moment its start time is reached — see §6.1.
 
 Rows show: time on the left, affordance (checkbox for tasks, a non-interactive marker for
@@ -104,6 +132,13 @@ everything else — §4), title, and a type-derived subtitle.
 ### 2.3 ANYTIME
 
 Three groups of items, in this order, under one heading with no sub-headings:
+
+> **The heading carries a plain count — added 2026-08-17 (founder, P2-44).** A bare number on the
+> trailing edge, and deliberately **not** `n of m done`: the 2026-08-12 amendment rejected a
+> second completion figure here because it dilutes the day bar, and the founder's instruction was
+> "just a count ... no need to track how many are complete". A count is not a progress figure, so
+> that guard is untouched. Its rows also reserve the time rail, so their checkboxes line up with
+> SCHEDULE's rather than sitting 56 pt further left.
 
 1. **Overdue tasks** rolled forward from previous days (§7), oldest original date first.
    Each carries a date chip showing its original date.
@@ -160,8 +195,9 @@ Two kinds of row share this section:
    tasks. They render without a time column and take their completion moment
    (`completedAt`) as their sort instant.
 
-The section sorts **descending** by that instant — clock time for the first kind,
-completion time for the second — so the most recent is at the top.
+The section sorts **ascending** by that instant — clock time for the first kind, completion time
+for the second — so the earliest is at the top and the most recent sits closest to the NOW
+divider beneath it (amended 2026-08-17; see the decision below).
 
 - Completed items render with their outcome verb in the trailing slot (`Had it`,
   `Watched`, `Attended`, `Done`) and a struck-through or de-emphasised title. **An outcome the
@@ -178,10 +214,20 @@ completion time for the second — so the most recent is at the top.
   6-second toast window closes.
 - Passed-but-unresolved items render with the resolution prompt described in §6.
 - The section is capped at 10 rows with a `Show all` expander.
+- **It is collapsed by default, at any length** (founder, 2026-08-17). Its header carries
+  `<n> done` and a chevron that opens it. The section now sits between the user and the part of
+  the day they can still act on, and what is behind you is reference rather than something to
+  work from — so it folds, and the count means nothing is hidden. The 10-row cap and its
+  `Show all` apply inside, once open.
 
-> **Decision:** EARLIER TODAY sorts descending (newest first) while SCHEDULE sorts
-> ascending. The two sections point in opposite directions from "now", which is what makes
-> the screen readable as a timeline centred on the present moment.
+> **Decision — amended 2026-08-17: EARLIER TODAY sorts ascending (oldest first).** It sorted
+> descending while it rendered **below** SCHEDULE, and the reason was sound for that position:
+> "the two sections point in opposite directions from 'now', which is what makes the screen
+> readable as a timeline centred on the present moment." The founder has moved the section
+> **above** SCHEDULE (§2), and under that order the same goal inverts the sort — reading downward
+> must run 8:00 AM → 11:00 AM → *NOW* → 5:30 PM, so the past climbs into the present rather than
+> retreating from it. SCHEDULE still sorts ascending; the screen is now one continuous direction
+> instead of two.
 
 > **Decision — completed untimed and undated items join EARLIER TODAY (2026-08-07).** This
 > section used to be clock-timed-only, which left a completed ANYTIME item with nowhere to
@@ -191,7 +237,10 @@ completion time for the second — so the most recent is at the top.
 > a time column keeps the timeline readable. §2.5's `All done for today` line is now
 > literally true: EARLIER TODAY carries every completed row.
 
-> **Presentation amendment — show completion before relocation (2026-08-11).** On Today,
+> **Presentation amendment — show completion before relocation (2026-08-11; narrowed
+> 2026-08-17).** This describes a row that **relocates**, which since 2026-08-17 means an untimed
+> or undated one only — a timed row now stays in SCHEDULE (§2.2) and simply renders checked and
+> struck, so there is nothing to hold or fade. On Today,
 > checking a task first checks and strikes the row in its current position. It holds for the
 > `fast` motion duration, fades out over `base`, and only then appears in EARLIER TODAY in its
 > canonical position. The completion request and optimistic completed state still happen
@@ -231,7 +280,7 @@ user.
 | Section | Primary | Tie-break 1 | Tie-break 2 |
 | --- | --- | --- | --- |
 | SCHEDULE | Effective start time, ascending | `activityId` ascending | `occurrenceDate` ascending |
-| EARLIER TODAY | Effective start time, descending (completion time for rows with no clock time, §2.4) | `activityId` descending | — |
+| EARLIER TODAY | Effective start time, **ascending** (completion time for rows with no clock time, §2.4) | `activityId` ascending | — |
 | ANYTIME group 1 (overdue) | `overdueFromDate` ascending | `activityId` ascending | — |
 | ANYTIME group 2 (untimed today) | `activityId` ascending | — | — |
 | ANYTIME group 3 (undated) | `createdAt` descending | `activityId` descending | — |
@@ -895,13 +944,20 @@ filtered to `type === 'task'` and `status === 'scheduled'` (H).
 ### 9.3 Rendered screen
 
 ```
-TODAY                                                  Thu, 6 August
+THURSDAY, AUGUST 6
+Today                                                  0 of 9 done
+━━━━━━━━━━────────────────────────────────────────────────────────
 
-UP NEXT
   ┌──────────────────────────────────────────────────────────────┐
-  │  5:30 PM   in 2 hours                                        │
+  │  UP NEXT · IN 2 HOURS                                        │
   │  □  Pick up groceries                                        │
+  │     5:30 PM                                                  │
+  │     Complete   Snooze                                        │
   └──────────────────────────────────────────────────────────────┘
+
+EARLIER TODAY                                            1 done  ⌄
+
+NOW ─────────────────────────────────────────────────────  3:10 PM
 
 SCHEDULE
   5:30 PM   □  Pick up groceries
@@ -909,15 +965,20 @@ SCHEDULE
   7:30 PM   ◇  Chicken tacos                       Meal · Dinner
   8:00 PM   ◇  Severance                    Watch · S2 E4    (A)
 
-ANYTIME
-  □  Call apartment office                                    Tue
-  □  Submit insurance form
-  □  Book flights for New York                    New York Trip
+ANYTIME                                                          3
+  Tue       □  Call apartment office
+            □  Submit insurance form
+            □  Book flights for New York          New York Trip
   + Add a task
+```
 
-EARLIER TODAY
-  2:30 PM   ◇  Dentist appointment       Dr Patel   How did it go?
+**EARLIER TODAY renders collapsed**, above SCHEDULE and above the NOW divider (§2, §2.4). Opened,
+it holds its two rows **oldest first**:
+
+```
+EARLIER TODAY                                            1 done  ⌃
   8:00 AM   ◇  Overnight oats                            Had it
+  2:30 PM   ◇  Dentist appointment       Dr Patel   How did it go?
 ```
 
 `(A)` is Alice's avatar. `↻` is the recurrence glyph.
@@ -933,8 +994,8 @@ EARLIER TODAY
 | Call apartment office | ANYTIME, first | Overdue task from 4 Aug, inside the 30-day window, rolled forward with a `Tue` chip (§7). |
 | Submit insurance form | ANYTIME, second | Dated today, no time (§2.3 group 2). |
 | Book flights for New York | ANYTIME, third | Undated `saved` task, merged in by `include=anytime_unscheduled`. Subtitle is the parent plan (§5.5). |
-| Dentist appointment | EARLIER TODAY, top | Passed at 14:30, no end time (§8.1). Still `scheduled`, so it carries the `event` prompt (§8.2). Descending order puts it above the 8 AM item (§2.4). |
-| Overnight oats | EARLIER TODAY, bottom | Passed and already completed; shows its outcome verb (§2.4). |
+| Overnight oats | EARLIER TODAY, top | Passed and already completed; shows its outcome verb (§2.4). Ascending order puts it above the 2:30 PM item (§2.4, amended 2026-08-17). |
+| Dentist appointment | EARLIER TODAY, bottom | Passed at 14:30, no end time (§8.1). Still `scheduled`, so it carries the `event` prompt (§8.2). Nearest to NOW, so it sits last (§2.4). |
 
 ### 9.5 What happens next on this screen
 

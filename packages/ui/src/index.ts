@@ -64,6 +64,7 @@ export {
   DATE_QUICK_LABELS,
   DATE_QUICK_OPTIONS,
   type DateQuickOption,
+  formatDayCaption,
   formatWallDate,
   formatWallTime,
   resolveQuickDate,

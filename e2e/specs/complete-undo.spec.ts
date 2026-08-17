@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { expectNoSeriousA11yViolations } from '../support/a11y';
-import { agendaRow, agendaRowBodies } from '../support/agenda';
+import { agendaRow, agendaRowBodies, openEarlierToday } from '../support/agenda';
 import { createTask, deleteActivities, wallDate } from '../support/api';
 
 test('creates, completes, and compensates a task without changing its prior position', async ({
@@ -119,6 +119,12 @@ test('completing from detail crosses the Today task off before the request settl
     await completionStarted;
     await page.locator('[data-testid="detail-back"]').click();
 
+    /**
+     * The task is untimed, so completing it moves it out of ANYTIME to EARLIER TODAY — the one
+     * relocation that still happens (`today-and-tasks.md` §2.2, amended 2026-08-17) — and that
+     * section is collapsed by default (§2.4).
+     */
+    await openEarlierToday(page);
     const projected = agendaRow(page, created.activityId).filter({ hasText: title });
     await expect(projected.getByRole('checkbox')).toBeChecked();
     await expect(projected.getByText(title, { exact: true })).toHaveCSS(

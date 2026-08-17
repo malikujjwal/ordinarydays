@@ -49,6 +49,15 @@ export function RowBadges({
   return (
     <View
       testID="agenda-row-badges"
+      /**
+       * **`box-none`: the strip is never the tap target, its chips still are.**
+       *
+       * It is painted after the row's backdrop, so as an ordinary `View` it sat on top of it and
+       * swallowed every tap in its band — the founder's report that the area around the `↻`
+       * badge stayed dead after the backdrop landed. `box-none` lets the press fall through to
+       * the backdrop while the overdue chip and any future interactive badge keep theirs.
+       */
+      pointerEvents="box-none"
       style={{
         flexDirection: 'row',
         flexWrap: 'wrap',

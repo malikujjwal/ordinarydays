@@ -72,14 +72,35 @@ export default function TabsLayout() {
            * spare at larger dynamic-type sizes. The bottom inset is added on top so the bar
            * clears the home indicator rather than sitting under it.
            */
+          /**
+           * **A floating capsule** — founder, 2026-08-17. `radius.pill` is the radius table's
+           * value for "things that behave like pills", which is what a detached bar is; a
+           * full-width bar with a hairline above it is the shape this replaces.
+           *
+           * Detaching it means it no longer occupies layout, so it is `position: absolute` with
+           * a gutter on three sides, and every scrolling tab reserves its height plus that
+           * margin through `bottomChromeScrollPadding`. It keeps its own elevation instead of
+           * the top border, because a capsule has no edge to rule.
+           */
           tabBarStyle: rail
             ? { display: 'none' }
             : {
+                position: 'absolute',
+                /**
+                 * Inset further and sitting lower than the first attempt — founder, 2026-08-17:
+                 * "it's a bit higher and occupies the full width". A capsule has to read as a
+                 * detached control resting near the edge, not as a bar with rounded ends.
+                 */
+                left: theme.space[7],
+                right: theme.space[7],
+                bottom: insets.bottom + theme.space[2],
                 backgroundColor: theme.colors.surfaceRaised,
-                borderTopColor: theme.colors.border,
-                height: theme.space[11] + insets.bottom,
+                borderTopWidth: 0,
+                borderRadius: theme.radius.pill,
+                height: theme.space[11],
                 paddingTop: theme.space[2],
-                paddingBottom: insets.bottom + theme.space[2],
+                paddingBottom: theme.space[2],
+                ...theme.elevation('e2'),
               },
           tabBarLabelStyle: theme.font('footnote'),
         }}

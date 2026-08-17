@@ -18,6 +18,14 @@ export interface CardProps {
   elevation?: Extract<ElevationToken, 'e1' | 'e2' | 'e3'>;
   radius?: 'lg' | 'xl';
   padding?: SpaceToken;
+  /**
+   * Overrides the bottom padding alone — added 2026-08-17.
+   *
+   * A card whose last child is a row of 44 pt hit targets already carries the control's own
+   * slack below its text, so uniform padding renders visibly bottom-heavy. The target keeps its
+   * 44 pt (`interaction-contract.md` §2); the card stops paying for it twice.
+   */
+  paddingBottom?: SpaceToken;
   onPress?: () => void;
   /** The UP NEXT card's mulberry-tinted shadow. The one surface that gets it. */
   hero?: boolean;
@@ -30,6 +38,7 @@ export function Card({
   elevation = 'e2',
   radius = 'lg',
   padding = 6,
+  paddingBottom,
   onPress,
   hero = false,
   accessibilityLabel,
@@ -42,12 +51,23 @@ export function Card({
       backgroundColor: hero ? theme.colors.accentSurface : theme.colors.surfaceRaised,
       borderRadius: theme.radius[radius],
       padding: theme.space[padding],
+      ...(paddingBottom === undefined
+        ? {}
+        : { paddingBottom: theme.space[paddingBottom] }),
     },
     theme.elevation(elevation),
     hero && theme.scheme === 'light' ? ({ boxShadow: upNextShadow } as object) : null,
-    // `accentBorder` is §5.1's decorative accent-surface outline; the hero card's rim is
-    // exactly that and never a control boundary.
-    hero ? { borderWidth: 1, borderColor: theme.colors.accentBorder } : null,
+    /**
+     * **A left edge, not a rim** — corrected 2026-08-17 against `design-system.md` §7.1, which
+     * has always specified "accentSurface fill · 3 pt accentDeep left border" and which the
+     * founder's frames draw the same way.
+     *
+     * It was built as a 1 px `accentBorder` box on all four sides. Outlined like that the card
+     * read as a container competing with the rows beneath it rather than as the one hero
+     * surface; the left edge marks it without boxing it. `accentDeep` is a graphic here, not
+     * text, and it is the same token §7.1 names.
+     */
+    hero ? { borderLeftWidth: 3, borderLeftColor: theme.colors.accentDeep } : null,
   ];
 
   if (onPress === undefined) {

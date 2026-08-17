@@ -232,6 +232,14 @@ export const space = {
 Sizes are in points and scale with the platform's dynamic type; `allowFontScaling` is never
 `false` (`interaction-contract.md` §6.3). Line heights are the values at the default size.
 
+> **The body sizes are 16/21, down from 17/22 — founder, 2026-08-17 (P2-44).** The report was
+> that "the screen feels visually large", with the agenda row given explicitly as 16 pt semibold
+> over 13–14 pt. Changed here on the scale rather than at the row: §10 admits no font size that is
+> not in this table, and a one-off row token would have left every other body string at the old
+> measure when the complaint was about the screen. 17 was the iOS body convention; 16 is a
+> deliberate step away from it. **No contrast threshold moves** — 16 is still normal text owing
+> 4.5:1, well under `interaction-contract.md` §6.4's 19 pt bold / 24 pt large-text boundary.
+
 **Two families.**
 
 - **Serif — Newsreader**, for `display` and `title` only. Bundled via `expo-font` as a
@@ -248,9 +256,9 @@ Sizes are in points and scale with the platform's dynamic type; `allowFontScalin
 export const type = {
   display:    { family: 'serif', size: 34, lineHeight: 38, weight: '500', letterSpacing: -0.4 }, // lineHeight ≈ 1.1, per the mock's tight display setting
   title:      { family: 'serif', size: 24, lineHeight: 29, weight: '500', letterSpacing: -0.2 },
-  heading:    { family: 'sans',  size: 17, lineHeight: 22, weight: '600', letterSpacing: -0.1 },
-  body:       { family: 'sans',  size: 17, lineHeight: 22, weight: '400', letterSpacing: -0.1 },
-  bodyStrong: { family: 'sans',  size: 17, lineHeight: 22, weight: '600', letterSpacing: -0.1 },
+  heading:    { family: 'sans',  size: 16, lineHeight: 21, weight: '600', letterSpacing: -0.1 },
+  body:       { family: 'sans',  size: 16, lineHeight: 21, weight: '400', letterSpacing: -0.1 },
+  bodyStrong: { family: 'sans',  size: 16, lineHeight: 21, weight: '600', letterSpacing: -0.1 },
   subhead:    { family: 'sans',  size: 15, lineHeight: 20, weight: '400', letterSpacing: 0 },
   footnote:   { family: 'sans',  size: 13, lineHeight: 18, weight: '400', letterSpacing: 0 },
   footnoteStrong: { family: 'sans', size: 13, lineHeight: 18, weight: '600', letterSpacing: 0 },
@@ -703,22 +711,46 @@ row's subtitle uses `textPrimary`. The decorative `accent` token is never text, 
 hairline connector, content to the right:
 
 ```
- 2:30 PM   ◇   Dentist appointment                       title: body, textPrimary
-           │   Jefferson Dental Center                   subtitle: subhead, textSecondary
+ 2:30 PM   ◇   Dentist appointment                       title: bodyStrong, textPrimary
+           │   Jefferson Dental Center                   subtitle: footnote, textSecondary
  5:30 PM   □   Pick up groceries
            │   Task · 4 items on Groceries
 ```
 
 - Time rail: `footnote`, `textSecondary`, right-aligned, fixed column.
+
+  > **Amended 2026-08-17 (founder).** The row's own grammar is now `bodyStrong` over `footnote` —
+  > 16 pt semibold with 13 pt beneath it. It was `body` over `subhead`, which left two points
+  > between the two lines and made every row read as two equal ones. The rail is `space[11]`
+  > wide: `12:00 PM` measures 58 pt in `footnote`, so the previous `space[10]` truncated it.
 - Marker column: the task checkbox or the 16 pt type marker; a 1 px `border` connector
   line runs vertically between markers — it is what makes the day read as a timeline.
 - The **NOW divider** sits between EARLIER TODAY and what remains: `NOW` in `caption`
-  `accent`, a 1 px `accent` hairline across, the current time right-aligned in
-  `footnoteStrong` `accent`. It is rendered by the same one-minute ticker that maintains
+  **`textAction`**, a 1 px `accent` hairline across, the current time right-aligned in
+  `footnoteStrong` **`textAction`**.
+
+  > **Both labels moved off `accent` — 2026-08-17, caught by the axe gate.** This line said
+  > `accent` for the two text runs; light `accent` `#8B6374` is **4.34:1** on `surface`, under
+  > `interaction-contract.md` §6.4's 4.5:1, and §5.1 already states that `accent` is never body
+  > text on `surface`. The hairline keeps it — a graphic owes 3:1, which it clears. It is rendered by the same one-minute ticker that maintains
   UP NEXT (`today-and-tasks.md` §2) and is purely presentational.
+
+  > **Resolved 2026-08-17 (founder, P2-44).** This sentence had no position under the section
+  > order `today-and-tasks.md` §2 originally fixed, in which EARLIER TODAY rendered **last** and
+  > nothing remained after it. P2-44 was written to bring the founder the candidates rather than
+  > bend one document to the other. The answer moved the section: EARLIER TODAY now renders above
+  > SCHEDULE, and the divider sits between the two — which is what this line has always described.
+  > It is `accessibilityElementsHidden`: a screen reader hears the sections, and a decorative rule
+  > announcing "now" between them adds a landmark that is not one.
 - EARLIER TODAY rows are `dimmed`; completed rows additionally `struck` with the olive
   check in the marker column. The section header carries `2 done ⌃` as its collapse
   affordance.
+
+  > **Clarified 2026-08-17 (P2-44).** `2 done ⌃` and the `Show all` expander
+  > `today-and-tasks.md` §2.4 specifies are **two controls, not one**, and an earlier reading of
+  > this line as replacing that one would have stranded every row past the tenth. `2 done ⌃` is a
+  > header affordance that collapses the whole section; `Show all` is a footer that uncaps rows 11
+  > and beyond, and applies inside once the section is open. Both ship.
 - A completion first renders checked and struck where the row was. After the `fast` hold it
   fades over `base`, then the ordinary projection places it in EARLIER TODAY. Do not animate
   the row travelling through the intervening screen; Reduce Motion removes the hold and
@@ -991,7 +1023,7 @@ default rather than a thing to remember.
 | Dynamic type | Every size in §3 is a scalable point value. `allowFontScaling` is never `false`. Above `xxxLarge`, `Row` switches to a vertical layout: time above title, avatars below; the Today time rail collapses into the row. |
 | Reduced motion | `motion` durations are read through `useMotion()`, which returns `instant` for every duration when the system setting is on. A component cannot animate around it. |
 | Minimum row height | `layout.rowMinHeight = 56`, content-sized above it. Fixed-height rows do not exist. |
-| Text truncation | `Text` defaults to `numberOfLines={2}` in the `body` variant used by rows. |
+| Text truncation | `Text` defaults to `numberOfLines={2}` in the `body` **and `bodyStrong`** variants used by rows (amended 2026-08-17: the agenda row's title moved to `bodyStrong` with the 16/21 scale, and the clamp follows the role rather than one variant name). |
 
 ---
 

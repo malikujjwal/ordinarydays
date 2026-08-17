@@ -18,6 +18,32 @@ function sections(page: Page): Locator {
   );
 }
 
+/**
+ * Opens EARLIER TODAY if it is shut.
+ *
+ * The section is **collapsed by default** (founder, 2026-08-17, `today-and-tasks.md` §2.4), so a
+ * spec that looks for a passed, completed or skipped row has to open it first — otherwise the
+ * row is not in the DOM at all and the failure reads as "element not found" rather than as
+ * "the section is closed".
+ *
+ * Idempotent and safe on a day with nothing behind it: the toggle only exists when the section
+ * does, and it is left open once opened.
+ */
+export async function openEarlierToday(page: Page): Promise<void> {
+  /**
+   * Wait for the agenda before looking. Called straight after `goto`, the toggle does not exist
+   * yet, and a bare `count() === 0` then reads as "there is nothing behind you today" and
+   * silently returns — which is how this helper failed to open anything at all on its first
+   * outing.
+   */
+  await page.locator('[data-testid="today-agenda"]').waitFor({ state: 'visible' });
+  const toggle = page.getByTestId('today-earlier-toggle');
+  await toggle.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => {});
+  if ((await toggle.count()) === 0) return;
+  const label = await toggle.getAttribute('aria-label');
+  if (label?.startsWith('Show') === true) await toggle.click();
+}
+
 /** Section rows whose title carries this spec's unique prefix, in render order. */
 export function agendaRowBodies(page: Page, prefix: string): Locator {
   return sections(page)

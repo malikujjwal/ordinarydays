@@ -135,6 +135,19 @@ export const ChevronLeft = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+/** A section that can be collapsed; the pair a disclosure toggles between. */
+export const ChevronUp = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path d="M5 15l7-7 7 7" stroke={color} {...stroke} />
+  </Frame>
+);
+
+export const ChevronDown = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path d="M5 9l7 7 7-7" stroke={color} {...stroke} />
+  </Frame>
+);
+
 export const Search = ({ size, color }: IconProps) => (
   <Frame size={size}>
     <Circle cx={11} cy={11} r={6.5} stroke={color} {...stroke} />

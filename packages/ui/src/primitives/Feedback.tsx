@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { useMotion, useTheme } from '../theme/index';
+import { type } from '../theme/tokens';
 import { Button } from './Button';
 import { Text } from './Text';
 import { Touchable } from './Touchable';
@@ -32,7 +33,8 @@ export function SectionHeader({ title, count, action, testID }: SectionHeaderPro
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingBottom: theme.space[3],
+        // The section's own gap supplies the rest; 8 here plus 4 there read as an odd 12.
+        paddingBottom: theme.space[2],
       }}
     >
       {/**
@@ -51,10 +53,49 @@ export function SectionHeader({ title, count, action, testID }: SectionHeaderPro
         role="heading"
         aria-level={2}
         accessibilityRole="header"
+        {...(count === undefined ? {} : { accessibilityLabel: `${title}, ${count}` })}
       >
-        {count === undefined ? title : `${title} · ${count}`}
+        {title}
       </Text>
-      {action}
+      {/**
+       * **The action keeps its 44 pt target without setting the header's height.**
+       *
+       * A `Button` here is 44 tall against a 14 pt caption, so the header row grew to 44 and
+       * left ~15 pt of dead air above the section's first row — the founder's "unusual gap",
+       * and visible only on EARLIER TODAY because it is the only section with an action. The
+       * negative margin is exactly that slack, derived from the two tokens rather than typed in,
+       * so the target still measures 44 (`interaction-contract.md` §2) while the header measures
+       * its text. Nothing interactive sits above or below it to overlap.
+       */}
+      {action === undefined ? null : (
+        <View
+          style={{
+            marginVertical: -(theme.layout.hitTarget - type.caption.lineHeight) / 2,
+          }}
+        >
+          {action}
+        </View>
+      )}
+      {/**
+       * **The count sits on the trailing edge, not inside the title** — amended 2026-08-17
+       * (founder). It used to render as `ANYTIME · 2`, which reads as part of the section's name;
+       * on the right it reads as a fact about the section, which is what `design-system.md` §7.1
+       * draws for EARLIER TODAY and what the founder asked for on ANYTIME.
+       *
+       * It stays inside the **heading's accessible name** above, so a screen reader still hears
+       * "Anytime, 2" as one announcement rather than meeting a bare number afterwards.
+       */}
+      {action !== undefined || count === undefined ? null : (
+        <Text
+          variant="caption"
+          color="textMuted"
+          aria-hidden
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          {count}
+        </Text>
+      )}
     </View>
   );
 }

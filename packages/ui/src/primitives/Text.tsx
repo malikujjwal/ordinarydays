@@ -57,8 +57,16 @@ export function Text({
       /**
        * Rows default to two lines: `design-system.md` §9 says titles wrap to two before
        * truncating and never truncate at one line at the default size.
+       *
+       * **`bodyStrong` is in the rule as of 2026-08-17**, because the agenda row's title moved
+       * to it in the same pass that took the scale to 16/21. The clamp had been written against
+       * `body` alone, so the title silently lost it and long ones ran to three and four lines —
+       * which is what made the row heights uneven again. The rule is about the role, and both
+       * variants now carry it.
        */
-      numberOfLines={numberOfLines ?? (variant === 'body' ? 2 : undefined)}
+      numberOfLines={
+        numberOfLines ?? (variant === 'body' || variant === 'bodyStrong' ? 2 : undefined)
+      }
       style={[
         font,
         { color: resolved },

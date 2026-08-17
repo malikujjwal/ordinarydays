@@ -57,6 +57,16 @@ export const wallTimeToDate = asTime;
 export const formatWallDate = (date: WallDate): string =>
   format(asDate(date), 'EEE, MMM d');
 
+/**
+ * `Thursday, August 6` — Today's day caption (`design-system.md` §7.1).
+ *
+ * Long where {@link formatWallDate} is short, because this one is the screen's only statement of
+ * which day it is: `Thu, Aug 6` above a serif `Today` reads as metadata, and §7.1 draws it as
+ * the sentence that dates the page. `Text`'s `caption` variant uppercases it.
+ */
+export const formatDayCaption = (date: WallDate): string =>
+  format(asDate(date), 'EEEE, MMMM d');
+
 /** `12:00 PM` — the same §7.3 format, and the one the time rail uses. */
 export const formatWallTime = (time: WallTime): string => format(asTime(time), 'h:mm a');
 

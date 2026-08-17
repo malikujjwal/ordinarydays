@@ -26,6 +26,13 @@ const item = (
 
 const titles = (items: readonly AgendaItem[]) => items.map((entry) => entry.title);
 
+/**
+ * **EARLIER TODAY ascends** — founder decision, 2026-08-17, with the section moved above
+ * SCHEDULE. Reading down the screen now runs oldest → NOW → soonest, so the past climbs into the
+ * present instead of retreating from it; `today-and-tasks.md` §2.4 is amended to match in the
+ * same pull request. Every expectation below is the previous one reversed, and nothing else about
+ * the partition changed.
+ */
 describe('partitionAgenda', () => {
   it.each([
     [
@@ -33,14 +40,14 @@ describe('partitionAgenda', () => {
       ['Pick up groceries'],
       ['Pick up groceries', 'Gym', 'Chicken tacos', 'Severance'],
       ['Call apartment office', 'Submit insurance form', 'Book flights for New York'],
-      ['Dentist appointment', 'Overnight oats'],
+      ['Overnight oats', 'Dentist appointment'],
     ],
     [
       '17:31',
       ['Gym'],
       ['Gym', 'Chicken tacos', 'Severance'],
       ['Call apartment office', 'Submit insurance form', 'Book flights for New York'],
-      ['Pick up groceries', 'Dentist appointment', 'Overnight oats'],
+      ['Overnight oats', 'Dentist appointment', 'Pick up groceries'],
     ],
     [
       '23:59',
@@ -48,12 +55,12 @@ describe('partitionAgenda', () => {
       [],
       ['Call apartment office', 'Submit insurance form', 'Book flights for New York'],
       [
-        'Severance',
-        'Chicken tacos',
-        'Gym',
-        'Pick up groceries',
-        'Dentist appointment',
         'Overnight oats',
+        'Dentist appointment',
+        'Pick up groceries',
+        'Gym',
+        'Chicken tacos',
+        'Severance',
       ],
     ],
   ])('matches the worked example at %s', (minute, upNext, schedule, anytime, earlier) => {
@@ -102,7 +109,7 @@ describe('partitionAgenda', () => {
     expect(titles(result.upNext)).toEqual([]);
     expect(titles(result.schedule)).toEqual([]);
     expect(titles(result.anytime)).toEqual([]);
-    expect(titles(result.earlier)).toEqual(['Future skip', 'Untimed skip']);
+    expect(titles(result.earlier)).toEqual(['Untimed skip', 'Future skip']);
   });
 
   it('flattens the server arrays without duplicating up next', () => {

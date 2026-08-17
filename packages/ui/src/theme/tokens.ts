@@ -58,18 +58,29 @@ export const type = {
     weight: '500',
     letterSpacing: -0.2,
   },
+  /**
+   * **16/21, down from 17/22 — founder, 2026-08-17.** The report was that "the screen feels
+   * visually large", with the agenda row spelled out as 16 pt semibold over 13–14 pt.
+   *
+   * Changed on the scale rather than at the row, because §10 admits no font size that is not
+   * here and a one-off `rowTitle` token would have left every other body string at the old
+   * measure — the complaint was about the screen, not about one component. 17 was the iOS body
+   * convention; 16 is a deliberate step away from it and reads tighter at the same line count.
+   * No contrast threshold moves: 16 is still normal text at 4.5:1, well under §6.4's 19 pt bold
+   * / 24 pt large-text boundary.
+   */
   heading: {
     family: 'sans',
-    size: 17,
-    lineHeight: 22,
+    size: 16,
+    lineHeight: 21,
     weight: '600',
     letterSpacing: -0.1,
   },
-  body: { family: 'sans', size: 17, lineHeight: 22, weight: '400', letterSpacing: -0.1 },
+  body: { family: 'sans', size: 16, lineHeight: 21, weight: '400', letterSpacing: -0.1 },
   bodyStrong: {
     family: 'sans',
-    size: 17,
-    lineHeight: 22,
+    size: 16,
+    lineHeight: 21,
     weight: '600',
     letterSpacing: -0.1,
   },

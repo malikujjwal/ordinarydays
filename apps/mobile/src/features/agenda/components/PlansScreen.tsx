@@ -15,8 +15,9 @@ import {
 } from '@od/ui';
 import { useMemo, useState } from 'react';
 import { SectionList, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
-import { GLOBAL_ADD_SCROLL_PADDING } from '@/components/globalAddLayout';
+import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
 import { TabScreen } from '@/components/TabScreen';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
 import { useAgenda } from '../hooks/useAgenda';
@@ -58,6 +59,7 @@ function describe(error: unknown): { message: string; requestId?: string } {
 /** Plans' Phase 2 Upcoming stage: one bounded, multi-day projection of the shared agenda. */
 export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const tick = useMinuteTicker();
   const agenda = useAgenda({ now: tick.instant, days: MAX_AGENDA_DAYS });
   const today = toWallDate(tick.instant, agenda.timezone);
@@ -172,7 +174,8 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
           contentContainerStyle={{
             gap: theme.space[5],
             // The final row scrolls above the global Add button without shrinking the viewport.
-            paddingBottom: GLOBAL_ADD_SCROLL_PADDING,
+            // Clear of the floating Add control *and* the tab bar painted over the scroll.
+            paddingBottom: bottomChromeScrollPadding(insets.bottom),
           }}
         />
       )}
