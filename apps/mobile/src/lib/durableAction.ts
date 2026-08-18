@@ -2,6 +2,7 @@ import type {
   IntentAttention,
   IntentLog,
   RejectedIntentAttention,
+  UndoLogResult,
 } from '@/lib/intentLog';
 import { getActiveIntentLog } from '@/lib/intentReplay';
 
@@ -24,6 +25,8 @@ export interface DurableIntentDescriptor {
   readonly mutationKey: readonly string[];
   readonly variables: unknown;
   readonly entityId: string;
+  readonly dependsOnIntentId?: string;
+  readonly compensationForIntentId?: string;
 }
 
 export interface DurableAction {
@@ -153,6 +156,18 @@ async function dispatchDurable(
   if (log !== undefined) {
     const claimed = await log.tryClaim(intent.intentId);
     if (claimed === undefined) {
+      const stored = log
+        .snapshot()
+        .intents.find((candidate) => candidate.intentId === intent.intentId);
+      if (stored?.status === 'queued' && stored.dependsOnIntentId !== undefined) {
+        action.update({ intentId: intent.intentId, status: 'queued' });
+        action.settleAttempt();
+        return;
+      }
+      if (stored === undefined && action.snapshot().status === 'acknowledged') {
+        action.settleAttempt();
+        return;
+      }
       action.update({ intentId: intent.intentId, status: 'refused' });
       options.rollback();
       options.restorePosition?.();
@@ -222,16 +237,79 @@ export async function coordinateDurableAction(
   const undo = async (): Promise<DurableAction> => {
     options.revert();
     options.restorePosition?.();
-    const outcome = await action.attempt;
-    if (log !== undefined && outcome.status === 'queued') {
-      const cancelled = await log.cancel(options.intent.intentId);
-      if (cancelled) {
+    if (log !== undefined && options.inverse !== undefined) {
+      let undoResult: UndoLogResult;
+      try {
+        undoResult = await log.undo(
+          options.intent.intentId,
+          options.inverse.intent,
+          action.snapshot().status === 'acknowledged' ? options.intent : undefined,
+        );
+      } catch (error) {
+        options.apply();
+        return terminalAction({
+          intentId: options.inverse.intent.intentId,
+          status: 'refused',
+          lastError: errorMessage(error),
+        });
+      }
+      if (undoResult.kind === 'cancelled') {
+        action.update({ intentId: options.intent.intentId, status: 'acknowledged' });
+        action.settleAttempt();
         return terminalAction({
           intentId: `${options.intent.intentId}:cancelled`,
           status: 'acknowledged',
         });
       }
+      if (undoResult.kind === 'rejected') {
+        return terminalAction({
+          intentId: options.inverse.intent.intentId,
+          status: 'acknowledged',
+        });
+      }
+      if (undoResult.kind === 'missing_dependency') {
+        options.apply();
+        return terminalAction({
+          intentId: options.inverse.intent.intentId,
+          status: 'needs_attention',
+          attention: { kind: 'parked', reason: 'legacy_unknown' },
+          lastError: 'The original action receipt is missing.',
+        });
+      }
+
+      const outcome = await action.attempt;
+      if (
+        outcome.status === 'needs_attention' &&
+        outcome.attention?.kind === 'rejected'
+      ) {
+        return terminalAction({
+          intentId: options.inverse.intent.intentId,
+          status: 'acknowledged',
+        });
+      }
+      if (outcome.status !== 'acknowledged') {
+        return terminalAction({
+          intentId: options.inverse.intent.intentId,
+          status: 'queued',
+        });
+      }
+      return coordinateDurableAction({
+        intent: {
+          ...options.inverse.intent,
+          dependsOnIntentId: options.intent.intentId,
+          compensationForIntentId: options.intent.intentId,
+        },
+        apply: () => undefined,
+        revert: options.apply,
+        rollback: options.apply,
+        ...(options.restorePosition === undefined
+          ? {}
+          : { restorePosition: options.restorePosition }),
+        dispatch: options.inverse.dispatch,
+      });
     }
+
+    const outcome = await action.attempt;
     if (outcome.status === 'needs_attention' || options.inverse === undefined) {
       return terminalAction(outcome);
     }

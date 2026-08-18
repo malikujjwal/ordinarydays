@@ -430,6 +430,21 @@ export interface IntentLogStorage {
   removeItem(key: string): Promise<void>;
 }
 
+export interface IntentAppendInput {
+  readonly intentId: string;
+  readonly mutationKey: readonly string[];
+  readonly variables: unknown;
+  readonly entityId: string;
+  readonly dependsOnIntentId?: string;
+  readonly compensationForIntentId?: string;
+}
+
+export type UndoLogResult =
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'dependent'; readonly intent: Intent }
+  | { readonly kind: 'rejected'; readonly intent: Intent }
+  | { readonly kind: 'missing_dependency' };
+
 /**
  * The log for one account.
  *
@@ -616,14 +631,7 @@ export class IntentLog {
    * Rejects when the queue is full or storage fails; the caller must then not tell the user
    * the action happened.
    */
-  append(input: {
-    intentId: string;
-    mutationKey: readonly string[];
-    variables: unknown;
-    entityId: string;
-    dependsOnIntentId?: string;
-    compensationForIntentId?: string;
-  }): Promise<Intent> {
+  append(input: IntentAppendInput): Promise<Intent> {
     return this.write((current) => {
       const existing = current.intents.find(
         (intent) => intent.intentId === input.intentId,
@@ -698,6 +706,13 @@ export class IntentLog {
       if (index < 0 || target === undefined || target.status !== 'queued') {
         return [current, undefined];
       }
+      if (
+        target.dependsOnIntentId !== undefined &&
+        current.intents.find((intent) => intent.intentId === target.dependsOnIntentId)
+          ?.status !== 'acknowledged'
+      ) {
+        return [current, undefined];
+      }
       const claimed: Intent = {
         ...target,
         status: 'in_flight',
@@ -709,9 +724,36 @@ export class IntentLog {
     });
   }
 
-  /** Success. A later dependency step generalizes which acknowledged receipts are retained. */
+  /** Success retains a receipt only while a dependent still needs the outcome. */
   acknowledge(intentId: string): Promise<Intent | undefined> {
-    return this.transition(intentId, () => undefined);
+    return this.write((current) => {
+      const target = current.intents.find((intent) => intent.intentId === intentId);
+      if (target === undefined) return [current, undefined];
+      const hasDependent = current.intents.some(
+        (intent) => intent.dependsOnIntentId === intentId,
+      );
+      const acknowledged: Intent = {
+        ...withoutAttention(target),
+        status: 'acknowledged',
+      };
+      const settled = hasDependent
+        ? current.intents.map((intent) =>
+            intent.intentId === intentId ? acknowledged : intent,
+          )
+        : current.intents.filter((intent) => intent.intentId !== intentId);
+      const remainingDependencies = new Set(
+        settled
+          .map((intent) => intent.dependsOnIntentId)
+          .filter((dependency): dependency is string => dependency !== undefined),
+      );
+      const compacted = settled.filter(
+        (intent) =>
+          intent.status !== 'acknowledged' ||
+          intent.reconciliationVersion !== undefined ||
+          remainingDependencies.has(intent.intentId),
+      );
+      return [{ ...current, intents: compacted }, acknowledged];
+    });
   }
 
   /** HTTP acknowledgement retained until a canonical recurrence projection proves the edit. */
@@ -774,12 +816,130 @@ export class IntentLog {
     error: string,
     rejection: Omit<RejectedIntentAttention, 'kind'> = {},
   ): Promise<Intent | undefined> {
-    return this.transition(intentId, (intent) => ({
-      ...intent,
-      status: 'needs_attention',
-      attention: { kind: 'rejected', ...rejection },
-      lastError: error,
-    }));
+    return this.write((current) => {
+      const target = current.intents.find((intent) => intent.intentId === intentId);
+      if (target === undefined) return [current, undefined];
+      const rejected: Intent = {
+        ...target,
+        status: 'needs_attention',
+        attention: { kind: 'rejected', ...rejection },
+        lastError: error,
+      };
+      return [
+        {
+          ...current,
+          intents: current.intents
+            .filter((intent) => intent.compensationForIntentId !== intentId)
+            .map((intent) => (intent.intentId === intentId ? rejected : intent)),
+        },
+        rejected,
+      ];
+    });
+  }
+
+  /**
+   * One atomic Undo decision against the claim race.
+   *
+   * Queued means the request has not left the device and is cancelled. Every later state
+   * produces a durable inverse dependent, except a known rejection where no inverse is
+   * necessary. A missing original is accepted only with the coordinator's acknowledged
+   * receipt; every other missing dependency blocks safely.
+   */
+  undo(
+    originalIntentId: string,
+    inverse: Omit<IntentAppendInput, 'dependsOnIntentId' | 'compensationForIntentId'>,
+    acknowledgedOriginal?: IntentAppendInput,
+  ): Promise<UndoLogResult> {
+    return this.write<UndoLogResult>((current) => {
+      const original = current.intents.find(
+        (intent) => intent.intentId === originalIntentId,
+      );
+      if (original?.status === 'queued') {
+        return [
+          {
+            ...current,
+            intents: current.intents.filter(
+              (intent) =>
+                intent.intentId !== originalIntentId &&
+                intent.compensationForIntentId !== originalIntentId,
+            ),
+          },
+          { kind: 'cancelled' },
+        ];
+      }
+      if (
+        original?.status === 'needs_attention' &&
+        original.attention?.kind === 'rejected'
+      ) {
+        return [
+          {
+            ...current,
+            intents: current.intents.filter(
+              (intent) => intent.compensationForIntentId !== originalIntentId,
+            ),
+          },
+          { kind: 'rejected', intent: original },
+        ];
+      }
+      if (original === undefined && acknowledgedOriginal === undefined) {
+        return [current, { kind: 'missing_dependency' }];
+      }
+
+      const dependentInput: IntentAppendInput = {
+        ...inverse,
+        dependsOnIntentId: originalIntentId,
+        compensationForIntentId: originalIntentId,
+      };
+      const existingInverse = current.intents.find(
+        (intent) => intent.intentId === inverse.intentId,
+      );
+      if (existingInverse !== undefined) {
+        if (!semanticallyIdenticalIntent(existingInverse, dependentInput)) {
+          throw new IntentLogInvariantError(inverse.intentId);
+        }
+        return [current, { kind: 'dependent', intent: existingInverse }];
+      }
+      if (current.intents.filter(occupiesQueue).length >= MAX_OFFLINE_MUTATIONS) {
+        throw new IntentLogFullError();
+      }
+
+      const now = this.clock();
+      let receipt: Intent | undefined;
+      if (original === undefined) {
+        if (acknowledgedOriginal === undefined) {
+          return [current, { kind: 'missing_dependency' }];
+        }
+        receipt = {
+          ...acknowledgedOriginal,
+          ownerUserId: this.ownerUserId,
+          status: 'acknowledged',
+          createdAt: now,
+          seq: current.nextSeq,
+          attempts: 0,
+        };
+      }
+      const dependent: Intent = {
+        ...dependentInput,
+        ownerUserId: this.ownerUserId,
+        status: 'queued',
+        createdAt: now,
+        seq: current.nextSeq + (receipt === undefined ? 0 : 1),
+        attempts: 0,
+      };
+      return [
+        {
+          ...current,
+          intents: [
+            ...current.intents,
+            ...(receipt === undefined ? [] : [receipt]),
+            dependent,
+          ],
+          nextSeq: dependent.seq + 1,
+          clockWitness: Math.max(current.clockWitness, now),
+        },
+        { kind: 'dependent', intent: dependent },
+      ];
+    });
   }
 
   /**
@@ -796,7 +956,12 @@ export class IntentLog {
       return [
         {
           ...current,
-          intents: current.intents.filter((intent) => intent.intentId !== intentId),
+          intents: current.intents.filter(
+            (intent) =>
+              intent.intentId !== intentId &&
+              intent.dependsOnIntentId !== intentId &&
+              intent.compensationForIntentId !== intentId,
+          ),
         },
         true,
       ];
@@ -805,9 +970,22 @@ export class IntentLog {
 
   /** Explicit user discard, valid from structured attention. */
   discard(intentId: string): Promise<Intent | undefined> {
-    return this.transition(intentId, (intent) =>
-      intent.status === 'needs_attention' ? undefined : intent,
-    );
+    return this.write((current) => {
+      const target = current.intents.find((intent) => intent.intentId === intentId);
+      if (target?.status !== 'needs_attention') return [current, target];
+      return [
+        {
+          ...current,
+          intents: current.intents.filter(
+            (intent) =>
+              intent.intentId !== intentId &&
+              intent.dependsOnIntentId !== intentId &&
+              intent.compensationForIntentId !== intentId,
+          ),
+        },
+        undefined,
+      ];
+    });
   }
 
   /** Re-evaluates age and clock trust. Called on hydrate and before each replay pass. */
@@ -827,7 +1005,13 @@ export class IntentLog {
       if (intent.status === 'acknowledged') return false;
       if (firstUnsettledEntity.has(intent.entityId)) return false;
       firstUnsettledEntity.add(intent.entityId);
-      return isAutomatable(intent, now, clockWitness);
+      if (!isAutomatable(intent, now, clockWitness)) return false;
+      if (intent.dependsOnIntentId === undefined) return true;
+      return (
+        this.envelope.intents.find(
+          (candidate) => candidate.intentId === intent.dependsOnIntentId,
+        )?.status === 'acknowledged'
+      );
     });
   }
 

@@ -115,4 +115,55 @@ describe('durable action coordinator', () => {
     });
     expect(rollback).toHaveBeenCalledOnce();
   });
+
+  it('cancels a requeued original on Undo without dispatching an inverse', async () => {
+    const backing = storage();
+    const log = new IntentLog(USER, backing);
+    await log.hydrate();
+    setActiveIntentLog(log);
+    const inverseDispatch = vi.fn(async () => undefined);
+    const revert = vi.fn();
+    const action = await coordinateDurableAction({
+      intent: descriptor(),
+      apply: vi.fn(),
+      revert,
+      rollback: vi.fn(),
+      dispatch: vi.fn(async () => {
+        throw new Error('offline');
+      }),
+      inverse: { intent: descriptor('inverse'), dispatch: inverseDispatch },
+    });
+    expect((await action.attempt).status).toBe('queued');
+
+    const undo = await action.undo();
+
+    expect((await undo.attempt).status).toBe('acknowledged');
+    expect(revert).toHaveBeenCalledOnce();
+    expect(inverseDispatch).not.toHaveBeenCalled();
+    expect(log.snapshot().intents).toHaveLength(0);
+  });
+
+  it('recreates an acknowledged receipt and durably orders the inverse after it', async () => {
+    const backing = storage();
+    const log = new IntentLog(USER, backing);
+    await log.hydrate();
+    setActiveIntentLog(log);
+    const inverseDispatch = vi.fn(async () => undefined);
+    const action = await coordinateDurableAction({
+      intent: descriptor(),
+      apply: vi.fn(),
+      revert: vi.fn(),
+      rollback: vi.fn(),
+      dispatch: vi.fn(async () => undefined),
+      inverse: { intent: descriptor('inverse'), dispatch: inverseDispatch },
+    });
+    expect((await action.attempt).status).toBe('acknowledged');
+    expect(log.snapshot().intents).toHaveLength(0);
+
+    const undo = await action.undo();
+
+    expect((await undo.attempt).status).toBe('acknowledged');
+    expect(inverseDispatch).toHaveBeenCalledOnce();
+    expect(log.snapshot().intents).toHaveLength(0);
+  });
 });

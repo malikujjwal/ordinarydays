@@ -962,4 +962,128 @@ describe('the durable intent log', () => {
     expect(result.attempted).toBe(1);
     expect(runner.dispatched).toEqual([{ activityId: 'act-other' }]);
   });
+
+  it('atomically cancels a queued original and it never replays', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    await log.append(intentInput());
+
+    const result = await log.undo('00000000-0000-4000-8000-000000000001', {
+      intentId: 'inverse',
+      mutationKey: ['activity', 'uncomplete'],
+      variables: { activityId: ACTIVITY, idempotencyKey: 'inverse' },
+      entityId: ACTIVITY,
+    });
+
+    expect(result).toEqual({ kind: 'cancelled' });
+    const runner = fakeRunner();
+    expect((await replayIntents(runner, log)).attempted).toBe(0);
+    expect(runner.dispatched).toHaveLength(0);
+  });
+
+  it('resolves an Undo/claim race as cancel-before-claim or one dependent after claim', async () => {
+    const inverse = {
+      intentId: 'inverse',
+      mutationKey: ['activity', 'uncomplete'] as const,
+      variables: { activityId: ACTIVITY, idempotencyKey: 'inverse' },
+      entityId: ACTIVITY,
+    };
+
+    const cancelWins = new IntentLog(USER, fakeStorage());
+    await cancelWins.hydrate();
+    const first = await cancelWins.append(intentInput());
+    const [cancelled, missedClaim] = await Promise.all([
+      cancelWins.undo(first.intentId, inverse),
+      cancelWins.tryClaim(first.intentId),
+    ]);
+    expect(cancelled.kind).toBe('cancelled');
+    expect(missedClaim).toBeUndefined();
+
+    const claimWins = new IntentLog(USER, fakeStorage());
+    await claimWins.hydrate();
+    const second = await claimWins.append(intentInput());
+    const [claimed, dependent] = await Promise.all([
+      claimWins.tryClaim(second.intentId),
+      claimWins.undo(second.intentId, inverse),
+    ]);
+    expect(claimed?.status).toBe('in_flight');
+    expect(dependent.kind).toBe('dependent');
+    expect(
+      claimWins.snapshot().intents.filter((intent) => intent.intentId === 'inverse'),
+    ).toHaveLength(1);
+  });
+
+  it('preserves an inverse across process death and replays it only after the original', async () => {
+    const backing = fakeStorage();
+    const log = new IntentLog(USER, backing);
+    await log.hydrate();
+    const original = await log.append(intentInput());
+    await log.tryClaim(original.intentId);
+    await log.undo(original.intentId, {
+      intentId: 'inverse-after-claim',
+      mutationKey: ['activity', 'uncomplete'],
+      variables: { activityId: ACTIVITY, idempotencyKey: 'inverse-after-claim' },
+      entityId: ACTIVITY,
+    });
+
+    const relaunched = new IntentLog(USER, backing);
+    await relaunched.hydrate();
+    expect(relaunched.snapshot().intents).toHaveLength(2);
+    const runner = fakeRunner();
+    const result = await replayIntents(runner, relaunched);
+
+    expect(result).toMatchObject({ attempted: 2, acknowledged: 2 });
+    expect(runner.dispatched).toEqual([
+      { activityId: ACTIVITY, idempotencyKey: 'idem-1' },
+      { activityId: ACTIVITY, idempotencyKey: 'inverse-after-claim' },
+    ]);
+    expect(relaunched.snapshot().intents).toHaveLength(0);
+  });
+
+  it('retires an unnecessary inverse on rejection but preserves it for ambiguity', async () => {
+    const rejected = new IntentLog(USER, fakeStorage());
+    await rejected.hydrate();
+    const original = await rejected.append(intentInput());
+    await rejected.tryClaim(original.intentId);
+    await rejected.undo(original.intentId, {
+      intentId: 'rejected-inverse',
+      mutationKey: ['activity', 'uncomplete'],
+      variables: {},
+      entityId: ACTIVITY,
+    });
+    await rejected.fail(original.intentId, 'No', { status: 422 });
+    expect(rejected.snapshot().intents.map((intent) => intent.intentId)).toEqual([
+      original.intentId,
+    ]);
+
+    const parked = new IntentLog(USER, fakeStorage());
+    await parked.hydrate();
+    const ambiguous = await parked.append(intentInput());
+    await parked.tryClaim(ambiguous.intentId);
+    await parked.undo(ambiguous.intentId, {
+      intentId: 'parked-inverse',
+      mutationKey: ['activity', 'uncomplete'],
+      variables: {},
+      entityId: ACTIVITY,
+    });
+    await parked.park(ambiguous.intentId, 'Lost response', 'ambiguous_collision');
+    expect(parked.snapshot().intents).toHaveLength(2);
+    expect(parked.replayable()).toHaveLength(0);
+  });
+
+  it('never treats a missing dependency as acknowledged', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    await log.append({
+      intentId: 'orphan-inverse',
+      mutationKey: ['activity', 'uncomplete'],
+      variables: {},
+      entityId: ACTIVITY,
+      dependsOnIntentId: 'missing',
+      compensationForIntentId: 'missing',
+    });
+
+    expect(log.replayable()).toHaveLength(0);
+    expect(await log.tryClaim('orphan-inverse')).toBeUndefined();
+  });
 });
