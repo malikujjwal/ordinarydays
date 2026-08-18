@@ -884,7 +884,14 @@ describe('delete', () => {
 
     await repo.deleteActivity(ALICE, subject.activityId);
 
-    expect(await repo.getActivityPartition(subject.activityId)).toHaveLength(0);
+    /**
+     * Everything the activity was is gone; the tombstone that replaces it is not part of it
+     * (P2-49). Naming the survivor rather than relaxing the count keeps this test able to
+     * catch a genuine leak.
+     */
+    const remaining = await repo.getActivityPartition(subject.activityId);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ sk: 'TOMBSTONE', entity: 'ActivityTombstone' });
     expect((await repo.listByBucket(ALICE, 'N')).items).toHaveLength(0);
   });
 

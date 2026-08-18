@@ -1,3 +1,4 @@
+import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { authedHeaders, withUser } from '../helpers/auth.js';
 import { useTestTable } from './harness.js';
@@ -1135,7 +1136,16 @@ describe('deleting an activity', () => {
     const res = await remove(subject.activityId);
 
     expect(res.status).toBe(200);
-    expect(await repo.getActivityPartition(subject.activityId)).toHaveLength(0);
+    /**
+     * **The tombstone is the one row that survives** (P2-49). Everything the activity was —
+     * META, its reminders, its pointers — is gone; what remains is a marker that this id was
+     * used and deleted, so a create replayed from an offline queue cannot resurrect it. This
+     * assertion is deliberately exact rather than relaxed to `toHaveLength(1)`: a second
+     * surviving row would be a leak, and naming the survivor is what makes that visible.
+     */
+    const remaining = await repo.getActivityPartition(subject.activityId);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ sk: 'TOMBSTONE', entity: 'ActivityTombstone' });
   });
 
   it('removes the index entry, so it leaves no feed', async () => {
@@ -1536,5 +1546,139 @@ describe('tenant isolation', () => {
 
     expect(await indexRows(DEV)).toHaveLength(1);
     expect(await indexRows(OTHER)).toHaveLength(1);
+  });
+});
+
+/**
+ * Durable creation against a real table (P2-49).
+ *
+ * The unit suite proves the transaction is composed with a conditional put and a tombstone
+ * check. What only a database can prove is that those conditions actually fire: that a second
+ * create on the same id is refused rather than overwriting, and that a tombstone written by a
+ * delete really blocks a create replayed days later.
+ */
+describe('client-minted ids and deletion tombstones', () => {
+  const CLIENT_ID = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+  const clientTask = (activityId: string, title = 'Written offline') => ({
+    ...TASK,
+    title,
+    activityId,
+  });
+
+  const del = (activityId: string) =>
+    withUser().fetch(
+      new Request(`http://localhost/v1/activities/${activityId}`, {
+        method: 'DELETE',
+        headers: authedHeaders(),
+      }),
+    );
+
+  const get = (activityId: string) =>
+    withUser().fetch(
+      new Request(`http://localhost/v1/activities/${activityId}`, {
+        headers: authedHeaders(),
+      }),
+    );
+
+  it('stores the client’s id verbatim and derives everything else', async () => {
+    const res = await post(clientTask(CLIENT_ID));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.activityId).toBe(CLIENT_ID);
+    expect(body.data.ownerId).toBe(DEV);
+    expect(await repo.getActivityMeta(CLIENT_ID)).toMatchObject({
+      activityId: CLIENT_ID,
+      ownerId: DEV,
+    });
+  });
+
+  /**
+   * The lost-response replay, which is the case client-minted ids exist for.
+   *
+   * A create committed, its response never arrived, and the intent replayed later under a
+   * **fresh** `Idempotency-Key` — a day later the original receipt is long gone, so
+   * idempotency cannot answer and the conditional write is what stands between the user and a
+   * duplicate. The client's documented recovery then reads its own id and finds it there.
+   */
+  it('refuses a replayed create and leaves exactly one activity behind', async () => {
+    await post(clientTask(CLIENT_ID, 'The write that landed'));
+
+    // A different key, as a replay after the receipt window would carry.
+    const replay = await post(clientTask(CLIENT_ID, 'The replay'), {
+      key: crypto.randomUUID(),
+    });
+    const body = await replay.json();
+
+    expect(replay.status).toBe(409);
+    expect(body.error.code).toBe('conflict');
+    // The generic answer names neither owner nor entity (`data-model.md` §8).
+    expect(JSON.stringify(body)).not.toContain(DEV);
+
+    // One activity, and it is the one that landed first — the replay overwrote nothing.
+    expect(await repo.getActivityMeta(CLIENT_ID)).toMatchObject({
+      title: 'The write that landed',
+    });
+    expect(await indexRows(DEV)).toHaveLength(1);
+
+    // And the recovery read the client would now perform succeeds on identity + ownership.
+    const recovered = await get(CLIENT_ID);
+    expect(recovered.status).toBe(200);
+    expect((await recovered.json()).data.activity.activityId).toBe(CLIENT_ID);
+  });
+
+  /**
+   * Deleted on another device, then the offline queue replays the create.
+   *
+   * Without the tombstone this is a resurrection: `META` is gone, so `attribute_not_exists`
+   * on its own would happily let the create through and the user would watch something they
+   * deleted come back.
+   */
+  it('does not resurrect a deleted activity when its create replays', async () => {
+    await post(clientTask(CLIENT_ID));
+    expect((await del(CLIENT_ID)).status).toBe(200);
+
+    const replay = await post(clientTask(CLIENT_ID), { key: crypto.randomUUID() });
+
+    expect(replay.status).toBe(409);
+    // Surfaced, never resurrected: no META came back and no index row was rebuilt.
+    expect(await repo.getActivityMeta(CLIENT_ID)).toBeUndefined();
+    expect(await indexRows(DEV)).toHaveLength(0);
+  });
+
+  it('keeps a tombstoned id at 404, so recovery surfaces rather than acknowledges', async () => {
+    await post(clientTask(CLIENT_ID));
+    await del(CLIENT_ID);
+
+    /**
+     * The `404` the client's collision recovery reads. It cannot distinguish this from a
+     * foreign id, which is why that path parks the intent for the user rather than re-minting
+     * — a fresh id would walk straight past this tombstone.
+     */
+    expect((await get(CLIENT_ID)).status).toBe(404);
+  });
+
+  it('writes a tombstone that outlives the automatic replay window', async () => {
+    await post(clientTask(CLIENT_ID));
+    const before = Date.now();
+    await del(CLIENT_ID);
+
+    const stored = await base.queryAll<Record<string, unknown>>({
+      pk: keys.activityTombstone(CLIENT_ID).pk,
+    });
+    const tombstone = stored.find((row) => row.sk === 'TOMBSTONE');
+
+    expect(tombstone).toMatchObject({ ownerId: DEV, entity: 'ActivityTombstone' });
+    /**
+     * The property the two windows share: a tombstone written at `deletedAt` expires at
+     * `deletedAt + N`, and an intent created before that delete stops replaying at
+     * `intentCreatedAt + N`. Since `intentCreatedAt ≤ deletedAt` for any intent that could
+     * target this id, the tombstone always outlives it. Asserted against the same imported
+     * constant, so tuning one without the other fails here.
+     */
+    const ttl = Number(tombstone?.ttl);
+    expect(ttl).toBeGreaterThanOrEqual(
+      Math.floor(before / 1000) + MAX_AUTOMATIC_INTENT_AGE_DAYS * 24 * 60 * 60,
+    );
   });
 });

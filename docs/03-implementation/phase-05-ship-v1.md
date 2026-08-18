@@ -931,6 +931,19 @@ before their Activities are removed. A cross-Activity Settlement spanning both h
 treated as retained, never shortened. No destructive partition delete runs until this
 cleanup succeeds, so a retained Expense cannot point to missing audit history.
 
+> **Deletion tombstones — handed over by P2-49 (2026-08-17).** Phase 2.6 writes an
+> `ACT#<activityId>` / `TOMBSTONE` row in every activity delete, so a create replayed from an
+> offline queue cannot resurrect a deleted activity
+> ([`../02-architecture/data-model.md#4-entities`](../02-architecture/data-model.md) §4, §8).
+> **The purge must remove them with everything else.** They are the one row in an activity's
+> partition that outlives `META`, so a cascade written against "delete the partition" catches
+> them and a cascade written against "delete what `META` pointed at" does not. Their `ttl`
+> makes this a tidiness obligation rather than a correctness one — a missed tombstone expires
+> on its own — but a purge that leaves rows behind in a partition it claims to have emptied is
+> the kind of gap the checkpointed traversal above exists to close. P2-49 could not do this
+> itself: `DELETE /v1/me` does not exist in Phase 2 and is deliberately absent rather than
+> stubbed.
+
 The Phase 5 purge already follows every owner-role `USER#/LIST#` pointer and runs the ordinary
 List cascade, because canonical List `META` and items live outside the user partition. Phase
 6 extends that same checkpointed traversal: owned shared Lists lose every member pointer,

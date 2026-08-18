@@ -375,6 +375,19 @@ export async function seedLocal(options: { reset?: boolean } = {}): Promise<Seed
 
   const seeded = activities();
   for (const activity of seeded) {
+    /**
+     * **Skip what is already there.** This script promises to be safe to run any number of
+     * times, and it used to keep that promise by accident: `createActivity` wrote
+     * unconditionally, so a second run overwrote each fixture with an identical copy.
+     *
+     * P2-49 made that write conditional on `attribute_not_exists(pk)` — the guard that stops
+     * a replayed client-minted create from overwriting somebody's activity — so the second
+     * run now collides on every fixture id. Checking first restores idempotency without
+     * softening the guard, which is the half that matters. Deleting and recreating would be
+     * worse still: a delete leaves a tombstone, and the tombstone would then block the
+     * recreate.
+     */
+    if ((await rows.getActivityMeta(activity.activityId)) !== undefined) continue;
     await rows.createActivity(DEV_USER, activity);
   }
 
