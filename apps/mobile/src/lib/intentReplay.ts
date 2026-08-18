@@ -74,6 +74,80 @@ interface ReplayRequest {
   promise: Promise<ReplayResult>;
 }
 
+export type ReplayTrigger = 'enqueue' | 'transient' | 'foreground' | 'reconnect';
+
+interface RegisteredReplayTarget {
+  readonly client: MutationRunner;
+  readonly log: IntentLog;
+  readonly http: HttpClient;
+  retryIndex: number;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+const REPLAY_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
+let registeredReplay: RegisteredReplayTarget | undefined;
+
+export function registerIntentReplayTarget(
+  client: MutationRunner,
+  log: IntentLog,
+  http: HttpClient = apiClient,
+): () => void {
+  const target: RegisteredReplayTarget = {
+    client,
+    log,
+    http,
+    retryIndex: 0,
+    timer: undefined,
+  };
+  registeredReplay = target;
+  return () => {
+    if (target.timer !== undefined) clearTimeout(target.timer);
+    if (registeredReplay === target) registeredReplay = undefined;
+  };
+}
+
+function scheduleRegisteredRetry(target: RegisteredReplayTarget): void {
+  if (target.timer !== undefined) return;
+  const delay = REPLAY_BACKOFF_MS[target.retryIndex];
+  if (delay === undefined) return;
+  target.retryIndex += 1;
+  target.timer = setTimeout(() => {
+    target.timer = undefined;
+    void runRegisteredReplay(target);
+  }, delay);
+}
+
+async function runRegisteredReplay(
+  target: RegisteredReplayTarget,
+): Promise<ReplayResult> {
+  const result = await replayIntents(target.client, target.log, target.http);
+  if (registeredReplay !== target) return result;
+  if (result.requeued > 0 && target.log.replayable().length > 0) {
+    scheduleRegisteredRetry(target);
+  } else if (result.requeued === 0) {
+    target.retryIndex = 0;
+  }
+  return result;
+}
+
+/** Level-triggered request into the one registered session replay owner. */
+export function requestActiveIntentReplay(
+  trigger: ReplayTrigger,
+): Promise<ReplayResult> | undefined {
+  const target = registeredReplay;
+  if (target === undefined) return undefined;
+  if (trigger === 'transient') {
+    scheduleRegisteredRetry(target);
+    return undefined;
+  }
+  if (target.timer !== undefined) {
+    clearTimeout(target.timer);
+    target.timer = undefined;
+  }
+  target.retryIndex = 0;
+  return runRegisteredReplay(target);
+}
+
 /**
  * One process-wide replay owner.
  *

@@ -8,7 +8,11 @@ import {
 } from '@/lib/agendaCache';
 import { isCoordinatingIntent } from '@/lib/durableAction';
 import { IntentLogFullError } from '@/lib/intentLog';
-import { getActiveIntentLog, replayingIntent } from '@/lib/intentReplay';
+import {
+  getActiveIntentLog,
+  replayingIntent,
+  requestActiveIntentReplay,
+} from '@/lib/intentReplay';
 import {
   changesActivityLists,
   refreshActivityDetails,
@@ -78,7 +82,9 @@ function settleIntent(
    * makes the permanent-versus-transient decision on the retry, where a real status code is
    * available to make it with.
    */
-  void log.requeue(intentId, outcome.message);
+  void log.requeue(intentId, outcome.message).then(() => {
+    requestActiveIntentReplay('transient');
+  });
 }
 
 /**

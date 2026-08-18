@@ -4,7 +4,7 @@ import type {
   RejectedIntentAttention,
   UndoLogResult,
 } from '@/lib/intentLog';
-import { getActiveIntentLog } from '@/lib/intentReplay';
+import { getActiveIntentLog, requestActiveIntentReplay } from '@/lib/intentReplay';
 
 export type DurableActionStatus =
   | 'refused'
@@ -187,6 +187,7 @@ async function dispatchDurable(
     if (attention === undefined && log !== undefined) {
       await log.requeue(intent.intentId, lastError);
       action.update({ intentId: intent.intentId, status: 'queued', lastError });
+      requestActiveIntentReplay('transient');
     } else if (attention !== undefined) {
       const { kind: _kind, ...details } = attention;
       await log?.fail(intent.intentId, lastError, details);

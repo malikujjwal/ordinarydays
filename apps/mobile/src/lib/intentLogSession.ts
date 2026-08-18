@@ -1,5 +1,5 @@
 import { onlineManager, type QueryClient } from '@tanstack/react-query';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import {
   clearRecurrenceEditProtection,
   isRecurrenceEditMutation,
@@ -9,7 +9,11 @@ import {
 } from '@/lib/agendaCache';
 import { httpClientConfig } from '@/lib/apiClient';
 import { IntentLog } from '@/lib/intentLog';
-import { replayIntents, setActiveIntentLog } from '@/lib/intentReplay';
+import {
+  registerIntentReplayTarget,
+  requestActiveIntentReplay,
+  setActiveIntentLog,
+} from '@/lib/intentReplay';
 import {
   importLegacyPausedMutations,
   retireImportedLegacyPausedMutations,
@@ -55,6 +59,7 @@ export async function startIntentLogSession(
   await importLegacyPausedMutations(log, platform);
   retireImportedLegacyPausedMutations(client, log);
   setActiveIntentLog(log);
+  const unregisterReplay = registerIntentReplayTarget(client, log);
 
   /**
    * Query-cache restoration happens before this session starts. Rebuild pending creates from
@@ -128,15 +133,49 @@ export async function startIntentLogSession(
    * has a log full of work and no connectivity transition coming to trigger it.
    */
   const unsubscribe = onlineManager.subscribe((online) => {
-    if (online) void replayIntents(client, log);
+    if (online) void requestActiveIntentReplay('reconnect');
   });
-  if (onlineManager.isOnline()) void replayIntents(client, log);
+  const appStateSubscription = AppState.addEventListener('change', (state) => {
+    if (state === 'active' && onlineManager.isOnline()) {
+      void requestActiveIntentReplay('foreground');
+    }
+  });
+
+  let queuedOnLastChange = new Set(
+    log
+      .snapshot()
+      .intents.filter((intent) => intent.status === 'queued' && intent.attempts === 0)
+      .map((intent) => intent.intentId),
+  );
+  let enqueueTimer: ReturnType<typeof setTimeout> | undefined;
+  const unsubscribeEnqueue = log.subscribe(() => {
+    const queuedNow = new Set(
+      log
+        .snapshot()
+        .intents.filter((intent) => intent.status === 'queued' && intent.attempts === 0)
+        .map((intent) => intent.intentId),
+    );
+    const appended = [...queuedNow].some((intentId) => !queuedOnLastChange.has(intentId));
+    queuedOnLastChange = queuedNow;
+    if (!appended || enqueueTimer !== undefined) return;
+    // Let the live mutation claim first. If it does, this level-triggered pass is a no-op;
+    // an imported/dependent enqueue remains queued and is drained.
+    enqueueTimer = setTimeout(() => {
+      enqueueTimer = undefined;
+      if (onlineManager.isOnline()) void requestActiveIntentReplay('enqueue');
+    }, 0);
+  });
+  if (onlineManager.isOnline()) void requestActiveIntentReplay('reconnect');
 
   return {
     log,
     stop: () => {
       unsubscribe();
+      unsubscribeEnqueue();
       unsubscribeProtection();
+      appStateSubscription.remove();
+      if (enqueueTimer !== undefined) clearTimeout(enqueueTimer);
+      unregisterReplay();
       /**
        * Sign-out **quarantines** (`auth.md` §3.4 step 6): the session forgets the log, every
        * byte stays on disk. Destroying unacknowledged writes here would lose work at the one

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const files = [
@@ -12,6 +13,31 @@ const files = [
 const sourceOf = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 
+const useMutationCalls = (source: string) => {
+  const parsed = ts.createSourceFile(
+    'mutation-surface.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const calls: ts.CallExpression[] = [];
+
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'useMutation'
+    ) {
+      calls.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(parsed);
+  return calls;
+};
+
 describe('offline mutation option guard', () => {
   it.each(files)('%s inherits the shared queue network/retry defaults', (relative) => {
     const source = sourceOf(relative);
@@ -21,9 +47,23 @@ describe('offline mutation option guard', () => {
 
     expect(mutationSurface).not.toMatch(/networkMode\s*:\s*['"]always['"]/);
     expect(mutationSurface).not.toMatch(/retry\s*:\s*false/);
-    expect(mutationSurface.match(/=\s*useMutation/g)?.length).toBe(
-      mutationSurface.match(/mutationKey\s*:/g)?.length,
-    );
+    const mutations = useMutationCalls(mutationSurface);
+    expect(mutations.length).toBeGreaterThan(0);
+    for (const mutation of mutations) {
+      const options = mutation.arguments[0];
+      expect(options && ts.isObjectLiteralExpression(options)).toBe(true);
+      expect(
+        options &&
+          ts.isObjectLiteralExpression(options) &&
+          options.properties.some(
+            (property) =>
+              ts.isPropertyAssignment(property) &&
+              ((ts.isIdentifier(property.name) && property.name.text === 'mutationKey') ||
+                (ts.isStringLiteral(property.name) &&
+                  property.name.text === 'mutationKey')),
+          ),
+      ).toBe(true);
+    }
   });
 
   /**
