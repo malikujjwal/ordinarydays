@@ -1,4 +1,7 @@
+import type { HttpClient } from '@od/shared/client';
 import type { QueryClient } from '@tanstack/react-query';
+import { apiClient } from '@/lib/apiClient';
+import { recoverFromCollision } from '@/lib/collisionRecovery';
 import type { Intent, IntentLog } from '@/lib/intentLog';
 
 /**
@@ -57,6 +60,27 @@ export interface ReplayResult {
   acknowledged: number;
   requeued: number;
   failed: number;
+  /** Collisions resolved by reading the client's own id, needing no user involvement. */
+  recovered: number;
+  /** Parked for the user: a collision whose recovery read came back `404`. */
+  parked: number;
+}
+
+/**
+ * A create whose id the server refused (P2-49).
+ *
+ * The only failure with a recovery path of its own, because it is the only one where the
+ * client already knows the entity's permanent id and can simply go and look.
+ */
+function isCreateCollision(intent: Intent, error: unknown): boolean {
+  if (intent.mutationKey[1] !== 'create') return false;
+  return (error as { status?: unknown } | undefined)?.status === 409;
+}
+
+function createdActivityId(intent: Intent): string | undefined {
+  const input = (intent.variables as { input?: { activityId?: unknown } } | undefined)
+    ?.input;
+  return typeof input?.activityId === 'string' ? input.activityId : undefined;
 }
 
 /**
@@ -91,9 +115,17 @@ function message(error: unknown): string {
 export async function replayIntents(
   client: MutationRunner,
   log: IntentLog,
+  http: HttpClient = apiClient,
 ): Promise<ReplayResult> {
   await log.refreshClockRule();
-  const result: ReplayResult = { attempted: 0, acknowledged: 0, requeued: 0, failed: 0 };
+  const result: ReplayResult = {
+    attempted: 0,
+    acknowledged: 0,
+    requeued: 0,
+    failed: 0,
+    recovered: 0,
+    parked: 0,
+  };
 
   for (const intent of log.replayable()) {
     /**
@@ -110,6 +142,33 @@ export async function replayIntents(
       await log.acknowledge(claimed.intentId);
       result.acknowledged += 1;
     } catch (error) {
+      const collidedId = isCreateCollision(claimed, error)
+        ? createdActivityId(claimed)
+        : undefined;
+      if (collidedId !== undefined) {
+        /**
+         * The documented recovery: read the client's **own** id. A `200` means the earlier
+         * create landed and only its response was lost, so this is a success wearing a
+         * conflict's clothes; a `404` needs the user, because a foreign collision and a
+         * tombstoned create-then-delete look identical and neither may be re-minted.
+         */
+        try {
+          const outcome = await recoverFromCollision(http, collidedId);
+          if (outcome.kind === 'acknowledged') {
+            await log.acknowledge(claimed.intentId);
+            result.acknowledged += 1;
+            result.recovered += 1;
+          } else {
+            await log.park(claimed.intentId, 'This never synced.');
+            result.parked += 1;
+          }
+        } catch {
+          // The recovery read itself failed: no answer, so conclude nothing and keep the write.
+          await log.requeue(claimed.intentId, message(error));
+          result.requeued += 1;
+        }
+        continue;
+      }
       if (isPermanent(error)) {
         await log.fail(claimed.intentId, message(error));
         result.failed += 1;

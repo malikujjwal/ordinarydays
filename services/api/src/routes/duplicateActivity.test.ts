@@ -223,11 +223,13 @@ describe('what the copy deliberately drops', () => {
     const items = (ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0]?.input
       .TransactItems ?? []) as Array<{ Put?: { Item?: Record<string, unknown> } }>;
 
-    expect(items.map((entry) => entry.Put?.Item?.entity).sort()).toEqual([
-      'Activity',
-      'ActivityIndex',
-      'Idempotency',
-    ]);
+    // The `undefined` a ConditionCheck would contribute is filtered: it writes no item.
+    expect(
+      items
+        .map((entry) => entry.Put?.Item?.entity)
+        .filter((entity) => entity !== undefined)
+        .sort(),
+    ).toEqual(['Activity', 'ActivityIndex', 'Idempotency']);
   });
 
   /** No `parentActivityId`, so no `SUB#` pointer on somebody else's plan. */

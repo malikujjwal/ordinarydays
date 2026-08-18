@@ -1,3 +1,4 @@
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -151,8 +152,11 @@ describe('creating a task', () => {
     expect(
       transacted()
         .map((entry) => entry.Put?.Item?.entity)
+        .filter((entity) => entity !== undefined)
         .sort(),
     ).toEqual(['Activity', 'ActivityIndex', 'Idempotency']);
+    // Plus the tombstone guard, which is a ConditionCheck and so puts no item (P2-49).
+    expect(transacted().filter((entry) => 'ConditionCheck' in entry)).toHaveLength(1);
   });
 
   it('writes to the partition of whoever identity resolved', async () => {
@@ -396,7 +400,11 @@ describe('reminders at creation', () => {
     });
 
     expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(1);
-    expect(transacted()).toHaveLength(4);
+    // META, tombstone ConditionCheck, index, REM# and the idempotency receipt.
+    expect(transacted()).toHaveLength(5);
+    expect(
+      transacted().filter((entry) => entry.Put?.Item?.entity === 'Reminder'),
+    ).toHaveLength(1);
   });
 });
 
@@ -426,5 +434,98 @@ describe('the Idempotency-Key', () => {
 
     expect(res.status).toBe(400);
     expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+});
+
+/**
+ * Client-minted ids (P2-49, ADR-055).
+ *
+ * The offline half of creation: a device generates the permanent `act_` ULID before the
+ * request leaves it, so a queued create is identity-complete from birth. What is tested here
+ * is the boundary — that the id is accepted as identity and never as authority, and that a
+ * replay or a genuine collision cannot overwrite an existing row.
+ */
+describe('a client-minted activityId', () => {
+  const CLIENT_ID = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+  const task = { objectKind: 'task', type: 'task', title: 'Buy milk' } as const;
+
+  it('is used verbatim as the created activity’s id', async () => {
+    const res = await post(createApp(), { ...task, activityId: CLIENT_ID });
+    const body = (await res.json()) as { data: { activityId: string } };
+
+    expect(res.status).toBe(201);
+    expect(body.data.activityId).toBe(CLIENT_ID);
+    expect(metaItem()).toMatchObject({ pk: `ACT#${CLIENT_ID}`, sk: 'META' });
+  });
+
+  it('still derives ownership from the principal, never from the body', async () => {
+    const app = createApp({
+      identityProvider: { resolve: () => Promise.resolve('usr_someone_else') },
+    });
+    await post(app, { ...task, activityId: CLIENT_ID });
+
+    // An id says which entity. It never says whose.
+    expect(metaItem()).toMatchObject({ ownerId: 'usr_someone_else' });
+  });
+
+  it('writes conditionally, so a replay cannot overwrite an existing row', async () => {
+    await post(createApp(), { ...task, activityId: CLIENT_ID });
+
+    const meta = transacted().find((entry) => entry.Put?.Item?.entity === 'Activity') as
+      | { Put?: { ConditionExpression?: string } }
+      | undefined;
+    expect(meta?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
+  });
+
+  it('condition-checks the tombstone, so a replay cannot resurrect a deletion', async () => {
+    await post(createApp(), { ...task, activityId: CLIENT_ID });
+
+    const items = transacted() as Array<{
+      ConditionCheck?: { Key?: Record<string, unknown>; ConditionExpression?: string };
+    }>;
+    expect(items.find((entry) => entry.ConditionCheck !== undefined)).toMatchObject({
+      ConditionCheck: {
+        Key: { pk: `ACT#${CLIENT_ID}`, sk: 'TOMBSTONE' },
+        ConditionExpression: 'attribute_not_exists(pk)',
+      },
+    });
+  });
+
+  it.each([
+    ['a bare ULID', '01J8XKQ2M4N5P6R7S8T9V0W1X2'],
+    ['a foreign prefix', 'rem_01J8XKQ2M4N5P6R7S8T9V0W1X2'],
+    ['a short body', 'act_01J8XKQ2M4N5P6R7S8T9V0W1X'],
+    ['a lowercase body', 'act_01j8xkq2m4n5p6r7s8t9v0w1x2'],
+  ])('rejects %s with validation_failed', async (_why, activityId) => {
+    const res = await post(createApp(), { ...task, activityId });
+    const body = (await res.json()) as { error: { code: string } };
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe('validation_failed');
+  });
+
+  it('answers a taken id generically, naming no owner and no entity', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+        $metadata: {},
+      }),
+    );
+
+    const res = await post(createApp(), { ...task, activityId: CLIENT_ID });
+    const body = (await res.json()) as { error: { code: string; message: string } };
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe('conflict');
+    /**
+     * The residual existence signal in success-versus-failure is accepted and bounded in
+     * `data-model.md` §8. What the body must not add to it is *whose* id it is or *what*
+     * lives there — including whether it was taken or deleted, which the client does not
+     * need: its recovery is to read its own id either way.
+     */
+    expect(JSON.stringify(body)).not.toContain('usr_');
+    expect(body.error.message.toLowerCase()).not.toContain('deleted');
+    expect(body.error.message.toLowerCase()).not.toContain('tombstone');
   });
 });

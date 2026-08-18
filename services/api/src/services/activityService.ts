@@ -38,6 +38,7 @@ import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import type { Logger } from '../lib/logger.js';
 import {
+  ActivityIdUnavailableError,
   deleteActivity as deleteActivityRows,
   getActivityMeta,
   getActivityPartition,
@@ -300,7 +301,15 @@ export async function createActivity(
   const reminderInputs = reminderInputsForSchedule(schedule).parse(input.reminders ?? []);
 
   const activity: Activity = {
-    activityId: newActivityId(),
+    /**
+     * The client's id when it minted one, ours otherwise (Phase 2.6, ADR-055).
+     *
+     * The schema has already validated prefix and encoding, so nothing here trusts the shape.
+     * What matters is what is **not** taken from the caller on the next two lines: ownership
+     * comes from the authenticated principal and status from the schedule, exactly as before.
+     * An id says which entity this is and never whose it is.
+     */
+    activityId: input.activityId ?? newActivityId(),
     ownerId: userId,
     status: deriveStatus(input.schedule),
     objectKind: input.objectKind,
@@ -346,15 +355,34 @@ export async function createActivity(
   }));
 
   const result = { activity, reminders };
-  await putActivity(userId, activity, {
-    reminders: reminders.map((row) => ({
-      reminderId: row.reminderId,
-      offsetMinutes: row.offsetMinutes,
-    })),
-    ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(result) }),
-  });
+  try {
+    await putActivity(userId, activity, {
+      reminders: reminders.map((row) => ({
+        reminderId: row.reminderId,
+        offsetMinutes: row.offsetMinutes,
+      })),
+      ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(result) }),
+    });
+  } catch (error) {
+    if (error instanceof ActivityIdUnavailableError) throw idUnavailable();
+    throw error;
+  }
 
   return result;
+}
+
+/**
+ * The answer when a client-minted id is already taken or tombstoned (Phase 2.6).
+ *
+ * **Deliberately says nothing about the id's fate.** No owner, no entity, no distinction
+ * between "exists" and "was deleted" — `data-model.md` §8 accepts the residual existence
+ * signal in success-versus-failure and bounds it, rather than pretending copy can hide it.
+ * The client's recovery is documented and does not branch on this text: it reads its own id.
+ */
+const ID_UNAVAILABLE = 'That id is already in use. Try again.';
+
+function idUnavailable(): AppError {
+  return new AppError('conflict', ID_UNAVAILABLE);
 }
 
 /** The stale-edit answer, and the one place its copy lives. */
@@ -1164,7 +1192,7 @@ export async function removeActivity(
   await releaseChildren(childIdsOf(partition), now);
   // The repository removes partition children and index pointers next, then META last. That
   // leaves this access seam present until every retryable cleanup step has succeeded.
-  await deleteActivityRows(userId, activityId, { partition });
+  await deleteActivityRows(userId, activityId, { partition, now });
 
   return activityId;
 }

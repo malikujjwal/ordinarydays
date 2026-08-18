@@ -44,6 +44,24 @@ export const activityMeta = (activityId: string) => ({
   sk: META,
 });
 
+/**
+ * The deletion tombstone (`data-model.md` §4, Phase 2.6).
+ *
+ * Written in the delete transaction and condition-checked by every client-minted create, so a
+ * create replayed from an offline queue cannot resurrect something deleted on another device.
+ * It lives in the deleted activity's own partition, which is what lets the create check it
+ * and the `META` put in one transaction — a check in another partition could not be atomic
+ * with the write it is guarding.
+ *
+ * Carries a `ttl` of `deletedAt + MAX_AUTOMATIC_INTENT_AGE_DAYS`, the same constant that
+ * bounds automatic replay, so the tombstone always outlives any intent that could replay
+ * against it.
+ */
+export const activityTombstone = (activityId: string) => ({
+  pk: activityPk(activityId),
+  sk: 'TOMBSTONE',
+});
+
 /** Every item under one activity — the plan-detail screen's single `Query` (pattern 4). */
 export const activityPartition = (activityId: string) => ({ pk: activityPk(activityId) });
 

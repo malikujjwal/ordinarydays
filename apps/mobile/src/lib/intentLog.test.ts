@@ -1,4 +1,5 @@
 import { MAX_AUTOMATIC_INTENT_AGE_DAYS, MAX_OFFLINE_MUTATIONS } from '@od/shared';
+import { ApiError } from '@od/shared/client';
 import { describe, expect, it, vi } from 'vitest';
 import {
   INTENT_LOG_SCHEMA_VERSION,
@@ -442,6 +443,71 @@ describe('the durable intent log', () => {
     // One intent in, one acknowledged out. A queue that grew as it drained never drains.
     expect(log.pending()).toHaveLength(0);
     setActiveIntentLog(undefined);
+  });
+
+  /**
+   * A create whose response was lost, replayed later (P2-49).
+   *
+   * The server already has the row, so the conditional write refuses the id and the replay
+   * sees a `409`. Recovery reads the client's own id and finds it — a success wearing a
+   * conflict's clothes, and crucially **not** a duplicate.
+   */
+  it('acknowledges a collision whose own id reads back, with no duplicate', async () => {
+    const storage = fakeStorage();
+    const log = new IntentLog(USER, storage);
+    await log.hydrate();
+    await log.append({
+      intentId: 'lost-response',
+      mutationKey: ['activity', 'create'],
+      variables: { input: { activityId: ACTIVITY, title: 'Buy milk' } },
+      entityId: ACTIVITY,
+    });
+
+    const runner = fakeRunner(async () => {
+      throw Object.assign(new Error('That id is already in use.'), { status: 409 });
+    });
+    const http = {
+      request: vi.fn(async () => ({ data: { activity: { activityId: ACTIVITY } } })),
+    } as unknown as Parameters<typeof replayIntents>[2];
+
+    const result = await replayIntents(runner, log, http);
+
+    expect(result).toMatchObject({ acknowledged: 1, recovered: 1, parked: 0 });
+    expect(log.pending()).toHaveLength(0);
+    // Exactly one create attempt and one recovery read — never a second create.
+    expect(runner.dispatched).toHaveLength(1);
+  });
+
+  it('parks a collision whose id is gone, and never re-mints it', async () => {
+    const storage = fakeStorage();
+    const log = new IntentLog(USER, storage);
+    await log.hydrate();
+    await log.append({
+      intentId: 'tombstoned',
+      mutationKey: ['activity', 'create'],
+      variables: { input: { activityId: ACTIVITY, title: 'Buy milk' } },
+      entityId: ACTIVITY,
+    });
+
+    const runner = fakeRunner(async () => {
+      throw Object.assign(new Error('That id is already in use.'), { status: 409 });
+    });
+    const http = {
+      request: vi.fn(async () => {
+        throw new ApiError('not_found', 'Not found', 404, 'req_1');
+      }),
+    } as unknown as Parameters<typeof replayIntents>[2];
+
+    const result = await replayIntents(runner, log, http);
+
+    /**
+     * Deleted on another device, or a foreign id — indistinguishable, and both need the user.
+     * An automatic re-mint here is exactly how a tombstone gets bypassed and a deletion comes
+     * back from the dead.
+     */
+    expect(result).toMatchObject({ parked: 1, acknowledged: 0 });
+    expect(log.pending()[0]?.status).toBe('needs_confirmation');
+    expect(log.replayable()).toHaveLength(0);
   });
 
   it('returns a transient failure to queued and keeps a permanent one for the user', async () => {

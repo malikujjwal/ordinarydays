@@ -4,6 +4,7 @@ import {
   QueryCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
 import type { Activity } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -100,11 +101,9 @@ describe('delete ordering', () => {
     });
 
     const calls = ddbMock.commandCalls(BatchWriteCommand);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     const firstRequests = Object.values(calls[0]?.args[0]?.input.RequestItems ?? {})[0];
-    const lastRequests = Object.values(calls[1]?.args[0]?.input.RequestItems ?? {})[0];
     const firstKeys = firstRequests?.map((request) => request.DeleteRequest?.Key);
-    const lastKeys = lastRequests?.map((request) => request.DeleteRequest?.Key);
 
     expect(firstKeys).toEqual(
       expect.arrayContaining([
@@ -114,13 +113,45 @@ describe('delete ordering', () => {
       ]),
     );
     expect(firstKeys).not.toContainEqual({ pk: `ACT#${ACT}`, sk: 'META' });
-    expect(lastKeys).toEqual([{ pk: `ACT#${ACT}`, sk: 'META' }]);
+
+    /**
+     * META's delete moved from a second batch into a transaction with the tombstone's put
+     * (P2-49). The ordering property is unchanged — children and pointers still go first, so
+     * an interrupted delete stays authorisable — but META's removal and the tombstone's
+     * arrival are now atomic, leaving no window in which a replayed create finds neither.
+     */
+    const verbsSent = verbs();
+    expect(verbsSent).toEqual(['Delete', 'Put']);
+    expect(sentItems()[0]?.Delete?.Key).toEqual({ pk: `ACT#${ACT}`, sk: 'META' });
+  });
+
+  it('writes a tombstone whose TTL is bounded by the shared replay window', async () => {
+    const deletedAt = '2026-08-17T10:00:00.000Z';
+    await deleteActivity(ALICE, ACT, { partition: [], now: deletedAt });
+
+    /**
+     * The **same** constant that bounds the client's automatic replay, imported rather than
+     * restated, so a tombstone always outlives every intent still eligible to replay against
+     * it. DynamoDB's lazy TTL deletion is slack on top, never the margin.
+     */
+    expect(sentItems()[1]?.Put?.Item).toMatchObject({
+      pk: `ACT#${ACT}`,
+      sk: 'TOMBSTONE',
+      entity: 'ActivityTombstone',
+      ownerId: ALICE,
+      deletedAt,
+      ttl:
+        Math.floor(Date.parse(deletedAt) / 1000) +
+        MAX_AUTOMATIC_INTENT_AGE_DAYS * 24 * 60 * 60,
+    });
   });
 });
 
 const sentItems = () =>
-  (ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0]?.input.TransactItems ??
-    []) as Array<Record<string, { Item?: Record<string, unknown>; Key?: unknown }>>;
+  (ddbMock.commandCalls(TransactWriteCommand).at(-1)?.args[0]?.input.TransactItems ??
+    []) as Array<
+    Record<string, { Item?: Record<string, unknown>; Key?: Record<string, unknown> }>
+  >;
 
 const verbs = () => sentItems().map((entry) => Object.keys(entry)[0]);
 
@@ -348,15 +379,36 @@ describe('the index entry’s GSI1 keys', () => {
 });
 
 describe('create composes one transaction', () => {
-  it('writes META and the owner’s index entry', async () => {
+  it('writes META and the owner’s index entry, guarded against a taken id', async () => {
     await createActivity(ALICE, activity());
 
-    expect(verbs()).toEqual(['Put', 'Put']);
-    expect(sentItems()[0]?.Put?.Item).toMatchObject({
-      pk: `ACT#${ACT}`,
-      sk: 'META',
-      entity: 'Activity',
-      schemaVersion: 1,
+    // The `ConditionCheck` is the tombstone guard, between the two puts (Phase 2.6).
+    expect(verbs()).toEqual(['Put', 'ConditionCheck', 'Put']);
+    expect(sentItems()[0]?.Put).toMatchObject({
+      Item: {
+        pk: `ACT#${ACT}`,
+        sk: 'META',
+        entity: 'Activity',
+        schemaVersion: 1,
+      },
+      /**
+       * Unconditional before P2-49. A replayed client-minted create would have overwritten
+       * whatever already lived at that id with the replayer's body.
+       */
+      ConditionExpression: 'attribute_not_exists(pk)',
+    });
+  });
+
+  it('condition-checks the tombstone in the same transaction as the write', async () => {
+    await createActivity(ALICE, activity());
+
+    /**
+     * Same transaction, not a read before it: a delete landing between a separate check and
+     * the put would let a queued create resurrect a deleted activity.
+     */
+    expect(sentItems()[1]?.ConditionCheck).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: 'TOMBSTONE' },
+      ConditionExpression: 'attribute_not_exists(pk)',
     });
   });
 

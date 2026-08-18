@@ -102,9 +102,16 @@ const del = (app: ReturnType<typeof CreateApp>, id = PLAN) =>
 const asUser = (userId: string) =>
   createApp({ identityProvider: { resolve: () => Promise.resolve(userId) } });
 
-/** Every key handed to a batch delete, flattened across batches. */
-const deletedKeys = () =>
-  ddbMock
+/**
+ * Every key the delete removed, across **both** mechanisms.
+ *
+ * P2-49 moved META's delete out of a second batch and into a transaction with the tombstone's
+ * put, so a batch-only view would report META as never deleted. What these tests assert — that
+ * the cascade removes the whole partition — is unchanged; where the last write goes is not
+ * their subject.
+ */
+const deletedKeys = () => [
+  ...ddbMock
     .commandCalls(BatchWriteCommand)
     .flatMap((call) => Object.values(call.args[0].input.RequestItems ?? {}).flat())
     .map(
@@ -112,7 +119,37 @@ const deletedKeys = () =>
         (request as { DeleteRequest?: { Key?: Record<string, unknown> } }).DeleteRequest
           ?.Key,
     )
-    .filter((key): key is Record<string, unknown> => key !== undefined);
+    .filter((key): key is Record<string, unknown> => key !== undefined),
+  ...ddbMock
+    .commandCalls(TransactWriteCommand)
+    .flatMap((call) => call.args[0].input.TransactItems ?? [])
+    .map((entry) => (entry as { Delete?: { Key?: Record<string, unknown> } }).Delete?.Key)
+    .filter((key): key is Record<string, unknown> => key !== undefined),
+];
+
+/**
+ * Transactions that actually touch the child.
+ *
+ * These tests used to count **every** `TransactWriteCommand`, which worked only while the
+ * delete itself used none. P2-49 gives the delete one of its own — META's removal and the
+ * tombstone's put, atomically — so a bare count now conflates "a prep task was released"
+ * with "an activity was deleted". Naming the child is what the assertions always meant.
+ */
+const childReleaseTransactions = () =>
+  ddbMock.commandCalls(TransactWriteCommand).filter((call) =>
+    (call.args[0].input.TransactItems ?? []).some((entry) => {
+      const item = entry as {
+        Put?: { Item?: Record<string, unknown> };
+        Update?: { Key?: Record<string, unknown> };
+        Delete?: { Key?: Record<string, unknown> };
+      };
+      const touched = item.Put?.Item ?? item.Update?.Key ?? item.Delete?.Key ?? undefined;
+      return (
+        touched !== undefined &&
+        (String(touched.pk) === `ACT#${CHILD}` || touched.activityId === CHILD)
+      );
+    }),
+  );
 
 describe('deleting an activity', () => {
   it('returns 200 naming the id that is gone', async () => {
@@ -228,7 +265,7 @@ describe('the prep tasks', () => {
 
     await del(createApp());
 
-    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(1);
+    expect(childReleaseTransactions()).toHaveLength(1);
     expect(ddbMock.commandCalls(BatchWriteCommand).length).toBeGreaterThan(0);
   });
 
@@ -239,7 +276,7 @@ describe('the prep tasks', () => {
     const res = await del(createApp());
 
     expect(res.status).toBe(200);
-    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    expect(childReleaseTransactions()).toHaveLength(0);
   });
 
   /** A child re-parented since the pointer was written is left alone. */
@@ -248,7 +285,7 @@ describe('the prep tasks', () => {
 
     await del(createApp());
 
-    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    expect(childReleaseTransactions()).toHaveLength(0);
   });
 });
 

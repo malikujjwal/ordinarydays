@@ -1,4 +1,4 @@
-import { assertNever } from '@od/shared';
+import { assertNever, MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
 import { deriveGsi1Bucket } from '@od/shared/activity';
 import { activity as activitySchema } from '@od/shared/schemas';
 import { TABLE } from '@od/shared/table';
@@ -17,6 +17,7 @@ import {
   activityIndex,
   activityMeta,
   activityPartition,
+  activityTombstone,
   childPointer,
   childPointerPrefix,
   gsi1Anytime,
@@ -84,7 +85,24 @@ const ENTITY = {
   index: 'ActivityIndex',
   reminder: 'Reminder',
   childPointer: 'ChildPointer',
+  /** The deletion marker a client-minted create is condition-checked against (Phase 2.6). */
+  tombstone: 'ActivityTombstone',
 } as const;
+
+/**
+ * The id a create asked for is not available — taken, or tombstoned.
+ *
+ * **One error for both**, deliberately. Telling the two apart would report the fate of an id
+ * the caller may not own, and the client's recovery does not branch on it: it reads its own
+ * id and the answer decides (`data-model.md` §8). The residual existence signal in
+ * success-versus-failure is accepted and bounded there rather than papered over here.
+ */
+export class ActivityIdUnavailableError extends Error {
+  constructor() {
+    super('That id is not available.');
+    this.name = 'ActivityIdUnavailableError';
+  }
+}
 
 const SCHEMA_VERSION = 1;
 const storedItemKey = z.object({ pk: z.string(), sk: z.string() });
@@ -297,6 +315,30 @@ export async function createActivity(
           ...activityMeta(activity.activityId),
           ...activity,
         }),
+        /**
+         * **Conditional, always** (Phase 2.6, ADR-055).
+         *
+         * A server-minted ULID never collides, so this costs a server-minted create nothing.
+         * A **client-minted** one can arrive twice — a replay whose first response was lost —
+         * or name an id that already exists, and an unconditional `Put` would silently
+         * overwrite somebody's activity with the replayer's body. The condition turns both
+         * into a failure the client recovers from by reading its own id.
+         */
+        ConditionExpression: 'attribute_not_exists(pk)',
+      },
+    },
+    /**
+     * The tombstone check, in the same transaction as the write it guards.
+     *
+     * A create replayed after the entity was deleted on another device must not resurrect
+     * it. Checking separately before the put would leave a window where the delete lands in
+     * between; a `ConditionCheck` makes "the id was never deleted" part of the same atomic
+     * unit as "the id is free".
+     */
+    {
+      ConditionCheck: {
+        Key: activityTombstone(activity.activityId),
+        ConditionExpression: 'attribute_not_exists(pk)',
       },
     },
     { Put: { Item: indexItem(userId, activity, options.taskSubtitle) } },
@@ -344,10 +386,19 @@ export async function createActivity(
   }
   await transactWrite(builder.build(), {
     operation: 'createActivity',
-    onConditionFailed: (index) =>
-      options.idempotencyReceipt !== undefined && index === receiptIndex
+    /**
+     * Items 0 and 1 are the `META` put and the tombstone check, so either failing means the
+     * id is unavailable. **Both map to the same generic error**: distinguishing "taken" from
+     * "deleted" would tell a caller which of the two happened to an id it may not own, and
+     * the client's recovery is identical either way — read its own id and let the answer
+     * decide (`data-model.md` §8).
+     */
+    onConditionFailed: (index) => {
+      if (index === 0 || index === 1) return new ActivityIdUnavailableError();
+      return options.idempotencyReceipt !== undefined && index === receiptIndex
         ? new IdempotencyRaceError()
-        : undefined,
+        : undefined;
+    },
   });
 }
 
@@ -747,6 +798,8 @@ export interface DeleteOptions {
    * access check, the cascade's read, and this one re-reading the same rows.
    */
   readonly partition?: readonly StoredItem[];
+  /** The delete instant, so the tombstone's `deletedAt` and `ttl` are testable. */
+  readonly now?: string;
 }
 
 export async function deleteActivity(
@@ -769,7 +822,46 @@ export async function deleteActivity(
   // META is the authority seam. Everything else goes first so an interrupted delete can
   // still authenticate a retry and finish cleanup; once META is gone, cleanup is complete.
   await deleteAll(keys);
-  await deleteAll([metaKey]);
+
+  /**
+   * META's removal and the tombstone's arrival are **one transaction** (Phase 2.6).
+   *
+   * Between the two there must be no instant where the id is neither alive nor tombstoned: a
+   * queued create replayed in that window would find no `META` to collide with and no
+   * tombstone to stop it, and would resurrect an entity the user deleted. Batching them
+   * separately would leave exactly that window open.
+   */
+  const deletedAt = options.now ?? new Date().toISOString();
+  await transactWrite(
+    new TransactionBuilder('deleteActivity', 0)
+      .add(
+        { Delete: { Key: metaKey } },
+        {
+          Put: {
+            Item: {
+              ...activityTombstone(activityId),
+              entity: ENTITY.tombstone,
+              activityId,
+              ownerId: userId,
+              deletedAt,
+              /**
+               * Seconds, as DynamoDB TTL requires. Bounded by the **same** constant that
+               * bounds the client's automatic replay, imported rather than restated, so the
+               * two windows cannot drift apart: a tombstone is guaranteed to outlive every
+               * intent still eligible to replay against it. DynamoDB deletes expired items
+               * lazily, which is extra slack and never part of the margin.
+               */
+              ttl:
+                Math.floor(Date.parse(deletedAt) / 1000) +
+                MAX_AUTOMATIC_INTENT_AGE_DAYS * 24 * 60 * 60,
+              schemaVersion: SCHEMA_VERSION,
+            },
+          },
+        },
+      )
+      .build(),
+    { operation: 'deleteActivity' },
+  );
 }
 
 export interface ListOptions {

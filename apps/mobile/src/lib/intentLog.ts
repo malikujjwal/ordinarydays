@@ -440,6 +440,22 @@ export class IntentLog {
     }));
   }
 
+  /**
+   * Parks an intent for the user to resolve (P2-49).
+   *
+   * Reached when a create collided and the recovery read came back `404` — a foreign id, or
+   * this one tombstoned by a delete elsewhere. Indistinguishable by design, and neither may
+   * be retried automatically: a fresh id would walk past the tombstone and resurrect the
+   * deletion. Only an explicit retry or discard moves it from here.
+   */
+  park(intentId: string, reason: string): Promise<Intent | undefined> {
+    return this.transition(intentId, (intent) => ({
+      ...intent,
+      status: 'needs_confirmation',
+      lastError: reason,
+    }));
+  }
+
   /** Permanent rejection. Retained until the user dismisses it — it holds their words. */
   fail(intentId: string, error: string): Promise<Intent | undefined> {
     return this.transition(intentId, (intent) => ({

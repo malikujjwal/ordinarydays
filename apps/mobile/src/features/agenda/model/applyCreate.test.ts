@@ -1,6 +1,6 @@
 import type { Activity, AgendaData, AgendaDay, AgendaItem } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
-import { applyCreate } from './applyCreate';
+import { applyCreate, applyPendingCreate } from './applyCreate';
 
 const existing: AgendaItem = {
   activityId: 'act_EXISTING',
@@ -110,5 +110,81 @@ describe('applyCreate', () => {
     });
 
     expect(titles(next, '2026-08-11', 'earlier')).toEqual(['Fresh task']);
+  });
+});
+
+/**
+ * The offline half (P2-49). A create the server has not seen yet still renders, under the
+ * permanent id the client minted for it.
+ */
+describe('applyPendingCreate', () => {
+  const CLIENT_ID = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+  const input = {
+    objectKind: 'task',
+    type: 'task',
+    title: 'Written on the subway',
+    schedule: { date: '2026-08-12', time: '09:00', timezone: 'America/New_York' },
+  } as const;
+
+  const pending = () =>
+    applyPendingCreate(cached, {
+      input,
+      activityId: CLIENT_ID,
+      mintedAt: '2026-08-11T15:00:00.000Z',
+      ...clock,
+    });
+
+  it('renders the row from local input, under its permanent id', () => {
+    const next = pending();
+
+    expect(titles(next, '2026-08-12', 'schedule')).toEqual(['Written on the subway']);
+    // The id it will keep for the rest of its life — no temporary id to rewrite later.
+    expect(next.days[1]?.schedule[0]?.activityId).toBe(CLIENT_ID);
+  });
+
+  it('projects only what the client can compute correctly', () => {
+    const row = pending().days[1]?.schedule[0];
+
+    // Everything here came from the user; no server state can contradict it.
+    expect(row).toMatchObject({
+      type: 'task',
+      time: '09:00',
+      status: 'scheduled',
+      hasCheckbox: true,
+      isRecurring: false,
+    });
+  });
+
+  it('lets the 201 replace it wholesale, since only the server owns the rest', () => {
+    const projected = pending();
+    const reconciled = applyCreate(projected, {
+      activity: activity({
+        activityId: CLIENT_ID,
+        title: 'Written on the subway',
+        schedule: { date: '2026-08-12', time: '09:00', timezone: 'America/New_York' },
+        ownerId: 'usr_real',
+        createdAt: '2026-08-11T15:00:04.000Z',
+      }),
+      reconcile: true,
+      ...clock,
+    });
+
+    const rows = reconciled.days[1]?.schedule ?? [];
+    // Reconciled in place: one row, still the client's id, now carrying server truth.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.activityId).toBe(CLIENT_ID);
+  });
+
+  it('does not double the row when the 201 arrives without reconcile', () => {
+    const projected = pending();
+    const again = applyCreate(projected, {
+      activity: activity({
+        activityId: CLIENT_ID,
+        schedule: { date: '2026-08-12', time: '09:00', timezone: 'America/New_York' },
+      }),
+      ...clock,
+    });
+
+    expect(again.days[1]?.schedule).toHaveLength(1);
   });
 });
