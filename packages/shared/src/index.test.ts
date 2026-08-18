@@ -5,6 +5,7 @@ import * as activity from '@od/shared/activity';
 import * as client from '@od/shared/client';
 import * as constants from '@od/shared/constants';
 import * as errors from '@od/shared/errors';
+import * as notifications from '@od/shared/notifications';
 import * as recurrence from '@od/shared/recurrence';
 import * as schemas from '@od/shared/schemas';
 import * as table from '@od/shared/table';
@@ -57,6 +58,8 @@ describe('exports map', () => {
     expect(recurrence.expandRecurrence).toBeDefined();
     expect(recurrence.addWallDays).toBeDefined();
     expect(recurrence.toUtcInstant).toBeDefined();
+    expect(notifications.reminderDelivery).toBeDefined();
+    expect(notifications.insideQuietHours).toBeDefined();
     expect(activity.deriveGsi1Bucket).toBeDefined();
     expect(activity.changeActivityKind).toBeDefined();
     expect(testFixtures.workedExampleDayResponse).toBeDefined();

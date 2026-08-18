@@ -532,7 +532,7 @@ rule and does not create direct participant rows.
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/v1/activities/:id/reminders` | **The caller's own reminders only.** Never anyone else's, on any plan, ever. |
-| `POST` | `/v1/activities/:id/reminders` | `{ offsetMinutes }`. Any participant, for themselves. Max 3 per user per activity → `422 reminder_limit_exceeded`. Creates a server-id row, so `Idempotency-Key` is required: replay returns the original 2xx response, while a new logical request at an existing offset returns the business-rule `409`. |
+| `POST` | `/v1/activities/:id/reminders` | `{ offsetMinutes, reminderId? }`. Any participant, for themselves. Max 3 per user per activity → `422 reminder_limit_exceeded`. `Idempotency-Key` is required: replay returns the original 2xx response, while a new logical request at an existing offset returns the business-rule `409`. **`reminderId` is optional and client-minted** (added 2026-08-17, P2-57), validated for prefix and encoding like `activityId` above and carrying no authority — `userId` is still the caller's and every derived field is still the server's. It exists so a reminder set offline can be armed locally against the id it will keep. Omitted, the server mints one exactly as before. |
 | `DELETE` | `/v1/activities/:id/reminders/:reminderId` | Only your own. |
 
 All three management routes require the Activity to have `schedule.date`; reminders on an

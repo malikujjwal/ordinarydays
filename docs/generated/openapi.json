@@ -2834,6 +2834,10 @@
       "ReminderInput": {
         "type": "object",
         "properties": {
+          "reminderId": {
+            "type": "string",
+            "pattern": "^rem_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
           "offsetMinutes": {
             "type": "integer",
             "minimum": -10080,

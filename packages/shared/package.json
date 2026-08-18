@@ -49,6 +49,11 @@
       "react-native": "./src/recurrence/index.ts",
       "default": "./dist/recurrence/index.js"
     },
+    "./notifications": {
+      "types": "./dist/notifications/index.d.ts",
+      "react-native": "./src/notifications/index.ts",
+      "default": "./dist/notifications/index.js"
+    },
     "./activity": {
       "types": "./dist/activity/index.d.ts",
       "react-native": "./src/activity/index.ts",

@@ -33,15 +33,25 @@ export const reminder = z
 /**
  * What a client may send when creating a reminder alongside an activity.
  *
- * **Only the offset.** `userId` is the caller's, taken from the identity seam and never from
- * the body — a body that could name a user would let one person set another's reminders.
- * `channel` has one value and is defaulted server-side rather than accepted.
+ * **The offset, and optionally the id.** `userId` is the caller's, taken from the identity
+ * seam and never from the body — a body that could name a user would let one person set
+ * another's reminders. `channel` has one value and is defaulted server-side rather than
+ * accepted.
+ *
+ * `reminderId` is the client-minted canonical id, exactly as `createActivityInput.activityId`
+ * is for `act_` (P2-49, ADR-055). A reminder set offline is identity-complete from birth, so
+ * the device can arm a local notification for it before any server has heard of it, and the
+ * eventual conditional create is idempotent on the id the device already used. Identity is
+ * client-mintable; **authority is not** — `userId`, `createdAt` and every derived field stay
+ * the server's, and the id is validated for prefix and encoding like any other.
  */
 export const reminderInput = z
   .strictObject({
+    reminderId: ulidId('rem').optional(),
     offsetMinutes: reminderOffsetMinutes,
   })
   .transform((value) => ({
+    ...(value.reminderId === undefined ? {} : { reminderId: value.reminderId }),
     offsetMinutes: Object.is(value.offsetMinutes, -0) ? 0 : value.offsetMinutes,
   }))
   .meta({ id: 'ReminderInput' });
