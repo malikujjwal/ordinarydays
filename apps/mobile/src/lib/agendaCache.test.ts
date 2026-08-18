@@ -540,6 +540,74 @@ describe('a delete reaches the agenda cache', () => {
     expect(holds(client, 'act_OTHER')).toBe(1);
   });
 
+  it('installs the freshest body when no version proof ever arrives', async () => {
+    /**
+     * The founder-reported bug, in both of its shapes.
+     *
+     * Adding recurrence moves the index row from the `#S` bucket to `#R`, and the server
+     * stamps a projection version only once the row it reads matches META. Mid-migration it
+     * does not, so the proof never comes — and the window used to stay exactly as the caller
+     * had left it in anticipation. A **new** recurring activity kept the lone anchor-date row
+     * with no repeat glyph and no later occurrences; one **switched** to recurring kept the
+     * patch branch's deletion and vanished. Both until a manual refresh.
+     */
+    const client = seeded();
+    const expanded: AgendaData = {
+      days: [{ date: TODAY, schedule: [row()], anytime: [], earlier: [] }],
+      warnings: [],
+      // The server's real answer, carrying no version for this activity at all.
+      projectionVersions: [],
+    };
+
+    const installed = await reconcileAgendaProjection(
+      client,
+      { activityId: 'act_STANDUP', version: '2026-08-14T10:00:00.000Z' },
+      async () => expanded,
+      async () => {},
+    );
+
+    expect(installed).toBe(true);
+    /**
+     * By content, not identity — `setQueryData` applies structural sharing, so the stored
+     * object is not the one handed in. What matters is that the server's expansion reached
+     * the cache at all.
+     */
+    expect(client.getQueryData<AgendaData>(KEY)).toEqual(expanded);
+    expect(
+      client.getQueryData<AgendaData>(KEY)?.days[0]?.schedule.map((r) => r.activityId),
+    ).toEqual(['act_STANDUP']);
+  });
+
+  it('still refuses to resurrect a deleted activity when the ladder is exhausted', async () => {
+    /**
+     * The half that must not relax. `absent` converges monotonically, so an unsatisfied one
+     * means the body genuinely still carries a row that is gone — and installing it would put
+     * back a row that `404`s the moment it is tapped.
+     */
+    const client = seeded();
+    const before = client.getQueryData<AgendaData>(KEY);
+    projectActivityWrite(client, deleteKey, { activityId: 'act_STANDUP' });
+
+    const resurrecting: AgendaData = {
+      days: [{ date: TODAY, schedule: [row()], anytime: [], earlier: [] }],
+      warnings: [],
+      projectionVersions: [],
+    };
+    const installed = await reconcileAgendaProjection(
+      client,
+      { activityId: 'act_STANDUP', version: '2026-08-14T10:00:00.000Z' },
+      async () => resurrecting,
+      async () => {},
+    );
+
+    expect(installed).toBe(false);
+    // The deleted row stayed gone rather than being put back by an unproven body.
+    expect(
+      client.getQueryData<AgendaData>(KEY)?.days[0]?.schedule.map((r) => r.activityId),
+    ).not.toContain('act_STANDUP');
+    expect(before).toBeDefined();
+  });
+
   it('clears an older pending recurrence version when the series is deleted', async () => {
     const client = seeded();
     const stale: AgendaData = {
@@ -550,6 +618,12 @@ describe('a delete reaches the agenda cache', () => {
       ],
     };
 
+    /**
+     * `true` since 2026-08-18: an exhausted ladder installs the freshest body and clears the
+     * version expectation rather than leaving the window stranded. The assertion this test
+     * exists for is the last line — a delete re-arms the guard against a body that still
+     * carries the row — and that is unchanged.
+     */
     expect(
       await reconcileAgendaProjection(
         client,
@@ -560,7 +634,7 @@ describe('a delete reaches the agenda cache', () => {
         async () => stale,
         async () => {},
       ),
-    ).toBe(false);
+    ).toBe(true);
 
     projectActivityWrite(client, deleteKey, { activityId: 'act_STANDUP' });
     const current: AgendaData = {

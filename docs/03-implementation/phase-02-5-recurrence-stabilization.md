@@ -287,7 +287,25 @@ add a colour outside P2-40's tables.
 4. Completing, skipping, snoozing or rescheduling one occurrence never writes series META.
 5. Converting a series retains exactly the explicitly selected occurrence as the one-off.
 6. End series preserves recurrence history and is inclusive; No end restarts future expansion.
-7. A stale agenda-index response never replaces state from a newer acknowledged mutation.
+7. A stale agenda-index response never replaces state from a newer acknowledged mutation
+   **while the reconciler is still waiting for proof**. Amended 2026-08-18: the wait is
+   bounded. When the retry ladder is exhausted without the expected projection version, the
+   freshest body is installed and the version expectation is cleared, because the guard's
+   purpose is to win a convergence race rather than to withhold data indefinitely. Two
+   founder-reported defects were that indefinite case — a new recurring activity kept only its
+   anchor-date row with no repeat glyph, and one switched to recurring vanished, both until a
+   manual refresh — because moving an index row from the `#S` bucket to `#R` means
+   `observedProjectionVersions` stamps no version for it mid-migration, so no proof was ever
+   coming.
+
+   **Two expectations are never relaxed by exhaustion.** A pending deletion stays absolute:
+   `absent` converges monotonically, is never relaxed, and a deleted activity is never
+   resurrected. An activity carrying a **pending recurrence edit** is likewise protected — its
+   last canonical expansion is held as an explicitly provisional, inert representation and its
+   version expectation stays armed, because installing an unproven body there would reinstate
+   the very recurrence the user just changed. Those activities escalate to an authoritative
+   targeted read rather than settling for the freshest guess; the freshest-body rule above
+   governs every unprotected activity in the same window.
 8. The cross-layer recurrence E2E catalogue passes on web and iOS.
 9. A recurring occurrence resolved as `Didn't happen` or `Didn't go` reports those words on
    its detail screen and on its agenda row after a cold reload, not `Skipped` and never the

@@ -28,7 +28,13 @@ import { type ActivityMutationTag, activityMutationKeys } from '@/lib/mutationKe
 import { activityDetailKey, activityKey } from '@/lib/queryKeys';
 
 const AGENDA_KEY = ['agenda'] as const;
-const RECONCILE_DELAYS_MS = [0, 150, 400, 900, 1_800, 3_200] as const;
+/**
+ * Widened 2026-08-18. The old ladder gave up after ~6.5 s, which a cold local table's GSI
+ * convergence can exceed — and giving up used to be permanent (see the exhaustion branch in
+ * `reconcileAgendaProjection`). Most occurrences now resolve properly rather than through the
+ * fallback.
+ */
+const RECONCILE_DELAYS_MS = [0, 150, 400, 900, 1_800, 3_200, 5_000] as const;
 /**
  * What a window is still waiting to see before it will accept a body from the index.
  *
@@ -174,6 +180,9 @@ export async function reconcileAgendaProjection(
   }
 
   const remaining = new Set(keys.map(keyId));
+  /** The freshest body each unconvinced window produced, kept for the exhaustion branch. */
+  const latest = new Map<string, AgendaData>();
+
   for (const delay of RECONCILE_DELAYS_MS) {
     if (delay > 0) await wait(delay);
     await Promise.all(
@@ -188,6 +197,7 @@ export async function reconcileAgendaProjection(
               tz,
               ...(include === null ? {} : { include }),
             });
+            latest.set(keyId(key), incoming);
             const guarded = guardAgendaResponse(client, key, incoming);
             if (guarded === incoming) {
               client.setQueryData(key, incoming);
@@ -200,7 +210,52 @@ export async function reconcileAgendaProjection(
     );
     if (remaining.size === 0) return true;
   }
-  return false;
+
+  /**
+   * **Exhaustion installs the freshest body rather than leaving the window stranded.**
+   *
+   * The guard exists to stop a stale GSI read overwriting state a write has already proved —
+   * a race that resolves in seconds. It was never meant to withhold data indefinitely, but
+   * that is what it did: when the ladder ran out unconvinced, this returned `false` and
+   * nothing retried, so whatever the caller had done to the cache in anticipation became
+   * permanent until the user manually refreshed.
+   *
+   * Both reported symptoms are that one behaviour. A **new** recurring activity kept the
+   * single anchor-date row `applyCreate` wrote, with no repeat glyph and no later
+   * occurrences. An activity **switched** to recurring kept the deletion the patch branch
+   * performed, and vanished. In each case the server's answer was correct on the wire and the
+   * client refused to install it, because adding recurrence moves the index row from the `#S`
+   * bucket to `#R` and `observedProjectionVersions` only stamps a version once the row it
+   * reads matches META — which, mid-migration, it does not.
+   *
+   * After the full ladder the likeliest reading is that no version is coming for this window,
+   * and a possibly-stale expansion beats a row the user has to know to refresh for. The next
+   * natural refetch corrects it either way.
+   */
+  for (const key of keys) {
+    const id = keyId(key);
+    if (!remaining.has(id)) continue;
+    const body = latest.get(id);
+    if (body === undefined) continue;
+
+    const pending = pendingByClient.get(client)?.get(id);
+    /**
+     * **A pending deletion is never relaxed.** `absent` converges monotonically — a deleted
+     * Activity does not come back — so an unsatisfied one means this body genuinely still
+     * carries a row that is gone, and installing it would resurrect a row that `404`s when
+     * tapped. Only the version expectations, which may have no proof coming, are dropped.
+     */
+    const resurrects = [...(pending ?? [])].some(
+      ([activityId, expectation]) =>
+        expectation.kind === 'absent' && contains(body, activityId),
+    );
+    if (resurrects) continue;
+
+    pendingByClient.get(client)?.delete(id);
+    client.setQueryData(key, body);
+    remaining.delete(id);
+  }
+  return remaining.size === 0;
 }
 
 /**
