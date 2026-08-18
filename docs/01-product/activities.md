@@ -730,12 +730,21 @@ The user-facing contract:
   Settlement. Deletion never silently discards settled Expense state or its audit history.
 - For a recurring series, Delete opens a sheet with three options, in this order:
   `This occurrence` · `End series` · `Delete whole series`.
+  - Both `This occurrence` and `End series` act on **one named day**, so both are offered
+    only when the screen carries an explicit occurrence target. A series-only detail screen
+    offers neither and says `Open a specific occurrence to remove it or end the series on
+    that date.`; it never resolves that day from today, the next cached occurrence or the
+    most recent one.
   - `This occurrence` writes a `skipped` occurrence. The series is untouched.
-  - `End series` is the primary, gentler affordance: it sets the series' end to today
-    (`recurrence.endDate`, through the normal `PATCH`), so no further occurrences are
-    emitted. The Activity row, every rule segment, and every past occurrence are kept —
-    nothing stored is removed, so there is no confirmation; it applies immediately with
-    the standard 6-second undo, which clears the end date again.
+  - `End series` is the primary, gentler affordance: it preserves `recurrence` and sets its
+    series-level `endDate` **inclusively to the occurrence in view**, so that occurrence
+    still happens and no later one is emitted. It is a distinct operation from
+    `Does not repeat`, which removes `recurrence` entirely, and from the Ends value
+    `No end`, which clears the termination fields
+    ([`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1). The Activity row,
+    every rule segment, and every past occurrence are kept — nothing stored is removed, so
+    there is no confirmation; it applies immediately with the standard 6-second undo, which
+    clears the end date again.
   - `Delete whole series` is the destructive option, styled as such and listed last. Its
     confirmation follows the §1a.1 shape and must name the history destroyed, with the
     real count of stored past completions (the series' `Occurrence` rows with
@@ -760,6 +769,20 @@ The user-facing contract:
   is removed with its Expense row.
 - Delete has no undo. Completion does — see
   [`interaction-contract.md`](interaction-contract.md) §4.
+
+> **Recurrence-action amendment — 2026-08-14 (founder), recorded by P2-52.** This sheet used
+> to say `End series` sets the series' end to **today**. The write path was right — ending a
+> series is still an ordinary `PATCH` of `recurrence` — but the date was not: it is the
+> explicitly targeted occurrence, never a day the screen picked on the user's behalf. Ending
+> a series is also not the same operation as removing its recurrence. The three operations —
+> **Does not repeat**, **End series** and **No end** — and the rule that a target is stated
+> rather than inferred are canonical in
+> [`today-and-tasks.md`](today-and-tasks.md#61-the-options-list) §6.1 and
+> [`../02-architecture/data-model.md#42-recurrence`](../02-architecture/data-model.md#42-recurrence)
+> §4.2, and their reasoning is
+> [`../02-architecture/decisions.md`](../02-architecture/decisions.md) **ADR-053** (scope is
+> explicit, never an optional `occurrenceDate`) and **ADR-054** (the three operations). Read
+> those rather than restating them here.
 
 ---
 

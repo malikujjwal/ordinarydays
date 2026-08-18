@@ -630,6 +630,16 @@ derives a nominal occurrence from today's date, the next cached agenda row, or t
 cached row. Any operation whose result depends on one occurrence requires the date in its
 discriminated target.
 
+> **Recorded by P2-52 from the founder's 2026-08-14 decisions.** The table above is the
+> storage half of two accepted decisions and does not restate either: `decisions.md`
+> **ADR-054** owns why the three operations are three, what the conversion survivor is, and
+> which alternatives were rejected; **ADR-053** owns why scope travels as a discriminated
+> `ActivityScope` rather than an optional `occurrenceDate`, and why the wire and the persisted
+> offline mutation variables deliberately keep the old shape. The product-facing halves are
+> [`../01-product/today-and-tasks.md#61-the-options-list`](../01-product/today-and-tasks.md#61-the-options-list)
+> §6.1 and §6.3. A change to this table that is not also a change to ADR-054 is a defect in
+> this table.
+
 ### 4.3 Reminder
 
 ```ts

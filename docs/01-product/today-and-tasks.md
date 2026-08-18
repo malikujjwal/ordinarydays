@@ -612,6 +612,18 @@ Ends setting and it closes the whole series.
 inclusive `endDate` to the explicit occurrence in view. It is not an option in the Repeat
 dropdown and it is not `No end`'s opposite write disguised under the same label.
 
+> **Three operations, one name each — 2026-08-14 (founder), recorded by P2-52.** The Repeat
+> sheet previously used `Never` for two opposite ideas: in the Repeat dropdown it removed
+> `recurrence`, and in the Ends dropdown it meant the series never terminates. Code and tests
+> could therefore agree on a label while performing different writes. **Does not repeat**,
+> **End series** and **No end** are now three operations with three names, and no
+> implementation may route them through a shared `Never` branch. The reasoning, the rejected
+> alternatives and the conversion-survivor rule are
+> [`../02-architecture/decisions.md`](../02-architecture/decisions.md) **ADR-054**; the rule
+> that scope is stated rather than inferred is **ADR-053**. Neither is restated here — where
+> this section and an ADR appear to differ, the ADR owns the mechanics and this section owns
+> what the user sees.
+
 **Does not repeat** needs one guard on an existing series. Removing `recurrence` from a
 series that has stored past completions leaves its `OCC#` rows stored but removes them from
 rendering — expansion is what puts those dates on screen. Choosing Does not repeat on such a
@@ -748,6 +760,16 @@ user has touched.
 single occurrence to another day: the occurrence is emitted on its override date — not its
 original one — and renders there with a `moved from Tue, 4 Aug` affix. The series and
 every other occurrence are untouched.
+
+The three recurrence-changing rows above are three write paths, and each names the one it
+uses ([`../02-architecture/api-contract.md#23-activities`](../02-architecture/api-contract.md#23-activities)
+§2.3):
+
+| Operation | Write path | Target |
+| --- | --- | --- |
+| Does not repeat | `POST /v1/activities/:id/recurrence/convert` | `{ occurrenceDate }`, **required** — there is no unscoped form |
+| End series | `PATCH /v1/activities/:id` carrying a `recurrence` whose `endDate` is the occurrence in view | The date is stated by the caller, never resolved from cache |
+| No end | `PATCH /v1/activities/:id` carrying a `recurrence` with neither `endDate` nor `count` | Series-level; no occurrence is involved |
 
 `AgendaItem.occurrenceDate` is present if and only if the item came from a series
 expansion. The client must send it back on every occurrence-scoped call

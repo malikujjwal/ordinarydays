@@ -100,6 +100,19 @@ one reviewable unit.
 
 **Tests.** Documentation links resolve and the existing shared scope ratchet remains green.
 
+> **As recorded — 2026-08-17.** Most of this task's substance landed early, inside
+> `fix: stabilize recurrence operations and reconciliation`, which changed the canonical docs
+> and the P2-53/P2-54 code in one commit. The completing pass covered what that left:
+> `activities.md` §6.4 still said `End series` sets the series' end to **today**, which
+> contradicted decisions 2 and 6, the canonical statements in `today-and-tasks.md` §6.1 and
+> `data-model.md` §4.2, and the shipped `endSeriesFromDelete`, which ends on the explicitly
+> targeted occurrence and is hidden without one. Only the date was wrong there; ending a
+> series is still an ordinary recurrence `PATCH`, as that bullet already said. Separately, no
+> canonical product or architecture document cited ADR-053 or
+> ADR-054, so three tables restated two accepted decisions with no link back to them. Both are
+> closed. The two code divergences found in the same pass are recorded against P2-54 above and
+> deliberately not fixed here.
+
 ---
 
 ### P2-53 — Explicit occurrence detail target and authoritative projection
@@ -155,6 +168,28 @@ selected effective schedule, and leaves stored Occurrence history untouched. Inj
 agenda responses before a current one and prove neither stale body replaces the projection.
 Count and date endings reconcile identically. Component tests distinguish Does not repeat,
 No end and End series and prove that each invokes only its named operation.
+
+> **Two obligations handed over by P2-52 — 2026-08-17.** P2-52 is documentation only and does
+> not edit code, so it records these rather than fixing them. Both are places where shipped
+> code still disagrees with the vocabulary the canonical docs now state, and both belong to
+> this task's "each operation invokes only its named operation" deliverable.
+>
+> 1. **A second, unguarded removal path.** `PATCH /v1/activities/:id` accepts
+>    `recurrence: null` and `recurrenceForPatch` returns that `null` straight through
+>    (`services/api/src/services/activityService.ts`), removing `recurrence` with no occurrence
+>    target and no schedule survivor. That is decision 1's operation performed without decision
+>    4's rule, beside the correct `POST /v1/activities/:id/recurrence/convert`. The mobile
+>    client no longer uses it — `RepeatSheet.commitDoesNotRepeat` refuses without an occurrence
+>    target — so this is an API residue, not a live UI defect. Close it by rejecting the
+>    unscoped removal on a recurring Activity the way `complete` and `skip` already reject
+>    their unscoped form, and add the `api-contract.md` §2.3 row that says so.
+> 2. **One identifier still names two operations.** `apps/mobile/src/features/activity/model/repeat.ts`
+>    declares `RepeatOption = 'never' | …` for **Does not repeat** and
+>    `RepeatEnds = { kind: 'never' } | …` for **No end**, in the same file. The visible labels
+>    are already correct and distinct; the token underneath is not.
+>    [`../02-architecture/data-model.md#42-recurrence`](../02-architecture/data-model.md#42-recurrence)
+>    §4.2 says these operations "must not share a generic `Never` branch", and ADR-054 names
+>    that shared word as the original defect. Rename both to say what each means.
 
 ---
 
