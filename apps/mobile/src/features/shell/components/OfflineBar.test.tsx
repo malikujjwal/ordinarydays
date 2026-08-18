@@ -64,14 +64,23 @@ describe('OfflineBar', () => {
     );
   });
 
-  it('shows nothing extra while a queue drains online, because §5.4 has one string', async () => {
+  it('leaves the moment connectivity returns, even with the queue still draining', async () => {
     setActiveIntentLog(await logWithIntent());
-    renderIn(<OfflineBar />);
+    onlineManager.setOnline(false);
+    const { rerender } = renderIn(<OfflineBar />);
+    expect(screen.getByTestId('offline-bar')).not.toBeNull();
 
     /**
-     * Online with work still queued. A "syncing" state would need copy §5.4 does not specify,
-     * so the bar stays out of it and the row's own `Pending` indicator carries the meaning.
+     * Back online with that write still queued. The bar answers "are you online", so it goes —
+     * founder, 2026-08-17. The row's own `Pending` indicator is what keeps reporting the write.
      */
+    onlineManager.setOnline(true);
+    rerender(
+      <ThemeProvider scheme="light">
+        <OfflineBar />
+      </ThemeProvider>,
+    );
+
     expect(screen.queryByTestId('offline-bar')).toBeNull();
   });
 });

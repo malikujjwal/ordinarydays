@@ -17,14 +17,14 @@ export function OfflineBar() {
   const offline = useIsOffline();
 
   /**
-   * **Offline only, deliberately.**
+   * **Strictly connectivity-scoped, and it leaves the moment connectivity returns**
+   * (founder, 2026-08-17).
    *
-   * A draining-after-reconnect state would need its own words, and §5.4 specifies exactly one
-   * string for this bar. Inventing a second is a founder decision
-   * ([`agent-playbook.md`](../../../../../../docs/04-conventions/agent-playbook.md) §10
-   * trigger 11), not an implementation one. The gap it would have covered is already covered
-   * per row: an unacknowledged write keeps its `Pending` indicator until it lands, which is
-   * the specified way to say "this particular thing has not synced".
+   * The bar answers one question — are you online — so it must not linger to report a queue
+   * still draining. That would give it a second meaning and need a second string §5.4 does
+   * not specify. Per-write status is the `Pending` indicator's job, and it stays on the row
+   * until that write lands, which is the specified way to say "this particular thing has not
+   * synced yet".
    */
   if (!offline) return null;
 

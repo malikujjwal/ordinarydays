@@ -470,7 +470,7 @@ message can name it.
 | Aspect | Behaviour |
 | --- | --- |
 | Detection | Connectivity state plus request failure. A single connectivity change does not clear the queue. |
-| Indicator | A persistent 20 pt bar under the header: `Offline — changes will sync.` No modal, no blocking. |
+| Indicator | A persistent 20 pt bar under the header: `Offline — changes will sync.` No modal, no blocking. **Strictly connectivity-scoped (founder, 2026-08-17):** it shows while offline and disappears the moment connectivity returns. It never stays up to report a queue that is still draining — that is a second meaning needing a second string, and per-write status is the `Pending` indicator's job. |
 | Reads | The last agenda, list and plan responses are cached and served. Today works fully offline for the current day. |
 | Writes | Queued in order, per entity, with their `Idempotency-Key` preserved so a retry cannot duplicate. Applied optimistically. |
 | Queued row indicator | A small `Pending` dot in the row's trailing slot. Not an error colour. |
