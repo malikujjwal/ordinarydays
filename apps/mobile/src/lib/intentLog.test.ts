@@ -6,6 +6,7 @@ import {
   INTENT_LOG_SCHEMA_VERSION,
   IntentLog,
   IntentLogFullError,
+  IntentLogInvariantError,
   type IntentLogStorage,
   IntentLogUnsupportedError,
   intentLogKey,
@@ -297,6 +298,75 @@ describe('the durable intent log', () => {
     expect(log.replayable().map((intent) => intent.seq)).toEqual([1, 2]);
   });
 
+  it('migrates v1 attention states and preserves conflicting duplicate ids', () => {
+    const migrated = parseEnvelope(
+      {
+        schemaVersion: 1,
+        intents: [
+          {
+            ...intentInput({ intentId: 'duplicate' }),
+            ownerUserId: USER,
+            status: 'failed',
+            lastError: 'No longer allowed',
+            seq: 1,
+            attempts: 1,
+            createdAt: 1,
+          },
+          {
+            ...intentInput({ intentId: 'duplicate', entityId: 'act-distinct' }),
+            ownerUserId: USER,
+            status: 'needs_confirmation',
+            seq: 2,
+            attempts: 0,
+            createdAt: 2,
+          },
+          // Exact duplicate logical write: safe to coalesce.
+          {
+            ...intentInput({ intentId: 'duplicate' }),
+            ownerUserId: USER,
+            status: 'failed',
+            lastError: 'No longer allowed',
+            seq: 3,
+            attempts: 1,
+            createdAt: 3,
+          },
+        ],
+      },
+      USER,
+    );
+
+    expect(migrated.intents).toHaveLength(2);
+    expect(migrated.intents.map((intent) => intent.intentId)).toEqual([
+      'duplicate',
+      'duplicate~legacy-2',
+    ]);
+    expect(migrated.intents[0]).toMatchObject({
+      status: 'needs_attention',
+      attention: { kind: 'rejected' },
+    });
+    expect(migrated.intents[1]).toMatchObject({
+      status: 'needs_attention',
+      attention: { kind: 'parked', reason: 'legacy_unknown' },
+    });
+  });
+
+  it('makes identical append idempotent and conflicting reuse an invariant failure', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    const first = await log.append(intentInput());
+    const duplicate = await log.append({
+      ...intentInput(),
+      variables: { idempotencyKey: 'idem-1', activityId: ACTIVITY },
+    });
+    expect(duplicate).toEqual(first);
+    expect(log.snapshot().intents).toHaveLength(1);
+
+    await expect(
+      log.append({ ...intentInput(), variables: { title: 'different' } }),
+    ).rejects.toThrow(IntentLogInvariantError);
+    expect(log.snapshot().intents).toHaveLength(1);
+  });
+
   it('surfaces a newer schema version rather than deleting work it cannot read', () => {
     expect(() =>
       parseEnvelope({ schemaVersion: INTENT_LOG_SCHEMA_VERSION + 1, intents: [] }, USER),
@@ -387,7 +457,10 @@ describe('the durable intent log', () => {
     clock.mockReturnValue(now - 7 * DAY_MS);
     await log.refreshClockRule();
 
-    expect(log.snapshot().intents[0]?.status).toBe('needs_confirmation');
+    expect(log.snapshot().intents[0]).toMatchObject({
+      status: 'needs_attention',
+      attention: { kind: 'parked', reason: 'clock_uncertainty' },
+    });
     expect(log.replayable()).toHaveLength(0);
     const runner = fakeRunner();
     expect((await replayIntents(runner, log)).attempted).toBe(0);
@@ -406,11 +479,14 @@ describe('the durable intent log', () => {
 
     // Retention is indefinite; only automation is bounded.
     expect(log.pending()).toHaveLength(1);
-    expect(log.snapshot().intents[0]?.status).toBe('needs_confirmation');
+    expect(log.snapshot().intents[0]).toMatchObject({
+      status: 'needs_attention',
+      attention: { kind: 'parked', reason: 'replay_age_expired' },
+    });
     expect(log.replayable()).toHaveLength(0);
   });
 
-  it('refuses a write past the cap, counting failed and needs_confirmation intents', async () => {
+  it('refuses a write past the cap, counting needs_attention intents', async () => {
     const storage = fakeStorage();
     const log = new IntentLog(USER, storage);
     await log.hydrate();
@@ -774,7 +850,10 @@ describe('the durable intent log', () => {
      * back from the dead.
      */
     expect(result).toMatchObject({ parked: 1, acknowledged: 0 });
-    expect(log.pending()[0]?.status).toBe('needs_confirmation');
+    expect(log.pending()[0]).toMatchObject({
+      status: 'needs_attention',
+      attention: { kind: 'parked', reason: 'ambiguous_collision' },
+    });
     expect(log.replayable()).toHaveLength(0);
   });
 
@@ -812,7 +891,10 @@ describe('the durable intent log', () => {
     });
     const byId = new Map(log.pending().map((intent) => [intent.intentId, intent]));
     expect(byId.get('transient')?.status).toBe('queued');
-    expect(byId.get('permanent')?.status).toBe('failed');
+    expect(byId.get('permanent')).toMatchObject({
+      status: 'needs_attention',
+      attention: { kind: 'rejected', status: 422 },
+    });
     expect(byId.get('permanent')?.lastError).toBe('nope');
   });
 });

@@ -24,7 +24,7 @@ import { useSyncStatus } from '@/stores/syncStatus';
  * response cannot become a second entity. The two mutations without one — delete and patch —
  * are naturally idempotent against a given target, so a per-target id is enough.
  */
-function intentIdFor(variables: unknown): string {
+export function intentIdFor(variables: unknown): string {
   const fields = variables as
     | {
         intentId?: unknown;
@@ -35,13 +35,9 @@ function intentIdFor(variables: unknown): string {
     | undefined;
   if (typeof fields?.intentId === 'string') return fields.intentId;
   if (typeof fields?.idempotencyKey === 'string') return fields.idempotencyKey;
-  const target =
-    typeof fields?.reminderId === 'string'
-      ? fields.reminderId
-      : typeof fields?.activityId === 'string'
-        ? fields.activityId
-        : 'unknown';
-  return `${target}:${Date.now()}`;
+  throw new Error(
+    'Offline-capable mutations require a stable intentId or idempotencyKey.',
+  );
 }
 
 /** The entity FIFO is promised within. Falls back to the intent id for an entity-less write. */
@@ -107,7 +103,7 @@ export function createOfflineQueryClient(): QueryClient {
        *
        * **The 200-intent cap moved into `IntentLog.append`**, which is the only place that can
        * count it correctly: the cap measures unacknowledged *user data*, so `failed` and
-       * `needs_confirmation` intents count even though neither is a pending TanStack mutation.
+       * `needs_attention` intents count even though none is a pending TanStack mutation.
        * Counting live mutations undercounted by exactly the writes most likely to be stuck.
        */
       onMutate: async (variables, mutation) => {

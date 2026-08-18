@@ -124,6 +124,7 @@ export interface DuplicateActivityVariables {
 
 export interface DeleteActivityVariables {
   activityId: string;
+  intentId: string;
 }
 
 export interface PatchActivityVariables {
@@ -150,6 +151,7 @@ export type ReminderCreateVariables = ActivityPostVariables<ReminderInput>;
 export interface ReminderDeleteVariables {
   activityId: string;
   reminderId: string;
+  intentId: string;
 }
 
 const ACTIVITY_LIST_KEY = ['activities'] as const;

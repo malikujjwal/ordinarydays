@@ -193,7 +193,7 @@ export function useActivityActions(activityId: string): ActivityActions {
     },
     remove: async () => {
       try {
-        await deleteMutation.mutateAsync({ activityId });
+        await deleteMutation.mutateAsync({ activityId, intentId: randomUUID() });
         return true;
       } catch {
         return false;

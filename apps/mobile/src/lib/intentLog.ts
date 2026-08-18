@@ -31,18 +31,28 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  * fit. Same reason the `Pending` indicator is copy-parameterised rather than per-entity.
  */
 
-/**
- * `queued → in_flight → acknowledged`, with two states that wait on a person.
- *
- * Transient failure returns to `queued`; permanent failure is `failed`; age or an untrusted
- * clock parks an intent in `needs_confirmation`.
- */
-export type IntentStatus =
-  | 'queued'
-  | 'in_flight'
-  | 'acknowledged'
-  | 'failed'
-  | 'needs_confirmation';
+/** Persisted schema v2 states. `refused` belongs only to the action coordinator. */
+export type IntentStatus = 'queued' | 'in_flight' | 'acknowledged' | 'needs_attention';
+
+export interface RejectedIntentAttention {
+  readonly kind: 'rejected';
+  readonly status?: number;
+  readonly code?: string;
+  readonly details?: unknown;
+}
+
+export type ParkedIntentReason =
+  | 'clock_uncertainty'
+  | 'replay_age_expired'
+  | 'ambiguous_collision'
+  | 'legacy_unknown';
+
+export interface ParkedIntentAttention {
+  readonly kind: 'parked';
+  readonly reason: ParkedIntentReason;
+}
+
+export type IntentAttention = RejectedIntentAttention | ParkedIntentAttention;
 
 export interface Intent {
   readonly intentId: string;
@@ -63,9 +73,15 @@ export interface Intent {
   /** Monotonic within a log, so ordering survives a wrong or moved clock (invariant 3). */
   readonly seq: number;
   readonly attempts: number;
+  /** Structured control state. Required exactly when status is `needs_attention`. */
+  readonly attention?: IntentAttention;
   readonly lastError?: string;
   /** Canonical META version returned by an acknowledged recurrence PATCH. */
   readonly reconciliationVersion?: string;
+  /** Causal predecessor. A missing predecessor is never interpreted as success. */
+  readonly dependsOnIntentId?: string;
+  /** Names the original when this intent is a durable inverse. */
+  readonly compensationForIntentId?: string;
 }
 
 export interface IntentLogEnvelope {
@@ -84,7 +100,7 @@ export interface IntentLogEnvelope {
   readonly nextSeq: number;
 }
 
-export const INTENT_LOG_SCHEMA_VERSION = 1;
+export const INTENT_LOG_SCHEMA_VERSION = 2;
 const KEY_PREFIX = 'ordinarydays-intent-log';
 
 /** Tolerance for ordinary jitter and NTP correction, below which nothing is suspected. */
@@ -124,18 +140,178 @@ export class IntentLogFullError extends Error {
   }
 }
 
-function isIntent(value: unknown): value is Intent {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Partial<Intent>;
-  return (
-    typeof candidate.intentId === 'string' &&
-    typeof candidate.ownerUserId === 'string' &&
-    Array.isArray(candidate.mutationKey) &&
-    typeof candidate.entityId === 'string' &&
-    typeof candidate.status === 'string' &&
-    typeof candidate.createdAt === 'number' &&
-    typeof candidate.attempts === 'number'
+/** Same id with different semantics means corruption, never a second accepted action. */
+export class IntentLogInvariantError extends Error {
+  constructor(readonly intentId: string) {
+    super(`Intent id ${intentId} was reused for a different durable action.`);
+    this.name = 'IntentLogInvariantError';
+  }
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : { variables: value };
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (typeof value !== 'object' || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, canonicalValue(child)]),
   );
+}
+
+function semanticKey(input: {
+  mutationKey: readonly string[];
+  variables: unknown;
+  entityId: string;
+  dependsOnIntentId?: string;
+  compensationForIntentId?: string;
+}): string {
+  return JSON.stringify(
+    canonicalValue({
+      mutationKey: input.mutationKey,
+      variables: input.variables,
+      entityId: input.entityId,
+      dependsOnIntentId: input.dependsOnIntentId,
+      compensationForIntentId: input.compensationForIntentId,
+    }),
+  );
+}
+
+export function semanticallyIdenticalIntent(
+  left: Pick<
+    Intent,
+    | 'mutationKey'
+    | 'variables'
+    | 'entityId'
+    | 'dependsOnIntentId'
+    | 'compensationForIntentId'
+  >,
+  right: {
+    mutationKey: readonly string[];
+    variables: unknown;
+    entityId: string;
+    dependsOnIntentId?: string;
+    compensationForIntentId?: string;
+  },
+): boolean {
+  return semanticKey(left) === semanticKey(right);
+}
+
+function withoutAttention(intent: Intent): Omit<Intent, 'attention'> {
+  const { attention: _attention, ...rest } = intent;
+  return rest;
+}
+
+function v2Attention(value: unknown): IntentAttention | undefined {
+  const candidate = record(value);
+  if (candidate.kind === 'rejected') {
+    return {
+      kind: 'rejected',
+      ...(typeof candidate.status === 'number' ? { status: candidate.status } : {}),
+      ...(typeof candidate.code === 'string' ? { code: candidate.code } : {}),
+      ...(candidate.details === undefined ? {} : { details: candidate.details }),
+    };
+  }
+  if (
+    candidate.kind === 'parked' &&
+    (candidate.reason === 'clock_uncertainty' ||
+      candidate.reason === 'replay_age_expired' ||
+      candidate.reason === 'ambiguous_collision' ||
+      candidate.reason === 'legacy_unknown')
+  ) {
+    return { kind: 'parked', reason: candidate.reason };
+  }
+  return undefined;
+}
+
+function migrateIntent(
+  value: unknown,
+  index: number,
+  ownerUserId: string,
+  version: number,
+  now: number,
+): Intent {
+  const candidate = record(value);
+  const legacyStatus = candidate.status;
+  const attention = v2Attention(candidate.attention);
+  const status: IntentStatus =
+    legacyStatus === 'queued' ||
+    legacyStatus === 'in_flight' ||
+    legacyStatus === 'acknowledged'
+      ? legacyStatus
+      : 'needs_attention';
+  const migratedAttention: IntentAttention | undefined =
+    status !== 'needs_attention'
+      ? undefined
+      : (attention ??
+        (version <= 1 && legacyStatus === 'failed'
+          ? { kind: 'rejected' as const }
+          : { kind: 'parked' as const, reason: 'legacy_unknown' as const }));
+  const mutationKey = Array.isArray(candidate.mutationKey)
+    ? candidate.mutationKey.map(String)
+    : ['legacy', 'unknown'];
+  return {
+    intentId:
+      typeof candidate.intentId === 'string' && candidate.intentId.length > 0
+        ? candidate.intentId
+        : `legacy-intent-${index + 1}`,
+    ownerUserId,
+    mutationKey,
+    variables: Object.hasOwn(candidate, 'variables') ? candidate.variables : value,
+    entityId:
+      typeof candidate.entityId === 'string'
+        ? candidate.entityId
+        : `legacy-entity-${index + 1}`,
+    status,
+    createdAt: typeof candidate.createdAt === 'number' ? candidate.createdAt : now,
+    seq:
+      typeof candidate.seq === 'number' && candidate.seq > 0 ? candidate.seq : index + 1,
+    attempts: typeof candidate.attempts === 'number' ? candidate.attempts : 0,
+    ...(migratedAttention === undefined ? {} : { attention: migratedAttention }),
+    ...(typeof candidate.lastError === 'string'
+      ? { lastError: candidate.lastError }
+      : {}),
+    ...(typeof candidate.reconciliationVersion === 'string'
+      ? { reconciliationVersion: candidate.reconciliationVersion }
+      : {}),
+    ...(typeof candidate.dependsOnIntentId === 'string'
+      ? { dependsOnIntentId: candidate.dependsOnIntentId }
+      : {}),
+    ...(typeof candidate.compensationForIntentId === 'string'
+      ? { compensationForIntentId: candidate.compensationForIntentId }
+      : {}),
+  };
+}
+
+/** Coalesces exact legacy duplicates and deterministically repairs conflicting duplicate ids. */
+function uniqueMigratedIntents(intents: readonly Intent[]): Intent[] {
+  const used = new Map<string, Intent>();
+  const result: Intent[] = [];
+  for (const intent of intents) {
+    const existing = used.get(intent.intentId);
+    if (existing === undefined) {
+      used.set(intent.intentId, intent);
+      result.push(intent);
+      continue;
+    }
+    if (semanticKey(existing) === semanticKey(intent)) continue;
+    let suffix = 2;
+    let repaired = `${intent.intentId}~legacy-${suffix}`;
+    while (used.has(repaired)) {
+      suffix += 1;
+      repaired = `${intent.intentId}~legacy-${suffix}`;
+    }
+    const distinct = { ...intent, intentId: repaired };
+    used.set(repaired, distinct);
+    result.push(distinct);
+  }
+  return result;
 }
 
 /**
@@ -153,18 +329,16 @@ export function parseEnvelope(raw: unknown, ownerUserId: string): IntentLogEnvel
     typeof candidate.schemaVersion === 'number' ? candidate.schemaVersion : 0;
   if (version > INTENT_LOG_SCHEMA_VERSION) throw new IntentLogUnsupportedError(version);
 
-  const stored = Array.isArray(candidate.intents)
-    ? candidate.intents.filter(isIntent)
-    : [];
+  const stored = Array.isArray(candidate.intents) ? candidate.intents : [];
   /**
    * Migration is additive and never drops an intent — "migrate or surface, never silently
    * discard". A pre-`seq` row is given its position in the stored order, which is the order
    * it was appended in.
    */
-  const intents = stored.map((intent, index) =>
-    typeof intent.seq === 'number' && intent.seq > 0
-      ? intent
-      : { ...intent, seq: index + 1 },
+  const intents = uniqueMigratedIntents(
+    stored.map((intent, index) =>
+      migrateIntent(intent, index, ownerUserId, version, now),
+    ),
   );
   const maxSeq = intents.reduce((high, intent) => Math.max(high, intent.seq), 0);
   return {
@@ -217,9 +391,21 @@ export function applyClockRule(
     if (intent.status !== 'queued') return intent;
     const implausible = intent.createdAt > now + CLOCK_TOLERANCE_MS;
     const tooOld = now - intent.createdAt > MAX_AUTOMATIC_INTENT_AGE_MS;
-    return rolledBack || implausible || tooOld
-      ? { ...intent, status: 'needs_confirmation' as const }
-      : intent;
+    if (rolledBack || implausible) {
+      return {
+        ...intent,
+        status: 'needs_attention' as const,
+        attention: { kind: 'parked' as const, reason: 'clock_uncertainty' as const },
+      };
+    }
+    if (tooOld) {
+      return {
+        ...intent,
+        status: 'needs_attention' as const,
+        attention: { kind: 'parked' as const, reason: 'replay_age_expired' as const },
+      };
+    }
+    return intent;
   });
   return {
     ...envelope,
@@ -435,8 +621,19 @@ export class IntentLog {
     mutationKey: readonly string[];
     variables: unknown;
     entityId: string;
+    dependsOnIntentId?: string;
+    compensationForIntentId?: string;
   }): Promise<Intent> {
     return this.write((current) => {
+      const existing = current.intents.find(
+        (intent) => intent.intentId === input.intentId,
+      );
+      if (existing !== undefined) {
+        if (semanticKey(existing) !== semanticKey(input)) {
+          throw new IntentLogInvariantError(input.intentId);
+        }
+        return [current, existing];
+      }
       if (current.intents.filter(occupiesQueue).length >= MAX_OFFLINE_MUTATIONS) {
         throw new IntentLogFullError();
       }
@@ -450,6 +647,12 @@ export class IntentLog {
         createdAt: this.clock(),
         seq: current.nextSeq,
         attempts: 0,
+        ...(input.dependsOnIntentId === undefined
+          ? {}
+          : { dependsOnIntentId: input.dependsOnIntentId }),
+        ...(input.compensationForIntentId === undefined
+          ? {}
+          : { compensationForIntentId: input.compensationForIntentId }),
       };
       return [
         {
@@ -506,7 +709,7 @@ export class IntentLog {
     });
   }
 
-  /** Success. Removed rather than retained: the server is now the record of what happened. */
+  /** Success. A later dependency step generalizes which acknowledged receipts are retained. */
   acknowledge(intentId: string): Promise<Intent | undefined> {
     return this.transition(intentId, () => undefined);
   }
@@ -517,7 +720,7 @@ export class IntentLog {
     version?: string,
   ): Promise<Intent | undefined> {
     return this.transition(intentId, (intent) => {
-      const { lastError: _lastError, ...retained } = intent;
+      const { lastError: _lastError, attention: _attention, ...retained } = intent;
       return {
         ...retained,
         status: 'acknowledged',
@@ -538,7 +741,7 @@ export class IntentLog {
   /** Transient failure returns to `queued`; the next reconnect picks it up unchanged. */
   requeue(intentId: string, error?: string): Promise<Intent | undefined> {
     return this.transition(intentId, (intent) => ({
-      ...intent,
+      ...withoutAttention(intent),
       status: 'queued',
       ...(error === undefined ? {} : { lastError: error }),
     }));
@@ -552,19 +755,29 @@ export class IntentLog {
    * be retried automatically: a fresh id would walk past the tombstone and resurrect the
    * deletion. Only an explicit retry or discard moves it from here.
    */
-  park(intentId: string, reason: string): Promise<Intent | undefined> {
+  park(
+    intentId: string,
+    error: string,
+    reason: ParkedIntentReason = 'ambiguous_collision',
+  ): Promise<Intent | undefined> {
     return this.transition(intentId, (intent) => ({
       ...intent,
-      status: 'needs_confirmation',
-      lastError: reason,
+      status: 'needs_attention',
+      attention: { kind: 'parked', reason },
+      lastError: error,
     }));
   }
 
   /** Permanent rejection. Retained until the user dismisses it — it holds their words. */
-  fail(intentId: string, error: string): Promise<Intent | undefined> {
+  fail(
+    intentId: string,
+    error: string,
+    rejection: Omit<RejectedIntentAttention, 'kind'> = {},
+  ): Promise<Intent | undefined> {
     return this.transition(intentId, (intent) => ({
       ...intent,
-      status: 'failed',
+      status: 'needs_attention',
+      attention: { kind: 'rejected', ...rejection },
       lastError: error,
     }));
   }
@@ -590,12 +803,10 @@ export class IntentLog {
     });
   }
 
-  /** Explicit user discard, valid from the two states that wait on a person. */
+  /** Explicit user discard, valid from structured attention. */
   discard(intentId: string): Promise<Intent | undefined> {
     return this.transition(intentId, (intent) =>
-      intent.status === 'failed' || intent.status === 'needs_confirmation'
-        ? undefined
-        : intent,
+      intent.status === 'needs_attention' ? undefined : intent,
     );
   }
 

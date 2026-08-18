@@ -106,11 +106,12 @@ ULID before the request leaves the device; accepted actions persist to an accoun
 durable intent log **before** the UI reports them accepted; the query cache stays a
 disposable projection and TanStack stops being the durability boundary. Pending entities are
 visible, inert and cancellable; automatic replay is bounded at 30 days with a
-`needs_confirmation` state beyond it; deletion tombstones share that same constant so replay
+structured `needs_attention/parked` state beyond it; deletion tombstones share that same constant so replay
 can never resurrect a deletion; and the reminder projection makes an offline-created
-reminder actually fire. Phase 3's queued list-item and Plan-bridge work consumes this
-mechanism, which is why the gate sits before it. **4 tasks** (a fifth, P2-58, is specified
-and parked).
+reminder actually fire. P2-59 makes durable action state authoritative for Undo and replay,
+adds dependent inverse intents, and makes replay level-triggered. Phase 3's queued list-item and Plan-bridge work consumes this
+mechanism, which is why the gate sits before it. **5 tasks** (a sixth, P2-58, is specified
+and parked, uncounted).
 
 ### 1.4 Phase 3 — Plans and lists
 
@@ -439,17 +440,17 @@ sizings did not support; those are corrected here.
 | 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
 | 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **119** | ~6.0 weeks |
 | 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **13** | ~0.7 weeks |
-| 2.6 — Sync hardening | 4 (P2-48…P2-50, P2-57 — 2026-08-17; P2-58 specified, parked, uncounted) | 0 / 1 / 3 | **14** | ~0.7 weeks |
+| 2.6 — Sync hardening | 5 (P2-48…P2-50, P2-57 and P2-59; P2-58 specified, parked, uncounted) | 0 / 1 / 4 | **18** | ~0.9 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **161** | **23 / 90 / 48** | **391** | **~19.6 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **162** | **23 / 90 / 49** | **395** | **~19.8 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **231** | **35 / 135 / 61** | **545** | **~27.3 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **232** | **35 / 135 / 62** | **549** | **~27.5 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9 plus Phases 2.5 and 2.6** | **380** | **48 / 226 / 106** | **920** | **~46 weeks (~10.5 months)** |
+| **Total 0–9 plus Phases 2.5 and 2.6** | **381** | **48 / 226 / 107** | **924** | **~46.2 weeks (~10.7 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -579,8 +580,14 @@ envelope with three silent data-loss paths. Four tasks — the account-scoped in
 with a fifth (P2-58, acting on pending entities) specified and parked, uncounted. That is
 **+4 tasks and +14 AWU**, giving **380 tasks and 920 AWU**.
 
-Use **920 AWU and ~46 weeks** (920 / 20 = 46) as the plan of record. Everything
-through Phase 5 is now 545 AWU and ~27.3 weeks; the
+**P2-59 is added to Phase 2.6 on 2026-08-18** after the durable-undo review found transient
+HTTP rejection still interpreted as action failure, inverse actions not durable, and replay
+liveness dependent on connectivity edges. One L task adds schema v2, structured attention,
+dependent intents, the action coordinator and level-triggered replay. That is **+1 task and
++4 AWU**, giving **381 tasks and 924 AWU**.
+
+Use **924 AWU and ~46.2 weeks** (924 / 20 = 46.2) as the plan of record. Everything
+through Phase 5 is now 549 AWU and ~27.5 weeks; the
 remaining ~18.8 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
 participant can act on.
@@ -719,7 +726,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-161 tasks, 391 AWU, ~19.6 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+162 tasks, 395 AWU, ~19.8 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -731,7 +738,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-231 tasks, 545 AWU, ~27.3 weeks. External testers who are not the founder are using it on
+232 tasks, 549 AWU, ~27.5 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -743,7 +750,7 @@ after the first TestFlight build, migrations are mandatory in both environments.
 
 ### 6.3 End of Phase 7 — the full multi-player product, before any AI spend
 
-309 tasks, 732 AWU, ~36.6 weeks. Sharing, guests, invites, shared lists, date suggestions,
+310 tasks, 736 AWU, ~36.8 weeks. Sharing, guests, invites, shared lists, date suggestions,
 expenses, balances and settlement all work. Every marginal cost in the system is still a fraction of a cent per
 request, and every AWS line item is either free-tier or the domain.
 
@@ -824,7 +831,7 @@ isolation, and it only holds if the isolation is real.
 **Phases 0 through 3, surfacing in Phase 4. New with the local-first ordering, and the price
 paid for it.**
 
-Nothing runs on AWS for 161 tasks. Every divergence between DynamoDB Local and DynamoDB,
+Nothing runs on AWS for 162 tasks. Every divergence between DynamoDB Local and DynamoDB,
 between the Hono Node adapter and an API Gateway v2 payload, and between a warm laptop
 process and a cold Lambda accumulates silently and is discovered in one phase — tangled up
 with a Cognito user pool, a first deploy and a new IAM surface, so that when something fails

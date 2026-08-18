@@ -80,7 +80,10 @@ const cases: Array<{ key: MutationKey; variables: Variables }> = [
     key: activityMutationKeys.duplicate,
     variables: { activityId: ACTIVITY_ID, idempotencyKey: IDEMPOTENCY_KEY },
   },
-  { key: activityMutationKeys.delete, variables: { activityId: ACTIVITY_ID } },
+  {
+    key: activityMutationKeys.delete,
+    variables: { activityId: ACTIVITY_ID, intentId: 'delete-intent-stable' },
+  },
   {
     key: activityMutationKeys.patch,
     variables: {
@@ -144,6 +147,7 @@ const cases: Array<{ key: MutationKey; variables: Variables }> = [
     variables: {
       activityId: ACTIVITY_ID,
       reminderId: 'rem_01J0000000000000000000000A',
+      intentId: 'reminder-delete-intent-stable',
     },
   },
 ];
@@ -372,7 +376,7 @@ describe('persisted mutation defaults', () => {
   /**
    * **The 201st-write refusal moved to `intentLog.test.ts` (P2-48)**, along with the cap
    * itself. It is not dropped coverage: the replacement asserts the same refusal *and* the
-   * thing this version could not, that `failed` and `needs_confirmation` intents count toward
+   * thing this version could not, that structured `needs_attention` intents count toward
    * the 200. Counting live TanStack mutations undercounted by exactly the stuck writes.
    */
 

@@ -2196,3 +2196,58 @@ TanStack persisted cache the durable store with a longer TTL — retention is no
 sharing a disposal policy with a cache is. Extending the log to web — rejected for
 ADR-024's original reason. Unbounded automatic replay — a create surfacing months later
 without confirmation, and an account-lifetime tombstone obligation, for no user benefit.
+
+---
+
+## ADR-056 — Durable action state, dependent intents and level-triggered replay
+
+**Status:** Accepted · **Date:** 2026-08-18 · **Amends ADR-055**
+
+**Context.** ADR-055 made the intent log the write-ahead durability boundary, but its first
+implementation still exposed a TanStack mutation promise as the semantic result to legacy UI
+helpers. A transient offline rejection therefore rolled back an action that the log had
+already accepted and queued. Undo also existed only as an in-memory decision to issue a
+second request: process death, a claim race, or a lost original response could lose or
+misorder the inverse. Replay coalesced concurrent calls but still depended primarily on a
+connectivity edge and did not stop a later same-entity intent after its predecessor requeued.
+
+**Decision.** Persisted intent schema v2 has exactly four states:
+`queued | in_flight | acknowledged | needs_attention`. `refused` is a coordinator-only
+result when durable append fails and is never persisted. `needs_attention` is structured as
+either `rejected` (permanent server status/code/details) or `parked` with an enumerated cause;
+display-only `lastError` is never parsed for behavior. Stable unique intent ids make append
+idempotent for canonically equivalent payloads and an invariant failure for conflicting
+reuse; v1 migration preserves every distinct write and deterministically repairs legacy
+duplicate ids.
+
+An observable `DurableAction` is the UI contract. It reports durable state and exposes a
+durable `undo()`. A queued original is cancelled atomically with its projection. Once claimed,
+Undo appends an inverse intent dependent on the original. Non-acknowledged dependencies block;
+acknowledgement permits dispatch. Lightweight acknowledged receipts remain while dependents
+or recurrence reconciliation require them, and compact only after they do not. Missing
+dependencies never imply success. Response-loss ambiguity is resolved through the original's
+authoritative recovery/idempotency path before the inverse is retired or executed.
+
+Replay remains globally serial initially and enforces a per-entity barrier: a requeued or
+attention-requiring N blocks N+1 for that entity while another entity may progress. Enqueue,
+transient backoff, foreground and reconnect request bounded/coalesced single-flight drains;
+the system is level-triggered and needs neither a fixed polling loop nor a false→true
+connectivity edge. TanStack remains request/cache machinery, not the authority for acceptance.
+
+**Consequences.** `startUndoable` becomes presentation-only: transient request failure keeps
+the accepted projection and shows queued state; rollback occurs only for refusal or known
+permanent rejection. PATCH/delete settlement can no longer identify a logical write with a
+fresh `Date.now()`. The recurrence-edit receipt introduced immediately before this ADR is a
+specialized consumer of the same acknowledged-receipt rule and remains retained until strong
+targeted agenda reconciliation proves the canonical projection.
+
+**Measured exception.** P2-59 does not change reachability policy. The local five-second
+health timeout must be instrumented or reproduced before probe decoupling; agenda latency by
+itself is not evidence that the probe failed.
+
+**Alternatives rejected.** Treating every rejected promise as failure — contradicts a durable
+queued record. Holding Undo until the toast expires — closing the app loses the action.
+Executing inverses without dependencies — can invert an original the server never accepted.
+A fixed replay loop — drains battery and invites a reconnect herd. Cross-entity parallel
+dispatch now — optional throughput work with no correctness benefit over the simpler serial
+owner.

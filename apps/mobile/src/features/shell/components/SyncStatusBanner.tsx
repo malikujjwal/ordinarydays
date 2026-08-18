@@ -13,8 +13,8 @@ export function SyncStatusBanner() {
   /**
    * Intents the queue could not land (P2-48).
    *
-   * `failed` is a permanent server rejection; `needs_confirmation` is a write parked by age or
-   * an untrusted clock. Both hold words the user typed and both are retained until the user
+   * Structured `needs_attention` covers permanent rejection and writes parked by age or an
+   * untrusted clock. Both hold words the user typed and both are retained until the user
    * acts, so both belong in the one banner §5.4 already specifies rather than in a second
    * surface. The count is of writes, which is what `<n> changes` means here.
    */

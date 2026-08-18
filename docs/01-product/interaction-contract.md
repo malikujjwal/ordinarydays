@@ -387,8 +387,11 @@ there is one is §1a.1.
 - The optimistic update is applied instantly; the network call fires immediately, not at the
   end of the window. Undo is a compensating call, not a delayed commit. This keeps the app
   correct when it is closed mid-window.
-- If the original call failed, the row reverts and the toast becomes an error toast with
-  `Retry` instead of `Undo`.
+- For an offline-capable action, the durable coordinator — not one HTTP promise — decides the
+  result. A transient request failure leaves the optimistic row projected and queued. The row
+  reverts and the toast becomes an error toast with `Retry` only when durable append was
+  refused or the server permanently rejected the action. Undo after dispatch is itself a
+  durable dependent action, so closing the app cannot lose it.
 - Toasts announce themselves to screen readers with `accessibilityLiveRegion="polite"` and
   their `Undo` button is focusable.
 
@@ -472,13 +475,13 @@ message can name it.
 | Detection | Connectivity state plus request failure. A single connectivity change does not clear the queue. |
 | Indicator | A persistent 20 pt bar under the header: `Offline — changes will sync.` No modal, no blocking. **Strictly connectivity-scoped (founder, 2026-08-17):** it shows while offline and disappears the moment connectivity returns. It never stays up to report a queue that is still draining — that is a second meaning needing a second string, and per-write status is the `Pending` indicator's job. |
 | Reads | The last agenda, list and plan responses are cached and served. Today works fully offline for the current day. |
-| Writes | Queued in order, per entity, with their `Idempotency-Key` preserved so a retry cannot duplicate. Applied optimistically. |
+| Writes | Queued in order, per entity, with stable unique intent identity and their `Idempotency-Key` preserved so a retry cannot duplicate. Applied optimistically. A blocked N prevents N+1 for that entity from dispatching. |
 | Queued row indicator | A small `Pending` dot in the row's trailing slot. Not an error colour. |
 | Conflicts on reconnect | Server state wins for fields the user did not touch. A queued write that returns `409` surfaces one banner: `<n> changes couldn't be applied.` with a list. |
 | Capture | Not attempted offline ([`ai-capture.md`](ai-capture.md#61-the-failure-matrix)). |
 | Uploads | Queued; the attachment shows a placeholder until the upload succeeds. |
-| Queue limits | 200 unacknowledged intents; beyond that, new writes are refused with `You're offline and there's a lot waiting to sync.` **Amended 2026-08-17 (P2-48):** the count is of queued *user data*, so a `failed` or `needs_confirmation` intent counts toward it — each still holds words the user typed. The refusal happens before the action is reported accepted, never after. |
-| Undo while offline | Works — it is a compensating local operation and a queued call. |
+| Queue limits | 200 unacknowledged intents; beyond that, new writes are refused with `You're offline and there's a lot waiting to sync.` **Amended 2026-08-18 (P2-59):** the count is of queued *user data*, so `needs_attention` intents count — each still holds words the user typed. The refusal happens before the action is reported accepted, never after, and `refused` is never persisted. |
+| Undo while offline | Works. A queued original is cancelled atomically; once the original is in flight or acknowledged, Undo is a durable inverse ordered after it. |
 
 **A pending entity is visible and inert — amended 2026-08-17 (Phase 2.6).** *"Applied
 optimistically"* above describes a write against an entity the server already knows.
@@ -496,11 +499,13 @@ armed locally once P2-57 lands).
 discarded by a cache-version change; each is persisted before the action is reported as
 accepted (`tech-stack.md` §3.4 mechanism 4). After 30 days without acknowledgement — or
 whenever the device clock proves untrustworthy — an intent stops replaying automatically and
-enters **`needs_confirmation`**: no automatic write; for a create, an online read-only check
+enters **`needs_attention/parked`**: no automatic write; for a create, an online read-only check
 may resolve it silently in the user's favour; otherwise the row asks
 `This never synced — retry or discard?` where **Retry** performs the action now as a fresh
 write and **Discard** requires the explicit tap. A permanently rejected write surfaces
-through the `<n> changes couldn't be applied.` banner above and is removed only by the user.
+as structured `needs_attention/rejected` through the `<n> changes couldn't be applied.`
+banner above and is removed only by the user. Display text is never parsed to decide either
+case.
 
 ### 5.5 Reschedule and snooze sheet copy
 

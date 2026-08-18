@@ -340,7 +340,11 @@ export function useActivityDetail(
     },
     removeReminder: async (reminderId) => {
       try {
-        await reminderDeleteMutation.mutateAsync({ activityId, reminderId });
+        await reminderDeleteMutation.mutateAsync({
+          activityId,
+          reminderId,
+          intentId: randomUUID(),
+        });
         return true;
       } catch {
         return false;

@@ -7,7 +7,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import { Platform } from 'react-native';
-import type { IntentLog } from '@/lib/intentLog';
+import { type IntentLog, semanticallyIdenticalIntent } from '@/lib/intentLog';
 
 /**
  * Persistence for the **query cache only**.
@@ -198,30 +198,59 @@ export async function importLegacyPausedMutations(
   const mutations = clientState?.mutations;
   if (!Array.isArray(mutations) || mutations.length === 0) return 0;
 
-  const known = new Set(log.pending().map((intent) => intent.intentId));
   let imported = 0;
-  for (const mutation of mutations) {
+  for (const [index, mutation] of mutations.entries()) {
     const key = mutation.mutationKey;
     const variables: unknown = mutation.state?.variables;
     if (!Array.isArray(key) || typeof variables !== 'object' || variables === null) {
       continue;
     }
-    const fields = variables as { idempotencyKey?: unknown; activityId?: unknown };
+    const fields = variables as {
+      intentId?: unknown;
+      idempotencyKey?: unknown;
+      activityId?: unknown;
+      input?: { activityId?: unknown };
+    };
     /**
      * The persisted `Idempotency-Key` is the intent id. It was minted once when the mutation
      * was enqueued and is the same value the server deduplicates on, so an import that runs
      * twice produces one intent and, ultimately, one server write.
      */
-    const intentId =
-      typeof fields.idempotencyKey === 'string' ? fields.idempotencyKey : undefined;
-    if (intentId === undefined || known.has(intentId)) continue;
-    await log.append({
-      intentId,
+    const entityId =
+      typeof fields.activityId === 'string'
+        ? fields.activityId
+        : typeof fields.input?.activityId === 'string'
+          ? fields.input.activityId
+          : `legacy-entity-${index + 1}`;
+    const baseIntentId =
+      typeof fields.intentId === 'string'
+        ? fields.intentId
+        : typeof fields.idempotencyKey === 'string'
+          ? fields.idempotencyKey
+          : `legacy-${mutation.state?.submittedAt ?? 0}-${index + 1}`;
+    const semantic = {
       mutationKey: key.map(String),
       variables,
-      entityId: typeof fields.activityId === 'string' ? fields.activityId : intentId,
+      entityId,
+    };
+    const same = log
+      .snapshot()
+      .intents.find(
+        (intent) =>
+          intent.intentId === baseIntentId &&
+          semanticallyIdenticalIntent(intent, semantic),
+      );
+    if (same !== undefined) continue;
+    let intentId = baseIntentId;
+    let suffix = 2;
+    while (log.snapshot().intents.some((intent) => intent.intentId === intentId)) {
+      intentId = `${baseIntentId}~legacy-${suffix}`;
+      suffix += 1;
+    }
+    await log.append({
+      intentId,
+      ...semantic,
     });
-    known.add(intentId);
     imported += 1;
   }
   return imported;
@@ -238,19 +267,30 @@ export function retireImportedLegacyPausedMutations(
   client: QueryClient,
   log: IntentLog,
 ): number {
-  const imported = new Set(log.pending().map((intent) => intent.intentId));
+  const imported = log.pending();
   let retired = 0;
   for (const mutation of client.getMutationCache().getAll()) {
     if (!mutation.state.isPaused) continue;
-    const variables = mutation.state.variables as
-      | { idempotencyKey?: unknown }
-      | undefined;
-    if (
-      typeof variables?.idempotencyKey !== 'string' ||
-      !imported.has(variables.idempotencyKey)
-    ) {
+    const variables = mutation.state.variables;
+    if (typeof variables !== 'object' || variables === null) continue;
+    const fields = variables as {
+      activityId?: unknown;
+      input?: { activityId?: unknown };
+    };
+    const entityId =
+      typeof fields.activityId === 'string'
+        ? fields.activityId
+        : typeof fields.input?.activityId === 'string'
+          ? fields.input.activityId
+          : undefined;
+    if (entityId === undefined || !Array.isArray(mutation.options.mutationKey)) continue;
+    const semantic = {
+      mutationKey: mutation.options.mutationKey.map(String),
+      variables,
+      entityId,
+    };
+    if (!imported.some((intent) => semanticallyIdenticalIntent(intent, semantic)))
       continue;
-    }
     client.getMutationCache().remove(mutation);
     retired += 1;
   }

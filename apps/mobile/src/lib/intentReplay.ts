@@ -134,6 +134,21 @@ function isPermanent(error: unknown): boolean {
   return status >= 400 && status < 500;
 }
 
+function rejectionDetails(error: unknown): {
+  status?: number;
+  code?: string;
+  details?: unknown;
+} {
+  const candidate = error as
+    | { status?: unknown; code?: unknown; details?: unknown }
+    | undefined;
+  return {
+    ...(typeof candidate?.status === 'number' ? { status: candidate.status } : {}),
+    ...(typeof candidate?.code === 'string' ? { code: candidate.code } : {}),
+    ...(candidate?.details === undefined ? {} : { details: candidate.details }),
+  };
+}
+
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -244,7 +259,7 @@ async function replayPass(
         continue;
       }
       if (isPermanent(error)) {
-        await log.fail(claimed.intentId, message(error));
+        await log.fail(claimed.intentId, message(error), rejectionDetails(error));
         result.failed += 1;
       } else {
         await log.requeue(claimed.intentId, message(error));

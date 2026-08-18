@@ -554,21 +554,44 @@ server request. Acknowledgement removes that exception and enables the canonical
 | Account boundary | Cleared on sign-out | Namespaced by `userId`, quarantined on sign-out |
 
 An intent is persisted **before** the user is told the action was accepted and before the
-request is attempted — a write-ahead record, not a replica. Lifecycle:
-`queued → in_flight → acknowledged → removed`; transient failure → `queued`; permanent
-failure → `failed`, surfaced, retained until dismissed. After
+request is attempted — a write-ahead record, not a replica. Persisted schema v2 lifecycle:
+`queued → in_flight → acknowledged`; transient failure → `queued`; permanent failure →
+`needs_attention/rejected`, with structured status/code/details where available. `refused`
+exists only as the action coordinator's result when append fails; it is never stored. After
 `MAX_AUTOMATIC_INTENT_AGE_DAYS` (`packages/shared`, shared with the server's deletion
 tombstones so the two windows cannot be tuned apart), or whenever the persisted timestamp is
-implausible or clock rollback is detected, an intent moves to `needs_confirmation`: **clock
-uncertainty reduces automation, never extends the replay window.** Cancellation is valid in
-`queued` only.
+implausible or clock rollback is detected, an intent moves to
+`needs_attention/parked` with an enumerated cause: **clock uncertainty reduces automation,
+never extends the replay window.** `lastError` is display/diagnostic text only and is never
+parsed for behavior. Cancellation is valid in `queued` only.
+
+Stable, unique `intentId` is a schema invariant. Appending the same id and canonically
+equivalent semantic payload is an idempotent no-op; reusing it for a different mutation,
+entity, variables or dependency is an invariant/corruption failure. PATCH and DELETE mint
+that id once and carry it through settlement — a newly evaluated clock value cannot identify
+a logical write. v1 migration preserves every distinct user write, maps `failed` and
+`needs_confirmation` into structured v2 attention, and deterministically disambiguates
+conflicting legacy duplicate ids.
+
+An inverse action is another durable intent with a causal dependency on the original.
+`queued`, `in_flight` and `needs_attention` dependencies block; `acknowledged` permits the
+dependent. Acknowledged parents retain lightweight receipts while any dependent or strong
+recurrence reconciliation needs the outcome, and compact only afterward. A missing dependency
+blocks unless a schema invariant proves its acknowledgement; it is never assumed successful.
+Queued Undo atomically cancels the original and projection. Undo after claim durably appends
+the inverse. Response-loss ambiguity recovers the original authoritatively before either
+retiring or dispatching that inverse.
 
 **TanStack is the execution layer, not the durability boundary.** On cold start the log is
 authoritative and pending work is rebuilt from it — including mutations that were mid-flight
 rather than paused when the process died. The iOS intent-log session is the sole replay owner:
-connectivity requests a coalesced, process-wide serial drain; an atomic claim either moves one
-`queued` intent to `in_flight` or leaves it byte-for-byte untouched. A second reconnect cannot
-dispatch the same intent, overtake the FIFO pass, or reinterpret a failed claim as deletion.
+enqueue, transient backoff, foreground and connectivity request a bounded/coalesced,
+process-wide serial drain; an atomic claim either moves one eligible `queued` intent to
+`in_flight` or leaves it byte-for-byte untouched. The serial owner enforces a per-entity
+barrier: a requeued or attention-requiring N blocks N+1 for that entity while another entity
+may progress. A second trigger cannot dispatch the same intent, overtake the barrier, or
+reinterpret a failed claim as deletion. This is level-triggered liveness, not a fixed loop and
+not a dependency on observing an offline→online edge.
 
 **Pending is not synced.** A client-minted id is not server acceptance. §5.4's `Pending`
 indicator and offline bar are entity-generic and copy-parameterised (Phase 3's

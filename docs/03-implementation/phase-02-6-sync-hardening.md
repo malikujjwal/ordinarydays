@@ -8,13 +8,14 @@ tasks already specify queued offline creates and a visible `Plan will finish syn
 (`phase-03-plans-and-lists.md` P3-13), and building those against today's persistence layer
 would build them on writes that can silently disappear.
 
-Three guarantees, deliberately not conflated, each owned by one task:
+Four guarantees, deliberately not conflated, each owned by one task:
 
 | | Promise | Task |
 | --- | --- | --- |
 | 1 | *"I won't lose what I created offline."* | P2-48, P2-49 |
 | 2 | *"I can see, trust and cancel what hasn't reached the server."* | P2-48, P2-50 |
 | 3 | *"A reminder I set offline will actually remind me."* | P2-57 |
+| 4 | *"Undo and retry follow what was durably accepted, not whether one HTTP promise resolved."* | P2-59 |
 
 A fourth — *"I can keep working with something that hasn't reached the server"* — is
 deliberately **not** in this phase. It is specified as P2-58 and parked.
@@ -56,7 +57,7 @@ disabled).
    coordination needed" — is the property the temp-id design was rebuilding by hand.
 2. **Retention is indefinite; automation is bounded.** An intent is never deleted by age.
    After `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30, `packages/shared/src/constants.ts`) it stops
-   replaying automatically and moves to `needs_confirmation`, where the user chooses retry
+   replaying automatically and moves to `needs_attention/parked`, where the user chooses retry
    or discard. Deletion tombstones need to cover only that window, plus no margin borrowed
    from DynamoDB's lazy TTL deletion.
 3. **Collision recovery reads; it never re-mints automatically.** On a conditional-create
@@ -72,7 +73,7 @@ disabled).
    is online-only.
 6. **Clock uncertainty reduces automation, never extends it.** An intent whose persisted
    timestamp is implausibly in the future, or where clock history indicates rollback, is not
-   auto-replayed; it goes to `needs_confirmation`.
+   auto-replayed; it goes to `needs_attention/parked`.
 7. **iOS only.** ADR-024's web rationale stands: a browser tab is closed, not backgrounded,
    and a queue that never flushes is worse than an error toast.
 
@@ -103,8 +104,11 @@ Recorded here so later phases inherit them rather than rediscover them.
 | P2-50 | Pending-entity behaviour: inert, explained, cancellable | mobile | P2-49 | yes | M |
 | P2-57 | Local reminder projection and cache-driven scheduling | shared/api/mobile | P2-34, P2-49 | yes | L |
 | P2-58 | Actions against a pending entity | — | — | **parked** | — |
+| P2-59 | Durable action coordinator, dependent intents and replay liveness | mobile/docs | P2-48, P2-49 | no | L |
 
-**4 tasks / 14 AWU** (P2-58 uncounted). Ordering: P2-48 → P2-49 → {P2-50, P2-57}.
+**5 tasks / 18 AWU** (P2-58 uncounted). Ordering:
+P2-48 → P2-49 → {P2-50, P2-57} → P2-59. P2-59 is not parallel-safe with
+other intent-log work.
 
 ---
 
@@ -145,13 +149,13 @@ a minimum.
   `queued`; permanent failure → `failed`, surfaced through §5.4's
   `<n> changes couldn't be applied.` banner, retained until dismissed. Older than
   `MAX_AUTOMATIC_INTENT_AGE_DAYS`, or timestamp implausible / clock rollback detected →
-  `needs_confirmation`: no automatic write, an online read-only `GET` may reconcile a
+  `needs_attention/parked`: no automatic write, an online read-only `GET` may reconcile a
   create, and only an explicit user retry (fresh id, fresh idempotency key) or discard
   resolves it. Cancellation is valid only in `queued`.
 - **Visible.** The §5.4 offline bar and the `Pending` row indicator, both entity-generic and
   copy-parameterised so Phase 3's `Plan will finish syncing` and P2-57's reminder copy are
   parameters, not new systems. The 200-intent cap moves here from `MutationCache.onMutate`;
-  `failed` and `needs_confirmation` intents count toward it (they hold real user data).
+  `needs_attention` intents count toward it (they hold real user data).
 - **FIFO per entity; no cross-entity ordering promise.** Serialize log writes; a storage
   write failure or quota error surfaces before the action is reported accepted.
 
@@ -163,7 +167,7 @@ two concurrent replay requests dispatch one intent once and cannot overtake the 
 intent; a failed claim leaves its stored intent byte-for-byte unchanged; a reconnect requested
 during a transient failure is coalesced and reruns; a cancel racing reconnect either cancels
 before dispatch or the race loser is a no-op — never a double write; sign-out then sign-in as
-another user replays nothing; clock rollback parks intents in `needs_confirmation`.
+another user replays nothing; clock rollback parks intents in `needs_attention/parked`.
 
 **Scope guard.** No web queue (ADR-024 stands). No new server behaviour. No mutations
 against pending entities (P2-58). The lifecycle UI beyond bar + indicator + banners is
@@ -218,7 +222,7 @@ resurrected; create → delete after TTL-expiry of the tombstone cannot occur in
 automation window (property: `deletedAt + N ≥ intentCreatedAt + N`); collision with a
 foreign id surfaces confirmation; a client-supplied malformed id is `validation_failed`; the
 201-reconciliation preserves the client id and adopts server `createdAt`/`updatedAt`;
-`needs_confirmation` retry uses a fresh id and key.
+`needs_attention/parked` retry uses a fresh id and key.
 The mobile projection test also proves persist → full cached-window recurrence expansion →
 request, and that the `201` atomically replaces the provisional rows without changing id.
 
@@ -241,8 +245,8 @@ absent-or-disabled-with-words on a row whose `CREATE` is unacknowledged; the det
 explains: `Waiting to sync — you can cancel it, and everything else unlocks once it's
 synced.` Cancel is offered in `queued` only, removes intent + projection, sends nothing.
 A reminder attached to a pending activity states it is not armed until sync (until P2-57
-lands, and its copy then changes to the armed-locally wording). `needs_confirmation` and
-`failed` intents render their §5.4 banners from here.
+lands, and its copy then changes to the armed-locally wording). Structured
+`needs_attention` intents render their §5.4 banners from here.
 
 **Tests.** No completion/reschedule/edit affordance on a pending row (capability probe, not
 style probe); cancel in `queued` issues no request and clears row + intent; an `in_flight`
@@ -303,6 +307,75 @@ it amends §5.4's inert paragraph. Not scheduled, not counted.
 
 ---
 
+### P2-59 — Durable action coordinator, dependent intents and replay liveness
+
+**Promise.** The durable mutation layer — not an HTTP promise — decides whether an
+offline-capable action was refused, queued, in flight, acknowledged, or needs attention;
+Undo remains safe across transient failure, response loss, races and process death.
+
+**Files.** `apps/mobile/src/lib/{intentLog.ts,intentReplay.ts,intentLogSession.ts,
+queryClient.ts,startUndoable.ts,durableAction.ts}`, their focused tests, the existing
+activity/agenda undo call sites, and ADR-056 plus the Phase 2.6 architecture/product
+amendments. Inventory is a minimum. This task must preserve P2-54/P2-55's occurrence
+targeting and the durable recurring-series reconciliation that lands immediately before it.
+
+**Approach.**
+
+- **Intent schema v2.** `refused` is coordinator-only and never stored. Persist only
+  `queued | in_flight | acknowledged | needs_attention`. `needs_attention` carries
+  structured `rejected` (permanent HTTP status/code/details when available) or `parked`
+  (`clock_uncertainty`, `replay_age_expired`, `ambiguous_collision`, `legacy_unknown`).
+  `lastError` remains display/diagnostic text and is never parsed for control flow.
+- **Migration and identity.** v1 `failed` migrates to
+  `needs_attention/rejected`; `needs_confirmation` migrates to
+  `needs_attention/parked/legacy_unknown` unless a structured cause can be proved. Every
+  distinct write survives. Identical duplicate appends for one stable id coalesce;
+  conflicting payload reuse surfaces an invariant/corruption failure. Legacy duplicate ids
+  are disambiguated deterministically without losing distinct writes. PATCH/delete
+  settlement uses a stable id minted once, never a newly evaluated `Date.now()`.
+- **Dependencies and receipts.** An inverse is a durable dependent ordered after its
+  original. A dependency in `queued`, `in_flight` or `needs_attention` blocks dispatch;
+  `acknowledged` permits it. Acknowledged parents retain lightweight receipts while a
+  dependent needs the outcome and compact only afterward. Missing dependencies block unless
+  a schema invariant proves acknowledgement. Cancel/discard atomically retires compensation
+  dependents. A lost response is recovered authoritatively before the inverse is retired or
+  executed.
+- **Observable coordinator.** `DurableAction` reports
+  `refused | queued | in_flight | acknowledged | needs_attention` and exposes
+  `undo(): Promise<DurableAction>`. Queued Undo atomically cancels the original and reverts
+  projection. In-flight/acknowledged Undo appends the inverse durably. Permanent rejection
+  rolls back and retires an unnecessary inverse; ambiguity preserves both until recovery.
+  `startUndoable` becomes presentation-only and does not translate a transient request
+  rejection into action failure.
+- **Replay barrier and liveness.** Replay initially remains globally serial, but selection
+  enforces a real per-entity barrier: if N requeues or needs attention, N+1 for that entity
+  does not dispatch; unrelated entities may progress. Replay is level-triggered,
+  single-flight and bounded/coalesced on enqueue, transient backoff, foreground and
+  reconnect, without requiring a false→true connectivity edge or installing a fixed loop.
+- **Measured reachability.** Do not change the local probe policy merely because agenda
+  reconciliation is slow. Instrument or reproduce the five-second health timeout first;
+  probe decoupling is a separate measured change. TanStack remains cache/request execution
+  machinery, never the semantic authority for durable acceptance.
+
+**Tests.** (1) append failure returns `refused`, sends nothing and rolls back; (2) transient
+offline completion remains projected and reports `queued`; (3) queued Undo atomically
+cancels and never replays; (4) Undo racing claim produces cancel-before-claim or one durable
+inverse-after-claim; (5) process death after in-flight Undo preserves the inverse; (6)
+permanent rejection becomes structured `needs_attention/rejected` and rolls back/surfaces;
+(7) age/clock/collision becomes `needs_attention/parked` and does not replay; (8) identical
+duplicate append creates one intent while conflicting reuse surfaces safely; (9) v1→v2
+migration preserves distinct writes and explicitly handles duplicate legacy ids; (10)
+same-entity N+1 does not dispatch behind requeue/attention while another entity may progress;
+(11) enqueue/foreground/reconnect/backoff triggers coalesce and eventually drain without a
+connectivity edge; (12) recurring create, ordinary create, completion detail projection,
+recurring-series reconciliation and existing replay suites remain green.
+
+**Scope guard.** No web queue. No cross-entity concurrency requirement. No server recurrence
+change, pending-entity mutation expansion, CRDT/local replica, or probe-policy change without
+measured evidence. No parsing `lastError` for behavior.
+
+---
+
 ## Acceptance criteria
 
 1. Airplane mode → create task with reminder → kill app → relaunch offline → row shows
@@ -321,3 +394,14 @@ it amends §5.4's inert paragraph. Not scheduled, not counted.
    later handoff test shows no double delivery.
 8. `pnpm verify` green; OpenAPI regenerated and committed; every doc named in the preamble
    amended in the same PRs that change the behaviour it describes.
+9. Durable append refusal sends no request and rolls projection back; transient network
+   failure keeps the accepted projection queued, and permanent rejection is structured
+   `needs_attention/rejected` rather than inferred from display text.
+10. Undo cancellation/inverse races are atomic and crash-safe: a queued original never
+    replays after cancellation, while an in-flight or acknowledged original has exactly one
+    durable dependent inverse whose dependency is resolved authoritatively.
+11. Intent-log v1→v2 migration preserves every distinct write, handles duplicate ids
+    deterministically, and new duplicate appends are idempotent only for equivalent payloads.
+12. Replay cannot overtake a blocked earlier intent for one entity; coalesced enqueue,
+    backoff, foreground and reconnect triggers eventually drain eligible work without a
+    fixed polling loop or a required offline→online edge.

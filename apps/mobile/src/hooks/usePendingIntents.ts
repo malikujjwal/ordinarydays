@@ -146,9 +146,7 @@ export async function cancelPendingCreate(intentId: string): Promise<boolean> {
 /** Intents the user has to resolve: permanently rejected, or parked by age or clock doubt. */
 export function useBlockedIntents(): readonly Intent[] {
   const intents = usePendingIntents();
-  return intents.filter(
-    (intent) => intent.status === 'failed' || intent.status === 'needs_confirmation',
-  );
+  return intents.filter((intent) => intent.status === 'needs_attention');
 }
 
 /**
