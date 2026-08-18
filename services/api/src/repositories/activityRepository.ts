@@ -415,6 +415,21 @@ export async function getActivityPartition(activityId: string): Promise<StoredIt
   return queryAll<StoredItem>(activityPartition(activityId));
 }
 
+/** Strong canonical partition read used only by activity-scoped agenda reconciliation. */
+export async function getActivityPartitionStrong(
+  activityId: string,
+): Promise<StoredItem[]> {
+  return queryAll<StoredItem>(activityPartition(activityId), { consistentRead: true });
+}
+
+/** Parses the canonical META row already obtained as part of a partition read. */
+export function activityFromPartition(
+  partition: readonly StoredItem[],
+): Activity | undefined {
+  const meta = partition.find((row) => row.sk === 'META');
+  return meta === undefined ? undefined : parseActivity(meta);
+}
+
 /** The `META` row alone, for the paths that do not need the whole partition. */
 export async function getActivityMeta(activityId: string): Promise<Activity | undefined> {
   return getItem<Activity & StoredItem>(activityMeta(activityId));

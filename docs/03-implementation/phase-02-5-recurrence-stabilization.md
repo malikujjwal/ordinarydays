@@ -155,19 +155,28 @@ transaction. End series remains a recurrence patch that sets an explicit inclusi
 end clears the series-level termination fields. Every write is explicitly activity- or
 occurrence-targeted and server-guarded.
 
-Replace “mark stale with no refetch for up to 60 seconds” with versioned reconciliation. A
-successful mutation supplies a version/token; the client retains its newer projection and
-retries the agenda read with bounded backoff until the returned projection has observed that
-version. A stale GSI response may never overwrite newer state. Once a recurrence write is
-acknowledged, remove the known-stale prior expansion immediately while reconciliation waits;
-do not leave obsolete frequencies interactive. Remove recurrence-specific partial expansion
-from `applyPatch`; the server remains the projection authority.
+Replace “mark stale with no refetch for up to 60 seconds” with activity-scoped versioned
+reconciliation. Classify only a recurrence-changing PATCH of an existing Activity; recurring
+CREATE remains locally expandable and never enters this state. A queued offline series edit
+retains the last canonical occurrence rows, makes them inert, and survives restart through
+the durable intent log. A stale or unproven ordinary GSI response may update unaffected
+Activities but may never erase those protected rows.
+
+After PATCH acknowledgement, bypass discovery with the strongly consistent targeted
+`ACT#<id>` agenda read in `api-contract.md` §2.2 / `data-model.md` pattern 4d. Atomically splice
+its server-expanded rows into each cached window only when its META version proves the write;
+an authoritative empty array removes the Activity. Timeout/network failure retains the rows
+and surfaces manual Retry. Canonical proof, cancellation, or permanent rejection clears the
+per-Activity protection. Remove recurrence-specific partial expansion from `applyPatch`; the
+server remains the projection authority.
 
 **Tests.** The conversion transaction changes META and its index atomically, preserves the
-selected effective schedule, and leaves stored Occurrence history untouched. Inject two stale
-agenda responses before a current one and prove neither stale body replaces the projection.
-Count and date endings reconcile identically. Component tests distinguish Does not repeat,
-No end and End series and prove that each invokes only its named operation.
+selected effective schedule, and leaves stored Occurrence history untouched. Cover recurring
+CREATE classification/offline expansion, immediate completion/detail projection, restart,
+single-owned PATCH replay, protected ordinary/manual refresh, targeted proof and failure,
+authoritative zero rows, and independent single-occurrence edits. Count and date endings
+reconcile identically. Component tests distinguish Does not repeat, No end and End series and
+prove that each invokes only its named operation.
 
 > **Two obligations handed over by P2-52 — 2026-08-17.** P2-52 is documentation only and does
 > not edit code, so it records these rather than fixing them. Both are places where shipped

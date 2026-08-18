@@ -1,8 +1,10 @@
 import { type AgendaQuery, parseAgendaInclude } from '@od/shared/schemas';
-import type { AgendaData, AgendaDay } from '@od/shared/types';
+import type { ActivityAgendaData, AgendaData, AgendaDay } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
+import { getActivityPartitionStrong } from '../repositories/activityRepository.js';
 import { projectAgendaItem, projectAgendaItems } from './agendaProjection.js';
-import { assembleAgenda } from './agendaService.js';
+import { assembleAgenda, targetedAgendaDependencies } from './agendaService.js';
+import { assertActivityReadAccessFromPartition } from './authz.js';
 
 /** Public agenda read: assemble canonical candidates, then apply caller-specific projection. */
 export async function getAgenda(
@@ -38,6 +40,55 @@ export async function getAgenda(
     ),
     warnings: [...assembly.warnings],
     projectionVersions: [...assembly.projectionVersions],
+  };
+}
+
+/**
+ * Canonical, activity-scoped agenda read used to reconcile an acknowledged series edit.
+ * It deliberately bypasses GSI discovery and treats an empty row array as authoritative.
+ */
+export async function getActivityAgenda(
+  userId: string,
+  activityId: string,
+  query: AgendaQuery,
+  now: string,
+): Promise<ActivityAgendaData> {
+  assertSupportedTimezone(query.tz);
+  const partition = await getActivityPartitionStrong(activityId);
+  const activity = await assertActivityReadAccessFromPartition(userId, partition);
+  const include = new Set(parseAgendaInclude(query.include));
+  const assembly = await assembleAgenda(
+    {
+      userId,
+      from: query.from,
+      to: query.to,
+      timezone: query.tz,
+      now,
+      includeAnytimeUnscheduled: include.has('anytime_unscheduled'),
+      includeOverdue: include.has('overdue'),
+      includeReminders: include.has('reminders'),
+    },
+    targetedAgendaDependencies(activity, partition),
+  );
+  const clock = { now, timezone: query.tz, today: query.from };
+
+  return {
+    activityId,
+    activityVersion: activity.updatedAt,
+    rows: assembly.days.flatMap((day) => [
+      ...day.schedule.map((candidate) => ({
+        date: day.date,
+        item: projectAgendaItem(candidate, clock),
+      })),
+      ...day.anytime.map((candidate) => ({
+        date: day.date,
+        item: projectAgendaItem(candidate, clock),
+      })),
+      ...day.earlier.map((candidate) => ({
+        date: day.date,
+        item: projectAgendaItem(candidate, clock),
+      })),
+    ]),
   };
 }
 

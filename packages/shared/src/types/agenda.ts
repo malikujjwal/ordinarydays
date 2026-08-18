@@ -85,3 +85,21 @@ export interface AgendaData {
   /** Optional only for wire compatibility with agenda bodies cached before P2-54. */
   projectionVersions?: AgendaProjectionVersion[];
 }
+
+/** One canonical row returned by the activity-scoped, strongly consistent agenda read. */
+export interface ActivityAgendaRow {
+  date: string;
+  item: AgendaItem;
+}
+
+/**
+ * Canonical agenda projection for exactly one activity and one requested window.
+ *
+ * `rows` is authoritative even when empty. `activityVersion` is the META version read from
+ * the same strongly consistent partition snapshot used to build the rows.
+ */
+export interface ActivityAgendaData {
+  activityId: string;
+  activityVersion: string;
+  rows: ActivityAgendaRow[];
+}

@@ -644,6 +644,45 @@
           "channel"
         ]
       },
+      "ActivityAgendaData": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "activityVersion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "item": {
+                  "$ref": "#/components/schemas/AgendaItem"
+                }
+              },
+              "required": [
+                "date",
+                "item"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "activityId",
+          "activityVersion",
+          "rows"
+        ],
+        "additionalProperties": false
+      },
       "ActivityListItem": {
         "type": "object",
         "properties": {
@@ -4212,6 +4251,123 @@
           },
           "400": {
             "description": "A malformed date or timezone, an invalid include token, or a window over 62 days.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agenda/activities/{id}": {
+      "get": {
+        "summary": "Canonical agenda rows for one activity",
+        "description": "Reads the ACT partition strongly consistently, expands that activity for the requested window without GSI discovery, and returns the META version used. An empty rows array is authoritative. Intended for post-PATCH series reconciliation.",
+        "tags": [
+          "agenda"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 64,
+              "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
+            },
+            "required": true,
+            "name": "tz",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "include",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical rows and the activity version used to produce them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ActivityAgendaData"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed activity id, date window, include token, or timezone.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The activity is absent or not visible to the caller.",
             "content": {
               "application/json": {
                 "schema": {

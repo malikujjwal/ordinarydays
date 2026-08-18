@@ -141,6 +141,19 @@ export const agendaData = z
   })
   .meta({ id: 'AgendaData' });
 
+export const activityAgendaRow = z.strictObject({
+  date: isoDate,
+  item: agendaItem,
+});
+
+export const activityAgendaData = z
+  .strictObject({
+    activityId: ulidId('act'),
+    activityVersion: z.string().min(1),
+    rows: z.array(activityAgendaRow),
+  })
+  .meta({ id: 'ActivityAgendaData' });
+
 function wallDay(value: string): number {
   const [year, month, day] = value.split('-').map(Number) as [number, number, number];
   return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000);

@@ -80,6 +80,11 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
 
   // §2.2 Agenda
   { method: 'GET', pattern: '/v1/agenda', auth: 'authenticated' },
+  {
+    method: 'GET',
+    pattern: '/v1/agenda/activities/:id',
+    auth: 'authenticated',
+  },
 
   // §2.2 Flat activity lists, and §2.3 Activities
   { method: 'GET', pattern: '/v1/activities', auth: 'authenticated' },

@@ -1,6 +1,14 @@
+import { deriveGsi1Bucket } from '@od/shared/activity';
 import { MAX_ACTIVE_SERIES, OVERDUE_WINDOW_DAYS } from '@od/shared/constants';
 import { addWallDays, expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
-import { agendaParticipantAvatar, ianaTimezone, ulidId } from '@od/shared/schemas';
+import {
+  agendaParticipantAvatar,
+  ianaTimezone,
+  occurrenceMoveMarker as occurrenceMoveMarkerSchema,
+  occurrence as occurrenceSchema,
+  reminder as reminderSchema,
+  ulidId,
+} from '@od/shared/schemas';
 import type {
   Activity,
   AgendaParticipantAvatar,
@@ -120,6 +128,106 @@ const DEFAULT_DEPENDENCIES: AgendaDependencies = {
   expand: expandRecurrence,
   warn: (message, fields) => logger.warn(fields ?? {}, message),
 };
+
+/**
+ * Builds the same projection as the ordinary agenda read without GSI discovery. Every target
+ * row comes from the supplied strongly consistent activity partition; unrelated parent context
+ * may still use its ordinary bounded repository reads.
+ */
+export function targetedAgendaDependencies(
+  activity: Activity,
+  partition: readonly StoredItem[],
+): AgendaDependencies {
+  const participantRows = partition.filter(
+    (row) => typeof row.sk === 'string' && row.sk.startsWith('PART#'),
+  );
+  const participantAvatars = participantRows.flatMap((row) => {
+    const parsed = agendaParticipantAvatar.safeParse({
+      personId: row.personId,
+      displayName: row.displayName,
+      ...(typeof row.avatarUrl === 'string' ? { avatarUrl: row.avatarUrl } : {}),
+    });
+    return parsed.success ? [parsed.data] : [];
+  });
+  const indexRow: StoredItem = {
+    pk: activity.activityId,
+    sk: 'TARGETED',
+    entity: 'ActivityIndex',
+    schemaVersion: 1,
+    activityId: activity.activityId,
+    updatedAt: activity.updatedAt,
+    timezone: activity.schedule?.timezone,
+    time: activity.schedule?.time,
+    endTime: activity.schedule?.endTime,
+    participantAvatars,
+  };
+  const bucket = deriveGsi1Bucket(activity);
+  const occurrences = partition.flatMap((row) => {
+    const parsed = occurrenceSchema.safeParse(row);
+    return parsed.success ? [parsed.data as Occurrence] : [];
+  });
+  const markers = partition.flatMap((row): OccurrenceMoveMarker[] => {
+    const parsed = occurrenceMoveMarkerSchema.safeParse(row);
+    if (!parsed.success) return [];
+    return [
+      {
+        ...parsed.data,
+        ...(typeof row.createdAt === 'string' ? { createdAt: row.createdAt } : {}),
+        ...(typeof row.updatedAt === 'string' ? { updatedAt: row.updatedAt } : {}),
+      },
+    ];
+  });
+
+  return {
+    ...DEFAULT_DEPENDENCIES,
+    listBucket: async (_userId, requested) => ({
+      items: requested === bucket ? [indexRow] : [],
+    }),
+    listOverdue: async () => (bucket === 'S' ? [indexRow] : []),
+    batchActivities: async (activityIds) => {
+      const needsTarget = activityIds.includes(activity.activityId);
+      const others = activityIds.filter((id) => id !== activity.activityId);
+      return [
+        ...(needsTarget ? [activity] : []),
+        ...(others.length === 0 ? [] : await batchGetActivityMeta(others)),
+      ];
+    },
+    listParticipants: async (activityId) =>
+      activityId === activity.activityId
+        ? [...participantRows]
+        : listParticipants(activityId),
+    batchAgendaRows: async (occurrencePairs, markerPairs) => {
+      const occurrenceKeys = new Set(
+        occurrencePairs.map((pair) => pairKey(pair.activityId, pair.date)),
+      );
+      const markerKeys = new Set(
+        markerPairs.map((pair) => pairKey(pair.activityId, pair.date)),
+      );
+      return {
+        occurrences: occurrences.filter((row) =>
+          occurrenceKeys.has(pairKey(row.activityId, row.date)),
+        ),
+        markers: markers.filter((row) =>
+          markerKeys.has(pairKey(row.activityId, row.destinationDate)),
+        ),
+      };
+    },
+    batchOccurrences: async (pairs) =>
+      pairs.map(
+        (pair) =>
+          occurrences.find(
+            (row) => row.activityId === pair.activityId && row.date === pair.date,
+          ) ?? null,
+      ),
+    listReminders: async (activityId, userId) =>
+      activityId === activity.activityId
+        ? partition.flatMap((row) => {
+            const parsed = reminderSchema.safeParse(row);
+            return parsed.success && parsed.data.userId === userId ? [parsed.data] : [];
+          })
+        : listRemindersForUser(activityId, userId),
+  };
+}
 
 /** Hydrates, expands and assembles the agenda without performing public projection. */
 export async function assembleAgenda(

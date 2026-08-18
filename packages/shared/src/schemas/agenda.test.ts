@@ -1,7 +1,13 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
-import type { AgendaData, AgendaIncludeToken, AgendaItem } from '../types/index.js';
+import type {
+  ActivityAgendaData,
+  AgendaData,
+  AgendaIncludeToken,
+  AgendaItem,
+} from '../types/index.js';
 import {
+  activityAgendaData,
   agendaData,
   agendaIncludeToken,
   agendaItem,
@@ -165,5 +171,24 @@ describe('agenda response', () => {
     expect(agendaData.safeParse({ ...base, warnings: ['partial_data'] }).success).toBe(
       false,
     );
+  });
+});
+
+describe('activity agenda response', () => {
+  it('matches the hand-written type and accepts authoritative zero rows', () => {
+    expectTypeOf<
+      z.infer<typeof activityAgendaData>
+    >().toEqualTypeOf<ActivityAgendaData>();
+    expect(
+      activityAgendaData.parse({
+        activityId: subject.activityId,
+        activityVersion: '2026-08-18T10:00:00.000Z',
+        rows: [],
+      }),
+    ).toEqual({
+      activityId: subject.activityId,
+      activityVersion: '2026-08-18T10:00:00.000Z',
+      rows: [],
+    });
   });
 });

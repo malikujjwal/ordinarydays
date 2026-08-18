@@ -16,7 +16,7 @@ import {
   skipActivityInput,
   uncompleteActivityInput,
 } from './schemas/activity.js';
-import { agendaData, agendaQuery } from './schemas/agenda.js';
+import { activityAgendaData, agendaData, agendaQuery } from './schemas/agenda.js';
 import {
   captureExtractInput,
   captureLinkInput,
@@ -58,6 +58,7 @@ const deletedReminderResponse = envelope(deletedReminder);
  */
 const activityListResponse = envelope(z.array(activityListItem));
 const agendaResponse = envelope(agendaData);
+const activityAgendaResponse = envelope(activityAgendaData);
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
@@ -257,6 +258,35 @@ registry.registerPath({
     400: {
       description:
         'A malformed date or timezone, an invalid include token, or a window over 62 days.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/v1/agenda/activities/{id}',
+  summary: 'Canonical agenda rows for one activity',
+  description:
+    'Reads the ACT partition strongly consistently, expands that activity for the requested ' +
+    'window without GSI discovery, and returns the META version used. An empty rows array is ' +
+    'authoritative. Intended for post-PATCH series reconciliation.',
+  tags: ['agenda'],
+  request: {
+    params: z.object({ id: activityId }),
+    query: agendaQuery,
+  },
+  responses: {
+    200: {
+      description: 'Canonical rows and the activity version used to produce them.',
+      content: { 'application/json': { schema: activityAgendaResponse } },
+    },
+    400: {
+      description: 'Malformed activity id, date window, include token, or timezone.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'The activity is absent or not visible to the caller.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

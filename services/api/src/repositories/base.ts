@@ -64,6 +64,8 @@ export interface QueryOptions {
   /** Repository-owned equality filter; services never supply DynamoDB expressions. */
   readonly filterEquals?: EqualityFilter;
   readonly select?: 'COUNT';
+  /** Strong consistency is available only for base-table reads, never a GSI query. */
+  readonly consistentRead?: boolean;
 }
 
 /** `GetItem`, upgraded on read. `undefined` when the item is not there. */
@@ -185,6 +187,9 @@ export async function query<T extends StoredItem>(
   options: QueryOptions = {},
 ): Promise<Page<T>> {
   const isIndex = 'gsi1pk' in partition;
+  if (isIndex && options.consistentRead === true) {
+    throw new Error('ConsistentRead is not supported for index queries.');
+  }
   const pkAttribute = isIndex ? 'gsi1pk' : 'pk';
   const skAttribute = isIndex ? 'gsi1sk' : 'sk';
   const pkValue = isIndex ? partition.gsi1pk : partition.pk;
@@ -215,6 +220,7 @@ export async function query<T extends StoredItem>(
     new QueryCommand({
       TableName: TABLE_NAME,
       ...(options.indexName === undefined ? {} : { IndexName: options.indexName }),
+      ...(options.consistentRead === true ? { ConsistentRead: true } : {}),
       KeyConditionExpression: condition,
       ExpressionAttributeNames: names,
       ExpressionAttributeValues: values,

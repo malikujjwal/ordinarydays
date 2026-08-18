@@ -1,6 +1,10 @@
 import type { Activity } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
-import { getActivityMeta, listParticipants } from '../repositories/activityRepository.js';
+import {
+  activityFromPartition,
+  getActivityMeta,
+  listParticipants,
+} from '../repositories/activityRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 
 /**
@@ -129,6 +133,32 @@ export async function assertActivityAccess(
     }
   }
 
+  throw new AppError('not_found', NOT_FOUND);
+}
+
+/**
+ * Authorises a target activity from the same strongly read partition used for projection.
+ * Parent inheritance may read the parent separately; the target META and participant proof
+ * are never rediscovered through an eventually consistent index.
+ */
+export async function assertActivityReadAccessFromPartition(
+  userId: string,
+  partition: readonly StoredItem[],
+): Promise<Activity> {
+  const activity = activityFromPartition(partition);
+  if (activity === undefined) throw new AppError('not_found', NOT_FOUND);
+  if (activity.ownerId === userId) return activity;
+  if (
+    partition.some(
+      (row) => row.sk?.toString().startsWith('PART#') && belongsTo(row, userId),
+    )
+  ) {
+    return activity;
+  }
+  if (activity.parentActivityId !== undefined) {
+    await assertActivityAccess(userId, activity.parentActivityId, 'read');
+    return activity;
+  }
   throw new AppError('not_found', NOT_FOUND);
 }
 

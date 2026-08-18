@@ -233,10 +233,25 @@ participant may act. This preserves inherited parent-owner access when somebody 
 the child.
 
 `projectionVersions` contains an Activity only when the GSI row selected for this read has
-the same stamped `updatedAt` as the canonical META row hydrated for it. Recurrence mutations
-return that Activity version; the client retains its acknowledged projection and retries with
-bounded backoff until this array proves the index has observed it. A missing or older entry
-is a stale agenda body and may not replace the newer local state.
+the same stamped `updatedAt` as the canonical META row hydrated for it. A missing or older
+entry is a stale agenda body and may not replace protected rows for an acknowledged
+recurrence edit. Ordinary refresh still installs fresh rows for every unaffected Activity.
+
+Recurrence-PATCH reconciliation does not wait for GSI convergence. It uses:
+
+```
+GET /v1/agenda/activities/:id?from=2026-08-06&to=2026-08-06&tz=America/New_York
+```
+
+This authenticated, `private, no-store` read queries the target `ACT#<id>` base-table
+partition with strong consistency, authorises from its META/participant rows, applies stored
+`OCC#` and `MOVE#` history, and expands only that Activity for the requested window. It
+returns `{ activityId, activityVersion, rows: [{ date, item }] }`. `rows: []` is an
+authoritative projection that removes the Activity from that window; a timeout or network
+failure proves nothing and leaves the protected rows intact. Once `activityVersion` is at
+least the PATCH-acknowledged version, the client atomically replaces only that Activity in
+each cached window and clears its durable reconciliation state. Manual agenda refresh retries
+this targeted read while protection is active.
 
 The server also authors the row's recurrence and snooze presentation. For a recurring item,
 `recurrenceDescription` is computed with `describeRecurrence` against the request window's

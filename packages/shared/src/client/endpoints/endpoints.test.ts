@@ -21,7 +21,7 @@ import {
   uncompleteActivity,
   unsnoozeActivity,
 } from './activities.js';
-import { getAgenda } from './agenda.js';
+import { getActivityAgenda, getAgenda } from './agenda.js';
 import {
   assertTargetEcho,
   type CreationTarget,
@@ -375,6 +375,31 @@ describe('getAgenda', () => {
     expect(calls[0]?.url).toBe(
       'https://api.test/v1/agenda?from=2026-08-06&to=2026-08-06&tz=UTC',
     );
+  });
+
+  it('requests one no-cache canonical activity window and accepts zero rows', async () => {
+    const activityId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+    const body = {
+      data: {
+        activityId,
+        activityVersion: '2026-08-18T10:00:00.000Z',
+        rows: [],
+      },
+      meta: { requestId: REQUEST_ID },
+    };
+    const { client, calls } = makeClient([{ status: 200, body }]);
+
+    await expect(
+      getActivityAgenda(client, activityId, {
+        from: '2026-08-06',
+        to: '2026-08-06',
+        tz: 'UTC',
+      }),
+    ).resolves.toEqual(body.data);
+    expect(calls[0]?.url).toBe(
+      `https://api.test/v1/agenda/activities/${activityId}?from=2026-08-06&to=2026-08-06&tz=UTC`,
+    );
+    expect(calls[0]?.headers).toMatchObject({ 'Cache-Control': 'no-cache' });
   });
 });
 

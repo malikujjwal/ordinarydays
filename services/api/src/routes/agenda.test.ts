@@ -28,6 +28,42 @@ const request = (
 const query = (from = '2026-08-01', to = '2026-08-01', extra = '') =>
   `from=${from}&to=${to}&tz=America%2FNew_York${extra}`;
 
+const ACTIVITY_ID = 'act_01J0000000000000000000000A';
+const VERSION = '2026-08-01T12:00:00.000Z';
+const activityRow = (status = 'scheduled') => ({
+  pk: `ACT#${ACTIVITY_ID}`,
+  sk: 'META',
+  entity: 'Activity',
+  activityId: ACTIVITY_ID,
+  ownerId: 'usr_local_dev',
+  objectKind: 'task',
+  type: 'task',
+  title: 'Canonical series',
+  status,
+  schedule: { date: '2026-08-01', time: '09:00', timezone: 'America/New_York' },
+  recurrence: {
+    mode: 'fixed',
+    segments: [{ freq: 'daily', effectiveFrom: '2026-08-01', time: '09:00' }],
+  },
+  participantCount: 0,
+  childCount: 0,
+  expenseTotalCents: 0,
+  visibility: 'private',
+  details: { kind: 'task' },
+  icsSequence: 0,
+  createdAt: VERSION,
+  updatedAt: VERSION,
+  lastActivityAt: VERSION,
+  schemaVersion: 1,
+});
+
+const targetedRequest = (app: ReturnType<typeof CreateApp>) =>
+  app.fetch(
+    new Request(`http://localhost/v1/agenda/activities/${ACTIVITY_ID}?${query()}`, {
+      headers: { 'X-Request-Id': 'req_targeted_agenda' },
+    }),
+  );
+
 beforeEach(async () => {
   ddbMock.reset();
   ddbMock.on(QueryCommand).resolves({ Items: [] });
@@ -166,5 +202,65 @@ describe('GET /v1/agenda', () => {
 
     expect(second.status).toBe(304);
     expect(second.headers.get('Cache-Control')).toBe('private, max-age=60');
+  });
+});
+
+describe('GET /v1/agenda/activities/:id', () => {
+  it('bypasses GSI discovery with one strongly consistent partition read', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        activityRow(),
+        {
+          pk: `ACT#${ACTIVITY_ID}`,
+          sk: 'OCC#2026-08-01',
+          entity: 'Occurrence',
+          activityId: ACTIVITY_ID,
+          date: '2026-08-01',
+          status: 'completed',
+          completedAt: '2026-08-01T14:00:00.000Z',
+          schemaVersion: 1,
+        },
+      ],
+    });
+
+    const res = await targetedRequest(createApp());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(body.data).toMatchObject({
+      activityId: ACTIVITY_ID,
+      activityVersion: VERSION,
+      rows: [
+        {
+          date: '2026-08-01',
+          item: {
+            activityId: ACTIVITY_ID,
+            occurrenceDate: '2026-08-01',
+            status: 'completed_occurrence',
+          },
+        },
+      ],
+    });
+    const calls = ddbMock.commandCalls(QueryCommand);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args[0]?.input).toMatchObject({
+      ConsistentRead: true,
+      KeyConditionExpression: '#pk = :pk',
+      ExpressionAttributeValues: { ':pk': `ACT#${ACTIVITY_ID}` },
+    });
+    expect(calls[0]?.args[0]?.input.IndexName).toBeUndefined();
+  });
+
+  it('returns authoritative zero rows with the META version', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [activityRow('cancelled')] });
+
+    const res = await targetedRequest(createApp());
+
+    expect((await res.json()).data).toEqual({
+      activityId: ACTIVITY_ID,
+      activityVersion: VERSION,
+      rows: [],
+    });
   });
 });

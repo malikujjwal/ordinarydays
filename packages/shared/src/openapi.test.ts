@@ -36,13 +36,15 @@ describe('the generated document', () => {
     // moves, and the person adding it has to say so. Saying so: **P1-07 added `/v1/me`**,
     // whose `GET` and `PATCH` share one path entry; **P1-08 added the two device paths** —
     // the `POST` collection and the `DELETE` on one id, separate because only one of them is
-    // templated; **P2-11 added `/v1/agenda`**; **P1-11 added `/v1/activities`**; and
+    // templated; **P2-11 added `/v1/agenda`**; **P2-54 added its targeted activity path**;
+    // **P1-11 added `/v1/activities`**; and
     // **P1-12 added the detail path**; **P2-16 added the reminder collection and item paths**.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
       '/v1/me/devices/{deviceId}',
       '/v1/agenda',
+      '/v1/agenda/activities/{id}',
       '/v1/activities',
       '/v1/activities/{id}',
       '/v1/activities/{id}/schedule',
@@ -86,6 +88,7 @@ describe('the generated document', () => {
   it('names its schemas as components instead of inlining them', () => {
     expect(Object.keys(document.components?.schemas ?? {}).sort()).toEqual([
       'Activity',
+      'ActivityAgendaData',
       'ActivityCompletionResult',
       'ActivityDetail',
       'ActivityListItem',

@@ -29,6 +29,8 @@ export type {
   OccurrenceDetailProjection,
 } from './activityDetail.js';
 export type {
+  ActivityAgendaData,
+  ActivityAgendaRow,
   AgendaCapabilities,
   AgendaData,
   AgendaDay,
