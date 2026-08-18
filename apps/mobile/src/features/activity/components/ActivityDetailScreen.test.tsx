@@ -7,6 +7,8 @@ import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
+import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
+import { setActiveIntentLog } from '@/lib/intentReplay';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { createOfflineQueryClient } from '@/lib/queryClient';
 import { useToast } from '@/stores/toast';
@@ -2646,5 +2648,101 @@ describe('removing the time', () => {
     await waitFor(() =>
       expect(screen.getByTestId('when-where-date').textContent).not.toContain('8:25 AM'),
     );
+  });
+});
+
+/**
+ * A detail screen for an entity the server has never seen (P2-50, §5.4).
+ *
+ * Capability probes throughout: the assertion is that server-directed controls do **not
+ * exist**, because there is nowhere to send them. A present-but-disabled button would satisfy
+ * a style probe and still be a defect.
+ */
+describe('a pending activity', () => {
+  function memoryStorage(): IntentLogStorage {
+    const data = new Map<string, string>();
+    return {
+      getItem: async (key) => data.get(key) ?? null,
+      setItem: async (key, value) => {
+        data.set(key, value);
+      },
+      removeItem: async (key) => {
+        data.delete(key);
+      },
+    };
+  }
+
+  async function pendingCreateLog() {
+    const log = new IntentLog('usr_01J0000000000000000000000A', memoryStorage());
+    await log.hydrate();
+    await log.append({
+      intentId: 'create-intent',
+      mutationKey: ['activity', 'create'],
+      variables: { input: { activityId: ID } },
+      entityId: ID,
+    });
+    setActiveIntentLog(log);
+    return log;
+  }
+
+  afterEach(() => setActiveIntentLog(undefined));
+
+  it('offers no completion, and explains why in announced words', async () => {
+    await pendingCreateLog();
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+
+    await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
+    // Absent, not disabled: there is no server row for a completion to reach.
+    expect(screen.queryByTestId('detail-complete')).toBeNull();
+
+    const notice = screen.getByTestId('pending-notice');
+    expect(notice.getAttribute('aria-live')).toBe('polite');
+    expect(notice.textContent).toContain('Waiting to sync');
+  });
+
+  it('offers no repeat or reminder editing while unacknowledged', async () => {
+    await pendingCreateLog();
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+
+    await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
+    /**
+     * The rows still render — hiding them would make the screen look like a different object
+     * — but neither opens a sheet, and the reminder states its true armed state rather than
+     * implying a notification that cannot arrive.
+     */
+    expect(screen.getByTestId('section-reminders').textContent).toContain(
+      'Not armed until synced',
+    );
+  });
+
+  it('offers cancel while queued and issues no request', async () => {
+    const log = await pendingCreateLog();
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+
+    await waitFor(() => expect(screen.getByTestId('pending-cancel')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('pending-cancel'));
+
+    await waitFor(() => expect(log.pendingCreateFor(ID)).toBeUndefined());
+    /**
+     * No **write** left the device. The screen's own detail read is still there, which is why
+     * this filters rather than asserting an empty log: cancelling an unsent create retracts a
+     * local record, so there is nothing to tell the server about.
+     */
+    expect(sent.filter((request) => request.method !== 'GET')).toHaveLength(0);
+  });
+
+  it('offers no cancel once the create is in flight', async () => {
+    const log = await pendingCreateLog();
+    await log.markInFlight('create-intent');
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+
+    await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
+    expect(screen.queryByTestId('pending-cancel')).toBeNull();
+    // The sentence changes with the button, rather than the button going quietly grey.
+    expect(screen.getByTestId('pending-notice').textContent).toContain('Syncing now');
   });
 });

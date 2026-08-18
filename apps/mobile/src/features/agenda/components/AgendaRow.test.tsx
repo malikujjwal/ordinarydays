@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 import type { ActivityType, AgendaItem } from '@od/shared/types';
 import { colors, space, ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
+import { setActiveIntentLog } from '@/lib/intentReplay';
 import { AgendaRow } from './AgendaRow';
 import { RowBadges } from './RowBadges';
 
@@ -492,7 +495,12 @@ describe('AgendaRow structural guards', () => {
 
     expect(leadingSource).toContain('if (hasCheckbox)');
     expect(leadingSource).not.toMatch(/\btype\b/);
-    expect(rowSource).toContain('hasCheckbox={item.hasCheckbox}');
+    /**
+     * Still `item.hasCheckbox` and still never `type` — P2-50 only adds the pending gate, and
+     * the gate is named here so the guard documents both facts rather than being loosened to
+     * a substring that would also pass for a type-derived checkbox.
+     */
+    expect(rowSource).toContain('hasCheckbox={item.hasCheckbox && !pendingCreate}');
   });
 
   it('keeps long scaled titles in a content-sized, shrinkable row', () => {
@@ -558,5 +566,109 @@ describe('AgendaRow — the skipped tag', () => {
     expect(screen.getByTestId('agenda-row-body').getAttribute('aria-label')).toContain(
       'Skipped',
     );
+  });
+});
+
+/**
+ * A row whose create has not been acknowledged (P2-50, §5.4).
+ *
+ * These are **capability probes, not style probes**: the assertion is that the control does
+ * not exist, because a server-directed action against an entity the server has never seen
+ * has nowhere to go. A disabled-but-present checkbox would pass a style probe and still be
+ * wrong.
+ */
+describe('a pending row', () => {
+  const PENDING_ID = 'act_01J0000000000000000000000P';
+
+  function memoryStorage(): IntentLogStorage {
+    const data = new Map<string, string>();
+    return {
+      getItem: async (key) => data.get(key) ?? null,
+      setItem: async (key, value) => {
+        data.set(key, value);
+      },
+      removeItem: async (key) => {
+        data.delete(key);
+      },
+    };
+  }
+
+  async function pendingLog(mutation: string, entityId = PENDING_ID) {
+    const log = new IntentLog('usr_01J0000000000000000000000A', memoryStorage());
+    await log.hydrate();
+    await log.append({
+      intentId: `intent-${mutation}`,
+      mutationKey: ['activity', mutation],
+      variables: { input: { activityId: entityId } },
+      entityId,
+    });
+    return log;
+  }
+
+  afterEach(() => setActiveIntentLog(undefined));
+
+  it('offers no checkbox at all while its create is unacknowledged', async () => {
+    setActiveIntentLog(await pendingLog('create'));
+    mount(
+      <AgendaRow
+        item={item('task', { activityId: PENDING_ID })}
+        onOpen={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('says why in words, so the absence is explained rather than guessed at', async () => {
+    setActiveIntentLog(await pendingLog('create'));
+    mount(
+      <AgendaRow
+        item={item('task', { activityId: PENDING_ID })}
+        onOpen={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('pending-indicator').textContent).toBe('Pending');
+  });
+
+  it('keeps the checkbox when only a completion is queued', async () => {
+    /**
+     * The distinction §5.4 turns on. This activity exists on the server; a queued completion
+     * says nothing about whether it can be acted on, and freezing it would break every
+     * offline tick.
+     */
+    setActiveIntentLog(await pendingLog('complete'));
+    mount(
+      <AgendaRow
+        item={item('task', { activityId: PENDING_ID })}
+        onOpen={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('checkbox')).not.toBeNull();
+  });
+
+  it('returns to normal on acknowledgement, without a remount', async () => {
+    const log = await pendingLog('create');
+    setActiveIntentLog(log);
+    mount(
+      <AgendaRow
+        item={item('task', { activityId: PENDING_ID })}
+        onOpen={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('checkbox')).toBeNull();
+
+    // The 201 lands. The row is subscribed to the log, so it re-renders in place.
+    await act(async () => {
+      await log.acknowledge('intent-create');
+    });
+
+    expect(screen.queryByRole('checkbox')).not.toBeNull();
+    expect(screen.queryByTestId('pending-indicator')).toBeNull();
   });
 });

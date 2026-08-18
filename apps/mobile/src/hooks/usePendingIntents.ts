@@ -43,6 +43,46 @@ export function useIsPending(entityId: string | undefined): boolean {
   return intents.some((intent) => intent.entityId === entityId);
 }
 
+/**
+ * What a surface needs to know about an entity whose create has not landed (P2-50).
+ *
+ * `pending` is specifically an unacknowledged **create**, not any queued write: a row with a
+ * queued completion exists on the server and stays fully usable, while one whose create is
+ * still waiting does not exist there at all and can accept nothing.
+ *
+ * `canCancel` is `queued` only. A request already on the wire cannot be retracted, so an
+ * `in_flight` intent offers no cancel rather than a cancel that might silently do nothing.
+ */
+export interface PendingCreateState {
+  pending: boolean;
+  canCancel: boolean;
+  intentId: string | undefined;
+  status: Intent['status'] | undefined;
+}
+
+export function usePendingCreate(entityId: string | undefined): PendingCreateState {
+  const intents = usePendingIntents();
+  if (entityId === undefined) {
+    return { pending: false, canCancel: false, intentId: undefined, status: undefined };
+  }
+  const create = intents.find(
+    (intent) => intent.entityId === entityId && intent.mutationKey[1] === 'create',
+  );
+  return {
+    pending: create !== undefined,
+    canCancel: create?.status === 'queued',
+    intentId: create?.intentId,
+    status: create?.status,
+  };
+}
+
+/** Cancels a queued create, removing the intent. Returns false if it was already dispatched. */
+export async function cancelPendingCreate(intentId: string): Promise<boolean> {
+  const log = getActiveIntentLog();
+  if (log === undefined) return false;
+  return log.cancel(intentId);
+}
+
 /** Intents the user has to resolve: permanently rejected, or parked by age or clock doubt. */
 export function useBlockedIntents(): readonly Intent[] {
   const intents = usePendingIntents();

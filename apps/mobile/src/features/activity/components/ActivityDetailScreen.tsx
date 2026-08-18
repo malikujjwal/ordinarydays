@@ -28,6 +28,7 @@ import {
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
+import { PendingNotice } from '@/components/PendingNotice';
 import { SnoozeSheet } from '@/components/SnoozeSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
 import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
@@ -59,6 +60,7 @@ import {
 import { endRepeatSeries } from '@/features/activity/model/repeat';
 import { sectionsFor, subtitleFor } from '@/features/activity/model/sections';
 import { useMinuteTicker } from '@/hooks/useMinuteTicker';
+import { cancelPendingCreate, usePendingCreate } from '@/hooks/usePendingIntents';
 import {
   completionVerb,
   isNegativeOutcome,
@@ -126,6 +128,28 @@ export function ActivityDetailScreen({
   const activityId = target.activityId;
   const detail = useActivityDetail(target);
   const actions = useActivityActions(activityId);
+  /**
+   * Derived from the intent log, never from a field on the Activity (P2-50). Pending-ness is
+   * a property of what this device has queued, not of the entity — the server has no idea
+   * this row exists, so it has nothing to tell us about it and no DTO carries it.
+   */
+  const pendingCreate = usePendingCreate(activityId);
+  const [cancellingPending, setCancellingPending] = useState(false);
+
+  async function cancelPending(): Promise<void> {
+    if (pendingCreate.intentId === undefined) return;
+    setCancellingPending(true);
+    try {
+      /**
+       * Removes the intent and nothing else reaches the network — cancelling an unsent create
+       * retracts a record that never left the device. The screen leaves because the entity it
+       * was about no longer exists anywhere.
+       */
+      if (await cancelPendingCreate(pendingCreate.intentId)) onBack();
+    } finally {
+      setCancellingPending(false);
+    }
+  }
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [repeatOpen, setRepeatOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -436,14 +460,26 @@ export function ActivityDetailScreen({
           resolved={resolved}
           onOpenResolution={() => setResolutionOpen(true)}
           shownSchedule={shownSchedule}
-          canComplete={detail.detail?.capabilities?.complete === true}
+          /**
+           * **Every server-directed capability is false while the create is unacknowledged**
+           * (P2-50, §5.4). Gated here rather than inside each control so the actions are
+           * genuinely absent — a capability probe finds nothing, which is the assertion the
+           * task asks for, rather than a styled-disabled button that still exists.
+           */
+          pending={pendingCreate.pending}
+          canCancelPending={pendingCreate.canCancel}
+          onCancelPending={() => void cancelPending()}
+          cancellingPending={cancellingPending}
+          canComplete={
+            detail.detail?.capabilities?.complete === true && !pendingCreate.pending
+          }
           completionUnavailable={seriesWithoutOccurrence || futureRecurringOccurrence}
           completing={actions.isCompleting}
           undoing={actions.isUndoing}
           resolutionKind={resolutionKind}
           resolutionOutcome={resolutionOutcome}
-          canSnooze={canSnoozeOccurrence(occurrenceContext)}
-          canSkip={canSkipOccurrence(occurrenceContext)}
+          canSnooze={canSnoozeOccurrence(occurrenceContext) && !pendingCreate.pending}
+          canSkip={canSkipOccurrence(occurrenceContext) && !pendingCreate.pending}
           skipsOneDay={actionOccurrenceDate !== undefined}
           onSnooze={() => setSnoozeOpen(true)}
           onSkip={() => void skipToday()}
@@ -771,6 +807,11 @@ export function ActivityDetailScreen({
 }
 
 interface LoadedProps {
+  /** The create has not been acknowledged, so the server knows nothing about this row. */
+  pending: boolean;
+  canCancelPending: boolean;
+  onCancelPending: () => void;
+  cancellingPending: boolean;
   activity: Activity;
   detail: ReturnType<typeof useActivityDetail>;
   today: WallDate;
@@ -857,6 +898,10 @@ function Loaded({
   undoing,
   resolutionKind,
   resolutionOutcome,
+  pending,
+  canCancelPending,
+  onCancelPending,
+  cancellingPending,
   canSnooze,
   canSkip,
   skipsOneDay,
@@ -870,6 +915,25 @@ function Loaded({
 
   return (
     <View style={{ gap: theme.space[6] }} testID="detail-content">
+      {/**
+       * The explanation, above everything it explains (§5.4, §5.5).
+       *
+       * Cancel appears only while the intent is `queued`. Once it is `in_flight` the request
+       * is on the wire and cannot be retracted, so offering the button would promise something
+       * the client cannot deliver — the sentence changes with it rather than the button going
+       * quietly grey.
+       */}
+      {pending ? (
+        <PendingNotice
+          message={
+            canCancelPending
+              ? 'Waiting to sync — you can cancel it, and everything else unlocks once it’s synced.'
+              : 'Syncing now — everything else unlocks once it’s synced.'
+          }
+          busy={cancellingPending}
+          {...(canCancelPending ? { onCancel: onCancelPending } : {})}
+        />
+      ) : null}
       {detail.conflict === undefined ? null : (
         <View
           accessibilityRole="alert"
@@ -1123,11 +1187,21 @@ function Loaded({
               <SettingRow
                 key={section.key}
                 label="Reminder"
-                value={reminderSummary(
-                  detail.detail?.reminders ?? [],
-                  activity.schedule?.time !== undefined,
-                )}
-                onPress={onOpenReminders}
+                value={
+                  /**
+                   * A reminder on a pending activity states its **true** armed state (§5.4).
+                   * Nothing is scheduled for an entity the server has never seen, and saying
+                   * otherwise would promise a notification that cannot arrive. P2-57 changes
+                   * this to the armed-locally wording once local scheduling exists.
+                   */
+                  pending
+                    ? 'Not armed until synced'
+                    : reminderSummary(
+                        detail.detail?.reminders ?? [],
+                        activity.schedule?.time !== undefined,
+                      )
+                }
+                {...(pending ? {} : { onPress: onOpenReminders })}
                 testID="section-reminders"
               />
             );
@@ -1143,7 +1217,7 @@ function Loaded({
                     ? 'Does not repeat'
                     : describeRecurrence(activity.recurrence, today)
                 }
-                onPress={onOpenRepeat}
+                {...(pending ? {} : { onPress: onOpenRepeat })}
                 testID="detail-edit-recurrence"
               />
             );

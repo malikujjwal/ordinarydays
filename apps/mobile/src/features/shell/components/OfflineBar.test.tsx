@@ -3,10 +3,10 @@ import { onlineManager } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PendingIndicator } from '@/components/PendingIndicator';
 import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
 import { setActiveIntentLog } from '@/lib/intentReplay';
 import { OfflineBar } from './OfflineBar';
-import { PendingIndicator } from './PendingIndicator';
 import { SyncStatusBanner } from './SyncStatusBanner';
 
 const USER = 'usr_01J0000000000000000000000A';

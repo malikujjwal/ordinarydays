@@ -9,7 +9,9 @@ import {
 } from '@od/ui';
 import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
+import { PendingIndicator } from '@/components/PendingIndicator';
 import { isFutureRecurringOccurrence } from '@/features/agenda/model/rowScope';
+import { usePendingCreate } from '@/hooks/usePendingIntents';
 import {
   canResolvePassedAgendaItem,
   outcomeVerb,
@@ -124,6 +126,12 @@ export function AgendaRow({
 }: AgendaRowProps) {
   const theme = useTheme();
   const checked = COMPLETED_STATUSES.has(item.status);
+  /**
+   * Derived from the intent log, not from `AgendaItem` (P2-50). No field was added to any
+   * shared schema: the server cannot report that a row it has never seen is pending, and a
+   * DTO field would be a second source of truth for something only this device knows.
+   */
+  const { pending: pendingCreate } = usePendingCreate(item.activityId);
   const skipped = SKIPPED_STATUSES.has(item.status);
   const dimmed = item.isPast || checked || skipped;
   const formattedTime = item.time === undefined ? undefined : formatWallTime(item.time);
@@ -384,11 +392,19 @@ export function AgendaRow({
         }}
       >
         <RowLeading
-          hasCheckbox={item.hasCheckbox}
+          /**
+           * **No checkbox at all while the create is unacknowledged** (P2-50, §5.4).
+           *
+           * A server-directed action against an entity the server has never seen has nowhere
+           * to go. Absent rather than disabled, so a capability probe finds nothing — and the
+           * `Pending` indicator in the trailing slot is what says why, in words, rather than
+           * leaving a greyed control as the only signal (§6.4).
+           */
+          hasCheckbox={item.hasCheckbox && !pendingCreate}
           checked={checked}
           title={item.title}
           disabled={futureRecurringCompletion}
-          {...(onToggleComplete === undefined
+          {...(onToggleComplete === undefined || pendingCreate
             ? {}
             : { onChange: (next) => onToggleComplete(item, next) })}
         />
@@ -550,6 +566,12 @@ export function AgendaRow({
          * point. What is left for this strip is the overdue chip, the avatars and the RSVP slot,
          * in their canonical order.
          */}
+        {/**
+         * §5.4's trailing-slot indicator. It is the row's half of "says why in words": the
+         * checkbox is absent above, and this is what explains the absence rather than leaving
+         * a gap the user has to interpret.
+         */}
+        <PendingIndicator entityId={item.activityId} />
         {dense ? null : (
           <RowBadges
             {...(item.overdueFromDate === undefined || showTime

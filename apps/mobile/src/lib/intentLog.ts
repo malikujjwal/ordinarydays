@@ -294,6 +294,19 @@ export class IntentLog {
     return this.pending().filter((intent) => intent.entityId === entityId);
   }
 
+  /**
+   * The unacknowledged **create** for one entity, if there is one (P2-50).
+   *
+   * The distinction `pendingFor` cannot make and §5.4 turns on: an entity whose *create* has
+   * not landed does not exist to the server, so no server-directed action can be sent about
+   * it. An entity that merely has a queued *completion* exists perfectly well and stays fully
+   * usable — treating those the same would freeze a row every time a checkbox was ticked
+   * offline.
+   */
+  pendingCreateFor(entityId: string): Intent | undefined {
+    return this.pendingFor(entityId).find((intent) => intent.mutationKey[1] === 'create');
+  }
+
   isHydrated(): boolean {
     return this.hydrated;
   }
