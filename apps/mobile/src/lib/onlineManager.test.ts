@@ -11,9 +11,10 @@ describe('local iOS reachability configuration', () => {
     expect(configuration).toMatchObject({
       reachabilityUrl: 'http://localhost:3000/v1/health',
       reachabilityMethod: 'GET',
-      reachabilityShortTimeout: 1_000,
-      reachabilityLongTimeout: 1_000,
-      reachabilityRequestTimeout: 2_000,
+      // Wide enough that ordinary LAN latency is not mistaken for a dead connection.
+      reachabilityShortTimeout: 2_000,
+      reachabilityLongTimeout: 30_000,
+      reachabilityRequestTimeout: 5_000,
       useNativeReachability: false,
     });
     await expect(
