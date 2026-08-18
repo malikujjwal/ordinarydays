@@ -1,3 +1,7 @@
+import {
+  coordinateDurableAction,
+  type DurableIntentDescriptor,
+} from '@/lib/durableAction';
 import type { ToastMessage, UndoToastMessage } from '@/stores/toast';
 
 export interface UndoToastPort {
@@ -13,73 +17,50 @@ export interface UndoableAction {
   restorePosition: () => void;
   request: () => Promise<unknown>;
   compensate: () => Promise<unknown>;
+  originalIntent: DurableIntentDescriptor;
+  inverseIntent: DurableIntentDescriptor;
   toast: UndoToastPort;
   message: string;
   failureMessage: string;
   compensationFailureMessage?: string;
 }
 
-/**
- * Starts a write immediately and makes Undo a local rollback plus compensating write.
- * The toast timer only releases its callbacks; it never controls when the network runs.
- */
+/** Presentation-only binding from one observable durable action to the standard Undo toast. */
 export function startUndoable(action: UndoableAction): void {
-  let undone = false;
-  let requestSucceeded = false;
-  let compensationStarted = false;
-  action.apply();
-  const request = action.request();
-
-  const retryCompensation = () => {
-    action.revert();
-    action.restorePosition();
-    void action.compensate().catch(() => {
-      action.apply();
+  void coordinateDurableAction({
+    intent: action.originalIntent,
+    apply: action.apply,
+    revert: action.revert,
+    rollback: action.rollbackFailure ?? action.revert,
+    restorePosition: action.restorePosition,
+    dispatch: action.request,
+    inverse: { intent: action.inverseIntent, dispatch: action.compensate },
+  }).then((durable) => {
+    const fail = (message: string, retry: () => void) => {
       action.toast.failUndo(toastId, {
-        message: action.compensationFailureMessage ?? "Couldn't undo this.",
+        message,
         tone: 'error',
-        action: { label: 'Retry', onPress: retryCompensation },
+        action: { label: 'Retry', onPress: retry },
       });
+    };
+    const toastId = action.toast.showUndo({
+      message: action.message,
+      onCommit: () => {},
+      onUndo: () => {
+        void durable.undo().then((inverse) =>
+          inverse.attempt.then((outcome) => {
+            if (outcome.status === 'refused' || outcome.status === 'needs_attention') {
+              fail(action.compensationFailureMessage ?? "Couldn't undo this.", () => {
+                void durable.undo();
+              });
+            }
+          }),
+        );
+      },
     });
-  };
-
-  const compensateAfterUndo = () => {
-    if (compensationStarted) return;
-    compensationStarted = true;
-    void action.compensate().catch(() => {
-      action.apply();
-      action.toast.failUndo(toastId, {
-        message: action.compensationFailureMessage ?? "Couldn't undo this.",
-        tone: 'error',
-        action: { label: 'Retry', onPress: retryCompensation },
-      });
+    void durable.attempt.then((outcome) => {
+      if (outcome.status !== 'refused' && outcome.status !== 'needs_attention') return;
+      fail(action.failureMessage, () => startUndoable(action));
     });
-  };
-
-  const toastId = action.toast.showUndo({
-    message: action.message,
-    onCommit: () => {},
-    onUndo: () => {
-      undone = true;
-      action.revert();
-      action.restorePosition();
-      if (requestSucceeded) compensateAfterUndo();
-    },
   });
-
-  void request
-    .then(() => {
-      requestSucceeded = true;
-      if (undone) compensateAfterUndo();
-    })
-    .catch(() => {
-      if (undone) return;
-      (action.rollbackFailure ?? action.revert)();
-      action.restorePosition();
-      action.toast.failUndo(toastId, {
-        message: action.failureMessage,
-        tone: 'error',
-        action: { label: 'Retry', onPress: () => startUndoable(action) },
-      });
-    });
 }

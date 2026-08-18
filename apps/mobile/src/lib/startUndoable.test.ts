@@ -35,6 +35,23 @@ function port() {
   };
 }
 
+function durableIntents() {
+  return {
+    originalIntent: {
+      intentId: 'original',
+      mutationKey: ['activity', 'complete'],
+      variables: { activityId: 'act-1' },
+      entityId: 'act-1',
+    },
+    inverseIntent: {
+      intentId: 'inverse',
+      mutationKey: ['activity', 'uncomplete'],
+      variables: { activityId: 'act-1' },
+      entityId: 'act-1',
+    },
+  };
+}
+
 describe('startUndoable helper', () => {
   it('starts the network immediately and compensates only after Undo', async () => {
     const pending = deferred();
@@ -44,6 +61,7 @@ describe('startUndoable helper', () => {
     const messages = port();
 
     startUndoable({
+      ...durableIntents(),
       apply,
       revert,
       restorePosition: vi.fn(),
@@ -55,7 +73,7 @@ describe('startUndoable helper', () => {
     });
 
     expect(apply).toHaveBeenCalledOnce();
-    expect(messages.toast.showUndo).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(messages.toast.showUndo).toHaveBeenCalledOnce());
     messages.undo?.onUndo();
     expect(revert).toHaveBeenCalledOnce();
     expect(compensate).not.toHaveBeenCalled();
@@ -70,6 +88,7 @@ describe('startUndoable helper', () => {
     const messages = port();
 
     startUndoable({
+      ...durableIntents(),
       apply: vi.fn(),
       revert: vi.fn(),
       restorePosition: vi.fn(),
@@ -80,6 +99,7 @@ describe('startUndoable helper', () => {
       failureMessage: 'Failed',
     });
     await Promise.resolve();
+    await vi.waitFor(() => expect(messages.toast.showUndo).toHaveBeenCalledOnce());
     messages.undo?.onUndo();
 
     await vi.waitFor(() => expect(compensate).toHaveBeenCalledOnce());
@@ -94,6 +114,7 @@ describe('startUndoable helper', () => {
     const messages = port();
 
     startUndoable({
+      ...durableIntents(),
       apply,
       revert,
       restorePosition,
@@ -123,6 +144,7 @@ describe('startUndoable helper', () => {
     const messages = port();
 
     startUndoable({
+      ...durableIntents(),
       apply: vi.fn(),
       revert,
       rollbackFailure,

@@ -296,6 +296,18 @@ export function useActivityActions(activityId: string): ActivityActions {
         restorePosition: () => {},
         request: () => completeMutation.mutateAsync(original),
         compensate: () => uncompleteMutation.mutateAsync(compensation),
+        originalIntent: {
+          intentId: original.idempotencyKey,
+          mutationKey: activityMutationKeys.complete,
+          variables: original,
+          entityId: activityId,
+        },
+        inverseIntent: {
+          intentId: compensation.idempotencyKey,
+          mutationKey: activityMutationKeys.uncomplete,
+          variables: compensation,
+          entityId: activityId,
+        },
         toast: {
           showUndo: (toast) => {
             const id = useToast.getState().showUndo(toast);

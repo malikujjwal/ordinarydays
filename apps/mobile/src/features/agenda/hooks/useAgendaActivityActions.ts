@@ -154,6 +154,22 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
           checked
             ? uncomplete.mutateAsync(compensation)
             : complete.mutateAsync(compensation),
+        originalIntent: {
+          intentId: original.idempotencyKey,
+          mutationKey: checked
+            ? activityMutationKeys.complete
+            : activityMutationKeys.uncomplete,
+          variables: original,
+          entityId: item.activityId,
+        },
+        inverseIntent: {
+          intentId: compensation.idempotencyKey,
+          mutationKey: checked
+            ? activityMutationKeys.uncomplete
+            : activityMutationKeys.complete,
+          variables: compensation,
+          entityId: item.activityId,
+        },
         toast: {
           showUndo: useToast.getState().showUndo,
           failUndo: useToast.getState().failUndo,
@@ -235,6 +251,18 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
         request: () => complete.mutateAsync(original),
         compensate: () => uncomplete.mutateAsync(compensation),
+        originalIntent: {
+          intentId: original.idempotencyKey,
+          mutationKey: activityMutationKeys.complete,
+          variables: original,
+          entityId: item.activityId,
+        },
+        inverseIntent: {
+          intentId: compensation.idempotencyKey,
+          mutationKey: activityMutationKeys.uncomplete,
+          variables: compensation,
+          entityId: item.activityId,
+        },
         toast: {
           showUndo: useToast.getState().showUndo,
           failUndo: useToast.getState().failUndo,
@@ -317,6 +345,18 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
         request: () => snoozeMutation.mutateAsync(original),
         compensate: () => unsnoozeMutation.mutateAsync(compensation),
+        originalIntent: {
+          intentId: original.idempotencyKey,
+          mutationKey: activityMutationKeys.snooze,
+          variables: original,
+          entityId: item.activityId,
+        },
+        inverseIntent: {
+          intentId: compensation.idempotencyKey,
+          mutationKey: activityMutationKeys.unsnooze,
+          variables: compensation,
+          entityId: item.activityId,
+        },
         toast: {
           showUndo: useToast.getState().showUndo,
           failUndo: useToast.getState().failUndo,
@@ -375,6 +415,18 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         restorePosition: () => options.restoreScrollOffset?.(scrollOffset),
         request: () => scheduleMutation.mutateAsync(original),
         compensate: () => scheduleMutation.mutateAsync(compensation),
+        originalIntent: {
+          intentId: original.idempotencyKey,
+          mutationKey: activityMutationKeys.schedule,
+          variables: original,
+          entityId: item.activityId,
+        },
+        inverseIntent: {
+          intentId: compensation.idempotencyKey,
+          mutationKey: activityMutationKeys.schedule,
+          variables: compensation,
+          entityId: item.activityId,
+        },
         toast: {
           showUndo: useToast.getState().showUndo,
           failUndo: useToast.getState().failUndo,

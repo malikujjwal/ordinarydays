@@ -6,6 +6,7 @@ import {
   protectRecurrenceEdit,
   reconcileRecurrenceEdit,
 } from '@/lib/agendaCache';
+import { isCoordinatingIntent } from '@/lib/durableAction';
 import { IntentLogFullError } from '@/lib/intentLog';
 import { getActiveIntentLog, replayingIntent } from '@/lib/intentReplay';
 import {
@@ -117,13 +118,16 @@ export function createOfflineQueryClient(): QueryClient {
          */
         if (replayingIntent() === intentIdFor(variables)) return;
 
+        const intentId = intentIdFor(variables);
         try {
-          await log.append({
-            intentId: intentIdFor(variables),
-            mutationKey: mutationKey.map(String),
-            variables,
-            entityId: entityIdFor(variables),
-          });
+          if (!isCoordinatingIntent(intentId)) {
+            await log.append({
+              intentId,
+              mutationKey: mutationKey.map(String),
+              variables,
+              entityId: entityIdFor(variables),
+            });
+          }
           if (isRecurrenceEditMutation(mutationKey, variables)) {
             const activityId = entityIdFor(variables);
             protectRecurrenceEdit(client, activityId);
@@ -136,7 +140,10 @@ export function createOfflineQueryClient(): QueryClient {
         }
       },
       onError: (error, variables, _context, mutation) => {
-        if (!(error instanceof IntentLogFullError)) {
+        if (
+          !(error instanceof IntentLogFullError) &&
+          !isCoordinatingIntent(intentIdFor(variables))
+        ) {
           const recurrenceEdit = isRecurrenceEditMutation(
             mutation.options.mutationKey,
             variables,
@@ -177,7 +184,9 @@ export function createOfflineQueryClient(): QueryClient {
         const { mutationKey } = mutation.options;
         const recurrenceEdit = isRecurrenceEditMutation(mutationKey, variables);
         const recurrenceVersion = recurrenceEdit ? activityVersionFrom(data) : undefined;
-        settleIntent(variables, 'ok', recurrenceEdit, recurrenceVersion);
+        if (!isCoordinatingIntent(intentIdFor(variables))) {
+          settleIntent(variables, 'ok', recurrenceEdit, recurrenceVersion);
+        }
         refreshActivityDetails(client, mutationKey, variables);
         if (!changesActivityLists(mutationKey)) return;
         projectActivityWrite(client, mutationKey, data, variables);
