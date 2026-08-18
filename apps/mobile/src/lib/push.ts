@@ -9,6 +9,24 @@ const OWNER_VALUE = 'local-reminder';
 export const localNotificationsSupported = true;
 
 /**
+ * The identifiers this adapter currently has armed, without the internal prefix.
+ *
+ * Added for P2-57's verification step: after replacing, the scheduler re-reads what the OS
+ * actually holds and compares it against what it meant to arm. iOS silently caps pending
+ * local notifications at 64, so "I called schedule 80 times" and "80 notifications exist" are
+ * different claims, and only the second one is worth acting on. Until Phase 5 this gates
+ * marking the schedule clean; P5-16's acknowledgement will assert the same thing.
+ */
+export async function readScheduledLocalNotifications(): Promise<string[]> {
+  const permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted) return [];
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  return scheduled
+    .filter((notification) => notification.identifier.startsWith(IDENTIFIER_PREFIX))
+    .map((notification) => notification.identifier.slice(IDENTIFIER_PREFIX.length));
+}
+
+/**
  * Replaces only the local reminders this adapter owns.
  *
  * Permission prompting belongs to Phase 5. A user who has not already granted permission

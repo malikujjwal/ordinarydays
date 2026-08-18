@@ -347,7 +347,8 @@ export async function createActivity(
    * from their own saved default at join time (P6-13, ADR-047).
    */
   const reminders: Reminder[] = reminderInputs.map((entry) => ({
-    reminderId: newReminderId(),
+    /** The client's id when it minted one (P2-57). Identity only; see `reminderService`. */
+    reminderId: entry.reminderId ?? newReminderId(),
     activityId: activity.activityId,
     userId,
     offsetMinutes: entry.offsetMinutes,

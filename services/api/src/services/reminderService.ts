@@ -66,7 +66,15 @@ export async function createReminder(
   }
 
   const reminder: Reminder = {
-    reminderId: newReminderId(),
+    /**
+     * The client's id when it minted one, the server's otherwise (P2-57, ADR-055).
+     *
+     * Identity only. `userId` above is still the caller's from the identity seam, and every
+     * other field is still derived here — accepting the id lets a device arm a local
+     * notification against the name the reminder will keep, and grants nothing else. The
+     * schema has already validated its prefix and encoding.
+     */
+    reminderId: parsed.reminderId ?? newReminderId(),
     activityId,
     userId,
     offsetMinutes: parsed.offsetMinutes,
