@@ -253,7 +253,16 @@ locally (Phase 2.5's authoritative projection is the source of truth for occurre
 pending local activities are expanded with `expandRecurrence`, safe precisely because no
 server overrides can exist for them. Any reminder-relevant change — including intent
 acknowledgement — marks the schedule dirty and triggers recompute-and-replace; a failed
-recompute leaves the existing scheduled set intact. Client-minted `rem_` reuses P2-49's
+recompute leaves the existing scheduled set intact. **iOS caps pending local notifications
+at 64**, a constraint no earlier document recorded: arm **nearest-first, capped with
+headroom (≈60)**, and treat the fire time of the last armed request as the device's
+`scheduledThrough` horizon — a heavy user gets a shorter local horizon, never lost
+reminders. Quiet-hours evaluation imports the shared pure policy module from
+`packages/shared` (`notifications.md` §4) rather than restating the rules. This task builds
+the arming and verification half of the Phase 5 handoff: after `replaceLocalNotifications`,
+re-read the scheduled set and verify it matches intent — that verification is what P5-16's
+acknowledgement will assert, and until Phase 5 exists it simply gates marking the schedule
+clean. All-or-nothing: a partial arming stays dirty and retries. Client-minted `rem_` reuses P2-49's
 server semantics; **this task must not modify P2-48's log — needing to means the primitive
 was activity-specific, and that is the acceptance test for Phase 3's reuse too.**
 

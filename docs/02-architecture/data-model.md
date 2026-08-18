@@ -318,6 +318,11 @@ interface User {
   allDayReminderHour?: number;             // 0–23, local
 
   quietHours?: { enabled: boolean; start: string; end: string };   // Phase 5 (P5-11)
+  // Monotonic counter bumped transactionally by every reminder-relevant write: reminder
+  // create/delete, schedule or recurrence change, completion, participant change. Devices
+  // acknowledge the version they armed against (§4.0a); the reminder Lambda compares the
+  // two to suppress visible pushes for locally-armed reminders (P5-16 second amendment).
+  reminderStateVersion?: number;                                   // Phase 5 (P5-16)
   notificationPrefs?: Record<string, boolean>;                     // Phase 5 (P5-11)
 
   defaultLists?: Partial<Record<DefaultSlot, string>>;             // §4.6. Phase 3.
@@ -369,6 +374,12 @@ interface Device {
   expoPushToken: string;       // "ExponentPushToken[...]"
   platform: DevicePlatform;
   deviceName?: string;         // "Ada's iPhone" — operator debugging only
+  // Local-first delivery acknowledgement (Phase 5, P5-16 second amendment). Written only by
+  // PUT /v1/me/devices/:deviceId/reminder-ack after the device has VERIFIED arming; read by
+  // the reminder Lambda's suppression check. Absent = no local coverage, always push.
+  reminderStateVersion?: number;   // matches USER#/PROFILE's counter when current
+  scheduledThrough?: string;       // ISO instant: last locally-armed fire time (iOS 64-cap horizon)
+  reminderAckAt?: string;          // ISO instant of the acknowledgement
 
   createdAt: string;
   updatedAt: string;

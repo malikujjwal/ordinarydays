@@ -476,6 +476,20 @@ the fire time from `date` + `time` + `timezone` to confirm it is still correct, 
 user's quiet-hours setting, sends through Expo Push, and — for a recurring series — schedules
 the same user's reminder for occurrence *n+2*.
 
+**The suppression check (local-first delivery, P5-16's second amendment).** Before sending,
+the Lambda compares each `DEVICE#` row's acknowledged `reminderStateVersion` and
+`scheduledThrough` against the user's current version and this reminder's fire time. A
+device that has provably armed this reminder locally — version current **and**
+`fireAt <= scheduledThrough` — gets **no visible push**; a device with a stale version gets
+a **silent data push** prompting re-sync, and the visible reminder only if it has not
+re-acknowledged by fire time. The schedule itself is **always created**: an acknowledgement
+can go stale after creation, so the timer must exist regardless. Quiet-hours evaluation uses
+the **shared pure policy module** from `packages/shared` — the same function P2-57's local
+scheduler imports — with parity tests over identical fixtures, never a second hand-written
+engine. Tests: an acked device receives no visible push for an armed reminder (the
+no-double-delivery assertion); a stale device receives data-push-then-backstop; a
+no-permission device is always served by push.
+
 **One schedule, many reminder sets.** `Activity` has no `reminders[]`; a reminder is a
 `REM#<userId>#<reminderId>` item in the activity partition
 ([`../02-architecture/data-model.md#43-reminder`](../02-architecture/data-model.md#43-reminder)
@@ -646,16 +660,37 @@ token with `expo-notifications` and keep the server's row true for the life of t
 4. Deletion on account deletion (P5-21) and on `DeviceNotRegistered` receipts (P5-13) is
    server-side and already specified.
 
-**Server push replaces local notifications — for server-known entities only (amended
-2026-08-17, Phase 2.6).** Once this task lands, local scheduling is retired for every
-reminder the server knows about — a registered device would otherwise receive it twice, once
-from the OS-local schedule and once from Expo Push. It is **retained for pending local
-intents**: an activity created offline has never reached the server, so the server cannot
-push its reminder, and P2-57's local projection is the only thing that can fire it. The
-transition is part of this task's contract: on intent acknowledgement the local request is
-cancelled and ownership moves to server push, with a test asserting **no double delivery**
-across that handoff — a reminder acknowledged between its local schedule time and its push
-delivers exactly once. The reminder controls and the no-permission behaviour are unchanged.
+**Reminder delivery is local-first; push is the updater and the backstop (second
+amendment, 2026-08-17 — supersedes both earlier versions of this paragraph).** The first
+version retired P2-57's local scheduling entirely; the second retained it for pending
+intents only. Both solved duplicate delivery by removing the one delivery path that works
+with no connectivity, which `notifications.md` §3.6 itself argues against: push is
+at-most-once, and a reminder more than 30 minutes late is dropped rather than shown. A
+planner must not require a network round trip at the exact firing minute for a time the
+device has known for days.
+
+The model (full contract in `notifications.md` §3.6):
+
+1. **A synchronized device fires its own reminders** from P2-57's bounded projection —
+   personal Tasks and shared Plans alike. No network at firing time.
+2. **Push communicates what the device could not know** — a shared plan rescheduled, a
+   reminder changed elsewhere — as a silent data push that triggers re-sync and re-arm.
+3. **Push is the visible backstop** exactly when the server cannot establish local
+   coverage: the device's acknowledged `reminderStateVersion` is stale, or the reminder
+   fires beyond its acknowledged `scheduledThrough` horizon, or arming failed and was
+   never acknowledged.
+
+Duplicate delivery — the concern that motivated retirement — is prevented architecturally:
+after verified arming the device acknowledges `{ reminderStateVersion, scheduledThrough }`
+via `PUT /v1/me/devices/:deviceId/reminder-ack`, and the reminder Lambda (P5-13) suppresses
+the visible push per device when the version matches and the fire time is inside the
+horizon. The one residual is a narrow race — a reminder-relevant change landing minutes
+before an armed reminder fires can produce one duplicate if the device has not re-acked —
+accepted deliberately, because a duplicate beats a miss. This task still retires nothing at
+install time; it registers the device and, with P5-13, turns the always-created EventBridge
+schedules into backstop timers. The reminder controls and the no-permission behaviour are
+unchanged; a device whose notification permission is revoked acknowledges nothing and is
+served entirely by push.
 
 **Edge cases.**
 

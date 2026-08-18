@@ -185,6 +185,19 @@ its predecessor fires.
 
 ### 3.6 Delivery guarantees
 
+> **Delivery ownership — 2026-08-17 (P5-16 second amendment).** Three concepts, kept
+> separate. **Reminder state** — *when should this activity remind me* — is authoritative on
+> the server. **The local notification schedule** — *which known reminders has this device
+> armed* — is a device-specific projection of synchronized state (P2-57), verified after
+> arming and acknowledged as `{ reminderStateVersion, scheduledThrough }` on the device's
+> `DEVICE#` row. **Push** answers *what changed that this device could not know*, and backs
+> up any reminder the server cannot confirm is locally armed. A reminder the device has
+> acknowledged fires **locally, with no network at firing time**; the guarantees below
+> describe the push channel, which is why they are tolerable — push is the updater and the
+> backstop, not the everyday alarm clock. The one accepted residual: a reminder-relevant
+> change landing just before an armed reminder fires can produce one duplicate when the
+> device cannot re-acknowledge in time. A duplicate beats a miss.
+
 - **At-most-once, best effort.** Expo Push is not a guaranteed channel. A dropped
   notification is not retried more than the transport's own retry.
 - A reminder more than **30 minutes** late at delivery time is dropped rather than shown.
@@ -259,6 +272,15 @@ about a change to it.
 | RSVP change, plan activity, expense | Held until the window's end. |
 | Added to a list, or items added to one | Held until the window's end. |
 | Unsettled reminder | Held. |
+
+> **One policy, two evaluators — 2026-08-17.** The reminder rows of this table are a pure
+> function of the quiet-hours setting, the activity's time, and the reminder's fire time —
+> all device-available — and are implemented **once** in `packages/shared`, imported by both
+> the local scheduler (P2-57) and the reminder Lambda (P5-13), with parity tests over
+> identical fixtures. The digest below and the 12-hour `plan_changes` exception remain
+> server-only: they aggregate across categories the device cannot see. One bounded
+> divergence is accepted and recorded: several early-held reminders fire individually at the
+> window's end on device, where the server may have digested them.
 
 Held notifications are coalesced at the window's end: more than three held items become one
 push (§7, `held_digest`). Their inbox entries are written at their original time regardless
