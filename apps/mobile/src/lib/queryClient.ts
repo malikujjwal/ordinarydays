@@ -1,14 +1,67 @@
-import { MAX_OFFLINE_MUTATIONS } from '@od/shared';
 import { MutationCache, QueryClient } from '@tanstack/react-query';
-import { Platform } from 'react-native';
 import { projectActivityWrite } from '@/lib/agendaCache';
+import { IntentLogFullError } from '@/lib/intentLog';
+import { getActiveIntentLog, replayingIntent } from '@/lib/intentReplay';
 import {
   changesActivityLists,
   refreshActivityDetails,
   refreshActivityLists,
   registerActivityMutationDefaults,
 } from '@/lib/mutationDefaults';
-import { OFFLINE_QUEUE_FULL_MESSAGE, useSyncStatus } from '@/stores/syncStatus';
+import { useSyncStatus } from '@/stores/syncStatus';
+
+/**
+ * The intent id for a write, which is its `Idempotency-Key` wherever one exists.
+ *
+ * Reusing that value is what makes the log idempotent end to end: the same key identifies the
+ * intent locally and deduplicates the request server side, so an intent replayed after a lost
+ * response cannot become a second entity. The two mutations without one — delete and patch —
+ * are naturally idempotent against a given target, so a per-target id is enough.
+ */
+function intentIdFor(variables: unknown): string {
+  const fields = variables as
+    | { idempotencyKey?: unknown; activityId?: unknown; reminderId?: unknown }
+    | undefined;
+  if (typeof fields?.idempotencyKey === 'string') return fields.idempotencyKey;
+  const target =
+    typeof fields?.reminderId === 'string'
+      ? fields.reminderId
+      : typeof fields?.activityId === 'string'
+        ? fields.activityId
+        : 'unknown';
+  return `${target}:${Date.now()}`;
+}
+
+/** The entity FIFO is promised within. Falls back to the intent id for an entity-less write. */
+function entityIdFor(variables: unknown): string {
+  const fields = variables as { activityId?: unknown } | undefined;
+  return typeof fields?.activityId === 'string'
+    ? fields.activityId
+    : intentIdFor(variables);
+}
+
+/**
+ * Resolves an intent after its request settled.
+ *
+ * Only the intent this mutation created, and only when it is not a replay — `replayIntents`
+ * owns the lifecycle of what it dispatches, and two writers moving one intent would race.
+ */
+function settleIntent(variables: unknown, outcome: 'ok' | Error): void {
+  const log = getActiveIntentLog();
+  if (log === undefined || replayingIntent() !== undefined) return;
+  const intentId = intentIdFor(variables);
+  if (outcome === 'ok') {
+    void log.acknowledge(intentId);
+    return;
+  }
+  /**
+   * A failed live attempt returns to `queued` rather than `failed`: the app is usually offline
+   * when this fires, and that is precisely the case the queue exists for. `replayIntents`
+   * makes the permanent-versus-transient decision on the retry, where a real status code is
+   * available to make it with.
+   */
+  void log.requeue(intentId, outcome.message);
+}
 
 /**
  * Builds the client with the offline defaults from `tech-stack.md` section 3.4.
@@ -18,21 +71,56 @@ import { OFFLINE_QUEUE_FULL_MESSAGE, useSyncStatus } from '@/stores/syncStatus';
  * multiplies the same logical operation to as many as 16 HTTP attempts, so both Query and
  * Mutation retries are disabled here.
  */
-export function createOfflineQueryClient(platform = Platform.OS): QueryClient {
+export function createOfflineQueryClient(): QueryClient {
   const client = new QueryClient({
     mutationCache: new MutationCache({
-      onMutate: () => {
-        if (platform !== 'ios') return;
-        const pending = client
-          .getMutationCache()
-          .getAll()
-          .filter((candidate) => candidate.state.status === 'pending').length;
-        if (pending <= MAX_OFFLINE_MUTATIONS) return;
+      /**
+       * **The write-ahead point** (P2-48, `tech-stack.md` §3.4 mechanism 4).
+       *
+       * TanStack awaits this before `mutationFn` and before the mutation's own `onMutate`, so
+       * one seam gives the exact ordering the durability contract requires — persist, then
+       * project, then request — for all thirteen registered mutations at once, without a
+       * single call site knowing the log exists. Throwing here aborts the mutation before any
+       * request, which is how a full queue or a failed disk write refuses the action instead
+       * of letting the user believe it happened.
+       *
+       * **The 200-intent cap moved into `IntentLog.append`**, which is the only place that can
+       * count it correctly: the cap measures unacknowledged *user data*, so `failed` and
+       * `needs_confirmation` intents count even though neither is a pending TanStack mutation.
+       * Counting live mutations undercounted by exactly the writes most likely to be stuck.
+       */
+      onMutate: async (variables, mutation) => {
+        const log = getActiveIntentLog();
+        if (log === undefined) return;
+        const { mutationKey } = mutation.options;
+        if (!Array.isArray(mutationKey)) return;
+        /**
+         * A replay runs through this same cache. Without this it would append a second copy
+         * of the intent it is replaying, and the queue would grow every time it drained.
+         */
+        if (replayingIntent() !== undefined) return;
 
-        useSyncStatus.getState().showQueueFull();
-        throw new Error(OFFLINE_QUEUE_FULL_MESSAGE);
+        try {
+          await log.append({
+            intentId: intentIdFor(variables),
+            mutationKey: mutationKey.map(String),
+            variables,
+            entityId: entityIdFor(variables),
+          });
+        } catch (error) {
+          if (error instanceof IntentLogFullError) {
+            useSyncStatus.getState().showQueueFull();
+          }
+          throw error;
+        }
       },
       onError: (error, variables, _context, mutation) => {
+        if (!(error instanceof IntentLogFullError)) {
+          settleIntent(
+            variables,
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
         useSyncStatus
           .getState()
           .captureMutationError(error, mutation.options.mutationKey, variables);
@@ -53,6 +141,7 @@ export function createOfflineQueryClient(platform = Platform.OS): QueryClient {
        * is what makes the change visible; the invalidation behind it is reconciliation.
        */
       onSuccess: (data, variables, _context, mutation) => {
+        settleIntent(variables, 'ok');
         const { mutationKey } = mutation.options;
         refreshActivityDetails(client, mutationKey, variables);
         if (!changesActivityLists(mutationKey)) return;

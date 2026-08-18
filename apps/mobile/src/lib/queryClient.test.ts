@@ -3,6 +3,8 @@ import type { HttpClient } from '@od/shared/client';
 import type { Activity } from '@od/shared/types';
 import { hydrate, type MutationKey, type QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
+import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
+import { replayIntents } from '@/lib/intentReplay';
 import {
   type ActivityPostVariables,
   type ConvertRecurrenceVariables,
@@ -20,6 +22,22 @@ import { shouldWarnBeforeUnload } from '@/lib/onlineManager';
 import { dehydratePersistedClient } from '@/lib/persister';
 import { createOfflineQueryClient } from '@/lib/queryClient';
 import { OFFLINE_QUEUE_FULL_MESSAGE, useSyncStatus } from '@/stores/syncStatus';
+
+const INTENT_USER = 'usr_01J0000000000000000000000Z';
+
+/** In-memory storage so an intent-log round trip crosses a real process boundary. */
+function fakeIntentStorage(): IntentLogStorage {
+  const data = new Map<string, string>();
+  return {
+    getItem: async (key) => data.get(key) ?? null,
+    setItem: async (key, value) => {
+      data.set(key, value);
+    },
+    removeItem: async (key) => {
+      data.delete(key);
+    },
+  };
+}
 
 const ACTIVITY_ID = 'act_01J0000000000000000000000A';
 const IDEMPOTENCY_KEY = '00000000-0000-4000-8000-000000000001';
@@ -290,7 +308,7 @@ describe('the query client defaults', () => {
   );
 
   it('marks a deleted detail stale without removing or refetching it', () => {
-    const client = createOfflineQueryClient('web');
+    const client = createOfflineQueryClient();
     const key = ['activity', ACTIVITY_ID, 'occurrence', '2026-08-12'] as const;
     client.setQueryData(key, { activity });
     const invalidateQueries = vi.spyOn(client, 'invalidateQueries');
@@ -312,52 +330,67 @@ describe('the query client defaults', () => {
 });
 
 describe('persisted mutation defaults', () => {
-  it('dehydrates, rehydrates and resolves all thirteen iOS mutations', async () => {
+  it('carries all thirteen mutations through the intent log, not the query envelope', async () => {
+    /**
+     * **Amended by P2-48.** This used to dehydrate the thirteen mutations into the query
+     * envelope and resume them from there, which is exactly the arrangement that let a
+     * buster bump or an age check delete queued user writes. The durability boundary is now
+     * the intent log; what this proves is unchanged in substance — every one of the thirteen
+     * registered defaults survives a process boundary and resolves against the real HTTP
+     * client — but it proves it across the store that is actually allowed to hold them.
+     */
     const source = createOfflineQueryClient();
     for (const entry of cases) addPausedMutation(source, entry.key, entry.variables);
-    const state = dehydratePersistedClient(source, 'ios');
-    expect(state.mutations).toHaveLength(13);
+    expect(dehydratePersistedClient(source).mutations).toHaveLength(0);
+
+    const storage = fakeIntentStorage();
+    const log = new IntentLog(INTENT_USER, storage);
+    await log.hydrate();
+    for (const [index, entry] of cases.entries()) {
+      await log.append({
+        intentId: `intent-${index}`,
+        mutationKey: entry.key.map(String),
+        variables: entry.variables,
+        entityId: `entity-${index}`,
+      });
+    }
+
+    // The process boundary: a second log over the same storage, as a relaunch builds.
+    const relaunched = new IntentLog(INTENT_USER, storage);
+    await relaunched.hydrate();
+    expect(relaunched.pending()).toHaveLength(13);
 
     const target = createOfflineQueryClient();
     const fake = fakeHttpClient();
     registerActivityMutationDefaults(target, fake.client);
-    hydrate(target, state);
-    await target.resumePausedMutations();
+    const result = await replayIntents(target, relaunched);
 
-    expect(
-      target
-        .getMutationCache()
-        .getAll()
-        .map((mutation) => mutation.state.status),
-    ).toEqual(Array.from({ length: 13 }, () => 'success'));
+    expect(result).toMatchObject({ attempted: 13, acknowledged: 13, failed: 0 });
     expect(fake.request).toHaveBeenCalledTimes(13);
+    expect(relaunched.pending()).toHaveLength(0);
   });
 
-  it('refuses mutation 201 on iOS with the canonical offline message', async () => {
-    const client = createOfflineQueryClient('ios');
-    const firstCase = cases[0];
-    if (firstCase === undefined) throw new Error('The create fixture is required.');
-    const variables = firstCase.variables;
-    for (let index = 0; index < MAX_OFFLINE_MUTATIONS; index += 1) {
-      addPausedMutation(client, ['test', index], variables);
-    }
-    const mutation = client.getMutationCache().build(client, {
-      mutationKey: activityMutationKeys.create,
-    });
+  /**
+   * **The 201st-write refusal moved to `intentLog.test.ts` (P2-48)**, along with the cap
+   * itself. It is not dropped coverage: the replacement asserts the same refusal *and* the
+   * thing this version could not, that `failed` and `needs_confirmation` intents count toward
+   * the 200. Counting live TanStack mutations undercounted by exactly the stuck writes.
+   */
 
-    await expect(mutation.execute(variables)).rejects.toThrow(OFFLINE_QUEUE_FULL_MESSAGE);
-    expect(useSyncStatus.getState().queueMessage).toBe(OFFLINE_QUEUE_FULL_MESSAGE);
-  });
-
-  it('persists queries but excludes the process-death mutation queue on web', () => {
+  it('persists queries and never a mutation, on either platform', () => {
     const source = createOfflineQueryClient();
     source.setQueryData(['agenda', '2026-08-12'], { sections: [] });
     const firstCase = cases[0];
     if (firstCase === undefined) throw new Error('The create fixture is required.');
     addPausedMutation(source, firstCase.key, firstCase.variables);
 
-    const state = dehydratePersistedClient(source, 'web');
+    const state = dehydratePersistedClient(source);
 
+    /**
+     * The exclusion used to be conditional on the platform, because iOS kept its queue in
+     * here. Nothing keeps a queue in here now — one action must not have two records that
+     * disagree the moment either store is pruned — so the assertion is unconditional.
+     */
     expect(state.queries).toHaveLength(1);
     expect(state.mutations).toHaveLength(0);
     expect(shouldWarnBeforeUnload(source)).toBe(true);

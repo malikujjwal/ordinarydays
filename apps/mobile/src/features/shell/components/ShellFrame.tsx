@@ -4,6 +4,7 @@ import { Platform, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AddButton } from '@/features/shell/components/AddButton';
 import { NavRail } from '@/features/shell/components/NavRail';
+import { OfflineBar } from '@/features/shell/components/OfflineBar';
 import { type TabDefinition, tabs } from '@/features/shell/model/tabs';
 
 const editableTarget = (target: EventTarget | null): boolean => {
@@ -76,7 +77,16 @@ export function ShellFrame({ activeName, onSelect, onAdd, children }: ShellFrame
     <View style={{ flex: 1, flexDirection: rail ? 'row' : 'column' }}>
       {rail ? <NavRail activeName={activeName} onSelect={onSelect} /> : null}
 
-      <View style={{ flex: 1 }}>{children}</View>
+      <View style={{ flex: 1 }}>
+        {/*
+          §5.4's bar sits above the screen content and below any header the screen renders its
+          own of, so it never covers what it is explaining. In the flow rather than absolutely
+          positioned: it is persistent, and content should move down for it rather than hide
+          under it.
+        */}
+        <OfflineBar />
+        {children}
+      </View>
 
       <View
         style={{

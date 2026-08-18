@@ -12,6 +12,7 @@ import { installLocalReminderScheduler } from '@/features/reminders/localSchedul
 import { SyncStatusBanner } from '@/features/shell/components/SyncStatusBanner';
 import { ClockProvider } from '@/hooks/useClock';
 import { useSerifFamily } from '@/lib/fonts';
+import { startIntentLogSession } from '@/lib/intentLogSession';
 import { installOnlineManager } from '@/lib/onlineManager';
 import { restorePersistedClient, subscribeToPersistence } from '@/lib/persister';
 import { queryClient } from '@/lib/queryClient';
@@ -47,12 +48,31 @@ function HydrationGate({ children }: { children: ReactNode }) {
     let stopPersistence: (() => void) | undefined;
     let stopOnlineManager: (() => void) | undefined;
     let stopLocalReminders: (() => void) | undefined;
+    let stopIntentLog: (() => void) | undefined;
 
-    void restorePersistedClient(queryClient).then(() => {
+    void restorePersistedClient(queryClient).then((outcome) => {
       if (!active) return;
-      stopPersistence = subscribeToPersistence(queryClient);
+      /**
+       * `outcome.safeToPersist` is what stops a slow storage read being overwritten by the
+       * empty client that was rendering while it was still in flight. The app becomes
+       * interactive now either way; only the *saving* waits.
+       */
+      stopPersistence = subscribeToPersistence(queryClient, outcome.safeToPersist);
       stopOnlineManager = installOnlineManager(queryClient);
       stopLocalReminders = installLocalReminderScheduler();
+      /**
+       * The log opens after the cache is restored but is not awaited before the app becomes
+       * interactive: it is the durability boundary, not a render dependency, and blocking the
+       * first frame on a disk read is what the restore deadline exists to avoid.
+       */
+      void startIntentLogSession(queryClient).then((session) => {
+        if (session === undefined) return;
+        if (!active) {
+          session.stop();
+          return;
+        }
+        stopIntentLog = session.stop;
+      });
       setReady(true);
     });
 
@@ -61,6 +81,7 @@ function HydrationGate({ children }: { children: ReactNode }) {
       stopPersistence?.();
       stopOnlineManager?.();
       stopLocalReminders?.();
+      stopIntentLog?.();
     };
   }, []);
 

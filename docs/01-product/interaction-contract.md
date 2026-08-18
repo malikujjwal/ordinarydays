@@ -477,7 +477,7 @@ message can name it.
 | Conflicts on reconnect | Server state wins for fields the user did not touch. A queued write that returns `409` surfaces one banner: `<n> changes couldn't be applied.` with a list. |
 | Capture | Not attempted offline ([`ai-capture.md`](ai-capture.md#61-the-failure-matrix)). |
 | Uploads | Queued; the attachment shows a placeholder until the upload succeeds. |
-| Queue limits | 200 pending mutations; beyond that, new writes are refused with `You're offline and there's a lot waiting to sync.` |
+| Queue limits | 200 unacknowledged intents; beyond that, new writes are refused with `You're offline and there's a lot waiting to sync.` **Amended 2026-08-17 (P2-48):** the count is of queued *user data*, so a `failed` or `needs_confirmation` intent counts toward it — each still holds words the user typed. The refusal happens before the action is reported accepted, never after. |
 | Undo while offline | Works — it is a compensating local operation and a queued call. |
 
 **A pending entity is visible and inert — amended 2026-08-17 (Phase 2.6).** *"Applied

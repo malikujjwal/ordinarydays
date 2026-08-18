@@ -1,6 +1,7 @@
 import { Card, Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBlockedIntents } from '@/hooks/usePendingIntents';
 import { useSyncStatus } from '@/stores/syncStatus';
 
 /** One app-level banner aggregates replay conflicts instead of emitting a toast per field. */
@@ -9,8 +10,18 @@ export function SyncStatusBanner() {
   const insets = useSafeAreaInsets();
   const queueMessage = useSyncStatus((state) => state.queueMessage);
   const conflictChanges = useSyncStatus((state) => state.conflictChanges);
+  /**
+   * Intents the queue could not land (P2-48).
+   *
+   * `failed` is a permanent server rejection; `needs_confirmation` is a write parked by age or
+   * an untrusted clock. Both hold words the user typed and both are retained until the user
+   * acts, so both belong in the one banner §5.4 already specifies rather than in a second
+   * surface. The count is of writes, which is what `<n> changes` means here.
+   */
+  const blocked = useBlockedIntents();
 
-  if (queueMessage === undefined && conflictChanges.length === 0) return null;
+  if (queueMessage === undefined && conflictChanges.length === 0 && blocked.length === 0)
+    return null;
 
   return (
     <View
@@ -30,6 +41,11 @@ export function SyncStatusBanner() {
           {queueMessage === undefined ? null : (
             <Text variant="subhead" color="textPrimary">
               {queueMessage}
+            </Text>
+          )}
+          {blocked.length === 0 ? null : (
+            <Text variant="subhead" color="textPrimary" testID="blocked-intents">
+              {`${blocked.length} ${blocked.length === 1 ? 'change' : 'changes'} couldn't be applied.`}
             </Text>
           )}
           {conflictChanges.length === 0 ? null : (

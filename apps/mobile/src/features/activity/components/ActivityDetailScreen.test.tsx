@@ -1802,7 +1802,7 @@ describe('the ⋯ actions', () => {
         body: { data: { activityId: ID }, meta: { requestId: 'req_delete' } },
       },
     );
-    const queryClient = createOfflineQueryClient('web');
+    const queryClient = createOfflineQueryClient();
     queryClient.setQueryData<AgendaData>(['agenda', 'delete-series'], {
       days: [
         {
