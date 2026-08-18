@@ -237,6 +237,21 @@ export const participantInput = z.union([
 ]);
 
 const createFieldsShape = {
+  /**
+   * The client's own `act_` ULID, minted before the request leaves the device
+   * (Phase 2.6, ADR-055; `data-model.md` §8, `api-contract.md` §2.3).
+   *
+   * An offline create can then render the permanent id it will always have — no temporary
+   * id, no reconciliation pipeline, no id rewriting. **Identity only.** The server still
+   * derives ownership from the authenticated principal and still sets `createdAt`; an id is
+   * an identifier, never a credential and never a claim, which is why the authority fields
+   * remain absent from this shape rather than being accepted and ignored.
+   *
+   * Optional, so omitting it keeps the server-minted behaviour byte-identical — required by
+   * `git-workflow.md` §6.3, which lets this land alone without breaking a branch that does
+   * not know the field exists.
+   */
+  activityId: ulidId('act').optional(),
   title,
   notes: z.string().max(MAX_NOTES_LEN).optional(),
   schedule: z

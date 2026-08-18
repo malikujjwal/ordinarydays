@@ -492,3 +492,65 @@ describe('complete, uncomplete and skip inputs', () => {
     );
   });
 });
+
+/**
+ * The client-minted `act_` id (Phase 2.6, ADR-055).
+ *
+ * Identity only: the field carries which entity this is, never who owns it or when it was
+ * made. The authority fields stay rejected by the same `strictObject` that rejects a typo.
+ */
+describe('createActivityInput accepts a client-minted activityId', () => {
+  const task = { title: 'Buy milk', objectKind: 'task', type: 'task' } as const;
+  const ACT = 'act_01J0000000000000000000000A';
+
+  it('stays valid with the field omitted, so the change is additive', () => {
+    const parsed = createActivityInput.safeParse(task);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && 'activityId' in parsed.data).toBe(false);
+  });
+
+  it('accepts a well-formed act_ ULID and preserves it', () => {
+    const parsed = createActivityInput.safeParse({ ...task, activityId: ACT });
+    expect(parsed.success && parsed.data.activityId).toBe(ACT);
+  });
+
+  it('accepts one on a Plan too, since offline creation is not Task-only', () => {
+    expect(
+      createActivityInput.safeParse({
+        title: 'Dinner',
+        objectKind: 'plan',
+        type: 'event',
+        activityId: ACT,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['a bare ULID with no prefix', '01J0000000000000000000000A'],
+    ['another entity prefix', 'rem_01J0000000000000000000000A'],
+    ['an id one character short', 'act_01J000000000000000000000A'],
+    ['a non-Crockford character', 'act_01J000000000000000000000IA'],
+    ['a lowercase body', 'act_01j0000000000000000000000a'],
+    ['an empty string', ''],
+  ])('rejects %s', (_why, activityId) => {
+    expect(createActivityInput.safeParse({ ...task, activityId }).success).toBe(false);
+  });
+
+  it('still refuses the authority fields an id might be mistaken for', () => {
+    // An id says which entity. It never says whose, or when — those stay server-derived.
+    expect(
+      createActivityInput.safeParse({
+        ...task,
+        activityId: ACT,
+        ownerId: 'usr_01J0000000000000000000000B',
+      }).success,
+    ).toBe(false);
+    expect(
+      createActivityInput.safeParse({
+        ...task,
+        activityId: ACT,
+        createdAt: '2026-08-17T10:00:00.000Z',
+      }).success,
+    ).toBe(false);
+  });
+});
