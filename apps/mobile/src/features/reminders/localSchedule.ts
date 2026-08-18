@@ -1,21 +1,44 @@
 import { getAgenda, getMe, type HttpClient } from '@od/shared/client';
-import { addWallDays, toUtcInstant } from '@od/shared/recurrence';
-import type { Clock, Instant, TimeZone, WallDate } from '@od/shared/time';
+import { addWallDays } from '@od/shared/recurrence';
+import type { Clock, TimeZone, WallDate } from '@od/shared/time';
 import { systemClock } from '@od/shared/time';
-import type { User } from '@od/shared/types';
+import { onlineManager } from '@tanstack/react-query';
 import { AppState } from 'react-native';
 import { apiClient } from '@/lib/apiClient';
-import { localNotificationsSupported, replaceLocalNotifications } from '@/lib/push';
+import { getActiveIntentLog } from '@/lib/intentReplay';
+import {
+  localNotificationsSupported,
+  readScheduledLocalNotifications,
+  replaceLocalNotifications,
+} from '@/lib/push';
 import type { LocalNotificationRequest } from '@/lib/push.types';
+import { planArming } from './arming';
+import { type DirtyReason, DirtySchedule } from './dirtySchedule';
+import { buildProjection, type ServerReminderSource } from './projection';
+import { loadProjection, type StoredProjection, saveProjection } from './projectionStore';
+
+/**
+ * Local reminder scheduling (P2-57).
+ *
+ * ## What changed
+ *
+ * This used to read `getMe` and `getAgenda` on **every** recompute, and recompute on exactly
+ * two events: app start and entering the background. Both halves were wrong for the case the
+ * feature exists to serve. A device with no connectivity could not recompute at all, and a
+ * reminder added at 9 AM was armed correctly only if the user happened to background the app
+ * before it was due.
+ *
+ * Now the network and the arming are separate concerns:
+ *
+ * - **`refreshReminderProjection`** is the only thing that touches the network. When online it
+ *   stores the server's answer and marks the schedule dirty. When offline it does nothing, and
+ *   nothing breaks.
+ * - **Arming** reads the stored projection plus the live intent log, and never the network.
+ *   It runs whenever the schedule is dirty, which is after any reminder-relevant change.
+ */
 
 const REMINDER_INCLUDE = 'reminders' as const;
-const DEFAULT_ALL_DAY_HOUR = 9;
-const MINUTE_MS = 60_000;
-const TITLE_LIMIT = 40;
-const BODY_LIMIT = 110;
-
-type AgendaProjection = Awaited<ReturnType<typeof getAgenda>>;
-type AgendaProjectionItem = AgendaProjection['days'][number]['schedule'][number];
+const PROJECTION_DAYS = 7;
 
 type AppStateListener = (state: string) => void;
 
@@ -29,7 +52,11 @@ export interface LocalReminderSchedulerDependencies {
   appState: SchedulerAppState;
   supported: boolean;
   replace: (requests: readonly LocalNotificationRequest[]) => Promise<void>;
-  onError: () => void;
+  readScheduled: () => Promise<string[]>;
+  load: typeof loadProjection;
+  save: typeof saveProjection;
+  isOnline: () => boolean;
+  onError: (error?: unknown) => void;
 }
 
 const defaultDependencies: LocalReminderSchedulerDependencies = {
@@ -38,200 +65,193 @@ const defaultDependencies: LocalReminderSchedulerDependencies = {
   appState: AppState,
   supported: localNotificationsSupported,
   replace: replaceLocalNotifications,
+  readScheduled: readScheduledLocalNotifications,
+  load: loadProjection,
+  save: saveProjection,
+  isOnline: () => onlineManager.isOnline(),
   onError: () => console.warn('local_notification_refresh_failed'),
 };
 
 /**
- * Computes every local request from the caller-scoped agenda projection.
+ * Collapses one `include=reminders` agenda response to the fields arming needs.
  *
- * The API already removed every other user's reminders. Filtering by user id here would
- * hide an upstream privacy defect, so this function deliberately has no user-id argument.
+ * The narrowing is the point: persisting whole `AgendaItem`s would make this a second copy of
+ * the agenda cache, which ADR-055's scope guard forbids.
  */
-export function computeLocalNotifications(
-  agenda: AgendaProjection,
-  profile: Pick<User, 'timezone' | 'allDayReminderHour'>,
-  now: Instant,
-  formatTime: (time: string) => string = formatWallTime,
-): LocalNotificationRequest[] {
-  const requests: LocalNotificationRequest[] = [];
-  const identifiers = new Set<string>();
+function toSources(
+  agenda: Awaited<ReturnType<typeof getAgenda>>,
+): ServerReminderSource[] {
+  const sources: ServerReminderSource[] = [];
+  const seen = new Set<string>();
 
   for (const day of agenda.days) {
-    for (const item of itemsForNotification(day)) {
-      if (isTerminal(item.status)) continue;
-
-      for (const reminder of item.reminders ?? []) {
-        if (item.time === undefined && reminder.offsetMinutes % 1440 !== 0) continue;
-        const fireAt = reminderInstant(
-          day.date as WallDate,
-          item,
-          reminder.offsetMinutes,
-          profile.timezone as TimeZone,
-          profile.allDayReminderHour ?? DEFAULT_ALL_DAY_HOUR,
-        );
-        if (Date.parse(fireAt) <= Date.parse(now)) continue;
-
-        const identifier = [
-          item.activityId,
-          reminder.reminderId,
-          item.occurrenceDate ?? day.date,
-        ].join(':');
-        if (identifiers.has(identifier)) continue;
-        identifiers.add(identifier);
-
-        requests.push({
-          identifier,
-          title: truncateAtWord(item.title, TITLE_LIMIT),
-          body: truncateAtWord(
-            notificationBody(item, reminder.offsetMinutes, formatTime),
-            BODY_LIMIT,
-          ),
-          fireAt,
-          route: `/activity/${item.activityId}`,
-        });
-      }
+    const items = [
+      ...(day.upNext === undefined ? [] : [day.upNext]),
+      ...day.schedule,
+      ...day.anytime,
+      ...day.earlier,
+    ];
+    for (const item of items) {
+      const key = `${item.activityId}:${item.occurrenceDate ?? day.date}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const reminders = (item.reminders ?? []).map((reminder) => ({
+        reminderId: reminder.reminderId,
+        offsetMinutes: reminder.offsetMinutes,
+      }));
+      if (reminders.length === 0) continue;
+      sources.push({
+        activityId: item.activityId,
+        title: item.title,
+        date: day.date as WallDate,
+        time: item.time,
+        status: item.status,
+        occurrenceDate: item.occurrenceDate,
+        reminders,
+      });
     }
   }
-
-  return requests;
+  return sources;
 }
 
-/** One independent eight-day agenda refresh. Today never calls or awaits this function. */
-export async function refreshLocalNotifications(
-  dependencies: Pick<
-    LocalReminderSchedulerDependencies,
-    'client' | 'clock' | 'supported' | 'replace'
-  > = defaultDependencies,
-): Promise<void> {
-  if (!dependencies.supported) return;
+/**
+ * The one network read, and the only thing that fills the store.
+ *
+ * Offline is not a failure here: there is simply nothing new to learn, and the stored
+ * projection plus the intent log already describe what to arm.
+ */
+export async function refreshReminderProjection(
+  dependencies: LocalReminderSchedulerDependencies = defaultDependencies,
+): Promise<StoredProjection | undefined> {
+  if (!dependencies.supported || !dependencies.isOnline()) return undefined;
 
   const profile = await getMe(dependencies.client);
   const today = dependencies.clock.todayIn(profile.timezone as TimeZone);
+  const to = addWallDays(today, PROJECTION_DAYS);
   const agenda = await getAgenda(dependencies.client, {
     from: today,
-    to: addWallDays(today, 7),
+    to,
     tz: profile.timezone,
     include: REMINDER_INCLUDE,
   });
 
-  await dependencies.replace(
-    computeLocalNotifications(agenda, profile, dependencies.clock.now()),
-  );
+  const stored: StoredProjection = {
+    profile: {
+      timezone: profile.timezone,
+      ...(profile.allDayReminderHour === undefined
+        ? {}
+        : { allDayReminderHour: profile.allDayReminderHour }),
+      ...(profile.quietHours === undefined ? {} : { quietHours: profile.quietHours }),
+    },
+    items: toSources(agenda),
+    from: today as WallDate,
+    to: to as WallDate,
+    updatedAt: dependencies.clock.now(),
+  };
+  await dependencies.save(stored);
+  return stored;
 }
 
-/** Installs the scheduler's startup and enter-background cadence at the app root. */
+/**
+ * Builds the armable set from stored data alone — no network, by construction.
+ *
+ * Reads the intent log through `pending()` only. P2-57's acceptance test is that reminders
+ * need no change to that primitive, and this is the call site that proves it.
+ */
+async function planFromStore(dependencies: LocalReminderSchedulerDependencies): Promise<{
+  requests: LocalNotificationRequest[];
+  scheduledThrough: ReturnType<typeof planArming>['scheduledThrough'];
+}> {
+  const stored = await dependencies.load();
+  const pending = getActiveIntentLog()?.pending() ?? [];
+
+  /**
+   * With no stored projection there is still work to do: an offline first run has pending
+   * creates and has never reached the server. The window falls back to the device's own
+   * today, which is all a purely local projection needs.
+   */
+  const timezone = stored?.profile.timezone ?? 'UTC';
+  const today = dependencies.clock.todayIn(timezone as TimeZone) as WallDate;
+  const window = {
+    from: stored?.from ?? today,
+    to: stored?.to ?? (addWallDays(today, PROJECTION_DAYS) as WallDate),
+  };
+
+  const projection = buildProjection(stored?.items ?? [], pending, window);
+  const plan = planArming(
+    projection,
+    stored?.profile ?? { timezone },
+    dependencies.clock.now(),
+  );
+  return { requests: plan.requests, scheduledThrough: plan.scheduledThrough };
+}
+
+/**
+ * Installs the scheduler.
+ *
+ * The two old moments — startup and entering the background — are now two of several reasons
+ * to mark dirty rather than the only two times anything happens. Reconnecting and an intent
+ * log change are the ones that were missing, and the second is what makes an acknowledged
+ * offline create re-arm from the server's copy instead of staying on the local one.
+ */
 export function installLocalReminderScheduler(
   overrides: Partial<LocalReminderSchedulerDependencies> = {},
 ): () => void {
   const dependencies = { ...defaultDependencies, ...overrides };
   let stopped = false;
-  let pending = Promise.resolve();
 
-  const tick = () => {
+  const schedule = new DirtySchedule({
+    plan: () => planFromStore(dependencies),
+    replace: dependencies.replace,
+    readScheduled: dependencies.readScheduled,
+    onError: dependencies.onError,
+  });
+
+  let pending = Promise.resolve();
+  const tick = (reason: DirtyReason, refresh: boolean) => {
+    schedule.mark(reason);
     pending = pending
       .then(async () => {
-        if (!stopped) await refreshLocalNotifications(dependencies);
+        if (stopped || !dependencies.supported) return;
+        /**
+         * The refresh is best-effort and deliberately does not gate arming: an offline device
+         * still arms from what it already has. A network failure marks nothing clean and
+         * cancels nothing.
+         */
+        if (refresh) {
+          try {
+            await refreshReminderProjection(dependencies);
+          } catch (error) {
+            dependencies.onError(error);
+          }
+        }
+        await schedule.run();
       })
-      .catch(() => dependencies.onError());
+      .catch((error: unknown) => dependencies.onError(error));
   };
 
-  tick();
+  tick('startup', true);
+
   const subscription = dependencies.appState.addEventListener('change', (state) => {
-    if (state === 'background') tick();
+    if (state === 'background') tick('background', true);
+  });
+  /** Reconnecting is when the server may have something the device could not know. */
+  const stopOnline = onlineManager.subscribe((online) => {
+    if (online) tick('activity-changed', true);
+  });
+  /**
+   * An acknowledged create moves a reminder from the log to the server's copy. Same key, so
+   * nothing is orphaned — but the schedule still has to be recomputed to pick up whatever
+   * else the server says about it.
+   */
+  const stopLog = getActiveIntentLog()?.subscribe(() => {
+    tick('intent-acknowledged', false);
   });
 
   return () => {
     stopped = true;
     subscription.remove();
+    stopOnline();
+    stopLog?.();
   };
-}
-
-function itemsForNotification(
-  day: AgendaProjection['days'][number],
-): AgendaProjectionItem[] {
-  const items = [
-    ...(day.upNext === undefined ? [] : [day.upNext]),
-    ...day.schedule,
-    ...day.anytime,
-    ...day.earlier,
-  ];
-  const unique = new Map<string, AgendaProjectionItem>();
-  for (const item of items) {
-    const key = `${item.activityId}:${item.occurrenceDate ?? day.date}`;
-    if (!unique.has(key)) unique.set(key, item);
-  }
-  return [...unique.values()];
-}
-
-function isTerminal(status: AgendaProjectionItem['status']): boolean {
-  return (
-    status === 'completed' ||
-    status === 'completed_occurrence' ||
-    status === 'skipped' ||
-    status === 'skipped_occurrence' ||
-    status === 'cancelled'
-  );
-}
-
-function reminderInstant(
-  date: WallDate,
-  item: AgendaProjectionItem,
-  offsetMinutes: number,
-  timezone: TimeZone,
-  allDayHour: number,
-): Instant {
-  if (item.time !== undefined) {
-    const activityInstant = toUtcInstant(date, item.time, timezone);
-    return new Date(
-      Date.parse(activityInstant) + offsetMinutes * MINUTE_MS,
-    ).toISOString() as Instant;
-  }
-
-  const fireDate = addWallDays(date, offsetMinutes / 1440);
-  const fireTime = `${String(allDayHour).padStart(2, '0')}:00`;
-  return toUtcInstant(fireDate, fireTime, timezone) as Instant;
-}
-
-function notificationBody(
-  item: AgendaProjectionItem,
-  offsetMinutes: number,
-  formatTime: (time: string) => string,
-): string {
-  if (item.time === undefined) return allDayBody(offsetMinutes);
-  return `${relativeLead(offsetMinutes)} · ${formatTime(item.time)}`;
-}
-
-function relativeLead(offsetMinutes: number): string {
-  const minutes = Math.abs(offsetMinutes);
-  if (minutes === 0) return 'Now';
-  if (minutes % 1440 === 0) return `In ${quantity(minutes / 1440, 'day')}`;
-  if (minutes % 60 === 0) return `In ${quantity(minutes / 60, 'hour')}`;
-  return `In ${quantity(minutes, 'minute')}`;
-}
-
-function allDayBody(offsetMinutes: number): string {
-  const days = Math.abs(offsetMinutes / 1440);
-  if (days === 0) return 'Today';
-  if (days === 1) return 'Tomorrow';
-  return `In ${quantity(days, 'day')}`;
-}
-
-function quantity(value: number, unit: string): string {
-  return `${value} ${unit}${value === 1 ? '' : 's'}`;
-}
-
-function formatWallTime(time: string): string {
-  const [hour, minute] = time.split(':').map(Number) as [number, number];
-  return new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(2000, 0, 1, hour, minute)));
-}
-
-function truncateAtWord(value: string, limit: number): string {
-  if (value.length <= limit) return value;
-  const available = value.slice(0, limit - 1);
-  const boundary = available.lastIndexOf(' ');
-  return `${available.slice(0, boundary > 0 ? boundary : available.length).trimEnd()}…`;
 }
