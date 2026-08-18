@@ -11,7 +11,7 @@ import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
 import { PendingIndicator } from '@/components/PendingIndicator';
 import { isFutureRecurringOccurrence } from '@/features/agenda/model/rowScope';
-import { usePendingCreate } from '@/hooks/usePendingIntents';
+import { usePendingCreate, useRecurrenceEditState } from '@/hooks/usePendingIntents';
 import {
   canResolvePassedAgendaItem,
   outcomeVerb,
@@ -132,6 +132,8 @@ export function AgendaRow({
    * DTO field would be a second source of truth for something only this device knows.
    */
   const { pending: pendingCreate } = usePendingCreate(item.activityId);
+  const recurrenceEdit = useRecurrenceEditState(item.activityId);
+  const inert = pendingCreate || recurrenceEdit.inert;
   const skipped = SKIPPED_STATUSES.has(item.status);
   const dimmed = item.isPast || checked || skipped;
   const formattedTime = item.time === undefined ? undefined : formatWallTime(item.time);
@@ -357,6 +359,7 @@ export function AgendaRow({
         accessibilityElementsHidden
         importantForAccessibility="no-hide-descendants"
         focusable={false}
+        disabled={inert}
         onPress={() => onOpen(item)}
         testID="agenda-row-backdrop"
         style={{
@@ -400,11 +403,11 @@ export function AgendaRow({
            * `Pending` indicator in the trailing slot is what says why, in words, rather than
            * leaving a greyed control as the only signal (§6.4).
            */
-          hasCheckbox={item.hasCheckbox && !pendingCreate}
+          hasCheckbox={item.hasCheckbox && !inert}
           checked={checked}
           title={item.title}
           disabled={futureRecurringCompletion}
-          {...(onToggleComplete === undefined || pendingCreate
+          {...(onToggleComplete === undefined || inert
             ? {}
             : { onChange: (next) => onToggleComplete(item, next) })}
         />
@@ -421,6 +424,7 @@ export function AgendaRow({
         style={{ flex: 1, minWidth: 0, gap: theme.space[2] }}
       >
         <Touchable
+          disabled={inert}
           accessibilityRole="button"
           accessibilityLabel={bodyLabel(item, checked, untimedContextLabel)}
           {...(accessibilityActions === undefined ? {} : { accessibilityActions })}
@@ -572,6 +576,15 @@ export function AgendaRow({
          * a gap the user has to interpret.
          */}
         <PendingIndicator entityId={item.activityId} />
+        {recurrenceEdit.message === undefined ? null : (
+          <Text
+            variant="footnote"
+            color={recurrenceEdit.status === 'failed' ? 'danger' : 'textSecondary'}
+            testID="agenda-row-recurrence-state"
+          >
+            {recurrenceEdit.message}
+          </Text>
+        )}
         {dense ? null : (
           <RowBadges
             {...(item.overdueFromDate === undefined || showTime
@@ -579,7 +592,7 @@ export function AgendaRow({
               : { overdueFromDate: item.overdueFromDate })}
             {...(today === undefined ? {} : { today })}
             participantAvatars={item.participantAvatars}
-            {...(onOpenOverdue === undefined
+            {...(onOpenOverdue === undefined || inert
               ? {}
               : { onOpenOverdue: () => onOpenOverdue(item) })}
           />
@@ -588,6 +601,7 @@ export function AgendaRow({
 
       {!showTime || formattedTime === undefined ? null : (
         <Touchable
+          disabled={inert}
           accessibilityRole="button"
           accessibilityLabel={`${formattedTime}, change time`}
           onPress={() => onOpenReschedule?.(item)}
@@ -630,7 +644,7 @@ export function AgendaRow({
           <OverdueChip
             overdueFromDate={item.overdueFromDate}
             today={today}
-            {...(onOpenOverdue === undefined
+            {...(onOpenOverdue === undefined || inert
               ? {}
               : { onPress: () => onOpenOverdue(item) })}
           />
@@ -649,7 +663,9 @@ export function AgendaRow({
         </View>
       ) : null}
 
-      {!canResolvePassedAgendaItem(item) || onOpenResolution === undefined ? null : (
+      {inert ||
+      !canResolvePassedAgendaItem(item) ||
+      onOpenResolution === undefined ? null : (
         <Chip
           label={passedPlanResolution(item.type).prompt}
           accessibilityLabel={`${passedPlanResolution(item.type).prompt} Choose an outcome for ${item.title}`}

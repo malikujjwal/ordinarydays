@@ -1,9 +1,10 @@
-import { getAgenda } from '@od/shared/client';
+import { getActivityAgenda, getAgenda } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
 import type { AgendaQuery, CreateActivityInput } from '@od/shared/schemas';
 import { type Instant, toWallDate, toWallTime } from '@od/shared/time';
 import type {
   Activity,
+  ActivityAgendaData,
   ActivityDetail,
   ActivityOutcome,
   AgendaData,
@@ -16,7 +17,9 @@ import {
   type AgendaProjectionClock,
   applyCompletion,
   findAgendaItem,
+  projectDay,
   replaceAgendaItem,
+  uniqueItems,
 } from '@/features/agenda/model/applyCompletion';
 import { applyCreate, applyPendingCreate } from '@/features/agenda/model/applyCreate';
 import { applyDelete } from '@/features/agenda/model/applyDelete';
@@ -26,6 +29,7 @@ import { applySkip } from '@/features/agenda/model/applySkip';
 import { applySnooze } from '@/features/agenda/model/applySnooze';
 import { resolveAgendaTimezone } from '@/features/agenda/timezone';
 import { apiClient } from '@/lib/apiClient';
+import { getActiveIntentLog } from '@/lib/intentReplay';
 import { type ActivityMutationTag, activityMutationKeys } from '@/lib/mutationKeys';
 import { activityDetailKey, activityKey } from '@/lib/queryKeys';
 
@@ -48,7 +52,8 @@ const RECONCILE_DELAYS_MS = [0, 150, 400, 900, 1_800, 3_200, 5_000] as const;
  */
 type PendingExpectation =
   | { readonly kind: 'version'; readonly version: string }
-  | { readonly kind: 'absent' };
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'protected'; readonly version?: string };
 
 const pendingByClient = new WeakMap<
   QueryClient,
@@ -122,15 +127,236 @@ export function guardAgendaResponse(
   const pending = windows?.get(keyId(queryKey));
   if (pending === undefined) return incoming;
 
-  for (const [activityId, expectation] of pending) {
+  let result = incoming;
+  for (const [activityId, expectation] of [...pending]) {
     const satisfied =
       expectation.kind === 'absent'
         ? !contains(incoming, activityId)
-        : observed(incoming, activityId, expectation.version);
-    if (!satisfied) return client.getQueryData<AgendaData>(queryKey) ?? incoming;
+        : expectation.kind === 'version'
+          ? observed(incoming, activityId, expectation.version)
+          : expectation.version !== undefined &&
+            observed(incoming, activityId, expectation.version);
+    if (satisfied) {
+      pending.delete(activityId);
+      if (expectation.kind === 'protected' && expectation.version !== undefined) {
+        clearReconciledIntentIfUnprotected(client, activityId, expectation.version);
+      }
+      continue;
+    }
+    const current = client.getQueryData<AgendaData>(queryKey);
+    if (current !== undefined) {
+      result = preserveActivityRows(result, current, activityId, agendaClock(client));
+    }
   }
-  windows?.delete(keyId(queryKey));
-  return incoming;
+  if (pending.size === 0) windows?.delete(keyId(queryKey));
+  return result;
+}
+
+/** Arms per-window protection before a recurrence PATCH can leave the device. */
+export function protectRecurrenceEdit(client: QueryClient, activityId: string): void {
+  let windows = pendingByClient.get(client);
+  if (windows === undefined) {
+    windows = new Map();
+    pendingByClient.set(client, windows);
+  }
+  for (const [key] of client.getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })) {
+    const pending = windows.get(keyId(key)) ?? new Map<string, PendingExpectation>();
+    pending.set(activityId, { kind: 'protected' });
+    windows.set(keyId(key), pending);
+  }
+}
+
+/** Clears protection after cancellation or permanent rejection. */
+export function clearRecurrenceEditProtection(
+  client: QueryClient,
+  activityId: string,
+): void {
+  const windows = pendingByClient.get(client);
+  if (windows === undefined) return;
+  for (const [id, pending] of windows) {
+    if (pending.get(activityId)?.kind === 'protected') pending.delete(activityId);
+    if (pending.size === 0) windows.delete(id);
+  }
+}
+
+/** Adds the acknowledged META version without allowing an unproven body to erase rows. */
+function expectProtectedVersion(
+  client: QueryClient,
+  activityId: string,
+  version: string,
+): void {
+  protectRecurrenceEdit(client, activityId);
+  const windows = pendingByClient.get(client);
+  for (const pending of windows?.values() ?? []) {
+    if (pending.get(activityId)?.kind === 'protected') {
+      pending.set(activityId, { kind: 'protected', version });
+    }
+  }
+}
+
+function preserveActivityRows(
+  incoming: AgendaData,
+  current: AgendaData,
+  activityId: string,
+  clock: AgendaProjectionClock,
+): AgendaData {
+  const currentByDate = new Map(
+    current.days.map((day) => [
+      day.date,
+      uniqueItems(day).filter((item) => item.activityId === activityId),
+    ]),
+  );
+  return {
+    ...incoming,
+    days: incoming.days.map((day) =>
+      projectDay(
+        day,
+        [
+          ...uniqueItems(day).filter((item) => item.activityId !== activityId),
+          ...(currentByDate.get(day.date) ?? []),
+        ],
+        clock,
+      ),
+    ),
+  };
+}
+
+/** Atomically replaces one activity across a single cached window, including zero rows. */
+export function spliceActivityAgenda(
+  agenda: AgendaData,
+  canonical: ActivityAgendaData,
+  clock: AgendaProjectionClock,
+): AgendaData {
+  const rowsByDate = new Map<string, ActivityAgendaData['rows']>();
+  for (const row of canonical.rows) {
+    if (row.item.activityId !== canonical.activityId) continue;
+    const rows = rowsByDate.get(row.date) ?? [];
+    rows.push(row);
+    rowsByDate.set(row.date, rows);
+  }
+  return {
+    ...agenda,
+    days: agenda.days.map((day) =>
+      projectDay(
+        day,
+        [
+          ...uniqueItems(day).filter((item) => item.activityId !== canonical.activityId),
+          ...(rowsByDate.get(day.date) ?? []).map((row) => row.item),
+        ],
+        clock,
+      ),
+    ),
+  };
+}
+
+type ActivityAgendaLoader = (
+  activityId: string,
+  query: AgendaQuery,
+) => Promise<ActivityAgendaData>;
+
+/** Strongly reconciles every applicable cached window for one acknowledged recurrence PATCH. */
+export async function reconcileRecurrenceEdit(
+  client: QueryClient,
+  activityId: string,
+  version: string,
+  load: ActivityAgendaLoader = (id, query) => getActivityAgenda(apiClient, id, query),
+): Promise<boolean> {
+  expectProtectedVersion(client, activityId, version);
+  const keys = client
+    .getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })
+    .map(([key]) => key as AgendaQueryKey);
+  let complete = true;
+  await Promise.all(
+    keys.map(async (key) => {
+      const [, from, to, tz, include] = key;
+      try {
+        const canonical = await load(activityId, {
+          from,
+          to,
+          tz,
+          ...(include === null ? {} : { include }),
+        });
+        if (canonical.activityId !== activityId || canonical.activityVersion < version) {
+          complete = false;
+          return;
+        }
+        client.setQueryData<AgendaData>(key, (agenda) =>
+          agenda === undefined
+            ? agenda
+            : spliceActivityAgenda(agenda, canonical, agendaClock(client)),
+        );
+        const pending = pendingByClient.get(client)?.get(keyId(key));
+        if (pending?.get(activityId)?.kind === 'protected') pending.delete(activityId);
+        clearReconciledIntentIfUnprotected(client, activityId, canonical.activityVersion);
+        if (pending?.size === 0) pendingByClient.get(client)?.delete(keyId(key));
+      } catch {
+        complete = false;
+      }
+    }),
+  );
+  return complete;
+}
+
+/** Ordinary/manual refresh: merge unaffected rows, then retry any versioned strong reads. */
+export async function loadAgendaWithReconciliation(
+  client: QueryClient,
+  queryKey: AgendaQueryKey,
+  query: AgendaQuery,
+  signal?: AbortSignal,
+  dependencies: {
+    readonly ordinary?: (query: AgendaQuery, signal?: AbortSignal) => Promise<AgendaData>;
+    readonly targeted?: ActivityAgendaLoader;
+  } = {},
+): Promise<AgendaData> {
+  let result = guardAgendaResponse(
+    client,
+    queryKey,
+    await (
+      dependencies.ordinary ??
+      ((request, requestSignal) => getAgenda(apiClient, request, requestSignal))
+    )(query, signal),
+  );
+  const pending = pendingByClient.get(client)?.get(keyId(queryKey));
+  for (const [activityId, expectation] of [...(pending ?? [])]) {
+    if (expectation.kind !== 'protected' || expectation.version === undefined) continue;
+    try {
+      const canonical = await (
+        dependencies.targeted ??
+        ((id, request) => getActivityAgenda(apiClient, id, request, signal))
+      )(activityId, query);
+      if (canonical.activityVersion < expectation.version) continue;
+      result = spliceActivityAgenda(result, canonical, agendaClock(client));
+      pending?.delete(activityId);
+      clearReconciledIntentIfUnprotected(client, activityId, canonical.activityVersion);
+    } catch {
+      // Protected rows remain installed; the next manual refresh retries this exact read.
+    }
+  }
+  if (pending?.size === 0) pendingByClient.get(client)?.delete(keyId(queryKey));
+  return result;
+}
+
+function clearReconciledIntentIfUnprotected(
+  client: QueryClient,
+  activityId: string,
+  proofVersion: string,
+): void {
+  const stillProtected = [...(pendingByClient.get(client)?.values() ?? [])].some(
+    (pending) => pending.get(activityId)?.kind === 'protected',
+  );
+  if (stillProtected) return;
+  const log = getActiveIntentLog();
+  if (log === undefined) return;
+  for (const intent of log.snapshotFor(activityId)) {
+    if (
+      intent.status === 'acknowledged' &&
+      intent.reconciliationVersion !== undefined &&
+      intent.reconciliationVersion <= proofVersion &&
+      isRecurrenceEditMutation(intent.mutationKey, intent.variables)
+    ) {
+      void log.acknowledge(intent.intentId);
+    }
+  }
 }
 
 export interface AgendaReconciliationVersion {
@@ -174,7 +400,8 @@ export async function reconcileAgendaProjection(
      */
     if (
       current?.kind !== 'absent' &&
-      (current === undefined || current.version < expected.version)
+      (current === undefined ||
+        (current.kind === 'version' && current.version < expected.version))
     ) {
       pending.set(expected.activityId, { kind: 'version', version: expected.version });
     }
@@ -253,8 +480,16 @@ export async function reconcileAgendaProjection(
     );
     if (resurrects) continue;
 
-    pendingByClient.get(client)?.delete(id);
-    client.setQueryData(key, body);
+    /**
+     * Relax only the ordinary version expectation this legacy ladder owns. A protected
+     * recurrence edit may share the window and must survive another Activity's exhausted
+     * reconciliation.
+     */
+    for (const [activityId, expectation] of [...(pending ?? [])]) {
+      if (expectation.kind === 'version') pending?.delete(activityId);
+    }
+    const guarded = guardAgendaResponse(client, key, body);
+    client.setQueryData(key, guarded);
     remaining.delete(id);
   }
   return remaining.size === 0;
@@ -335,22 +570,9 @@ export function projectActivityWrite(
    * derivable here.
    */
   if (tag === 'patch') {
-    if (isRecurrenceWrite(variables)) {
+    if (isRecurrenceEditMutation(mutationKey, variables)) {
       if (typeof activity.updatedAt === 'string') {
-        /**
-         * The server has accepted a new recurrence rule, so every cached expansion of the
-         * previous rule is now known to be stale. Remove those rows immediately instead of
-         * displaying the old frequency during GSI convergence. We deliberately do not invent
-         * replacement occurrences here; the versioned reconciler below installs only the
-         * canonical expansion returned by the agenda endpoint.
-         */
-        update(client, (agenda) =>
-          applyDelete(agenda, { activityId: activity.activityId, ...clock }),
-        );
-        void reconcileAgendaProjection(client, {
-          activityId: activity.activityId,
-          version: activity.updatedAt,
-        });
+        expectProtectedVersion(client, activity.activityId, activity.updatedAt);
       }
       return true;
     }
@@ -735,6 +957,41 @@ export interface PendingCreateProjectionIntent {
   readonly createdAt: number;
 }
 
+export interface RecurrenceEditProjectionIntent {
+  readonly intentId: string;
+  readonly entityId: string;
+  readonly mutationKey: readonly string[];
+  readonly variables: unknown;
+  readonly status: string;
+  readonly reconciliationVersion?: string;
+}
+
+/** Restores per-activity protection from the durable log after a process restart. */
+export function restoreRecurrenceEditProtection(
+  client: QueryClient,
+  intents: readonly RecurrenceEditProjectionIntent[],
+): number {
+  let restored = 0;
+  for (const intent of intents) {
+    if (
+      intent.mutationKey[0] !== 'activity' ||
+      intent.mutationKey[1] !== 'patch' ||
+      !isRecurrenceEditMutation(intent.mutationKey, intent.variables) ||
+      (intent.status !== 'queued' &&
+        intent.status !== 'in_flight' &&
+        intent.status !== 'acknowledged')
+    ) {
+      continue;
+    }
+    protectRecurrenceEdit(client, intent.entityId);
+    if (intent.reconciliationVersion !== undefined) {
+      expectProtectedVersion(client, intent.entityId, intent.reconciliationVersion);
+    }
+    restored += 1;
+  }
+  return restored;
+}
+
 /** Rebuilds pending create rows from the durable log after query-cache restoration. */
 export function restorePendingActivityCreates(
   client: QueryClient,
@@ -931,7 +1188,11 @@ function inputOf(variables: unknown): object | undefined {
 }
 
 /** Whether this PATCH changes series projection rather than ordinary row text. */
-function isRecurrenceWrite(variables: unknown): boolean {
+export function isRecurrenceEditMutation(
+  mutationKey: MutationKey | undefined,
+  variables: unknown,
+): boolean {
+  if (activityMutationTag(mutationKey) !== 'patch') return false;
   const input = inputOf(variables);
   return input !== undefined && Object.hasOwn(input, 'recurrence');
 }

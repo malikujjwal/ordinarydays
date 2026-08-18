@@ -1,4 +1,4 @@
-import { getAgenda, getMe } from '@od/shared/client';
+import { getMe } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
 import type { AgendaQuery } from '@od/shared/schemas';
 import { type Instant, toWallDate } from '@od/shared/time';
@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { useClock } from '@/hooks/useClock';
-import { guardAgendaResponse } from '@/lib/agendaCache';
+import { loadAgendaWithReconciliation } from '@/lib/agendaCache';
 import { apiClient } from '@/lib/apiClient';
 import { agendaKey, TODAY_AGENDA_INCLUDE } from '../keys';
 import { resolveAgendaTimezone } from '../timezone';
@@ -85,12 +85,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
   const queryKey = agendaKey(request.from, request.to, request.tz, request.include);
   const agenda = useQuery({
     queryKey,
-    queryFn: async ({ signal }) =>
-      guardAgendaResponse(
-        queryClient,
-        queryKey,
-        await getAgenda(apiClient, request, signal),
-      ),
+    queryFn: ({ signal }) =>
+      loadAgendaWithReconciliation(queryClient, queryKey, request, signal),
   });
   const refetch = agenda.refetch;
 

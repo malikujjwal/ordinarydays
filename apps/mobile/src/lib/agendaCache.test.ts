@@ -3,12 +3,16 @@ import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import {
   guardAgendaResponse,
+  isRecurrenceEditMutation,
+  loadAgendaWithReconciliation,
   projectActivityWrite,
   projectOptimisticCompletion,
   projectOptimisticSnooze,
   projectPendingActivityCreate,
   reconcileAgendaProjection,
+  reconcileRecurrenceEdit,
   restorePendingActivityCreates,
+  restoreRecurrenceEditProtection,
 } from '@/lib/agendaCache';
 
 /**
@@ -525,7 +529,7 @@ describe('a patch reaches the agenda cache', () => {
     expect(rows.map((item) => item.occurrenceDate)).toEqual([TODAY, '2026-08-14']);
   });
 
-  it('removes a confirmed-stale recurrence expansion while canonical reconciliation runs', () => {
+  it('retains the last canonical recurrence expansion while reconciliation runs', () => {
     const client = new QueryClient();
     client.setQueryData(KEY, {
       days: [
@@ -549,7 +553,25 @@ describe('a patch reaches the agenda cache', () => {
       { activityId: 'act_STANDUP', input: { recurrence: daily } },
     );
 
-    expect(rowOf(client)).toBeUndefined();
+    expect(rowOf(client)?.occurrenceDate).toBe(TODAY);
+  });
+
+  it('classifies only recurrence-changing PATCHes as recurrence edits', () => {
+    expect(
+      isRecurrenceEditMutation(['activity', 'patch'], {
+        input: { recurrence: daily },
+      }),
+    ).toBe(true);
+    expect(
+      isRecurrenceEditMutation(['activity', 'create'], {
+        input: { recurrence: daily },
+      }),
+    ).toBe(false);
+    expect(
+      isRecurrenceEditMutation(['activity', 'schedule'], {
+        input: { occurrenceDate: TODAY, date: '2026-08-14' },
+      }),
+    ).toBe(false);
   });
 
   it('leaves a window that never held the activity alone', () => {
@@ -603,6 +625,142 @@ describe('versioned agenda reconciliation', () => {
     expect(client.getQueryData<AgendaData>(KEY)?.days[0]?.schedule[0]?.title).toBe(
       'Current',
     );
+  });
+});
+
+describe('activity-scoped recurrence reconciliation', () => {
+  const version = '2026-08-14T10:00:00.000Z';
+  const recurrence = {
+    mode: 'fixed',
+    segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '09:30' }],
+  };
+  const patchVariables = {
+    activityId: 'act_STANDUP',
+    input: {
+      recurrence: { mode: 'fixed', segments: [{ freq: 'weekly', effectiveFrom: TODAY }] },
+    },
+  };
+
+  const arm = (client: QueryClient) => {
+    projectActivityWrite(
+      client,
+      ['activity', 'patch'],
+      {
+        activityId: 'act_STANDUP',
+        type: 'task',
+        title: 'Stand-up',
+        status: 'scheduled',
+        schedule: { date: TODAY, time: '09:30' },
+        updatedAt: version,
+        recurrence,
+      },
+      patchVariables,
+    );
+  };
+
+  const targetRow = (client: QueryClient) => {
+    const agenda = client.getQueryData<AgendaData>(KEY);
+    return agenda?.days
+      .flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier])
+      .find((item) => item.activityId === 'act_STANDUP');
+  };
+
+  it('restores offline recurrence protection from the durable intent after restart', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    expect(
+      restoreRecurrenceEditProtection(client, [
+        {
+          intentId: 'intent-repeat',
+          entityId: 'act_STANDUP',
+          mutationKey: ['activity', 'patch'],
+          variables: patchVariables,
+          status: 'queued',
+        },
+      ]),
+    ).toBe(1);
+
+    const refreshed = guardAgendaResponse(client, KEY, {
+      days: [{ date: TODAY, schedule: [], anytime: [], earlier: [] }],
+      warnings: [],
+    });
+    expect(refreshed.days[0]?.schedule[0]?.activityId).toBe('act_STANDUP');
+  });
+
+  it('preserves protected rows on failure while accepting unaffected refresh rows', async () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    arm(client);
+    const incoming: AgendaData = {
+      days: [
+        {
+          date: TODAY,
+          schedule: [row({ activityId: 'act_OTHER', title: 'Fresh' })],
+          anytime: [],
+          earlier: [],
+        },
+      ],
+      warnings: [],
+    };
+
+    const result = await loadAgendaWithReconciliation(
+      client,
+      KEY as never,
+      { from: TODAY, to: TODAY, tz: 'America/New_York' },
+      undefined,
+      {
+        ordinary: async () => incoming,
+        targeted: async () => {
+          throw new Error('offline');
+        },
+      },
+    );
+
+    expect(result.days[0]?.schedule.map((item) => item.activityId)).toEqual(
+      expect.arrayContaining(['act_STANDUP', 'act_OTHER']),
+    );
+  });
+
+  it('manual refresh replaces only the protected activity on authoritative success', async () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    arm(client);
+    const result = await loadAgendaWithReconciliation(
+      client,
+      KEY as never,
+      { from: TODAY, to: TODAY, tz: 'America/New_York' },
+      undefined,
+      {
+        ordinary: async () => ({
+          days: [{ date: TODAY, schedule: [], anytime: [], earlier: [] }],
+          warnings: [],
+        }),
+        targeted: async () => ({
+          activityId: 'act_STANDUP',
+          activityVersion: version,
+          rows: [{ date: TODAY, item: row({ title: 'Canonical', time: '14:00' }) }],
+        }),
+      },
+    );
+
+    expect(
+      result.days[0]?.schedule.find((item) => item.activityId === 'act_STANDUP'),
+    ).toMatchObject({ title: 'Canonical', time: '14:00' });
+  });
+
+  it('treats authoritative zero rows as removal, not as a failed read', async () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    arm(client);
+    const proved = await reconcileRecurrenceEdit(
+      client,
+      'act_STANDUP',
+      version,
+      async () => ({
+        activityId: 'act_STANDUP',
+        activityVersion: version,
+        rows: [],
+      }),
+    );
+
+    expect(proved).toBe(true);
+    expect(targetRow(client)).toBeUndefined();
   });
 });
 

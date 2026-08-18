@@ -64,6 +64,8 @@ export interface Intent {
   readonly seq: number;
   readonly attempts: number;
   readonly lastError?: string;
+  /** Canonical META version returned by an acknowledged recurrence PATCH. */
+  readonly reconciliationVersion?: string;
 }
 
 export interface IntentLogEnvelope {
@@ -255,6 +257,8 @@ export class IntentLog {
   private chain: Promise<unknown> = Promise.resolve();
   private hydrated = false;
   private readonly listeners = new Set<() => void>();
+  private readonly entityListeners = new Map<string, Set<() => void>>();
+  private readonly entitySnapshots = new Map<string, readonly Intent[]>();
 
   constructor(
     readonly ownerUserId: string,
@@ -281,8 +285,49 @@ export class IntentLog {
     };
   }
 
-  private notify(): void {
+  /** Entity-scoped subscription so one intent transition does not rerender every agenda row. */
+  subscribeEntity(entityId: string, listener: () => void): () => void {
+    const listeners = this.entityListeners.get(entityId) ?? new Set<() => void>();
+    listeners.add(listener);
+    this.entityListeners.set(entityId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.entityListeners.delete(entityId);
+    };
+  }
+
+  /** Stable snapshot identity until this entity's own intents change. */
+  snapshotFor(entityId: string): readonly Intent[] {
+    const cached = this.entitySnapshots.get(entityId);
+    if (cached !== undefined) return cached;
+    const snapshot = this.envelope.intents.filter(
+      (intent) => intent.entityId === entityId,
+    );
+    this.entitySnapshots.set(entityId, snapshot);
+    return snapshot;
+  }
+
+  private notify(previous?: IntentLogEnvelope): void {
     for (const listener of this.listeners) listener();
+    const entityIds = new Set([
+      ...(previous?.intents.map((intent) => intent.entityId) ?? []),
+      ...this.envelope.intents.map((intent) => intent.entityId),
+    ]);
+    for (const entityId of entityIds) {
+      const before =
+        previous?.intents.filter((intent) => intent.entityId === entityId) ?? [];
+      const after = this.envelope.intents.filter(
+        (intent) => intent.entityId === entityId,
+      );
+      if (
+        before.length === after.length &&
+        before.every((intent, index) => intent === after[index])
+      ) {
+        continue;
+      }
+      this.entitySnapshots.set(entityId, after);
+      for (const listener of this.entityListeners.get(entityId) ?? []) listener();
+    }
   }
 
   pending(): Intent[] {
@@ -304,7 +349,11 @@ export class IntentLog {
    * offline.
    */
   pendingCreateFor(entityId: string): Intent | undefined {
-    return this.pendingFor(entityId).find((intent) => intent.mutationKey[1] === 'create');
+    return this.pendingFor(entityId).find(
+      (intent) =>
+        intent.mutationKey[1] === 'create' &&
+        (intent.status === 'queued' || intent.status === 'in_flight'),
+    );
   }
 
   isHydrated(): boolean {
@@ -361,10 +410,10 @@ export class IntentLog {
       } catch (error) {
         // Roll the in-memory view back so it never claims durability it does not have.
         this.envelope = previous;
-        this.notify();
+        this.notify(previous);
         throw error;
       }
-      this.notify();
+      this.notify(previous);
       return result;
     });
     // The chain must not reject, or one storage failure would stall every later write.
@@ -460,6 +509,30 @@ export class IntentLog {
   /** Success. Removed rather than retained: the server is now the record of what happened. */
   acknowledge(intentId: string): Promise<Intent | undefined> {
     return this.transition(intentId, () => undefined);
+  }
+
+  /** HTTP acknowledgement retained until a canonical recurrence projection proves the edit. */
+  acknowledgeForReconciliation(
+    intentId: string,
+    version?: string,
+  ): Promise<Intent | undefined> {
+    return this.transition(intentId, (intent) => {
+      const { lastError: _lastError, ...retained } = intent;
+      return {
+        ...retained,
+        status: 'acknowledged',
+        ...(version === undefined ? {} : { reconciliationVersion: version }),
+      };
+    });
+  }
+
+  /** Records a retryable targeted-read failure without making the PATCH replayable again. */
+  failReconciliation(intentId: string, error: string): Promise<Intent | undefined> {
+    return this.transition(intentId, (intent) => ({
+      ...intent,
+      status: 'acknowledged',
+      lastError: error,
+    }));
   }
 
   /** Transient failure returns to `queued`; the next reconnect picks it up unchanged. */

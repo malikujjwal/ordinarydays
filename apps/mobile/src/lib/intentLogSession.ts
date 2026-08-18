@@ -1,6 +1,12 @@
 import { onlineManager, type QueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
-import { restorePendingActivityCreates } from '@/lib/agendaCache';
+import {
+  clearRecurrenceEditProtection,
+  isRecurrenceEditMutation,
+  reconcileRecurrenceEdit,
+  restorePendingActivityCreates,
+  restoreRecurrenceEditProtection,
+} from '@/lib/agendaCache';
 import { httpClientConfig } from '@/lib/apiClient';
 import { IntentLog } from '@/lib/intentLog';
 import { replayIntents, setActiveIntentLog } from '@/lib/intentReplay';
@@ -56,7 +62,66 @@ export async function startIntentLogSession(
    * pass will run. This makes the optimistic series restart-safe instead of merely fast in
    * the process that accepted it.
    */
-  restorePendingActivityCreates(client, log.pending());
+  restorePendingActivityCreates(
+    client,
+    log
+      .snapshot()
+      .intents.filter(
+        (intent) => intent.status === 'queued' || intent.status === 'in_flight',
+      ),
+  );
+  const restoredIntents = log.snapshot().intents;
+  restoreRecurrenceEditProtection(client, restoredIntents);
+  const protectedActivityIds = new Set(
+    restoredIntents
+      .filter(
+        (intent) =>
+          isRecurrenceEditMutation(intent.mutationKey, intent.variables) &&
+          (intent.status === 'queued' ||
+            intent.status === 'in_flight' ||
+            intent.status === 'acknowledged'),
+      )
+      .map((intent) => intent.entityId),
+  );
+  const unsubscribeProtection = log.subscribe(() => {
+    const active = new Set(
+      log
+        .snapshot()
+        .intents.filter(
+          (intent) =>
+            isRecurrenceEditMutation(intent.mutationKey, intent.variables) &&
+            (intent.status === 'queued' ||
+              intent.status === 'in_flight' ||
+              intent.status === 'acknowledged'),
+        )
+        .map((intent) => intent.entityId),
+    );
+    for (const activityId of protectedActivityIds) {
+      if (!active.has(activityId)) {
+        clearRecurrenceEditProtection(client, activityId);
+        protectedActivityIds.delete(activityId);
+      }
+    }
+    for (const activityId of active) protectedActivityIds.add(activityId);
+  });
+  for (const intent of restoredIntents) {
+    if (intent.status !== 'acknowledged' || intent.reconciliationVersion === undefined) {
+      continue;
+    }
+    if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'patch') {
+      continue;
+    }
+    void reconcileRecurrenceEdit(
+      client,
+      intent.entityId,
+      intent.reconciliationVersion,
+    ).then((proved) => {
+      if (proved) void log.acknowledge(intent.intentId);
+      else {
+        void log.failReconciliation(intent.intentId, "Couldn't refresh schedule · Retry");
+      }
+    });
+  }
 
   /**
    * Drain on reconnect, and once now if already online — a relaunch that comes up connected
@@ -71,6 +136,7 @@ export async function startIntentLogSession(
     log,
     stop: () => {
       unsubscribe();
+      unsubscribeProtection();
       /**
        * Sign-out **quarantines** (`auth.md` §3.4 step 6): the session forgets the log, every
        * byte stays on disk. Destroying unacknowledged writes here would lose work at the one

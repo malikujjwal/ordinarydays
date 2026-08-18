@@ -210,8 +210,10 @@ async function replayPass(
 
     result.attempted += 1;
     try {
-      await runIntent(client, claimed);
-      await log.acknowledge(claimed.intentId);
+      const data = await runIntent(client, claimed);
+      await (isRecurrencePatch(claimed)
+        ? log.acknowledgeForReconciliation(claimed.intentId, activityVersionFrom(data))
+        : log.acknowledge(claimed.intentId));
       result.acknowledged += 1;
     } catch (error) {
       const collidedId = isCreateCollision(claimed, error)
@@ -251,6 +253,24 @@ async function replayPass(
     }
   }
   return result;
+}
+
+function isRecurrencePatch(intent: Intent): boolean {
+  if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'patch') {
+    return false;
+  }
+  const input = (intent.variables as { input?: unknown } | undefined)?.input;
+  return (
+    typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
+  );
+}
+
+function activityVersionFrom(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const candidate = 'activity' in data ? (data as { activity: unknown }).activity : data;
+  if (typeof candidate !== 'object' || candidate === null) return undefined;
+  const updatedAt = (candidate as { updatedAt?: unknown }).updatedAt;
+  return typeof updatedAt === 'string' ? updatedAt : undefined;
 }
 
 /**

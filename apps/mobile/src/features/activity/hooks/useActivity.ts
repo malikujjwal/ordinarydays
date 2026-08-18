@@ -289,6 +289,7 @@ export function useActivityDetail(
         if (current === undefined) return false;
         await mutation.mutateAsync({
           activityId,
+          intentId: randomUUID(),
           input,
           ifMatch: current.activity.updatedAt,
           changeNames: patchChangeNames(input),

@@ -30,6 +30,24 @@ export function usePendingIntents(): readonly Intent[] {
   return intents.filter((intent) => intent.status !== 'acknowledged');
 }
 
+export function useEntityIntents(entityId: string | undefined): readonly Intent[] {
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const log = getActiveIntentLog();
+      if (log === undefined || entityId === undefined) return () => undefined;
+      return log.subscribeEntity(entityId, listener);
+    },
+    [entityId],
+  );
+  const snapshot = useCallback(() => {
+    const log = getActiveIntentLog();
+    return log === undefined || entityId === undefined
+      ? NO_INTENTS
+      : log.snapshotFor(entityId);
+  }, [entityId]);
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
 /**
  * Whether one entity has unacknowledged work.
  *
@@ -38,9 +56,9 @@ export function usePendingIntents(): readonly Intent[] {
  * of this, not a second mechanism.
  */
 export function useIsPending(entityId: string | undefined): boolean {
-  const intents = usePendingIntents();
+  const intents = useEntityIntents(entityId);
   if (entityId === undefined) return false;
-  return intents.some((intent) => intent.entityId === entityId);
+  return intents.some((intent) => intent.status !== 'acknowledged');
 }
 
 /**
@@ -61,18 +79,60 @@ export interface PendingCreateState {
 }
 
 export function usePendingCreate(entityId: string | undefined): PendingCreateState {
-  const intents = usePendingIntents();
+  const intents = useEntityIntents(entityId);
   if (entityId === undefined) {
     return { pending: false, canCancel: false, intentId: undefined, status: undefined };
   }
   const create = intents.find(
-    (intent) => intent.entityId === entityId && intent.mutationKey[1] === 'create',
+    (intent) =>
+      intent.entityId === entityId &&
+      intent.mutationKey[1] === 'create' &&
+      (intent.status === 'queued' || intent.status === 'in_flight'),
   );
   return {
     pending: create !== undefined,
     canCancel: create?.status === 'queued',
     intentId: create?.intentId,
     status: create?.status,
+  };
+}
+
+export interface RecurrenceEditState {
+  inert: boolean;
+  message: string | undefined;
+  status: 'idle' | 'queued' | 'updating' | 'retry' | 'failed';
+}
+
+/** Durable row presentation for recurrence PATCH lifecycle only; CREATE never enters it. */
+export function useRecurrenceEditState(
+  entityId: string | undefined,
+): RecurrenceEditState {
+  const intents = useEntityIntents(entityId);
+  const edit = [...intents].reverse().find((intent) => {
+    if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'patch') {
+      return false;
+    }
+    const input = (intent.variables as { input?: unknown } | undefined)?.input;
+    return (
+      typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
+    );
+  });
+  if (edit === undefined) return { inert: false, message: undefined, status: 'idle' };
+  if (edit.status === 'queued') {
+    return { inert: true, message: 'Will update when online', status: 'queued' };
+  }
+  if (edit.status === 'in_flight') {
+    return { inert: true, message: 'Updating schedule…', status: 'updating' };
+  }
+  if (edit.status === 'acknowledged') {
+    return edit.lastError === undefined
+      ? { inert: true, message: 'Updating schedule…', status: 'updating' }
+      : { inert: true, message: "Couldn't refresh schedule · Retry", status: 'retry' };
+  }
+  return {
+    inert: false,
+    message: edit.lastError ?? 'Schedule update needs attention',
+    status: 'failed',
   };
 }
 

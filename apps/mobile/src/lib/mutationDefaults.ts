@@ -128,6 +128,8 @@ export interface DeleteActivityVariables {
 
 export interface PatchActivityVariables {
   activityId: string;
+  /** Stable logical-write identity retained across persistence, replay and settlement. */
+  intentId: string;
   input: PatchActivityInput;
   ifMatch: string;
   /** Human-readable field names retained so one resumed-conflict banner can name them. */

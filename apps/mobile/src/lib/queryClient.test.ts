@@ -1,10 +1,9 @@
-import { MAX_OFFLINE_MUTATIONS } from '@od/shared';
 import type { HttpClient } from '@od/shared/client';
 import type { Activity } from '@od/shared/types';
-import { hydrate, type MutationKey, type QueryClient } from '@tanstack/react-query';
+import type { MutationKey, QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
-import { replayIntents } from '@/lib/intentReplay';
+import { replayIntents, setActiveIntentLog } from '@/lib/intentReplay';
 import {
   type ActivityPostVariables,
   type ConvertRecurrenceVariables,
@@ -21,7 +20,6 @@ import { activityMutationKeys } from '@/lib/mutationKeys';
 import { shouldWarnBeforeUnload } from '@/lib/onlineManager';
 import { dehydratePersistedClient } from '@/lib/persister';
 import { createOfflineQueryClient } from '@/lib/queryClient';
-import { OFFLINE_QUEUE_FULL_MESSAGE, useSyncStatus } from '@/stores/syncStatus';
 
 const INTENT_USER = 'usr_01J0000000000000000000000Z';
 
@@ -87,6 +85,7 @@ const cases: Array<{ key: MutationKey; variables: Variables }> = [
     key: activityMutationKeys.patch,
     variables: {
       activityId: ACTIVITY_ID,
+      intentId: 'patch-intent-stable',
       input: { title: 'Dentist' },
       ifMatch: activity.updatedAt,
       changeNames: ['Title'],
@@ -424,5 +423,47 @@ describe('persisted mutation defaults', () => {
     expect(headers.every((value) => value?.['Idempotency-Key'] === IDEMPOTENCY_KEY)).toBe(
       true,
     );
+  });
+
+  it('replays one persisted recurrence PATCH exactly once under its stable intent id', async () => {
+    const storage = fakeIntentStorage();
+    const log = new IntentLog(INTENT_USER, storage);
+    await log.hydrate();
+    const variables: PatchActivityVariables = {
+      activityId: ACTIVITY_ID,
+      intentId: 'patch-recurrence-stable',
+      input: {
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'daily', effectiveFrom: '2026-08-12' }],
+        },
+      },
+      ifMatch: activity.updatedAt,
+      changeNames: ['Repeat'],
+    };
+    await log.append({
+      intentId: variables.intentId,
+      mutationKey: activityMutationKeys.patch,
+      variables,
+      entityId: ACTIVITY_ID,
+    });
+
+    const relaunched = new IntentLog(INTENT_USER, storage);
+    await relaunched.hydrate();
+    const target = createOfflineQueryClient();
+    const fake = fakeHttpClient();
+    registerActivityMutationDefaults(target, fake.client);
+    setActiveIntentLog(relaunched);
+    try {
+      await Promise.all([
+        replayIntents(target, relaunched),
+        replayIntents(target, relaunched),
+      ]);
+      await vi.waitFor(() => expect(relaunched.snapshot().intents).toHaveLength(0));
+    } finally {
+      setActiveIntentLog(undefined);
+    }
+
+    expect(fake.request).toHaveBeenCalledTimes(1);
   });
 });

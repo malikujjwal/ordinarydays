@@ -8,6 +8,7 @@ import {
   agendaSwipeActions,
   allAgendaSwipeActions,
 } from '@/features/agenda/model/swipeActions';
+import { usePendingCreate, useRecurrenceEditState } from '@/hooks/usePendingIntents';
 import { canResolvePassedAgendaItem } from '@/lib/passedPlanResolution';
 import { AgendaRow, type AgendaRowProps } from './AgendaRow';
 
@@ -64,7 +65,16 @@ function subscribeToRowKeyboard(
 export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps) {
   const theme = useTheme();
   const wrapper = useRef<View>(null);
-  const actions = useMemo(() => agendaSwipeActions(item), [item]);
+  const pendingCreate = usePendingCreate(item.activityId).pending;
+  const recurrenceEdit = useRecurrenceEditState(item.activityId);
+  const inert = pendingCreate || recurrenceEdit.inert;
+  const actions = useMemo(
+    () =>
+      inert
+        ? { positive: [] as AgendaSwipeAction[], secondary: [] as AgendaSwipeAction[] }
+        : agendaSwipeActions(item),
+    [inert, item],
+  );
   const allActions = useMemo(() => allAgendaSwipeActions(actions), [actions]);
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
@@ -72,7 +82,7 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
   const [menuOpen, setMenuOpen] = useState(false);
   const hasResolutionPrompt =
     rowProps.onOpenResolution !== undefined && canResolvePassedAgendaItem(item);
-  const controlsVisible = hovered || focusWithin || rowFocused || menuOpen;
+  const controlsVisible = !inert && (hovered || focusWithin || rowFocused || menuOpen);
   const { onOpen, onToggleComplete } = rowProps;
 
   const dispatch = useCallback(
@@ -91,6 +101,7 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
     if (element === null) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (inert) return;
       const key = event.key.toLowerCase();
       if (['arrowup', 'arrowdown', 'home', 'end'].includes(key)) {
         const rows = Array.from(
@@ -142,7 +153,7 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
     };
 
     return subscribeToRowKeyboard(element, onKeyDown);
-  }, [actions.positive, dispatch, findAction, item, onOpen, onToggleComplete]);
+  }, [actions.positive, dispatch, findAction, inert, item, onOpen, onToggleComplete]);
 
   const accessibilityActions = agendaAccessibilityActions(actions);
   const positive = actions.positive[0];

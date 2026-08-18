@@ -1,5 +1,11 @@
 import { MutationCache, QueryClient } from '@tanstack/react-query';
-import { projectActivityWrite } from '@/lib/agendaCache';
+import {
+  clearRecurrenceEditProtection,
+  isRecurrenceEditMutation,
+  projectActivityWrite,
+  protectRecurrenceEdit,
+  reconcileRecurrenceEdit,
+} from '@/lib/agendaCache';
 import { IntentLogFullError } from '@/lib/intentLog';
 import { getActiveIntentLog, replayingIntent } from '@/lib/intentReplay';
 import {
@@ -20,8 +26,14 @@ import { useSyncStatus } from '@/stores/syncStatus';
  */
 function intentIdFor(variables: unknown): string {
   const fields = variables as
-    | { idempotencyKey?: unknown; activityId?: unknown; reminderId?: unknown }
+    | {
+        intentId?: unknown;
+        idempotencyKey?: unknown;
+        activityId?: unknown;
+        reminderId?: unknown;
+      }
     | undefined;
+  if (typeof fields?.intentId === 'string') return fields.intentId;
   if (typeof fields?.idempotencyKey === 'string') return fields.idempotencyKey;
   const target =
     typeof fields?.reminderId === 'string'
@@ -48,12 +60,19 @@ function entityIdFor(variables: unknown): string {
  * Only the intent this mutation created, and only when it is not a replay — `replayIntents`
  * owns the lifecycle of what it dispatches, and two writers moving one intent would race.
  */
-function settleIntent(variables: unknown, outcome: 'ok' | Error): void {
+function settleIntent(
+  variables: unknown,
+  outcome: 'ok' | Error,
+  retainForReconciliation = false,
+  reconciliationVersion?: string,
+): void {
   const log = getActiveIntentLog();
   const intentId = intentIdFor(variables);
   if (log === undefined || replayingIntent() === intentId) return;
   if (outcome === 'ok') {
-    void log.acknowledge(intentId);
+    void (retainForReconciliation
+      ? log.acknowledgeForReconciliation(intentId, reconciliationVersion)
+      : log.acknowledge(intentId));
     return;
   }
   /**
@@ -109,6 +128,10 @@ export function createOfflineQueryClient(): QueryClient {
             variables,
             entityId: entityIdFor(variables),
           });
+          if (isRecurrenceEditMutation(mutationKey, variables)) {
+            const activityId = entityIdFor(variables);
+            protectRecurrenceEdit(client, activityId);
+          }
         } catch (error) {
           if (error instanceof IntentLogFullError) {
             useSyncStatus.getState().showQueueFull();
@@ -118,10 +141,22 @@ export function createOfflineQueryClient(): QueryClient {
       },
       onError: (error, variables, _context, mutation) => {
         if (!(error instanceof IntentLogFullError)) {
-          settleIntent(
+          const recurrenceEdit = isRecurrenceEditMutation(
+            mutation.options.mutationKey,
             variables,
-            error instanceof Error ? error : new Error(String(error)),
           );
+          if (recurrenceEdit && isPermanentFailure(error)) {
+            clearRecurrenceEditProtection(client, entityIdFor(variables));
+            const log = getActiveIntentLog();
+            if (log !== undefined && replayingIntent() !== intentIdFor(variables)) {
+              void log.fail(intentIdFor(variables), String((error as Error).message));
+            }
+          } else {
+            settleIntent(
+              variables,
+              error instanceof Error ? error : new Error(String(error)),
+            );
+          }
         }
         useSyncStatus
           .getState()
@@ -143,11 +178,30 @@ export function createOfflineQueryClient(): QueryClient {
        * is what makes the change visible; the invalidation behind it is reconciliation.
        */
       onSuccess: (data, variables, _context, mutation) => {
-        settleIntent(variables, 'ok');
         const { mutationKey } = mutation.options;
+        const recurrenceEdit = isRecurrenceEditMutation(mutationKey, variables);
+        const recurrenceVersion = recurrenceEdit ? activityVersionFrom(data) : undefined;
+        settleIntent(variables, 'ok', recurrenceEdit, recurrenceVersion);
         refreshActivityDetails(client, mutationKey, variables);
         if (!changesActivityLists(mutationKey)) return;
         projectActivityWrite(client, mutationKey, data, variables);
+        if (recurrenceEdit) {
+          const activityId = entityIdFor(variables);
+          const version = recurrenceVersion;
+          const intentId = intentIdFor(variables);
+          if (version !== undefined) {
+            void reconcileRecurrenceEdit(client, activityId, version).then((proved) => {
+              const log = getActiveIntentLog();
+              if (proved) void log?.acknowledge(intentId);
+              else {
+                void log?.failReconciliation(
+                  intentId,
+                  "Couldn't refresh schedule · Retry",
+                );
+              }
+            });
+          }
+        }
         refreshActivityLists(client);
       },
     }),
@@ -171,3 +225,22 @@ export function createOfflineQueryClient(): QueryClient {
 
 /** One client for one app process; tests create isolated clients through the factory above. */
 export const queryClient = createOfflineQueryClient();
+
+function activityVersionFrom(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const candidate = 'activity' in data ? (data as { activity: unknown }).activity : data;
+  if (typeof candidate !== 'object' || candidate === null) return undefined;
+  const version = (candidate as { updatedAt?: unknown }).updatedAt;
+  return typeof version === 'string' ? version : undefined;
+}
+
+function isPermanentFailure(error: unknown): boolean {
+  const status = (error as { status?: unknown } | undefined)?.status;
+  return (
+    typeof status === 'number' &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 429
+  );
+}

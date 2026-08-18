@@ -500,7 +500,7 @@ describe('AgendaRow structural guards', () => {
      * the gate is named here so the guard documents both facts rather than being loosened to
      * a substring that would also pass for a type-derived checkbox.
      */
-    expect(rowSource).toContain('hasCheckbox={item.hasCheckbox && !pendingCreate}');
+    expect(rowSource).toContain('hasCheckbox={item.hasCheckbox && !inert}');
   });
 
   it('keeps long scaled titles in a content-sized, shrinkable row', () => {
@@ -649,6 +649,71 @@ describe('a pending row', () => {
     );
 
     expect(screen.queryByRole('checkbox')).not.toBeNull();
+  });
+
+  it('does not present a permanently failed create as an actively pending create', async () => {
+    const log = await pendingLog('create');
+    await log.fail('intent-create', 'rejected');
+    setActiveIntentLog(log);
+    mount(
+      <AgendaRow
+        item={item('task', { activityId: PENDING_ID })}
+        onOpen={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('checkbox')).not.toBeNull();
+    expect(screen.queryByTestId('pending-indicator')).toBeNull();
+  });
+
+  it('keeps a queued recurrence edit inert and explains that it will update online', async () => {
+    const log = new IntentLog('usr_01J0000000000000000000000A', memoryStorage());
+    await log.hydrate();
+    await log.append({
+      intentId: 'intent-repeat',
+      mutationKey: ['activity', 'patch'],
+      variables: { input: { recurrence: null } },
+      entityId: PENDING_ID,
+    });
+    setActiveIntentLog(log);
+    mount(
+      <AgendaRow
+        item={item('task', { activityId: PENDING_ID, isRecurring: true })}
+        onOpen={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByTestId('agenda-row-recurrence-state').textContent).toBe(
+      'Will update when online',
+    );
+  });
+
+  it('shows retry copy after acknowledgement when the canonical read fails', async () => {
+    const log = new IntentLog('usr_01J0000000000000000000000A', memoryStorage());
+    await log.hydrate();
+    await log.append({
+      intentId: 'intent-repeat',
+      mutationKey: ['activity', 'patch'],
+      variables: { input: { recurrence: null } },
+      entityId: PENDING_ID,
+    });
+    await log.acknowledgeForReconciliation('intent-repeat', '2026-08-18T10:00:00Z');
+    await log.failReconciliation('intent-repeat', 'network');
+    setActiveIntentLog(log);
+    mount(
+      <AgendaRow
+        item={item('task', { activityId: PENDING_ID, isRecurring: true })}
+        onOpen={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('agenda-row-recurrence-state').textContent).toBe(
+      "Couldn't refresh schedule · Retry",
+    );
   });
 
   it('returns to normal on acknowledgement, without a remount', async () => {
