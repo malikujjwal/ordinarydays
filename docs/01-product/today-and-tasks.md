@@ -319,7 +319,8 @@ user.
 | ANYTIME group 2 (untimed today) | `activityId` ascending | — | — |
 | ANYTIME group 3 (undated) | `createdAt` descending | `activityId` descending | — |
 
-`activityId` is a ULID and therefore sorts by creation time. Using it as the tie-break
+`activityId` is a ULID, so it sorts **stably and identically on every client** — which is
+the property these rows need. Using it as the tie-break
 means SCHEDULE ordering is exactly the natural order of the GSI1 query
 (`gsi1sk = <localDateTime>#<activityId>`, see
 [`../02-architecture/data-model.md#35-gsi1-buckets`](../02-architecture/data-model.md#35-gsi1-buckets)),
@@ -335,6 +336,11 @@ local mutation produces the identical order.
 > a device clock, so id order remains deterministic and stable but is no longer a creation
 > chronology. Any surface that genuinely needs "the one I added first" must sort on
 > `createdAt`, which stays server-set.
+>
+> One row of the table above uses `activityId` as a **primary** sort rather than a tie-break —
+> ANYTIME group 2, untimed-today items, which have no other ordering signal. It keeps that
+> sort: stable and identical on every client is what the group needs, and it never claimed to
+> be chronological. Group 3 already leads with `createdAt` and is unaffected.
 
 ### 3.2 What is excluded from Today
 
