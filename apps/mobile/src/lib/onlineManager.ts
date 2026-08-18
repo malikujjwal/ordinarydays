@@ -55,8 +55,8 @@ export function shouldWarnBeforeUnload(client: QueryClient): boolean {
 }
 
 /**
- * Uses the platform connectivity source and owns replay after hydration.
- * Web keeps its queue only in memory and warns before the tab discards it.
+ * Uses the platform connectivity source. The durable intent-log session owns iOS replay;
+ * TanStack's client keeps its ordinary in-memory behavior on web.
  */
 export function installOnlineManager(client: QueryClient): () => void {
   onlineManager.setEventListener((setOnline) => {
@@ -85,13 +85,6 @@ export function installOnlineManager(client: QueryClient): () => void {
     });
   });
 
-  const onlineUnsubscribe = onlineManager.subscribe((online) => {
-    if (online && Platform.OS === 'ios') void client.resumePausedMutations();
-  });
-  if (Platform.OS === 'ios' && onlineManager.isOnline()) {
-    void client.resumePausedMutations();
-  }
-
   const beforeUnload = (event: BeforeUnloadEvent) => {
     if (!shouldWarnBeforeUnload(client)) return;
     event.preventDefault();
@@ -100,7 +93,6 @@ export function installOnlineManager(client: QueryClient): () => void {
   if (Platform.OS === 'web') window.addEventListener('beforeunload', beforeUnload);
 
   return () => {
-    onlineUnsubscribe();
     if (Platform.OS === 'web') window.removeEventListener('beforeunload', beforeUnload);
   };
 }

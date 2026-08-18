@@ -125,13 +125,18 @@ a minimum.
   version migrates or surfaces — never silently discards. Fix the empty-overwrite restore
   path regardless of the split: it can lose a queued completion today.
 - **Write-ahead ordering.** Persist the intent (with its `Idempotency-Key`, minted once),
-  then project, then request. The log is the authority on cold start; TanStack's mutation
-  cache is rebuilt from it, covering mutations that were mid-flight — not merely paused —
-  when the process died.
+  then project, then request. A create surface may dismiss after the first two steps; it does
+  not wait for connectivity or the response. The log is the authority on cold start;
+  TanStack's mutation cache is rebuilt from it, covering mutations that were mid-flight —
+  not merely paused — when the process died.
 - **Migrate every existing queued mutation.** All eleven registered activity mutation
   defaults move; a dehydrated paused mutation found in the old envelope is imported once
   and the old copy retired. If only creates moved, every other queued action would keep
   today's data-loss paths.
+- **One replay owner.** Hydrate the log and import/retire legacy paused mutations before
+  installing connectivity or accepting writes. The intent-log session alone requests iOS
+  replay. Overlapping startup/reconnect requests coalesce into one serial drain; an atomic
+  claim returns no intent without changing storage when another pass already owns it.
 - **Account-scoped.** The log is namespaced by immutable `userId`; every intent stores its
   `ownerUserId`; hydration and replay filter on the authenticated identity. Sign-out
   quarantines the log rather than destroying it (`auth.md` §3.4); account deletion purges it
@@ -153,10 +158,12 @@ a minimum.
 **Tests.** Kill/relaunch/reconnect replays exactly once; an intent older than seven days
 survives; the query buster changes and the cache dies while the log survives; a log
 schema-version bump migrates; a >2 s storage restore does not overwrite stored intents; a
-mid-flight kill replays; migration imports a legacy paused mutation exactly once; a cancel
-racing reconnect either cancels before dispatch or the race loser is a no-op — never a
-double write; sign-out then sign-in as another user replays nothing; clock rollback parks
-intents in `needs_confirmation`.
+mid-flight kill replays; migration imports and retires a legacy paused mutation exactly once;
+two concurrent replay requests dispatch one intent once and cannot overtake the next FIFO
+intent; a failed claim leaves its stored intent byte-for-byte unchanged; a reconnect requested
+during a transient failure is coalesced and reruns; a cancel racing reconnect either cancels
+before dispatch or the race loser is a no-op — never a double write; sign-out then sign-in as
+another user replays nothing; clock rollback parks intents in `needs_confirmation`.
 
 **Scope guard.** No web queue (ADR-024 stands). No new server behaviour. No mutations
 against pending entities (P2-58). The lifecycle UI beyond bar + indicator + banners is
@@ -194,7 +201,16 @@ schema change lands first per `git-workflow.md` §6.3.
   tenancy); the response carries no owner or entity metadata, and `data-model.md` §8
   documents the bounded residual rather than claiming the copy hides it.
 - The client projects the pending entity from local input at mint time (`applyCreate`'s
-  second entry point) and reconciles server-owned fields from the `201`.
+  second entry point) and reconciles server-owned fields from the `201`. A recurring create
+  expands immediately across every currently cached agenda window with the shared recurrence
+  engine; cold-start restoration rebuilds the same projection from the intent log. These are
+  query-cache rows only, never materialized Occurrence storage. The exception is limited to
+  an unacknowledged create, whose full first segment came from this client; recurrence edits
+  and every server-known series remain server-expanded.
+- If an offline device has no cached Today response yet, a pending create that belongs in the
+  Today/tomorrow window seeds a minimal stale window rather than showing the no-data load
+  failure. Opening that pending row reconstructs detail from the durable create intent and
+  sends no `GET` for an entity the server cannot know yet.
 
 **Tests.** Replay >25 h after a committed-but-lost response acknowledges via `GET` without a
 duplicate; create → delete on another device → replay after tombstone → surfaced, not
@@ -203,6 +219,8 @@ automation window (property: `deletedAt + N ≥ intentCreatedAt + N`); collision
 foreign id surfaces confirmation; a client-supplied malformed id is `validation_failed`; the
 201-reconciliation preserves the client id and adopts server `createdAt`/`updatedAt`;
 `needs_confirmation` retry uses a fresh id and key.
+The mobile projection test also proves persist → full cached-window recurrence expansion →
+request, and that the `201` atomically replaces the provisional rows without changing id.
 
 **Scope guard.** No client-supplied `ownerId`/`createdAt`. No change to `gsi1sk` shapes —
 chronology stays timestamp-led. No list-item or reminder creation here (P2-57, Phase 3).

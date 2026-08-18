@@ -4,6 +4,9 @@ import type {
   AgendaItem,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
+import type { PendingActivity } from '@/lib/pendingActivity';
+
+type DisplayActivity = Activity | PendingActivity;
 
 /**
  * The occurrence-scoped actions a detail screen may offer, and the row shape the shared snooze
@@ -94,7 +97,7 @@ export function canSkipOccurrence(context: OccurrenceContext): boolean {
  * date happens to be present.
  */
 export function occurrenceAgendaItem(
-  activity: Activity,
+  activity: DisplayActivity,
   context: OccurrenceContext,
 ): AgendaItem | undefined {
   const time = context.shownSchedule?.time;
@@ -139,7 +142,7 @@ export function occurrenceAgendaItem(
  * shape cannot quietly reach only some of them.
  */
 export function effectiveSchedule(
-  activity: Activity | undefined,
+  activity: DisplayActivity | undefined,
   occurrence: OccurrenceDetailProjection | undefined,
 ): { date: string; time?: string; endTime?: string } | undefined {
   if (occurrence !== undefined) {

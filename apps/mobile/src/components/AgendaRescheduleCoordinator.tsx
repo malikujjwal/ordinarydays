@@ -42,6 +42,8 @@ export function AgendaRescheduleCoordinator({
             action={{ label: 'Try again', onPress: detail.refetch }}
           />
         </View>
+      ) : 'pending' in detail.detail.activity ? (
+        <EmptyState heading="Waiting to sync." />
       ) : (
         <RescheduleSheet
           open

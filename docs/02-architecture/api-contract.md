@@ -243,7 +243,11 @@ The server also authors the row's recurrence and snooze presentation. For a recu
 `from` date in the requested `tz`, never the server wall-clock, so the same window has stable
 presentation and a deterministic ETag. When a snooze changes the displayed time,
 `originalTime` is the viewer-timezone projection of the schedule time or recurrence segment
-in force for that occurrence. Clients render both fields verbatim and do not derive them.
+in force for that occurrence. Clients render both fields verbatim and do not derive them
+for a server-known Activity. The sole pre-acknowledgement exception is a client-created
+pending series: it may use the same shared `describeRecurrence` function against the cached
+window's `from` date while locally expanding the user-supplied create input. The `201` and
+then the version-proven agenda response replace that provisional presentation.
 
 For a prep task, `parentActivityId` is copied from the source Activity so the client can
 select the prep-task gesture set and open the parent Plan. It is absent on every other row.

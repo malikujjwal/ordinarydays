@@ -50,7 +50,7 @@ function HydrationGate({ children }: { children: ReactNode }) {
     let stopLocalReminders: (() => void) | undefined;
     let stopIntentLog: (() => void) | undefined;
 
-    void restorePersistedClient(queryClient).then((outcome) => {
+    void restorePersistedClient(queryClient).then(async (outcome) => {
       if (!active) return;
       /**
        * `outcome.safeToPersist` is what stops a slow storage read being overwritten by the
@@ -58,21 +58,19 @@ function HydrationGate({ children }: { children: ReactNode }) {
        * interactive now either way; only the *saving* waits.
        */
       stopPersistence = subscribeToPersistence(queryClient, outcome.safeToPersist);
+      /**
+       * The log is the iOS durability boundary, so it must be hydrated and any legacy paused
+       * mutations must be imported before connectivity can resume work or the app can accept
+       * a write. Web returns immediately because it has no durable log.
+       */
+      const session = await startIntentLogSession(queryClient);
+      if (!active) {
+        session?.stop();
+        return;
+      }
+      stopIntentLog = session?.stop;
       stopOnlineManager = installOnlineManager(queryClient);
       stopLocalReminders = installLocalReminderScheduler();
-      /**
-       * The log opens after the cache is restored but is not awaited before the app becomes
-       * interactive: it is the durability boundary, not a render dependency, and blocking the
-       * first frame on a disk read is what the restore deadline exists to avoid.
-       */
-      void startIntentLogSession(queryClient).then((session) => {
-        if (session === undefined) return;
-        if (!active) {
-          session.stop();
-          return;
-        }
-        stopIntentLog = session.stop;
-      });
       setReady(true);
     });
 

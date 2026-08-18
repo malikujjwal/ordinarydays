@@ -1,10 +1,11 @@
-import { QueryClient } from '@tanstack/react-query';
+import { hydrate, QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
 import {
   importLegacyPausedMutations,
   queryPersister,
   restorePersistedClient,
+  retireImportedLegacyPausedMutations,
   subscribeToPersistence,
 } from '@/lib/persister';
 
@@ -115,6 +116,55 @@ describe('the query-cache persister', () => {
      */
     expect(await importLegacyPausedMutations(log, 'ios')).toBe(0);
     expect(log.pending()).toHaveLength(1);
+  });
+
+  it('retires an in-memory legacy mutation only after its intent was imported', async () => {
+    const client = new QueryClient();
+    hydrate(client, {
+      mutations: [
+        {
+          mutationKey: ['activity', 'complete'],
+          state: {
+            data: undefined,
+            error: null,
+            failureCount: 0,
+            failureReason: null,
+            isPaused: true,
+            status: 'pending',
+            variables: { activityId: ACTIVITY, idempotencyKey: 'legacy-key-1' },
+            submittedAt: 1,
+          },
+        },
+        {
+          mutationKey: ['activity', 'complete'],
+          state: {
+            data: undefined,
+            error: null,
+            failureCount: 0,
+            failureReason: null,
+            isPaused: true,
+            status: 'pending',
+            variables: { activityId: ACTIVITY, idempotencyKey: 'not-imported' },
+            submittedAt: 2,
+          },
+        },
+      ],
+      queries: [],
+    });
+    const log = new IntentLog(USER, memoryStorage());
+    await log.hydrate();
+    await log.append({
+      intentId: 'legacy-key-1',
+      mutationKey: ['activity', 'complete'],
+      variables: { activityId: ACTIVITY, idempotencyKey: 'legacy-key-1' },
+      entityId: ACTIVITY,
+    });
+
+    expect(retireImportedLegacyPausedMutations(client, log)).toBe(1);
+    expect(client.getMutationCache().getAll()).toHaveLength(1);
+    expect(client.getMutationCache().getAll()[0]?.state.variables).toMatchObject({
+      idempotencyKey: 'not-imported',
+    });
   });
 
   it('imports nothing on web, where there is no queue to migrate', async () => {

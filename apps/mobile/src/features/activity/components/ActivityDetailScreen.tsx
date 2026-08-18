@@ -67,6 +67,7 @@ import {
   outcomeVerb,
   passedPlanResolution,
 } from '@/lib/passedPlanResolution';
+import type { PendingActivity } from '@/lib/pendingActivity';
 import { planKindLabel } from '@/lib/planKinds';
 
 /**
@@ -234,6 +235,8 @@ export function ActivityDetailScreen({
   }
 
   const activity = detail.detail?.activity;
+  const authoritativeActivity =
+    activity !== undefined && !('pending' in activity) ? activity : undefined;
   const showResolutionPrompt =
     resolutionOccurrenceDate !== undefined &&
     activity?.status === 'scheduled' &&
@@ -265,10 +268,17 @@ export function ActivityDetailScreen({
   }
 
   async function endSeriesFromDelete() {
-    if (activity?.recurrence === undefined || actionOccurrenceDate === undefined) return;
+    if (
+      authoritativeActivity?.recurrence === undefined ||
+      actionOccurrenceDate === undefined
+    )
+      return;
     if (
       await detail.patch({
-        recurrence: endRepeatSeries(activity.recurrence, actionOccurrenceDate),
+        recurrence: endRepeatSeries(
+          authoritativeActivity.recurrence,
+          actionOccurrenceDate,
+        ),
       })
     ) {
       setDeleteOpen(false);
@@ -518,7 +528,7 @@ export function ActivityDetailScreen({
         <View testID="detail-surface">{detailContent}</View>
       </ScreenShell>
 
-      {activity === undefined ? null : (
+      {authoritativeActivity === undefined ? null : (
         <>
           <SnoozeSheet
             open={snoozeOpen}
@@ -546,7 +556,7 @@ export function ActivityDetailScreen({
                 date: addWallDays(shownSchedule.date, 1),
                 ...(shownSchedule.time === undefined ? {} : { time: shownSchedule.time }),
                 timezone:
-                  activity.schedule?.timezone ??
+                  authoritativeActivity.schedule?.timezone ??
                   Intl.DateTimeFormat().resolvedOptions().timeZone,
               });
               setSnoozeOpen(false);
@@ -557,7 +567,7 @@ export function ActivityDetailScreen({
             open={rescheduleOpen}
             onClose={() => setRescheduleOpen(false)}
             today={today}
-            activity={activity}
+            activity={authoritativeActivity}
             /**
              * **Occurrence scope reaches the sheet, or the write is rejected.**
              *
@@ -595,25 +605,26 @@ export function ActivityDetailScreen({
             busy={detail.isSaving}
             {...(detail.editError === undefined ? {} : { error: detail.editError })}
           />
-          {activity.schedule === undefined ? null : (
+          {authoritativeActivity.schedule === undefined ? null : (
             <RepeatSheet
               open={repeatOpen}
               onClose={() => setRepeatOpen(false)}
               anchorDate={
-                activity.recurrence === undefined
-                  ? activity.schedule.date
+                authoritativeActivity.recurrence === undefined
+                  ? authoritativeActivity.schedule.date
                   : (actionOccurrenceDate ?? today)
               }
               scope={actionScope}
-              {...(activity.recurrence === undefined
+              {...(authoritativeActivity.recurrence === undefined
                 ? {}
-                : { value: activity.recurrence })}
+                : { value: authoritativeActivity.recurrence })}
               onCommit={(recurrence) =>
                 detail.patch({
                   recurrence: recurrence ?? null,
                   ...(recurrence !== undefined &&
-                  activity.recurrence !== undefined &&
-                  recurrence.segments.length > activity.recurrence.segments.length &&
+                  authoritativeActivity.recurrence !== undefined &&
+                  recurrence.segments.length >
+                    authoritativeActivity.recurrence.segments.length &&
                   actionOccurrenceDate !== undefined
                     ? { editedFromDate: actionOccurrenceDate }
                     : {}),
@@ -638,7 +649,7 @@ export function ActivityDetailScreen({
             open={remindersOpen}
             onClose={() => setRemindersOpen(false)}
             reminders={detail.detail?.reminders ?? []}
-            timed={activity.schedule?.time !== undefined}
+            timed={authoritativeActivity.schedule?.time !== undefined}
             busy={detail.isSavingReminder}
             {...(detail.reminderError === undefined
               ? {}
@@ -650,15 +661,15 @@ export function ActivityDetailScreen({
           <OverflowMenu
             open={menuOpen}
             onClose={() => setMenuOpen(false)}
-            activity={activity}
+            activity={authoritativeActivity}
             onChangePlanKind={() => setKindSheet('planKind')}
             onChangeObject={() => {
-              if (activity.objectKind === 'task') {
+              if (authoritativeActivity.objectKind === 'task') {
                 setKindSheet('toPlan');
                 return;
               }
               // Plan → Task needs no kind chosen; the menu already checked the blockers.
-              propose(activity, { objectKind: 'task', type: 'task' });
+              propose(authoritativeActivity, { objectKind: 'task', type: 'task' });
             }}
             onDuplicate={() => void duplicate()}
             onDelete={() => setDeleteOpen(true)}
@@ -668,12 +679,12 @@ export function ActivityDetailScreen({
             open={kindSheet !== undefined}
             onClose={() => setKindSheet(undefined)}
             title={kindSheet === 'toPlan' ? 'Change to Plan' : 'Change Plan kind'}
-            {...(kindSheet === 'planKind' && activity.objectKind === 'plan'
-              ? { current: activity.type as PlanType }
+            {...(kindSheet === 'planKind' && authoritativeActivity.objectKind === 'plan'
+              ? { current: authoritativeActivity.type as PlanType }
               : {})}
             onChoose={(type) => {
               setKindSheet(undefined);
-              propose(activity, { objectKind: 'plan', type });
+              propose(authoritativeActivity, { objectKind: 'plan', type });
             }}
           />
 
@@ -688,16 +699,16 @@ export function ActivityDetailScreen({
               confirmation={pending.confirmation}
               busy={detail.isSaving}
               onCancel={() => setPending(undefined)}
-              onConfirm={() => void applyKind(activity, pending.target)}
+              onConfirm={() => void applyKind(authoritativeActivity, pending.target)}
               testID="kind-change-confirm"
             />
           )}
 
-          {activity.recurrence === undefined ? (
+          {authoritativeActivity.recurrence === undefined ? (
             <ConfirmDialog
               open={deleteOpen}
               confirmation={deleteConfirmation(
-                activity,
+                authoritativeActivity,
                 detail.detail?.reminders.length ?? 0,
               )}
               busy={actions.isBusy}
@@ -766,7 +777,7 @@ export function ActivityDetailScreen({
               <ConfirmDialog
                 open={deleteSeriesConfirmOpen}
                 confirmation={deleteConfirmation(
-                  activity,
+                  authoritativeActivity,
                   detail.detail?.reminders.length ?? 0,
                   detail.detail?.completedOccurrenceCount ?? 0,
                 )}
@@ -780,8 +791,8 @@ export function ActivityDetailScreen({
 
           <PassedPlanResolutionSheet
             open={resolutionOpen && showResolutionPrompt}
-            type={activity.type}
-            title={activity.title}
+            type={authoritativeActivity.type}
+            title={authoritativeActivity.title}
             busy={actions.isBusy}
             onClose={() => setResolutionOpen(false)}
             onResolve={(outcome) => {
@@ -812,7 +823,7 @@ interface LoadedProps {
   canCancelPending: boolean;
   onCancelPending: () => void;
   cancellingPending: boolean;
-  activity: Activity;
+  activity: Activity | PendingActivity;
   detail: ReturnType<typeof useActivityDetail>;
   today: WallDate;
   onOpenReschedule: () => void;

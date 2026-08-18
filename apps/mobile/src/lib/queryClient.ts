@@ -34,10 +34,12 @@ function intentIdFor(variables: unknown): string {
 
 /** The entity FIFO is promised within. Falls back to the intent id for an entity-less write. */
 function entityIdFor(variables: unknown): string {
-  const fields = variables as { activityId?: unknown } | undefined;
-  return typeof fields?.activityId === 'string'
-    ? fields.activityId
-    : intentIdFor(variables);
+  const fields = variables as
+    | { activityId?: unknown; input?: { activityId?: unknown } }
+    | undefined;
+  if (typeof fields?.activityId === 'string') return fields.activityId;
+  if (typeof fields?.input?.activityId === 'string') return fields.input.activityId;
+  return intentIdFor(variables);
 }
 
 /**
@@ -48,8 +50,8 @@ function entityIdFor(variables: unknown): string {
  */
 function settleIntent(variables: unknown, outcome: 'ok' | Error): void {
   const log = getActiveIntentLog();
-  if (log === undefined || replayingIntent() !== undefined) return;
   const intentId = intentIdFor(variables);
+  if (log === undefined || replayingIntent() === intentId) return;
   if (outcome === 'ok') {
     void log.acknowledge(intentId);
     return;
@@ -98,7 +100,7 @@ export function createOfflineQueryClient(): QueryClient {
          * A replay runs through this same cache. Without this it would append a second copy
          * of the intent it is replaying, and the queue would grow every time it drained.
          */
-        if (replayingIntent() !== undefined) return;
+        if (replayingIntent() === intentIdFor(variables)) return;
 
         try {
           await log.append({

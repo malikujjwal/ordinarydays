@@ -100,7 +100,7 @@ describe('cancelling a queued create', () => {
 
   it('refuses once the create is in flight', async () => {
     const log = await logWithCreate();
-    await log.markInFlight('create-intent');
+    await log.tryClaim('create-intent');
     setActiveIntentLog(log);
 
     expect(await cancelPendingCreate('create-intent')).toBe(false);

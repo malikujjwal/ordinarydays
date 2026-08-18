@@ -478,13 +478,15 @@ useMutation({
 are unit-tested — the optimistic projection must agree with what the server will return,
 or the row will visibly flip back.
 
-**3. Offline mutation queue.** Mutations use `mutationKey` + a persisted mutation cache
-with `queryClient.resumePausedMutations()` on reconnect (`@react-native-community/netinfo`
-drives the online manager). Every creating `POST`, plus the explicitly replay-protected
-complete/uncomplete/skip mutations, carries a client-generated `Idempotency-Key`
-(`expo-crypto`'s `randomUUID`), generated once when the mutation is enqueued and stored in its
-variables before `mutationFn` runs. Every retry and process-death replay reuses it — this is
-why the API's idempotency records exist.
+**3. Replay-safe mutation execution (amended by ADR-055).** Mutations use registered
+`mutationKey` defaults as TanStack execution recipes. Every creating `POST`, plus the
+explicitly replay-protected complete/uncomplete/skip mutations, carries a client-generated
+`Idempotency-Key` (`expo-crypto`'s `randomUUID`), generated once when the action is accepted
+and stored in its variables before `mutationFn` runs. Every retry and process-death replay
+reuses it — this is why the API's idempotency records exist. New iOS writes are **not**
+persisted or replayed as TanStack mutations; the durable log in mechanism 4 owns that job.
+A one-time upgrade bridge imports legacy paused mutations into the log and retires their
+in-memory copies before connectivity is installed. Web has no durable mutation queue.
 
 Scope guard: we do not build a full local-first replica (no SQLite mirror, no CRDT). The
 agenda is a server-computed projection; reimplementing recurrence expansion against a
@@ -528,8 +530,18 @@ authority still arrives late.
    with `localDateTime`/`createdAt`/`lastActivityAt`; the ULID is a stable tiebreaker. A
    wrong device clock therefore cannot corrupt ordering.
 4. **The client projects only what it can compute correctly.** Its own unacknowledged
-   creates: yes — no server state can contradict them. Occurrence overrides, roll-forward,
-   balances, or expansion of a server-known series: never.
+   creates: yes — no server state can contradict them. For a recurring create this includes
+   expanding the user-supplied first segment with the shared recurrence engine across agenda
+   windows already present in the query cache, plus the minimal Today fallback described
+   below. Those rows are disposable projections, not stored Occurrences. Occurrence overrides,
+   roll-forward, balances, or expansion of a server-known series: never.
+
+If no Today window has ever been cached, an accepted pending create that belongs in Today or
+tomorrow seeds a minimal, immediately-stale Today window containing its local projection.
+This prevents a valid offline create from falling into the screen-level no-data error; the
+offline bar remains the explicit signal that no complete server view is available. Opening a
+pending row reads its detail from the durable create intent and makes no guaranteed-to-fail
+server request. Acknowledgement removes that exception and enables the canonical detail read.
 
 **Two stores, two durability contracts.**
 
@@ -553,7 +565,10 @@ uncertainty reduces automation, never extends the replay window.** Cancellation 
 
 **TanStack is the execution layer, not the durability boundary.** On cold start the log is
 authoritative and pending work is rebuilt from it — including mutations that were mid-flight
-rather than paused when the process died.
+rather than paused when the process died. The iOS intent-log session is the sole replay owner:
+connectivity requests a coalesced, process-wide serial drain; an atomic claim either moves one
+`queued` intent to `in_flight` or leaves it byte-for-byte untouched. A second reconnect cannot
+dispatch the same intent, overtake the FIFO pass, or reinterpret a failed claim as deletion.
 
 **Pending is not synced.** A client-minted id is not server acceptance. §5.4's `Pending`
 indicator and offline bar are entity-generic and copy-parameterised (Phase 3's

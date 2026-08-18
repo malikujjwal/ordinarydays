@@ -2678,7 +2678,15 @@ describe('a pending activity', () => {
     await log.append({
       intentId: 'create-intent',
       mutationKey: ['activity', 'create'],
-      variables: { input: { activityId: ID } },
+      variables: {
+        input: {
+          activityId: ID,
+          objectKind: 'task',
+          type: 'task',
+          title: 'Pending offline task',
+          schedule: { date: TODAY, time: '09:00', timezone: 'America/New_York' },
+        },
+      },
       entityId: ID,
     });
     setActiveIntentLog(log);
@@ -2686,6 +2694,19 @@ describe('a pending activity', () => {
   }
 
   afterEach(() => setActiveIntentLog(undefined));
+
+  it('renders from the durable create without making an impossible offline GET', async () => {
+    await pendingCreateLog();
+    stubFetch({ status: 500, body: {} });
+    mount();
+
+    await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
+    expect(screen.queryByTestId('detail-error')).toBeNull();
+    expect(screen.getByTestId('detail-title').getAttribute('value')).toBe(
+      'Pending offline task',
+    );
+    expect(sent).toHaveLength(0);
+  });
 
   it('offers no completion, and explains why in announced words', async () => {
     await pendingCreateLog();
@@ -2736,7 +2757,7 @@ describe('a pending activity', () => {
 
   it('offers no cancel once the create is in flight', async () => {
     const log = await pendingCreateLog();
-    await log.markInFlight('create-intent');
+    await log.tryClaim('create-intent');
     stubFetch({ status: 200, body: detailBody(task()) });
     mount();
 

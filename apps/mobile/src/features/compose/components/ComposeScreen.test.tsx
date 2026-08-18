@@ -5,7 +5,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
+import { setActiveIntentLog } from '@/lib/intentReplay';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
+import { createOfflineQueryClient } from '@/lib/queryClient';
 import { useComposeDraft } from '@/stores/composeDraft';
 import { useToast } from '@/stores/toast';
 import { ComposeScreen, type ComposeScreenProps } from './ComposeScreen';
@@ -27,7 +30,11 @@ const ZONE = 'America/New_York';
  * assertions double as accessibility assertions.
  */
 
-vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-test-key' }));
+vi.mock('expo-crypto', () => ({
+  getRandomBytes: (count: number) =>
+    Uint8Array.from({ length: count }, (_, index) => index),
+  randomUUID: () => 'idem-test-key',
+}));
 
 vi.mock('expo-image-picker', () => ({
   requestCameraPermissionsAsync: () => Promise.resolve({ granted: true }),
@@ -99,10 +106,13 @@ function stubFetch(...responses: Array<{ status: number; body: unknown }>) {
 function mount(
   onClose = () => {},
   overrides: Partial<Omit<ComposeScreenProps, 'onClose' | 'today' | 'timezone'>> = {},
+  suppliedClient?: QueryClient,
 ) {
-  const queryClient = new QueryClient({
-    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
-  });
+  const queryClient =
+    suppliedClient ??
+    new QueryClient({
+      defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+    });
   registerActivityMutationDefaults(queryClient);
   const wrap = (ui: ReactNode) => (
     <SafeAreaProvider>
@@ -126,6 +136,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setActiveIntentLog(undefined);
   vi.unstubAllGlobals();
 });
 
@@ -369,8 +380,51 @@ describe('Task', () => {
     expect(sent[0]?.method).toBe('POST');
     expect(sent[0]?.url).toMatch(/\/v1\/activities$/);
     expect(sent[0]?.body).toMatchObject({ objectKind: 'task', type: 'task' });
+    expect(sent[0]?.body).toMatchObject({
+      activityId: expect.stringMatching(/^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$/),
+    });
     expect(sent[0]?.headers['Idempotency-Key']).toBe('idem-test-key');
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
+  it('dismisses after durable projection without waiting for the native request', async () => {
+    const storage: IntentLogStorage = {
+      getItem: async () => null,
+      setItem: async () => undefined,
+      removeItem: async () => undefined,
+    };
+    const log = new IntentLog('usr_01J0000000000000000000000A', storage);
+    await log.hydrate();
+    setActiveIntentLog(log);
+
+    let finishRequest: ((response: unknown) => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      () =>
+        new Promise((resolve) => {
+          finishRequest = resolve;
+        }),
+    );
+    const onClose = vi.fn();
+    mount(onClose, {}, createOfflineQueryClient());
+    tapChoice('Task');
+    fireEvent.change(screen.getByLabelText('Title'), {
+      target: { value: 'Call the dentist' },
+    });
+
+    tap('Save task');
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(log.pending()).toHaveLength(1);
+    expect(finishRequest).toBeTypeOf('function');
+    finishRequest?.({
+      ok: true,
+      status: 201,
+      headers: { get: () => null },
+      json: () => Promise.resolve(createdBody()),
+      text: () => Promise.resolve(JSON.stringify(createdBody())),
+    });
+    await waitFor(() => expect(log.pending()).toHaveLength(0));
   });
 
   it('names where it landed in the toast, after the form dismisses', async () => {

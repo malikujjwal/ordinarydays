@@ -23,6 +23,7 @@ import {
   droppedMessage,
   resolveConflict,
 } from '@/features/activity/model/conflict';
+import { usePendingIntents } from '@/hooks/usePendingIntents';
 import { apiClient } from '@/lib/apiClient';
 import {
   type ConvertRecurrenceVariables,
@@ -33,6 +34,10 @@ import {
   type ScheduleActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
+import {
+  type PendingActivityDetail,
+  pendingActivityDetailFromIntent,
+} from '@/lib/pendingActivity';
 import { activityDetailKey, activityKey } from '@/lib/queryKeys';
 
 /**
@@ -53,7 +58,7 @@ export { activityKey };
 
 export interface ActivityDetailView {
   status: 'pending' | 'success' | 'error';
-  detail?: ActivityDetail;
+  detail?: ActivityDetail | PendingActivityDetail;
   /** `interaction-contract.md` §5.3 copy for the screen-level failure. */
   message?: string;
   requestId?: string;
@@ -102,6 +107,10 @@ export function useActivityDetail(
   const activityId = target.activityId;
   const queryKey = activityDetailKey(target);
   const queryClient = useQueryClient();
+  const pendingIntents = usePendingIntents();
+  const pendingDetail = pendingIntents
+    .map((intent) => pendingActivityDetailFromIntent(intent, target))
+    .find((detail) => detail !== undefined);
   const [conflict, setConflict] = useState<ActivityDetailView['conflict']>(undefined);
   const [editError, setEditError] = useState<string | undefined>(undefined);
   const [reminderError, setReminderError] = useState<string | undefined>(undefined);
@@ -109,6 +118,8 @@ export function useActivityDetail(
   const query = useQuery({
     queryKey,
     queryFn: ({ signal }) => getActivity(apiClient, target, signal),
+    // A pending create has no server row to read. Its durable intent is the detail source.
+    enabled: pendingDetail === undefined,
     /**
      * `always`, overriding the app-wide `offlineFirst`, for the reason written out in
      * `useHealth`: under `offlineFirst` a network-class failure pauses the query rather than
@@ -258,11 +269,16 @@ export function useActivityDetail(
     onError: (error: unknown) => setReminderError(describe(error).message),
   });
 
-  const failure = query.error === null ? undefined : describe(query.error);
+  const failure =
+    pendingDetail !== undefined || query.error === null
+      ? undefined
+      : describe(query.error);
 
   return {
-    status: query.status,
-    refetch: () => void query.refetch(),
+    status: pendingDetail === undefined ? query.status : 'success',
+    refetch: () => {
+      if (pendingDetail === undefined) void query.refetch();
+    },
     isSaving:
       mutation.isPending || scheduleMutation.isPending || convertMutation.isPending,
     isSavingReminder:
@@ -330,7 +346,11 @@ export function useActivityDetail(
       }
     },
     acknowledgeConflict: () => setConflict(undefined),
-    ...(query.data === undefined ? {} : { detail: query.data }),
+    ...(pendingDetail === undefined
+      ? query.data === undefined
+        ? {}
+        : { detail: query.data }
+      : { detail: pendingDetail }),
     ...(failure === undefined
       ? {}
       : {

@@ -1,4 +1,7 @@
 import type { Activity } from '@od/shared/types';
+import type { PendingActivity } from '@/lib/pendingActivity';
+
+type DisplayActivity = Activity | PendingActivity;
 
 /**
  * Which sections the detail screen renders, and in which state (P1-26).
@@ -73,7 +76,7 @@ const COMING_LATER: DetailSection[] = [
  * Notes-first order is the founder's 2026-08-13 refinement to the canonical detail anatomy.
  * The remaining Plan capabilities keep `plans-and-lists.md` §2.1's relative order.
  */
-export function sectionsFor(activity: Activity): DetailSection[] {
+export function sectionsFor(activity: DisplayActivity): DetailSection[] {
   /**
    * `repeat` and `reminders` are **setting rows** and sit together, in the frames' order:
    * the two things about *when* this happens, stated by value, each opening its own sheet.
@@ -124,7 +127,7 @@ export function sectionsFor(activity: Activity): DetailSection[] {
  * omitted entirely on a Task — a Task has no sharing state to describe, not even a solo one
  * (`today-and-tasks.md` §5.1).
  */
-export function subtitleFor(activity: Activity, planKindLabel: string): string {
+export function subtitleFor(activity: DisplayActivity, planKindLabel: string): string {
   if (activity.objectKind === 'task') return 'Task';
   return `${planKindLabel} · Just you`;
 }

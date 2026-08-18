@@ -2,7 +2,7 @@ import { changeActivityKind } from '@od/shared';
 import type { CreationTarget } from '@od/shared/client';
 import type { WallDate } from '@od/shared/time';
 import type { PlanType, Recurrence } from '@od/shared/types';
-import { randomUUID } from 'expo-crypto';
+import { getRandomBytes, randomUUID } from 'expo-crypto';
 import { create } from 'zustand';
 import {
   type DraftDetails,
@@ -66,11 +66,13 @@ export interface ComposeDraftState {
   /** A locally picked image. Phase 3 uploads it; Phase 1 shows it and blocks save with it. */
   attachmentUri: string | undefined;
   /**
-   * Generated once at `onMutate` and reused on every retry, cleared whenever the draft
+   * Generated once at the save boundary and reused on every retry, cleared whenever the draft
    * changes (`api-contract.md` §1). Clearing on change is what stops an edited-then-resaved
    * draft from being deduplicated against the previous body.
    */
   idempotencyKey: string | undefined;
+  /** Permanent identity minted with the durable create and sent unchanged to the server. */
+  activityId: string | undefined;
 
   /** `activities.md` §4's Date / Time / End time, for every type that has them. */
   schedule: DraftSchedule;
@@ -101,6 +103,8 @@ export interface ComposeDraftState {
   setDetails: (patch: Partial<DraftDetails>) => void;
   /** Returns the key for this attempt, generating one if the draft has changed since the last. */
   takeIdempotencyKey: () => string;
+  /** Returns the permanent `act_` ULID for this logical create. */
+  takeActivityId: () => string;
   reset: () => void;
 }
 
@@ -112,6 +116,7 @@ const EMPTY = {
   sourceUrl: undefined,
   attachmentUri: undefined,
   idempotencyKey: undefined,
+  activityId: undefined,
   schedule: EMPTY_SCHEDULE,
   location: EMPTY_LOCATION,
   reminderOffset: undefined,
@@ -138,6 +143,7 @@ const EMPTY = {
   | 'setRecurrence'
   | 'setDetails'
   | 'takeIdempotencyKey'
+  | 'takeActivityId'
   | 'reset'
 >;
 
@@ -151,7 +157,65 @@ const EMPTY = {
 const edited = (patch: Partial<ComposeDraftState>) => ({
   ...patch,
   idempotencyKey: undefined,
+  activityId: undefined,
 });
+
+const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+let lastActivityIdTime = -1;
+let lastActivityIdRandom = '';
+
+function encodeUlidTime(timestamp: number): string {
+  let remaining = timestamp;
+  let encoded = '';
+  for (let index = 0; index < 10; index += 1) {
+    encoded = ULID_ALPHABET[remaining % 32] + encoded;
+    remaining = Math.floor(remaining / 32);
+  }
+  return encoded;
+}
+
+/** Encodes 80 native-random bits as the ULID's exact 16 Crockford-base32 characters. */
+function encodeUlidRandom(bytes: Uint8Array): string {
+  let buffer = 0;
+  let bitCount = 0;
+  let encoded = '';
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte;
+    bitCount += 8;
+    while (bitCount >= 5) {
+      bitCount -= 5;
+      encoded += ULID_ALPHABET[(buffer >>> bitCount) & 31];
+      buffer &= (1 << bitCount) - 1;
+    }
+  }
+  return encoded;
+}
+
+function incrementUlidRandom(value: string): string {
+  const characters = [...value];
+  for (let index = characters.length - 1; index >= 0; index -= 1) {
+    const character = characters[index];
+    const position = character === undefined ? -1 : ULID_ALPHABET.indexOf(character);
+    if (position < ULID_ALPHABET.length - 1) {
+      characters[index] = ULID_ALPHABET[position + 1] ?? '0';
+      return characters.join('');
+    }
+    characters[index] = '0';
+  }
+  throw new Error('Activity identity space exhausted for this millisecond.');
+}
+
+/** Expo's native CSPRNG works in Hermes; `ulid`'s implicit browser/Node detection does not. */
+function nextActivityId(): string {
+  const now = Date.now();
+  if (now <= lastActivityIdTime) {
+    lastActivityIdRandom = incrementUlidRandom(lastActivityIdRandom);
+    return `act_${encodeUlidTime(lastActivityIdTime)}${lastActivityIdRandom}`;
+  }
+  lastActivityIdTime = now;
+  lastActivityIdRandom = encodeUlidRandom(getRandomBytes(10));
+  return `act_${encodeUlidTime(now)}${lastActivityIdRandom}`;
+}
 
 function withEventDefaults(
   type: PlanType,
@@ -405,6 +469,14 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     const key = randomUUID();
     set({ idempotencyKey: key });
     return key;
+  },
+
+  takeActivityId: () => {
+    const existing = get().activityId;
+    if (existing !== undefined) return existing;
+    const activityId = nextActivityId();
+    set({ activityId });
+    return activityId;
   },
 
   reset: () => set({ ...EMPTY }),

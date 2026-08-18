@@ -330,10 +330,10 @@ extended to the list and shared-list mutations that exist by this phase.
 The durable queue exists: the account-scoped intent log from
 [`phase-02-6-sync-hardening.md`](phase-02-6-sync-hardening.md) P2-48/P2-49, in which
 durability lives in the log — written before the action is reported accepted — and TanStack
-Query is the execution layer (`resumePausedMutations()` on reconnect, `netinfo` through
-`onlineManager`). Building a second queue on TanStack's persisted mutation cache here would
-reintroduce exactly the architecture ADR-055 retired. What this task adds is the **semantics
-layer** for list mutations riding that log:
+Query is the execution layer (the log builds registered mutation defaults; `netinfo` requests
+one coalesced serial log drain through `onlineManager`). Building a second queue on TanStack's
+persisted mutation cache here would reintroduce exactly the architecture ADR-055 retired. What
+this task adds is the **semantics layer** for list mutations riding that log:
 
 - **Mutation defaults must be registered at app start**, before rehydration, for every list
   mutation key — the execution half still needs its functions, and a rehydrated mutation

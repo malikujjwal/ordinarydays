@@ -97,7 +97,7 @@ export function ComposeScreen({
       },
       timezone,
     );
-    if (saved === undefined) return; // The banner is already showing; the draft stays put.
+    if (!saved) return; // The banner is already showing; the draft stays put.
 
     // §2.5's order: the form dismisses, then the toast names where it landed.
     draft.reset();

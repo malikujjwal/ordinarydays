@@ -1,5 +1,6 @@
 import { MAX_AUTOMATIC_INTENT_AGE_DAYS, MAX_OFFLINE_MUTATIONS } from '@od/shared';
 import { ApiError } from '@od/shared/client';
+import type { Activity, AgendaData } from '@od/shared/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   INTENT_LOG_SCHEMA_VERSION,
@@ -11,7 +12,10 @@ import {
   parseEnvelope,
 } from '@/lib/intentLog';
 import { replayIntents, setActiveIntentLog } from '@/lib/intentReplay';
-import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
+import {
+  registerActivityMutationDefaults,
+  waitForActivityCreateAcceptance,
+} from '@/lib/mutationDefaults';
 import { createOfflineQueryClient } from '@/lib/queryClient';
 
 const USER = 'usr_01J0000000000000000000000A';
@@ -121,6 +125,104 @@ describe('the durable intent log', () => {
     expect(relaunched.pending()).toHaveLength(0);
   });
 
+  it('leaves an intent unchanged when another pass already claimed it', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    const intent = await log.append(intentInput());
+
+    expect(await log.tryClaim(intent.intentId)).toMatchObject({
+      status: 'in_flight',
+      attempts: 1,
+    });
+    const claimed = log.snapshot();
+
+    expect(await log.tryClaim(intent.intentId)).toBeUndefined();
+    expect(log.snapshot()).toEqual(claimed);
+  });
+
+  it('coalesces concurrent replay passes so one intent dispatches once', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    await log.append(intentInput());
+    let finish: ((value: unknown) => void) | undefined;
+    const runner = fakeRunner(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+
+    const first = replayIntents(runner, log);
+    await vi.waitFor(() => expect(runner.dispatched).toHaveLength(1));
+    const overlapping = replayIntents(runner, log);
+
+    expect(overlapping).toBe(first);
+    finish?.({});
+    const [firstResult, overlappingResult] = await Promise.all([first, overlapping]);
+    expect(firstResult).toBe(overlappingResult);
+    expect(firstResult.acknowledged).toBe(1);
+    expect(runner.dispatched).toHaveLength(1);
+  });
+
+  it('keeps FIFO when a second replay request arrives during the first dispatch', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    await log.append(intentInput({ intentId: 'first' }));
+    await log.append({
+      ...intentInput({ intentId: 'second' }),
+      variables: { activityId: ACTIVITY, idempotencyKey: 'idem-2' },
+    });
+    let finishFirst: ((value: unknown) => void) | undefined;
+    let call = 0;
+    const runner = fakeRunner(async () => {
+      call += 1;
+      if (call !== 1) return {};
+      return await new Promise((resolve) => {
+        finishFirst = resolve;
+      });
+    });
+
+    const first = replayIntents(runner, log);
+    await vi.waitFor(() => expect(runner.dispatched).toHaveLength(1));
+    const overlapping = replayIntents(runner, log);
+    await Promise.resolve();
+    expect(runner.dispatched).toHaveLength(1);
+
+    finishFirst?.({});
+    await Promise.all([first, overlapping]);
+    expect(runner.dispatched).toEqual([
+      { activityId: ACTIVITY, idempotencyKey: 'idem-1' },
+      { activityId: ACTIVITY, idempotencyKey: 'idem-2' },
+    ]);
+  });
+
+  it('reruns after a coalesced request when the active pass requeues an intent', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    await log.append(intentInput());
+    let failFirst: ((error: Error) => void) | undefined;
+    let call = 0;
+    const runner = fakeRunner(() => {
+      call += 1;
+      if (call !== 1) return Promise.resolve({});
+      return new Promise((_resolve, reject) => {
+        failFirst = reject;
+      });
+    });
+
+    const first = replayIntents(runner, log);
+    await vi.waitFor(() => expect(runner.dispatched).toHaveLength(1));
+    const overlapping = replayIntents(runner, log);
+    failFirst?.(new Error('offline'));
+
+    const result = await overlapping;
+    await first;
+    expect(result.requeued).toBe(1);
+    expect(result.acknowledged).toBe(1);
+    expect(runner.dispatched).toHaveLength(2);
+    expect(log.pending()).toHaveLength(0);
+  });
+
   it('keeps an intent far older than the query cache MAX_AGE', async () => {
     const storage = fakeStorage();
     const now = Date.parse('2026-08-17T12:00:00.000Z');
@@ -206,7 +308,7 @@ describe('the durable intent log', () => {
     const log = new IntentLog(USER, storage);
     await log.hydrate();
     const intent = await log.append(intentInput());
-    await log.markInFlight(intent.intentId);
+    await log.tryClaim(intent.intentId);
     expect(log.snapshot().intents[0]?.status).toBe('in_flight');
 
     /**
@@ -241,7 +343,7 @@ describe('the durable intent log', () => {
     const second = new IntentLog(USER, fakeStorage());
     await second.hydrate();
     const live = await second.append(intentInput({ intentId: 'second' }));
-    await second.markInFlight(live.intentId);
+    await second.tryClaim(live.intentId);
     expect(await second.cancel(live.intentId)).toBe(false);
     expect(second.pending()).toHaveLength(1);
   });
@@ -395,6 +497,172 @@ describe('the durable intent log', () => {
     // Acknowledged on success, so the queue does not grow with completed work.
     expect(log.pending()).toHaveLength(0);
     setActiveIntentLog(undefined);
+  });
+
+  it('persists, expands a recurring create, then starts its request', async () => {
+    const storage = fakeStorage();
+    const log = new IntentLog(USER, storage);
+    await log.hydrate();
+    setActiveIntentLog(log);
+
+    const client = createOfflineQueryClient();
+    const key = ['agenda', '2026-08-18', '2026-08-19', 'America/New_York', null] as const;
+    client.setQueryData(key, {
+      days: [
+        { date: '2026-08-18', schedule: [], anytime: [], earlier: [] },
+        { date: '2026-08-19', schedule: [], anytime: [], earlier: [] },
+      ],
+      warnings: [],
+    } satisfies AgendaData);
+
+    const recurring = {
+      activityId: ACTIVITY,
+      objectKind: 'task',
+      type: 'task',
+      title: 'Daily walk',
+      status: 'scheduled',
+      schedule: {
+        date: '2026-08-18',
+        time: '18:00',
+        timezone: 'America/New_York',
+      },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-18' }],
+      },
+    } as Activity;
+    let finishRequest: ((response: { data: Activity }) => void) | undefined;
+    registerActivityMutationDefaults(client, {
+      request: async () => {
+        expect(log.pending()[0]?.entityId).toBe(ACTIVITY);
+        const agenda = client.getQueryData<AgendaData>(key);
+        const occurrences = agenda?.days.flatMap((day) =>
+          [...day.schedule, ...day.anytime, ...day.earlier].filter(
+            (row) => row.activityId === ACTIVITY,
+          ),
+        );
+        expect(occurrences?.map((row) => row.occurrenceDate)).toEqual([
+          '2026-08-18',
+          '2026-08-19',
+        ]);
+        return await new Promise<{ data: Activity }>((resolve) => {
+          finishRequest = resolve;
+        });
+      },
+    } as unknown as Parameters<typeof registerActivityMutationDefaults>[1]);
+
+    const mutation = client.getMutationCache().build(client, {
+      ...client.getMutationDefaults(['activity', 'create']),
+      mutationKey: ['activity', 'create'],
+    });
+    const variables = {
+      input: {
+        activityId: ACTIVITY,
+        objectKind: 'task',
+        type: 'task',
+        title: 'Daily walk',
+        schedule: recurring.schedule,
+        recurrence: recurring.recurrence,
+      },
+      idempotencyKey: 'idem-recurring-create',
+    };
+    const accepted = waitForActivityCreateAcceptance(variables.idempotencyKey);
+    const execution = mutation.execute(variables);
+
+    await accepted.promise;
+    // The UI acceptance boundary does not wait for this deliberately unfinished request.
+    expect(log.pending()).toHaveLength(1);
+    await vi.waitFor(() => expect(finishRequest).toBeTypeOf('function'));
+    finishRequest?.({ data: recurring });
+    await execution;
+
+    expect(log.pending()).toHaveLength(0);
+    setActiveIntentLog(undefined);
+  });
+
+  it('rolls a provisional create back when no durable native queue exists', async () => {
+    setActiveIntentLog(undefined);
+    const client = createOfflineQueryClient();
+    const key = ['agenda', '2026-08-18', '2026-08-18', 'America/New_York', null] as const;
+    const original = {
+      days: [{ date: '2026-08-18', schedule: [], anytime: [], earlier: [] }],
+      warnings: [],
+    } satisfies AgendaData;
+    client.setQueryData(key, original);
+    registerActivityMutationDefaults(client, {
+      request: async () => {
+        throw new ApiError('validation_failed', 'Nope', 400, 'req-create');
+      },
+    } as unknown as Parameters<typeof registerActivityMutationDefaults>[1]);
+    const mutation = client.getMutationCache().build(client, {
+      ...client.getMutationDefaults(['activity', 'create']),
+      mutationKey: ['activity', 'create'],
+    });
+
+    await expect(
+      mutation.execute({
+        input: {
+          activityId: ACTIVITY,
+          objectKind: 'task',
+          type: 'task',
+          title: 'Rejected',
+          schedule: { date: '2026-08-18', timezone: 'America/New_York' },
+        },
+        idempotencyKey: 'idem-rejected-create',
+      }),
+    ).rejects.toThrow('Nope');
+    expect(client.getQueryData(key)).toEqual(original);
+  });
+
+  it('removes a fallback Today window when a non-durable create fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-18T16:00:00.000Z'));
+    try {
+      setActiveIntentLog(undefined);
+      const client = createOfflineQueryClient();
+      client.setQueryData(['me'], { timezone: 'America/New_York' });
+      registerActivityMutationDefaults(client, {
+        request: async () => {
+          throw new ApiError('validation_failed', 'Nope', 400, 'req-create');
+        },
+      } as unknown as Parameters<typeof registerActivityMutationDefaults>[1]);
+      const mutation = client.getMutationCache().build(client, {
+        ...client.getMutationDefaults(['activity', 'create']),
+        mutationKey: ['activity', 'create'],
+      });
+      const seededKey = [
+        'agenda',
+        '2026-08-18',
+        '2026-08-19',
+        'America/New_York',
+        'anytime_unscheduled,overdue',
+      ] as const;
+
+      await expect(
+        mutation.execute({
+          input: {
+            activityId: ACTIVITY,
+            objectKind: 'task',
+            type: 'task',
+            title: 'Rejected offline fallback',
+          },
+          idempotencyKey: 'idem-rejected-fallback',
+        }),
+      ).rejects.toThrow('Nope');
+      expect(client.getQueryData(seededKey)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disposes an abandoned create-acceptance waiter without retaining it', async () => {
+    const acceptance = waitForActivityCreateAcceptance('idem-abandoned-compose');
+    acceptance.dispose();
+    await expect(acceptance.promise).resolves.toBeUndefined();
+
+    const replacement = waitForActivityCreateAcceptance('idem-abandoned-compose');
+    replacement.dispose();
+    await expect(replacement.promise).resolves.toBeUndefined();
   });
 
   it('refuses the action rather than reporting it accepted when the queue is full', async () => {

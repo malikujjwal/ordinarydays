@@ -1,9 +1,13 @@
 import { onlineManager, type QueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
+import { restorePendingActivityCreates } from '@/lib/agendaCache';
 import { httpClientConfig } from '@/lib/apiClient';
 import { IntentLog } from '@/lib/intentLog';
 import { replayIntents, setActiveIntentLog } from '@/lib/intentReplay';
-import { importLegacyPausedMutations } from '@/lib/persister';
+import {
+  importLegacyPausedMutations,
+  retireImportedLegacyPausedMutations,
+} from '@/lib/persister';
 
 /**
  * Binds one durable intent log to one signed-in account, for the life of that session.
@@ -43,7 +47,16 @@ export async function startIntentLogSession(
    * the `Idempotency-Key` they already carry.
    */
   await importLegacyPausedMutations(log, platform);
+  retireImportedLegacyPausedMutations(client, log);
   setActiveIntentLog(log);
+
+  /**
+   * Query-cache restoration happens before this session starts. Rebuild pending creates from
+   * the durable source of truth now, including when the app launched offline and no replay
+   * pass will run. This makes the optimistic series restart-safe instead of merely fast in
+   * the process that accepted it.
+   */
+  restorePendingActivityCreates(client, log.pending());
 
   /**
    * Drain on reconnect, and once now if already online — a relaunch that comes up connected

@@ -6,7 +6,9 @@ import {
   projectActivityWrite,
   projectOptimisticCompletion,
   projectOptimisticSnooze,
+  projectPendingActivityCreate,
   reconcileAgendaProjection,
+  restorePendingActivityCreates,
 } from '@/lib/agendaCache';
 
 /**
@@ -64,6 +66,133 @@ const statusOf = (client: QueryClient, activityId: string): string | undefined =
 
 const completion = (activityId: string, status: string) => ({
   activity: { activityId, status, schedule: { date: TODAY, time: '09:30' } },
+});
+
+describe('pending create restoration', () => {
+  it('seeds Today with the pending row when no server window was ever cached', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-13T16:00:00.000Z'));
+    try {
+      const client = new QueryClient();
+      client.setQueryData(['me'], { timezone: 'America/New_York' });
+
+      expect(
+        projectPendingActivityCreate(
+          client,
+          {
+            idempotencyKey: 'idem-first-offline-create',
+            input: {
+              activityId: 'act_01J0000000000000000000000A',
+              objectKind: 'task',
+              type: 'task',
+              title: 'Created before the first agenda read',
+            },
+          },
+          '2026-08-13T16:00:00.000Z',
+        ),
+      ).toMatchObject({ projected: true, seededKey: expect.any(Array) });
+
+      const key = [
+        'agenda',
+        TODAY,
+        '2026-08-14',
+        'America/New_York',
+        'anytime_unscheduled,overdue',
+      ] as const;
+      const agenda = client.getQueryData<AgendaData>(key);
+      expect(agenda?.days[0]?.anytime[0]?.title).toBe(
+        'Created before the first agenda read',
+      );
+      expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keys the fallback window in the viewer timezone, not the schedule timezone', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-13T16:00:00.000Z'));
+    try {
+      const client = new QueryClient();
+      client.setQueryData(['me'], { timezone: 'America/New_York' });
+
+      const projection = projectPendingActivityCreate(
+        client,
+        {
+          idempotencyKey: 'idem-cross-zone-create',
+          input: {
+            activityId: 'act_01J0000000000000000000000Z',
+            objectKind: 'task',
+            type: 'task',
+            title: 'Tokyo appointment on my Today',
+            schedule: { date: TODAY, time: '09:00', timezone: 'Asia/Tokyo' },
+          },
+        },
+        '2026-08-13T16:00:00.000Z',
+      );
+
+      expect(projection.seededKey).toEqual([
+        'agenda',
+        TODAY,
+        '2026-08-14',
+        'America/New_York',
+        'anytime_unscheduled,overdue',
+      ]);
+      expect(client.getQueryData<AgendaData>(projection.seededKey ?? [])).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rebuilds a recurring series from the durable log on an offline cold start', () => {
+    const client = new QueryClient();
+    const key = ['agenda', TODAY, '2026-08-14', 'America/New_York', null] as const;
+    client.setQueryData(key, {
+      days: [
+        { date: TODAY, schedule: [], anytime: [], earlier: [] },
+        { date: '2026-08-14', schedule: [], anytime: [], earlier: [] },
+      ],
+      warnings: [],
+    } satisfies AgendaData);
+
+    expect(
+      restorePendingActivityCreates(client, [
+        {
+          mutationKey: ['activity', 'create'],
+          createdAt: Date.parse('2026-08-13T12:00:00.000Z'),
+          variables: {
+            idempotencyKey: 'idem-cold-start',
+            input: {
+              activityId: 'act_01J0000000000000000000000A',
+              objectKind: 'task',
+              type: 'task',
+              title: 'Offline series',
+              schedule: {
+                date: TODAY,
+                time: '18:00',
+                timezone: 'America/New_York',
+              },
+              recurrence: {
+                mode: 'fixed',
+                segments: [{ freq: 'daily', interval: 1, effectiveFrom: TODAY }],
+              },
+            },
+          },
+        },
+      ]),
+    ).toBe(1);
+
+    const agenda = client.getQueryData<AgendaData>(key);
+    const occurrences = agenda?.days.flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (item) => item.title === 'Offline series',
+      ),
+    );
+    expect(occurrences?.map((item) => item.occurrenceDate)).toEqual([
+      TODAY,
+      '2026-08-14',
+    ]);
+  });
 });
 
 describe('a completion recorded anywhere reaches the agenda cache', () => {

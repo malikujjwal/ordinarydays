@@ -14,6 +14,8 @@ import { hasContent, useComposeDraft } from './composeDraft';
  */
 let uuidCounter = 0;
 vi.mock('expo-crypto', () => ({
+  getRandomBytes: (count: number) =>
+    Uint8Array.from({ length: count }, (_, index) => (uuidCounter + index) % 256),
   randomUUID: () => {
     uuidCounter += 1;
     return `uuid-${uuidCounter}`;
@@ -281,6 +283,34 @@ describe('the idempotency key', () => {
     draft().takeIdempotencyKey();
     draft().reset();
     expect(draft().idempotencyKey).toBeUndefined();
+  });
+});
+
+describe('the client activity identity', () => {
+  it('mints one permanent act_ ULID and reuses it for the same draft', () => {
+    draft().chooseObject('task');
+    draft().setTitle('Call the dentist');
+
+    const first = draft().takeActivityId();
+    expect(draft().takeActivityId()).toBe(first);
+    expect(first).toMatch(/^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+  });
+
+  it('mints a fresh identity when an accepted draft is edited and saved again', () => {
+    draft().chooseObject('task');
+    draft().setTitle('Call the dentist');
+    const first = draft().takeActivityId();
+
+    draft().setTitle('Call the dentist tomorrow');
+
+    expect(draft().activityId).toBeUndefined();
+    expect(draft().takeActivityId()).not.toBe(first);
+  });
+
+  it('clears the identity on reset', () => {
+    draft().takeActivityId();
+    draft().reset();
+    expect(draft().activityId).toBeUndefined();
   });
 });
 

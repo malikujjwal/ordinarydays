@@ -2185,7 +2185,10 @@ locally only for entities the server has never seen.
 **Consequences.** Offline creation becomes safe to build (Phase 2.6) and Phase 3's queued
 list-item promises inherit a real foundation; sign-out gains a quarantine step (`auth.md`
 §3.4); deletion writes a tombstone; `POST /v1/activities` accepts an optional client id; and
-two windows that must never be tuned apart are one shared constant.
+two windows that must never be tuned apart are one shared constant. On iOS the log session is
+the sole replay owner: legacy paused mutations are imported and retired before connectivity,
+claims are atomic no-ops when already owned, and overlapping replay requests coalesce into one
+serial drain.
 
 **Alternatives rejected.** Temporary ids with canonicalization — rebuilt coordination that
 ULIDs exist to avoid, and required id rewriting inside queued mutations. Making the

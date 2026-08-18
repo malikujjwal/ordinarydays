@@ -26,14 +26,89 @@ import type {
   UncompleteActivityInput,
   UnsnoozeActivityInput,
 } from '@od/shared/schemas';
+import type { AgendaData } from '@od/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
+import { projectPendingActivityCreate } from '@/lib/agendaCache';
 import { apiClient } from '@/lib/apiClient';
+import { getActiveIntentLog } from '@/lib/intentReplay';
 import { activityMutationKeys } from '@/lib/mutationKeys';
 import { activityKey } from '@/lib/queryKeys';
 
 export interface CreateActivityVariables {
   input: CreateActivityInput;
   idempotencyKey: string;
+}
+
+interface CreateAcceptance {
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
+const createAcceptances = new Map<string, CreateAcceptance>();
+const AGENDA_QUERY_KEY = ['agenda'] as const;
+
+interface CreateProjectionContext {
+  previous: Array<[readonly unknown[], AgendaData | undefined]>;
+  seededKey?: readonly unknown[];
+}
+
+export interface ActivityCreateAcceptance {
+  readonly promise: Promise<void>;
+  /** Stops retaining this compose surface if it unmounts before the boundary settles. */
+  readonly dispose: () => void;
+}
+
+/** Only native sessions with an active durable log may acknowledge before the response. */
+export function hasDurableActivityCreateQueue(): boolean {
+  return getActiveIntentLog() !== undefined;
+}
+
+/**
+ * Resolves once the create is durable and projected, without waiting for its network result.
+ * The compose surface uses this boundary to dismiss immediately online or offline.
+ */
+export function waitForActivityCreateAcceptance(
+  idempotencyKey: string,
+): ActivityCreateAcceptance {
+  let acceptance: CreateAcceptance;
+  const promise = new Promise<void>((resolve, reject) => {
+    acceptance = { resolve, reject };
+    createAcceptances.set(idempotencyKey, acceptance);
+  });
+  return {
+    promise,
+    dispose: () => {
+      if (createAcceptances.get(idempotencyKey) !== acceptance) return;
+      createAcceptances.delete(idempotencyKey);
+      // Nobody observes acceptance after its compose surface has gone; settle the waiter so
+      // its suspended save closure can be collected as well.
+      acceptance.resolve();
+    },
+  };
+}
+
+function acceptActivityCreate(idempotencyKey: string): void {
+  const acceptance = createAcceptances.get(idempotencyKey);
+  if (acceptance === undefined) return;
+  try {
+    acceptance.resolve();
+  } finally {
+    if (createAcceptances.get(idempotencyKey) === acceptance) {
+      createAcceptances.delete(idempotencyKey);
+    }
+  }
+}
+
+function refuseActivityCreate(idempotencyKey: string, error: unknown): void {
+  const acceptance = createAcceptances.get(idempotencyKey);
+  if (acceptance === undefined) return;
+  try {
+    acceptance.reject(error);
+  } finally {
+    if (createAcceptances.get(idempotencyKey) === acceptance) {
+      createAcceptances.delete(idempotencyKey);
+    }
+  }
 }
 
 export interface ActivityPostVariables<TInput> {
@@ -171,6 +246,29 @@ export function registerActivityMutationDefaults(
   httpClient: HttpClient = apiClient,
 ): void {
   client.setMutationDefaults(activityMutationKeys.create, {
+    onMutate: (variables: CreateActivityVariables) => {
+      const previous = client.getQueriesData<AgendaData>({ queryKey: AGENDA_QUERY_KEY });
+      const projection = projectPendingActivityCreate(client, variables);
+      acceptActivityCreate(variables.idempotencyKey);
+      return {
+        previous,
+        ...(projection.seededKey === undefined
+          ? {}
+          : { seededKey: projection.seededKey }),
+      } satisfies CreateProjectionContext;
+    },
+    onError: (
+      error,
+      variables: CreateActivityVariables,
+      context: CreateProjectionContext | undefined,
+    ) => {
+      refuseActivityCreate(variables.idempotencyKey, error);
+      if (hasDurableActivityCreateQueue() || context === undefined) return;
+      for (const [key, agenda] of context.previous) client.setQueryData(key, agenda);
+      if (context.seededKey !== undefined) {
+        client.removeQueries({ queryKey: context.seededKey, exact: true });
+      }
+    },
     mutationFn: ({ input, idempotencyKey }: CreateActivityVariables) =>
       createActivity(httpClient, input, idempotencyKey),
   });

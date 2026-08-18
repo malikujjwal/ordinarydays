@@ -431,12 +431,30 @@ export class IntentLog {
     });
   }
 
-  markInFlight(intentId: string): Promise<Intent | undefined> {
-    return this.transition(intentId, (intent) =>
-      intent.status === 'queued'
-        ? { ...intent, status: 'in_flight', attempts: intent.attempts + 1 }
-        : intent,
-    );
+  /**
+   * Atomically claims one queued intent for dispatch.
+   *
+   * This deliberately does not use `transition`: there, an `undefined` result means
+   * "remove the intent", while here it means "another replay pass already owns it". Keeping
+   * those meanings separate is what makes a failed claim a byte-for-byte no-op rather than
+   * silent data loss.
+   */
+  tryClaim(intentId: string): Promise<Intent | undefined> {
+    return this.write((current) => {
+      const index = current.intents.findIndex((intent) => intent.intentId === intentId);
+      const target = current.intents[index];
+      if (index < 0 || target === undefined || target.status !== 'queued') {
+        return [current, undefined];
+      }
+      const claimed: Intent = {
+        ...target,
+        status: 'in_flight',
+        attempts: target.attempts + 1,
+      };
+      const intents = [...current.intents];
+      intents[index] = claimed;
+      return [{ ...current, intents }, claimed];
+    });
   }
 
   /** Success. Removed rather than retained: the server is now the record of what happened. */
@@ -482,7 +500,7 @@ export class IntentLog {
    * Cancellation, valid in `queued` only.
    *
    * A request already on the wire cannot be retracted, so the race loser here is a no-op
-   * rather than a second write: `markInFlight` and `cancel` both run through `write`, so one
+   * rather than a second write: `tryClaim` and `cancel` both run through `write`, so one
    * of them observes the other's result and declines.
    */
   cancel(intentId: string): Promise<boolean> {

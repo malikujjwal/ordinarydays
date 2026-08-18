@@ -1,11 +1,16 @@
 import { ApiError, type CreationTarget } from '@od/shared/client';
 import type { Activity } from '@od/shared/types';
 import { useMutation } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
 import {
   type DraftFields,
   toCreateActivityInput,
 } from '@/features/compose/model/targets';
-import type { CreateActivityVariables } from '@/lib/mutationDefaults';
+import {
+  type CreateActivityVariables,
+  hasDurableActivityCreateQueue,
+  waitForActivityCreateAcceptance,
+} from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -25,7 +30,7 @@ export interface CreateActivityResult {
     fields: DraftFields,
     /** The zone the wall-clock schedule is anchored in, supplied by the route. */
     timezone: string,
-  ) => Promise<Activity | undefined>;
+  ) => Promise<boolean>;
   isSaving: boolean;
   /** `interaction-contract.md` §5.3 copy for the banner. The draft stays open behind it. */
   errorMessage: string | undefined;
@@ -65,6 +70,17 @@ function toFieldErrors(error: unknown): Record<string, string> {
 
 export function useCreateActivity(): CreateActivityResult {
   const takeIdempotencyKey = useComposeDraft((s) => s.takeIdempotencyKey);
+  const takeActivityId = useComposeDraft((s) => s.takeActivityId);
+  const [localError, setLocalError] = useState<Error>();
+  const acceptanceDisposers = useRef(new Set<() => void>());
+
+  useEffect(
+    () => () => {
+      for (const dispose of acceptanceDisposers.current) dispose();
+      acceptanceDisposers.current.clear();
+    },
+    [],
+  );
 
   const mutation = useMutation<Activity, Error, CreateActivityVariables>({
     mutationKey: activityMutationKeys.create,
@@ -87,30 +103,51 @@ export function useCreateActivity(): CreateActivityResult {
      */
   });
 
-  const failure = mutation.error === null ? undefined : describe(mutation.error);
+  const error = localError ?? (mutation.error === null ? undefined : mutation.error);
+  const failure = error === undefined ? undefined : describe(error);
 
   return {
     save: async (target, fields, timezone) => {
       try {
+        setLocalError(undefined);
         const input = toCreateActivityInput(target, fields, timezone);
         if (input === undefined) {
           throw new Error('A List item is not created through POST /v1/activities.');
         }
-        return await mutation.mutateAsync({
-          input,
-          idempotencyKey: takeIdempotencyKey(),
-        });
-      } catch {
+        const idempotencyKey = takeIdempotencyKey();
+        const variables = {
+          input: { ...input, activityId: takeActivityId() },
+          idempotencyKey,
+        } satisfies CreateActivityVariables;
+        if (!hasDurableActivityCreateQueue()) {
+          await mutation.mutateAsync(variables);
+          return true;
+        }
+        const acceptance = waitForActivityCreateAcceptance(idempotencyKey);
+        acceptanceDisposers.current.add(acceptance.dispose);
+        try {
+          mutation.mutate(variables);
+          await acceptance.promise;
+          return true;
+        } finally {
+          acceptanceDisposers.current.delete(acceptance.dispose);
+          acceptance.dispose();
+        }
+      } catch (error) {
+        setLocalError(error instanceof Error ? error : new Error(String(error)));
         // Swallowed on purpose: the error is already on `mutation.error` and is rendered as
         // the banner. Rethrowing here would surface an unhandled rejection for a failure the
         // UI has fully handled.
-        return undefined;
+        return false;
       }
     },
     isSaving: mutation.isPending,
     errorMessage: failure?.message,
     errorRequestId: failure?.requestId,
-    fieldErrors: toFieldErrors(mutation.error),
-    dismissError: () => mutation.reset(),
+    fieldErrors: toFieldErrors(error),
+    dismissError: () => {
+      setLocalError(undefined);
+      mutation.reset();
+    },
   };
 }

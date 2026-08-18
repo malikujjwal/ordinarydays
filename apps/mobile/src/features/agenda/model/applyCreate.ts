@@ -1,14 +1,21 @@
+import { describeRecurrence, expandRecurrence } from '@od/shared/recurrence';
 import type { CreateActivityInput } from '@od/shared/schemas';
 import type { Activity, AgendaData, AgendaItem } from '@od/shared/types';
+import { pendingActivityFromInput } from '@/lib/pendingActivity';
 import {
   type AgendaProjectionClock,
   findAgendaItem,
+  projectDay,
   replaceAgendaItem,
+  uniqueItems,
 } from './applyCompletion';
 
 export interface CreateProjectionVariables extends AgendaProjectionClock {
   /** The window this cache entry covers, so a create outside it is left alone. */
-  activity: Activity;
+  activity: Pick<
+    Activity,
+    'activityId' | 'type' | 'title' | 'schedule' | 'recurrence' | 'parentActivityId'
+  >;
   /**
    * Replace a row this window already holds instead of leaving it (P2-49).
    *
@@ -21,7 +28,7 @@ export interface CreateProjectionVariables extends AgendaProjectionClock {
 }
 
 /**
- * Places a **server-confirmed** new Activity into an agenda window.
+ * Places a newly-created Activity into an agenda window.
  *
  * **Why this exists (P2-46).** The agenda is served from `GSI1`, and a global secondary index
  * is eventually consistent — there is no such thing as a consistent read on one. Invalidating
@@ -31,13 +38,13 @@ export interface CreateProjectionVariables extends AgendaProjectionClock {
  * invalidates it. Every layer is individually correct, which is why no unit test caught it and
  * why `create-activity.spec.ts` had been failing since Phase 1.
  *
- * The row is projected from the **201 response**, not from the draft the user typed. The
- * server has already accepted the write, so there is nothing to roll back and no invented
- * `activityId` to reconcile later — this is the "keep local state and reconcile" branch, and
- * the invalidation that follows it is reconciliation rather than the only source of truth.
+ * A server-confirmed call projects the **201 response**. The pending entry point below first
+ * builds an Activity from durable local input and calls the same projection, under the
+ * permanent client-minted id. In either case the invalidation that follows is reconciliation
+ * rather than the only source of truth.
  *
- * Idempotent: an activity the window already holds is left untouched, so arriving here after
- * a refetch that *did* win the race cannot double the row.
+ * Idempotent: an activity the window already holds is left untouched unless `reconcile` asks
+ * the canonical `201` to replace the provisional set, so neither path can double a row.
  */
 export function applyCreate(
   agenda: AgendaData,
@@ -45,6 +52,10 @@ export function applyCreate(
 ): AgendaData {
   const { activity } = variables;
   const date = activity.schedule?.date;
+
+  if (activity.recurrence !== undefined && activity.schedule !== undefined) {
+    return applyRecurringCreate(agenda, variables);
+  }
 
   // An undated Task belongs to the ANYTIME bucket of the window's first day; a dated one
   // belongs to its own date. Either way, a create outside this window is not ours to place.
@@ -104,6 +115,85 @@ export function applyCreate(
 }
 
 /**
+ * Expands a newly-created series across this cache window.
+ *
+ * This is deliberately limited to **creates**. The user just supplied the only recurrence
+ * segment, so the shared expansion engine has every input needed to project it exactly. An
+ * edit to a server-known series may have occurrence history and overrides that are absent
+ * from the create response; that path remains server-owned in `agendaCache.ts`.
+ */
+function applyRecurringCreate(
+  agenda: AgendaData,
+  variables: CreateProjectionVariables,
+): AgendaData {
+  const { activity } = variables;
+  const recurrence = activity.recurrence;
+  const schedule = activity.schedule;
+  const dates = agenda.days.map((day) => day.date).sort();
+  const from = dates[0];
+  const to = dates.at(-1);
+  if (
+    recurrence === undefined ||
+    schedule === undefined ||
+    from === undefined ||
+    to === undefined
+  ) {
+    return agenda;
+  }
+
+  if (
+    findAgendaItem(agenda, { activityId: activity.activityId }) !== undefined &&
+    variables.reconcile !== true
+  ) {
+    return agenda;
+  }
+
+  const occurrences = new Set(expandRecurrence(recurrence, from, to, schedule.timezone));
+  const recurrenceDescription = describeRecurrence(recurrence, from);
+
+  return {
+    ...agenda,
+    days: agenda.days.map((day) => {
+      const items = uniqueItems(day).filter(
+        (item) => item.activityId !== activity.activityId,
+      );
+      if (occurrences.has(day.date)) {
+        const segment = [...recurrence.segments]
+          .reverse()
+          .find((candidate) => candidate.effectiveFrom <= day.date);
+        const time = segment?.time ?? schedule.time;
+        const endTime = segment?.endTime ?? schedule.endTime;
+        items.unshift({
+          activityId: activity.activityId,
+          type: activity.type,
+          title: activity.title,
+          status: 'scheduled',
+          ...(time === undefined ? {} : { time }),
+          ...(endTime === undefined ? {} : { endTime }),
+          isRecurring: true,
+          recurrenceDescription,
+          occurrenceDate: day.date,
+          isSnoozed: false,
+          hasCheckbox: activity.type === 'task',
+          capabilities: { complete: true, skip: true, snooze: true },
+          participantAvatars: [],
+          participantCount: 0,
+          ...(activity.parentActivityId === undefined
+            ? {}
+            : { parentActivityId: activity.parentActivityId }),
+          isPast:
+            day.date < variables.today ||
+            (day.date === variables.today &&
+              time !== undefined &&
+              (endTime ?? time) <= variables.currentMinute),
+        });
+      }
+      return projectDay(day, items, variables);
+    }),
+  };
+}
+
+/**
  * Projects a create the server has **not** seen yet, from the input the user typed.
  *
  * `applyCreate`'s second entry point (P2-49). An offline create carries its own permanent
@@ -121,32 +211,7 @@ export function applyPendingCreate(
   variables: PendingCreateVariables,
 ): AgendaData {
   const { input, activityId, mintedAt } = variables;
-  const provisional = {
-    activityId,
-    /** Placeholder. The `201` supplies the real one; nothing renders it meanwhile. */
-    ownerId: '',
-    objectKind: input.objectKind,
-    type: input.type,
-    status: input.schedule === undefined ? 'saved' : 'scheduled',
-    title: input.title,
-    ...(input.notes === undefined ? {} : { notes: input.notes }),
-    ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
-    ...(input.recurrence === undefined ? {} : { recurrence: input.recurrence }),
-    ...(input.location === undefined ? {} : { location: input.location }),
-    ...(input.parentActivityId === undefined
-      ? {}
-      : { parentActivityId: input.parentActivityId }),
-    details: input.details ?? { kind: input.type },
-    participantCount: 0,
-    childCount: 0,
-    expenseTotalCents: 0,
-    visibility: 'private',
-    icsSequence: 0,
-    createdAt: mintedAt,
-    lastActivityAt: mintedAt,
-    updatedAt: mintedAt,
-    schemaVersion: 1,
-  } as Activity;
+  const provisional = pendingActivityFromInput(input, activityId, mintedAt);
 
   return applyCreate(agenda, {
     activity: provisional,

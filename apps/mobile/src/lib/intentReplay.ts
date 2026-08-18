@@ -66,6 +66,43 @@ export interface ReplayResult {
   parked: number;
 }
 
+interface ReplayRequest {
+  readonly client: MutationRunner;
+  readonly log: IntentLog;
+  readonly http: HttpClient;
+  rerunRequested: boolean;
+  promise: Promise<ReplayResult>;
+}
+
+/**
+ * One process-wide replay owner.
+ *
+ * A reconnect and the session's already-online drain can arrive together. Calls for the same
+ * log coalesce and request one follow-up pass; a different account waits for the current pass
+ * rather than sharing the module-level replay marker with it.
+ */
+let activeReplay: ReplayRequest | undefined;
+
+function emptyReplayResult(): ReplayResult {
+  return {
+    attempted: 0,
+    acknowledged: 0,
+    requeued: 0,
+    failed: 0,
+    recovered: 0,
+    parked: 0,
+  };
+}
+
+function addReplayResult(target: ReplayResult, pass: ReplayResult): void {
+  target.attempted += pass.attempted;
+  target.acknowledged += pass.acknowledged;
+  target.requeued += pass.requeued;
+  target.failed += pass.failed;
+  target.recovered += pass.recovered;
+  target.parked += pass.parked;
+}
+
 /**
  * A create whose id the server refused (P2-49).
  *
@@ -112,29 +149,64 @@ function message(error: unknown): string {
  * A mid-pass failure does not abort the rest: an unrelated entity should not be held hostage
  * by one rejected write, which is the same reason no cross-entity ordering is promised.
  */
-export async function replayIntents(
+export function replayIntents(
   client: MutationRunner,
   log: IntentLog,
   http: HttpClient = apiClient,
 ): Promise<ReplayResult> {
-  await log.refreshClockRule();
-  const result: ReplayResult = {
-    attempted: 0,
-    acknowledged: 0,
-    requeued: 0,
-    failed: 0,
-    recovered: 0,
-    parked: 0,
+  const running = activeReplay;
+  if (running !== undefined) {
+    if (running.log === log) {
+      running.rerunRequested = true;
+      return running.promise;
+    }
+    return running.promise.then(
+      () => replayIntents(client, log, http),
+      () => replayIntents(client, log, http),
+    );
+  }
+
+  const request: ReplayRequest = {
+    client,
+    log,
+    http,
+    rerunRequested: false,
+    promise: Promise.resolve(emptyReplayResult()),
   };
+  request.promise = (async () => {
+    const result = emptyReplayResult();
+    do {
+      request.rerunRequested = false;
+      addReplayResult(
+        result,
+        await replayPass(request.client, request.log, request.http),
+      );
+    } while (request.rerunRequested);
+    return result;
+  })().finally(() => {
+    if (activeReplay === request) activeReplay = undefined;
+  });
+  activeReplay = request;
+  return request.promise;
+}
+
+/** One FIFO pass. The public entry point above guarantees that only one pass runs at once. */
+async function replayPass(
+  client: MutationRunner,
+  log: IntentLog,
+  http: HttpClient,
+): Promise<ReplayResult> {
+  await log.refreshClockRule();
+  const result = emptyReplayResult();
 
   for (const intent of log.replayable()) {
     /**
-     * `markInFlight` is the race gate against `cancel`. Both go through the log's serialised
+     * `tryClaim` is the race gate against `cancel`. Both go through the log's serialised
      * write chain, so if a cancel landed first this intent is already gone and the transition
      * returns `undefined` — the race loser is a no-op, never a second write.
      */
-    const claimed = await log.markInFlight(intent.intentId);
-    if (claimed === undefined || claimed.status !== 'in_flight') continue;
+    const claimed = await log.tryClaim(intent.intentId);
+    if (claimed === undefined) continue;
 
     result.attempted += 1;
     try {

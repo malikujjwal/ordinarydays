@@ -1,7 +1,7 @@
 import { getAgenda, getMe } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
 import type { AgendaQuery } from '@od/shared/schemas';
-import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
+import { type Instant, toWallDate } from '@od/shared/time';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
@@ -9,6 +9,7 @@ import { useClock } from '@/hooks/useClock';
 import { guardAgendaResponse } from '@/lib/agendaCache';
 import { apiClient } from '@/lib/apiClient';
 import { agendaKey, TODAY_AGENDA_INCLUDE } from '../keys';
+import { resolveAgendaTimezone } from '../timezone';
 
 const ME_QUERY_KEY = ['me'] as const;
 
@@ -32,13 +33,12 @@ export function useAgenda(options: UseAgendaOptions = {}) {
   const queryClient = useQueryClient();
   const clock = useClock();
   // Observe the existing profile query without starting a second screen-owned request.
-  const me = useQuery({
+  useQuery({
     queryKey: ME_QUERY_KEY,
     queryFn: ({ signal }) => getMe(apiClient, signal),
     enabled: false,
   });
-  const timezone = (me.data?.timezone ??
-    Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone;
+  const timezone = resolveAgendaTimezone(queryClient);
   const today =
     options.now === undefined
       ? clock.todayIn(timezone)

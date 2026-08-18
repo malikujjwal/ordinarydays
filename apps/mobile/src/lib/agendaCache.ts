@@ -1,15 +1,16 @@
 import { getAgenda } from '@od/shared/client';
-import type { AgendaQuery } from '@od/shared/schemas';
-import { type Instant, type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
+import { addWallDays } from '@od/shared/recurrence';
+import type { AgendaQuery, CreateActivityInput } from '@od/shared/schemas';
+import { type Instant, toWallDate, toWallTime } from '@od/shared/time';
 import type {
   Activity,
   ActivityDetail,
   ActivityOutcome,
   AgendaData,
   AgendaItemStatus,
-  User,
 } from '@od/shared/types';
 import type { MutationKey, QueryClient } from '@tanstack/react-query';
+import { agendaKey, TODAY_AGENDA_INCLUDE } from '@/features/agenda/keys';
 import {
   type AgendaMutationTarget,
   type AgendaProjectionClock,
@@ -17,12 +18,13 @@ import {
   findAgendaItem,
   replaceAgendaItem,
 } from '@/features/agenda/model/applyCompletion';
-import { applyCreate } from '@/features/agenda/model/applyCreate';
+import { applyCreate, applyPendingCreate } from '@/features/agenda/model/applyCreate';
 import { applyDelete } from '@/features/agenda/model/applyDelete';
 import { applyPatch } from '@/features/agenda/model/applyPatch';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
 import { applySnooze } from '@/features/agenda/model/applySnooze';
+import { resolveAgendaTimezone } from '@/features/agenda/timezone';
 import { apiClient } from '@/lib/apiClient';
 import { type ActivityMutationTag, activityMutationKeys } from '@/lib/mutationKeys';
 import { activityDetailKey, activityKey } from '@/lib/queryKeys';
@@ -292,23 +294,26 @@ export function projectActivityWrite(
   const clock = agendaClock(client);
 
   if (tag === 'create' || tag === 'duplicate') {
-    update(client, (agenda) => applyCreate(agenda, { activity, ...clock }));
+    update(client, (agenda) =>
+      applyCreate(agenda, {
+        activity,
+        ...clock,
+        // A create may already be represented by its durable local projection. The 201 is
+        // canonical and replaces those provisional rows atomically across each window.
+        ...(tag === 'create' ? { reconcile: true } : {}),
+      }),
+    );
 
     /**
-     * **A new series needs the server's expansion, not just its first day.**
+     * **A new series is locally complete, then canonically reconciled.**
      *
-     * `applyCreate` writes one row on the activity's own date, which is everything a one-off
-     * has and the first day of everything a series has. Nothing then asked for the rest: this
-     * branch returned, and `refreshActivityLists` marks the agenda stale with
-     * `refetchType: 'none'`. So a plan created to repeat daily showed exactly one occurrence,
-     * on its anchor date, until something incidental refetched — and showed it without the
-     * repeat glyph, because that is driven by `recurrenceDescription`, which the server authors
-     * and an optimistic row cannot invent.
+     * `applyCreate` expands a create with the shared recurrence engine across each cached
+     * window, which is safe because a new series has no server occurrence history or overrides.
+     * This reconciliation still runs because the agenda endpoint owns canonical projection
+     * fields and its version proof is what allows later server bodies to replace local state.
      *
-     * Reported for a Meal and reproduced against the local API, which returned all seven days
-     * correctly for the same activity — the row was right on the wire and wrong in the cache.
-     * The convert branch below has always done this; create was the one recurrence-producing
-     * write that never asked.
+     * This exception is intentionally create-only. A recurrence edit can depend on occurrence
+     * history absent from the Activity response and remains server-expanded below.
      */
     if (activity.recurrence !== undefined && typeof activity.updatedAt === 'string') {
       void reconcileAgendaProjection(client, {
@@ -634,6 +639,125 @@ export function projectActivityWrite(
   return unhandled;
 }
 
+export interface PendingActivityCreateVariables {
+  input: CreateActivityInput;
+  idempotencyKey: string;
+}
+
+export interface PendingActivityCreateProjection {
+  readonly projected: boolean;
+  readonly seededKey?: ReturnType<typeof agendaKey>;
+}
+
+/**
+ * Projects a durable, unacknowledged create into every cached agenda window.
+ *
+ * The global MutationCache appends the intent first; TanStack then invokes the create
+ * default's `onMutate`, which calls this function. That preserves Phase 2.6's ordering:
+ * durable write, local projection, network request. It is also safe to call again during
+ * replay or cold-start restoration because `applyPendingCreate` is idempotent.
+ */
+export function projectPendingActivityCreate(
+  client: QueryClient,
+  variables: PendingActivityCreateVariables,
+  mintedAt = new Date().toISOString(),
+): PendingActivityCreateProjection {
+  const input = (variables as Partial<PendingActivityCreateVariables> | undefined)?.input;
+  const activityId = input?.activityId;
+  if (input === undefined || activityId === undefined) return { projected: false };
+  const clock = agendaClock(client);
+  const seededTodayKey = seedPendingTodayWindow(
+    client,
+    input,
+    activityId,
+    mintedAt,
+    clock,
+  );
+  update(client, (agenda) =>
+    applyPendingCreate(agenda, {
+      input,
+      activityId,
+      mintedAt,
+      ...clock,
+    }),
+  );
+  if (seededTodayKey !== undefined) {
+    void client.invalidateQueries({ queryKey: seededTodayKey, refetchType: 'none' });
+  }
+  return {
+    projected: true,
+    ...(seededTodayKey === undefined ? {} : { seededKey: seededTodayKey }),
+  };
+}
+
+/**
+ * Gives Today a minimal local window when no server response has ever been cached.
+ *
+ * Without this, `setQueriesData` has nothing to update on a first offline launch and Today
+ * falls through to its no-data error even though the durable create is valid local data. The
+ * seeded window is immediately stale and contains only this device's pending projection; the
+ * offline bar communicates that the rest of the server view is unavailable.
+ */
+function seedPendingTodayWindow(
+  client: QueryClient,
+  input: CreateActivityInput,
+  activityId: string,
+  mintedAt: string,
+  clock: AgendaProjectionClock,
+): ReturnType<typeof agendaKey> | undefined {
+  const timezone = resolveAgendaTimezone(client);
+  const tomorrow = addWallDays(clock.today, 1);
+  const key = agendaKey(clock.today, tomorrow, timezone, TODAY_AGENDA_INCLUDE);
+  if (client.getQueryData<AgendaData>(key) !== undefined) return undefined;
+
+  const empty: AgendaData = {
+    days: [
+      { date: clock.today, schedule: [], anytime: [], earlier: [] },
+      { date: tomorrow, schedule: [], anytime: [], earlier: [] },
+    ],
+    warnings: [],
+  };
+  const projected = applyPendingCreate(empty, {
+    input,
+    activityId,
+    mintedAt,
+    ...clock,
+  });
+  if (!contains(projected, activityId)) return undefined;
+
+  client.setQueryData(key, projected);
+  return key;
+}
+
+export interface PendingCreateProjectionIntent {
+  readonly mutationKey: readonly string[];
+  readonly variables: unknown;
+  readonly createdAt: number;
+}
+
+/** Rebuilds pending create rows from the durable log after query-cache restoration. */
+export function restorePendingActivityCreates(
+  client: QueryClient,
+  intents: readonly PendingCreateProjectionIntent[],
+): number {
+  let projected = 0;
+  for (const intent of intents) {
+    if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'create') {
+      continue;
+    }
+    if (
+      projectPendingActivityCreate(
+        client,
+        intent.variables as PendingActivityCreateVariables,
+        new Date(intent.createdAt).toISOString(),
+      ).projected
+    ) {
+      projected += 1;
+    }
+  }
+  return projected;
+}
+
 /** Narrows a `MutationKey` to the activity tags this projector is required to be total over. */
 function activityMutationTag(
   mutationKey: MutationKey | undefined,
@@ -859,8 +983,7 @@ function activityFrom(data: unknown): Activity | undefined {
 }
 
 function agendaClock(client: QueryClient): AgendaProjectionClock {
-  const timezone = (client.getQueryData<User>(['me'])?.timezone ??
-    Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone;
+  const timezone = resolveAgendaTimezone(client);
   const now = new Date().toISOString() as Instant;
   return {
     today: toWallDate(now, timezone),

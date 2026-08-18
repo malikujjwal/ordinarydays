@@ -227,6 +227,36 @@ export async function importLegacyPausedMutations(
   return imported;
 }
 
+/**
+ * Removes only legacy paused mutations whose durable replacement is present in the log.
+ *
+ * TanStack subscribes to connectivity internally and would otherwise resume these old
+ * in-memory records alongside the log. Unknown or malformed mutations are deliberately left
+ * alone: migration must never discard a write it failed to preserve first.
+ */
+export function retireImportedLegacyPausedMutations(
+  client: QueryClient,
+  log: IntentLog,
+): number {
+  const imported = new Set(log.pending().map((intent) => intent.intentId));
+  let retired = 0;
+  for (const mutation of client.getMutationCache().getAll()) {
+    if (!mutation.state.isPaused) continue;
+    const variables = mutation.state.variables as
+      | { idempotencyKey?: unknown }
+      | undefined;
+    if (
+      typeof variables?.idempotencyKey !== 'string' ||
+      !imported.has(variables.idempotencyKey)
+    ) {
+      continue;
+    }
+    client.getMutationCache().remove(mutation);
+    retired += 1;
+  }
+  return retired;
+}
+
 /** Test seam for proving the query envelope no longer carries mutations. */
 export function dehydratePersistedClient(client: QueryClient): DehydratedState {
   return persistedState(client).clientState;

@@ -1,3 +1,4 @@
+import type { CreateActivityInput } from '@od/shared/schemas';
 import type { Activity, AgendaData, AgendaDay, AgendaItem } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 import { applyCreate, applyPendingCreate } from './applyCreate';
@@ -111,6 +112,27 @@ describe('applyCreate', () => {
 
     expect(titles(next, '2026-08-11', 'earlier')).toEqual(['Fresh task']);
   });
+
+  it('expands a new recurrence across every cached day immediately', () => {
+    const next = applyCreate(cached, {
+      activity: activity({
+        schedule: { date: '2026-08-11', time: '18:00', timezone: 'America/New_York' },
+        recurrence: {
+          mode: 'fixed',
+          segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-11' }],
+        },
+      }),
+      ...clock,
+    });
+
+    const rows = next.days.flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (row) => row.activityId === 'act_NEW',
+      ),
+    );
+    expect(rows.map((row) => row.occurrenceDate)).toEqual(['2026-08-11', '2026-08-12']);
+    expect(rows.every((row) => row.recurrenceDescription === 'Daily')).toBe(true);
+  });
 });
 
 /**
@@ -186,5 +208,50 @@ describe('applyPendingCreate', () => {
     });
 
     expect(again.days[1]?.schedule).toHaveLength(1);
+  });
+
+  it('expands a pending recurrence locally and lets the 201 replace the whole expansion', () => {
+    const recurringInput: CreateActivityInput = {
+      ...input,
+      schedule: { date: '2026-08-11', time: '18:00', timezone: 'America/New_York' },
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', interval: 1, effectiveFrom: '2026-08-11' }],
+      },
+    };
+    const projected = applyPendingCreate(cached, {
+      input: recurringInput,
+      activityId: CLIENT_ID,
+      mintedAt: '2026-08-11T15:00:00.000Z',
+      ...clock,
+    });
+
+    const pendingRows = projected.days.flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (row) => row.activityId === CLIENT_ID,
+      ),
+    );
+    expect(pendingRows.map((row) => row.occurrenceDate)).toEqual([
+      '2026-08-11',
+      '2026-08-12',
+    ]);
+
+    const reconciled = applyCreate(projected, {
+      activity: activity({
+        activityId: CLIENT_ID,
+        title: 'Canonical title',
+        schedule: recurringInput.schedule as NonNullable<Activity['schedule']>,
+        recurrence: recurringInput.recurrence as NonNullable<Activity['recurrence']>,
+      }),
+      reconcile: true,
+      ...clock,
+    });
+    const canonicalRows = reconciled.days.flatMap((day) =>
+      [...day.schedule, ...day.anytime, ...day.earlier].filter(
+        (row) => row.activityId === CLIENT_ID,
+      ),
+    );
+    expect(canonicalRows).toHaveLength(2);
+    expect(canonicalRows.every((row) => row.title === 'Canonical title')).toBe(true);
   });
 });
