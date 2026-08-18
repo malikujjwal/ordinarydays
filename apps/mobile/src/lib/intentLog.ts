@@ -822,9 +822,13 @@ export class IntentLog {
   replayable(): Intent[] {
     const now = this.clock();
     const { clockWitness } = this.envelope;
-    return replayOrder(
-      this.envelope.intents.filter((intent) => isAutomatable(intent, now, clockWitness)),
-    );
+    const firstUnsettledEntity = new Set<string>();
+    return replayOrder(this.envelope.intents).filter((intent) => {
+      if (intent.status === 'acknowledged') return false;
+      if (firstUnsettledEntity.has(intent.entityId)) return false;
+      firstUnsettledEntity.add(intent.entityId);
+      return isAutomatable(intent, now, clockWitness);
+    });
   }
 
   /** Sign-out quarantine: forget it in memory, leave every byte on disk (`auth.md` §3.4). */

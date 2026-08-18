@@ -295,7 +295,9 @@ describe('the durable intent log', () => {
     // Migrated forward, not discarded, and ordered as they were appended.
     expect(log.snapshot().schemaVersion).toBe(INTENT_LOG_SCHEMA_VERSION);
     expect(log.pending().map((intent) => intent.intentId)).toEqual(['a', 'b']);
-    expect(log.replayable().map((intent) => intent.seq)).toEqual([1, 2]);
+    expect(log.snapshot().intents.map((intent) => intent.seq)).toEqual([1, 2]);
+    // The per-entity barrier exposes only the oldest unsettled write to replay.
+    expect(log.replayable().map((intent) => intent.seq)).toEqual([1]);
   });
 
   it('migrates v1 attention states and preserves conflicting duplicate ids', () => {
@@ -896,5 +898,68 @@ describe('the durable intent log', () => {
       attention: { kind: 'rejected', status: 422 },
     });
     expect(byId.get('permanent')?.lastError).toBe('nope');
+  });
+
+  it.each([
+    { name: 'requeues', status: 503 },
+    { name: 'rejects permanently', status: 422 },
+  ])(
+    'blocks same-entity N+1 when N $name while another entity progresses',
+    async ({ status }) => {
+      const log = new IntentLog(USER, fakeStorage());
+      await log.hydrate();
+      await log.append({
+        ...intentInput({ intentId: 'entity-a-first' }),
+        variables: { activityId: ACTIVITY, order: 1 },
+      });
+      await log.append({
+        ...intentInput({ intentId: 'entity-a-second' }),
+        variables: { activityId: ACTIVITY, order: 2 },
+      });
+      await log.append({
+        ...intentInput({ intentId: 'entity-b-first', entityId: 'act-other' }),
+        variables: { activityId: 'act-other', order: 1 },
+      });
+      const runner = fakeRunner(async (variables) => {
+        const action = variables as { activityId: string; order: number };
+        if (action.activityId === ACTIVITY && action.order === 1) {
+          throw Object.assign(new Error('not now'), { status });
+        }
+        return {};
+      });
+
+      const result = await replayIntents(runner, log);
+
+      expect(result.attempted).toBe(2);
+      expect(runner.dispatched).toEqual([
+        { activityId: ACTIVITY, order: 1 },
+        { activityId: 'act-other', order: 1 },
+      ]);
+      expect(
+        log.snapshot().intents.find((intent) => intent.intentId === 'entity-a-second')
+          ?.status,
+      ).toBe('queued');
+    },
+  );
+
+  it('treats a parked predecessor as an entity barrier', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    await log.append(intentInput({ intentId: 'parked-first' }));
+    await log.append({
+      ...intentInput({ intentId: 'blocked-second' }),
+      variables: { activityId: ACTIVITY, order: 2 },
+    });
+    await log.append({
+      ...intentInput({ intentId: 'other', entityId: 'act-other' }),
+      variables: { activityId: 'act-other' },
+    });
+    await log.park('parked-first', 'Ambiguous collision', 'ambiguous_collision');
+    const runner = fakeRunner();
+
+    const result = await replayIntents(runner, log);
+
+    expect(result.attempted).toBe(1);
+    expect(runner.dispatched).toEqual([{ activityId: 'act-other' }]);
   });
 });

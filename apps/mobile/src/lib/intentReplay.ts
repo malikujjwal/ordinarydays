@@ -214,7 +214,13 @@ async function replayPass(
   await log.refreshClockRule();
   const result = emptyReplayResult();
 
-  for (const intent of log.replayable()) {
+  const attempted = new Set<string>();
+  while (true) {
+    const intent = log
+      .replayable()
+      .find((candidate) => !attempted.has(candidate.intentId));
+    if (intent === undefined) break;
+    attempted.add(intent.intentId);
     /**
      * `tryClaim` is the race gate against `cancel`. Both go through the log's serialised
      * write chain, so if a cancel landed first this intent is already gone and the transition
