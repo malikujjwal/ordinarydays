@@ -1,6 +1,6 @@
 import { Text, useTheme } from '@od/ui';
 import { View } from 'react-native';
-import { useIsPending } from '@/hooks/usePendingIntents';
+import { usePendingCreate } from '@/hooks/usePendingIntents';
 
 /**
  * The `Pending` indicator for a row whose write has not reached the server
@@ -13,6 +13,13 @@ import { useIsPending } from '@/hooks/usePendingIntents';
  *
  * Not an error colour: waiting is not failure. §5.4 calls for "a small `Pending` dot in the
  * row's trailing slot. Not an error colour."
+ *
+ * **It tracks the unacknowledged *create*, not any queued write** (fixed 2026-08-18). It first
+ * shipped asking "does this entity have any pending intent", which meant ticking a checkbox
+ * offline flagged the row as `Pending` — a task whose completion is queued exists on the
+ * server perfectly well, and §5.4 ties this indicator to the create specifically: "until its
+ * create is acknowledged it renders with the `Pending` indicator". The row's checkbox was
+ * already gated on the create; this is the half that disagreed with it.
  */
 export interface PendingIndicatorProps {
   /** Whatever the row is about — `act_`, `rem_`, later `itm_`. */
@@ -23,7 +30,7 @@ export interface PendingIndicatorProps {
 
 export function PendingIndicator({ entityId, label = 'Pending' }: PendingIndicatorProps) {
   const theme = useTheme();
-  const pending = useIsPending(entityId);
+  const { pending } = usePendingCreate(entityId);
   if (!pending) return null;
 
   return (

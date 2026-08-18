@@ -25,12 +25,15 @@ function memoryStorage(): IntentLogStorage {
   };
 }
 
-async function logWithIntent(entityId = ACTIVITY): Promise<IntentLog> {
+async function logWithIntent(
+  entityId = ACTIVITY,
+  mutation = 'create',
+): Promise<IntentLog> {
   const log = new IntentLog(USER, memoryStorage());
   await log.hydrate();
   await log.append({
     intentId: `intent-${entityId}`,
-    mutationKey: ['activity', 'complete'],
+    mutationKey: ['activity', mutation],
     variables: { activityId: entityId },
     entityId,
   });
@@ -136,6 +139,18 @@ describe('PendingIndicator', () => {
     expect(screen.getByTestId('pending-indicator').textContent).toBe(
       'Plan will finish syncing',
     );
+  });
+
+  it('stays out of the way when only a completion is queued', async () => {
+    /**
+     * The defect this replaced: ticking a checkbox offline flagged the row `Pending`, which
+     * put a visible marker — and a re-render — on the most common interaction in the app. A
+     * queued completion is a write against an activity the server already knows.
+     */
+    setActiveIntentLog(await logWithIntent(ACTIVITY, 'complete'));
+    renderIn(<PendingIndicator entityId={ACTIVITY} />);
+
+    expect(screen.queryByTestId('pending-indicator')).toBeNull();
   });
 
   it('is entity-generic, so a reminder id works the same way', async () => {

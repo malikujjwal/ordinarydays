@@ -39,6 +39,17 @@ import { loadProjection, type StoredProjection, saveProjection } from './project
 
 const REMINDER_INCLUDE = 'reminders' as const;
 const PROJECTION_DAYS = 7;
+/**
+ * The shortest gap between two network refreshes (fixed 2026-08-18).
+ *
+ * Reconnecting triggers a refresh, and on a local dev build `onlineManager` is driven by a
+ * one-second health probe that flaps on ordinary LAN jitter. Each flap was costing a `getMe`
+ * plus an eight-day `include=reminders` agenda read, which competed with whatever the user
+ * had actually asked for — a detail screen opening while the reminder refresh held the
+ * connection. Reminder data does not change on a one-second timescale, so coalescing costs
+ * nothing: arming still runs on every trigger, from the store.
+ */
+const MIN_REFRESH_INTERVAL_MS = 60_000;
 
 type AppStateListener = (state: string) => void;
 
@@ -199,6 +210,7 @@ export function installLocalReminderScheduler(
 ): () => void {
   const dependencies = { ...defaultDependencies, ...overrides };
   let stopped = false;
+  let lastRefreshAt = 0;
 
   const schedule = new DirtySchedule({
     plan: () => planFromStore(dependencies),
@@ -218,9 +230,14 @@ export function installLocalReminderScheduler(
          * still arms from what it already has. A network failure marks nothing clean and
          * cancels nothing.
          */
-        if (refresh) {
+        const elapsed = Date.parse(dependencies.clock.now()) - lastRefreshAt;
+        if (refresh && elapsed >= MIN_REFRESH_INTERVAL_MS) {
           try {
-            await refreshReminderProjection(dependencies);
+            const refreshed = await refreshReminderProjection(dependencies);
+            // Only a real read counts; an offline no-op must not start the cooldown.
+            if (refreshed !== undefined) {
+              lastRefreshAt = Date.parse(dependencies.clock.now());
+            }
           } catch (error) {
             dependencies.onError(error);
           }

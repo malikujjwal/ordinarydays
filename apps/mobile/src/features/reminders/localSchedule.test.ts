@@ -243,6 +243,27 @@ describe('the scheduler installation', () => {
     stop();
   });
 
+  it('coalesces refreshes, so connectivity flapping does not re-read the agenda', async () => {
+    /**
+     * The regression this replaced: a local dev build probes reachability every second, so an
+     * ordinary LAN hiccup produced a burst of online transitions — and each one cost a full
+     * `getMe` plus eight-day agenda read that competed with the screen the user had just
+     * opened. Arming still runs every time; only the network read is coalesced.
+     */
+    const { dependencies, urls, replaced, listeners } = harness();
+
+    const stop = installLocalReminderScheduler(dependencies);
+    await vi.waitFor(() => expect(replaced).toHaveLength(1));
+    const afterStartup = urls.length;
+
+    for (let index = 0; index < 5; index += 1) listeners[0]?.('background');
+    await vi.waitFor(() => expect(replaced.length).toBeGreaterThan(1));
+
+    // Armed again from the store, but the clock has not moved, so nothing was re-read.
+    expect(urls).toHaveLength(afterStartup);
+    stop();
+  });
+
   it('does no network or device work on web', async () => {
     const { dependencies, urls, replaced } = harness({ supported: false });
 
