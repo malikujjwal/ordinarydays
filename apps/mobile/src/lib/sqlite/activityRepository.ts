@@ -1,5 +1,6 @@
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import { activity as activitySchema } from '@od/shared/schemas';
+import { systemClock } from '@od/shared/time';
 import type {
   Activity,
   ActivityDetail,
@@ -300,11 +301,7 @@ export class ActivityRepository {
     await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
       activityId,
     ]);
-    await this.recordTombstone(
-      transaction.database,
-      activityId,
-      new Date().toISOString(),
-    );
+    await this.recordTombstone(transaction.database, activityId, systemClock.now());
     transaction.changed(this.scope(activityId));
     transaction.changed('agenda');
     transaction.changed('reminders');

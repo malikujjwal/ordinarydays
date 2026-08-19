@@ -1,3 +1,4 @@
+import { systemClock } from '@od/shared/time';
 import { textColumn } from '@/lib/sqlite/database';
 import type { RepositoryScope } from '@/lib/sqlite/subscriptions';
 import type {
@@ -241,7 +242,7 @@ export class LegacyImporter {
     private readonly transactions: SerializedTransactionRunner,
     private readonly target: LegacyImportTarget,
     private readonly fingerprint: LegacyImportFingerprint = sha256LegacySource,
-    private readonly now: () => string = () => new Date().toISOString(),
+    private readonly now: () => string = () => systemClock.now(),
   ) {}
 
   async import(source: LegacyImportSource): Promise<LegacyImportOutcome> {

@@ -1,6 +1,7 @@
 import { addWallDays } from '@od/shared/recurrence';
 import type { AgendaQuery } from '@od/shared/schemas';
 import { agendaItem as agendaItemSchema } from '@od/shared/schemas';
+import { systemClock } from '@od/shared/time';
 import type {
   Activity,
   ActivityAgendaData,
@@ -199,7 +200,7 @@ export class AgendaRepository {
     transaction: TransactionContext,
     request: AgendaQuery,
     data: AgendaData,
-    refreshedAt = new Date().toISOString(),
+    refreshedAt: string = systemClock.now(),
   ): Promise<void> {
     const guards = await readCanonicalOutboxGuards(transaction.database);
     const coveredActivityIds = new Set<string>();
@@ -499,7 +500,7 @@ export class AgendaRepository {
        VALUES (?, ?, 1, ?)
        ON CONFLICT(scope) DO UPDATE SET message=excluded.message,
          retryable=1, recorded_at=excluded.recorded_at;`,
-      [this.scope(coverage), message, new Date().toISOString()],
+      [this.scope(coverage), message, systemClock.now()],
     );
     transaction.changed('agenda');
   }

@@ -448,7 +448,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           await this.activities.recordTombstone(
             transaction.database,
             intent.entityId,
-            new Date().toISOString(),
+            systemClock.now(),
           );
         }
         if (intent.mutationKey[1] === 'reminder-delete') {
@@ -461,7 +461,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           await transaction.database.run(
             `INSERT OR IGNORE INTO reminder_tombstones
               (reminder_id, activity_id, acknowledged_at) VALUES (?, ?, ?);`,
-            [reminderId, intent.entityId, new Date().toISOString()],
+            [reminderId, intent.entityId, systemClock.now()],
           );
         }
         await this.outbox.acknowledge(

@@ -4,6 +4,7 @@ import type {
   ScheduleActivityInput,
 } from '@od/shared/schemas';
 import { activity as activitySchema } from '@od/shared/schemas';
+import { systemClock } from '@od/shared/time';
 import type {
   Activity,
   ActivityOutcome,
@@ -147,7 +148,7 @@ export class ActivityTransactionService {
     ownerUserId: string,
     variables: ActivityCreateVariables,
     clock: ProjectionClock,
-    mintedAt = new Date().toISOString(),
+    mintedAt: string = systemClock.now(),
   ): Promise<TransactionalIntentResult> {
     const activityId = variables.input.activityId;
     if (activityId === undefined)
@@ -384,7 +385,7 @@ export class ActivityTransactionService {
         variables.activityId,
         negative ? 'skipped' : completed ? 'completed' : restoredStatus,
         completed ? variables.input.outcome : undefined,
-        completed && !negative ? new Date().toISOString() : undefined,
+        completed && !negative ? systemClock.now() : undefined,
       );
     } else {
       await transaction.database.run(
@@ -403,7 +404,7 @@ export class ActivityTransactionService {
             : completed
               ? 'completed_occurrence'
               : restoredStatus,
-          completed && !negative ? new Date().toISOString() : null,
+          completed && !negative ? systemClock.now() : null,
         ],
       );
       transaction.changed(this.activities.scope(variables.activityId));

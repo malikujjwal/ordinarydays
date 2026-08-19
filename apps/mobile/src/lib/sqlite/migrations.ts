@@ -1,3 +1,4 @@
+import { systemClock } from '@od/shared/time';
 import type { SqliteDatabase, SqliteExecutor } from '@/lib/sqlite/database';
 import { numberColumn, textColumn } from '@/lib/sqlite/database';
 
@@ -272,7 +273,7 @@ function validatePlan(migrations: readonly SqliteMigration[]): void {
 export async function runMigrations(
   database: SqliteDatabase,
   migrations: readonly SqliteMigration[] = FOUNDATION_MIGRATIONS,
-  appliedAt: () => string = () => new Date().toISOString(),
+  appliedAt: () => string = () => systemClock.now(),
 ): Promise<void> {
   validatePlan(migrations);
   await database.transaction((transaction) =>

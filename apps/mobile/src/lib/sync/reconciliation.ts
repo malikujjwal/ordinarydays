@@ -132,7 +132,7 @@ export class RecurrenceReconciler {
            VALUES (?, ?, 1, ?)
            ON CONFLICT(scope) DO UPDATE SET message=excluded.message,
              retryable=1, recorded_at=excluded.recorded_at;`,
-          [`reconciliation:${intent.entityId}`, message, new Date().toISOString()],
+          [`reconciliation:${intent.entityId}`, message, systemClock.now()],
         );
         for (const coverage of coverages) {
           await this.agenda.recordSyncError(transaction, coverage, message);
