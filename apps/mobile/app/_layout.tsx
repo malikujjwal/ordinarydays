@@ -16,6 +16,7 @@ import { startIntentLogSession } from '@/lib/intentLogSession';
 import { installOnlineManager } from '@/lib/onlineManager';
 import { restorePersistedClient, subscribeToPersistence } from '@/lib/persister';
 import { queryClient } from '@/lib/queryClient';
+import { startNativeStateSession } from '@/lib/sqlite/nativeStateSession';
 
 /**
  * The root layout: every provider the app needs, in the order they have to nest.
@@ -49,6 +50,7 @@ function HydrationGate({ children }: { children: ReactNode }) {
     let stopOnlineManager: (() => void) | undefined;
     let stopLocalReminders: (() => void) | undefined;
     let stopIntentLog: (() => void) | undefined;
+    let stopNativeState: (() => void) | undefined;
 
     void restorePersistedClient(queryClient).then(async (outcome) => {
       if (!active) return;
@@ -63,11 +65,17 @@ function HydrationGate({ children }: { children: ReactNode }) {
        * mutations must be imported before connectivity can resume work or the app can accept
        * a write. Web returns immediately because it has no durable log.
        */
-      const session = await startIntentLogSession(queryClient);
+      const nativeSession = await startNativeStateSession(queryClient);
+      const session =
+        nativeSession === undefined
+          ? await startIntentLogSession(queryClient)
+          : undefined;
       if (!active) {
         session?.stop();
+        nativeSession?.stop();
         return;
       }
+      stopNativeState = nativeSession?.stop;
       stopIntentLog = session?.stop;
       stopOnlineManager = installOnlineManager(queryClient);
       stopLocalReminders = installLocalReminderScheduler();
@@ -80,6 +88,7 @@ function HydrationGate({ children }: { children: ReactNode }) {
       stopOnlineManager?.();
       stopLocalReminders?.();
       stopIntentLog?.();
+      stopNativeState?.();
     };
   }, []);
 

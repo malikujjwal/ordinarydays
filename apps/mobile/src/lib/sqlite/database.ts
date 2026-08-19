@@ -8,11 +8,14 @@ export interface SqliteRunResult {
 }
 
 /** The deliberately small SQL surface repositories may use. */
-export interface SqliteExecutor {
-  exec(sql: string): Promise<void>;
-  run(sql: string, parameters?: SqliteParameters): Promise<SqliteRunResult>;
+export interface SqliteReader {
   first(sql: string, parameters?: SqliteParameters): Promise<SqliteRow | undefined>;
   all(sql: string, parameters?: SqliteParameters): Promise<readonly SqliteRow[]>;
+}
+
+export interface SqliteExecutor extends SqliteReader {
+  exec(sql: string): Promise<void>;
+  run(sql: string, parameters?: SqliteParameters): Promise<SqliteRunResult>;
 }
 
 export interface SqliteDatabase extends SqliteExecutor {

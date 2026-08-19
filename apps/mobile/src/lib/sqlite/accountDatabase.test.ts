@@ -21,7 +21,7 @@ function nodeHash(value: string): Promise<string> {
 const testMigrations: readonly SqliteMigration[] = [
   ...FOUNDATION_MIGRATIONS,
   {
-    version: 2,
+    version: FOUNDATION_MIGRATIONS.length + 1,
     name: 'account-test-values',
     apply: (database) =>
       database.exec(`
