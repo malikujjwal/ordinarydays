@@ -35,6 +35,7 @@ import {
 } from '@od/shared/schemas';
 import { apiClient } from '@/lib/apiClient';
 import type { OutboxIntent } from '@/lib/sqlite/outbox';
+import { field } from '@/lib/unknown';
 
 export interface ActivityPushTransport {
   create(input: CreateActivityInput, idempotencyKey: string): Promise<unknown>;
@@ -110,10 +111,6 @@ export const sharedActivityPushTransport: ActivityPushTransport = {
   deleteReminder: (activityId, reminderId) =>
     deleteReminderForReplay(apiClient, activityId, reminderId),
 };
-
-function field(value: object, key: string): unknown {
-  return Reflect.get(value, key);
-}
 
 function variables(intent: OutboxIntent): object {
   if (typeof intent.variables !== 'object' || intent.variables === null) {

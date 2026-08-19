@@ -8,6 +8,7 @@ import {
 } from '@tanstack/react-query';
 import { Platform } from 'react-native';
 import { type IntentLog, semanticallyIdenticalIntent } from '@/lib/intentLog';
+import { field, stringField } from '@/lib/unknown';
 
 /**
  * Persistence for the **web query cache** and non-Activity native queries only.
@@ -33,17 +34,6 @@ interface StoredClient {
   timestamp: number;
   buster: string;
   clientState: DehydratedState;
-}
-
-function field(value: unknown, key: string): unknown {
-  return typeof value === 'object' && value !== null
-    ? Reflect.get(value, key)
-    : undefined;
-}
-
-function stringField(value: unknown, key: string): string | undefined {
-  const candidate = field(value, key);
-  return typeof candidate === 'string' ? candidate : undefined;
 }
 
 const NATIVE_ACTIVITY_QUERY_ROOTS = new Set(['activity', 'activities', 'agenda']);

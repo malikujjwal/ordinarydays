@@ -300,15 +300,31 @@ export class ActivityRepository {
     await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
       activityId,
     ]);
-    await transaction.database.run(
-      `INSERT OR IGNORE INTO activity_tombstones (activity_id, acknowledged_at)
-       VALUES (?, ?);`,
-      [activityId, new Date().toISOString()],
+    await this.recordTombstone(
+      transaction.database,
+      activityId,
+      new Date().toISOString(),
     );
     transaction.changed(this.scope(activityId));
     transaction.changed('agenda');
     transaction.changed('reminders');
     return true;
+  }
+
+  /**
+   * Append-once by design: the delete acknowledgement and an authoritative detail 404
+   * record the same shape, and whichever lands second must be a no-op.
+   */
+  async recordTombstone(
+    database: SqliteExecutor,
+    activityId: string,
+    acknowledgedAt: string,
+  ): Promise<void> {
+    await database.run(
+      `INSERT OR IGNORE INTO activity_tombstones (activity_id, acknowledged_at)
+       VALUES (?, ?);`,
+      [activityId, acknowledgedAt],
+    );
   }
 
   async putLocal(

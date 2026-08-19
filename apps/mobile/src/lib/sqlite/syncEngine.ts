@@ -34,6 +34,7 @@ import {
   RecurrenceReconciler,
   type TargetedAgendaTransport,
 } from '@/lib/sync/reconciliation';
+import { field } from '@/lib/unknown';
 
 export type NativeSyncReason =
   | 'accepted-action'
@@ -67,12 +68,6 @@ function isPermanent(error: unknown): boolean {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function field(value: unknown, key: string): unknown {
-  return typeof value === 'object' && value !== null
-    ? Reflect.get(value, key)
-    : undefined;
 }
 
 function rejectedAttention(error: unknown) {
@@ -450,10 +445,10 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           }
         }
         if (intent.mutationKey[1] === 'delete') {
-          await transaction.database.run(
-            `INSERT OR IGNORE INTO activity_tombstones (activity_id, acknowledged_at)
-             VALUES (?, ?);`,
-            [intent.entityId, new Date().toISOString()],
+          await this.activities.recordTombstone(
+            transaction.database,
+            intent.entityId,
+            new Date().toISOString(),
           );
         }
         if (intent.mutationKey[1] === 'reminder-delete') {

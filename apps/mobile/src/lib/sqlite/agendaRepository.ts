@@ -40,6 +40,21 @@ function rowId(date: string, item: AgendaItem): string {
   return `${date}\u0000${item.activityId}\u0000${item.occurrenceDate ?? ''}`;
 }
 
+/**
+ * Every item a day's response carries, `upNext` included. `upNext` may repeat an item that
+ * is also in `schedule` — deliberate, and harmless to the set/upsert consumers here.
+ * `insertDay` and `replaceLocalActivityRows` intentionally do NOT use this: they treat
+ * `upNext` as an identity flag, not an extra item.
+ */
+function itemsOf(day: AgendaDay): readonly AgendaItem[] {
+  return [
+    ...(day.upNext === undefined ? [] : [day.upNext]),
+    ...day.schedule,
+    ...day.anytime,
+    ...day.earlier,
+  ];
+}
+
 function itemFromRow(row: SqliteRow): AgendaItem {
   return agendaItemSchema.parse({
     activityId: text(row, 'activity_id'),
@@ -207,14 +222,7 @@ export class AgendaRepository {
       (data.projectionVersions ?? []).map((entry) => [entry.activityId, entry.version]),
     );
     const returnedActivityIds = new Set(
-      data.days.flatMap((day) =>
-        [
-          ...(day.upNext === undefined ? [] : [day.upNext]),
-          ...day.schedule,
-          ...day.anytime,
-          ...day.earlier,
-        ].map((item) => item.activityId),
-      ),
+      data.days.flatMap((day) => itemsOf(day).map((item) => item.activityId)),
     );
     const staleActivityIds = new Set<string>();
     for (const activityId of returnedActivityIds) {
@@ -247,12 +255,7 @@ export class AgendaRepository {
         true,
         new Set([...guards.deletedActivityIds, ...preservedActivityIds]),
       );
-      for (const item of [
-        ...(day.upNext === undefined ? [] : [day.upNext]),
-        ...day.schedule,
-        ...day.anytime,
-        ...day.earlier,
-      ]) {
+      for (const item of itemsOf(day)) {
         coveredActivityIds.add(item.activityId);
         if (preservedActivityIds.has(item.activityId)) continue;
         if (guards.deletedActivityIds.has(item.activityId)) continue;
@@ -284,12 +287,7 @@ export class AgendaRepository {
     if (request.include?.split(',').includes('reminders') === true) {
       const returnedReminderIds = new Set(
         data.days.flatMap((day) =>
-          [
-            ...(day.upNext === undefined ? [] : [day.upNext]),
-            ...day.schedule,
-            ...day.anytime,
-            ...day.earlier,
-          ].flatMap((item) =>
+          itemsOf(day).flatMap((item) =>
             (item.reminders ?? []).map((reminder) => reminder.reminderId),
           ),
         ),
