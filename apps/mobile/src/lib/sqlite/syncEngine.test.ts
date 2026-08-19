@@ -1014,6 +1014,62 @@ describe('serialized native convergence guard', () => {
     expect(agendaPull).toHaveBeenCalledTimes(1);
   });
 
+  it('runs a second bounded pull for coverage registered after the active snapshot', async () => {
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const agendaPull = vi.fn(
+      async (request: Parameters<ActivityPullAdapter['agenda']>[0]) => {
+        calls += 1;
+        if (calls === 1) await pending;
+        return pullAdapter().agenda(request);
+      },
+    );
+    const sync = syncEngine({ pull: { ...pullAdapter(), agenda: agendaPull } });
+
+    sync.request('foreground');
+    await vi.waitFor(() => expect(agendaPull).toHaveBeenCalledTimes(1));
+    const laterCoverage = sync.pullAgenda({
+      from: '2026-08-20',
+      to: '2026-08-20',
+      tz: 'UTC',
+    });
+    release?.();
+
+    await laterCoverage;
+    sync.stop();
+    /* The follow-up pass refreshes the known window and includes the newly queued one. */
+    expect(agendaPull).toHaveBeenCalledTimes(3);
+    expect(agendaPull).toHaveBeenLastCalledWith({
+      from: '2026-08-20',
+      to: '2026-08-20',
+      tz: 'UTC',
+    });
+  });
+
+  it('reports one in-flight pull failure to every concurrent manual caller', async () => {
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const agendaPull = vi.fn(async () => {
+      await pending;
+      throw new Error('offline together');
+    });
+    const sync = syncEngine({ pull: { ...pullAdapter(), agenda: agendaPull } });
+
+    const first = sync.syncNow();
+    await vi.waitFor(() => expect(agendaPull).toHaveBeenCalledTimes(1));
+    const second = sync.syncNow();
+    release?.();
+
+    await expect(first).rejects.toThrow('offline together');
+    await expect(second).rejects.toThrow('offline together');
+    sync.stop();
+  });
+
   it('rejects stale projection versions and applies only covered authoritative absence', async () => {
     const coverage = { from: '2026-08-19', to: '2026-08-19', timezone: 'UTC' };
     const current = await agenda.read(coverage);

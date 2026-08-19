@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { cents, cursor, hhmm, ianaTimezone, isoDate, ulidId } from './common.js';
+import {
+  cents,
+  cursor,
+  hhmm,
+  ianaTimezone,
+  isoDate,
+  timeZone,
+  ulidId,
+} from './common.js';
 
 /**
  * These primitives are composed by every other schema in the product, so a hole here is a
@@ -56,6 +64,11 @@ describe('ianaTimezone', () => {
     ['empty', ''],
   ])('rejects %s', (_why, v) => {
     expect(ianaTimezone.safeParse(v).success).toBe(false);
+  });
+
+  it('brands only a value that passed the shared timezone validation', () => {
+    expect(timeZone.parse('America/New_York')).toBe('America/New_York');
+    expect(timeZone.safeParse('not-a-zone').success).toBe(false);
   });
 });
 

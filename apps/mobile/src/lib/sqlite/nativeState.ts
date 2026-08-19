@@ -15,6 +15,7 @@ export interface NativeActivityState {
 }
 
 export interface NativeStateSession {
+  readonly queryPersistenceSafe: boolean;
   readonly stop: () => void;
 }
 

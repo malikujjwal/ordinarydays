@@ -5,8 +5,9 @@ import {
   activityCompletionResult,
   activity as activitySchema,
   scheduleActivityResult,
+  timeZone,
 } from '@od/shared/schemas';
-import { systemClock, type TimeZone } from '@od/shared/time';
+import { systemClock } from '@od/shared/time';
 import type {
   Activity,
   ActivityDetail,
@@ -16,6 +17,11 @@ import type {
   OccurrenceDetailProjection,
 } from '@od/shared/types';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
+import {
+  agendaCoverageForQuery,
+  agendaQueryForCoverage,
+  agendaQueryKey,
+} from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
@@ -49,7 +55,7 @@ const MAX_INTENTS_PER_PASS = 20;
 const RETRY_BACKOFF_MS = [2_000, 10_000, 30_000, 60_000] as const;
 
 function isPermanent(error: unknown): boolean {
-  const status = (error as { status?: unknown } | undefined)?.status;
+  const status = field(error, 'status');
   return (
     typeof status === 'number' &&
     status >= 400 &&
@@ -63,30 +69,37 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function field(value: unknown, key: string): unknown {
+  return typeof value === 'object' && value !== null
+    ? Reflect.get(value, key)
+    : undefined;
+}
+
 function rejectedAttention(error: unknown) {
-  const candidate = error as
-    | { status?: unknown; code?: unknown; details?: unknown }
-    | undefined;
+  const status = field(error, 'status');
+  const code = field(error, 'code');
+  const details = field(error, 'details');
   return {
     kind: 'rejected' as const,
-    ...(typeof candidate?.status === 'number' ? { status: candidate.status } : {}),
-    ...(typeof candidate?.code === 'string' ? { code: candidate.code } : {}),
-    ...(candidate?.details === undefined ? {} : { details: candidate.details }),
+    ...(typeof status === 'number' ? { status } : {}),
+    ...(typeof code === 'string' ? { code } : {}),
+    ...(details === undefined ? {} : { details }),
   };
 }
 
 function activityFromResponse(response: unknown): Activity | undefined {
   if (typeof response !== 'object' || response === null) return undefined;
-  const candidate =
-    'activity' in response ? (response as { activity: unknown }).activity : response;
+  const nested = field(response, 'activity');
+  const candidate = nested === undefined ? response : nested;
   const parsed = activitySchema.safeParse(candidate);
+  // Zod's optional output uses `T | undefined`; the domain model uses property absence.
   return parsed.success ? (parsed.data as Activity) : undefined;
 }
 
 function isRecurrencePatch(intent: OutboxIntent): boolean {
   if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'patch')
     return false;
-  const input = (intent.variables as { input?: unknown } | undefined)?.input;
+  const input = field(intent.variables, 'input');
   return (
     typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
   );
@@ -110,9 +123,9 @@ interface CanonicalOccurrenceResponse {
 
 function occurrenceDateFromIntent(intent: OutboxIntent): string | undefined {
   if (!OCCURRENCE_MUTATIONS.has(intent.mutationKey[1] ?? '')) return undefined;
-  const input = (intent.variables as { input?: unknown } | undefined)?.input;
+  const input = field(intent.variables, 'input');
   if (typeof input !== 'object' || input === null) return undefined;
-  const occurrenceDate = (input as { occurrenceDate?: unknown }).occurrenceDate;
+  const occurrenceDate = field(input, 'occurrenceDate');
   return typeof occurrenceDate === 'string' ? occurrenceDate : undefined;
 }
 
@@ -143,6 +156,7 @@ function canonicalOccurrenceResponse(
         ? {}
         : { completedAt: parsed.occurrence.completedAt }),
     };
+    // Zod's optional output uses `T | undefined`; the domain model uses property absence.
     return { activity: parsed.activity as Activity, nominalDate, projection };
   }
   const parsed = activityCompletionResult.parse(response);
@@ -154,11 +168,15 @@ function canonicalOccurrenceResponse(
     throw new Error('Canonical occurrence identity did not match the durable action.');
   }
   return {
+    // Zod's optional output uses `T | undefined`; the domain model uses property absence.
     activity: parsed.activity as Activity,
     nominalDate,
     ...(parsed.occurrence === undefined
       ? {}
-      : { occurrence: parsed.occurrence as Occurrence }),
+      : {
+          // Zod's optional output uses `T | undefined`; the domain model uses absence.
+          occurrence: parsed.occurrence as Occurrence,
+        }),
   };
 }
 
@@ -170,7 +188,7 @@ export class PendingActivityDeletionError extends Error {
 }
 
 export class SerializedNativeSyncEngine implements NativeSyncEngine {
-  private running: Promise<void> | undefined;
+  private running: Promise<Error | undefined> | undefined;
   private requested = false;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private retryIndex = 0;
@@ -215,22 +233,24 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       if (reason === 'accepted-action' || !this.pulling) this.requested = true;
       return;
     }
+    this.cycleError = undefined;
     this.requested = true;
-    this.running = this.drain().finally(() => {
-      this.running = undefined;
-      if (this.requested) this.request('retry');
-    });
+    this.running = this.drain()
+      .then(() => this.cycleError)
+      .finally(() => {
+        this.running = undefined;
+        if (this.requested) this.request('retry');
+      });
   }
 
   async syncNow(): Promise<void> {
-    this.cycleError = undefined;
     this.request('manual');
-    await this.running;
-    if (this.cycleError !== undefined) throw this.cycleError;
+    const error = await this.running;
+    if (error !== undefined) throw error;
   }
 
   async pullAgenda(request: AgendaQuery): Promise<AgendaData> {
-    this.requestedCoverages.set(JSON.stringify(request), request);
+    this.queueCoverage(request);
     await this.syncNow();
     return this.agenda.read({
       from: request.from,
@@ -267,14 +287,14 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   async pullReminderCoverage(): Promise<void> {
     await this.serialNetwork(async () => {
       const user = await this.pull.profile();
-      const today = systemClock.todayIn(user.timezone as TimeZone);
+      const today = systemClock.todayIn(timeZone.parse(user.timezone));
       const request = {
         from: today,
         to: addWallDays(today, 7),
         tz: user.timezone,
         include: 'reminders' as const,
       };
-      this.requestedCoverages.set(JSON.stringify(request), request);
+      this.queueCoverage(request);
       await this.transactions.run(async (transaction) => {
         await transaction.database.run(
           `INSERT INTO native_reminder_profile (
@@ -419,13 +439,11 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           intent.mutationKey[0] === 'activity' &&
           intent.mutationKey[1] === 'reminder-create'
         ) {
-          const input = (
-            intent.variables as { input?: { reminderId?: unknown } } | undefined
-          )?.input;
-          if (typeof input?.reminderId === 'string') {
+          const reminderId = field(field(intent.variables, 'input'), 'reminderId');
+          if (typeof reminderId === 'string') {
             await transaction.database.run(
               "UPDATE activity_reminders SET local_state = 'canonical' WHERE reminder_id = ?;",
-              [input.reminderId],
+              [reminderId],
             );
             transaction.changed(this.activities.scope(intent.entityId));
             transaction.changed('reminders');
@@ -439,8 +457,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           );
         }
         if (intent.mutationKey[1] === 'reminder-delete') {
-          const reminderId = (intent.variables as { reminderId?: unknown } | undefined)
-            ?.reminderId;
+          const reminderId = field(intent.variables, 'reminderId');
           if (typeof reminderId !== 'string') {
             throw new Error(
               'Reminder delete acknowledgement omitted its durable identity.',
@@ -501,24 +518,14 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private async pullKnownCoverage(): Promise<Error | undefined> {
     const requests = new Map<string, AgendaQuery>();
     for (const coverage of await this.agenda.coverage()) {
-      const request = {
-        from: coverage.from,
-        to: coverage.to,
-        tz: coverage.timezone,
-        ...(coverage.include === undefined ? {} : { include: coverage.include }),
-      } as AgendaQuery;
-      requests.set(JSON.stringify(request), request);
+      const request = agendaQueryForCoverage(coverage);
+      requests.set(agendaQueryKey(request), request);
     }
     for (const [key, request] of this.requestedCoverages) requests.set(key, request);
     this.requestedCoverages.clear();
     let firstError: Error | undefined;
     for (const request of requests.values()) {
-      const coverage = {
-        from: request.from,
-        to: request.to,
-        timezone: request.tz,
-        ...(request.include === undefined ? {} : { include: request.include }),
-      };
+      const coverage = agendaCoverageForQuery(request);
       try {
         const data = await this.serialNetwork(() => this.pull.agenda(request));
         await this.transactions.run((transaction) =>
@@ -533,6 +540,15 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
     }
     return firstError;
+  }
+
+  /** A coverage registered after the active pull snapshot must cause one more bounded pass. */
+  private queueCoverage(request: AgendaQuery): void {
+    this.requestedCoverages.set(agendaQueryKey(request), request);
+    if (this.pulling) {
+      this.pullRequested = true;
+      this.requested = true;
+    }
   }
 
   private async recoverCreateCollision(

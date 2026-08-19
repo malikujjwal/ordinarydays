@@ -291,9 +291,10 @@ apps/mobile/
 │  │  └─ agenda/
 │  │     ├─ hooks/useAgenda.ts
 │  │     ├─ components/AgendaSection.tsx
-│  │     └─ model/partition.ts     Pure helpers, unit-tested
+│  │     └─ model/                 Feature actions and re-exports of shared projections
 │  ├─ hooks/                       Cross-feature hooks (useSession, useTimezone)
 │  ├─ lib/                         queryClient.ts, apiClient.ts, storage.ts, analytics.ts
+│  │  └─ agenda/                   Pure partition/up-next helpers used by UI and SQLite
 │  └─ stores/                      Zustand stores, one per UI domain
 ├─ app.config.ts
 └─ eas.json
@@ -495,8 +496,10 @@ reuses it — this is why the API's idempotency records exist. New iOS writes ar
 persisted or replayed as TanStack mutations; the durable log in mechanism 4 owns that job.
 A one-time upgrade bridge imports legacy paused mutations into the account log, verifies that
 log in SQLite, records the query-domain migration receipt and only then retires both legacy
-native sources before connectivity is installed. The native runtime never executes those
-MutationCache records. Web has no durable mutation queue.
+native sources. If verification fails, the SQLite session may still pull canonical state,
+but native query-cache saving remains disabled and the retained legacy records are not
+executed or retired; the next launch retries the same idempotent import. The native runtime
+never executes those MutationCache records. Web has no durable mutation queue.
 
 Scope guard after ADR-057: native SQLite is a typed materialized application model, not a
 DynamoDB mirror, CRDT or generic local-first replica. Existing-series and completion-relative

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TimeZone } from '../time/types.js';
 
 /**
  * The primitives every other schema composes. Declared once, here.
@@ -34,6 +35,9 @@ export const ianaTimezone = z
     /^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)+)$/,
     'Expected an IANA time zone, e.g. America/New_York',
   );
+
+/** Runtime-validated IANA name branded for wall-clock conversion APIs. */
+export const timeZone = ianaTimezone.transform((value) => value as TimeZone);
 
 /**
  * A money amount in **integer cents**. Never a float, anywhere, ever (`CLAUDE.md` rule 4).

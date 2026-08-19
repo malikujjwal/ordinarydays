@@ -35,6 +35,17 @@ interface StoredClient {
   clientState: DehydratedState;
 }
 
+function field(value: unknown, key: string): unknown {
+  return typeof value === 'object' && value !== null
+    ? Reflect.get(value, key)
+    : undefined;
+}
+
+function stringField(value: unknown, key: string): string | undefined {
+  const candidate = field(value, key);
+  return typeof candidate === 'string' ? candidate : undefined;
+}
+
 const NATIVE_ACTIVITY_QUERY_ROOTS = new Set(['activity', 'activities', 'agenda']);
 
 function isNativeActivityKey(key: unknown): boolean {
@@ -81,24 +92,26 @@ function persistedState(client: QueryClient, platform = Platform.OS): StoredClie
 
 function validStoredClient(value: unknown): value is StoredClient {
   if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Partial<StoredClient>;
+  const timestamp = field(value, 'timestamp');
+  const buster = field(value, 'buster');
+  const clientState = field(value, 'clientState');
   return (
-    typeof candidate.timestamp === 'number' &&
-    candidate.buster === CACHE_BUSTER &&
-    Date.now() - candidate.timestamp <= MAX_AGE &&
-    typeof candidate.clientState === 'object' &&
-    candidate.clientState !== null
+    typeof timestamp === 'number' &&
+    buster === CACHE_BUSTER &&
+    Date.now() - timestamp <= MAX_AGE &&
+    typeof clientState === 'object' &&
+    clientState !== null
   );
 }
 
 function dehydratedStateFrom(value: unknown): DehydratedState | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
-  const state = (value as Partial<StoredClient>).clientState;
-  return state !== undefined &&
-    Array.isArray(state.queries) &&
-    Array.isArray(state.mutations)
-    ? state
-    : undefined;
+  const state = field(value, 'clientState');
+  const queries = field(state, 'queries');
+  const mutations = field(state, 'mutations');
+  if (!Array.isArray(queries) || !Array.isArray(mutations)) return undefined;
+  /* TanStack exposes no persisted-state parser; its generic cannot infer the checked arrays. */
+  return { queries, mutations } as DehydratedState;
 }
 
 /**
@@ -246,8 +259,8 @@ export async function importLegacyPausedMutations(
     () => undefined,
   );
   if (typeof stored !== 'object' || stored === null) return 0;
-  const clientState = (stored as Partial<StoredClient>).clientState;
-  const mutations = clientState?.mutations;
+  const clientState = field(stored, 'clientState');
+  const mutations = field(clientState, 'mutations');
   if (!Array.isArray(mutations) || mutations.length === 0) return 0;
 
   let imported = 0;
@@ -257,29 +270,19 @@ export async function importLegacyPausedMutations(
     if (!Array.isArray(key) || typeof variables !== 'object' || variables === null) {
       continue;
     }
-    const fields = variables as {
-      intentId?: unknown;
-      idempotencyKey?: unknown;
-      activityId?: unknown;
-      input?: { activityId?: unknown };
-    };
     /**
      * The persisted `Idempotency-Key` is the intent id. It was minted once when the mutation
      * was enqueued and is the same value the server deduplicates on, so an import that runs
      * twice produces one intent and, ultimately, one server write.
      */
     const entityId =
-      typeof fields.activityId === 'string'
-        ? fields.activityId
-        : typeof fields.input?.activityId === 'string'
-          ? fields.input.activityId
-          : `legacy-entity-${index + 1}`;
+      stringField(variables, 'activityId') ??
+      stringField(field(variables, 'input'), 'activityId') ??
+      `legacy-entity-${index + 1}`;
     const baseIntentId =
-      typeof fields.intentId === 'string'
-        ? fields.intentId
-        : typeof fields.idempotencyKey === 'string'
-          ? fields.idempotencyKey
-          : `legacy-${mutation.state?.submittedAt ?? 0}-${index + 1}`;
+      stringField(variables, 'intentId') ??
+      stringField(variables, 'idempotencyKey') ??
+      `legacy-${mutation.state?.submittedAt ?? 0}-${index + 1}`;
     const semantic = {
       mutationKey: key.map(String),
       variables,
@@ -325,16 +328,9 @@ export function retireImportedLegacyPausedMutations(
     if (!mutation.state.isPaused) continue;
     const variables = mutation.state.variables;
     if (typeof variables !== 'object' || variables === null) continue;
-    const fields = variables as {
-      activityId?: unknown;
-      input?: { activityId?: unknown };
-    };
     const entityId =
-      typeof fields.activityId === 'string'
-        ? fields.activityId
-        : typeof fields.input?.activityId === 'string'
-          ? fields.input.activityId
-          : undefined;
+      stringField(variables, 'activityId') ??
+      stringField(field(variables, 'input'), 'activityId');
     if (entityId === undefined || !Array.isArray(mutation.options.mutationKey)) continue;
     const semantic = {
       mutationKey: mutation.options.mutationKey.map(String),
@@ -376,8 +372,9 @@ export async function inspectNativeLegacyPersistence(
   );
   const profile = clientState.queries.find(
     (query) => Array.isArray(query.queryKey) && query.queryKey[0] === 'me',
-  )?.state.data as { userId?: unknown } | undefined;
-  const ownerUserId = typeof profile?.userId === 'string' ? profile.userId : undefined;
+  )?.state.data;
+  const profileUserId = field(profile, 'userId');
+  const ownerUserId = typeof profileUserId === 'string' ? profileUserId : undefined;
   return {
     domainRecordKeys: domainQueries.map(
       (query, index) =>
@@ -403,16 +400,10 @@ function mutationSemantic(mutation: DehydratedState['mutations'][number]):
   ) {
     return undefined;
   }
-  const variables = mutation.state.variables as {
-    activityId?: unknown;
-    input?: { activityId?: unknown };
-  };
+  const variables = mutation.state.variables;
   const entityId =
-    typeof variables.activityId === 'string'
-      ? variables.activityId
-      : typeof variables.input?.activityId === 'string'
-        ? variables.input.activityId
-        : undefined;
+    stringField(variables, 'activityId') ??
+    stringField(field(variables, 'input'), 'activityId');
   return entityId === undefined
     ? undefined
     : { mutationKey: mutation.mutationKey, variables, entityId };

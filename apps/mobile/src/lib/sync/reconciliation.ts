@@ -1,9 +1,10 @@
 import { getActivityAgenda } from '@od/shared/client';
-import type { AgendaQuery } from '@od/shared/schemas';
-import { systemClock, type TimeZone, toWallTime } from '@od/shared/time';
+import { type AgendaQuery, timeZone } from '@od/shared/schemas';
+import { systemClock, toWallTime } from '@od/shared/time';
 import type { ActivityAgendaData } from '@od/shared/types';
 import { apiClient } from '@/lib/apiClient';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
+import { agendaQueryForCoverage } from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
@@ -23,20 +24,6 @@ export interface ReconciliationResult {
 
 function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function requestFor(coverage: {
-  readonly from: string;
-  readonly to: string;
-  readonly timezone: string;
-  readonly include?: string;
-}): AgendaQuery {
-  return {
-    from: coverage.from,
-    to: coverage.to,
-    tz: coverage.timezone,
-    ...(coverage.include === undefined ? {} : { include: coverage.include }),
-  } as AgendaQuery;
 }
 
 /** Owns the version-proven strong read required after an existing-series PATCH. */
@@ -72,7 +59,7 @@ export class RecurrenceReconciler {
         readonly data: ActivityAgendaData;
       }> = [];
       for (const coverage of coverages) {
-        const request = requestFor(coverage);
+        const request = agendaQueryForCoverage(coverage);
         const data = await this.network(() =>
           this.transport.load(intent.entityId, request),
         );
@@ -108,8 +95,8 @@ export class RecurrenceReconciler {
             response.request,
             response.data,
             {
-              today: systemClock.todayIn(response.request.tz as TimeZone),
-              currentMinute: toWallTime(now, response.request.tz as TimeZone),
+              today: systemClock.todayIn(timeZone.parse(response.request.tz)),
+              currentMinute: toWallTime(now, timeZone.parse(response.request.tz)),
             },
           );
           await transaction.database.run(

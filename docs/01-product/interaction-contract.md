@@ -482,7 +482,7 @@ message can name it.
 | Uploads | Queued; the attachment shows a placeholder until the upload succeeds. |
 | Queue limits | 200 unacknowledged intents; beyond that, new writes are refused with `You're offline and there's a lot waiting to sync.` **Amended 2026-08-18 (P2-59):** the count is of queued *user data*, so `needs_attention` intents count — each still holds words the user typed. The refusal happens before the action is reported accepted, never after, and `refused` is never persisted. |
 | Undo while offline | Works. A queued original is cancelled atomically; once the original is in flight or acknowledged, Undo is a durable inverse ordered after it. |
-| Pull to refresh | Calls the one serialized `syncNow()`, coalesced with overlapping foreground/reconnect work. Failure in push, coverage pull or targeted recurrence reconciliation retains every committed row, records a retryable sync error and exposes Retry; Today never becomes empty merely because refresh failed. |
+| Pull to refresh | Calls the one serialized `syncNow()`, coalesced with overlapping foreground/reconnect work. A window requested after an active pull snapshots its work receives one follow-up bounded pass. Failure in push, coverage pull or targeted recurrence reconciliation is shared by concurrent refresh callers, retains every committed row, records a retryable sync error and exposes Retry; Today never becomes empty merely because refresh failed. |
 
 **Transition invariants — amended 2026-08-18 (P2-60 evidence, ADR-057 runtime).** No accepted
 action visually replays or reverses during offline/online flapping; a stale response arriving

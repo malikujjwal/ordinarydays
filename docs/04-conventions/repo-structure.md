@@ -30,10 +30,12 @@ ordinarydays/
 │     │  │  ├─ agenda/
 │     │  │  │  ├─ components/    AgendaSection.tsx, AgendaRow.tsx, UpNextCard.tsx
 │     │  │  │  ├─ hooks/         useAgenda.ts, useCompleteActivity.ts
-│     │  │  │  └─ model/         partition.ts, applyCompletion.ts — pure, unit-tested
+│     │  │  │  └─ model/         Feature projections/actions; shared agenda projection
+│     │  │  │                    helpers are re-exported from `src/lib/agenda/`.
 │     │  │  ├─ activities/  lists/  people/  expenses/  capture/  notifications/
 │     │  ├─ hooks/               Cross-feature: useSession, useTimezone, useBreakpoint
 │     │  ├─ lib/                 queryClient.ts, apiClient.ts, storage.ts, clock.ts
+│     │  │  ├─ agenda/           Pure partition/up-next projection shared by UI and SQLite.
 │     │  │  ├─ sqlite/           Native-only account DB lifecycle, migrations, typed
 │     │  │                       repositories, transaction coordinator, outbox and sync.
 │     │  │  └─ sync/             Typed native Activity push/pull and targeted-reconciliation
@@ -304,8 +306,10 @@ subscriptions publish only after commit. The one native sync adapter owns networ
 installs permitted canonical responses and settles the matching outbox receipt in a second
 transaction. Connectivity merely schedules that adapter.
 Native startup never registers the legacy intent-log/MutationCache replay session. The old
-AsyncStorage sources are migration inputs only and are retired after SQLite receipts commit;
-web TanStack persistence and optimistic adapters remain separate and unchanged.
+AsyncStorage sources are migration inputs only and are retired after SQLite receipts commit.
+If verification defers retirement, the SQLite session may continue but native query-cache
+saving stays off so it cannot overwrite the retained source; web TanStack persistence and
+optimistic adapters remain separate and unchanged.
 
 This SQLite application model is deliberately separate from the server persistence model.
 `services/api/src/repositories/` alone knows DynamoDB `pk`/`sk`/GSI shapes; native tables use

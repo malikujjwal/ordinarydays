@@ -1,13 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onlineManager, type QueryClient } from '@tanstack/react-query';
 import { AppState } from 'react-native';
 import { httpClientConfig } from '@/lib/apiClient';
-import { IntentLog, intentLogKey } from '@/lib/intentLog';
-import {
-  importLegacyPausedMutations,
-  inspectNativeLegacyPersistence,
-  retireNativeActivityAgendaPersistence,
-} from '@/lib/persister';
 import { AccountDatabaseManager } from '@/lib/sqlite/accountDatabase';
 import { NativeActivityActionCoordinator } from '@/lib/sqlite/actionCoordinator';
 import { ActivityAgendaLegacyImportTarget } from '@/lib/sqlite/activityAgendaLegacyTarget';
@@ -15,6 +8,7 @@ import { ActivityRepository } from '@/lib/sqlite/activityRepository';
 import { ActivityTransactionService } from '@/lib/sqlite/activityTransactions';
 import { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import { LegacyImporter } from '@/lib/sqlite/legacyImporter';
+import { migrateNativeLegacyState } from '@/lib/sqlite/legacyMigration';
 import { type NativeStateSession, setActiveNativeState } from '@/lib/sqlite/nativeState';
 import { OutboxRepository } from '@/lib/sqlite/outbox';
 import { recoverAbandonedOutbox } from '@/lib/sqlite/sessionRecovery';
@@ -53,67 +47,14 @@ async function startSession(
   const activities = new ActivityRepository(account.database, account.subscriptions);
   const agenda = new AgendaRepository(account.database, account.subscriptions);
   const outbox = new OutboxRepository(account.database);
-  const legacyPersistence = await inspectNativeLegacyPersistence('ios');
-  if (
-    legacyPersistence.domainMutationCount > 0 &&
-    legacyPersistence.ownerUserId !== ownerUserId
-  ) {
-    throw new Error(
-      'Legacy native mutations do not have verified ownership for this account; migration stopped.',
-    );
-  }
-  const hadIntentLog = (await AsyncStorage.getItem(intentLogKey(ownerUserId))) !== null;
-  const legacyLog = new IntentLog(ownerUserId);
-  await legacyLog.hydrate();
-  await importLegacyPausedMutations(legacyLog, 'ios');
-  const legacyIntents = legacyLog.snapshot().intents;
   const importer = new LegacyImporter(
     account.transactions,
     new ActivityAgendaLegacyImportTarget(activities, agenda, outbox),
   );
-  if (legacyIntents.length > 0) {
-    await importer.import({
-      sourceId: `async-storage-intent-log:${ownerUserId}`,
-      baseCandidates: [],
-      intents: legacyIntents.map((intent) => ({
-        recordKey: `intent:${intent.seq}:${intent.intentId}`,
-        intentId: intent.intentId,
-        mutationKey: intent.mutationKey,
-        variables: intent.variables,
-        entityId: intent.entityId,
-        orderingKey: `activity:${intent.entityId}`,
-        status: intent.status,
-        ...(intent.dependsOnIntentId === undefined
-          ? {}
-          : { dependsOnIntentId: intent.dependsOnIntentId }),
-        ...(intent.compensationForIntentId === undefined
-          ? {}
-          : { compensationForIntentId: intent.compensationForIntentId }),
-      })),
-    });
+  const migration = await migrateNativeLegacyState(ownerUserId, queryClient, importer);
+  if (migration.kind === 'deferred') {
+    console.warn('native_legacy_migration_deferred', migration.error.message);
   }
-  if (
-    legacyPersistence.domainRecordKeys.length > 0 ||
-    legacyPersistence.domainMutationCount > 0
-  ) {
-    await importer.import({
-      sourceId: `async-storage-query-domain:${ownerUserId}`,
-      baseCandidates: [
-        ...legacyPersistence.domainRecordKeys.map((recordKey) => ({
-          provenance: 'p2_60_materialized_overlay' as const,
-          recordKey,
-        })),
-        ...Array.from({ length: legacyPersistence.domainMutationCount }, (_, index) => ({
-          provenance: 'ambiguous' as const,
-          recordKey: `paused-mutation:${index + 1}`,
-        })),
-      ],
-      intents: [],
-    });
-  }
-  /* Both receipts are committed before either legacy durability source is removed. */
-  await retireNativeActivityAgendaPersistence(queryClient, legacyLog, 'ios');
-  if (hadIntentLog || legacyIntents.length > 0) await legacyLog.purge();
   await recoverAbandonedOutbox(account.transactions, outbox);
   const service = new ActivityTransactionService(outbox, activities, agenda);
   const sync = new SerializedNativeSyncEngine(
@@ -142,6 +83,7 @@ async function startSession(
 
   let stopped = false;
   const session: NativeStateSession = {
+    queryPersistenceSafe: migration.queryPersistenceSafe,
     stop: () => {
       if (stopped) return;
       stopped = true;

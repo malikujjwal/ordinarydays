@@ -2374,8 +2374,10 @@ is replaced by SQLite transactions.
 **Implementation note (2026-08-19).** P2-63 removed the native intent-log/MutationCache
 replay owner and native Activity/Agenda query-domain hydration. Typed endpoint adapters now
 feed one serialized SQLite sync engine. Legacy account logs and query-domain records are
-retired only after separate verified SQLite receipts; P2-60 overlay-shaped queries are
-recorded as non-canonical provenance and require synchronization. Domain-specific Activity
+retired only after separate verified SQLite receipts; unproven query provenance is recorded
+as ambiguous and requires synchronization. A failed verification defers retirement without
+blocking the SQLite session, while native query-cache persistence stays disabled so it cannot
+overwrite the retained source. Domain-specific Activity
 and reminder tombstones, projection-version guards and the strong targeted recurrence
 transaction close the convergence paths without adding a change feed. Web remains on the
 online-first TanStack adapter.

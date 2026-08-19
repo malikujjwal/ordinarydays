@@ -57,13 +57,15 @@ function HydrationGate({ children }: { children: ReactNode }) {
        * empty client that was rendering while it was still in flight. The app becomes
        * interactive now either way; only the *saving* waits.
        */
-      stopPersistence = subscribeToPersistence(queryClient, outcome.safeToPersist);
       const nativeSession = await startNativeStateSession(queryClient);
       if (!active) {
         nativeSession?.stop();
         return;
       }
       stopNativeState = nativeSession?.stop;
+      if (nativeSession?.queryPersistenceSafe !== false) {
+        stopPersistence = subscribeToPersistence(queryClient, outcome.safeToPersist);
+      }
       stopOnlineManager = installOnlineManager(queryClient);
       stopLocalReminders = installLocalReminderScheduler();
       setReady(true);

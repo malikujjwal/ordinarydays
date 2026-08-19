@@ -534,9 +534,11 @@ DynamoDB mirror, ORM, CRDT, web queue or local expansion of an existing server-k
 retires legacy native persistence only after verified import, and makes refresh a non-
 destructive sync request.
 
-**Files.** `apps/mobile/src/lib/sqlite/{syncEngine,agendaRepository,outbox,migrations,
-nativeStateSession.native}.ts`, `apps/mobile/src/lib/sync/{pushAdapter,pullAdapter,
-reconciliation}.ts`, `apps/mobile/src/lib/persister.ts`, SQLite import receipts, existing shared endpoint
+**Files.** `apps/mobile/src/lib/sqlite/{syncEngine,agendaRepository,agendaCoverage,outbox,
+migrations,legacyMigration,nativeStateSession.native}.ts`,
+`apps/mobile/src/lib/sync/{pushAdapter,pullAdapter,reconciliation}.ts`,
+`apps/mobile/src/lib/agenda/{partition,upNext}.ts`, `apps/mobile/src/lib/persister.ts`,
+SQLite import receipts, existing shared endpoint
 clients, Activity/Agenda refresh/error surfaces, removal of native query-domain persistence
 paths in `persister.ts`/query hooks, and transition/targeted-reconciliation/account-isolation
 tests. Inventory is a minimum.
@@ -567,14 +569,20 @@ tests. Inventory is a minimum.
 MutationCache replay session. It inventories legacy Activity/Agenda queries and paused
 mutations before hydration, imports the account intent log into SQLite, records separate
 receipt-backed provenance for the native query-domain envelope, and only then removes those
-domain entries and purges the old account log. Expired or cache-buster-old envelopes remain
-available to the importer; a mutation that cannot be proved present in the imported log
-stops retirement. Ordinary native hydration and persistence filter Activity, Activities and
-Agenda query roots. Web continues to hydrate and persist them unchanged.
+domain entries and purges the old account log. Unproven query records are receipt-marked
+`ambiguous`, never guessed to be P2-60 overlays or server bases. Expired or cache-buster-old
+envelopes remain available to the importer; a mutation that cannot be proved present in the
+imported log stops retirement. Verification failure leaves both legacy sources intact,
+continues with the account's SQLite session, and disables query-cache saving for that session
+so a filtered save cannot destroy the evidence needed on the next launch. Ordinary native
+hydration filters Activity, Activities and Agenda query roots. Web continues to hydrate and
+persist them unchanged.
 
 The serialized engine calls typed shared endpoint adapters directly, holds one network tail,
 coalesces overlapping lifecycle pulls, retains same-key barriers while allowing unrelated
-keys to progress, and installs acknowledgements in the outbox settlement transaction.
+keys to progress, and installs acknowledgements in the outbox settlement transaction. A
+coverage requested after an active pull took its snapshot schedules one additional bounded
+pass; concurrent manual callers observe the same cycle failure rather than clearing it.
 Domain-specific Activity and reminder tombstones suppress stale resurrection. Ordinary
 coverage pulls version-guard returned projections and cannot overwrite an unresolved local
 or recurrence-reconciliation representation. The targeted strong read owns recurrence

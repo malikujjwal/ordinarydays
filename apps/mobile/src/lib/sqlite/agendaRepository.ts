@@ -9,18 +9,14 @@ import type {
   AgendaItem,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
-import { partitionAgenda } from '@/features/agenda/model/partition';
+import { partitionAgenda } from '@/lib/agenda/partition';
+import type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 import { readCanonicalOutboxGuards } from '@/lib/sqlite/outbox';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
 
-export interface AgendaCoverage {
-  readonly from: string;
-  readonly to: string;
-  readonly timezone: string;
-  readonly include?: string;
-}
+export type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
 
 function text(row: SqliteRow, column: string): string | undefined {
   const value = row[column];
