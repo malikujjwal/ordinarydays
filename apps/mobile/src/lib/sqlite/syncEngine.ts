@@ -304,8 +304,30 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         );
         const recurrencePatch = isRecurrencePatch(intent);
         const activity = activityFromResponse(response);
-        const canonicalOccurrence =
-          later === undefined ? canonicalOccurrenceResponse(intent, response) : undefined;
+        let canonicalOccurrence: CanonicalOccurrenceResponse | undefined;
+        let occurrenceContractBroken = false;
+        if (later === undefined) {
+          try {
+            canonicalOccurrence = canonicalOccurrenceResponse(intent, response);
+          } catch (contractError) {
+            /*
+             * The server already accepted this durable action, so redispatching cannot
+             * repair a response that violates the occurrence contract — it only loops
+             * the claim. Acknowledge, install at most the matching activity-level
+             * result, and leave that occurrence's presentation to the next pull.
+             */
+            occurrenceContractBroken = true;
+            console.warn(
+              'outbox_response_contract_mismatch',
+              intent.mutationKey.join('.'),
+              message(contractError),
+            );
+          }
+        }
+        const installable =
+          occurrenceContractBroken && activity?.activityId !== intent.entityId
+            ? undefined
+            : activity;
         if (canonicalOccurrence !== undefined) {
           const projection = await this.activities.acceptCanonicalOccurrence(
             transaction,
@@ -319,19 +341,19 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             canonicalOccurrence.activity,
             projection,
           );
-        } else if (later === undefined && activity !== undefined && !recurrencePatch) {
-          await this.activities.acceptCanonicalResponse(transaction, activity);
+        } else if (later === undefined && installable !== undefined && !recurrencePatch) {
+          await this.activities.acceptCanonicalResponse(transaction, installable);
           await transaction.database.run(
             `UPDATE agenda_rows SET title = ?, type = ?,
               status = CASE WHEN occurrence_date IS NULL THEN ? ELSE status END,
               local_state = 'canonical', canonical_version = ?
              WHERE activity_id = ?;`,
             [
-              activity.title,
-              activity.type,
-              activity.status,
-              activity.updatedAt,
-              activity.activityId,
+              installable.title,
+              installable.type,
+              installable.status,
+              installable.updatedAt,
+              installable.activityId,
             ],
           );
           transaction.changed('agenda');

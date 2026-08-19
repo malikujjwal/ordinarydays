@@ -420,6 +420,143 @@ describe('serialized native convergence guard', () => {
     },
   );
 
+  it('acknowledges a contract-breaking occurrence response once and still installs the activity result', async () => {
+    const activity = await seedRecurring();
+    await transactions.run((transaction) =>
+      service.complete(
+        transaction,
+        {
+          activityId: ACTIVITY,
+          idempotencyKey: 'occurrence-complete',
+          input: { occurrenceDate: '2026-08-19' },
+        },
+        true,
+        'scheduled',
+        clock,
+      ),
+    );
+    const projectedRow = await database?.first(
+      'SELECT status FROM agenda_rows WHERE activity_id = ? AND occurrence_date = ?;',
+      [ACTIVITY, '2026-08-19'],
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let dispatched = 0;
+    client.setMutationDefaults(['activity', 'complete'], {
+      mutationFn: async () => {
+        dispatched += 1;
+        return {
+          activity: { ...activity, title: 'Server title' },
+          occurrenceDate: '2026-08-19',
+          occurrence: { malformed: true },
+        };
+      },
+    });
+    const sync = new SerializedNativeSyncEngine(
+      OWNER,
+      client,
+      transactions,
+      outbox,
+      activities,
+      agenda,
+    );
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(dispatched).toBe(1);
+    expect(await outbox.all()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      'outbox_response_contract_mismatch',
+      'activity.complete',
+      expect.any(String),
+    );
+    expect(
+      await database?.first(
+        'SELECT title, local_state FROM activities WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toMatchObject({ title: 'Server title', local_state: 'canonical' });
+    expect(
+      await database?.first(
+        `SELECT status, local_state FROM agenda_rows
+         WHERE activity_id = ? AND occurrence_date = ?;`,
+        [ACTIVITY, '2026-08-19'],
+      ),
+    ).toMatchObject({ status: projectedRow?.status, local_state: 'canonical' });
+    warn.mockRestore();
+  });
+
+  it('acknowledges without installing when the contract-breaking response names another entity', async () => {
+    const activity = await seedRecurring();
+    await transactions.run((transaction) =>
+      service.complete(
+        transaction,
+        {
+          activityId: ACTIVITY,
+          idempotencyKey: 'occurrence-complete',
+          input: { occurrenceDate: '2026-08-19' },
+        },
+        true,
+        'scheduled',
+        clock,
+      ),
+    );
+    const projectedRow = await database?.first(
+      'SELECT status FROM agenda_rows WHERE activity_id = ? AND occurrence_date = ?;',
+      [ACTIVITY, '2026-08-19'],
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let dispatched = 0;
+    client.setMutationDefaults(['activity', 'complete'], {
+      mutationFn: async () => {
+        dispatched += 1;
+        return {
+          activity: { ...activity, activityId: OTHER, title: 'Foreign activity' },
+          occurrenceDate: '2026-08-19',
+          occurrence: { malformed: true },
+        };
+      },
+    });
+    const sync = new SerializedNativeSyncEngine(
+      OWNER,
+      client,
+      transactions,
+      outbox,
+      activities,
+      agenda,
+    );
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(dispatched).toBe(1);
+    expect(await outbox.all()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      'outbox_response_contract_mismatch',
+      'activity.complete',
+      expect.any(String),
+    );
+    expect(
+      await database?.first(
+        'SELECT COUNT(*) AS count FROM activities WHERE activity_id = ?;',
+        [OTHER],
+      ),
+    ).toMatchObject({ count: 0 });
+    expect(
+      await database?.first('SELECT title FROM activities WHERE activity_id = ?;', [
+        ACTIVITY,
+      ]),
+    ).toMatchObject({ title: 'Recurring task' });
+    expect(
+      await database?.first(
+        `SELECT status, local_state FROM agenda_rows
+         WHERE activity_id = ? AND occurrence_date = ?;`,
+        [ACTIVITY, '2026-08-19'],
+      ),
+    ).toMatchObject({ status: projectedRow?.status, local_state: 'queued' });
+    warn.mockRestore();
+  });
+
   it('does not let an older occurrence response regress a newer dependent Undo', async () => {
     const activity = await seedRecurring();
     let releaseComplete: ((value: unknown) => void) | undefined;

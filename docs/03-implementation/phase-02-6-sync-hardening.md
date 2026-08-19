@@ -493,13 +493,17 @@ is a minimum.
   occurrence and update only that occurrence's detail/Agenda rows, while a later same-key
   intent blocks an older response. Unresolved Activity/reminder deletes suppress stale pull
   resurrection; authoritative reminder coverage prunes only covered canonical reminders and
-  preserves unresolved local creates.
+  preserves unresolved local creates. A response that breaks the occurrence contract is
+  logged and never redispatched — the server already accepted the write, so the intent
+  still acknowledges, at most the activity-level result matching the intent's entity
+  installs, and that occurrence's presentation waits for the next pull.
 
 **Tests.** Unit/integration tests cover transactional refusal, commit-before-publish,
 completion, rapid complete/uncomplete, queued cancellation, durable Undo after claim,
 offline one-off and recurring create, reschedule, one-occurrence edit, existing-series
 queued/updating retention, restart-mid-claim recovery, canonical occurrence
-acknowledgement, deletion/reminder pull suppression and scoped reminder pruning. Real-device
+acknowledgement, contract-mismatch acknowledgement without redispatch, deletion/reminder
+pull suppression and scoped reminder pruning. Real-device
 transition acceptance proves: rapid offline/online flapping during completion never reverses the row;
 kill after local commit before request restores identical state; a stale response arriving
 last cannot regress visible rows; complete/Undo racing reconnect produces one correct final
