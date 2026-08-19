@@ -398,11 +398,12 @@ entity because ListItems are not schedulable Activities.
 
 ## ADR-012 — TanStack Query for server state, Zustand for client state
 
-**Native amendment (ADR-057, 2026-08-18).** This remains the web rule. After a native domain
-migrates, typed SQLite repositories own its visible state and TanStack is transport machinery;
-Zustand remains UI-only. Shared repository/use-case interfaces bind both adapters.
-
 **Status:** Accepted · **Date:** 2026-08-06
+
+> **Amended by ADR-057 (2026-08-18).** This remains the web rule. After a native domain
+> migrates, typed SQLite repositories own its visible state and TanStack is transport
+> machinery; Zustand remains UI-only. Shared repository/use-case interfaces bind both
+> adapters.
 
 **Context.** The client needs caching, retries, optimistic updates, and an offline mutation
 queue for server data, plus a small amount of purely local UI state.
@@ -735,8 +736,13 @@ allowed to see. Presigned URLs are issued for `PUT` only, never `GET`.
 
 ## ADR-024 — Offline means cached reads plus a mutation queue, not a local-first replica
 
-**Status:** Accepted for web; native runtime materialization superseded by ADR-057 after
-domain cutover · **Date:** 2026-08-06
+**Status:** Accepted · **Date:** 2026-08-06
+
+> **Amended by ADR-057 (2026-08-18).** Accepted as written for web. For a migrated native
+> domain, the runtime materialization is superseded: typed SQLite repositories own visible
+> state after cutover. The rejection below of a *SQLite mirror with full sync* stands —
+> ADR-057 adopts a bounded, domain-specific application model, not a mirror, and
+> existing-series recurrence expansion stays on the server.
 
 **Context.** The app must be usable on a subway. Full local-first architecture (a SQLite
 mirror, CRDTs, background sync) is the maximal answer.
@@ -2162,8 +2168,13 @@ occurrence rows on conversion — destructive work with no benefit and no recove
 
 ## ADR-055 — The durable intent log and client-minted canonical ids
 
-**Status:** Accepted semantics; native storage/materialization amended by ADR-057 ·
-**Date:** 2026-08-17 · **Amends ADR-024**
+**Status:** Accepted · **Date:** 2026-08-17 · **Amends ADR-024**
+
+> **Amended by ADR-057 (2026-08-18).** The semantics stand — client-minted canonical ULIDs,
+> the never-age-expired durable log written before acceptance, tombstone-checked creation
+> and the shared retention constant. Their native storage and materialization move from the
+> AsyncStorage intent log and TanStack cache to SQLite outbox transactions; P2-62 ports
+> them without semantic change.
 
 **Context.** ADR-024's three mechanisms left the durability boundary at TanStack Query's
 persisted mutation cache, which the 2026-08-13 review showed shares the query cache's
@@ -2208,8 +2219,12 @@ without confirmation, and an account-lifetime tombstone obligation, for no user 
 
 ## ADR-056 — Durable action state, dependent intents and level-triggered replay
 
-**Status:** Accepted semantics; native storage/materialization amended by ADR-057 ·
-**Date:** 2026-08-18 · **Amends ADR-055**
+**Status:** Accepted · **Date:** 2026-08-18 · **Amends ADR-055**
+
+> **Amended by ADR-057 (2026-08-18).** The semantics stand — the four persisted states with
+> coordinator-only `refused`, structured attention, durable dependent inverses, receipts,
+> per-entity barriers and level-triggered replay. Their native storage and materialization
+> move to the SQLite outbox; P2-62 ports them without semantic change.
 
 **Context.** ADR-055 made the intent log the write-ahead durability boundary, but its first
 implementation still exposed a TanStack mutation promise as the semantic result to legacy UI

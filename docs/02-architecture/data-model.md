@@ -4,6 +4,15 @@
 this document. If you need a new access pattern, add it to the Access Patterns table below
 in the same PR and explain the key design.
 
+**Scope (ADR-057, 2026-08-18).** This document is the server data model: DynamoDB tables,
+key patterns and access paths. The native client's on-device store is a separate,
+domain-specific SQLite application model — ADR-057 in [`decisions.md`](decisions.md) and
+[`tech-stack.md`](tech-stack.md#34-offline-and-optimistic-updates) §3.4 mechanism 5, with
+its tables specified by
+[`phase-02-6-sync-hardening.md`](../03-implementation/phase-02-6-sync-hardening.md)
+P2-61…P2-63. Local tables never mirror this document's `PK`/`SK`/GSI shapes, and nothing
+about the native store relaxes this document's rules for server storage.
+
 ---
 
 ## 1. Core modelling decision: there is only one schedulable entity
