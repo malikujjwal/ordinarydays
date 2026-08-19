@@ -31,6 +31,7 @@ Today's Anytime list and is not a backlog with a counter on it.
 | # | Item | Notes |
 | --- | --- | --- |
 | 1 | Phases 1, 2 and blocking Phase 2.5 complete and passing | The Activity CRUD, agenda, completion, explicit occurrence targeting and recurrence reconciliation are all load-bearing here. Phase 3 implementation does not overlap the stabilization gate. |
+| 1a | Phase 2.6 P2-63 complete and its real-device/account-migration gate passing | Native Lists/ListItems start on typed SQLite repositories and the same transactional outbox; they do not extend the retired AsyncStorage/TanStack domain materializer. Web binds the shared use cases to its existing online-first TanStack adapter. |
 | 2 | [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) read in full | It is the specification for this phase, including the three worked examples in §9 which are the integration fixtures. |
 | 3 | [`../02-architecture/data-model.md#46-list-and-listitem`](../02-architecture/data-model.md#46-list-and-listitem) and [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists) read in full | The list model is behaviour plus capabilities plus templates, not a closed enum of list kinds. ADR-031 to ADR-035 in [`../02-architecture/decisions.md`](../02-architecture/decisions.md) record why, and are the reference when a task looks like it wants a new kind. |
 | 3a | [`../02-architecture/data-model.md#33-list-partition`](../02-architecture/data-model.md#33-list-partition) read | The canonical list is at `LIST#<l>`, not in the owner's partition, and the `USER#` row is a near-pure pointer. Building it the other way round works for one user and has to be migrated for two (ADR-041, ADR-042). |
@@ -1190,8 +1191,9 @@ header `⋯` holding `Show archived`
   filter over the same response, not a second endpoint.
 - Empty state, verbatim from §5.9: `No lists yet` /
   `Keep things you want to remember, track, or organise together.` / `New list`.
-- Pagination at 50 pointers per page, auto-fetch at 80 % scroll depth; cached and served
-  offline through the persisted query cache (P2-33), with creates queued.
+- Pagination at 50 pointers per page, auto-fetch at 80 % scroll depth. Native pages are
+  materialized into typed SQLite rows and served through repository subscriptions, with
+  creates in the same transactional outbox; web uses its TanStack cache.
 
 **Tests.** Render: a fixture whose catalogue record is mutated after creation still renders
 the stored icon and copy; an archived list is absent until `Show archived`; the empty state
@@ -1374,8 +1376,9 @@ or sends a rank; the server converts via P3-03.
   changes are explicit controls in the item sheet (decision recorded here — raise in PR if
   wrong).
 - Checked items reorder like any other and stay where they are put (§5.6).
-- Offline: the mutation queues with its `Idempotency-Key`; the row keeps its optimistic
-  position with the `Pending` dot (interaction contract §5.4).
+- Offline on native: one transaction appends the intent and materializes the row's new
+  position with its `Pending` dot; web refuses the write while offline. The stable
+  `Idempotency-Key` remains the server replay identity (interaction contract §5.4).
 
 **Edge cases.**
 
@@ -1855,9 +1858,10 @@ the item-create key, so retrying the bridge cannot create a duplicate Plan. If t
 succeeds while scheduling is offline, the item remains a valid saved ListItem and the queued
 bridge visibly shows `Plan will finish syncing`; the UI does not claim the Plan exists until
 that request succeeds. `Plan will finish syncing` is **not a new mechanism**: it is the
-copy-parameterised pending indicator from the Phase 2.6 intent log
-([`phase-02-6-sync-hardening.md`](phase-02-6-sync-hardening.md) P2-48), and this task's
-queued writes ride that log — implementing a second pending system here is a defect.
+copy-parameterised pending indicator from the Phase 2.6 outbox
+([`phase-02-6-sync-hardening.md`](phase-02-6-sync-hardening.md) P2-62), and this task's
+native queued writes use the same SQLite transaction/coordinator — implementing a second
+pending system or making TanStack native domain authority here is a defect.
 
 **Edge cases.**
 

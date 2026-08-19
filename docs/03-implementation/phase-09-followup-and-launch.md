@@ -5,9 +5,9 @@
 At the end of this phase the lifecycle closes. Completing something offers the one contextual
 next step that makes sense — update the episode, add the ingredients, review the expenses —
 and never writes anything without a tap. The app remembers what a person does repeatedly:
-favourite meals, custom-activity shortcuts, the next episode. It works on a subway, with a
-persisted cache and a mutation queue whose conflict rules are written down rather than
-emergent — including for a shared grocery list two people are ticking through from two
+favourite meals, custom-activity shortcuts, the next episode. It works on a subway, with
+typed native SQLite state and a transactional outbox whose conflict rules are written down
+rather than emergent — including for a shared grocery list two people are ticking through from two
 shops, one of them with no signal. It reaches into iOS properly, with a share extension
 that accepts a link, a screenshot or a photo, and a home-screen widget that shows what is next without the app
 running. Performance and accessibility stop being aspirations and become measured numbers with
@@ -23,7 +23,7 @@ live, alarms confirmed, and a runbook that tells one person what to do at 2 a.m.
 | 3 | Watch ListItems, viewer-local `LNK#` rows, Activity `listId` / `listItemId` provenance, and meal ingredients exist | Phase 3 |
 | 4 | Balances, obligation-settlement status and the `Balance` cache work | Phase 7 |
 | 4a | Shared lists ship: members, roles, the leave flow, and item writes with no `If-Match` | Phase 6. The offline tasks here are the first place a second writer meets a cached copy. |
-| 5 | TanStack Query with the persisted cache and `Idempotency-Key` on every creating `POST` | Phase 1 |
+| 5 | P2-63 SQLite native-state gate, the web TanStack adapter, and `Idempotency-Key` on every creating `POST` | Phases 1 and 2.6 |
 | 6 | An Apple Developer Program membership, an App Store Connect app record, and a live privacy policy URL | Phase 5 |
 | 7 | EAS build and submit profiles, and an `expo-updates` channel per environment | Phase 5 |
 
@@ -34,9 +34,9 @@ live, alarms confirmed, and a runbook that tells one person what to do at 2 a.m.
 - [ ] Meal favourites and custom-activity shortcuts.
 - [ ] The last two recurrence modes: completion-relative and custom `rrule`.
 - [ ] The opt-in monthly unsettled-expense reminder.
-- [ ] Offline: a specified persisted cache, a durable mutation queue, and written conflict
+- [ ] Offline: specified typed native materialized rows, a transactional outbox, and written conflict
       rules — including which shared-list mutations queue safely, which are refused, and what
-      happens when a shared list changes underneath a cached copy.
+      happens when a shared list changes underneath a retained local copy.
 - [ ] An iOS share extension accepting a URL, plain text or one image.
 - [ ] A home-screen widget in two sizes, reading a snapshot, never the network.
 - [ ] Performance budgets measured and gated in CI.
@@ -56,8 +56,8 @@ live, alarms confirmed, and a runbook that tells one person what to do at 2 a.m.
 | P9-03 | Meal follow-up and meal favourites | mobile/api | P9-01 | no | M |
 | P9-04 | Custom-activity shortcuts | mobile/api | — | no | L |
 | P9-05 | The monthly unsettled-expense reminder | api/infra | — | yes | M |
-| P9-06 | Offline: the persisted cache and its allow-list | mobile | — | no | L |
-| P9-07 | Offline: the mutation queue | mobile | P9-06 | no | L |
+| P9-06 | Offline coverage allow-list: native rows and web persisted reads | mobile | — | no | L |
+| P9-07 | Offline: list outbox semantics | mobile | P9-06 | no | L |
 | P9-08 | Offline: conflict resolution | mobile | P9-07 | no | L |
 | P9-09 | Offline: indicators, limits and undo | mobile | P9-07 | no | M |
 | P9-10 | Offline: the upload queue | mobile | P9-07 | no | M |
@@ -247,13 +247,15 @@ handling at the month boundary; no inbox entry.
 
 ---
 
-### P9-06 — Offline: the persisted cache and its allow-list
+### P9-06 — Offline coverage allow-list: native rows and web persisted reads
 
 **What to build.** Exactly what survives a cold start with no network.
 
-**Approach.** TanStack Query's cache is persisted with
-`@tanstack/query-async-storage-persister` over `AsyncStorage` on iOS. Persistence is **opt-in
-per query key**, not blanket, via the persister's `shouldDehydrateQuery` predicate.
+**Approach — amended 2026-08-18 (ADR-057).** The table below is the data-coverage allow-list,
+not the native storage mechanism. On native, eligible domains are materialized into
+typed/indexed SQLite tables and read through repositories; money keeps the same explicit
+offline-unavailable policy. On web, TanStack Query's cache is persisted to `localStorage`,
+opt-in per query key through `shouldDehydrateQuery`.
 
 | Query | Persisted | Window | Reason |
 | --- | --- | --- | --- |
@@ -273,27 +275,30 @@ per query key**, not blanket, via the persister's `shouldDehydrateQuery` predica
 > degrades to last-known data because a stale plan title is harmless; a stale figure that
 > someone acts on is not, and it would be an unexplained number by another route.
 
-**A shared list can change underneath its cached copy, and the cache does not pretend
+**A shared list can change underneath its retained copy, and the client does not pretend
 otherwise.** Another member may have added, checked, reordered or deleted items since the
 copy was taken, and there is no push channel that tells the device so. What the client does
 about it:
 
-- A cached shared list renders normally. There is no warning banner, because the list being
+- A retained shared list renders normally. There is no warning banner, because the list being
   slightly out of date is the ordinary condition of a shared list, online or off, and a
   banner that is always up says nothing.
-- The list detail screen refetches on focus and on reconnect. That is the whole
-  reconciliation: **the server's copy replaces the cached one**, then the pending queue
-  reapplies on top (P9-08 rule 12).
-- A cached list the caller has been **removed** from refetches to `404`. The client drops it
-  from the index, drops its queued mutations for that list, and shows one banner reading
-  `You're no longer on "Groceries".` It does not retry, and it does not keep the rows around
-  as an orphan.
-- `memberCount` and the members list are cached with the list and are the most likely field
+- The list detail screen schedules a coverage-aware sync on focus and reconnect. On native,
+  canonical rows and any retained local state are reconciled in a transaction before
+  repository subscribers observe them; there is no read-time "queue reapplies on top" step.
+  Web keeps its online-first response replacement.
+- A retained list the caller has been **removed** from syncs to `404`/`403`. The client hides
+  it from the index, marks its unresolved intents structured `needs_attention/rejected`, and
+  shows one banner reading `You're no longer on "Groceries".` It does not auto-retry or keep
+  visible orphan rows; the user resolves the retained rejected work through the standard
+  attention surface.
+- `memberCount` and the members list are retained with the list and are the most likely field
   to be stale. Nothing is gated on them, so a wrong count is a cosmetic error for one
   refetch.
 
-> **Decision — no CRDT, and no local merge of item sets.** The reconciliation is "refetch
-> wins, then replay the queue". That is honestly weaker than a convergent data type: an item
+> **Decision — no CRDT or generic local merge of item sets.** Native reconciliation is an
+> explicit sync transaction; web remains "refetch wins". This is honestly weaker than a
+> convergent data type: an item
 > another member **deleted** while this device was offline reappears if this device had a
 > queued edit to it, and an item added by both members with the same title exists twice
 > (which is the canonical rule anyway — duplicates are never auto-merged). Both outcomes are
@@ -303,55 +308,46 @@ about it:
 > two devices at once — for a household grocery list. The limits are stated here so nobody
 > discovers them and calls them a defect.
 
-Cache size is capped at **5 MB** serialised, with a throttle of 1 s between writes. On exceed,
-activity details are evicted oldest-first, then agenda days outside today ± 3. The cache is
-versioned by a `buster` string containing the app version, so an upgrade discards a cache whose
-shape changed rather than rehydrating it into new code.
-
-**Web** persists the same query cache to `localStorage` with a 2 MB cap, and persists **no**
-mutations (P9-07).
+The **web** persisted cache is capped at **2 MB**, throttled to 1 s between writes and
+versioned by an app-version `buster`; on exceed it evicts activity details oldest-first, then
+agenda days outside today ± 3. It persists **no** mutations (P9-07). Native retention is
+table/coverage-specific and never age-deletes a database with unresolved outbox work.
 
 **Tests.** Airplane-mode cold start renders Today, Plans, Lists and a recently-opened plan; a
-balance renders the unavailable state; the cache stays under the cap with 200 activities;
-a version bump discards the cache; a capture result is never written to storage. Plus: a
-cached shared list renders with no banner; a refetch returning a changed item set replaces
-the cached one and then reapplies pending mutations; a refetch returning `404` drops the
-list, drops its queued mutations and shows the removal banner exactly once.
+balance renders the unavailable state; typed native coverage and web cache stay within their
+budgets; a web buster discards the cache while a native migration preserves rows/outbox; a
+capture result is never written to storage. Plus: a retained shared list renders with no
+banner; a native sync returning a changed item set commits canonical/materialized rows once;
+a `404`/`403` hides the list, preserves structured rejected intents and shows the removal
+banner exactly once.
 
 ---
 
-### P9-07 — Offline: list-mutation queueing semantics
+### P9-07 — Offline: list outbox semantics
 
 **What to build.** The queueing rules in
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §5.4,
 extended to the list and shared-list mutations that exist by this phase.
 
-**Approach — amended 2026-08-17 (Phase 2.6, ADR-055).** This task no longer builds a queue.
-The durable queue exists: the account-scoped intent log from
-[`phase-02-6-sync-hardening.md`](phase-02-6-sync-hardening.md) P2-48/P2-49, in which
-durability lives in the log — written before the action is reported accepted — and TanStack
-Query is the execution layer (the log builds registered mutation defaults; `netinfo` requests
-one coalesced serial log drain through `onlineManager`). Building a second queue on TanStack's
-persisted mutation cache here would reintroduce exactly the architecture ADR-055 retired. What
-this task adds is the **semantics layer** for list mutations riding that log:
+**Approach — amended 2026-08-18 (ADR-057).** This task does not build a second queue. Native
+Lists/ListItems already use the SQLite outbox/coordinator established by P2-62 and adopted in
+Phase 3: accepted visible rows and intent commit together, and the serialized sync engine owns
+transport/reconciliation. TanStack is not native list state or persistence. What this task
+adds is the **semantics layer** for list mutations riding that outbox:
 
-- **Mutation defaults must be registered at app start**, before rehydration, for every list
-  mutation key — the execution half still needs its functions, and a rehydrated mutation
-  without them resumes as a no-op. (Durability no longer depends on this: the intent log,
-  not the rehydrated mutation cache, is the record of what must reach the server.)
+- **Push adapters must be registered before sync starts** for every durable list mutation
+  kind. The SQLite outbox, not a rehydrated TanStack mutation, is the record of what must
+  reach the server.
 - **The `Idempotency-Key` is generated once and persisted in the intent** at enqueue,
   exactly as P2-48 already does for activity writes. It is never regenerated on retry.
-- **Serialisation is per entity.** `mutationKey` is `[resource, id, verb]`, and the queue runs
-  with concurrency 4 across distinct ids and strictly FIFO within one id. Two edits to the same
-  activity never interleave; edits to different activities do not block each other.
-- **Occurrence writes collapse.** A queued `complete`/`skip`/`snooze` for the same
-  `(activityId, occurrenceDate)` replaces the earlier one rather than queueing behind it — the
-  last intent is the only one that matters. This is the **deliberate home of queue
-  compaction**, deferred out of Phase 2.6 on the correctness-before-optimisation rule: it is
-  safe precisely because these verbs are absolute sets (ADR-055 invariant 2), and it extends
-  no further — `EDIT A, EDIT B, EDIT C` stays three intents.
-- **Date values are captured in the variables at `onMutate`**, never derived at flush time. A
-  completion queued on Tuesday and flushed on Wednesday still names Tuesday.
+- **Serialisation is explicit.** Every intent carries an `ordering_key`; FIFO and dependency
+  barriers hold within that domain while unrelated work may progress. Cross-entity concurrent
+  dispatch is not required.
+- **No implicit compaction.** Same-`ordering_key` intents preserve their durable order.
+  Compaction is a separate optimization only after it proves dependencies, receipts, Undo and
+  reconciliation remain equivalent; this task does not infer that last intent is sufficient.
+- **Date values are captured in the transactional action input**, never derived at sync time.
+  A completion queued on Tuesday and flushed on Wednesday still names Tuesday.
 - **Cap: 200 pending mutations.** Beyond it, new writes are refused with `You're offline and
   there's a lot waiting to sync.`
 
@@ -390,10 +386,10 @@ private at flush time.
 > moment of failure. Web keeps the queue in memory for the session and warns on unload when it
 > is non-empty — a session-scoped refinement, not a durable log; nothing survives the tab.
 
-**Tests.** A queued mutation survives an app kill and flushes on relaunch; defaults are
-registered before rehydration (asserted by a test that rehydrates a mutation and checks it has
-a function); the idempotency key is stable across three retries; two edits to one activity
-apply in order; occurrence writes collapse; the 200 cap refuses with the specified copy.
+**Tests.** A queued mutation survives an app kill and flushes on relaunch; push adapters are
+registered before claims begin; the idempotency key is stable across three retries; two edits
+with one `ordering_key` apply in order while unrelated work may progress; the 200 cap refuses
+with the specified copy.
 
 Plus one test per row of the queueable table: a check queued offline flushes and the item is
 `checked` exactly once even when the same intent is delivered twice; two devices queueing a
@@ -430,28 +426,30 @@ for the two objects more than one person can write to, a shared plan and a share
    List-*level* edits — title, capabilities, behaviour, slot — are rule 2, not rule 4.
 5. **A `404` on a queued mutation is success.** The thing is already gone; drop it silently
    and count it.
-6. **A `403` is dropped and named.** The user lost permission — usually they were removed from
-   a plan while offline.
+6. **A `403` is rejected and named.** The user lost permission — usually they were removed
+   from a plan while offline. The intent becomes structured `needs_attention/rejected`; it is
+   not auto-replayed or silently discarded.
 7. **A `429` is retried after `Retry-After`,** up to three times.
 8. **A `5xx` retries with exponential backoff up to six attempts**, then parks in an
    `Unsent changes` list the user can retry or discard from Settings. Nothing is discarded
    without the user seeing it.
-9. **Any other `4xx` is dropped and named.** A validation failure that only appears at flush
-   time is a bug; it is logged with the payload shape (never the content) so it can be found.
+9. **Any other `4xx` is rejected and named.** The intent becomes structured
+   `needs_attention/rejected`. A validation failure that only appears at sync time is a bug;
+   it is logged with the payload shape (never the content) so it can be found.
 10. **One banner per reconnection**, not one per failure: `<n> changes couldn't be applied.`
     with an expandable list naming each item and the reason.
-11. **Undo works offline.** It is a compensating local operation plus a queued call, and the
-    queue's per-entity FIFO guarantees it lands after the operation it compensates.
-12. **A shared object is refetched, not merged.** On reconnect, for every shared list and
-    every shared plan with queued mutations: flush the queue, then refetch, and let the
-    server's response replace the cached copy. There is no client-side merge of item sets and
-    no CRDT (P9-06). The order matters — flushing first means the refetch already contains
-    this device's writes, so the screen does not visibly flicker back and forward.
-13. **Losing access is a drop, not a failure.** A `404` on a list route, or a `403`, means the
-    caller was removed while offline. Every queued mutation for that `listId` is discarded
-    without a per-mutation error, the list leaves the cache, and one banner names the list.
-    Rules 5 and 6 handle the individual calls; this rule stops twelve grocery items producing
-    twelve lines in the banner.
+11. **Undo works offline.** It is a compensating local operation plus a dependent intent, and
+    its `ordering_key`/dependency barrier guarantees it lands after the operation it
+    compensates.
+12. **A shared object is reconciled explicitly, not generically merged.** Native sync pushes
+    eligible intents, pulls canonical rows and commits the affected materialized rows plus
+    intent settlement in a transaction before subscribers observe them. Web refetches. There
+    is no render-time overlay, generic item-set merge or CRDT (P9-06).
+13. **Losing access hides rows and preserves rejected work.** A `404` on a list route, or a
+    `403`, means the caller was removed while offline. The list leaves visible native rows or
+    the web cache; its unresolved native intents become structured
+    `needs_attention/rejected`; and one banner names the list. This rule stops twelve grocery
+    items producing twelve lines while retaining P2-59's user-data semantics.
 
 **What this honestly does not do.** Stated so nobody meets it and files it as a bug:
 
@@ -1139,16 +1137,17 @@ between the Repeat sheet's construction and `describe.ts`'s rendering; 100% bran
    until **Save plan**.
 6. `unsettled_monthly` is off by default, fires at most once per calendar month, lists at most
    two balances, writes no inbox entry, and is held by quiet hours.
-7. With no network and a cold start, Today, Plans, Lists and any plan opened in the last 7 days
-   render from cache; a balance renders `Balance unavailable offline` rather than a figure.
-8. The persisted cache stays under 5 MB, evicts oldest-first, and is discarded on an app
-   version change.
+7. With no network and a cold start, Today, Plans, Lists and any plan in retained coverage
+   render from committed typed native rows (or the web persisted read cache); a balance
+   renders `Balance unavailable offline` rather than a figure.
+8. Native coverage stays within its table-specific policy and migrates transactionally;
+   unresolved outbox work is never age-deleted. The web cache stays under its 2 MB deployment
+   cap and may be discarded on an app-version buster.
 9. A mutation queued offline survives an app kill and flushes on reconnect with the **same**
    `Idempotency-Key` it was created with.
-10. Mutation defaults are registered before rehydration; a test rehydrates a mutation and
-    asserts it has a function.
-11. Two queued edits to one activity apply in order; edits to different activities run
-    concurrently; two occurrence writes for the same date collapse to the last.
+10. Every durable mutation kind has a push adapter before the sync engine may claim it.
+11. Intents sharing an `ordering_key` apply in durable order; unrelated work may progress,
+    with no cross-entity concurrency or implicit-compaction requirement.
 12. A queued `PATCH` uses the `If-Match` value captured at edit time. On `409` the client
     performs a field-level three-way merge, re-applying non-overlapping fields and naming the
     dropped ones in one banner.
@@ -1164,12 +1163,13 @@ between the Repeat sheet's construction and `describe.ts`'s rendering; 100% bran
     no `409`.
 17. Reordering a list item offline is refused with `Reordering needs a connection.`,
     enqueues nothing, and the row springs back. The list share sheet is disabled offline.
-18. On reconnect, a shared list flushes its queue, refetches, and ends with the server's item
-    set plus every queued mutation applied — no client-side merge of item sets exists in the
-    codebase.
+18. On reconnect, a shared list sync transaction installs canonical server rows and resolves
+    retained local intents according to the written policy before subscribers observe it —
+    no render-time overlay or generic client-side merge of item sets exists.
 19. A member removed from a shared list while offline gets **one** banner naming the list,
-    has every queued mutation for it discarded without a per-mutation error, and the list
-    leaves the cache.
+    has every unresolved native intent for it retained as structured
+    `needs_attention/rejected` without a per-intent banner, and the list leaves visible rows
+    or the web cache.
 20. The share extension accepts a URL, plain text or one image up to 10 MB, hands off to Global
     Add with **Task**, **Plan**, and **List item** unselected, has no compose UI, requests no
     keychain access, and discards a payload older than 10 minutes. Capture waits for a complete,
@@ -1221,8 +1221,8 @@ between the Repeat sheet's construction and `describe.ts`'s rendering; 100% bran
 
 | Not in Phase 9 | Why |
 | --- | --- |
-| A local-first replica: SQLite mirror, CRDTs, offline recurrence expansion | ADR-024. Offline means "read what you had, queue what you did". Reimplementing recurrence against a local store duplicates the hardest logic in the product. |
-| A convergent merge for shared lists — an OR-set of items, a client-side three-way merge of item sets, or any resolution beyond "refetch wins, then replay the queue" | ADR-024 and ADR-044. The limits of the simple rule are written into P9-08 rather than engineered around. |
+| A generic local-first framework, DynamoDB mirror, generic entity table, CRDT, SQLite web adapter, or local expansion of a server-known recurrence series | ADR-057. Domain-specific native SQLite is already the bounded architecture; recurrence authority remains server-side. |
+| A convergent merge for shared lists — an OR-set of items or generic client-side three-way merge | ADR-044 and ADR-057. Phase 6 may add a durable change feed/conflict policy when shared offline edits require it; it is not a Phase 2.6 prerequisite and no half-CRDT is introduced here. |
 | Queued reordering of list items, and any client-side rank computation | P9-07. The server owns ranks; the client sends `afterItemId`. Reordering offline is refused, not deferred. |
 | A real-time channel for shared lists — WebSockets, polling, or a push on another member's edit | Not in v1. Refetch on focus and on reconnect is the whole reconciliation. |
 | Web push, a service worker, a browser permission prompt (OQ-8) | Only worth it if web becomes a primary surface rather than the invite surface. |
@@ -1240,15 +1240,15 @@ between the Repeat sheet's construction and `describe.ts`'s rendering; 100% bran
 
 | # | Risk | Mitigation |
 | --- | --- | --- |
-| 1 | **Rehydrated mutations with no registered default silently do nothing**, and the bug looks like "sync doesn't work sometimes". | `setMutationDefaults` for every key at app start, before rehydration, with a test that rehydrates and asserts a function is present. |
-| 2 | **An idempotency key regenerated on retry** creates duplicates on a flaky network — the exact failure the key exists to prevent. | Generated once at `onMutate` and persisted with the variables; a test asserts stability across three retries. |
-| 3 | **Deriving a date at flush time** completes the wrong day when the queue drains overnight. | Dates are captured in the variables at `onMutate`; tested explicitly. |
+| 1 | **An outbox intent has no registered push adapter**, and the bug looks like "sync doesn't work sometimes". | Register every durable mutation kind before the serialized engine may claim work; a startup test enumerates stored kinds against adapters. |
+| 2 | **An idempotency key regenerated on retry** creates duplicates on a flaky network — the exact failure the key exists to prevent. | Generated once in the transactional action input and persisted with the intent; a test asserts stability across three retries. |
+| 3 | **Deriving a date at sync time** completes the wrong day when the queue drains overnight. | Dates are captured in the transactional action input; tested explicitly. |
 | 4 | **Serving money from a stale cache** produces an unexplained number, which the product forbids. | Balances and expenses are never persisted; offline shows an explicit unavailable state. |
 | 5 | **A conflict policy that is emergent rather than written** produces different behaviour per screen and is impossible to test. | Thirteen numbered rules, each with a named test, plus a table of what the policy honestly does not do. |
 | 6 | **A queued reorder resolves `afterItemId` against a list that changed**, so the item lands somewhere the user did not mean, silently. | Reordering is refused offline, not queued (P9-07), with copy that says why. The alternative — a client-computed rank — would put a second rank generator in the product. |
 | 7 | **`checked` is treated as a toggle in the optimistic path** even though the server sets it, so a duplicate queue delivery flips it back. | Set, never toggle, on both sides; criterion 14's grep and criterion 16's double-delivery test. |
-| 8 | **A shared list is merged locally** because "refetch wins" loses an edit in some case, and the fix grows into a half-CRDT nobody can test. | The rule is one line (rule 12), its limits are a table, and ADR-044 records the trade. A merge implementation the server does not share is a second source of truth. |
-| 9 | **Losing access to a shared list produces one error per queued mutation**, so a user removed from a grocery list sees twelve toasts. | Rule 13 drops the whole `listId` at once and emits one banner; criterion 19 counts the banners and asserts zero retries. |
+| 8 | **A shared list grows an ad-hoc local merge** because one reconciliation case loses an edit, and the fix becomes a half-CRDT nobody can test. | ADR-057 keeps typed transaction materializers bounded and leaves a durable change feed/conflict policy to Phase 6 if shared offline evidence requires it. |
+| 9 | **Losing access to a shared list produces one error per queued mutation**, so a user removed from a grocery list sees twelve toasts. | Rule 13 hides the list, marks its unresolved intents rejected and emits one banner; criterion 19 counts banners and asserts zero retries. |
 | 10 | **A UI share extension** means a second RN runtime in a memory-limited process and a second creation path to keep in sync. | Non-UI hand-off. |
 | 11 | **A widget that authenticates** needs a token in a second process and a refresh path in an extension with seconds of budget. | Snapshot file only; no network, no credential. |
 | 12 | **Lock-screen widget content** exposes plan titles to anyone holding the phone. | An explicit setting that changes what is written, not just what is rendered. |

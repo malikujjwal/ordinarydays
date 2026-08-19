@@ -101,17 +101,15 @@ and no Phase 3 implementation starts until all four tasks pass. **4 tasks.**
 
 ### 1.3b Phase 2.6 — Sync hardening
 
-The offline durability gate (2026-08-17, ADR-055). The client mints the real `act_`/`rem_`
-ULID before the request leaves the device; accepted actions persist to an account-scoped
-durable intent log **before** the UI reports them accepted; the query cache stays a
-disposable projection and TanStack stops being the durability boundary. Pending entities are
-visible, inert and cancellable; automatic replay is bounded at 30 days with a
-structured `needs_attention/parked` state beyond it; deletion tombstones share that same constant so replay
-can never resurrect a deletion; and the reminder projection makes an offline-created
-reminder actually fire. P2-59 makes durable action state authoritative for Undo and replay,
-adds dependent inverse intents, and makes replay level-triggered. Phase 3's queued list-item and Plan-bridge work consumes this
-mechanism, which is why the gate sits before it. **5 tasks** (a sixth, P2-58, is specified
-and parked, uncounted).
+The offline durability and native-state gate (2026-08-17 through 2026-08-18,
+ADR-055…ADR-057). P2-59 preserves stable durable action identity, dependent Undo, structured
+attention and level-triggered replay. P2-60's real-device read-time-overlay experiment is
+historical, superseded and uncounted, but its no-flicker/restart/refresh invariants remain the
+acceptance bar. P2-61…P2-63 replace that materializer with per-account SQLite, typed
+repositories, transactional outbox + visible-row commits, one serialized sync engine and
+verified legacy retirement. Native Activity/Agenda stop treating TanStack/AsyncStorage as
+domain authority; web keeps its online-first TanStack adapter. Phase 3 begins only after
+P2-63. **8 live tasks** (P2-58 parked and P2-60 historical, both uncounted).
 
 ### 1.4 Phase 3 — Plans and lists
 
@@ -253,8 +251,9 @@ semantics already fixed in
 most one future occurrence, and custom recurrence via RFC 5545 `rrule` lands — the only
 reason a series can produce two occurrences on one date and therefore the reason the
 expansion carries that warning. Meal favourites and custom-activity shortcuts are the
-personalisation the concept names. Offline becomes specified rather than emergent: a
-persisted cache, a durable mutation queue and written conflict rules. An iOS share extension
+personalisation the concept names. Offline becomes specified rather than emergent: typed
+native SQLite coverage, the transactional outbox, the web persisted-read adapter and written
+conflict rules. An iOS share extension
 and a home-screen widget. Then the launch work: full App Review rather than Beta App Review,
 phased release, crash reporting, the 60-day GSI archival sweep against real data volume,
 cost verification against
@@ -273,9 +272,9 @@ and can be started against the contract alone.
 graph TD
     P0["Phase 0 · Foundations<br/>local · 31 tasks · 63 AWU"]
     P1["Phase 1 · Activity core<br/>local · 30 tasks · 72 AWU"]
-    P2["Phase 2 · Today and tasks<br/>local · 48 tasks · 119 AWU"]
-    P25["Phase 2.5 · Recurrence stabilization<br/>local · 5 tasks · 13 AWU"]
-    P26["Phase 2.6 · Sync hardening<br/>local · 4 tasks · 14 AWU"]
+    P2["Phase 2 · Today and tasks<br/>local · 48 tasks · 120 AWU"]
+    P25["Phase 2.5 · Recurrence stabilization<br/>local · 5 tasks · 16 AWU"]
+    P26["Phase 2.6 · Sync hardening<br/>local · 8 tasks · 30 AWU"]
     P3["Phase 3 · Plans and lists<br/>local · 43 tasks · 110 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
     P5["Phase 5 · Ship v1<br/>TestFlight · 37 tasks · 82 AWU"]
@@ -319,9 +318,9 @@ Four edges deserve explanation because they are not obvious.
   in terms of completion, un-completion and skip, which do not exist until Phase 2. Building
   lists first would mean building the bridge twice; Phase 2.5 additionally proves those
   operations cannot target a whole recurring series accidentally. Phase 2.6 sits between
-  because P3-13's queued offline creates and its `Plan will finish syncing` state are
-  consumers of the intent log and the pending indicator — built without them, they would sit
-  on the persistence layer whose three silent data-loss paths the 2026-08-13 review found.
+  because Phase 3's Lists/ListItems must consume typed SQLite repositories and the
+  transactional outbox rather than extend the superseded TanStack/AsyncStorage materializer.
+  P2-63 is the explicit gate.
 - **Phase 4 depends on Phase 0 by interface, not by artefact.** Phase 0 writes eight stacks
   and deploys none of them. Phase 4's first task after bootstrap is to make `ApiStack`
   deployable without a custom domain, because `cdk synth` being green has never been
@@ -438,19 +437,19 @@ sizings did not support; those are corrected here.
 | --- | --- | --- | --- | --- |
 | 0 — Foundations | 31 | 9 / 17 / 5 | **63** | ~3 weeks |
 | 1 — Activity core | 30 (29 plus P1-30 and P1-31, minus the struck P1-19 — all 2026-08-08) | 4 / 18 / 8 | **72** | ~3.5 weeks |
-| 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **119** | ~6.0 weeks |
-| 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **13** | ~0.7 weeks |
-| 2.6 — Sync hardening | 5 (P2-48…P2-50, P2-57 and P2-59; P2-58 specified, parked, uncounted) | 0 / 1 / 4 | **18** | ~0.9 weeks |
+| 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **120** | ~6.0 weeks |
+| 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **16** | ~0.8 weeks |
+| 2.6 — Sync hardening | 8 (P2-48…P2-50, P2-57, P2-59 and P2-61…P2-63; P2-58 parked and P2-60 historical, uncounted) | 0 / 1 / 7 | **30** | ~1.5 weeks |
 | 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **162** | **23 / 90 / 49** | **395** | **~19.8 weeks** |
+| **0–3 subtotal (local, $0 AWS)** | **165** | **23 / 90 / 52** | **411** | **~20.6 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **232** | **35 / 135 / 62** | **549** | **~27.5 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **235** | **35 / 135 / 65** | **565** | **~28.3 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9 plus Phases 2.5 and 2.6** | **381** | **48 / 226 / 107** | **924** | **~46.2 weeks (~10.7 months)** |
+| **Total 0–9 plus Phases 2.5 and 2.6** | **384** | **48 / 226 / 110** | **940** | **~47.0 weeks (~10.9 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -461,8 +460,9 @@ P1-01…P1-18 and P1-20…P1-31.
 ### 4.3 The headline changed
 
 The previous roadmap's total was ~683 AWU and ~34 weeks. The first recomputation on
-2026-08-07 produced **859 AWU and ~43 weeks**; the dated gate corrections below bring the
-current plan to 904 AWU. The difference is not drift but explicit, auditable corrections.
+2026-08-07 produced **859 AWU and ~43 weeks**. The base correction table and dated gate
+amendments below bring the fully recomputed plan to 940 AWU; the difference is not drift but
+explicit, auditable corrections.
 
 | Change | AWU |
 | --- | --- |
@@ -586,8 +586,26 @@ liveness dependent on connectivity edges. One L task adds schema v2, structured 
 dependent intents, the action coordinator and level-triggered replay. That is **+1 task and
 +4 AWU**, giving **381 tasks and 924 AWU**.
 
-Use **924 AWU and ~46.2 weeks** (924 / 20 = 46.2) as the plan of record. Everything
-through Phase 5 is now 549 AWU and ~27.5 weeks; the
+**P2-60 is retained as historical evidence, uncounted, on 2026-08-18.** Device testing of
+its `server base ⊕ unresolved intents` read-time materializer established five regression
+requirements — no visual replay, no stale-refetch regression, identical state after restart,
+no screen disagreement and no empty Today during failed refresh — but the 637-line overlay
+runtime does not land in this production lineage. It changes no task or AWU total.
+
+**ADR-057 adds P2-61, P2-62 and P2-63 on 2026-08-18** after the same real-device testing
+showed that TanStack + AsyncStorage + read-time overlay still exposed multiple authorities
+during offline/online transitions. Three serial L tasks add the SQLite/account/migration
+foundation, the transactional Activity/Agenda vertical slice, and sync convergence plus
+verified legacy retirement. That is **+3 tasks and +12 AWU**, giving **384 tasks and 936
+AWU**.
+
+**The required full recount corrects +4 AWU on 2026-08-18.** Phase 2's own
+`6 S / 27 M / 15 L` table is 120 AWU, not 119; Phase 2.5's `0 / 2 / 3` is 16 AWU, not 13,
+under the stated S=1/M=2/L=4 rule. No task or size changed. The two arithmetic corrections
+move the fully recomputed plan from 936 to **940 AWU**.
+
+Use **940 AWU and ~47.0 weeks** (940 / 20 = 47.0) as the plan of record. Everything
+through Phase 5 is now 565 AWU and ~28.3 weeks; the
 remaining ~18.8 weeks is the multi-player half, which grew by 28 AWU when lists joined plans as
 a shareable object and by a further 12 when date suggestions made Needs a date something a
 participant can act on.
@@ -726,7 +744,7 @@ whether the next phase is still the right next phase.
 
 ### 6.1 End of Phase 3 — a working single-player app on your own phone, zero spend
 
-162 tasks, 395 AWU, ~19.8 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
+165 tasks, 411 AWU, ~20.6 weeks, and **$0.00 of AWS**. Today, Plans and Lists all work on the
 simulator, in a browser and on the physical iPhone in your pocket over the LAN. Nobody else can use it and it has no account.
 
 This is the cheapest place in the whole plan to change your mind, because nothing is
@@ -738,7 +756,7 @@ Phase 5.
 
 ### 6.2 End of Phase 5 — shipped to TestFlight, real users
 
-232 tasks, 549 AWU, ~27.5 weeks. External testers who are not the founder are using it on
+235 tasks, 565 AWU, ~28.3 weeks. External testers who are not the founder are using it on
 their own phones, at `ordinarydays.app`, with reminders that fire and an account they can
 delete. There is a prod environment, an App Store Connect record and a rehearsed rollback.
 
@@ -750,7 +768,7 @@ after the first TestFlight build, migrations are mandatory in both environments.
 
 ### 6.3 End of Phase 7 — the full multi-player product, before any AI spend
 
-310 tasks, 736 AWU, ~36.8 weeks. Sharing, guests, invites, shared lists, date suggestions,
+313 tasks, 752 AWU, ~37.6 weeks. Sharing, guests, invites, shared lists, date suggestions,
 expenses, balances and settlement all work. Every marginal cost in the system is still a fraction of a cent per
 request, and every AWS line item is either free-tier or the domain.
 
@@ -831,7 +849,7 @@ isolation, and it only holds if the isolation is real.
 **Phases 0 through 3, surfacing in Phase 4. New with the local-first ordering, and the price
 paid for it.**
 
-Nothing runs on AWS for 162 tasks. Every divergence between DynamoDB Local and DynamoDB,
+Nothing runs on AWS for 165 tasks. Every divergence between DynamoDB Local and DynamoDB,
 between the Hono Node adapter and an API Gateway v2 payload, and between a warm laptop
 process and a cold Lambda accumulates silently and is discovered in one phase — tangled up
 with a Cognito user pool, a first deploy and a new IAM surface, so that when something fails

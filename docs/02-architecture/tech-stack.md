@@ -148,10 +148,11 @@ version bumps as PRs (see `security-privacy.md` §7).
 | `react-native-web` | 0.20+ | Renders RN primitives to DOM | The alternative is a second Next.js web app duplicating every screen. One founder cannot maintain two clients. |
 | `react` / `react-dom` | 19.x | — | — |
 | `@react-navigation/native` + `@react-navigation/bottom-tabs` | 7.x | The navigation engine Expo Router is built on | Not a choice — Expo Router delegates to it. We depend on it directly only for typed navigation helpers and tab-bar customisation. |
-| `@tanstack/react-query` | 5.x | **Server state**: fetching, caching, retries, optimistic updates, offline mutation queue | Redux Toolkit Query is coupled to Redux. SWR has no mutation queue or persisted cache. Hand-rolled `useEffect` fetching produces exactly the bugs Query already solved. |
-| `@tanstack/query-async-storage-persister` | 5.x, pinned with React Query | Persists the Query cache and paused mutations | The first-party persister serialises the cache shape TanStack owns; a hand-written serializer would be coupled to undocumented internals. Direct `apps/mobile` dependency from P2-33. |
-| `@react-native-async-storage/async-storage` | Expo SDK 54-compatible | Native persistence backend for the query/mutation cache | Query data is non-secret and needs process-lifetime persistence; SecureStore is for small credentials, not a cache. Install with Expo and declare directly in `apps/mobile` in P2-33. |
-| `@react-native-community/netinfo` | Expo SDK 54-compatible | Drives TanStack's online manager and resumes paused mutations | Polling with failed HTTP requests wastes retries and cannot distinguish an offline queue from a server failure. Install with Expo and declare directly in `apps/mobile` in P2-33. |
+| `@tanstack/react-query` | 5.x | Web server state and shared HTTP/request machinery; never migrated native domain state or persistence | Redux Toolkit Query is coupled to Redux. SWR lacks the settled web cache adapter. Native uses the same endpoint clients behind typed SQLite repositories after ADR-057 cutover. |
+| `@tanstack/query-async-storage-persister` | 5.x, pinned with React Query | Web persisted reads and the temporary legacy-native import source | The first-party persister owns its cache serialization. P2-63 retires native query-domain persistence after verified SQLite import; it remains valid for web. |
+| `@react-native-async-storage/async-storage` | Expo SDK 54-compatible | Non-domain preferences plus the legacy native cache/outbox migration source | P2-63 retires native persisted domain/query and intent paths after a verified migration receipt. It is never token storage or migrated native domain authority. |
+| `expo-sqlite` | SDK 54-compatible | Sole native visible domain state, transactional outbox, versioned migrations and account-scoped databases after feature cutover | SQLite provides atomic local action + materialization, indexed typed queries and crash durability without a generic local-first framework. Installed/configured by P2-61. |
+| `@react-native-community/netinfo` | Expo SDK 54-compatible | Schedules native `syncNow()` and drives web online state | Connectivity is a scheduling signal only; it never clears or rematerializes native rows. Polling with failed requests wastes retries. |
 | `zustand` | 5.x | **Client state**: UI-only state — composer draft, filter selections, sheet visibility, onboarding step | Redux for this volume of state is ceremony. Context re-renders the whole subtree. Jotai is fine but Zustand's single-store-per-domain model is easier for an agent to follow. |
 | `zod` | 4.x | Runtime validation + type inference, defined once in `packages/shared` | Yup has weaker inference. `io-ts` is unreadable. Valibot is smaller but lacks the OpenAPI generator we rely on. **OQ-11 closed in P0-07:** the ecosystem has followed — `@asteasolutions/zod-to-openapi@9` now requires `zod ^4.0.0`, making v3 the version that would need a pin. |
 | `react-native-reanimated` | 4.x | Gesture-driven and layout animations on the UI thread — swipe actions, sheet transitions, checkbox spring | The `Animated` API drops frames on the JS thread during list scrolling, which is exactly when Today's swipe actions fire. Installed with Expo and declared directly in `apps/mobile` by P2-22; a lockfile-only peer entry is not an installation. |
@@ -170,11 +171,10 @@ version bumps as PRs (see `security-privacy.md` §7).
 | `@react-native-community/datetimepicker` | 8.4.x (SDK-pinned) | The platform date and time wheels behind `@od/ui`'s `DatePicker` and `TimePicker` (P1-22) | Required by `04-conventions/design-system.md` §6, which specifies the **native wheel on iOS** and `<input type="date">` on web. Writing a calendar grid instead would mean re-implementing keyboard navigation, localisation, and the month arithmetic `04-conventions/coding-standards.md` §4.4 rules out doing by hand — for a control every user already knows. Expo-managed, so SDK-pinned and installed with `npx expo install`. Declared on `packages/ui` as a **peer plus dev** dependency, the same shape as `react-native`: the app supplies the native module, the package renders into it. Reached only by `pickerSurface.tsx`; the web build resolves `pickerSurface.web.tsx` and never bundles it. **Stubbed under Vitest** (`packages/ui/test/datetimepicker-stub.tsx`) because it is a native module with nothing for jsdom to render — the wheel is asserted by Maestro on the simulator (P1-29). |
 | `@expo-google-fonts/newsreader` | 0.4.x | The Newsreader face itself, latin subset | **Static `Newsreader_500Medium`, not the variable font `design-system.md` §3 describes.** Both serif roles — `display` and `title` — are weight 500, so a variable axis would ship a range nothing varies across. One file, latin-subset, SDK-compatible, and swappable for the variable build if a third serif weight is ever specified. |
 
-> **Decision:** TanStack Query for server state, Zustand for client state. Neither replaces
-> the other. The rule enforced in review: **if the value originated from the API, it lives
-> in Query's cache and nowhere else.** No copying server data into Zustand — that is how
-> stale-state bugs start. Zustand holds only values that would be meaningless to persist
-> server-side.
+> **Decision — amended by ADR-057:** web server state lives in TanStack Query; migrated
+> native domain state lives in typed SQLite repositories; Zustand remains UI-only state.
+> Native screens never copy API data into Zustand or combine TanStack data and intents at
+> read time. Shared use cases depend on repository interfaces, with web and native adapters.
 
 ### 2.3 Server
 
@@ -428,12 +428,20 @@ For `services/api` and `infra`, `shared` is compiled by `tsc` to `dist/` as part
 
 ### 3.4 Offline and optimistic updates
 
-The app must be usable on a subway. Three mechanisms, in order of importance.
+The app must be usable on a subway. **ADR-057 is the production native architecture after a
+domain cutover:** typed SQLite repositories are the sole visible state, and local actions
+materialize rows in the same transaction that appends the durable outbox intent. Reads never
+fold a server response with intents. One serialized sync engine owns push/pull reconciliation;
+connectivity and pull-to-refresh only schedule `syncNow()`. The API remains authoritative for
+ownership, versions, capabilities, derived fields and recurrence semantics.
 
-**1. Persisted query cache.** TanStack Query's cache is persisted to `AsyncStorage`
-(native) / `localStorage` (web) via `@tanstack/query-async-storage-persister`. On cold
-start the app renders last-known agenda data immediately and revalidates in the
-background.
+The four numbered mechanisms below document the P2-33/P2-48…P2-59 lineage and remain the web
+adapter or legacy migration input where stated. Their native TanStack/AsyncStorage
+materialization is superseded by mechanism 5 when P2-62 cuts Activity/Agenda over.
+
+**1. Persisted query cache (web; legacy native import source).** TanStack Query's cache is
+persisted to `localStorage` on web. The pre-cutover native `AsyncStorage` cache is read only
+by the P2-61/P2-63 verifier/importer, then retired; migrated native screens do not render it.
 
 ```ts
 // src/lib/queryClient.ts
@@ -456,7 +464,7 @@ three times, four transport attempts inside four Query attempts would produce up
 requests for one user action. A hook may keep `networkMode: 'always'` for an explicit
 query-side retry control, as activity detail does, but it does not re-enable Query retries.
 
-**2. Optimistic updates on the interactions that must feel instant.** Specifically:
+**2. Optimistic updates (web and pre-cutover native only).** Specifically:
 task completion, occurrence snooze/skip, list-item check, RSVP change, and list-item
 reorder. Pattern, applied uniformly:
 
@@ -488,12 +496,12 @@ persisted or replayed as TanStack mutations; the durable log in mechanism 4 owns
 A one-time upgrade bridge imports legacy paused mutations into the log and retires their
 in-memory copies before connectivity is installed. Web has no durable mutation queue.
 
-Scope guard: we do not build a full local-first replica (no SQLite mirror, no CRDT). The
-agenda is a server-computed projection; reimplementing recurrence expansion against a
-local store would duplicate the hardest logic in the product. Offline means "read what you
-had, queue what you did", not "work indefinitely disconnected".
+Scope guard after ADR-057: native SQLite is a typed materialized application model, not a
+DynamoDB mirror, CRDT or generic local-first replica. Existing-series and completion-relative
+recurrence remain server-expanded. Web keeps "read what you had" and no durable queue.
 
-**4. Client-minted canonical identity and the durable intent log (Phase 2.6, ADR-055).**
+**4. Client-minted canonical identity and the durable intent log (historical P2-48…P2-59
+storage; semantics retained by ADR-057).**
 The three mechanisms above make a write *survive a retry*; they do not make it durable or
 visible. This one does.
 
@@ -582,7 +590,7 @@ Queued Undo atomically cancels the original and projection. Undo after claim dur
 the inverse. Response-loss ambiguity recovers the original authoritatively before either
 retiring or dispatching that inverse.
 
-**TanStack is the execution layer, not the durability boundary.** On cold start the log is
+**TanStack was the execution layer, not the durability boundary.** On cold start the log is
 authoritative and pending work is rebuilt from it — including mutations that were mid-flight
 rather than paused when the process died. The iOS intent-log session is the sole replay owner:
 enqueue, transient backoff, foreground and connectivity request a bounded/coalesced,
@@ -604,6 +612,53 @@ online-only by nature.
 **Platforms.** iOS only, exactly as the §3.5 table and ADR-024 already rule: a browser tab
 is closed, not backgrounded, and a queue that never flushes is worse than an error toast.
 The web keeps the persisted read cache and no mutation queue.
+
+**5. SQLite materialized native state and transactional outbox (P2-61…P2-63, ADR-057).**
+
+```
+ local action ─► BEGIN IMMEDIATE
+                 ├─ append outbox intent
+                 ├─ materialize typed visible rows
+                 └─ COMMIT ─► repository subscriptions ─► native UI
+
+ connectivity / foreground / refresh ─► syncNow()
+                                          │
+                                          ▼
+                             serialized push/pull engine
+                                          │ transaction
+                                          ├─ canonical response
+                                          ├─ rematerialized rows
+                                          └─ retire/park intent
+```
+
+One hashed database filename belongs to one immutable account namespace; metadata asserts
+the owner before reads or replay. Sign-out closes/quarantines, account switching opens a
+different database, confirmed deletion purges, and unresolved outbox work prevents age-based
+deletion. Every open enables WAL and foreign keys. Migrations are monotonic and transactional.
+
+Tables and repositories are domain-specific. Indexed columns own filters, ordering and render
+fields; opaque nested values may use JSON. There is no generic entity table, `base_json` /
+`view_json` contract, DynamoDB key mirror or ORM requirement. A verified server snapshot or
+version may be retained for rollback/rebase, but the materialized row is what the UI queries.
+
+The SQLite outbox preserves P2-59: stable mutation ids, canonically equivalent append as an
+idempotent no-op, structured attention, durable inverse dependencies, explicit
+`ordering_key` barriers, necessary receipts and bounded level-triggered replay. The serialized
+sync engine may let unrelated keys progress but need not dispatch concurrently. Connectivity
+never changes visible rows directly.
+
+Recurring CREATE may materialize across known local coverage; one occurrence edit may update
+its explicit row. Existing-series edits retain canonical rows with queued/updating state until
+the targeted strong activity-agenda read atomically replaces that activity's rows, including
+zero rows. Failure retains rows and records retryable sync state. Completion-relative
+recurrence remains server-reconciled.
+
+Legacy migration imports only provenance-verified server base plus all distinct intents,
+statuses and dependencies in one transaction, verifies read-back, writes a receipt, then
+retires old data. P2-60 overlay output is never canonical base; ambiguous provenance keeps
+intents and schedules sync. Existing collection/detail endpoints, coverage-aware pulls,
+canonical write responses, tombstones and targeted recurrence reconciliation are sufficient;
+a generic change-feed/cursor is not a Phase 2.6 prerequisite.
 
 ### 3.5 One codebase, two platforms
 
@@ -647,7 +702,7 @@ wrong after rotation and wrong on web resize.
 | Animations | Reanimated worklets | Reanimated's web build (CSS/WAAPI backend); heavy list animations disabled at `compact` | Web animation fidelity is not worth debugging; correctness first. |
 | Haptics | Yes | No-op | No API. |
 | `⊕ Choose from Contacts` in the participant picker | OS contact picker via `expo-contacts` | **Row not rendered.** Manual name + email entry only | There is no OS picker on the web. The browser Contact Picker API is Chromium-on-Android only, so a shim would give web a capability iOS Safari and desktop lack. `03-implementation/phase-06-sharing.md` P6-37. |
-| Offline | Persisted cache + mutation queue | Persisted cache only; mutation queue disabled | A browser tab is usually closed, not backgrounded. Queued mutations that never flush are worse than an error toast. |
+| Offline | Typed SQLite repositories + transactional outbox after migration | Online-first TanStack adapter with persisted reads; durable mutation queue disabled | Native must survive process/connectivity transitions; a browser tab is usually closed, so queued mutations that never flush are worse than an error toast. |
 
 **The web build ships as a static export.** `npx expo export --platform web` produces
 `dist/` — HTML, JS, and assets, no server. Expo Router is configured with

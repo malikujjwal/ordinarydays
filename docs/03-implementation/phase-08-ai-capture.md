@@ -27,6 +27,7 @@ release gates are numbers.
 | 2 | `CreationTarget` and `ParsedCapture` are defined in `packages/shared/src/schemas/capture.ts` and generated into OpenAPI; every stub rejects a missing target | [`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §2.11 |
 | 3 | Attachments: presigned `PUT`, MIME and size limits, ownership checks | Phase 3 |
 | 4 | All three target-specific final write paths exist: Task/Plan activity create and list-item create | Phases 1 and 3 |
+| 4a | P2-63 native state/outbox gate and Phase 3 typed Lists/ListItems repositories pass | Confirmed native actions must use the ordinary SQLite coordinator; capture never gets a private queue or writes TanStack domain state. Web keeps its online-first adapter. |
 | 5 | Rate limiting with `RATE#` counters works for authenticated routes | P1-03 |
 | 6 | Secrets Manager is reachable from the API role and `getSecret` caches at cold start | [`../02-architecture/infrastructure.md`](../02-architecture/infrastructure.md) §5.3 |
 | 7 | OQ-5 is answered: a provider and model chosen, with **written confirmation that API inputs and outputs are excluded from training** | [`../02-architecture/decisions.md`](../02-architecture/decisions.md), [`../02-architecture/security-privacy.md`](../02-architecture/security-privacy.md) §8.4 |
@@ -624,6 +625,12 @@ screen and the user confirms: Task and Plan call `POST /v1/activities`; ListItem
 `POST /v1/lists/:listId/items`. Each write carries an `Idempotency-Key`. The server has no
 memory of the parse and no ability to reconcile it against what was created. This is a product
 rule (concept §13), a security property, and criterion S9.
+
+On native, confirmation invokes the same repository use case and transactional SQLite
+coordinator as a manual create: outbox intent plus affected visible rows commit together.
+Capture does not own an AsyncStorage queue, a TanStack domain projection or a second sync
+engine. On web, the same use case binds to the online-first TanStack adapter and refuses the
+write offline.
 
 **Edge cases.** Concurrent requests from one user are serialised by the rate limiter, not by a
 lock. A parse that produces no fields returns `200` with `confidence: 0` — the client's

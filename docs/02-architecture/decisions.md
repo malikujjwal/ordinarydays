@@ -398,6 +398,10 @@ entity because ListItems are not schedulable Activities.
 
 ## ADR-012 — TanStack Query for server state, Zustand for client state
 
+**Native amendment (ADR-057, 2026-08-18).** This remains the web rule. After a native domain
+migrates, typed SQLite repositories own its visible state and TanStack is transport machinery;
+Zustand remains UI-only. Shared repository/use-case interfaces bind both adapters.
+
 **Status:** Accepted · **Date:** 2026-08-06
 
 **Context.** The client needs caching, retries, optimistic updates, and an offline mutation
@@ -731,7 +735,8 @@ allowed to see. Presigned URLs are issued for `PUT` only, never `GET`.
 
 ## ADR-024 — Offline means cached reads plus a mutation queue, not a local-first replica
 
-**Status:** Accepted · **Date:** 2026-08-06
+**Status:** Accepted for web; native runtime materialization superseded by ADR-057 after
+domain cutover · **Date:** 2026-08-06
 
 **Context.** The app must be usable on a subway. Full local-first architecture (a SQLite
 mirror, CRDTs, background sync) is the maximal answer.
@@ -1615,10 +1620,11 @@ the offline queue, where the same intent may be delivered twice.
 - Reordering is the one list operation that cannot be queued offline, because `afterItemId`
   is resolved against neighbours at flush time. It is refused with an explanation rather than
   queued and quietly misapplied.
-- There is no CRDT. Reconnection is "refetch wins, then replay the queue", and the cases that
-  rule handles badly are enumerated in `../03-implementation/phase-09-followup-and-launch.md`
-  P9-08 rather than engineered around. ADR-024 already rejects a local-first replica; this is
-  the same reasoning applied to a second writer rather than a second device.
+- There is no CRDT. Web remains online-first/refetch-wins. Native reconciliation installs
+  canonical responses and retained local work in an explicit SQLite sync transaction; it is
+  not a generic item-set merge. Cases this policy handles badly are enumerated in
+  `../03-implementation/phase-09-followup-and-launch.md` P9-08 rather than engineered around.
+  Phase 6 may add a durable change feed/conflict policy if shared offline evidence requires it.
 
 **Alternatives rejected.**
 - *`If-Match` on everything.* Constant spurious `409`s on checkboxes, an offline queue that
@@ -2156,7 +2162,8 @@ occurrence rows on conversion — destructive work with no benefit and no recove
 
 ## ADR-055 — The durable intent log and client-minted canonical ids
 
-**Status:** Accepted · **Date:** 2026-08-17 · **Amends ADR-024**
+**Status:** Accepted semantics; native storage/materialization amended by ADR-057 ·
+**Date:** 2026-08-17 · **Amends ADR-024**
 
 **Context.** ADR-024's three mechanisms left the durability boundary at TanStack Query's
 persisted mutation cache, which the 2026-08-13 review showed shares the query cache's
@@ -2201,7 +2208,8 @@ without confirmation, and an account-lifetime tombstone obligation, for no user 
 
 ## ADR-056 — Durable action state, dependent intents and level-triggered replay
 
-**Status:** Accepted · **Date:** 2026-08-18 · **Amends ADR-055**
+**Status:** Accepted semantics; native storage/materialization amended by ADR-057 ·
+**Date:** 2026-08-18 · **Amends ADR-055**
 
 **Context.** ADR-055 made the intent log the write-ahead durability boundary, but its first
 implementation still exposed a TanStack mutation promise as the semantic result to legacy UI
@@ -2251,3 +2259,107 @@ Executing inverses without dependencies — can invert an original the server ne
 A fixed replay loop — drains battery and invites a reconnect herd. Cross-entity parallel
 dispatch now — optional throughput work with no correctness benefit over the simpler serial
 owner.
+
+---
+
+## ADR-057 — SQLite materialized native state and a transactional outbox
+
+**Status:** Accepted · **Date:** 2026-08-18 · **Amends ADR-024, ADR-055 and ADR-056;
+supersedes P2-60's native read-time materializer**
+
+**Context.** P2-59 made durable acceptance, dependent Undo and replay ordering correct, but
+native visible state still had two authorities: TanStack/AsyncStorage responses and durable
+intents folded into them. P2-60 specified `base ⊕ intents` on every read and a 637-line
+`durableOverlay.ts` experiment. Real-device offline/online testing retained flicker,
+cross-screen disagreement and destructive refresh edges because hydration, reads, overlay
+folding and settlement could still become observable in different orders. P2-60 remains
+historical evidence and fixes the acceptance bar — no visual replay, no stale refetch
+regression, identical state after restart, no screen disagreement and no empty Today during
+failed refresh — but its runtime commits do not join the production lineage.
+
+**Decision.** After a native feature is migrated, SQLite is its sole source of visible
+domain state. Native screens read and subscribe to typed repositories only. They never merge
+TanStack responses with outbox intents during render or read. Materialization happens in
+local-action and sync transactions, so UI reads are ordinary queries over already-
+materialized rows.
+
+A locally accepted offline-capable action is one SQLite transaction: append its durable
+outbox intent, update every affected visible row, then commit. Append or transaction failure
+returns coordinator-only `refused`, sends no request and exposes no accepted state. P2-59's
+semantics remain invariants of the SQLite outbox: stable mutation ids, idempotent equivalent
+append, structured `needs_attention/rejected|parked`, durable dependent inverse intents,
+explicit per-`ordering_key` barriers, receipts while dependencies or reconciliation need
+them, and bounded level-triggered replay.
+
+Tables are domain-specific. Query, render and order fields use typed/indexed columns; nested
+opaque fields may be JSON. A verified server snapshot/version may be retained for rollback or
+rebase. This decision does not freeze a generic `base_json`/`view_json` entity table, mirror
+DynamoDB `PK`/`SK`/GSI shapes, require an ORM, or adopt a generic local-first framework.
+
+One serialized native sync engine owns network writes and reconciliation. It claims intents,
+observes explicit `ordering_key` domains, calls existing API endpoints, transactionally
+installs canonical write/read responses and rematerialized rows, then retires or parks
+intents. A blocked ordering key cannot be overtaken; unrelated work may progress. Cross-
+entity concurrent dispatch is not required. TanStack may remain HTTP/request machinery, but
+it is neither native domain state nor native persistence after cutover.
+
+Connectivity, foreground and manual refresh only schedule bounded sync work. Pull-to-refresh
+means `syncNow()`. A failed pull retains committed rows and records a retryable sync error;
+connectivity never clears, reconstructs or directly changes visible rows. A stale response
+cannot replace a row whose stored canonical/local version proves it older.
+
+**Server authority and recurrence.** DynamoDB/API remain authoritative for ownership,
+versions, capabilities, derived fields, occurrence history, existing-series recurrence
+expansion and completion-relative recurrence. The native database is an application model,
+not a DynamoDB mirror.
+
+- Recurring CREATE may expand across known local coverage because its first segment came
+  from this client.
+- A one-occurrence edit may update its explicit row locally.
+- An existing-series recurrence edit retains prior canonical agenda rows with queued/updating
+  state; it never locally invents the new expansion.
+- After PATCH acknowledgement, the existing targeted strong activity-agenda read atomically
+  replaces only that activity's rows, including an authoritative result of zero rows.
+- A failed targeted read retains those rows and exposes Retry.
+- Completion-relative recurrence projects no next occurrence locally; the server response
+  reconciles it in Phase 9.
+
+**Platforms and later phases.** This migration is native/iOS only. Web keeps the existing
+online-first TanStack adapter and no durable mutation queue. Shared repository and use-case
+interfaces keep domain/UI behavior common without making SQLite a web dependency. Phase 3
+Lists/ListItems use typed SQLite repositories and the same transaction/outbox boundary;
+reminders derive from committed rows; Phase 8 confirmed AI actions use the same coordinator.
+
+**Account isolation and migration.** Each immutable account namespace owns one SQLite
+database with a hashed filename and an owner assertion in metadata. Sign-out closes and
+quarantines it; a different account opens a different file; confirmed account deletion
+purges it. A database containing unresolved outbox work is never deleted merely because of
+age.
+
+Legacy AsyncStorage migration is idempotent and transactional. It imports only verified
+server-base cache data plus every distinct intent, status and dependency; reads back and
+verifies the result; persists a migration receipt; then retires legacy data. A P2-60
+materialized overlay is never imported as canonical base. Ambiguous cache provenance keeps
+the intents and requires sync instead of guessing.
+
+**Convergence without a change feed.** Phase 2.6 does not require a generic server change-
+feed/cursor. Existing collection/detail endpoints, coverage-aware foreground/manual pulls,
+canonical write responses, tombstones and the targeted recurrence read are sufficient for
+the single-user native slice. Sync interfaces remain extensible so Phase 6 collaboration may
+add a durable change feed and conflict policy when shared offline edits require them.
+
+**Consequences.** Native reads become fast and deterministic at the cost of versioned local
+schema migrations, explicit materializers and an account-database lifecycle. The production
+gate is split into P2-61 (foundation), P2-62 (Activity/Agenda vertical slice) and P2-63
+(convergence and legacy retirement); Phase 3 begins only after P2-63. ADR-024 remains the web
+policy. ADR-055's client-minted identity and retention rules and ADR-056's durable action,
+dependency and replay rules survive, but their native AsyncStorage/TanStack materialization
+is replaced by SQLite transactions.
+
+**Alternatives rejected.** P2-60's generic read-time overlay — two authorities remain
+observable. A generic entity table — hides query contracts and turns JSON rewriting into the
+storage API. A DynamoDB mirror — couples device schema to server access paths. CRDTs or a
+generic local-first framework — no Phase 2.6 conflict model requires them. A new change feed
+as a prerequisite — existing single-user contracts converge without it. SQLite on web — the
+browser has different lifecycle constraints and no durable mutation queue. Local expansion
+of server-known recurrence — duplicates the server's authoritative occurrence rules.

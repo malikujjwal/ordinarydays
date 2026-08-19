@@ -8,7 +8,9 @@ tasks already specify queued offline creates and a visible `Plan will finish syn
 (`phase-03-plans-and-lists.md` P3-13), and building those against today's persistence layer
 would build them on writes that can silently disappear.
 
-Four guarantees, deliberately not conflated, each owned by one task:
+The original five guarantees remain acceptance requirements. P2-60 recorded the fifth after
+device testing, but its read-time materializer is historical evidence rather than production
+architecture:
 
 | | Promise | Task |
 | --- | --- | --- |
@@ -16,8 +18,9 @@ Four guarantees, deliberately not conflated, each owned by one task:
 | 2 | *"I can see, trust and cancel what hasn't reached the server."* | P2-48, P2-50 |
 | 3 | *"A reminder I set offline will actually remind me."* | P2-57 |
 | 4 | *"Undo and retry follow what was durably accepted, not whether one HTTP promise resolved."* | P2-59 |
+| 5 | *"Reconnect and refresh never erase an accepted local action while it is still unresolved."* | P2-60 evidence; P2-61…P2-63 production replacement |
 
-A fourth — *"I can keep working with something that hasn't reached the server"* — is
+A sixth — *"I can keep working with something that hasn't reached the server"* — is
 deliberately **not** in this phase. It is specified as P2-58 and parked.
 
 **Why this is a gate and not a feature.**
@@ -35,21 +38,39 @@ query-cache envelope**, where three independent paths destroy them silently:
 
 Each of these violates guarantee 1 today, before any new offline capability is added.
 
-## The architecture in one paragraph
+## Architecture — amended 2026-08-18 by ADR-057
 
-The client mints the entity's **real, permanent id** (`act_<ULID>`, `rem_<ULID>` —
-[`../02-architecture/data-model.md`](../02-architecture/data-model.md#8-ids) §8) before the
-request leaves the device, so an offline-created entity is identity-complete from birth and
-there is no temporary id, no reconciliation pipeline and no id rewriting. Accepted user
-actions are persisted to a **durable intent log** — account-scoped, separately versioned,
-never age-expired — *before* the UI reports them accepted; the query cache remains a
-disposable projection; TanStack Query remains the execution and retry machinery but stops
-being the durability boundary. The server stays the sole authority for `ownerId`,
-`createdAt`, versions, capabilities and every derived field. The full contract, including
-the four invariants and the durability table, is
-[`../02-architecture/tech-stack.md`](../02-architecture/tech-stack.md#34-offline-and-optimistic-updates)
-§3.4 mechanism 4, adopted by ADR-055 (which amends ADR-024 — the web mutation queue stays
-disabled).
+After a native feature migrates, **typed SQLite repositories are the sole source of its
+visible domain state**. A locally accepted offline-capable action is one SQLite transaction:
+append the durable outbox intent, materialize the affected visible typed rows, and commit
+before the coordinator reports acceptance. Append or transaction failure is the only
+coordinator result named `refused`. Reads are ordinary indexed repository queries; they do
+not fold TanStack responses and intents, and connectivity never clears or reconstructs rows.
+One serialized sync engine pushes and reconciles through existing API endpoints, installing
+canonical responses and retiring or parking intents transactionally. TanStack may remain
+transport machinery, but it is neither native domain state nor native persistence.
+
+The client still mints the entity's **real, permanent id** (`act_<ULID>`, `rem_<ULID>` —
+[`../02-architecture/data-model.md`](../02-architecture/data-model.md#8-ids) §8), and
+DynamoDB/API remain authoritative for ownership, versions, capabilities, derived fields,
+occurrence history and server recurrence semantics. SQLite uses domain-specific tables and
+indexed columns, not DynamoDB keys and not a generic `base_json`/`view_json` entity table.
+ADR-057 amends ADR-024/055/056 for migrated native domains; web retains the online-first
+TanStack adapter and no durable mutation queue.
+
+### P2-60 historical evidence — superseded, uncounted
+
+P2-60 was specified in `bc75375` after real-device testing exposed reconnect/refetch
+regressions. It modeled visible state at read time as `server base ⊕ unresolved intents` and
+produced a 637-line `durableOverlay.ts` experiment plus transition tests in commits `53ea4ea`
+and `fe70f5d`. The design evidence remains; those runtime commits do **not** land in the
+production lineage. The experiment
+proved the required invariants — no visual replay, no stale-refetch regression, identical
+state after restart, no disagreement between screens, and no empty Today during a failed
+refresh — while also proving that combining two authorities on every read remained glitchy
+during offline/online transitions. P2-61…P2-63 preserve the invariants and replace the
+materializer with write-time SQLite transactions. P2-60 is historical and uncounted in
+roadmap totals.
 
 ## Founder decisions — 2026-08-13 through 2026-08-17
 
@@ -82,14 +103,14 @@ disabled).
 Recorded here so later phases inherit them rather than rediscover them.
 
 - **Phase 3** consumes P2-48's entity-generic pending mechanism for `itm_` and the Plan
-  bridge (`Plan will finish syncing` is that mechanism's copy-parameterised indicator, not a
-  second system).
-- **Phase 5** — a `426` force-upgrade must never destroy a non-empty intent log; the log is
-  migrated or drained, and P5-16's push handoff retires local reminder scheduling **for
+  bridge through the same SQLite transaction/outbox contract. Its Lists/ListItems use typed
+  repositories, not a second cache projection.
+- **Phase 5** — a `426` force-upgrade must never destroy a non-empty SQLite outbox; its schema
+  is migrated or drained, and P5-16's push handoff retires local reminder scheduling **for
   server-known entities only**, retaining it for pending local intents with a
   no-double-delivery transition test.
-- **Phase 8** — `ai-capture.md` §6.1 already promises offline queueing for Task, Plan and
-  ListItem confirmations; they ride the same log.
+- **Phase 8** — confirmed Task, Plan and ListItem actions use the same coordinator and
+  transactional outbox; capture requests themselves remain online-only.
 - **Phase 9** — completion-relative recurrence: an offline completion shows the completion
   and projects **no** next occurrence; the server computes it on sync.
 - **Phases 6 and 7** — sharing, invitations, expenses and settlements are online-only by
@@ -105,10 +126,14 @@ Recorded here so later phases inherit them rather than rediscover them.
 | P2-57 | Local reminder projection and cache-driven scheduling | shared/api/mobile | P2-34, P2-49 | yes | L |
 | P2-58 | Actions against a pending entity | — | — | **parked** | — |
 | P2-59 | Durable action coordinator, dependent intents and replay liveness | mobile/docs | P2-48, P2-49 | no | L |
+| P2-60 | Read-time durable overlay experiment | — | P2-59 | **historical, superseded, uncounted** | — |
+| P2-61 | ADR-057 and SQLite native-state foundation | mobile/docs | P2-59 | no | L |
+| P2-62 | Transactional outbox and Activity/Agenda vertical slice | shared/mobile | P2-61 | no | L |
+| P2-63 | Sync convergence and legacy retirement | shared/mobile | P2-62 | no | L |
 
-**5 tasks / 18 AWU** (P2-58 uncounted). Ordering:
-P2-48 → P2-49 → {P2-50, P2-57} → P2-59. P2-59 is not parallel-safe with
-other intent-log work.
+**8 live tasks / 30 AWU** (P2-58 parked and P2-60 historical, both uncounted). Ordering:
+P2-48 → P2-49 → {P2-50, P2-57} → P2-59 → P2-61 → P2-62 → P2-63. The
+SQLite migration tasks are serial because each establishes the invariant used by the next.
 
 ---
 
@@ -259,6 +284,11 @@ explanation copy is announced to a screen reader, not colour-only.
 
 ### P2-57 — Local reminder projection and cache-driven scheduling
 
+> **Native source amended by ADR-057.** This heading and implementation plan record the
+> original task. After P2-62, reminders derive from committed typed local rows; they do not
+> read a TanStack cache or maintain an independent domain projection. The arming horizon,
+> iOS cap, quiet-hours policy and Phase 5 handoff requirements remain unchanged.
+
 **Promise.** A reminder created offline fires on time with no connectivity; a reminder
 changed while online and foregrounded re-arms without backgrounding the app.
 
@@ -376,6 +406,151 @@ measured evidence. No parsing `lastError` for behavior.
 
 ---
 
+### P2-61 — ADR-057 and SQLite native-state foundation
+
+**Promise.** Native domain screens can subscribe to one account-scoped, transactional,
+versioned SQLite state layer without changing broad feature behavior yet.
+
+**Files.** `apps/mobile/package.json`, Expo app config, `apps/mobile/src/lib/sqlite/{database,
+accountDatabase,migrations,transaction,subscriptions,legacyImporter}.ts`, typed repository
+interfaces and test fixtures under `apps/mobile/src/repositories/`, shared repository/use-case
+interfaces where native and web adapters meet, plus ADR-057 and the architecture/security/auth
+documents named in this phase. Inventory is a minimum; feature hooks do not cut over here.
+
+**Approach.**
+
+- Install and configure the Expo SDK-compatible `expo-sqlite`. Open one database per
+  immutable account namespace using a hashed filename, and assert the unhashed owner identity
+  in metadata before any read or replay. Enable WAL and foreign keys on every open.
+- Add monotonic, transactional schema migrations; a serialized transaction abstraction; and
+  typed repository/query/subscription foundations. Domain tables use explicit/indexed columns
+  for every filter, render and order field. Nested opaque fields may be JSON. A verified
+  server snapshot/version may be retained for rollback/rebase, but there is no generic
+  entity table and no frozen `base_json`/`view_json` schema.
+- Define account lifecycle before data: sign-out closes and quarantines the current DB;
+  another account opens another filename; confirmed account deletion purges only that
+  account's DB. Never age-delete a DB with unresolved outbox work.
+- Build an idempotent legacy-import harness. It accepts only verified server-base cache data
+  plus every distinct intent/status/dependency, imports them in one transaction, reads back
+  and verifies counts/identities/dependencies, writes a migration receipt, then permits
+  retirement. A P2-60 materialized overlay is never imported as canonical base. Ambiguous
+  cache provenance retains intents and requires sync rather than guessing.
+- Keep shared repository/use-case interfaces platform-neutral: native will bind SQLite; web
+  keeps the existing online-first TanStack adapter.
+
+**Tests.** WAL and foreign keys are enabled; migrations are ordered, transactional,
+idempotent and roll back on failure; concurrent callers serialize; typed subscriptions
+publish only after commit; owner metadata rejects a mismatched account; account A close then
+account B open exposes no A row or intent; confirmed deletion purges only the named DB; an
+unresolved-outbox DB is not age-deleted; importer rerun is a receipt-backed no-op; malformed
+or partial import rolls back; ambiguous cache imports all distinct intents but no guessed
+base; P2-60 overlay-shaped cache data is rejected as canonical base.
+
+**Scope guard.** Foundation only: no broad screen or feature cutover, sync engine, endpoint
+change, generic entity table, DynamoDB PK/SK/GSI mirror, ORM requirement, CRDT, generic
+local-first framework, SQLite-backed web adapter or database cleanup by age.
+
+---
+
+### P2-62 — Transactional outbox and Activity/Agenda vertical slice
+
+**Promise.** Activity and Agenda visible native state changes once, at local commit, and
+remains identical across reconnect, refresh, process death and every screen until a later
+transaction installs canonical truth.
+
+**Files.** `apps/mobile/src/lib/sqlite/{outbox,activityRepository,agendaRepository,
+activityTransactions}.ts`, the serialized action coordinator and sync-engine interfaces,
+Activity/Agenda hooks/screens/use cases, recurrence coverage/materialization helpers, legacy
+P2-59 adapters, and focused repository/coordinator/real-device transition suites. Inventory
+is a minimum.
+
+**Approach.**
+
+- Port P2-59 semantics into the SQLite outbox: stable mutation ids; idempotent equivalent
+  append; structured `needs_attention/rejected|parked`; durable dependent inverse intents;
+  explicit `ordering_key`; per-key barriers; receipts while dependency or reconciliation
+  needs them; and bounded, level-triggered replay. Append/transaction failure is the only
+  coordinator-only `refused` and sends no request.
+- Make each accepted offline-capable Activity action one transaction: append intent, update
+  every affected Activity/Agenda materialized row, then commit. Materialization occurs only
+  in local-action and sync transactions, never in reads. Completion, rapid toggle, Undo,
+  create, reschedule and one-occurrence edit use ordinary typed repository queries after
+  commit.
+- Recurring CREATE may expand across known local coverage. A one-occurrence edit may update
+  its explicit row. An existing-series recurrence edit retains prior canonical agenda rows
+  with queued/updating state; it does not locally invent the new server expansion.
+- Cut Activity/Agenda native hooks and screens to typed SQLite repositories/subscriptions.
+  They never combine TanStack results and outbox intents at render time. Remove native
+  Activity/Agenda domain authority from TanStack; it may still execute HTTP behind the sync
+  adapter.
+- Reminders become a derived consumer of committed local rows. Completion-relative
+  recurrence remains server-reconciled and projects no locally invented next occurrence.
+
+**Tests.** Unit/integration tests cover transactional refusal, commit-before-publish,
+completion, rapid complete/uncomplete, queued cancellation, durable Undo after claim,
+offline one-off and recurring create, reschedule, one-occurrence edit, existing-series
+queued/updating retention, restart and connectivity scheduling. Real-device transition
+acceptance proves: rapid offline/online flapping during completion never reverses the row;
+kill after local commit before request restores identical state; a stale response arriving
+last cannot regress visible rows; complete/Undo racing reconnect produces one correct final
+state; offline/manual refresh retains Today; recurring create offline remains expanded; and
+multiple same-`ordering_key` intents preserve order while unrelated work may progress.
+
+**Scope guard.** Activity/Agenda native vertical slice only. No broad Lists/ListItems or AI
+cutover, cross-entity concurrency requirement, generic change feed, generic entity table,
+DynamoDB mirror, ORM, CRDT, web queue or local expansion of an existing server-known series.
+
+---
+
+### P2-63 — Sync convergence and legacy retirement
+
+**Promise.** The Activity/Agenda slice converges through existing server contracts, safely
+retires legacy native persistence only after verified import, and makes refresh a non-
+destructive sync request.
+
+**Files.** `apps/mobile/src/lib/sync/{engine,pushAdapter,pullAdapter,coverage,
+reconciliation}.ts`, SQLite repositories/migrations/import receipts, existing shared endpoint
+clients, Activity/Agenda refresh/error surfaces, removal of native query-domain persistence
+paths in `persister.ts`/query hooks, and transition/targeted-reconciliation/account-isolation
+tests. Inventory is a minimum.
+
+**Approach.**
+
+- One serialized native sync engine owns all network writes and reconciliation. It claims
+  eligible intents, observes explicit `ordering_key` domains, calls existing API endpoints,
+  installs canonical write responses, rematerializes affected rows, and retires or parks
+  intents transactionally. Unrelated keys may progress behind a blocked key; parallel
+  dispatch is not required.
+- Connectivity, foreground and manual refresh only schedule bounded level-triggered work.
+  Pull-to-refresh calls `syncNow()`; failure retains committed rows and records a retryable
+  sync error with Retry. Connectivity never clears, reconstructs or directly edits visible
+  domain rows.
+- Converge through existing collection/detail endpoints, coverage-aware foreground/manual
+  pulls, canonical write responses, stale-version guards, tombstones/deletions and the
+  existing targeted strong activity-agenda read. Do not make a generic change-feed/cursor a
+  prerequisite; keep the sync interfaces extensible for Phase 6 collaboration.
+- After an existing-series recurrence PATCH acknowledgement, the targeted strong read
+  atomically replaces that activity's agenda rows, including authoritative zero rows. A
+  failed targeted read retains prior rows with retryable state and exposes Retry.
+- Run the P2-61 importer, verify read-back and receipt, then retire legacy AsyncStorage intent
+  data and native persisted query-domain paths. Never import a P2-60 overlay as server base.
+  Phase 3 begins only after this retirement/convergence gate passes.
+
+**Tests.** Existing endpoint push/pull adapters, coverage gaps, tombstones, deletions,
+stale-version rejection and canonical-response install are exercised against fixtures.
+Real-device acceptance repeats every P2-62 transition and adds: recurrence edit retains rows
+until the strong canonical replacement; authoritative zero rows clear only that activity;
+failed targeted read retains rows and exposes Retry; migration failure leaves legacy data
+intact; verified receipt precedes retirement; and account switching cannot expose rows or
+claim/replay another database's outbox.
+
+**Scope guard.** No new server change-feed/cursor, server conflict protocol, CRDT, generic
+local-first framework, generic entity table, DynamoDB mirror, ORM, cross-entity concurrency,
+SQLite web dependency or new recurrence authority. Phase 6 may add a durable change feed and
+conflict policy only when shared offline edits require them.
+
+---
+
 ## Acceptance criteria
 
 1. Airplane mode → create task with reminder → kill app → relaunch offline → row shows
@@ -405,3 +580,24 @@ measured evidence. No parsing `lastError` for behavior.
 12. Replay cannot overtake a blocked earlier intent for one entity; coalesced enqueue,
     backoff, foreground and reconnect triggers eventually drain eligible work without a
     fixed polling loop or a required offline→online edge.
+13. P2-60's regression requirements hold without a read-time overlay: no visual replay, no
+    stale-refetch regression, identical state after restart, no screen disagreement and no
+    empty Today during failed refresh.
+14. Rapid offline/online flapping during completion causes no reversal; killing after local
+    commit but before request restores identical state; and a stale response arriving last
+    cannot regress committed rows.
+15. Complete/Undo racing reconnect produces one correct final state; same-`ordering_key`
+    intents preserve order while unrelated keys may progress.
+16. Manual refresh while offline retains Today and records a retryable sync error; recurring
+    create remains expanded across known local coverage.
+17. Existing-series recurrence edit retains prior rows with queued/updating state until the
+    targeted strong read atomically replaces that activity's rows, including zero rows;
+    failed replacement retains rows and exposes Retry.
+18. One hashed SQLite database per asserted immutable account namespace prevents another
+    account from reading or replaying its rows; confirmed deletion purges the named DB, and
+    no unresolved-outbox DB is age-deleted.
+19. Legacy import is transactional, receipt-backed and idempotent; it preserves verified
+    base plus every distinct intent/status/dependency, never treats a P2-60 overlay as base,
+    and retires AsyncStorage data only after read-back verification.
+20. Phase 3 does not begin until native Activity/Agenda domain reads and persistence no
+    longer depend on TanStack/AsyncStorage and P2-63's real-device gate passes.

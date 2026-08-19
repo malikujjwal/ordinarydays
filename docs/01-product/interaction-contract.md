@@ -472,16 +472,24 @@ message can name it.
 
 | Aspect | Behaviour |
 | --- | --- |
-| Detection | Connectivity state plus request failure. A single connectivity change does not clear the queue. |
+| Detection | Connectivity state plus request failure. Connectivity only schedules sync; it never clears, reconstructs or directly changes visible native rows. |
 | Indicator | A persistent 20 pt bar under the header: `Offline — changes will sync.` No modal, no blocking. **Strictly connectivity-scoped (founder, 2026-08-17):** it shows while offline and disappears the moment connectivity returns. It never stays up to report a queue that is still draining — that is a second meaning needing a second string, and per-write status is the `Pending` indicator's job. |
-| Reads | The last agenda, list and plan responses are cached and served. Today works fully offline for the current day. |
-| Writes | Queued in order, per entity, with stable unique intent identity and their `Idempotency-Key` preserved so a retry cannot duplicate. Applied optimistically. A blocked N prevents N+1 for that entity from dispatching. |
+| Reads | After a native domain migrates, screens query already-materialized typed SQLite rows. Today works fully offline for known local coverage and never combines a response with intents during render. Web continues to serve its last persisted TanStack response. |
+| Writes | On migrated native domains, accepted state plus its durable outbox intent commit in one transaction, ordered by explicit `ordering_key`, with stable unique mutation identity and `Idempotency-Key`. A blocked N prevents N+1 for that key while unrelated work may progress. Web remains online-first and has no durable queue. |
 | Queued row indicator | A small `Pending` dot in the row's trailing slot. Not an error colour. |
 | Conflicts on reconnect | Server state wins for fields the user did not touch. A queued write that returns `409` surfaces one banner: `<n> changes couldn't be applied.` with a list. |
 | Capture | Not attempted offline ([`ai-capture.md`](ai-capture.md#61-the-failure-matrix)). |
 | Uploads | Queued; the attachment shows a placeholder until the upload succeeds. |
 | Queue limits | 200 unacknowledged intents; beyond that, new writes are refused with `You're offline and there's a lot waiting to sync.` **Amended 2026-08-18 (P2-59):** the count is of queued *user data*, so `needs_attention` intents count — each still holds words the user typed. The refusal happens before the action is reported accepted, never after, and `refused` is never persisted. |
 | Undo while offline | Works. A queued original is cancelled atomically; once the original is in flight or acknowledged, Undo is a durable inverse ordered after it. |
+| Pull to refresh | Calls `syncNow()`. Failure retains every committed row, records a retryable sync error and exposes Retry; Today never becomes empty merely because refresh failed. |
+
+**Transition invariants — amended 2026-08-18 (P2-60 evidence, ADR-057 runtime).** No accepted
+action visually replays or reverses during offline/online flapping; a stale response arriving
+last cannot regress it; restart restores the same visible state; agenda and detail never
+disagree; and failed refresh never empties Today. P2-60's read-time overlay implementation is
+superseded. These are product requirements implemented by write-time SQLite transactions and
+ordinary typed repository reads on native.
 
 **A pending entity is visible and inert — amended 2026-08-17 (Phase 2.6).** *"Applied
 optimistically"* above describes a write against an entity the server already knows.

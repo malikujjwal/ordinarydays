@@ -2576,6 +2576,12 @@ driven by `@react-native-community/netinfo`.
 > intent log of [`phase-02-6-sync-hardening.md`](phase-02-6-sync-hardening.md) P2-48, and
 > the mechanism below replays what that log says must reach the server. Read this section as
 > history plus execution detail, never as the durability contract.
+>
+> **Superseded as native domain state — 2026-08-18 (ADR-057).** P2-61…P2-63 migrate
+> Activity/Agenda native reads, materialization and the outbox to typed SQLite repositories.
+> TanStack remains the web adapter and may remain HTTP machinery on native; P2-63 retires
+> these native AsyncStorage domain paths only after verified import. This task remains the
+> historical P2-33 record.
 
 The root provider is hydration-gated: restoration of the persisted client completes before
 feature queries mount, default mutation functions are registered before paused mutations can
@@ -2633,15 +2639,17 @@ the Activity-delete default treats `404` as success because the requested termin
 already true. This is endpoint-specific reconciliation, not a transport-wide conversion of
 all 404s into success.
 
-**Platform difference, deliberate:** the mutation queue is **iOS only**. On web the
+**Historical platform difference, retained by ADR-057:** durable mutation handling is
+**iOS only**. The pre-cutover implementation below used TanStack; migrated native domains
+use SQLite. On web the
 persisted cache is enabled but the queue is disabled and the app warns on unload if the
 in-memory queue is non-empty. A browser tab is usually closed, not backgrounded; queued
 mutations that never flush are worse than an error toast.
 
-**Scope guard.** No SQLite mirror, no CRDT, no local recurrence expansion. Offline means
-"read what you had, queue what you did", not "work indefinitely disconnected". The agenda is
-a server-computed projection; reimplementing expansion against a local store would duplicate
-the hardest logic in the product in a second place that can disagree with the first.
+**Historical scope guard.** No CRDT, generic local-first framework or server-known recurrence
+expansion. ADR-057 now permits domain-specific native SQLite materialized rows and local
+expansion only for a recurring CREATE across known coverage; it still forbids a DynamoDB
+mirror, generic entity table and SQLite web dependency.
 
 **Edge cases.** Queue cap of 200 pending mutations, then new writes are refused with
 `You're offline and there's a lot waiting to sync.` Genuinely divergent queued PATCHes
@@ -2850,12 +2858,10 @@ on app foregrounding. Do not widen any agenda query window. Do not move the agen
 or attempt a consistent read on an index — the projection exists precisely because that is not
 possible.
 
-> **Deferred, on the founder's call — 2026-08-12.** Persisting the cache to **SQLite** rather
-> than the current store was raised while diagnosing this and is deliberately **not** part of
-> P2-46. It is a different problem: this defect lives in the gap between a write and a read and
-> would exist under any cache backend, so the projection above is required either way. SQLite
-> changes durability and query power, needs a new dependency with a `tech-stack.md` entry, and
-> is a storage-layer decision for a later phase.
+> **Historical deferral, superseded 2026-08-18 by ADR-057.** SQLite correctly remained out of
+> P2-46. P2-61 now owns the dependency and foundation, P2-62 the Activity/Agenda cutover, and
+> P2-63 verified legacy retirement. P2-46's server-version/stale-read protection remains an
+> input to sync convergence, not a read-time cache overlay.
 
 ---
 
@@ -3754,7 +3760,7 @@ contain. Do not add a colour outside P2-40's tables.
 | Capture beyond the existing `501` stubs | Phase 8 |
 | The maintenance job that drops undated terminal items out of GSI1 after 60 days (past `#S` items are exempt — Plans → Past is permanent) | Phase 9 (P9-33) |
 | Web push, service worker | Not in v1 |
-| A local-first replica, SQLite mirror, or client-side recurrence expansion | Not in v1 at all |
+| A generic local-first framework, DynamoDB mirror, generic entity table, CRDT, SQLite web dependency, or local expansion of a server-known series | Not in v1. ADR-057's domain-specific native SQLite rows and recurring-CREATE expansion are the bounded exceptions. |
 
 ## Risks and gotchas
 

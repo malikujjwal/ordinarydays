@@ -441,18 +441,17 @@ expired session is how a client generates thousands of requests per minute.
 4. `apiClient.clearCache()` — remove the in-memory ETag/body pairs added in Phase 2. Their
    keys are identity-scoped, but explicit clearing is still part of ending the session;
    replacing a client instance is not an auth boundary.
-5. `queryClient.clear()` — remove every cached server response, including the persisted
-   cache on disk. TanStack Query's persister must be purged explicitly; clearing the store
-   in memory is not enough.
-6. **The durable intent log is quarantined, not cleared** (Phase 2.6). Unacknowledged
-   offline writes are user data — destroying them at sign-out would silently lose work, and
-   an offline sign-out is exactly when unsynced writes exist. The log is namespaced by
-   immutable `userId` and every intent stores its `ownerUserId`; after sign-out it is
-   neither hydrated nor replayed until the **same** account signs back in. A different
-   account signing in on the device sees nothing from it and can trigger nothing in it —
-   replay under a different authenticated principal would create entities the server owns to
-   the wrong person. Account deletion purges the quarantined log
-   (`security-privacy.md` §3).
+5. `queryClient.clear()` — remove web and any pre-cutover native cached responses, including
+   the persisted cache on disk. TanStack's persister must be purged explicitly where it is
+   still the adapter; clearing memory is not enough. P2-63 performs this retirement for
+   migrated native domains only after verified SQLite import.
+6. **Close and quarantine the account's SQLite database; do not clear it** (Phase 2.6,
+   ADR-057). One hashed filename belongs to one immutable account namespace and metadata
+   asserts the unhashed owner before any read or replay. Unacknowledged outbox writes are user
+   data, so offline sign-out cannot destroy them. The same account may reopen the database;
+   a different account opens a different file and can neither read nor claim/replay it.
+   Never age-delete a database with unresolved outbox work. Confirmed account deletion purges
+   that account's quarantined database (`security-privacy.md` §3).
 7. Route to `(auth)/sign-in`.
 
 Steps 3 through 5 run even if step 1 fails (offline sign-out must work). Step 1 is retried
