@@ -9,6 +9,7 @@ import { scopeToWire } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback } from 'react';
+import { projectOptimisticCompletion } from '@/lib/agendaCache';
 import type {
   CompleteActivityVariables,
   ScheduleActivityVariables,
@@ -84,7 +85,6 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
        */
       if (checked && isFutureRecurringOccurrence(item, options.today)) return;
 
-      const snapshots = queryClient.getQueriesData<AgendaData>({ queryKey: ['agenda'] });
       const anytimeSnapshots = queryClient.getQueriesData<ActivityListCache>({
         queryKey: ['activities', 'saved'],
       });
@@ -93,27 +93,19 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         activityId: item.activityId,
         ...scopeToWire(scopeForRow(item)),
       };
+      let rollbackCompletion = () => {};
       const project = () => {
-        for (const [key, cached] of snapshots) {
-          if (cached === undefined) continue;
-          queryClient.setQueryData(
-            key,
-            applyCompletion(cached, {
-              ...target,
-              today: options.today,
-              currentMinute: options.currentMinute,
-              ...(checked
-                ? { completed: true }
-                : {
-                    completed: false,
-                    restoredStatus:
-                      item.status === 'saved'
-                        ? ('saved' as const)
-                        : ('scheduled' as const),
-                  }),
-            }),
-          );
-        }
+        rollbackCompletion = projectOptimisticCompletion(
+          queryClient,
+          checked
+            ? { ...target, completed: true }
+            : {
+                ...target,
+                completed: false,
+                restoredStatus: item.status === 'saved' ? 'saved' : 'scheduled',
+              },
+          { today: options.today, currentMinute: options.currentMinute },
+        );
         for (const [key, cached] of anytimeSnapshots) {
           if (cached === undefined) continue;
           queryClient.setQueryData(key, {
@@ -133,7 +125,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         }
       };
       const restore = () => {
-        for (const [key, cached] of snapshots) queryClient.setQueryData(key, cached);
+        rollbackCompletion();
         for (const [key, cached] of anytimeSnapshots)
           queryClient.setQueryData(key, cached);
       };

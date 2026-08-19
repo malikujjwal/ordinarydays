@@ -226,6 +226,81 @@ describe('a completion recorded anywhere reaches the agenda cache', () => {
     expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
   });
 
+  it('projects an offline uncomplete into detail and rolls both caches back together', () => {
+    const client = seeded(row({ status: 'completed' }));
+    const detailKey = ['activity', 'act_STANDUP'] as const;
+    const detail = {
+      activity: {
+        activityId: 'act_STANDUP',
+        status: 'completed',
+        outcome: 'done',
+        completedAt: '2026-08-13T13:30:00.000Z',
+      },
+      reminders: [],
+    };
+    client.setQueryData(detailKey, detail);
+
+    const rollback = projectOptimisticCompletion(client, {
+      activityId: 'act_STANDUP',
+      completed: false,
+      restoredStatus: 'scheduled',
+    });
+
+    expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
+    expect(client.getQueryData<typeof detail>(detailKey)?.activity).toEqual({
+      activityId: 'act_STANDUP',
+      status: 'scheduled',
+    });
+
+    rollback();
+    expect(statusOf(client, 'act_STANDUP')).toBe('completed');
+    expect(client.getQueryData(detailKey)).toEqual(detail);
+  });
+
+  it('projects only the targeted occurrence detail and restores it on rollback', () => {
+    const client = seeded(
+      row({
+        isRecurring: true,
+        occurrenceDate: TODAY,
+        status: 'completed_occurrence',
+      }),
+    );
+    const occurrenceKey = ['activity', 'act_STANDUP', 'occurrence', TODAY] as const;
+    const seriesKey = ['activity', 'act_STANDUP'] as const;
+    const occurrenceDetail = {
+      activity: { activityId: 'act_STANDUP', status: 'scheduled' },
+      reminders: [],
+      occurrence: {
+        nominalDate: TODAY,
+        date: TODAY,
+        status: 'completed_occurrence',
+        isSnoozed: false,
+      },
+    };
+    client.setQueryData(occurrenceKey, occurrenceDetail);
+    client.setQueryData(seriesKey, {
+      activity: { activityId: 'act_STANDUP', status: 'scheduled' },
+      reminders: [],
+    });
+
+    const rollback = projectOptimisticCompletion(client, {
+      activityId: 'act_STANDUP',
+      occurrenceDate: TODAY,
+      completed: false,
+      restoredStatus: 'scheduled',
+    });
+
+    expect(
+      client.getQueryData<typeof occurrenceDetail>(occurrenceKey)?.occurrence.status,
+    ).toBe('scheduled');
+    expect(
+      client.getQueryData<{ activity: { status: string } }>(seriesKey)?.activity.status,
+    ).toBe('scheduled');
+
+    rollback();
+    expect(client.getQueryData(occurrenceKey)).toEqual(occurrenceDetail);
+  });
+
   it('marks the row completed, so Today crosses it off without a refetch', () => {
     const client = seeded();
 

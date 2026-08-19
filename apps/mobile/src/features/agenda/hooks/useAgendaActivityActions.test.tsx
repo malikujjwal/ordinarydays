@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
+import { setActiveIntentLog } from '@/lib/intentReplay';
 import { registerActivityMutationDefaults } from '@/lib/mutationDefaults';
 import { useToast } from '@/stores/toast';
 import { useAgendaActivityActions } from './useAgendaActivityActions';
@@ -54,6 +56,19 @@ const cached: AgendaData = {
   warnings: [],
 };
 
+function memoryStorage(): IntentLogStorage {
+  const data = new Map<string, string>();
+  return {
+    getItem: async (key) => data.get(key) ?? null,
+    setItem: async (key, value) => {
+      data.set(key, value);
+    },
+    removeItem: async (key) => {
+      data.delete(key);
+    },
+  };
+}
+
 function setup(restoreScrollOffset = vi.fn()) {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: false, networkMode: 'always' } },
@@ -103,10 +118,73 @@ beforeEach(() => {
   clientCalls.snooze.mockReset();
   clientCalls.unsnooze.mockReset();
   clientCalls.schedule.mockReset();
+  setActiveIntentLog(undefined);
   useToast.setState({ current: undefined });
 });
 
 describe('useAgendaActivityActions completion undo', () => {
+  it('keeps Today and cached detail unmarked when the durable request finishes offline', async () => {
+    clientCalls.uncomplete.mockRejectedValue(new Error('offline'));
+    const log = new IntentLog('usr_01J0000000000000000000000A', memoryStorage());
+    await log.hydrate();
+    setActiveIntentLog(log);
+    const mounted = setup();
+    const completed = { ...first, status: 'completed' as const };
+    mounted.client.setQueryData<AgendaData>(mounted.key, {
+      ...cached,
+      days: [
+        {
+          date: '2026-08-11',
+          schedule: [],
+          anytime: [],
+          earlier: [completed],
+        },
+      ],
+    });
+    const detailKey = ['activity', first.activityId] as const;
+    mounted.client.setQueryData(detailKey, {
+      activity: {
+        activityId: first.activityId,
+        status: 'completed',
+        outcome: 'done',
+        completedAt: '2026-08-11T17:00:00.000Z',
+      },
+      reminders: [],
+    });
+
+    act(() => mounted.result.current.toggleComplete(completed, false));
+
+    await waitFor(() =>
+      expect(
+        mounted.client.getQueryData<AgendaData>(mounted.key)?.days[0]?.schedule[0]
+          ?.status,
+      ).toBe('scheduled'),
+    );
+    expect(
+      mounted.client.getQueryData<{ activity: { status: string; outcome?: string } }>(
+        detailKey,
+      )?.activity,
+    ).toMatchObject({ status: 'scheduled' });
+    expect(
+      mounted.client.getQueryData<{ activity: { outcome?: string } }>(detailKey)
+        ?.activity,
+    ).not.toHaveProperty('outcome');
+
+    await waitFor(() => expect(clientCalls.uncomplete).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(log.snapshot().intents).toEqual([
+        expect.objectContaining({ status: 'queued', lastError: 'offline' }),
+      ]),
+    );
+    expect(
+      mounted.client.getQueryData<AgendaData>(mounted.key)?.days[0]?.schedule[0]?.status,
+    ).toBe('scheduled');
+    expect(
+      mounted.client.getQueryData<{ activity: { status: string } }>(detailKey)?.activity
+        .status,
+    ).toBe('scheduled');
+  });
+
   it('restores the exact cache order and scroll offset, then compensates', async () => {
     let finishComplete!: () => void;
     clientCalls.complete.mockReturnValue(

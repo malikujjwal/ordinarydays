@@ -1030,16 +1030,20 @@ const ACTIVITY_MUTATION_TAGS: ReadonlySet<string> = new Set(
 );
 
 /**
- * Projects a detail-screen completion before its request settles and returns a targeted
- * rollback. The rollback restores only the affected row in each cached agenda window, so an
- * unrelated agenda write made while the completion is in flight is never overwritten.
+ * Projects completion state across every cached surface before its request settles.
+ *
+ * The agenda row, ordinary detail and occurrence detail are one user-visible fact even while
+ * the durable intent is queued offline. The returned rollback restores the same snapshots if
+ * the coordinator refuses or permanently rejects that fact; transient transport failure keeps
+ * every projection in place for replay.
  */
 export function projectOptimisticCompletion(
   client: QueryClient,
   variables: AgendaMutationTarget &
     ({ completed: true } | { completed: false; restoredStatus: 'saved' | 'scheduled' }),
+  clockOverride?: AgendaProjectionClock,
 ): () => void {
-  const clock = agendaClock(client);
+  const clock = clockOverride ?? agendaClock(client);
   const snapshots = client
     .getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })
     .map(([queryKey, agenda]) => ({
@@ -1049,6 +1053,47 @@ export function projectOptimisticCompletion(
 
   update(client, (agenda) => applyCompletion(agenda, { ...variables, ...clock }));
 
+  const detailKey =
+    variables.occurrenceDate === undefined
+      ? activityKey(variables.activityId)
+      : activityDetailKey({
+          kind: 'occurrence',
+          activityId: variables.activityId,
+          date: variables.occurrenceDate,
+        });
+  const detailBefore = client.getQueryData<ActivityDetail>(detailKey);
+  if (detailBefore !== undefined) {
+    client.setQueryData<ActivityDetail>(detailKey, (previous) => {
+      if (previous === undefined) return previous;
+      if (variables.occurrenceDate !== undefined) {
+        return previous.occurrence === undefined
+          ? previous
+          : {
+              ...previous,
+              occurrence: {
+                ...previous.occurrence,
+                status: variables.completed ? 'completed_occurrence' : 'scheduled',
+              },
+            };
+      }
+      if (variables.completed) {
+        return {
+          ...previous,
+          activity: { ...previous.activity, status: 'completed' },
+        };
+      }
+      const {
+        completedAt: _completedAt,
+        outcome: _outcome,
+        ...activity
+      } = previous.activity;
+      return {
+        ...previous,
+        activity: { ...activity, status: variables.restoredStatus },
+      };
+    });
+  }
+
   return () => {
     for (const { queryKey, found } of snapshots) {
       client.setQueryData<AgendaData>(queryKey, (agenda) => {
@@ -1056,6 +1101,7 @@ export function projectOptimisticCompletion(
         return replaceAgendaItem(agenda, variables, found.item, found.sourceDate, clock);
       });
     }
+    if (detailBefore !== undefined) client.setQueryData(detailKey, detailBefore);
   };
 }
 
