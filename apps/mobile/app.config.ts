@@ -72,7 +72,7 @@ const config: ExpoConfig = {
      */
     output: 'static',
   },
-  plugins: ['expo-router'],
+  plugins: ['expo-router', 'expo-sqlite'],
   experiments: { typedRoutes: true },
   extra: {
     profile: PROFILE,
