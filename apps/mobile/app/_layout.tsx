@@ -1,21 +1,18 @@
-import { Skeleton, ThemeProvider, useTheme } from '@od/ui';
+import { ThemeProvider } from '@od/ui';
 import { QueryClientProvider } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import { Stack } from 'expo-router';
 import Head from 'expo-router/head';
 import { StatusBar } from 'expo-status-bar';
-import { type ReactNode, useEffect, useState } from 'react';
-import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { HydrationGate } from '@/components/HydrationGate';
 import { installLocalReminderScheduler } from '@/features/reminders/localSchedule';
 import { SyncStatusBanner } from '@/features/shell/components/SyncStatusBanner';
 import { ClockProvider } from '@/hooks/useClock';
 import { useSerifFamily } from '@/lib/fonts';
 import { installOnlineManager } from '@/lib/onlineManager';
-import { restorePersistedClient, subscribeToPersistence } from '@/lib/persister';
 import { queryClient } from '@/lib/queryClient';
-import { startNativeStateSession } from '@/lib/sqlite/nativeStateSession';
 
 /**
  * The root layout: every provider the app needs, in the order they have to nest.
@@ -39,69 +36,19 @@ const APP_NAME =
     ? Constants.expoConfig.name
     : 'Ordinary Days';
 
-function HydrationGate({ children }: { children: ReactNode }) {
-  const theme = useTheme();
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    let stopPersistence: (() => void) | undefined;
-    let stopOnlineManager: (() => void) | undefined;
-    let stopLocalReminders: (() => void) | undefined;
-    let stopNativeState: (() => void) | undefined;
-
-    void restorePersistedClient(queryClient).then(async (outcome) => {
-      if (!active) return;
-      /**
-       * `outcome.safeToPersist` is what stops a slow storage read being overwritten by the
-       * empty client that was rendering while it was still in flight. The app becomes
-       * interactive now either way; only the *saving* waits.
-       */
-      const nativeSession = await startNativeStateSession(queryClient);
-      if (!active) {
-        nativeSession?.stop();
-        return;
-      }
-      stopNativeState = nativeSession?.stop;
-      if (nativeSession?.queryPersistenceSafe !== false) {
-        stopPersistence = subscribeToPersistence(queryClient, outcome.safeToPersist);
-      }
-      stopOnlineManager = installOnlineManager(queryClient);
-      stopLocalReminders = installLocalReminderScheduler();
-      setReady(true);
-    });
-
-    return () => {
-      active = false;
-      stopPersistence?.();
-      stopOnlineManager?.();
-      stopLocalReminders?.();
-      stopNativeState?.();
-    };
-  }, []);
-
-  if (!ready) {
-    return (
-      <View
-        testID="cache-hydration-loading"
-        style={{
-          flex: 1,
-          justifyContent: 'center',
-          paddingHorizontal: theme.space[6],
-          backgroundColor: theme.colors.surface,
-        }}
-      >
-        <Skeleton shape="row" count={5} />
-      </View>
-    );
-  }
-
-  return (
-    <>
-      {children}
-      <SyncStatusBanner />
-    </>
-  );
+/**
+ * Module-level so its identity is stable across renders — `HydrationGate` re-runs its
+ * startup effect when this changes. The gate cannot import these itself: they live in
+ * feature slices, and a shared component importing a feature is the layer inversion
+ * `repo-structure.md` §3.2 exists to prevent.
+ */
+function installShellServices(): () => void {
+  const stopOnlineManager = installOnlineManager(queryClient);
+  const stopLocalReminders = installLocalReminderScheduler();
+  return () => {
+    stopOnlineManager();
+    stopLocalReminders();
+  };
 }
 
 export default function RootLayout() {
@@ -129,10 +76,11 @@ export default function RootLayout() {
         <ClockProvider>
           <ThemeProvider {...(serifFamily === undefined ? {} : { serifFamily })}>
             <QueryClientProvider client={queryClient}>
-              <HydrationGate>
+              <HydrationGate install={installShellServices}>
                 {/* Headerless: every screen owns its own chrome (`interaction-contract.md`). */}
                 <Stack screenOptions={{ headerShown: false }} />
                 <StatusBar style="auto" />
+                <SyncStatusBanner />
               </HydrationGate>
             </QueryClientProvider>
           </ThemeProvider>

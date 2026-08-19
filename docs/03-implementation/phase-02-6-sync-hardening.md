@@ -574,9 +574,11 @@ domain entries and purges the old account log. Unproven query records are receip
 envelopes remain available to the importer; a mutation that cannot be proved present in the
 imported log stops retirement. Verification failure leaves both legacy sources intact,
 continues with the account's SQLite session, and disables query-cache saving for that session
-so a filtered save cannot destroy the evidence needed on the next launch. Ordinary native
-hydration filters Activity, Activities and Agenda query roots. Web continues to hydrate and
-persist them unchanged.
+so a filtered save cannot destroy the evidence needed on the next launch. A start that fails
+outside migration — the account database, outbox recovery — surfaces `Couldn't open your
+data.` with Retry instead of blocking hydration; the singleton start is safe to re-run.
+Ordinary native hydration filters Activity, Activities and Agenda query roots. Web continues
+to hydrate and persist them unchanged.
 
 The serialized engine calls typed shared endpoint adapters directly, holds one network tail,
 coalesces overlapping lifecycle pulls, retains same-key barriers while allowing unrelated
