@@ -50,6 +50,9 @@ export interface CanonicalOutboxGuards {
   readonly deletedActivityIds: ReadonlySet<string>;
   readonly deletedReminderIds: ReadonlySet<string>;
   readonly createdReminderIds: ReadonlySet<string>;
+  /** Ordinary pulls cannot overwrite any still-represented local Activity work. */
+  readonly protectedActivityIds: ReadonlySet<string>;
+  readonly reconcilingActivityIds: ReadonlySet<string>;
 }
 
 export class OutboxFullError extends Error {
@@ -121,22 +124,34 @@ export async function readCanonicalOutboxGuards(
   const deletedActivityIds = new Set<string>();
   const deletedReminderIds = new Set<string>();
   const createdReminderIds = new Set<string>();
+  const protectedActivityIds = new Set<string>();
+  const reconcilingActivityIds = new Set<string>();
   const rows = await database.all(
-    `SELECT mutation_key_json, variables_json, entity_id
+    `SELECT mutation_key_json, variables_json, entity_id, status
      FROM outbox_intents
      WHERE status IN ('queued', 'in_flight', 'needs_attention')
-       AND mutation_key_json IN (
-         '["activity","delete"]',
-         '["activity","reminder-delete"]',
-         '["activity","reminder-create"]'
-       );`,
+        OR (status = 'acknowledged' AND reconciliation_version IS NOT NULL);`,
   );
   for (const row of rows) {
     const mutationKey = parseJson(stringValue(row, 'mutation_key_json'));
     const variables = record(parseJson(stringValue(row, 'variables_json')));
     if (!Array.isArray(mutationKey) || variables === undefined) continue;
+    const activityId = stringValue(row, 'entity_id');
+    if (
+      activityId !== undefined &&
+      mutationKey[1] !== 'reminder-create' &&
+      mutationKey[1] !== 'reminder-delete'
+    ) {
+      protectedActivityIds.add(activityId);
+    }
+    if (
+      activityId !== undefined &&
+      mutationKey[1] === 'patch' &&
+      stringValue(row, 'status') === 'acknowledged'
+    ) {
+      reconcilingActivityIds.add(activityId);
+    }
     if (mutationKey[1] === 'delete') {
-      const activityId = stringValue(row, 'entity_id');
       if (activityId !== undefined) deletedActivityIds.add(activityId);
       continue;
     }
@@ -151,7 +166,21 @@ export async function readCanonicalOutboxGuards(
       createdReminderIds.add(input.reminderId);
     }
   }
-  return { deletedActivityIds, deletedReminderIds, createdReminderIds };
+  for (const row of await database.all('SELECT activity_id FROM activity_tombstones;')) {
+    const activityId = stringValue(row, 'activity_id');
+    if (activityId !== undefined) deletedActivityIds.add(activityId);
+  }
+  for (const row of await database.all('SELECT reminder_id FROM reminder_tombstones;')) {
+    const reminderId = stringValue(row, 'reminder_id');
+    if (reminderId !== undefined) deletedReminderIds.add(reminderId);
+  }
+  return {
+    deletedActivityIds,
+    deletedReminderIds,
+    createdReminderIds,
+    protectedActivityIds,
+    reconcilingActivityIds,
+  };
 }
 
 function intentFromRow(row: SqliteRow): OutboxIntent {
@@ -313,15 +342,23 @@ export class OutboxRepository {
   async claimNext(
     database: SqliteExecutor,
     now = Date.now(),
+    excludedOrderingKeys: ReadonlySet<string> = new Set(),
   ): Promise<OutboxIntent | undefined> {
     await this.parkExpired(database, now);
-    const row = await database.first(`
+    const excluded = [...excludedOrderingKeys];
+    const exclusion =
+      excluded.length === 0
+        ? ''
+        : `AND candidate.ordering_key NOT IN (${excluded.map(() => '?').join(', ')})`;
+    const row = await database.first(
+      `
       SELECT candidate.*
       FROM outbox_intents candidate
       LEFT JOIN outbox_intents dependency
         ON dependency.intent_id = candidate.depends_on_intent_id
       WHERE candidate.status = 'queued'
         AND (candidate.depends_on_intent_id IS NULL OR dependency.status = 'acknowledged')
+        ${exclusion}
         AND NOT EXISTS (
           SELECT 1 FROM outbox_intents earlier
           WHERE earlier.ordering_key = candidate.ordering_key
@@ -330,7 +367,9 @@ export class OutboxRepository {
         )
       ORDER BY candidate.seq
       LIMIT 1;
-    `);
+    `,
+      excluded,
+    );
     if (row === undefined) return undefined;
     const intent = intentFromRow(row);
     await database.run(
@@ -427,6 +466,43 @@ export class OutboxRepository {
         intentId,
       ],
     );
+  }
+
+  async pendingReconciliations(
+    database: SqliteReader = this.reader,
+  ): Promise<readonly OutboxIntent[]> {
+    return (
+      await database.all(
+        `SELECT * FROM outbox_intents
+         WHERE status = 'acknowledged' AND reconciliation_version IS NOT NULL
+         ORDER BY seq;`,
+      )
+    ).map(intentFromRow);
+  }
+
+  async failReconciliation(
+    database: SqliteExecutor,
+    intentId: string,
+    error: string,
+  ): Promise<void> {
+    await database.run(
+      `UPDATE outbox_intents SET last_error = ?
+       WHERE intent_id = ? AND status = 'acknowledged'
+         AND reconciliation_version IS NOT NULL;`,
+      [error, intentId],
+    );
+  }
+
+  async completeReconciliation(
+    database: SqliteExecutor,
+    intentId: string,
+  ): Promise<void> {
+    await database.run(
+      `UPDATE outbox_intents SET reconciliation_version = NULL, last_error = NULL
+       WHERE intent_id = ? AND status = 'acknowledged';`,
+      [intentId],
+    );
+    await this.acknowledge(database, intentId);
   }
 
   async cancelQueued(database: SqliteExecutor, intentId: string): Promise<boolean> {

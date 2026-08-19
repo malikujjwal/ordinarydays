@@ -238,6 +238,24 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         );
       `),
   },
+  {
+    version: 3,
+    name: 'activity-reminder-canonical-tombstones',
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE activity_tombstones (
+          activity_id TEXT PRIMARY KEY NOT NULL,
+          acknowledged_at TEXT NOT NULL
+        );
+        CREATE TABLE reminder_tombstones (
+          reminder_id TEXT PRIMARY KEY NOT NULL,
+          activity_id TEXT NOT NULL,
+          acknowledged_at TEXT NOT NULL
+        );
+        CREATE INDEX reminder_tombstones_activity
+          ON reminder_tombstones (activity_id, reminder_id);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

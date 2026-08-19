@@ -111,6 +111,11 @@ verified legacy retirement. Native Activity/Agenda stop treating TanStack/AsyncS
 domain authority; web keeps its online-first TanStack adapter. Phase 3 begins only after
 P2-63. **8 live tasks** (P2-58 parked and P2-60 historical, both uncounted).
 
+P2-63's native runtime and automated convergence coverage were implemented on 2026-08-19.
+The Phase 3 gate remains closed until the Phase 2.6 iOS real-device transition matrix and
+Maestro acceptance run are recorded on a supported macOS/device environment; task counts and
+AWU do not change for that verification state.
+
 ### 1.4 Phase 3 — Plans and lists
 
 Lists and list items as independent collections: three behaviours and an unbounded template

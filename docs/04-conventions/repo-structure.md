@@ -34,8 +34,10 @@ ordinarydays/
 │     │  │  ├─ activities/  lists/  people/  expenses/  capture/  notifications/
 │     │  ├─ hooks/               Cross-feature: useSession, useTimezone, useBreakpoint
 │     │  ├─ lib/                 queryClient.ts, apiClient.ts, storage.ts, clock.ts
-│     │  │  └─ sqlite/           Native-only account DB lifecycle, migrations, typed
+│     │  │  ├─ sqlite/           Native-only account DB lifecycle, migrations, typed
 │     │  │                       repositories, transaction coordinator, outbox and sync.
+│     │  │  └─ sync/             Typed native Activity push/pull and targeted-reconciliation
+│     │  │                       adapters over `@od/shared/client`; no projection callbacks.
 │     │  └─ stores/              Zustand stores, one file per UI domain
 │     ├─ e2e/                    Maestro flows (.yaml) — iOS E2E
 │     ├─ assets/                 Icons, splash, fonts. Nothing generated.
@@ -175,7 +177,7 @@ code belongs somewhere else.
 | --- | --- |
 | Routes (`app/`), feature slices, hooks, stores, client-side glue | `fetch` outside `@od/shared/client` |
 | Web query keys, optimistic-update projections and invalidation policy | Business rules that the server also enforces — duplicate a rule and the two will drift |
-| Native domain-specific SQLite repositories, transaction coordinators, outbox and serialized sync adapters under `src/lib/sqlite/` | A generic entity/base-view JSON store, ORM, CRDT, change feed, DynamoDB key mirror, or SQLite dependency on web |
+| Native domain-specific SQLite repositories, transaction coordinators and outbox under `src/lib/sqlite/`; typed endpoint/reconciliation adapters under `src/lib/sync/` | A generic entity/base-view JSON store, ORM, CRDT, change feed, DynamoDB key mirror, or SQLite dependency on web |
 | Platform forks (`.ios.tsx` / `.web.tsx`) where the platforms genuinely differ | `@aws-sdk/*` — the client never talks to AWS directly; it talks to the API |
 | Screen-level composition under ~150 lines per route file | Recurrence expansion or money splitting reimplemented locally — import it from `@od/shared` |
 | Maestro flows in `e2e/` | Inline styles inside list rows (`coding-standards.md` §9.5) |
@@ -288,7 +290,7 @@ web hooks    → TanStack adapter → @od/shared/client
 native hooks → SQLite coordinator → serialized transaction
                                   ├→ typed repositories → domain-specific SQLite tables
                                   └→ transactional outbox
-             → serialized sync adapter → @od/shared/client
+             → serialized SQLite sync engine → typed src/lib/sync adapters → @od/shared/client
                                       ↘ canonical repository transaction
 ```
 
@@ -301,6 +303,9 @@ intent and materializes visible rows in one serialized transaction; repository
 subscriptions publish only after commit. The one native sync adapter owns network writes,
 installs permitted canonical responses and settles the matching outbox receipt in a second
 transaction. Connectivity merely schedules that adapter.
+Native startup never registers the legacy intent-log/MutationCache replay session. The old
+AsyncStorage sources are migration inputs only and are retired after SQLite receipts commit;
+web TanStack persistence and optimistic adapters remain separate and unchanged.
 
 This SQLite application model is deliberately separate from the server persistence model.
 `services/api/src/repositories/` alone knows DynamoDB `pk`/`sk`/GSI shapes; native tables use

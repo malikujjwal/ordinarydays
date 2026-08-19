@@ -73,14 +73,18 @@ export function useActivityDetail(
 
   const refetch = useCallback(() => {
     void (async () => {
-      const committed = await load();
+      await load();
       try {
         const canonical = await state.sync.pullActivity(target);
         setDetail(canonical);
         setStatus('success');
         setMessage(undefined);
       } catch (error) {
-        if (committed === undefined) setStatus('error');
+        const retained = await state.activities.read(target);
+        if (retained === undefined) {
+          setDetail(undefined);
+          setStatus('error');
+        }
         setMessage(error instanceof Error ? error.message : String(error));
       }
     })();

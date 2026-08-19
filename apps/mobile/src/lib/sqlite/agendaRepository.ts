@@ -3,11 +3,13 @@ import type { AgendaQuery } from '@od/shared/schemas';
 import { agendaItem as agendaItemSchema } from '@od/shared/schemas';
 import type {
   Activity,
+  ActivityAgendaData,
   AgendaData,
   AgendaDay,
   AgendaItem,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
+import { partitionAgenda } from '@/features/agenda/model/partition';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 import { readCanonicalOutboxGuards } from '@/lib/sqlite/outbox';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
@@ -190,21 +192,56 @@ export class AgendaRepository {
   ): Promise<void> {
     const guards = await readCanonicalOutboxGuards(transaction.database);
     const coveredActivityIds = new Set<string>();
+    const previousVersions = new Map<string, string>();
     for (const row of await transaction.database.all(
-      'SELECT DISTINCT activity_id FROM agenda_rows WHERE viewer_date BETWEEN ? AND ?;',
+      `SELECT activity_id, canonical_version FROM agenda_rows
+       WHERE viewer_date BETWEEN ? AND ?;`,
       [request.from, request.to],
     )) {
       const activityId = text(row, 'activity_id');
-      if (activityId !== undefined) coveredActivityIds.add(activityId);
+      if (activityId === undefined) continue;
+      coveredActivityIds.add(activityId);
+      const version = text(row, 'canonical_version');
+      const previous = previousVersions.get(activityId);
+      if (version !== undefined && (previous === undefined || version > previous)) {
+        previousVersions.set(activityId, version);
+      }
     }
-    await transaction.database.run(
-      `DELETE FROM agenda_rows
-       WHERE viewer_date BETWEEN ? AND ? AND local_state = 'canonical';`,
-      [request.from, request.to],
-    );
     const versions = new Map(
       (data.projectionVersions ?? []).map((entry) => [entry.activityId, entry.version]),
     );
+    const returnedActivityIds = new Set(
+      data.days.flatMap((day) =>
+        [
+          ...(day.upNext === undefined ? [] : [day.upNext]),
+          ...day.schedule,
+          ...day.anytime,
+          ...day.earlier,
+        ].map((item) => item.activityId),
+      ),
+    );
+    const staleActivityIds = new Set<string>();
+    for (const activityId of returnedActivityIds) {
+      const previous = previousVersions.get(activityId);
+      const incoming = versions.get(activityId);
+      if (previous !== undefined && (incoming === undefined || previous > incoming)) {
+        staleActivityIds.add(activityId);
+      }
+    }
+    const preservedActivityIds = new Set([
+      ...guards.protectedActivityIds,
+      ...staleActivityIds,
+    ]);
+    for (const activityId of coveredActivityIds) {
+      if (preservedActivityIds.has(activityId)) continue;
+      /* Absence is authoritative only inside this exact covered range. */
+      await transaction.database.run(
+        `DELETE FROM agenda_rows
+         WHERE activity_id = ? AND viewer_date BETWEEN ? AND ?
+           AND local_state = 'canonical';`,
+        [activityId, request.from, request.to],
+      );
+    }
     for (const day of data.days) {
       await this.insertDay(
         transaction.database,
@@ -212,7 +249,7 @@ export class AgendaRepository {
         'canonical',
         (item) => versions.get(item.activityId),
         true,
-        guards.deletedActivityIds,
+        new Set([...guards.deletedActivityIds, ...preservedActivityIds]),
       );
       for (const item of [
         ...(day.upNext === undefined ? [] : [day.upNext]),
@@ -221,6 +258,7 @@ export class AgendaRepository {
         ...day.earlier,
       ]) {
         coveredActivityIds.add(item.activityId);
+        if (preservedActivityIds.has(item.activityId)) continue;
         if (guards.deletedActivityIds.has(item.activityId)) continue;
         for (const reminder of item.reminders ?? []) {
           if (
@@ -261,6 +299,7 @@ export class AgendaRepository {
         ),
       );
       for (const activityId of coveredActivityIds) {
+        if (preservedActivityIds.has(activityId)) continue;
         if (guards.deletedActivityIds.has(activityId)) {
           await transaction.database.run(
             'DELETE FROM activity_reminders WHERE activity_id = ?;',
@@ -299,19 +338,34 @@ export class AgendaRepository {
         includeKey(request.include),
         refreshedAt,
         JSON.stringify(data.warnings),
-        data.projectionVersions === undefined
-          ? null
-          : JSON.stringify(data.projectionVersions),
+        (() => {
+          if (data.projectionVersions === undefined && staleActivityIds.size === 0) {
+            return null;
+          }
+          const installedVersions = new Map(versions);
+          for (const activityId of staleActivityIds) {
+            const previous = previousVersions.get(activityId);
+            if (previous !== undefined) installedVersions.set(activityId, previous);
+          }
+          return JSON.stringify(
+            [...installedVersions].map(([activityId, version]) => ({
+              activityId,
+              version,
+            })),
+          );
+        })(),
       ],
     );
-    await transaction.database.run('DELETE FROM native_sync_errors WHERE scope = ?;', [
-      this.scope({
-        from: request.from,
-        to: request.to,
-        timezone: request.tz,
-        ...(request.include === undefined ? {} : { include: request.include }),
-      }),
-    ]);
+    if (guards.reconcilingActivityIds.size === 0) {
+      await transaction.database.run('DELETE FROM native_sync_errors WHERE scope = ?;', [
+        this.scope({
+          from: request.from,
+          to: request.to,
+          timezone: request.tz,
+          ...(request.include === undefined ? {} : { include: request.include }),
+        }),
+      ]);
+    }
     transaction.changed('agenda');
     if (request.include === 'reminders') transaction.changed('reminders');
   }
@@ -338,6 +392,54 @@ export class AgendaRepository {
         onlyActivity,
         state,
         () => undefined,
+        false,
+      );
+    }
+    transaction.changed('agenda');
+  }
+
+  /** Strongly replaces one Activity inside one materialized coverage, including zero rows. */
+  async replaceCanonicalActivityRows(
+    transaction: TransactionContext,
+    request: AgendaQuery,
+    canonical: ActivityAgendaData,
+    clock: { readonly today: string; readonly currentMinute: string },
+  ): Promise<void> {
+    await transaction.database.run(
+      `DELETE FROM agenda_rows
+       WHERE activity_id = ? AND viewer_date BETWEEN ? AND ?;`,
+      [canonical.activityId, request.from, request.to],
+    );
+    const itemsByDate = new Map<string, AgendaItem[]>();
+    for (const row of canonical.rows) {
+      if (
+        row.item.activityId !== canonical.activityId ||
+        row.date < request.from ||
+        row.date > request.to
+      ) {
+        continue;
+      }
+      const items = itemsByDate.get(row.date) ?? [];
+      items.push(row.item);
+      itemsByDate.set(row.date, items);
+    }
+    for (const [date, items] of itemsByDate) {
+      const sections = partitionAgenda(
+        items,
+        date < clock.today ? '23:59' : date > clock.today ? '00:00' : clock.currentMinute,
+        true,
+      );
+      await this.insertDay(
+        transaction.database,
+        {
+          date,
+          schedule: sections.schedule,
+          anytime: sections.anytime,
+          earlier: sections.earlier,
+          ...(sections.upNext[0] === undefined ? {} : { upNext: sections.upNext[0] }),
+        },
+        'canonical',
+        () => canonical.activityVersion,
         false,
       );
     }

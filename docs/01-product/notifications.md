@@ -188,7 +188,9 @@ its predecessor fires.
 > **Delivery ownership — 2026-08-17 (P5-16 second amendment).** Three concepts, kept
 > separate. **Reminder state** — *when should this activity remind me* — is authoritative on
 > the server. **The local notification schedule** — *which known reminders has this device
-> armed* — is a device-specific projection of synchronized state (P2-57), verified after
+> armed* — is a device-specific consumer of committed typed SQLite Activity, occurrence and
+> reminder rows (ADR-057/P2-63). It publishes and re-arms only after the containing database
+> transaction commits; TanStack/AsyncStorage cache state is never an arming input. It is verified after
 > arming and acknowledged as `{ reminderStateVersion, scheduledThrough }` on the device's
 > `DEVICE#` row. **Push** answers *what changed that this device could not know*, and backs
 > up any reminder the server cannot confirm is locally armed. A reminder the device has

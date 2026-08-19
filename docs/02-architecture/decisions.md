@@ -2371,6 +2371,15 @@ policy. ADR-055's client-minted identity and retention rules and ADR-056's durab
 dependency and replay rules survive, but their native AsyncStorage/TanStack materialization
 is replaced by SQLite transactions.
 
+**Implementation note (2026-08-19).** P2-63 removed the native intent-log/MutationCache
+replay owner and native Activity/Agenda query-domain hydration. Typed endpoint adapters now
+feed one serialized SQLite sync engine. Legacy account logs and query-domain records are
+retired only after separate verified SQLite receipts; P2-60 overlay-shaped queries are
+recorded as non-canonical provenance and require synchronization. Domain-specific Activity
+and reminder tombstones, projection-version guards and the strong targeted recurrence
+transaction close the convergence paths without adding a change feed. Web remains on the
+online-first TanStack adapter.
+
 **Alternatives rejected.** P2-60's generic read-time overlay — two authorities remain
 observable. A generic entity table — hides query contracts and turns JSON rewriting into the
 storage API. A DynamoDB mirror — couples device schema to server access paths. CRDTs or a

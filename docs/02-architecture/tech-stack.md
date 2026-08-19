@@ -493,8 +493,10 @@ explicitly replay-protected complete/uncomplete/skip mutations, carries a client
 and stored in its variables before `mutationFn` runs. Every retry and process-death replay
 reuses it — this is why the API's idempotency records exist. New iOS writes are **not**
 persisted or replayed as TanStack mutations; the durable log in mechanism 4 owns that job.
-A one-time upgrade bridge imports legacy paused mutations into the log and retires their
-in-memory copies before connectivity is installed. Web has no durable mutation queue.
+A one-time upgrade bridge imports legacy paused mutations into the account log, verifies that
+log in SQLite, records the query-domain migration receipt and only then retires both legacy
+native sources before connectivity is installed. The native runtime never executes those
+MutationCache records. Web has no durable mutation queue.
 
 Scope guard after ADR-057: native SQLite is a typed materialized application model, not a
 DynamoDB mirror, CRDT or generic local-first replica. Existing-series and completion-relative
@@ -590,7 +592,8 @@ Queued Undo atomically cancels the original and projection. Undo after claim dur
 the inverse. Response-loss ambiguity recovers the original authoritatively before either
 retiring or dispatching that inverse.
 
-**TanStack was the execution layer, not the durability boundary.** On cold start the log is
+**Historical P2-59 runtime.** TanStack was the execution layer, not the durability boundary.
+On cold start the log was
 authoritative and pending work is rebuilt from it — including mutations that were mid-flight
 rather than paused when the process died. The iOS intent-log session is the sole replay owner:
 enqueue, transient backoff, foreground and connectivity request a bounded/coalesced,
@@ -600,6 +603,11 @@ barrier: a requeued or attention-requiring N blocks N+1 for that entity while an
 may progress. A second trigger cannot dispatch the same intent, overtake the barrier, or
 reinterpret a failed claim as deletion. This is level-triggered liveness, not a fixed loop and
 not a dependency on observing an offline→online edge.
+
+P2-63 removes that native session and its MutationCache replay registration after receipt-
+backed migration. Mechanism 5 now owns the same stable identity, barrier, dependency,
+attention and level-triggered semantics in SQLite; this paragraph remains lineage evidence,
+not a callable native replay path.
 
 **Pending is not synced.** A client-minted id is not server acceptance. §5.4's `Pending`
 indicator and offline bar are entity-generic and copy-parameterised (Phase 3's
@@ -659,6 +667,12 @@ retires old data. P2-60 overlay output is never canonical base; ambiguous proven
 intents and schedules sync. Existing collection/detail endpoints, coverage-aware pulls,
 canonical write responses, tombstones and targeted recurrence reconciliation are sufficient;
 a generic change-feed/cursor is not a Phase 2.6 prerequisite.
+
+After P2-63, the native persister filters `activity`, `activities` and `agenda` query roots on
+both hydration and save. Startup reads the unfiltered legacy envelope only as migration input,
+including expired/buster-old envelopes that may still contain user writes. It purges the
+account AsyncStorage intent log and retires those query/mutation records only after SQLite
+read-back receipts commit. Web persistence remains unchanged.
 
 ### 3.5 One codebase, two platforms
 

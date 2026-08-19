@@ -12,7 +12,6 @@ import { installLocalReminderScheduler } from '@/features/reminders/localSchedul
 import { SyncStatusBanner } from '@/features/shell/components/SyncStatusBanner';
 import { ClockProvider } from '@/hooks/useClock';
 import { useSerifFamily } from '@/lib/fonts';
-import { startIntentLogSession } from '@/lib/intentLogSession';
 import { installOnlineManager } from '@/lib/onlineManager';
 import { restorePersistedClient, subscribeToPersistence } from '@/lib/persister';
 import { queryClient } from '@/lib/queryClient';
@@ -49,7 +48,6 @@ function HydrationGate({ children }: { children: ReactNode }) {
     let stopPersistence: (() => void) | undefined;
     let stopOnlineManager: (() => void) | undefined;
     let stopLocalReminders: (() => void) | undefined;
-    let stopIntentLog: (() => void) | undefined;
     let stopNativeState: (() => void) | undefined;
 
     void restorePersistedClient(queryClient).then(async (outcome) => {
@@ -60,23 +58,12 @@ function HydrationGate({ children }: { children: ReactNode }) {
        * interactive now either way; only the *saving* waits.
        */
       stopPersistence = subscribeToPersistence(queryClient, outcome.safeToPersist);
-      /**
-       * The log is the iOS durability boundary, so it must be hydrated and any legacy paused
-       * mutations must be imported before connectivity can resume work or the app can accept
-       * a write. Web returns immediately because it has no durable log.
-       */
       const nativeSession = await startNativeStateSession(queryClient);
-      const session =
-        nativeSession === undefined
-          ? await startIntentLogSession(queryClient)
-          : undefined;
       if (!active) {
-        session?.stop();
         nativeSession?.stop();
         return;
       }
       stopNativeState = nativeSession?.stop;
-      stopIntentLog = session?.stop;
       stopOnlineManager = installOnlineManager(queryClient);
       stopLocalReminders = installLocalReminderScheduler();
       setReady(true);
@@ -87,7 +74,6 @@ function HydrationGate({ children }: { children: ReactNode }) {
       stopPersistence?.();
       stopOnlineManager?.();
       stopLocalReminders?.();
-      stopIntentLog?.();
       stopNativeState?.();
     };
   }, []);

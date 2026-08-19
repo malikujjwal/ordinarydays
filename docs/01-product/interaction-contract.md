@@ -482,7 +482,7 @@ message can name it.
 | Uploads | Queued; the attachment shows a placeholder until the upload succeeds. |
 | Queue limits | 200 unacknowledged intents; beyond that, new writes are refused with `You're offline and there's a lot waiting to sync.` **Amended 2026-08-18 (P2-59):** the count is of queued *user data*, so `needs_attention` intents count — each still holds words the user typed. The refusal happens before the action is reported accepted, never after, and `refused` is never persisted. |
 | Undo while offline | Works. A queued original is cancelled atomically; once the original is in flight or acknowledged, Undo is a durable inverse ordered after it. |
-| Pull to refresh | Calls `syncNow()`. Failure retains every committed row, records a retryable sync error and exposes Retry; Today never becomes empty merely because refresh failed. |
+| Pull to refresh | Calls the one serialized `syncNow()`, coalesced with overlapping foreground/reconnect work. Failure in push, coverage pull or targeted recurrence reconciliation retains every committed row, records a retryable sync error and exposes Retry; Today never becomes empty merely because refresh failed. |
 
 **Transition invariants — amended 2026-08-18 (P2-60 evidence, ADR-057 runtime).** No accepted
 action visually replays or reverses during offline/online flapping; a stale response arriving
@@ -505,7 +505,7 @@ armed locally once P2-57 lands).
 
 **Queued writes are user data, not cache.** They do not expire on cache age and are never
 discarded by a cache-version change; each is persisted before the action is reported as
-accepted (`tech-stack.md` §3.4 mechanism 4). After 30 days without acknowledgement — or
+accepted (`tech-stack.md` §3.4 mechanism 5; mechanism 4 records its P2-59 lineage). After 30 days without acknowledgement — or
 whenever the device clock proves untrustworthy — an intent stops replaying automatically and
 enters **`needs_attention/parked`**: no automatic write; for a create, an online read-only check
 may resolve it silently in the user's favour; otherwise the row asks

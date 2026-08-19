@@ -272,6 +272,45 @@ export class ActivityRepository {
     return true;
   }
 
+  /** Applies an authoritative detail 404 without deleting unresolved local work. */
+  async acceptCanonicalDeletion(
+    transaction: TransactionContext,
+    activityId: string,
+  ): Promise<boolean> {
+    const guards = await readCanonicalOutboxGuards(transaction.database);
+    if (guards.protectedActivityIds.has(activityId)) return false;
+    const existing = await transaction.database.first(
+      'SELECT local_state FROM activities WHERE activity_id = ?;',
+      [activityId],
+    );
+    if (existing !== undefined && text(existing, 'local_state') !== 'canonical') {
+      return false;
+    }
+    await transaction.database.run(
+      'DELETE FROM activity_reminders WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run(
+      'DELETE FROM activity_occurrences WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
+      activityId,
+    ]);
+    await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
+      activityId,
+    ]);
+    await transaction.database.run(
+      `INSERT OR IGNORE INTO activity_tombstones (activity_id, acknowledged_at)
+       VALUES (?, ?);`,
+      [activityId, new Date().toISOString()],
+    );
+    transaction.changed(this.scope(activityId));
+    transaction.changed('agenda');
+    transaction.changed('reminders');
+    return true;
+  }
+
   async putLocal(
     transaction: TransactionContext,
     activity: Activity,

@@ -1,4 +1,4 @@
-import { getActivity, getAgenda, getMe } from '@od/shared/client';
+import { ApiError } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
 import {
   type AgendaQuery,
@@ -15,13 +15,19 @@ import type {
   Occurrence,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
-import type { QueryClient } from '@tanstack/react-query';
-import { apiClient } from '@/lib/apiClient';
-import { runIntent } from '@/lib/intentReplay';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
+import {
+  type ActivityPullAdapter,
+  sharedActivityPullAdapter,
+} from '@/lib/sync/pullAdapter';
+import { ActivityPushAdapter, type ActivityPushTransport } from '@/lib/sync/pushAdapter';
+import {
+  RecurrenceReconciler,
+  type TargetedAgendaTransport,
+} from '@/lib/sync/reconciliation';
 
 export type NativeSyncReason =
   | 'accepted-action'
@@ -170,25 +176,46 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private retryIndex = 0;
   private stopped = false;
   private networkTail: Promise<void> = Promise.resolve();
+  private pullRequested = false;
+  private pulling = false;
+  private readonly requestedCoverages = new Map<string, AgendaQuery>();
+  private cycleError: Error | undefined;
+  private readonly push: ActivityPushAdapter;
+  private readonly reconciler: RecurrenceReconciler;
 
   constructor(
-    private readonly ownerUserId: string,
-    private readonly queryClient: QueryClient,
     private readonly transactions: SerializedTransactionRunner,
     private readonly outbox: OutboxRepository,
     private readonly activities: ActivityRepository,
     private readonly agenda: AgendaRepository,
-  ) {}
+    pushTransport?: ActivityPushTransport,
+    private readonly pull: ActivityPullAdapter = sharedActivityPullAdapter,
+    targetedTransport?: TargetedAgendaTransport,
+  ) {
+    this.push = new ActivityPushAdapter(pushTransport);
+    this.reconciler = new RecurrenceReconciler(
+      transactions,
+      outbox,
+      activities,
+      agenda,
+      targetedTransport,
+      (operation) => this.serialNetwork(operation),
+    );
+  }
 
   request(reason: NativeSyncReason): void {
     if (this.stopped) return;
+    if (reason !== 'accepted-action' && !this.pulling) this.pullRequested = true;
     if (reason !== 'retry') {
       if (this.retryTimer !== undefined) clearTimeout(this.retryTimer);
       this.retryTimer = undefined;
       this.retryIndex = 0;
     }
+    if (this.running !== undefined) {
+      if (reason === 'accepted-action' || !this.pulling) this.requested = true;
+      return;
+    }
     this.requested = true;
-    if (this.running !== undefined) return;
     this.running = this.drain().finally(() => {
       this.running = undefined;
       if (this.requested) this.request('retry');
@@ -196,30 +223,37 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   }
 
   async syncNow(): Promise<void> {
+    this.cycleError = undefined;
     this.request('manual');
     await this.running;
+    if (this.cycleError !== undefined) throw this.cycleError;
   }
 
   async pullAgenda(request: AgendaQuery): Promise<AgendaData> {
+    this.requestedCoverages.set(JSON.stringify(request), request);
     await this.syncNow();
-    return this.serialNetwork(async () => {
-      const data = await getAgenda(apiClient, request);
-      await this.transactions.run((transaction) =>
-        this.agenda.installCanonical(transaction, request, data),
-      );
-      return this.agenda.read({
-        from: request.from,
-        to: request.to,
-        timezone: request.tz,
-        ...(request.include === undefined ? {} : { include: request.include }),
-      });
+    return this.agenda.read({
+      from: request.from,
+      to: request.to,
+      timezone: request.tz,
+      ...(request.include === undefined ? {} : { include: request.include }),
     });
   }
 
   async pullActivity(target: ActivityDetailTarget): Promise<ActivityDetail> {
     await this.syncNow();
     return this.serialNetwork(async () => {
-      const detail = await getActivity(apiClient, target);
+      let detail: ActivityDetail;
+      try {
+        detail = await this.pull.activity(target);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          await this.transactions.run((transaction) =>
+            this.activities.acceptCanonicalDeletion(transaction, target.activityId),
+          );
+        }
+        throw error;
+      }
       await this.transactions.run((transaction) =>
         this.activities.putCanonical(transaction, detail),
       );
@@ -231,9 +265,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   }
 
   async pullReminderCoverage(): Promise<void> {
-    await this.syncNow();
     await this.serialNetwork(async () => {
-      const user = await getMe(apiClient);
+      const user = await this.pull.profile();
       const today = systemClock.todayIn(user.timezone as TimeZone);
       const request = {
         from: today,
@@ -241,9 +274,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         tz: user.timezone,
         include: 'reminders' as const,
       };
-      const data = await getAgenda(apiClient, request);
+      this.requestedCoverages.set(JSON.stringify(request), request);
       await this.transactions.run(async (transaction) => {
-        await this.agenda.installCanonical(transaction, request, data);
         await transaction.database.run(
           `INSERT INTO native_reminder_profile (
             singleton, timezone, all_day_reminder_hour, quiet_hours_json, refreshed_at
@@ -261,6 +293,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         transaction.changed('reminders');
       });
     });
+    await this.syncNow();
   }
 
   stop(): void {
@@ -273,27 +306,43 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private async drain(): Promise<void> {
     do {
       this.requested = false;
+      const blockedOrderingKeys = new Set<string>();
       for (let count = 0; count < MAX_INTENTS_PER_PASS; count += 1) {
         const claimed = await this.transactions.run(async (transaction) => {
-          const intent = await this.outbox.claimNext(transaction.database);
+          const intent = await this.outbox.claimNext(
+            transaction.database,
+            Date.now(),
+            blockedOrderingKeys,
+          );
           if (intent !== undefined) transaction.changed('outbox');
           return intent;
         });
         if (claimed === undefined) break;
-        const shouldContinue = await this.execute(claimed);
-        if (!shouldContinue) break;
+        const outcome = await this.execute(claimed);
+        if (outcome === 'blocked') blockedOrderingKeys.add(claimed.orderingKey);
+      }
+      const reconciliation = await this.reconciler.reconcilePending();
+      if (reconciliation.failed > 0) {
+        this.cycleError ??= new Error("Couldn't refresh schedule · Retry");
+        this.scheduleRetry();
+      }
+      if (this.pullRequested) {
+        this.pullRequested = false;
+        this.pulling = true;
+        const pullError = await this.pullKnownCoverage().finally(() => {
+          this.pulling = false;
+        });
+        if (pullError !== undefined) {
+          this.cycleError = pullError;
+          this.scheduleRetry();
+        }
       }
     } while (this.requested);
   }
 
-  private async execute(intent: OutboxIntent): Promise<boolean> {
+  private async execute(intent: OutboxIntent): Promise<'continue' | 'blocked'> {
     try {
-      const response = await this.serialNetwork(() =>
-        runIntent(this.queryClient, {
-          ...intent,
-          ownerUserId: this.ownerUserId,
-        }),
-      );
+      const response = await this.serialNetwork(() => this.push.execute(intent));
       await this.transactions.run(async (transaction) => {
         const later = await transaction.database.first(
           `SELECT intent_id FROM outbox_intents
@@ -359,6 +408,10 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           transaction.changed('agenda');
         }
         if (recurrencePatch) {
+          if (activity === undefined) {
+            throw new Error('Recurrence PATCH acknowledgement omitted its Activity.');
+          }
+          await this.activities.acceptCanonicalResponse(transaction, activity);
           await this.activities.setLocalState(transaction, intent.entityId, 'updating');
           await this.agenda.markActivityRows(transaction, intent.entityId, 'updating');
         }
@@ -378,6 +431,27 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             transaction.changed('reminders');
           }
         }
+        if (intent.mutationKey[1] === 'delete') {
+          await transaction.database.run(
+            `INSERT OR IGNORE INTO activity_tombstones (activity_id, acknowledged_at)
+             VALUES (?, ?);`,
+            [intent.entityId, new Date().toISOString()],
+          );
+        }
+        if (intent.mutationKey[1] === 'reminder-delete') {
+          const reminderId = (intent.variables as { reminderId?: unknown } | undefined)
+            ?.reminderId;
+          if (typeof reminderId !== 'string') {
+            throw new Error(
+              'Reminder delete acknowledgement omitted its durable identity.',
+            );
+          }
+          await transaction.database.run(
+            `INSERT OR IGNORE INTO reminder_tombstones
+              (reminder_id, activity_id, acknowledged_at) VALUES (?, ?, ?);`,
+            [reminderId, intent.entityId, new Date().toISOString()],
+          );
+        }
         await this.outbox.acknowledge(
           transaction.database,
           intent.intentId,
@@ -386,8 +460,12 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         transaction.changed('outbox');
       });
       this.retryIndex = 0;
-      return true;
+      return 'continue';
     } catch (error) {
+      const collision = await this.recoverCreateCollision(intent, error);
+      if (collision === 'recovered' || collision === 'parked') return 'continue';
+      if (collision === 'retry') return 'blocked';
+      this.cycleError ??= error instanceof Error ? error : new Error(String(error));
       await this.transactions.run(async (transaction) => {
         if (isPermanent(error)) {
           await this.outbox.needsAttention(
@@ -416,7 +494,107 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         transaction.changed('outbox');
       });
       if (!isPermanent(error)) this.scheduleRetry();
-      return isPermanent(error);
+      return isPermanent(error) ? 'continue' : 'blocked';
+    }
+  }
+
+  private async pullKnownCoverage(): Promise<Error | undefined> {
+    const requests = new Map<string, AgendaQuery>();
+    for (const coverage of await this.agenda.coverage()) {
+      const request = {
+        from: coverage.from,
+        to: coverage.to,
+        tz: coverage.timezone,
+        ...(coverage.include === undefined ? {} : { include: coverage.include }),
+      } as AgendaQuery;
+      requests.set(JSON.stringify(request), request);
+    }
+    for (const [key, request] of this.requestedCoverages) requests.set(key, request);
+    this.requestedCoverages.clear();
+    let firstError: Error | undefined;
+    for (const request of requests.values()) {
+      const coverage = {
+        from: request.from,
+        to: request.to,
+        timezone: request.tz,
+        ...(request.include === undefined ? {} : { include: request.include }),
+      };
+      try {
+        const data = await this.serialNetwork(() => this.pull.agenda(request));
+        await this.transactions.run((transaction) =>
+          this.agenda.installCanonical(transaction, request, data),
+        );
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        firstError ??= failure;
+        await this.transactions.run((transaction) =>
+          this.agenda.recordSyncError(transaction, coverage, failure.message),
+        );
+      }
+    }
+    return firstError;
+  }
+
+  private async recoverCreateCollision(
+    intent: OutboxIntent,
+    error: unknown,
+  ): Promise<'not_applicable' | 'recovered' | 'parked' | 'retry'> {
+    if (
+      intent.mutationKey[1] !== 'create' ||
+      !(error instanceof ApiError) ||
+      error.status !== 409
+    ) {
+      return 'not_applicable';
+    }
+    try {
+      const detail = await this.serialNetwork(() =>
+        this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
+      );
+      await this.transactions.run(async (transaction) => {
+        await this.activities.acceptCanonicalResponse(transaction, detail.activity);
+        await this.activities.putCanonical(transaction, detail);
+        await this.outbox.acknowledge(transaction.database, intent.intentId);
+        transaction.changed('outbox');
+      });
+      return 'recovered';
+    } catch (recoveryError) {
+      if (!(recoveryError instanceof ApiError) || recoveryError.status !== 404) {
+        const failure =
+          recoveryError instanceof Error
+            ? recoveryError
+            : new Error(String(recoveryError));
+        this.cycleError ??= failure;
+        await this.transactions.run(async (transaction) => {
+          await this.outbox.requeue(
+            transaction.database,
+            intent.intentId,
+            failure.message,
+          );
+          transaction.changed('outbox');
+        });
+        this.scheduleRetry();
+        return 'retry';
+      }
+      await this.transactions.run(async (transaction) => {
+        await this.outbox.needsAttention(
+          transaction.database,
+          intent.intentId,
+          { kind: 'parked', reason: 'ambiguous_collision' },
+          'This never synced.',
+        );
+        await this.activities.setLocalState(
+          transaction,
+          intent.entityId,
+          'needs_attention',
+        );
+        await this.agenda.markActivityRows(
+          transaction,
+          intent.entityId,
+          'needs_attention',
+        );
+        transaction.changed('outbox');
+      });
+      return 'parked';
     }
   }
 

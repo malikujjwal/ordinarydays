@@ -2,10 +2,13 @@ import { hydrate, QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
 import {
+  dehydratePersistedClient,
   importLegacyPausedMutations,
+  inspectNativeLegacyPersistence,
   queryPersister,
   restorePersistedClient,
   retireImportedLegacyPausedMutations,
+  retireNativeActivityAgendaPersistence,
   subscribeToPersistence,
 } from '@/lib/persister';
 
@@ -174,5 +177,136 @@ describe('the query-cache persister', () => {
 
     expect(await importLegacyPausedMutations(log, 'web')).toBe(0);
     expect(restoreClient).not.toHaveBeenCalled();
+  });
+
+  it('never hydrates or persists native Activity/Agenda TanStack authority', async () => {
+    const legacy = {
+      timestamp: Date.now(),
+      buster: 'p2-33-v1',
+      clientState: {
+        queries: [
+          {
+            queryKey: ['agenda', '2026-08-19'],
+            queryHash: '["agenda","2026-08-19"]',
+            state: {
+              data: { legacy: true },
+              dataUpdateCount: 1,
+              dataUpdatedAt: Date.now(),
+              error: null,
+              errorUpdateCount: 0,
+              errorUpdatedAt: 0,
+              fetchFailureCount: 0,
+              fetchFailureReason: null,
+              fetchMeta: null,
+              isInvalidated: false,
+              status: 'success',
+              fetchStatus: 'idle',
+            },
+          },
+        ],
+        mutations: [],
+      },
+    };
+    vi.spyOn(queryPersister, 'restoreClient').mockResolvedValue(
+      legacy as unknown as Awaited<ReturnType<typeof queryPersister.restoreClient>>,
+    );
+    const client = new QueryClient();
+
+    await restorePersistedClient(client, 'ios');
+    expect(client.getQueryData(['agenda', '2026-08-19'])).toBeUndefined();
+    client.setQueryData(['agenda', '2026-08-19'], { committedElsewhere: true });
+    expect(dehydratePersistedClient(client, 'ios').queries).toEqual([]);
+    expect(dehydratePersistedClient(client, 'web').queries).toHaveLength(1);
+  });
+
+  it('does not discard an expired native envelope before its intents are imported', async () => {
+    vi.spyOn(queryPersister, 'restoreClient').mockResolvedValue({
+      timestamp: 0,
+      buster: 'old-buster',
+      clientState: {
+        queries: [],
+        mutations: [
+          {
+            mutationKey: ['activity', 'complete'],
+            state: {
+              isPaused: true,
+              variables: { activityId: ACTIVITY, idempotencyKey: 'old-write' },
+            } as never,
+          },
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof queryPersister.restoreClient>>);
+    const remove = vi.spyOn(queryPersister, 'removeClient').mockResolvedValue();
+
+    expect((await restorePersistedClient(new QueryClient(), 'ios')).status).toBe(
+      'discarded',
+    );
+    expect(remove).not.toHaveBeenCalled();
+    expect(await inspectNativeLegacyPersistence('ios')).toMatchObject({
+      domainMutationCount: 1,
+    });
+  });
+
+  it('retires native query and paused-mutation persistence only after preservation', async () => {
+    const legacy = {
+      timestamp: Date.now(),
+      buster: 'p2-33-v1',
+      clientState: {
+        queries: [
+          {
+            queryKey: ['agenda', '2026-08-19'],
+            queryHash: 'agenda-hash',
+            state: {} as never,
+          },
+          {
+            queryKey: ['me'],
+            queryHash: 'profile-hash',
+            state: { data: { userId: USER } } as never,
+          },
+        ],
+        mutations: [
+          {
+            mutationKey: ['activity', 'complete'],
+            state: {
+              isPaused: true,
+              variables: { activityId: ACTIVITY, idempotencyKey: 'legacy-key-1' },
+            } as never,
+          },
+        ],
+      },
+    };
+    vi.spyOn(queryPersister, 'restoreClient').mockResolvedValue(
+      legacy as unknown as Awaited<ReturnType<typeof queryPersister.restoreClient>>,
+    );
+    const persist = vi.spyOn(queryPersister, 'persistClient').mockResolvedValue();
+    const client = new QueryClient();
+    const log = new IntentLog(USER, memoryStorage());
+    await log.hydrate();
+
+    expect(await inspectNativeLegacyPersistence('ios')).toEqual({
+      domainRecordKeys: ['query:agenda-hash'],
+      domainMutationCount: 1,
+      ownerUserId: USER,
+    });
+    await expect(
+      retireNativeActivityAgendaPersistence(client, log, 'ios'),
+    ).rejects.toThrow('not verified in durable SQLite');
+    expect(persist).not.toHaveBeenCalled();
+
+    await log.append({
+      intentId: 'legacy-key-1',
+      mutationKey: ['activity', 'complete'],
+      variables: { activityId: ACTIVITY, idempotencyKey: 'legacy-key-1' },
+      entityId: ACTIVITY,
+    });
+    await retireNativeActivityAgendaPersistence(client, log, 'ios');
+    expect(persist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientState: expect.objectContaining({
+          queries: [expect.objectContaining({ queryHash: 'profile-hash' })],
+          mutations: [],
+        }),
+      }),
+    );
   });
 });

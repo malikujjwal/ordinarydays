@@ -10,9 +10,10 @@ import { Platform } from 'react-native';
 import { type IntentLog, semanticallyIdenticalIntent } from '@/lib/intentLog';
 
 /**
- * Persistence for the **query cache only**.
+ * Persistence for the **web query cache** and non-Activity native queries only.
  *
- * Queued writes used to live in this envelope, which is why they could vanish: a cache is
+ * Native Activity/Agenda roots are filtered on hydrate/save after P2-63. Queued writes used
+ * to live in this envelope, which is why they could vanish: a cache is
  * allowed to be discarded by a buster bump or an age check, and user data is not. They now
  * live in the durable intent log (`intentLog.ts`, `tech-stack.md` §3.4 mechanism 4), which
  * has its own key, its own `schemaVersion` and no age expiry. What remains here is a
@@ -20,7 +21,7 @@ import { type IntentLog, semanticallyIdenticalIntent } from '@/lib/intentLog';
  * purpose.
  *
  * `importLegacyPausedMutations` below carries the one-time bridge for devices that already
- * have paused mutations sitting in the old envelope.
+ * have paused mutations sitting in the old envelope; retirement requires SQLite receipts.
  */
 
 const CACHE_KEY = 'ordinarydays-query-cache-v1';
@@ -34,13 +35,33 @@ interface StoredClient {
   clientState: DehydratedState;
 }
 
+const NATIVE_ACTIVITY_QUERY_ROOTS = new Set(['activity', 'activities', 'agenda']);
+
+function isNativeActivityKey(key: unknown): boolean {
+  return (
+    Array.isArray(key) &&
+    typeof key[0] === 'string' &&
+    NATIVE_ACTIVITY_QUERY_ROOTS.has(key[0])
+  );
+}
+
+function withoutNativeActivityState(state: DehydratedState): DehydratedState {
+  return {
+    ...state,
+    queries: state.queries.filter((query) => !isNativeActivityKey(query.queryKey)),
+    mutations: state.mutations.filter(
+      (mutation) => !isNativeActivityKey(mutation.mutationKey),
+    ),
+  };
+}
+
 export const queryPersister = createAsyncStoragePersister({
   storage: AsyncStorage,
   key: CACHE_KEY,
   throttleTime: 1_000,
 });
 
-function persistedState(client: QueryClient): StoredClient {
+function persistedState(client: QueryClient, platform = Platform.OS): StoredClient {
   return {
     timestamp: Date.now(),
     buster: CACHE_BUSTER,
@@ -51,7 +72,9 @@ function persistedState(client: QueryClient): StoredClient {
        * one action two records that disagree the moment either store is pruned.
        */
       shouldDehydrateMutation: () => false,
-      shouldDehydrateQuery: (query) => query.state.status === 'success',
+      shouldDehydrateQuery: (query) =>
+        query.state.status === 'success' &&
+        (platform !== 'ios' || !isNativeActivityKey(query.queryKey)),
     }),
   };
 }
@@ -66,6 +89,16 @@ function validStoredClient(value: unknown): value is StoredClient {
     typeof candidate.clientState === 'object' &&
     candidate.clientState !== null
   );
+}
+
+function dehydratedStateFrom(value: unknown): DehydratedState | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const state = (value as Partial<StoredClient>).clientState;
+  return state !== undefined &&
+    Array.isArray(state.queries) &&
+    Array.isArray(state.mutations)
+    ? state
+    : undefined;
 }
 
 /**
@@ -84,6 +117,7 @@ export interface RestoreOutcome {
 
 export async function restorePersistedClient(
   client: QueryClient,
+  platform = Platform.OS,
 ): Promise<RestoreOutcome> {
   let settleLate: (() => void) | undefined;
   const lateSettled = new Promise<void>((resolve) => {
@@ -93,7 +127,9 @@ export async function restorePersistedClient(
   let timedOut = false;
   const restored = Promise.resolve(queryPersister.restoreClient())
     .catch(async () => {
-      await Promise.resolve(queryPersister.removeClient()).catch(() => undefined);
+      if (platform !== 'ios') {
+        await Promise.resolve(queryPersister.removeClient()).catch(() => undefined);
+      }
       return undefined;
     })
     .then((value) => {
@@ -103,7 +139,14 @@ export async function restorePersistedClient(
        * hydrate only what it does not already hold — `hydrate` merges, and a query the app
        * has since fetched is newer than this.
        */
-      if (validStoredClient(value)) hydrate(client, value.clientState);
+      if (validStoredClient(value)) {
+        hydrate(
+          client,
+          platform === 'ios'
+            ? withoutNativeActivityState(value.clientState)
+            : value.clientState,
+        );
+      }
       settleLate?.();
       return value;
     });
@@ -127,10 +170,18 @@ export async function restorePersistedClient(
     return { status: 'empty', safeToPersist: Promise.resolve() };
   }
   if (!validStoredClient(value)) {
-    await Promise.resolve(queryPersister.removeClient()).catch(() => undefined);
+    /* Native migration still needs an expired/buster-old envelope's paused mutations. */
+    if (platform !== 'ios') {
+      await Promise.resolve(queryPersister.removeClient()).catch(() => undefined);
+    }
     return { status: 'discarded', safeToPersist: Promise.resolve() };
   }
-  hydrate(client, value.clientState);
+  hydrate(
+    client,
+    platform === 'ios'
+      ? withoutNativeActivityState(value.clientState)
+      : value.clientState,
+  );
   return { status: 'restored', safeToPersist: Promise.resolve() };
 }
 
@@ -144,6 +195,7 @@ export async function restorePersistedClient(
 export function subscribeToPersistence(
   client: QueryClient,
   safeToPersist: Promise<void> = Promise.resolve(),
+  platform = Platform.OS,
 ): () => void {
   let open = false;
   let missed = false;
@@ -159,9 +211,9 @@ export function subscribeToPersistence(
       missed = true;
       return;
     }
-    void Promise.resolve(queryPersister.persistClient(persistedState(client))).catch(
-      () => undefined,
-    );
+    void Promise.resolve(
+      queryPersister.persistClient(persistedState(client, platform)),
+    ).catch(() => undefined);
   }
 
   const queryUnsubscribe = client.getQueryCache().subscribe((event) => {
@@ -297,7 +349,135 @@ export function retireImportedLegacyPausedMutations(
   return retired;
 }
 
+export interface NativeLegacyPersistenceSnapshot {
+  readonly domainRecordKeys: readonly string[];
+  readonly domainMutationCount: number;
+  readonly ownerUserId?: string;
+}
+
+/** Inventories the native cache source before its receipt is written. */
+export async function inspectNativeLegacyPersistence(
+  platform = Platform.OS,
+): Promise<NativeLegacyPersistenceSnapshot> {
+  if (platform !== 'ios') return { domainRecordKeys: [], domainMutationCount: 0 };
+  const stored: unknown = await Promise.resolve(queryPersister.restoreClient()).catch(
+    () => undefined,
+  );
+  if (stored === undefined) return { domainRecordKeys: [], domainMutationCount: 0 };
+  const clientState = dehydratedStateFrom(stored);
+  if (clientState === undefined) {
+    throw new Error('Native legacy query persistence is malformed and was not retired.');
+  }
+  const domainQueries = clientState.queries.filter((query) =>
+    isNativeActivityKey(query.queryKey),
+  );
+  const domainMutations = clientState.mutations.filter((mutation) =>
+    isNativeActivityKey(mutation.mutationKey),
+  );
+  const profile = clientState.queries.find(
+    (query) => Array.isArray(query.queryKey) && query.queryKey[0] === 'me',
+  )?.state.data as { userId?: unknown } | undefined;
+  const ownerUserId = typeof profile?.userId === 'string' ? profile.userId : undefined;
+  return {
+    domainRecordKeys: domainQueries.map(
+      (query, index) =>
+        `query:${query.queryHash || JSON.stringify(query.queryKey) || index + 1}`,
+    ),
+    domainMutationCount: domainMutations.length,
+    ...(ownerUserId === undefined ? {} : { ownerUserId }),
+  };
+}
+
+function mutationSemantic(mutation: DehydratedState['mutations'][number]):
+  | {
+      readonly mutationKey: readonly string[];
+      readonly variables: unknown;
+      readonly entityId: string;
+    }
+  | undefined {
+  if (
+    !Array.isArray(mutation.mutationKey) ||
+    !mutation.mutationKey.every((part) => typeof part === 'string') ||
+    typeof mutation.state.variables !== 'object' ||
+    mutation.state.variables === null
+  ) {
+    return undefined;
+  }
+  const variables = mutation.state.variables as {
+    activityId?: unknown;
+    input?: { activityId?: unknown };
+  };
+  const entityId =
+    typeof variables.activityId === 'string'
+      ? variables.activityId
+      : typeof variables.input?.activityId === 'string'
+        ? variables.input.activityId
+        : undefined;
+  return entityId === undefined
+    ? undefined
+    : { mutationKey: mutation.mutationKey, variables, entityId };
+}
+
+/**
+ * Retires only after the caller has committed SQLite receipts for both the intent log and
+ * this cache-domain inventory. Any unpreserved mutation aborts retirement instead of being
+ * guessed away.
+ */
+export async function retireNativeActivityAgendaPersistence(
+  client: QueryClient,
+  log: IntentLog,
+  platform = Platform.OS,
+): Promise<void> {
+  if (platform !== 'ios') return;
+  const stored: unknown = await Promise.resolve(queryPersister.restoreClient()).catch(
+    () => undefined,
+  );
+  if (stored !== undefined) {
+    const clientState = dehydratedStateFrom(stored);
+    if (clientState === undefined) {
+      throw new Error(
+        'Native legacy query persistence is malformed and was not retired.',
+      );
+    }
+    for (const mutation of clientState.mutations) {
+      if (!isNativeActivityKey(mutation.mutationKey)) continue;
+      const semantic = mutationSemantic(mutation);
+      if (
+        semantic === undefined ||
+        !log
+          .snapshot()
+          .intents.some((intent) => semanticallyIdenticalIntent(intent, semantic))
+      ) {
+        throw new Error(
+          'A native legacy mutation was not verified in durable SQLite; retirement stopped.',
+        );
+      }
+    }
+    if (validStoredClient(stored)) {
+      await Promise.resolve(
+        queryPersister.persistClient({
+          ...stored,
+          clientState: withoutNativeActivityState(clientState),
+        }),
+      );
+    } else {
+      await Promise.resolve(queryPersister.removeClient());
+    }
+  }
+  for (const root of NATIVE_ACTIVITY_QUERY_ROOTS) {
+    client.removeQueries({ queryKey: [root] });
+  }
+  for (const mutation of client.getMutationCache().getAll()) {
+    if (isNativeActivityKey(mutation.options.mutationKey)) {
+      client.getMutationCache().remove(mutation);
+    }
+  }
+}
+
 /** Test seam for proving the query envelope no longer carries mutations. */
-export function dehydratePersistedClient(client: QueryClient): DehydratedState {
-  return persistedState(client).clientState;
+export function dehydratePersistedClient(
+  client: QueryClient,
+  platform = Platform.OS,
+): DehydratedState {
+  return persistedState(client, platform).clientState;
 }

@@ -343,11 +343,14 @@ it amends §5.4's inert paragraph. Not scheduled, not counted.
 offline-capable action was refused, queued, in flight, acknowledged, or needs attention;
 Undo remains safe across transient failure, response loss, races and process death.
 
-**Files.** `apps/mobile/src/lib/{intentLog.ts,intentReplay.ts,intentLogSession.ts,
-queryClient.ts,startUndoable.ts,durableAction.ts}`, their focused tests, the existing
-activity/agenda undo call sites, and ADR-056 plus the Phase 2.6 architecture/product
-amendments. Inventory is a minimum. This task must preserve P2-54/P2-55's occurrence
-targeting and the durable recurring-series reconciliation that lands immediately before it.
+**Files (historical P2-59 inventory).**
+`apps/mobile/src/lib/{intentLog.ts,intentReplay.ts,intentLogSession.ts,queryClient.ts,
+startUndoable.ts,durableAction.ts}`, their focused tests, the existing activity/agenda undo
+call sites, and ADR-056 plus the Phase 2.6 architecture/product amendments. P2-63 removed
+`intentLogSession.ts` after SQLite became the sole native replay owner; it remains named here
+only to preserve the P2-59 implementation record. Inventory is a minimum. This task must
+preserve P2-54/P2-55's occurrence targeting and the durable recurring-series reconciliation
+that lands immediately before it.
 
 **Approach.**
 
@@ -518,12 +521,22 @@ DynamoDB mirror, ORM, CRDT, web queue or local expansion of an existing server-k
 
 ### P2-63 — Sync convergence and legacy retirement
 
+> **Implementation status — 2026-08-19:** implemented for the native Activity/Agenda slice.
+> Automated repository, outbox, convergence, reminder and web-regression verification is
+> required in the implementation commit. The Phase 3 gate remains closed until the documented
+> iOS transition matrix and Maestro run are completed on a supported macOS/device environment.
+> On the 2026-08-19 Windows implementation host, `pnpm verify` and the complete mobile suite
+> pass. Playwright passes 7/8 specs; the first recurrence-stabilization spec times out twice at
+> its existing reschedule-scope interaction. Maestro is not installed and iOS device/simulator
+> execution is unavailable, so neither result is represented as passed.
+
 **Promise.** The Activity/Agenda slice converges through existing server contracts, safely
 retires legacy native persistence only after verified import, and makes refresh a non-
 destructive sync request.
 
-**Files.** `apps/mobile/src/lib/sync/{engine,pushAdapter,pullAdapter,coverage,
-reconciliation}.ts`, SQLite repositories/migrations/import receipts, existing shared endpoint
+**Files.** `apps/mobile/src/lib/sqlite/{syncEngine,agendaRepository,outbox,migrations,
+nativeStateSession.native}.ts`, `apps/mobile/src/lib/sync/{pushAdapter,pullAdapter,
+reconciliation}.ts`, `apps/mobile/src/lib/persister.ts`, SQLite import receipts, existing shared endpoint
 clients, Activity/Agenda refresh/error surfaces, removal of native query-domain persistence
 paths in `persister.ts`/query hooks, and transition/targeted-reconciliation/account-isolation
 tests. Inventory is a minimum.
@@ -549,6 +562,23 @@ tests. Inventory is a minimum.
 - Run the P2-61 importer, verify read-back and receipt, then retire legacy AsyncStorage intent
   data and native persisted query-domain paths. Never import a P2-60 overlay as server base.
   Phase 3 begins only after this retirement/convergence gate passes.
+
+**Implementation record.** Native startup no longer registers the AsyncStorage intent-log /
+MutationCache replay session. It inventories legacy Activity/Agenda queries and paused
+mutations before hydration, imports the account intent log into SQLite, records separate
+receipt-backed provenance for the native query-domain envelope, and only then removes those
+domain entries and purges the old account log. Expired or cache-buster-old envelopes remain
+available to the importer; a mutation that cannot be proved present in the imported log
+stops retirement. Ordinary native hydration and persistence filter Activity, Activities and
+Agenda query roots. Web continues to hydrate and persist them unchanged.
+
+The serialized engine calls typed shared endpoint adapters directly, holds one network tail,
+coalesces overlapping lifecycle pulls, retains same-key barriers while allowing unrelated
+keys to progress, and installs acknowledgements in the outbox settlement transaction.
+Domain-specific Activity and reminder tombstones suppress stale resurrection. Ordinary
+coverage pulls version-guard returned projections and cannot overwrite an unresolved local
+or recurrence-reconciliation representation. The targeted strong read owns recurrence
+replacement, including zero rows, and clears Retry state only in that commit.
 
 **Tests.** Existing endpoint push/pull adapters, coverage gaps, tombstones, deletions,
 stale-version rejection and canonical-response install are exercised against fixtures.
