@@ -1,8 +1,15 @@
 import { addWallDays } from '@od/shared/recurrence';
 import type { AgendaQuery } from '@od/shared/schemas';
 import { agendaItem as agendaItemSchema } from '@od/shared/schemas';
-import type { AgendaData, AgendaDay, AgendaItem } from '@od/shared/types';
+import type {
+  Activity,
+  AgendaData,
+  AgendaDay,
+  AgendaItem,
+  OccurrenceDetailProjection,
+} from '@od/shared/types';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
+import { readCanonicalOutboxGuards } from '@/lib/sqlite/outbox';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
 
@@ -181,6 +188,15 @@ export class AgendaRepository {
     data: AgendaData,
     refreshedAt = new Date().toISOString(),
   ): Promise<void> {
+    const guards = await readCanonicalOutboxGuards(transaction.database);
+    const coveredActivityIds = new Set<string>();
+    for (const row of await transaction.database.all(
+      'SELECT DISTINCT activity_id FROM agenda_rows WHERE viewer_date BETWEEN ? AND ?;',
+      [request.from, request.to],
+    )) {
+      const activityId = text(row, 'activity_id');
+      if (activityId !== undefined) coveredActivityIds.add(activityId);
+    }
     await transaction.database.run(
       `DELETE FROM agenda_rows
        WHERE viewer_date BETWEEN ? AND ? AND local_state = 'canonical';`,
@@ -196,6 +212,7 @@ export class AgendaRepository {
         'canonical',
         (item) => versions.get(item.activityId),
         true,
+        guards.deletedActivityIds,
       );
       for (const item of [
         ...(day.upNext === undefined ? [] : [day.upNext]),
@@ -203,14 +220,23 @@ export class AgendaRepository {
         ...day.anytime,
         ...day.earlier,
       ]) {
+        coveredActivityIds.add(item.activityId);
+        if (guards.deletedActivityIds.has(item.activityId)) continue;
         for (const reminder of item.reminders ?? []) {
+          if (
+            guards.deletedReminderIds.has(reminder.reminderId) ||
+            guards.createdReminderIds.has(reminder.reminderId)
+          ) {
+            continue;
+          }
           await transaction.database.run(
             `INSERT INTO activity_reminders (
               reminder_id, activity_id, owner_user_id, offset_minutes, channel, local_state
             ) VALUES (?, ?, ?, ?, 'push', 'canonical')
             ON CONFLICT(reminder_id) DO UPDATE SET
               activity_id=excluded.activity_id, owner_user_id=excluded.owner_user_id,
-              offset_minutes=excluded.offset_minutes, local_state='canonical';`,
+              offset_minutes=excluded.offset_minutes, local_state='canonical'
+            WHERE activity_reminders.local_state = 'canonical';`,
             [
               reminder.reminderId,
               item.activityId,
@@ -218,6 +244,43 @@ export class AgendaRepository {
               reminder.offsetMinutes,
             ],
           );
+        }
+      }
+    }
+    if (request.include?.split(',').includes('reminders') === true) {
+      const returnedReminderIds = new Set(
+        data.days.flatMap((day) =>
+          [
+            ...(day.upNext === undefined ? [] : [day.upNext]),
+            ...day.schedule,
+            ...day.anytime,
+            ...day.earlier,
+          ].flatMap((item) =>
+            (item.reminders ?? []).map((reminder) => reminder.reminderId),
+          ),
+        ),
+      );
+      for (const activityId of coveredActivityIds) {
+        if (guards.deletedActivityIds.has(activityId)) {
+          await transaction.database.run(
+            'DELETE FROM activity_reminders WHERE activity_id = ?;',
+            [activityId],
+          );
+          continue;
+        }
+        const canonical = await transaction.database.all(
+          `SELECT reminder_id FROM activity_reminders
+           WHERE activity_id = ? AND local_state = 'canonical';`,
+          [activityId],
+        );
+        for (const row of canonical) {
+          const reminderId = text(row, 'reminder_id');
+          if (reminderId !== undefined && !returnedReminderIds.has(reminderId)) {
+            await transaction.database.run(
+              "DELETE FROM activity_reminders WHERE reminder_id = ? AND local_state = 'canonical';",
+              [reminderId],
+            );
+          }
         }
       }
     }
@@ -289,6 +352,31 @@ export class AgendaRepository {
     await transaction.database.run(
       'UPDATE agenda_rows SET local_state = ? WHERE activity_id = ?;',
       [state, activityId],
+    );
+    transaction.changed('agenda');
+  }
+
+  async acceptCanonicalOccurrence(
+    transaction: TransactionContext,
+    activity: Activity,
+    projection: OccurrenceDetailProjection,
+  ): Promise<void> {
+    await transaction.database.run(
+      `UPDATE agenda_rows SET
+         row_id = ?, viewer_date = ?, status = ?, time = ?, end_time = ?,
+         is_snoozed = ?, local_state = 'canonical', canonical_version = ?
+       WHERE activity_id = ? AND occurrence_date = ?;`,
+      [
+        `${projection.date}\u0000${activity.activityId}\u0000${projection.nominalDate}`,
+        projection.date,
+        projection.status,
+        projection.time ?? null,
+        projection.endTime ?? null,
+        projection.isSnoozed ? 1 : 0,
+        activity.updatedAt,
+        activity.activityId,
+        projection.nominalDate,
+      ],
     );
     transaction.changed('agenda');
   }
@@ -390,6 +478,7 @@ export class AgendaRepository {
     state: 'canonical' | 'queued' | 'updating' | 'needs_attention',
     version: (item: AgendaItem) => string | undefined,
     preserveLocal: boolean,
+    suppressedActivityIds: ReadonlySet<string> = new Set(),
   ): Promise<void> {
     const sections = [
       ['schedule', day.schedule],
@@ -402,6 +491,7 @@ export class AgendaRepository {
         : `${day.upNext.activityId}\u0000${day.upNext.occurrenceDate ?? ''}`;
     for (const [section, items] of sections) {
       for (const [order, item] of items.entries()) {
+        if (suppressedActivityIds.has(item.activityId)) continue;
         if (preserveLocal) {
           const existing = await database.first(
             'SELECT local_state, canonical_version FROM agenda_rows WHERE row_id = ?;',

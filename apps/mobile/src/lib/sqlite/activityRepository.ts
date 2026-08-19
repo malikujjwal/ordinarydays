@@ -4,9 +4,13 @@ import type {
   Activity,
   ActivityDetail,
   ActivityDetailTarget,
+  Occurrence,
+  OccurrenceDetailProjection,
   Reminder,
 } from '@od/shared/types';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
+import { projectionFromCanonicalOccurrence } from '@/lib/sqlite/occurrenceMaterialization';
+import { readCanonicalOutboxGuards } from '@/lib/sqlite/outbox';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
 
@@ -93,6 +97,21 @@ function activityFromRow(row: SqliteRow): Activity {
     updatedAt: text(row, 'updated_at'),
     schemaVersion: number(row, 'schema_version'),
   }) as Activity;
+}
+
+function occurrenceFromRow(row: SqliteRow): OccurrenceDetailProjection {
+  const time = text(row, 'time');
+  const endTime = text(row, 'end_time');
+  const completedAt = text(row, 'completed_at');
+  return {
+    nominalDate: text(row, 'nominal_date') ?? '',
+    date: text(row, 'viewer_date') ?? '',
+    ...(time === undefined ? {} : { time }),
+    ...(endTime === undefined ? {} : { endTime }),
+    status: text(row, 'status') as OccurrenceDetailProjection['status'],
+    isSnoozed: number(row, 'is_snoozed') === 1,
+    ...(completedAt === undefined ? {} : { completedAt }),
+  };
 }
 
 function valuesFor(
@@ -192,29 +211,11 @@ export class ActivityRepository {
       'SELECT * FROM activity_occurrences WHERE activity_id = ? AND nominal_date = ?;',
       [target.activityId, target.date],
     );
-    const occurrenceTime =
-      occurrence === undefined ? undefined : text(occurrence, 'time');
-    const occurrenceEndTime =
-      occurrence === undefined ? undefined : text(occurrence, 'end_time');
-    const occurrenceCompletedAt =
-      occurrence === undefined ? undefined : text(occurrence, 'completed_at');
     return occurrence === undefined
       ? detail
       : {
           ...detail,
-          occurrence: {
-            nominalDate: target.date,
-            date: text(occurrence, 'viewer_date') ?? target.date,
-            ...(occurrenceTime === undefined ? {} : { time: occurrenceTime }),
-            ...(occurrenceEndTime === undefined ? {} : { endTime: occurrenceEndTime }),
-            status: text(occurrence, 'status') as NonNullable<
-              ActivityDetail['occurrence']
-            >['status'],
-            isSnoozed: number(occurrence, 'is_snoozed') === 1,
-            ...(occurrenceCompletedAt === undefined
-              ? {}
-              : { completedAt: occurrenceCompletedAt }),
-          },
+          occurrence: occurrenceFromRow(occurrence),
         };
   }
 
@@ -222,6 +223,8 @@ export class ActivityRepository {
     transaction: TransactionContext,
     detail: ActivityDetail,
   ): Promise<boolean> {
+    const guards = await readCanonicalOutboxGuards(transaction.database);
+    if (guards.deletedActivityIds.has(detail.activity.activityId)) return false;
     const existing = await transaction.database.first(
       'SELECT canonical_version, local_state FROM activities WHERE activity_id = ?;',
       [detail.activity.activityId],
@@ -261,6 +264,8 @@ export class ActivityRepository {
       transaction.database,
       detail.activity.activityId,
       detail.reminders,
+      'canonical',
+      true,
     );
     transaction.changed(this.scope(detail.activity.activityId));
     transaction.changed('reminders');
@@ -369,6 +374,54 @@ export class ActivityRepository {
     });
   }
 
+  async acceptCanonicalOccurrence(
+    transaction: TransactionContext,
+    activity: Activity,
+    nominalDate: string,
+    occurrence: Occurrence | undefined,
+    authoritative?: OccurrenceDetailProjection,
+  ): Promise<OccurrenceDetailProjection> {
+    const row = await transaction.database.first(
+      'SELECT * FROM activity_occurrences WHERE activity_id = ? AND nominal_date = ?;',
+      [activity.activityId, nominalDate],
+    );
+    const projection =
+      authoritative ??
+      projectionFromCanonicalOccurrence(
+        activity,
+        nominalDate,
+        occurrence,
+        row === undefined ? undefined : occurrenceFromRow(row),
+      );
+    if (projection.nominalDate !== nominalDate) {
+      throw new Error('Canonical occurrence identity did not match the durable action.');
+    }
+    await transaction.database.run(
+      `INSERT INTO activity_occurrences (
+        activity_id, nominal_date, viewer_date, time, end_time, status,
+        is_snoozed, completed_at, local_state, canonical_version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'canonical', ?)
+      ON CONFLICT(activity_id, nominal_date) DO UPDATE SET
+        viewer_date=excluded.viewer_date, time=excluded.time, end_time=excluded.end_time,
+        status=excluded.status, is_snoozed=excluded.is_snoozed,
+        completed_at=excluded.completed_at, local_state='canonical',
+        canonical_version=excluded.canonical_version;`,
+      [
+        activity.activityId,
+        nominalDate,
+        projection.date,
+        projection.time ?? null,
+        projection.endTime ?? null,
+        projection.status,
+        projection.isSnoozed ? 1 : 0,
+        projection.completedAt ?? null,
+        activity.updatedAt,
+      ],
+    );
+    transaction.changed(this.scope(activity.activityId));
+    return projection;
+  }
+
   async setStatusLocal(
     transaction: TransactionContext,
     activityId: string,
@@ -427,15 +480,30 @@ export class ActivityRepository {
     activityId: string,
     reminders: readonly Reminder[],
     state: NativeRowState = 'canonical',
+    preserveLocal = false,
   ): Promise<void> {
-    await database.run('DELETE FROM activity_reminders WHERE activity_id = ?;', [
-      activityId,
-    ]);
+    const guards = preserveLocal ? await readCanonicalOutboxGuards(database) : undefined;
+    await database.run(
+      preserveLocal
+        ? "DELETE FROM activity_reminders WHERE activity_id = ? AND local_state = 'canonical';"
+        : 'DELETE FROM activity_reminders WHERE activity_id = ?;',
+      [activityId],
+    );
     for (const reminder of reminders) {
+      if (
+        guards?.deletedReminderIds.has(reminder.reminderId) === true ||
+        guards?.createdReminderIds.has(reminder.reminderId) === true
+      ) {
+        continue;
+      }
       await database.run(
         `INSERT INTO activity_reminders
           (reminder_id, activity_id, owner_user_id, offset_minutes, channel, local_state)
-         VALUES (?, ?, ?, ?, 'push', ?);`,
+         VALUES (?, ?, ?, ?, 'push', ?)
+         ON CONFLICT(reminder_id) DO UPDATE SET
+           activity_id=excluded.activity_id, owner_user_id=excluded.owner_user_id,
+           offset_minutes=excluded.offset_minutes, local_state=excluded.local_state
+         WHERE activity_reminders.local_state = 'canonical';`,
         [reminder.reminderId, activityId, reminder.userId, reminder.offsetMinutes, state],
       );
     }

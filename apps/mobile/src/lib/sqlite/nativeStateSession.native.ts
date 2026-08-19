@@ -15,11 +15,25 @@ import { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import { LegacyImporter } from '@/lib/sqlite/legacyImporter';
 import { type NativeStateSession, setActiveNativeState } from '@/lib/sqlite/nativeState';
 import { OutboxRepository } from '@/lib/sqlite/outbox';
+import { recoverAbandonedOutbox } from '@/lib/sqlite/sessionRecovery';
 import { SerializedNativeSyncEngine } from '@/lib/sqlite/syncEngine';
 
 const databases = new AccountDatabaseManager();
+let activeSession: NativeStateSession | undefined;
+let startup: Promise<NativeStateSession | undefined> | undefined;
 
-export async function startNativeStateSession(
+export function startNativeStateSession(
+  queryClient: QueryClient,
+): Promise<NativeStateSession | undefined> {
+  if (activeSession !== undefined) return Promise.resolve(activeSession);
+  if (startup !== undefined) return startup;
+  startup = startSession(queryClient).finally(() => {
+    startup = undefined;
+  });
+  return startup;
+}
+
+async function startSession(
   queryClient: QueryClient,
 ): Promise<NativeStateSession | undefined> {
   const ownerUserId = await httpClientConfig.tokenProvider.getIdentity();
@@ -60,6 +74,7 @@ export async function startNativeStateSession(
     // The account-scoped AsyncStorage source remains available for P2-63 retirement.
     retireImportedLegacyPausedMutations(queryClient, legacyLog);
   }
+  await recoverAbandonedOutbox(account.transactions, outbox);
   const service = new ActivityTransactionService(outbox, activities, agenda);
   const sync = new SerializedNativeSyncEngine(
     ownerUserId,
@@ -86,13 +101,19 @@ export async function startNativeStateSession(
   });
   sync.request('foreground');
 
-  return {
+  let stopped = false;
+  const session: NativeStateSession = {
     stop: () => {
+      if (stopped) return;
+      stopped = true;
       sync.stop();
       stopOnline();
       appState.remove();
       setActiveNativeState(undefined);
+      if (activeSession === session) activeSession = undefined;
       void databases.signOut();
     },
   };
+  activeSession = session;
+  return session;
 }

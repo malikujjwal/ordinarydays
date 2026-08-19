@@ -46,6 +46,12 @@ export interface OutboxAppendInput {
   readonly compensationForIntentId?: string;
 }
 
+export interface CanonicalOutboxGuards {
+  readonly deletedActivityIds: ReadonlySet<string>;
+  readonly deletedReminderIds: ReadonlySet<string>;
+  readonly createdReminderIds: ReadonlySet<string>;
+}
+
 export class OutboxFullError extends Error {
   constructor() {
     super("You're offline and there's a lot waiting to sync.");
@@ -100,6 +106,52 @@ function numberValue(row: SqliteRow, column: string): number | undefined {
 function parseJson(value: string | undefined): unknown {
   if (value === undefined) return undefined;
   return JSON.parse(value) as unknown;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Snapshot of unresolved local removals/creates used inside canonical install transactions. */
+export async function readCanonicalOutboxGuards(
+  database: SqliteReader,
+): Promise<CanonicalOutboxGuards> {
+  const deletedActivityIds = new Set<string>();
+  const deletedReminderIds = new Set<string>();
+  const createdReminderIds = new Set<string>();
+  const rows = await database.all(
+    `SELECT mutation_key_json, variables_json, entity_id
+     FROM outbox_intents
+     WHERE status IN ('queued', 'in_flight', 'needs_attention')
+       AND mutation_key_json IN (
+         '["activity","delete"]',
+         '["activity","reminder-delete"]',
+         '["activity","reminder-create"]'
+       );`,
+  );
+  for (const row of rows) {
+    const mutationKey = parseJson(stringValue(row, 'mutation_key_json'));
+    const variables = record(parseJson(stringValue(row, 'variables_json')));
+    if (!Array.isArray(mutationKey) || variables === undefined) continue;
+    if (mutationKey[1] === 'delete') {
+      const activityId = stringValue(row, 'entity_id');
+      if (activityId !== undefined) deletedActivityIds.add(activityId);
+      continue;
+    }
+    if (mutationKey[1] === 'reminder-delete') {
+      if (typeof variables.reminderId === 'string') {
+        deletedReminderIds.add(variables.reminderId);
+      }
+      continue;
+    }
+    const input = record(variables.input);
+    if (mutationKey[1] === 'reminder-create' && typeof input?.reminderId === 'string') {
+      createdReminderIds.add(input.reminderId);
+    }
+  }
+  return { deletedActivityIds, deletedReminderIds, createdReminderIds };
 }
 
 function intentFromRow(row: SqliteRow): OutboxIntent {
@@ -290,6 +342,14 @@ export class OutboxRepository {
       [intent.intentId],
     );
     return claimed === undefined ? undefined : intentFromRow(claimed);
+  }
+
+  /** Reopens work claimed by a previous process; call once before a session can dispatch. */
+  async recoverAbandoned(database: SqliteExecutor): Promise<number> {
+    const result = await database.run(
+      "UPDATE outbox_intents SET status = 'queued' WHERE status = 'in_flight';",
+    );
+    return result.changes;
   }
 
   async acknowledge(

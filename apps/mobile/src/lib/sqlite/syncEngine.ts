@@ -1,12 +1,19 @@
 import { getActivity, getAgenda, getMe } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
-import { type AgendaQuery, activity as activitySchema } from '@od/shared/schemas';
+import {
+  type AgendaQuery,
+  activityCompletionResult,
+  activity as activitySchema,
+  scheduleActivityResult,
+} from '@od/shared/schemas';
 import { systemClock, type TimeZone } from '@od/shared/time';
 import type {
   Activity,
   ActivityDetail,
   ActivityDetailTarget,
   AgendaData,
+  Occurrence,
+  OccurrenceDetailProjection,
 } from '@od/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
@@ -79,6 +86,83 @@ function isRecurrencePatch(intent: OutboxIntent): boolean {
   );
 }
 
+const OCCURRENCE_MUTATIONS = new Set([
+  'complete',
+  'uncomplete',
+  'skip',
+  'snooze',
+  'unsnooze',
+  'schedule',
+]);
+
+interface CanonicalOccurrenceResponse {
+  readonly activity: Activity;
+  readonly nominalDate: string;
+  readonly occurrence?: Occurrence;
+  readonly projection?: OccurrenceDetailProjection;
+}
+
+function occurrenceDateFromIntent(intent: OutboxIntent): string | undefined {
+  if (!OCCURRENCE_MUTATIONS.has(intent.mutationKey[1] ?? '')) return undefined;
+  const input = (intent.variables as { input?: unknown } | undefined)?.input;
+  if (typeof input !== 'object' || input === null) return undefined;
+  const occurrenceDate = (input as { occurrenceDate?: unknown }).occurrenceDate;
+  return typeof occurrenceDate === 'string' ? occurrenceDate : undefined;
+}
+
+function canonicalOccurrenceResponse(
+  intent: OutboxIntent,
+  response: unknown,
+): CanonicalOccurrenceResponse | undefined {
+  const nominalDate = occurrenceDateFromIntent(intent);
+  if (nominalDate === undefined) return undefined;
+  if (intent.mutationKey[1] === 'schedule') {
+    const parsed = scheduleActivityResult.parse(response);
+    if (
+      parsed.occurrence === undefined ||
+      parsed.occurrence.nominalDate !== nominalDate
+    ) {
+      throw new Error('Canonical occurrence identity did not match the schedule action.');
+    }
+    const projection: OccurrenceDetailProjection = {
+      nominalDate: parsed.occurrence.nominalDate,
+      date: parsed.occurrence.date,
+      ...(parsed.occurrence.time === undefined ? {} : { time: parsed.occurrence.time }),
+      ...(parsed.occurrence.endTime === undefined
+        ? {}
+        : { endTime: parsed.occurrence.endTime }),
+      status: parsed.occurrence.status,
+      isSnoozed: parsed.occurrence.isSnoozed,
+      ...(parsed.occurrence.completedAt === undefined
+        ? {}
+        : { completedAt: parsed.occurrence.completedAt }),
+    };
+    return { activity: parsed.activity as Activity, nominalDate, projection };
+  }
+  const parsed = activityCompletionResult.parse(response);
+  if (
+    parsed.occurrence !== undefined &&
+    (parsed.occurrence.activityId !== intent.entityId ||
+      parsed.occurrence.date !== nominalDate)
+  ) {
+    throw new Error('Canonical occurrence identity did not match the durable action.');
+  }
+  return {
+    activity: parsed.activity as Activity,
+    nominalDate,
+    ...(parsed.occurrence === undefined
+      ? {}
+      : { occurrence: parsed.occurrence as Occurrence }),
+  };
+}
+
+export class PendingActivityDeletionError extends Error {
+  constructor(readonly activityId: string) {
+    super('This activity is pending deletion.');
+    this.name = 'PendingActivityDeletionError';
+  }
+}
+
 export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private running: Promise<void> | undefined;
   private requested = false;
@@ -139,7 +223,10 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       await this.transactions.run((transaction) =>
         this.activities.putCanonical(transaction, detail),
       );
-      return (await this.activities.read(target)) ?? detail;
+      const installed = await this.activities.read(target);
+      if (installed === undefined)
+        throw new PendingActivityDeletionError(target.activityId);
+      return installed;
     });
   }
 
@@ -217,10 +304,26 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         );
         const recurrencePatch = isRecurrencePatch(intent);
         const activity = activityFromResponse(response);
-        if (later === undefined && activity !== undefined && !recurrencePatch) {
+        const canonicalOccurrence =
+          later === undefined ? canonicalOccurrenceResponse(intent, response) : undefined;
+        if (canonicalOccurrence !== undefined) {
+          const projection = await this.activities.acceptCanonicalOccurrence(
+            transaction,
+            canonicalOccurrence.activity,
+            canonicalOccurrence.nominalDate,
+            canonicalOccurrence.occurrence,
+            canonicalOccurrence.projection,
+          );
+          await this.agenda.acceptCanonicalOccurrence(
+            transaction,
+            canonicalOccurrence.activity,
+            projection,
+          );
+        } else if (later === undefined && activity !== undefined && !recurrencePatch) {
           await this.activities.acceptCanonicalResponse(transaction, activity);
           await transaction.database.run(
-            `UPDATE agenda_rows SET title = ?, type = ?, status = ?,
+            `UPDATE agenda_rows SET title = ?, type = ?,
+              status = CASE WHEN occurrence_date IS NULL THEN ? ELSE status END,
               local_state = 'canonical', canonical_version = ?
              WHERE activity_id = ?;`,
             [

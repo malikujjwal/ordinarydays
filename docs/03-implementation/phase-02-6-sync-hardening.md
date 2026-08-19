@@ -471,6 +471,10 @@ is a minimum.
   explicit `ordering_key`; per-key barriers; receipts while dependency or reconciliation
   needs them; and bounded, level-triggered replay. Append/transaction failure is the only
   coordinator-only `refused` and sends no request.
+- Before a newly opened account session can schedule replay, transactionally requeue claims
+  left `in_flight` by the previous process without changing their identity, sequence,
+  attempts, dependency/compensation edges, payload or local projection. A live session is
+  initialized once, so its active request cannot be recovered out from under it.
 - Make each accepted offline-capable Activity action one transaction: append intent, update
   every affected Activity/Agenda materialized row, then commit. Materialization occurs only
   in local-action and sync transactions, never in reads. Completion, rapid toggle, Undo,
@@ -485,12 +489,18 @@ is a minimum.
   adapter.
 - Reminders become a derived consumer of committed local rows. Completion-relative
   recurrence remains server-reconciled and projects no locally invented next occurrence.
+- Canonical installation is mutation-aware: occurrence writes consume the returned
+  occurrence and update only that occurrence's detail/Agenda rows, while a later same-key
+  intent blocks an older response. Unresolved Activity/reminder deletes suppress stale pull
+  resurrection; authoritative reminder coverage prunes only covered canonical reminders and
+  preserves unresolved local creates.
 
 **Tests.** Unit/integration tests cover transactional refusal, commit-before-publish,
 completion, rapid complete/uncomplete, queued cancellation, durable Undo after claim,
 offline one-off and recurring create, reschedule, one-occurrence edit, existing-series
-queued/updating retention, restart and connectivity scheduling. Real-device transition
-acceptance proves: rapid offline/online flapping during completion never reverses the row;
+queued/updating retention, restart-mid-claim recovery, canonical occurrence
+acknowledgement, deletion/reminder pull suppression and scoped reminder pruning. Real-device
+transition acceptance proves: rapid offline/online flapping during completion never reverses the row;
 kill after local commit before request restores identical state; a stale response arriving
 last cannot regress visible rows; complete/Undo racing reconnect produces one correct final
 state; offline/manual refresh retains Today; recurring create offline remains expanded; and

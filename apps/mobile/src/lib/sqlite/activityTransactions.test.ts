@@ -49,6 +49,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
   let service: ActivityTransactionService;
   let request: ReturnType<typeof vi.fn>;
   let coordinator: NativeActivityActionCoordinator;
+  let sync: NativeSyncEngine;
 
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'ordinarydays-p2-62-'));
@@ -67,7 +68,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     outbox = new OutboxRepository(database);
     service = new ActivityTransactionService(outbox, activities, agenda);
     request = vi.fn();
-    const sync: NativeSyncEngine = {
+    sync = {
       request,
       syncNow: async () => undefined,
       pullActivity: async () => {
@@ -449,5 +450,217 @@ describe('Activity/Agenda transactional SQLite slice', () => {
         [ACTIVITY],
       ),
     ).toEqual([{ local_state: 'updating' }]);
+  });
+
+  it('does not resurrect a pending activity delete from stale detail or agenda data', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'create-before-delete' },
+      clock,
+    );
+    await coordinator.create(
+      {
+        input: {
+          ...createInput(OTHER),
+          title: 'Unrelated activity',
+          reminders: [],
+        },
+        idempotencyKey: 'unrelated-create',
+      },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+      await transaction.database.run('DELETE FROM outbox_intents;');
+    });
+    const staleDetail = await activities.read({
+      kind: 'activity',
+      activityId: ACTIVITY,
+    });
+    const staleAgenda = await agenda.read({
+      from: '2026-08-19',
+      to: '2026-08-21',
+      timezone: 'America/New_York',
+    });
+    if (staleDetail === undefined) throw new Error('missing stale detail fixture');
+
+    await coordinator.remove(ACTIVITY, 'pending-delete');
+    await transactions.run(async (transaction) => {
+      expect((await outbox.claimNext(transaction.database))?.intentId).toBe(
+        'pending-delete',
+      );
+      await outbox.requeue(transaction.database, 'pending-delete', 'offline');
+    });
+    await transactions.run(async (transaction) => {
+      await activities.putCanonical(transaction, staleDetail);
+      await agenda.installCanonical(
+        transaction,
+        { from: '2026-08-19', to: '2026-08-21', tz: 'America/New_York' },
+        staleAgenda,
+      );
+    });
+
+    expect(
+      await activities.read({ kind: 'activity', activityId: ACTIVITY }),
+    ).toBeUndefined();
+    const visible = (
+      await agenda.read({
+        from: '2026-08-19',
+        to: '2026-08-21',
+        timezone: 'America/New_York',
+      })
+    ).days.flatMap((day) => day.schedule);
+    expect(visible).not.toContainEqual(expect.objectContaining({ activityId: ACTIVITY }));
+    expect(visible).toContainEqual(expect.objectContaining({ activityId: OTHER }));
+  });
+
+  it('suppresses pending reminder deletes and prunes only covered canonical reminders', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'create-before-reminder-delete' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run(
+        "UPDATE activity_reminders SET local_state = 'canonical';",
+      );
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+      await transaction.database.run('DELETE FROM outbox_intents;');
+    });
+    const stale = await agenda.read({
+      from: '2026-08-19',
+      to: '2026-08-21',
+      timezone: 'America/New_York',
+    });
+    const staleWithReminder = {
+      ...stale,
+      days: stale.days.map((day) => ({
+        ...day,
+        schedule: day.schedule.map((item) => ({
+          ...item,
+          reminders: [
+            {
+              reminderId: REMINDER,
+              activityId: ACTIVITY,
+              userId: OWNER,
+              offsetMinutes: -10,
+              channel: 'push' as const,
+            },
+          ],
+        })),
+      })),
+    };
+
+    await coordinator.removeReminder({
+      activityId: ACTIVITY,
+      reminderId: REMINDER,
+      intentId: 'delete-reminder',
+    });
+    await transactions.run((transaction) =>
+      agenda.installCanonical(
+        transaction,
+        {
+          from: '2026-08-19',
+          to: '2026-08-21',
+          tz: 'America/New_York',
+          include: 'reminders',
+        },
+        staleWithReminder,
+      ),
+    );
+    expect(
+      await database?.all(
+        'SELECT reminder_id FROM activity_reminders WHERE reminder_id = ?;',
+        [REMINDER],
+      ),
+    ).toEqual([]);
+    if (database === undefined) throw new Error('Test database was not opened.');
+    setActiveNativeState({
+      account: {
+        accountNamespace: OWNER,
+        filename: 'slice.sqlite',
+        database,
+        subscriptions,
+        transactions,
+      },
+      activities,
+      agenda,
+      outbox,
+      coordinator,
+      sync,
+    });
+    expect(
+      (await planFromCommittedRows()).requests.some((notification) =>
+        notification.identifier.includes(REMINDER),
+      ),
+    ).toBe(false);
+
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run(
+        `INSERT INTO activity_reminders
+          (reminder_id, activity_id, owner_user_id, offset_minutes, channel, local_state)
+         VALUES ('rem_01J0000000000000000000000B', ?, ?, -30, 'push', 'canonical'),
+                ('rem_01J0000000000000000000000D', ?, ?, -60, 'push', 'canonical');`,
+        [ACTIVITY, OWNER, OTHER, OWNER],
+      );
+    });
+    await coordinator.addReminder({
+      activityId: ACTIVITY,
+      idempotencyKey: 'queued-reminder-create',
+      input: {
+        reminderId: 'rem_01J0000000000000000000000C',
+        offsetMinutes: -45,
+      },
+    });
+    await coordinator.addReminder({
+      activityId: ACTIVITY,
+      idempotencyKey: 'attention-reminder-create',
+      input: {
+        reminderId: 'rem_01J0000000000000000000000E',
+        offsetMinutes: -50,
+      },
+    });
+    await transactions.run(async (transaction) => {
+      await outbox.needsAttention(transaction.database, 'attention-reminder-create', {
+        kind: 'parked',
+        reason: 'legacy_unknown',
+      });
+      await transaction.database.run(
+        "UPDATE activity_reminders SET local_state = 'needs_attention' WHERE reminder_id = ?;",
+        ['rem_01J0000000000000000000000E'],
+      );
+    });
+    await transactions.run((transaction) =>
+      agenda.installCanonical(
+        transaction,
+        {
+          from: '2026-08-19',
+          to: '2026-08-21',
+          tz: 'America/New_York',
+          include: 'reminders',
+        },
+        stale,
+      ),
+    );
+
+    expect(
+      await database?.all(
+        'SELECT reminder_id, local_state FROM activity_reminders ORDER BY reminder_id;',
+      ),
+    ).toEqual([
+      {
+        reminder_id: 'rem_01J0000000000000000000000C',
+        local_state: 'queued',
+      },
+      {
+        reminder_id: 'rem_01J0000000000000000000000D',
+        local_state: 'canonical',
+      },
+      {
+        reminder_id: 'rem_01J0000000000000000000000E',
+        local_state: 'needs_attention',
+      },
+    ]);
   });
 });

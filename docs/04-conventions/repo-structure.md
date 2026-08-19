@@ -34,6 +34,8 @@ ordinarydays/
 │     │  │  ├─ activities/  lists/  people/  expenses/  capture/  notifications/
 │     │  ├─ hooks/               Cross-feature: useSession, useTimezone, useBreakpoint
 │     │  ├─ lib/                 queryClient.ts, apiClient.ts, storage.ts, clock.ts
+│     │  │  └─ sqlite/           Native-only account DB lifecycle, migrations, typed
+│     │  │                       repositories, transaction coordinator, outbox and sync.
 │     │  └─ stores/              Zustand stores, one file per UI domain
 │     ├─ e2e/                    Maestro flows (.yaml) — iOS E2E
 │     ├─ assets/                 Icons, splash, fonts. Nothing generated.
@@ -172,7 +174,8 @@ code belongs somewhere else.
 | Belongs | Never |
 | --- | --- |
 | Routes (`app/`), feature slices, hooks, stores, client-side glue | `fetch` outside `@od/shared/client` |
-| Query keys, optimistic-update projections, invalidation policy | Business rules that the server also enforces — duplicate a rule and the two will drift |
+| Web query keys, optimistic-update projections and invalidation policy | Business rules that the server also enforces — duplicate a rule and the two will drift |
+| Native domain-specific SQLite repositories, transaction coordinators, outbox and serialized sync adapters under `src/lib/sqlite/` | A generic entity/base-view JSON store, ORM, CRDT, change feed, DynamoDB key mirror, or SQLite dependency on web |
 | Platform forks (`.ios.tsx` / `.web.tsx`) where the platforms genuinely differ | `@aws-sdk/*` — the client never talks to AWS directly; it talks to the API |
 | Screen-level composition under ~150 lines per route file | Recurrence expansion or money splitting reimplemented locally — import it from `@od/shared` |
 | Maestro flows in `e2e/` | Inline styles inside list rows (`coding-standards.md` §9.5) |
@@ -278,12 +281,31 @@ layer but imports none of them.
 ### 3.2 Layer direction inside `apps/mobile`
 
 ```
-app/ (routes) → src/features/*/components/ → src/features/*/hooks/ → @od/shared/client
+app/ (routes) → src/features/*/components/ → src/features/*/hooks/
                                            ↘ src/features/*/model/ (pure)
+
+web hooks    → TanStack adapter → @od/shared/client
+native hooks → SQLite coordinator → serialized transaction
+                                  ├→ typed repositories → domain-specific SQLite tables
+                                  └→ transactional outbox
+             → serialized sync adapter → @od/shared/client
+                                      ↘ canonical repository transaction
 ```
 
 `src/features/a/**` may not import `src/features/b/**`. If two features need the same
 thing, it moves up to `src/components/`, `src/hooks/`, or `@od/ui`.
+
+After an ADR-057 native cutover, hooks subscribe to typed repositories and never combine a
+TanStack response with outbox intents at read/render time. A local coordinator appends the
+intent and materializes visible rows in one serialized transaction; repository
+subscriptions publish only after commit. The one native sync adapter owns network writes,
+installs permitted canonical responses and settles the matching outbox receipt in a second
+transaction. Connectivity merely schedules that adapter.
+
+This SQLite application model is deliberately separate from the server persistence model.
+`services/api/src/repositories/` alone knows DynamoDB `pk`/`sk`/GSI shapes; native tables use
+domain/query columns for Activity, occurrence, Agenda, reminder and outbox behavior and must
+never copy those server keys.
 
 ---
 
