@@ -6,7 +6,7 @@ import {
   inspectNativeLegacyPersistence,
   type NativeLegacyPersistenceSnapshot,
   retireNativeActivityAgendaPersistence,
-} from '@/lib/persister';
+} from '@/lib/legacyPersistence';
 import type {
   LegacyImportOutcome,
   LegacyImportSource,
