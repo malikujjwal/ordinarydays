@@ -295,29 +295,29 @@ export class OutboxRepository {
     input: OutboxAppendInput,
     now = Date.now(),
   ): Promise<{ readonly kind: 'inserted' | 'existing'; readonly intent: OutboxIntent }> {
-    const existing = await database.first(
-      'SELECT * FROM outbox_intents WHERE intent_id = ?;',
+    /* One snapshot lookup covers idempotency, sequence allocation and the offline cap. */
+    const allocation = await database.first(
+      `SELECT existing.*, meta.next_seq AS meta_next_seq,
+        (SELECT COUNT(*) FROM outbox_intents
+         WHERE status IN ('queued', 'in_flight', 'needs_attention')) AS unresolved_count
+       FROM outbox_meta meta
+       LEFT JOIN outbox_intents existing ON existing.intent_id = ?
+       WHERE meta.singleton = 1;`,
       [input.intentId],
     );
     const semanticKey = outboxSemanticKey(input);
-    if (existing !== undefined) {
-      if (stringValue(existing, 'semantic_key') !== semanticKey) {
+    if (stringValue(allocation ?? {}, 'intent_id') !== undefined) {
+      if (stringValue(allocation ?? {}, 'semantic_key') !== semanticKey) {
         throw new OutboxInvariantError(input.intentId);
       }
-      return { kind: 'existing', intent: intentFromRow(existing) };
+      return { kind: 'existing', intent: intentFromRow(allocation ?? {}) };
     }
-    const allocation = await database.first(
-      `SELECT next_seq,
-        (SELECT COUNT(*) FROM outbox_intents
-         WHERE status IN ('queued', 'in_flight', 'needs_attention')) AS unresolved_count
-       FROM outbox_meta WHERE singleton = 1;`,
-    );
     if (
       (numberValue(allocation ?? {}, 'unresolved_count') ?? 0) >= MAX_OFFLINE_MUTATIONS
     ) {
       throw new OutboxFullError();
     }
-    const seq = numberValue(allocation ?? {}, 'next_seq');
+    const seq = numberValue(allocation ?? {}, 'meta_next_seq');
     if (seq === undefined) throw new OutboxInvariantError(input.intentId);
     const orderingKey = input.orderingKey ?? `activity:${input.entityId}`;
     const mutationKeyJson = JSON.stringify(input.mutationKey);

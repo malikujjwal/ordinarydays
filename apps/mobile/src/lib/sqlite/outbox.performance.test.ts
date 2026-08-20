@@ -3,11 +3,11 @@ import type { SqliteExecutor } from './database';
 import { OutboxRepository } from './outbox';
 
 describe('OutboxRepository append hot path', () => {
-  it('allocates and returns a new intent with two reads and two writes', async () => {
-    const first = vi
-      .fn<SqliteExecutor['first']>()
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ next_seq: 41, unresolved_count: 3 });
+  it('allocates and returns a new intent with one read and two writes', async () => {
+    const first = vi.fn<SqliteExecutor['first']>().mockResolvedValueOnce({
+      meta_next_seq: 41,
+      unresolved_count: 3,
+    });
     const run = vi
       .fn<SqliteExecutor['run']>()
       .mockResolvedValue({ changes: 1, lastInsertRowId: 0 });
@@ -30,7 +30,7 @@ describe('OutboxRepository append hot path', () => {
       1234,
     );
 
-    expect(first).toHaveBeenCalledTimes(2);
+    expect(first).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
       kind: 'inserted',
