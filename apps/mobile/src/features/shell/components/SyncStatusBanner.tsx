@@ -1,7 +1,12 @@
-import { Card, Text, useTheme } from '@od/ui';
+import { Button, Card, Text, useTheme } from '@od/ui';
+import { useState } from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useBlockedIntents } from '@/hooks/usePendingIntents';
+import {
+  discardBlockedIntent,
+  retryBlockedIntent,
+  useBlockedIntents,
+} from '@/hooks/usePendingIntents';
 import { useSyncStatus } from '@/stores/syncStatus';
 
 /** One app-level banner aggregates replay conflicts instead of emitting a toast per field. */
@@ -19,6 +24,24 @@ export function SyncStatusBanner() {
    * surface. The count is of writes, which is what `<n> changes` means here.
    */
   const blocked = useBlockedIntents();
+  const [actingOn, setActingOn] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
+
+  async function recover(intentId: string, action: 'retry' | 'discard') {
+    setActingOn(intentId);
+    setActionError(undefined);
+    try {
+      const succeeded =
+        action === 'retry'
+          ? await retryBlockedIntent(intentId)
+          : await discardBlockedIntent(intentId);
+      if (!succeeded) setActionError('That change is no longer waiting for recovery.');
+    } catch {
+      setActionError("Couldn't update that change. Try again.");
+    } finally {
+      setActingOn(undefined);
+    }
+  }
 
   if (queueMessage === undefined && conflictChanges.length === 0 && blocked.length === 0)
     return null;
@@ -44,9 +67,41 @@ export function SyncStatusBanner() {
             </Text>
           )}
           {blocked.length === 0 ? null : (
-            <Text variant="subhead" color="textPrimary" testID="blocked-intents">
-              {`${blocked.length} ${blocked.length === 1 ? 'change' : 'changes'} couldn't be applied.`}
-            </Text>
+            <View style={{ gap: theme.space[3] }} testID="blocked-intents">
+              <Text variant="subhead" color="textPrimary">
+                {blocked.length === 1
+                  ? "1 change couldn't be applied."
+                  : `${blocked.length} changes couldn't be applied.`}
+              </Text>
+              {blocked.map((intent) => (
+                <View key={intent.intentId} style={{ gap: theme.space[2] }}>
+                  <Text variant="footnote" color="textSecondary">
+                    {intent.lastError ?? intent.mutationKey.slice(1).join(' ')}
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: theme.space[2] }}>
+                    <Button
+                      label="Retry"
+                      variant="secondary"
+                      loading={actingOn === intent.intentId}
+                      onPress={() => void recover(intent.intentId, 'retry')}
+                      testID={`retry-intent-${intent.intentId}`}
+                    />
+                    <Button
+                      label="Discard"
+                      variant="ghost"
+                      disabled={actingOn === intent.intentId}
+                      onPress={() => void recover(intent.intentId, 'discard')}
+                      testID={`discard-intent-${intent.intentId}`}
+                    />
+                  </View>
+                </View>
+              ))}
+              {actionError === undefined ? null : (
+                <Text variant="footnote" color="danger">
+                  {actionError}
+                </Text>
+              )}
+            </View>
           )}
           {conflictChanges.length === 0 ? null : (
             <>

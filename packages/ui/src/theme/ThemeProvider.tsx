@@ -2,9 +2,7 @@ import {
   createContext,
   type ReactNode,
   useContext,
-  useEffect,
   useMemo,
-  useState,
   useSyncExternalStore,
 } from 'react';
 import {
@@ -183,29 +181,62 @@ export interface MotionTokens {
   reduced: boolean;
 }
 
-export function useMotion(): MotionTokens {
-  const [reduced, setReduced] = useState(false);
+const reducedMotionListeners = new Set<() => void>();
+let reducedMotion = false;
+let reducedMotionStarted = false;
+let reducedMotionGeneration = 0;
+let reducedMotionSubscription:
+  | ReturnType<typeof AccessibilityInfo.addEventListener>
+  | undefined;
 
-  useEffect(() => {
-    let alive = true;
-    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
-      if (alive) setReduced(enabled);
-    });
-    /**
-     * The subscription is optional-chained on removal: React Native Web returns `undefined`
-     * from `addEventListener` rather than a subscription object, so an unconditional
-     * `.remove()` throws on unmount — which presents as a component that renders fine and
-     * explodes when it goes away. Found by `Skeleton`'s render test.
-     */
-    const subscription = AccessibilityInfo.addEventListener(
-      'reduceMotionChanged',
-      setReduced,
-    );
-    return () => {
-      alive = false;
-      subscription?.remove?.();
-    };
-  }, []);
+function publishReducedMotion(enabled: boolean): void {
+  if (reducedMotion === enabled) return;
+  reducedMotion = enabled;
+  for (const listener of reducedMotionListeners) listener();
+}
+
+function startReducedMotion(): void {
+  if (reducedMotionStarted) return;
+  reducedMotionStarted = true;
+  const generation = ++reducedMotionGeneration;
+  void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+    if (reducedMotionStarted && reducedMotionGeneration === generation) {
+      publishReducedMotion(enabled);
+    }
+  });
+  reducedMotionSubscription = AccessibilityInfo.addEventListener(
+    'reduceMotionChanged',
+    (enabled) => {
+      if (reducedMotionStarted && reducedMotionGeneration === generation) {
+        publishReducedMotion(enabled);
+      }
+    },
+  );
+}
+
+function subscribeToReducedMotion(listener: () => void): () => void {
+  reducedMotionListeners.add(listener);
+  startReducedMotion();
+  return () => {
+    reducedMotionListeners.delete(listener);
+    if (reducedMotionListeners.size > 0) return;
+    reducedMotionStarted = false;
+    reducedMotionGeneration += 1;
+    reducedMotionSubscription?.remove?.();
+    reducedMotionSubscription = undefined;
+    reducedMotion = false;
+  };
+}
+
+const reducedMotionSnapshot = () => reducedMotion;
+const reducedMotionServerSnapshot = () => false;
+
+export function useMotion(): MotionTokens {
+  const reduced = useSyncExternalStore(
+    subscribeToReducedMotion,
+    reducedMotionSnapshot,
+    reducedMotionServerSnapshot,
+  );
 
   return useMemo(
     () => ({

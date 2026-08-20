@@ -87,6 +87,19 @@ export function pendingActivityDetailFromIntent(
     target.activityId,
     new Date(intent.createdAt).toISOString(),
   );
+  const reminders = (parsed.data.reminders ?? []).flatMap((reminder) =>
+    reminder.reminderId === undefined
+      ? []
+      : [
+          {
+            reminderId: reminder.reminderId,
+            activityId: target.activityId,
+            userId: intent.ownerUserId,
+            offsetMinutes: reminder.offsetMinutes,
+            channel: 'push' as const,
+          },
+        ],
+  );
   let occurrence: OccurrenceDetailProjection | undefined;
   if (target.kind === 'occurrence') {
     const recurrence = activity.recurrence;
@@ -117,7 +130,7 @@ export function pendingActivityDetailFromIntent(
 
   return {
     activity,
-    reminders: [],
+    reminders,
     capabilities: { complete: false, skip: false, snooze: false },
     ...(occurrence === undefined ? {} : { occurrence }),
   };

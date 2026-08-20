@@ -15,9 +15,28 @@ import type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 import { readCanonicalOutboxGuards } from '@/lib/sqlite/outbox';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
-import type { TransactionContext } from '@/lib/sqlite/transaction';
+import type { SqliteReadScheduler, TransactionContext } from '@/lib/sqlite/transaction';
 
 export type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
+
+export type AgendaInvalidation =
+  | { readonly kind: 'immediate' }
+  | { readonly kind: 'local-day'; readonly date: string };
+
+const AGENDA_SCOPE = 'agenda';
+const AGENDA_LOCAL_DAY_SCOPE_PREFIX = 'agenda:local-day:';
+
+function localDayScope(date: string): string {
+  return `${AGENDA_LOCAL_DAY_SCOPE_PREFIX}${date}`;
+}
+
+function datesInCoverage(coverage: Pick<AgendaCoverage, 'from' | 'to'>): string[] {
+  const dates: string[] = [];
+  for (let date = coverage.from; date <= coverage.to; date = addWallDays(date, 1)) {
+    dates.push(date);
+  }
+  return dates;
+}
 
 function text(row: SqliteRow, column: string): string | undefined {
   const value = row[column];
@@ -113,6 +132,63 @@ function itemFromRow(row: SqliteRow): AgendaItem {
   }) as AgendaItem;
 }
 
+function daysForDates(rows: readonly SqliteRow[], dates: readonly string[]): AgendaDay[] {
+  const byDate = new Map<string, AgendaDay>();
+  for (const date of dates) {
+    byDate.set(date, { date, schedule: [], anytime: [], earlier: [] });
+  }
+  for (const row of rows) {
+    const date = text(row, 'viewer_date');
+    const section = text(row, 'section');
+    if (date === undefined || section === undefined) continue;
+    const day = byDate.get(date);
+    if (day === undefined) continue;
+    const item = itemFromRow(row);
+    if (section === 'schedule') day.schedule.push(item);
+    else if (section === 'anytime') day.anytime.push(item);
+    else if (section === 'earlier') day.earlier.push(item);
+  }
+  const upNextKeys = new Set(
+    rows
+      .filter((row) => number(row, 'is_up_next') === 1)
+      .map(
+        (row) =>
+          `${text(row, 'viewer_date') ?? ''}\u0000${occurrenceIdentity(
+            text(row, 'activity_id') ?? '',
+            text(row, 'occurrence_date'),
+          )}`,
+      ),
+  );
+  return [...byDate.values()].map((day) => {
+    const upNext = day.schedule.find((item) =>
+      upNextKeys.has(
+        `${day.date}\u0000${occurrenceIdentity(item.activityId, item.occurrenceDate)}`,
+      ),
+    );
+    return upNext === undefined ? day : { ...day, upNext };
+  });
+}
+
+function daysFromRows(rows: readonly SqliteRow[], from: string, to: string): AgendaDay[] {
+  return daysForDates(rows, datesInCoverage({ from, to }));
+}
+
+function agendaDataFromRows(
+  rows: readonly SqliteRow[],
+  coverage: AgendaCoverage,
+  metadata: SqliteRow | undefined,
+): AgendaData {
+  return {
+    days: daysFromRows(rows, coverage.from, coverage.to),
+    warnings: json(text(metadata ?? {}, 'warnings_json'), []),
+    ...(text(metadata ?? {}, 'projection_versions_json') === undefined
+      ? {}
+      : {
+          projectionVersions: json(text(metadata ?? {}, 'projection_versions_json'), []),
+        }),
+  };
+}
+
 function itemValues(
   date: string,
   section: 'schedule' | 'anytime' | 'earlier',
@@ -161,31 +237,102 @@ const AGENDA_ROW_COLUMNS = `
   capabilities_json, participant_avatars_json, participant_count, location_label,
   subtitle, note_excerpt, is_past, overdue_from_date, local_state, canonical_version
 `;
+const AGENDA_READ_COLUMNS = `
+  viewer_date, section, is_up_next, activity_id, occurrence_date, parent_activity_id,
+  type, title, status, time, end_time, is_recurring, recurrence_description,
+  is_snoozed, original_time, has_checkbox, capabilities_json,
+  participant_avatars_json, participant_count, location_label, subtitle, note_excerpt,
+  is_past, overdue_from_date
+`;
 const AGENDA_ROW_PLACEHOLDERS = Array.from({ length: 28 }, () => '?').join(', ');
 const INSERT_ROW = `INSERT INTO agenda_rows (${AGENDA_ROW_COLUMNS})
   VALUES (${AGENDA_ROW_PLACEHOLDERS});`;
 const INSERT_CHUNK_SIZE = 25;
+/** Gives a just-accepted UI write one frame to enter the scheduler before refresh work. */
+const AGENDA_BACKGROUND_READ_DELAY_MS = 16;
 
 export class AgendaRepository {
+  private readonly snapshots = new Map<
+    string,
+    Promise<{ readonly data: AgendaData; readonly covered: boolean }>
+  >();
+
   constructor(
     private readonly reader: SqliteReader,
     private readonly subscriptions: RepositorySubscriptions,
+    private readonly readScheduler?: SqliteReadScheduler,
   ) {}
 
   scope(coverage: AgendaCoverage): string {
     return `agenda:${coverage.from}:${coverage.to}:${coverage.timezone}:${includeKey(coverage.include)}`;
   }
 
-  subscribe(_coverage: AgendaCoverage, listener: () => void): () => void {
-    return this.subscriptions.subscribe('agenda', listener);
+  subscribe(
+    coverage: AgendaCoverage,
+    listener: (invalidation: AgendaInvalidation) => void,
+  ): () => void {
+    const stopImmediate = this.subscriptions.subscribe(AGENDA_SCOPE, () =>
+      listener({ kind: 'immediate' }),
+    );
+    const stopLocalDays = datesInCoverage(coverage).map((date) =>
+      this.subscriptions.subscribe(localDayScope(date), () =>
+        listener({ kind: 'local-day', date }),
+      ),
+    );
+    return () => {
+      stopImmediate();
+      for (const stop of stopLocalDays) stop();
+    };
   }
 
-  version(_coverage: AgendaCoverage): number {
-    return this.subscriptions.version('agenda');
+  version(coverage: AgendaCoverage): number {
+    return datesInCoverage(coverage).reduce(
+      (version, date) => version + this.subscriptions.version(localDayScope(date)),
+      this.subscriptions.version(AGENDA_SCOPE),
+    );
   }
 
   async read(coverage: AgendaCoverage): Promise<AgendaData> {
-    return this.readWith(this.reader, coverage);
+    return (await this.readSnapshot(coverage)).data;
+  }
+
+  /** Shares one in-flight committed snapshot across equivalent mounted Agenda consumers. */
+  readSnapshot(
+    coverage: AgendaCoverage,
+  ): Promise<{ readonly data: AgendaData; readonly covered: boolean }> {
+    // A commit published after an older read began must not make a newly mounted consumer
+    // share that pre-commit snapshot after it already missed the invalidation event.
+    const key = `${this.scope(coverage)}:${this.version(coverage)}`;
+    const current = this.snapshots.get(key);
+    if (current !== undefined) return current;
+    const read = () => this.readSnapshotWith(this.reader, coverage);
+    const promise = (
+      this.readScheduler === undefined
+        ? read()
+        : this.readScheduler.read(
+            (database) => this.readSnapshotWith(database, coverage),
+            AGENDA_BACKGROUND_READ_DELAY_MS,
+          )
+    ).finally(() => {
+      if (this.snapshots.get(key) === promise) this.snapshots.delete(key);
+    });
+    this.snapshots.set(key, promise);
+    return promise;
+  }
+
+  /** Reads only locally changed days, preserving the large Plans window outside SQLite. */
+  async readDays(
+    coverage: AgendaCoverage,
+    requestedDates: readonly string[],
+  ): Promise<AgendaDay[]> {
+    const dates = [...new Set(requestedDates)]
+      .filter((date) => date >= coverage.from && date <= coverage.to)
+      .sort();
+    if (dates.length === 0) return [];
+    const read = (database: SqliteReader) => this.readDaysWith(database, dates);
+    return this.readScheduler === undefined
+      ? read(this.reader)
+      : this.readScheduler.read(read);
   }
 
   async coverage(): Promise<readonly AgendaCoverage[]> {
@@ -436,16 +583,20 @@ export class AgendaRepository {
     activityId: string,
     occurrenceDate?: string,
   ): Promise<AgendaData> {
-    const target = await database.first(
-      `SELECT viewer_date FROM agenda_rows
-       WHERE activity_id = ? AND occurrence_date IS ?
-       ORDER BY viewer_date
-       LIMIT 1;`,
+    const rows = await database.all(
+      `SELECT ${AGENDA_READ_COLUMNS} FROM agenda_rows
+       WHERE viewer_date = (
+         SELECT viewer_date FROM agenda_rows
+         WHERE activity_id = ? AND occurrence_date IS ?
+         ORDER BY viewer_date
+         LIMIT 1
+       )
+       ORDER BY viewer_date, section, sort_order, activity_id;`,
       [activityId, occurrenceDate ?? null],
     );
-    const date = target === undefined ? undefined : text(target, 'viewer_date');
+    const date = rows[0] === undefined ? undefined : text(rows[0], 'viewer_date');
     if (date === undefined) return { days: [], warnings: [] };
-    return this.readWith(database, { from: date, to: date, timezone: 'UTC' });
+    return { days: daysFromRows(rows, date, date), warnings: [] };
   }
 
   /** Replaces only one explicit materialized identity after its local transaction commits. */
@@ -475,7 +626,13 @@ export class AgendaRepository {
       state,
       () => undefined,
     );
-    transaction.changed('agenda');
+    const changedDates = new Set(data.days.map((day) => day.date));
+    if (changedDates.size === 0) {
+      // A target absent from all materialized days has no safe date to merge incrementally.
+      transaction.changed(AGENDA_SCOPE);
+    } else {
+      for (const date of changedDates) transaction.changed(localDayScope(date));
+    }
   }
 
   /** Strongly replaces one Activity inside one materialized coverage, including zero rows. */
@@ -543,11 +700,12 @@ export class AgendaRepository {
     activity: Activity,
     projection: OccurrenceDetailProjection,
   ): Promise<void> {
-    await transaction.database.run(
+    const visible = await transaction.database.run(
       `UPDATE agenda_rows SET
-         row_id = ?, viewer_date = ?, status = ?, time = ?, end_time = ?,
-         is_snoozed = ?, local_state = 'canonical', canonical_version = ?
-       WHERE activity_id = ? AND occurrence_date = ?;`,
+         row_id = ?, viewer_date = ?, status = ?, time = ?, end_time = ?, is_snoozed = ?
+       WHERE activity_id = ? AND occurrence_date = ?
+         AND (row_id IS NOT ? OR viewer_date IS NOT ? OR status IS NOT ?
+           OR time IS NOT ? OR end_time IS NOT ? OR is_snoozed IS NOT ?);`,
       [
         rowIdFromParts(projection.date, activity.activityId, projection.nominalDate),
         projection.date,
@@ -555,12 +713,51 @@ export class AgendaRepository {
         projection.time ?? null,
         projection.endTime ?? null,
         projection.isSnoozed ? 1 : 0,
-        activity.updatedAt,
         activity.activityId,
         projection.nominalDate,
+        rowIdFromParts(projection.date, activity.activityId, projection.nominalDate),
+        projection.date,
+        projection.status,
+        projection.time ?? null,
+        projection.endTime ?? null,
+        projection.isSnoozed ? 1 : 0,
       ],
     );
-    transaction.changed('agenda');
+    await transaction.database.run(
+      `UPDATE agenda_rows SET local_state = 'canonical', canonical_version = ?
+       WHERE activity_id = ? AND occurrence_date = ?;`,
+      [activity.updatedAt, activity.activityId, projection.nominalDate],
+    );
+    if (visible.changes > 0) transaction.changed('agenda');
+  }
+
+  /** Acknowledges summary fields without invalidating Agenda for metadata-only changes. */
+  async acceptCanonicalActivitySummary(
+    transaction: TransactionContext,
+    activity: Activity,
+  ): Promise<void> {
+    const visible = await transaction.database.run(
+      `UPDATE agenda_rows SET title = ?, type = ?,
+         status = CASE WHEN occurrence_date IS NULL THEN ? ELSE status END
+       WHERE activity_id = ?
+         AND (title IS NOT ? OR type IS NOT ?
+           OR (occurrence_date IS NULL AND status IS NOT ?));`,
+      [
+        activity.title,
+        activity.type,
+        activity.status,
+        activity.activityId,
+        activity.title,
+        activity.type,
+        activity.status,
+      ],
+    );
+    await transaction.database.run(
+      `UPDATE agenda_rows SET local_state = 'canonical', canonical_version = ?
+       WHERE activity_id = ?;`,
+      [activity.updatedAt, activity.activityId],
+    );
+    if (visible.changes > 0) transaction.changed('agenda');
   }
 
   async readMaterializedWindow(
@@ -602,56 +799,42 @@ export class AgendaRepository {
     database: SqliteReader,
     coverage: AgendaCoverage,
   ): Promise<AgendaData> {
+    return (await this.readSnapshotWith(database, coverage)).data;
+  }
+
+  private async readSnapshotWith(
+    database: SqliteReader,
+    coverage: AgendaCoverage,
+  ): Promise<{ readonly data: AgendaData; readonly covered: boolean }> {
     const rows = await database.all(
-      `SELECT * FROM agenda_rows
+      `SELECT ${AGENDA_READ_COLUMNS} FROM agenda_rows
        WHERE viewer_date BETWEEN ? AND ?
        ORDER BY viewer_date, section, sort_order, activity_id;`,
       [coverage.from, coverage.to],
     );
-    const byDate = new Map<string, AgendaDay>();
-    for (let date = coverage.from; date <= coverage.to; date = addWallDays(date, 1)) {
-      byDate.set(date, { date, schedule: [], anytime: [], earlier: [] });
-    }
-    for (const row of rows) {
-      const date = text(row, 'viewer_date');
-      const section = text(row, 'section');
-      if (date === undefined || section === undefined) continue;
-      const day = byDate.get(date);
-      if (day === undefined) continue;
-      const item = itemFromRow(row);
-      if (section === 'schedule') day.schedule.push(item);
-      else if (section === 'anytime') day.anytime.push(item);
-      else if (section === 'earlier') day.earlier.push(item);
-    }
-    const days = [...byDate.values()].map((day) => {
-      const upNext = day.schedule.find((item) =>
-        rows.some(
-          (row) =>
-            text(row, 'viewer_date') === day.date &&
-            text(row, 'activity_id') === item.activityId &&
-            text(row, 'occurrence_date') === item.occurrenceDate &&
-            number(row, 'is_up_next') === 1,
-        ),
-      );
-      return upNext === undefined ? day : { ...day, upNext };
-    });
     const metadata = await database.first(
       `SELECT warnings_json, projection_versions_json FROM agenda_coverage
        WHERE from_date = ? AND to_date = ? AND timezone = ? AND include_key = ?;`,
       [coverage.from, coverage.to, coverage.timezone, includeKey(coverage.include)],
     );
     return {
-      days,
-      warnings: json(text(metadata ?? {}, 'warnings_json'), []),
-      ...(text(metadata ?? {}, 'projection_versions_json') === undefined
-        ? {}
-        : {
-            projectionVersions: json(
-              text(metadata ?? {}, 'projection_versions_json'),
-              [],
-            ),
-          }),
+      data: agendaDataFromRows(rows, coverage, metadata),
+      covered: metadata !== undefined,
     };
+  }
+
+  private async readDaysWith(
+    database: SqliteReader,
+    dates: readonly string[],
+  ): Promise<AgendaDay[]> {
+    const placeholders = dates.map(() => '?').join(', ');
+    const rows = await database.all(
+      `SELECT ${AGENDA_READ_COLUMNS} FROM agenda_rows
+       WHERE viewer_date IN (${placeholders})
+       ORDER BY viewer_date, section, sort_order, activity_id;`,
+      dates,
+    );
+    return daysForDates(rows, dates);
   }
 
   private async insertDay(

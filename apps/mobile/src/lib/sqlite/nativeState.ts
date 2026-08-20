@@ -2,6 +2,7 @@ import type { AccountDatabase } from '@/lib/sqlite/accountDatabase';
 import type { NativeActivityActionCoordinator } from '@/lib/sqlite/actionCoordinator';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
+import type { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
 import type { OutboxRepository } from '@/lib/sqlite/outbox';
 import type { NativeSyncEngine } from '@/lib/sqlite/syncEngine';
 
@@ -9,6 +10,7 @@ export interface NativeActivityState {
   readonly account: AccountDatabase;
   readonly activities: ActivityRepository;
   readonly agenda: AgendaRepository;
+  readonly anytime?: AnytimeRepository;
   readonly outbox: OutboxRepository;
   readonly coordinator: NativeActivityActionCoordinator;
   readonly sync: NativeSyncEngine;

@@ -20,8 +20,15 @@ export interface NativeLegacyMigrationDependencies {
   readonly hasIntentLog: (ownerUserId: string) => Promise<boolean>;
   readonly createIntentLog: (ownerUserId: string) => IntentLog;
   readonly inspectPersistence: () => Promise<NativeLegacyPersistenceSnapshot>;
-  readonly importPausedMutations: (log: IntentLog) => Promise<number>;
-  readonly retirePersistence: (client: QueryClient, log: IntentLog) => Promise<void>;
+  readonly importPausedMutations: (
+    log: IntentLog,
+    snapshot: NativeLegacyPersistenceSnapshot,
+  ) => Promise<number>;
+  readonly retirePersistence: (
+    client: QueryClient,
+    log: IntentLog,
+    snapshot: NativeLegacyPersistenceSnapshot,
+  ) => Promise<void>;
 }
 
 const nativeDependencies: NativeLegacyMigrationDependencies = {
@@ -29,9 +36,10 @@ const nativeDependencies: NativeLegacyMigrationDependencies = {
     (await AsyncStorage.getItem(intentLogKey(ownerUserId))) !== null,
   createIntentLog: (ownerUserId) => new IntentLog(ownerUserId),
   inspectPersistence: () => inspectNativeLegacyPersistence('ios'),
-  importPausedMutations: (log) => importLegacyPausedMutations(log, 'ios'),
-  retirePersistence: (client, log) =>
-    retireNativeActivityAgendaPersistence(client, log, 'ios'),
+  importPausedMutations: (log, snapshot) =>
+    importLegacyPausedMutations(log, 'ios', snapshot),
+  retirePersistence: (client, log, snapshot) =>
+    retireNativeActivityAgendaPersistence(client, log, 'ios', snapshot),
 };
 
 export type NativeLegacyMigrationResult =
@@ -56,9 +64,11 @@ export async function migrateNativeLegacyState(
   queryClient: QueryClient,
   importer: LegacyMigrationImporter,
   dependencies: NativeLegacyMigrationDependencies = nativeDependencies,
+  persistenceSnapshot?: NativeLegacyPersistenceSnapshot,
 ): Promise<NativeLegacyMigrationResult> {
   try {
-    const legacyPersistence = await dependencies.inspectPersistence();
+    const legacyPersistence =
+      persistenceSnapshot ?? (await dependencies.inspectPersistence());
     if (
       legacyPersistence.domainMutationCount > 0 &&
       legacyPersistence.ownerUserId !== ownerUserId
@@ -70,8 +80,9 @@ export async function migrateNativeLegacyState(
     const hadIntentLog = await dependencies.hasIntentLog(ownerUserId);
     const legacyLog = dependencies.createIntentLog(ownerUserId);
     await legacyLog.hydrate();
-    await dependencies.importPausedMutations(legacyLog);
-    const legacyIntents = legacyLog.snapshot().intents;
+    await dependencies.importPausedMutations(legacyLog, legacyPersistence);
+    const legacyEnvelope = legacyLog.snapshot();
+    const legacyIntents = legacyEnvelope.intents;
     if (legacyIntents.length > 0) {
       await importer.import({
         sourceId: `async-storage-intent-log:${ownerUserId}`,
@@ -84,6 +95,10 @@ export async function migrateNativeLegacyState(
           entityId: intent.entityId,
           orderingKey: `activity:${intent.entityId}`,
           status: intent.status,
+          createdAt: intent.createdAt,
+          attempts: intent.attempts,
+          ...(intent.attention === undefined ? {} : { attention: intent.attention }),
+          clockWitness: legacyEnvelope.clockWitness,
           ...(intent.dependsOnIntentId === undefined
             ? {}
             : { dependsOnIntentId: intent.dependsOnIntentId }),
@@ -117,7 +132,7 @@ export async function migrateNativeLegacyState(
       });
     }
     /* Both receipts are committed before either legacy durability source is removed. */
-    await dependencies.retirePersistence(queryClient, legacyLog);
+    await dependencies.retirePersistence(queryClient, legacyLog, legacyPersistence);
     if (hadIntentLog || legacyIntents.length > 0) await legacyLog.purge();
     return { kind: 'completed', queryPersistenceSafe: true };
   } catch (error) {

@@ -26,6 +26,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgendaRescheduleCoordinator } from '@/components/AgendaRescheduleCoordinator';
+import { ConnectivityStatus } from '@/components/ConnectivityStatus';
 import { bottomChromeScrollPadding } from '@/components/globalAddLayout';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { SnoozeSheet } from '@/components/SnoozeSheet';
@@ -164,6 +165,7 @@ export function TodayScreen({
     today,
     currentMinute,
     timezone: agenda.timezone,
+    ...(agenda.data === undefined ? {} : { agendaData: agenda.data as AgendaData }),
     getScrollOffset: () => scrollOffset.current,
     restoreScrollOffset: (offset) => {
       requestAnimationFrame(() =>
@@ -198,6 +200,7 @@ export function TodayScreen({
       </View>
     );
   const headerAction = headerActionWith(undefined);
+  const connectivityStatus = <ConnectivityStatus />;
   /** The date is known before the response is; the loading and error days are dated too. */
   const dayCaption = formatDayCaption(today);
   const overflowMenu = (
@@ -216,6 +219,7 @@ export function TodayScreen({
           title="Today"
           testID="today-screen"
           caption={dayCaption}
+          titleAccessory={connectivityStatus}
           headerAction={headerAction}
         >
           <View testID="today-loading">
@@ -235,6 +239,7 @@ export function TodayScreen({
           title="Today"
           testID="today-screen"
           caption={dayCaption}
+          titleAccessory={connectivityStatus}
           headerAction={headerAction}
         >
           <View testID="today-error">
@@ -460,6 +465,7 @@ export function TodayScreen({
           title="Today"
           testID="today-screen"
           caption={dayCaption}
+          titleAccessory={connectivityStatus}
           headerAction={headerAction}
         >
           <EmptyState
@@ -479,6 +485,7 @@ export function TodayScreen({
       title="Today"
       testID="today-screen"
       caption={dayCaption}
+      titleAccessory={connectivityStatus}
       bleedBody
       headerAction={headerActionWith(countLabel)}
       belowHeader={

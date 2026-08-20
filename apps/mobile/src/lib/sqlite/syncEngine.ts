@@ -12,6 +12,7 @@ import type {
   Activity,
   ActivityDetail,
   ActivityDetailTarget,
+  ActivityListItem,
   AgendaData,
   Occurrence,
   OccurrenceDetailProjection,
@@ -25,6 +26,7 @@ import {
   nativeVisibleAgendaQuery,
 } from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
+import type { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
 import {
@@ -51,6 +53,7 @@ export interface NativeSyncEngine {
   pullActivity(target: ActivityDetailTarget): Promise<ActivityDetail>;
   pullAgenda(request: AgendaQuery): Promise<AgendaData>;
   pullReminderCoverage(): Promise<void>;
+  pullAnytime?(): Promise<readonly ActivityListItem[]>;
   stop(): void;
 }
 
@@ -142,6 +145,7 @@ function canonicalOccurrenceResponse(
   if (intent.mutationKey[1] === 'schedule') {
     const parsed = scheduleActivityResult.parse(response);
     if (
+      parsed.activity.activityId !== intent.entityId ||
       parsed.occurrence === undefined ||
       parsed.occurrence.nominalDate !== nominalDate
     ) {
@@ -165,9 +169,10 @@ function canonicalOccurrenceResponse(
   }
   const parsed = activityCompletionResult.parse(response);
   if (
-    parsed.occurrence !== undefined &&
-    (parsed.occurrence.activityId !== intent.entityId ||
-      parsed.occurrence.date !== nominalDate)
+    parsed.activity.activityId !== intent.entityId ||
+    (parsed.occurrence !== undefined &&
+      (parsed.occurrence.activityId !== intent.entityId ||
+        parsed.occurrence.date !== nominalDate))
   ) {
     throw new Error('Canonical occurrence identity did not match the durable action.');
   }
@@ -204,6 +209,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private readonly activeCoverageKeys = new Set<string>();
   private readonly requestedCoverages = new Map<string, AgendaQuery>();
   private cycleError: Error | undefined;
+  private anytimeRunning: Promise<readonly ActivityListItem[]> | undefined;
   private readonly push: ActivityPushAdapter;
   private readonly reconciler: RecurrenceReconciler;
 
@@ -215,6 +221,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     pushTransport?: ActivityPushTransport,
     private readonly pull: ActivityPullAdapter = sharedActivityPullAdapter,
     targetedTransport?: TargetedAgendaTransport,
+    private readonly anytime?: AnytimeRepository,
   ) {
     this.push = new ActivityPushAdapter(pushTransport);
     this.reconciler = new RecurrenceReconciler(
@@ -322,6 +329,43 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     await this.syncNow();
   }
 
+  async pullAnytime(): Promise<readonly ActivityListItem[]> {
+    if (this.anytimeRunning !== undefined) return this.anytimeRunning;
+    const running = this.loadAnytime();
+    this.anytimeRunning = running;
+    try {
+      return await running;
+    } finally {
+      if (this.anytimeRunning === running) this.anytimeRunning = undefined;
+    }
+  }
+
+  private async loadAnytime(): Promise<readonly ActivityListItem[]> {
+    const anytime = this.anytime;
+    const pullAnytimePage = this.pull.anytimePage;
+    if (anytime === undefined || pullAnytimePage === undefined) {
+      throw new Error('Native Anytime state is not ready.');
+    }
+    const items: ActivityListItem[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const page = await this.serialNetwork(() => pullAnytimePage(cursor));
+      items.push(...page.data);
+      cursor = page.nextCursor;
+      if (cursor !== undefined) {
+        if (seenCursors.has(cursor)) {
+          throw new Error('Anytime pagination returned a repeated cursor.');
+        }
+        seenCursors.add(cursor);
+      }
+    } while (cursor !== undefined);
+    await this.transactions.run((transaction) =>
+      anytime.replaceCanonical(transaction, items),
+    );
+    return anytime.read();
+  }
+
   stop(): void {
     this.stopped = true;
     this.requested = false;
@@ -373,6 +417,38 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     let phase: 'push' | 'settlement' = 'push';
     try {
       const response = await this.serialNetwork(() => this.push.execute(intent));
+      const pushedActivity = activityFromResponse(response);
+      let createdDetail: ActivityDetail | undefined;
+      if (
+        intent.mutationKey[0] === 'activity' &&
+        intent.mutationKey[1] === 'create' &&
+        pushedActivity?.activityId === intent.entityId
+      ) {
+        try {
+          const detail = await this.serialNetwork(() =>
+            this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
+          );
+          if (detail.activity.activityId === intent.entityId) createdDetail = detail;
+          else if (__DEV__) {
+            console.warn('native_create_detail_identity_mismatch', {
+              expectedActivityId: intent.entityId,
+              returnedActivityId: detail.activity.activityId,
+            });
+          }
+        } catch (error) {
+          /*
+           * The create has already succeeded. Detail enrichment is deliberately best-effort:
+           * a briefly stale or unavailable read must not redispatch or permanently reject the
+           * durable create. The detail hook retains its existing targeted-read fallback.
+           */
+          if (__DEV__) {
+            console.info('native_create_detail_prefetch_failed', {
+              activityId: intent.entityId,
+              message: message(error),
+            });
+          }
+        }
+      }
       phase = 'settlement';
       await this.transactions.run(async (transaction) => {
         const later = await transaction.database.first(
@@ -383,9 +459,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           [intent.orderingKey, intent.seq],
         );
         const recurrencePatch = isRecurrencePatch(intent);
-        const activity = activityFromResponse(response);
+        const activity = pushedActivity;
         let canonicalOccurrence: CanonicalOccurrenceResponse | undefined;
-        let occurrenceContractBroken = false;
         if (later === undefined) {
           try {
             canonicalOccurrence = canonicalOccurrenceResponse(intent, response);
@@ -396,7 +471,6 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
              * the claim. Acknowledge, install at most the matching activity-level
              * result, and leave that occurrence's presentation to the next pull.
              */
-            occurrenceContractBroken = true;
             console.warn(
               'outbox_response_contract_mismatch',
               intent.mutationKey.join('.'),
@@ -405,10 +479,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           }
         }
         const installable =
-          occurrenceContractBroken && activity?.activityId !== intent.entityId
-            ? undefined
-            : activity;
-        if (canonicalOccurrence !== undefined) {
+          activity?.activityId === intent.entityId ? activity : undefined;
+        if (canonicalOccurrence !== undefined && later === undefined) {
           const projection = await this.activities.acceptCanonicalOccurrence(
             transaction,
             canonicalOccurrence.activity,
@@ -422,23 +494,17 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             projection,
           );
         } else if (later === undefined && installable !== undefined && !recurrencePatch) {
-          await this.activities.acceptCanonicalResponse(transaction, installable);
-          await transaction.database.run(
-            `UPDATE agenda_rows SET title = ?, type = ?,
-              status = CASE WHEN occurrence_date IS NULL THEN ? ELSE status END,
-              local_state = 'canonical', canonical_version = ?
-             WHERE activity_id = ?;`,
-            [
-              installable.title,
-              installable.type,
-              installable.status,
-              installable.updatedAt,
-              installable.activityId,
-            ],
-          );
-          transaction.changed('agenda');
+          if (createdDetail === undefined) {
+            await this.activities.acceptCanonicalResponse(transaction, installable);
+          } else {
+            await this.activities.acceptCanonicalDetailResponse(
+              transaction,
+              createdDetail,
+            );
+          }
+          await this.agenda.acceptCanonicalActivitySummary(transaction, installable);
         }
-        if (recurrencePatch) {
+        if (recurrencePatch && later === undefined) {
           if (activity === undefined) {
             throw new Error('Recurrence PATCH acknowledgement omitted its Activity.');
           }
@@ -480,10 +546,17 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             [reminderId, intent.entityId, systemClock.now()],
           );
         }
+        if (later === undefined && this.anytime !== undefined) {
+          if (intent.mutationKey[1] === 'delete') {
+            await this.anytime.removeCanonical(transaction, intent.entityId);
+          } else if (installable !== undefined) {
+            await this.anytime.acceptCanonicalActivity(transaction, installable);
+          }
+        }
         await this.outbox.acknowledge(
           transaction.database,
           intent.intentId,
-          recurrencePatch ? activity?.updatedAt : undefined,
+          recurrencePatch && later === undefined ? activity?.updatedAt : undefined,
         );
         transaction.changed('outbox');
       });
@@ -521,35 +594,177 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       if (collision === 'recovered' || collision === 'parked') return 'continue';
       if (collision === 'retry') return 'blocked';
       this.cycleError ??= failure;
-      await this.transactions.run(async (transaction) => {
-        if (permanent) {
-          await this.outbox.needsAttention(
-            transaction.database,
-            intent.intentId,
-            rejectedAttention(failure),
-            failure.message,
-          );
-          await this.activities.setLocalState(
-            transaction,
-            intent.entityId,
-            'needs_attention',
-          );
-          await this.agenda.markActivityRows(
-            transaction,
-            intent.entityId,
-            'needs_attention',
-          );
-        } else {
+      if (permanent) {
+        await this.rollbackPermanentRejection(intent, failure);
+      } else {
+        await this.transactions.run(async (transaction) => {
           await this.outbox.requeue(
             transaction.database,
             intent.intentId,
             failure.message,
           );
-        }
-        transaction.changed('outbox');
-      });
+          transaction.changed('outbox');
+        });
+      }
       if (!permanent) this.scheduleRetry();
       return permanent ? 'continue' : 'blocked';
+    }
+  }
+
+  /** Restores the last server truth before exposing a permanent rejection for recovery. */
+  private async rollbackPermanentRejection(
+    intent: OutboxIntent,
+    failure: Error,
+  ): Promise<void> {
+    const occurrenceDate = occurrenceDateFromIntent(intent);
+    const target: ActivityDetailTarget =
+      occurrenceDate === undefined
+        ? { kind: 'activity', activityId: intent.entityId }
+        : { kind: 'occurrence', activityId: intent.entityId, date: occurrenceDate };
+    let canonical: ActivityDetail | undefined;
+    let missing = false;
+    try {
+      canonical = await this.serialNetwork(() => this.pull.activity(target));
+    } catch (rollbackError) {
+      missing = field(rollbackError, 'status') === 404;
+      if (!missing && __DEV__) {
+        console.warn('native_rejection_rollback_read_failed', {
+          intentId: intent.intentId,
+          message: message(rollbackError),
+        });
+      }
+    }
+
+    let canonicalAgendas:
+      | Array<{ readonly request: AgendaQuery; readonly data: AgendaData }>
+      | undefined;
+    if (canonical !== undefined) {
+      try {
+        canonicalAgendas = [];
+        for (const coverage of latestNativeAgendaCoverage(await this.agenda.coverage())) {
+          const request = agendaQueryForCoverage(coverage);
+          canonicalAgendas.push({
+            request,
+            data: await this.serialNetwork(() => this.pull.agenda(request)),
+          });
+        }
+      } catch (rollbackError) {
+        canonicalAgendas = undefined;
+        if (__DEV__) {
+          console.warn('native_rejection_agenda_rollback_read_failed', {
+            intentId: intent.intentId,
+            message: message(rollbackError),
+          });
+        }
+      }
+    }
+
+    await this.transactions.run(async (transaction) => {
+      await this.outbox.needsAttention(
+        transaction.database,
+        intent.intentId,
+        rejectedAttention(failure),
+        failure.message,
+      );
+      for (const later of await this.outbox.laterInOrdering(
+        transaction.database,
+        intent.orderingKey,
+        intent.seq,
+      )) {
+        await this.outbox.needsAttention(
+          transaction.database,
+          later.intentId,
+          { kind: 'parked', reason: 'predecessor_rejected' },
+          'An earlier change for this activity was rejected.',
+        );
+      }
+      if (canonical !== undefined) {
+        await transaction.database.run(
+          "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
+          [intent.entityId],
+        );
+        await transaction.database.run(
+          "UPDATE activity_reminders SET local_state = 'canonical' WHERE activity_id = ?;",
+          [intent.entityId],
+        );
+        await transaction.database.run(
+          "UPDATE activity_occurrences SET local_state = 'canonical' WHERE activity_id = ?;",
+          [intent.entityId],
+        );
+        await transaction.database.run(
+          "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ?;",
+          [intent.entityId],
+        );
+        await this.activities.putCanonical(transaction, canonical);
+        await this.anytime?.acceptCanonicalActivity(transaction, canonical.activity);
+        if (canonicalAgendas !== undefined && canonicalAgendas.length > 0) {
+          for (const snapshot of canonicalAgendas) {
+            await this.agenda.installCanonical(
+              transaction,
+              snapshot.request,
+              snapshot.data,
+            );
+          }
+        } else if (canonical.occurrence !== undefined) {
+          await this.agenda.acceptCanonicalOccurrence(
+            transaction,
+            canonical.activity,
+            canonical.occurrence,
+          );
+        } else if (
+          intent.mutationKey[1] !== 'duplicate' &&
+          intent.mutationKey[1] !== 'convert-recurrence' &&
+          intent.mutationKey[1] !== 'reminder-create' &&
+          intent.mutationKey[1] !== 'reminder-delete'
+        ) {
+          /* Entity-level schedule/delete projections cannot be reversed row-by-row safely. */
+          await transaction.database.run(
+            'DELETE FROM agenda_rows WHERE activity_id = ?;',
+            [intent.entityId],
+          );
+          transaction.changed('agenda');
+        }
+      } else if (missing) {
+        await this.anytime?.removeCanonical(transaction, intent.entityId);
+        await transaction.database.run(
+          'DELETE FROM activity_reminders WHERE activity_id = ?;',
+          [intent.entityId],
+        );
+        await transaction.database.run(
+          'DELETE FROM activity_occurrences WHERE activity_id = ?;',
+          [intent.entityId],
+        );
+        await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
+          intent.entityId,
+        ]);
+        await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
+          intent.entityId,
+        ]);
+        transaction.changed(this.activities.scope(intent.entityId));
+        transaction.changed('agenda');
+        transaction.changed('reminders');
+      } else {
+        await this.activities.setLocalState(
+          transaction,
+          intent.entityId,
+          'needs_attention',
+        );
+        await this.agenda.markActivityRows(
+          transaction,
+          intent.entityId,
+          'needs_attention',
+        );
+      }
+      transaction.changed('outbox');
+      transaction.changed('anytime');
+    });
+    if (
+      canonical !== undefined &&
+      occurrenceDate === undefined &&
+      canonicalAgendas === undefined
+    ) {
+      this.pullRequested = true;
+      this.requested = true;
     }
   }
 

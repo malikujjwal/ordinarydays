@@ -16,6 +16,7 @@ export type OutboxAttention =
         | 'clock_uncertainty'
         | 'replay_age_expired'
         | 'ambiguous_collision'
+        | 'predecessor_rejected'
         | 'legacy_unknown';
     };
 
@@ -52,6 +53,8 @@ export interface CanonicalOutboxGuards {
   readonly createdReminderIds: ReadonlySet<string>;
   /** Ordinary pulls cannot overwrite any still-represented local Activity work. */
   readonly protectedActivityIds: ReadonlySet<string>;
+  /** Occurrence-only local work is protected even when the Activity row stayed canonical. */
+  readonly protectedOccurrenceKeys: ReadonlySet<string>;
   readonly reconcilingActivityIds: ReadonlySet<string>;
 }
 
@@ -117,6 +120,21 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function freshVariables(value: unknown, freshIntentId: string): unknown {
+  const variables = record(value);
+  if (variables === undefined) throw new Error('Blocked intent variables are malformed.');
+  const hasIntentId = typeof variables.intentId === 'string';
+  const hasIdempotencyKey = typeof variables.idempotencyKey === 'string';
+  if (!hasIntentId && !hasIdempotencyKey) {
+    throw new Error('Blocked intent has no retry identity.');
+  }
+  return {
+    ...variables,
+    ...(hasIntentId ? { intentId: freshIntentId } : {}),
+    ...(hasIdempotencyKey ? { idempotencyKey: freshIntentId } : {}),
+  };
+}
+
 /** Snapshot of unresolved local removals/creates used inside canonical install transactions. */
 export async function readCanonicalOutboxGuards(
   database: SqliteReader,
@@ -125,9 +143,11 @@ export async function readCanonicalOutboxGuards(
   const deletedReminderIds = new Set<string>();
   const createdReminderIds = new Set<string>();
   const protectedActivityIds = new Set<string>();
+  const protectedOccurrenceKeys = new Set<string>();
   const reconcilingActivityIds = new Set<string>();
   const rows = await database.all(
-    `SELECT mutation_key_json, variables_json, entity_id, status
+    `SELECT mutation_key_json, variables_json, entity_id, status, attention_kind,
+            attention_reason
      FROM outbox_intents
      WHERE status IN ('queued', 'in_flight', 'needs_attention')
         OR (status = 'acknowledged' AND reconciliation_version IS NOT NULL);`,
@@ -136,6 +156,15 @@ export async function readCanonicalOutboxGuards(
     const mutationKey = parseJson(stringValue(row, 'mutation_key_json'));
     const variables = record(parseJson(stringValue(row, 'variables_json')));
     if (!Array.isArray(mutationKey) || variables === undefined) continue;
+    /* Rolled-back work must not shield the projection that replaced it. */
+    if (
+      stringValue(row, 'status') === 'needs_attention' &&
+      (stringValue(row, 'attention_kind') === 'rejected' ||
+        (stringValue(row, 'attention_kind') === 'parked' &&
+          stringValue(row, 'attention_reason') === 'predecessor_rejected'))
+    ) {
+      continue;
+    }
     const activityId = stringValue(row, 'entity_id');
     if (
       activityId !== undefined &&
@@ -162,6 +191,9 @@ export async function readCanonicalOutboxGuards(
       continue;
     }
     const input = record(variables.input);
+    if (activityId !== undefined && typeof input?.occurrenceDate === 'string') {
+      protectedOccurrenceKeys.add(`${activityId}:${input.occurrenceDate}`);
+    }
     if (mutationKey[1] === 'reminder-create' && typeof input?.reminderId === 'string') {
       createdReminderIds.add(input.reminderId);
     }
@@ -179,6 +211,7 @@ export async function readCanonicalOutboxGuards(
     deletedReminderIds,
     createdReminderIds,
     protectedActivityIds,
+    protectedOccurrenceKeys,
     reconcilingActivityIds,
   };
 }
@@ -273,18 +306,23 @@ export class OutboxRepository {
       }
       return { kind: 'existing', intent: intentFromRow(existing) };
     }
-    const occupied = await database.first(
-      "SELECT COUNT(*) AS count FROM outbox_intents WHERE status <> 'acknowledged';",
+    const allocation = await database.first(
+      `SELECT next_seq,
+        (SELECT COUNT(*) FROM outbox_intents
+         WHERE status IN ('queued', 'in_flight', 'needs_attention')) AS unresolved_count
+       FROM outbox_meta WHERE singleton = 1;`,
     );
-    if ((numberValue(occupied ?? {}, 'count') ?? 0) >= MAX_OFFLINE_MUTATIONS) {
+    if (
+      (numberValue(allocation ?? {}, 'unresolved_count') ?? 0) >= MAX_OFFLINE_MUTATIONS
+    ) {
       throw new OutboxFullError();
     }
-    const meta = await database.first(
-      'SELECT next_seq, clock_witness FROM outbox_meta WHERE singleton = 1;',
-    );
-    const seq = numberValue(meta ?? {}, 'next_seq');
+    const seq = numberValue(allocation ?? {}, 'next_seq');
     if (seq === undefined) throw new OutboxInvariantError(input.intentId);
     const orderingKey = input.orderingKey ?? `activity:${input.entityId}`;
+    const mutationKeyJson = JSON.stringify(input.mutationKey);
+    const variablesJson = JSON.stringify(input.variables);
+    if (variablesJson === undefined) throw new OutboxInvariantError(input.intentId);
     await database.run(
       `INSERT INTO outbox_intents (
         intent_id, mutation_key_json, variables_json, entity_id, ordering_key,
@@ -293,8 +331,8 @@ export class OutboxRepository {
       ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, 0, ?, ?, ?);`,
       [
         input.intentId,
-        JSON.stringify(input.mutationKey),
-        JSON.stringify(input.variables),
+        mutationKeyJson,
+        variablesJson,
         input.entityId,
         orderingKey,
         now,
@@ -308,12 +346,26 @@ export class OutboxRepository {
       'UPDATE outbox_meta SET next_seq = ?, clock_witness = MAX(clock_witness, ?) WHERE singleton = 1;',
       [seq + 1, now],
     );
-    const inserted = await database.first(
-      'SELECT * FROM outbox_intents WHERE intent_id = ?;',
-      [input.intentId],
-    );
-    if (inserted === undefined) throw new OutboxInvariantError(input.intentId);
-    return { kind: 'inserted', intent: intentFromRow(inserted) };
+    return {
+      kind: 'inserted',
+      intent: {
+        intentId: input.intentId,
+        mutationKey: JSON.parse(mutationKeyJson) as string[],
+        variables: JSON.parse(variablesJson) as unknown,
+        entityId: input.entityId,
+        orderingKey,
+        status: 'queued',
+        createdAt: now,
+        seq,
+        attempts: 0,
+        ...(input.dependsOnIntentId === undefined
+          ? {}
+          : { dependsOnIntentId: input.dependsOnIntentId }),
+        ...(input.compensationForIntentId === undefined
+          ? {}
+          : { compensationForIntentId: input.compensationForIntentId }),
+      },
+    };
   }
 
   async all(): Promise<readonly OutboxIntent[]> {
@@ -337,6 +389,38 @@ export class OutboxRepository {
         [entityId],
       )
     ).map(intentFromRow);
+  }
+
+  async laterInOrdering(
+    database: SqliteReader,
+    orderingKey: string,
+    seq: number,
+  ): Promise<readonly OutboxIntent[]> {
+    return (
+      await database.all(
+        `SELECT * FROM outbox_intents
+         WHERE ordering_key = ? AND seq > ?
+           AND status IN ('queued', 'in_flight', 'needs_attention')
+         ORDER BY seq;`,
+        [orderingKey, seq],
+      )
+    ).map(intentFromRow);
+  }
+
+  async hasUnacknowledgedCreate(
+    database: SqliteReader,
+    entityId: string,
+  ): Promise<boolean> {
+    const row = await database.first(
+      `SELECT intent_id FROM outbox_intents
+       WHERE entity_id = ?
+         AND status IN ('queued', 'in_flight', 'needs_attention')
+         AND json_extract(mutation_key_json, '$[0]') = 'activity'
+         AND json_extract(mutation_key_json, '$[1]') = 'create'
+       LIMIT 1;`,
+      [entityId],
+    );
+    return row !== undefined;
   }
 
   async claimNext(
@@ -511,6 +595,101 @@ export class OutboxRepository {
       [intentId],
     );
     return result.changes === 1;
+  }
+
+  async retryAttention(
+    database: SqliteExecutor,
+    intentId: string,
+    freshIntentId: string,
+    now = Date.now(),
+  ): Promise<OutboxIntent | undefined> {
+    const current = await this.get(database, intentId);
+    if (current?.status !== 'needs_attention') return current;
+    if ((await this.get(database, freshIntentId)) !== undefined) {
+      throw new OutboxInvariantError(freshIntentId);
+    }
+    const variables = freshVariables(current.variables, freshIntentId);
+    const semanticKey = outboxSemanticKey({
+      intentId: freshIntentId,
+      mutationKey: current.mutationKey,
+      variables,
+      entityId: current.entityId,
+      orderingKey: current.orderingKey,
+      ...(current.dependsOnIntentId === undefined
+        ? {}
+        : { dependsOnIntentId: current.dependsOnIntentId }),
+      ...(current.compensationForIntentId === undefined
+        ? {}
+        : { compensationForIntentId: current.compensationForIntentId }),
+    });
+    const dependentRows = await database.all(
+      `SELECT * FROM outbox_intents
+       WHERE depends_on_intent_id = ? OR compensation_for_intent_id = ?;`,
+      [intentId, intentId],
+    );
+    for (const row of dependentRows) {
+      const dependent = intentFromRow(row);
+      const dependsOnIntentId =
+        dependent.dependsOnIntentId === intentId
+          ? freshIntentId
+          : dependent.dependsOnIntentId;
+      const compensationForIntentId =
+        dependent.compensationForIntentId === intentId
+          ? freshIntentId
+          : dependent.compensationForIntentId;
+      const dependentSemanticKey = outboxSemanticKey({
+        intentId: dependent.intentId,
+        mutationKey: dependent.mutationKey,
+        variables: dependent.variables,
+        entityId: dependent.entityId,
+        orderingKey: dependent.orderingKey,
+        ...(dependsOnIntentId === undefined ? {} : { dependsOnIntentId }),
+        ...(compensationForIntentId === undefined ? {} : { compensationForIntentId }),
+      });
+      await database.run(
+        `UPDATE outbox_intents SET depends_on_intent_id = ?,
+           compensation_for_intent_id = ?, semantic_key = ?
+         WHERE intent_id = ?;`,
+        [
+          dependsOnIntentId ?? null,
+          compensationForIntentId ?? null,
+          dependentSemanticKey,
+          dependent.intentId,
+        ],
+      );
+    }
+    await database.run(
+      `UPDATE outbox_intents SET intent_id = ?, variables_json = ?, semantic_key = ?,
+         status = 'queued', created_at = ?, attempts = 0, last_error = NULL,
+         attention_kind = NULL, attention_reason = NULL, attention_status = NULL,
+         attention_code = NULL, attention_details_json = NULL
+       WHERE intent_id = ? AND status = 'needs_attention';`,
+      [freshIntentId, JSON.stringify(variables), semanticKey, now, intentId],
+    );
+    await database.run(
+      `UPDATE outbox_meta SET clock_witness = MAX(clock_witness, ?)
+       WHERE singleton = 1;`,
+      [now],
+    );
+    return this.get(database, freshIntentId);
+  }
+
+  async discardAttention(database: SqliteExecutor, intentId: string): Promise<boolean> {
+    const target = await this.get(database, intentId);
+    if (target?.status !== 'needs_attention') return false;
+    await database.run(
+      `WITH RECURSIVE doomed(intent_id) AS (
+         SELECT intent_id FROM outbox_intents WHERE intent_id = ?
+         UNION
+         SELECT child.intent_id FROM outbox_intents child
+         JOIN doomed parent
+           ON child.depends_on_intent_id = parent.intent_id
+           OR child.compensation_for_intent_id = parent.intent_id
+       )
+       DELETE FROM outbox_intents WHERE intent_id IN (SELECT intent_id FROM doomed);`,
+      [intentId],
+    );
+    return true;
   }
 
   private async parkExpired(database: SqliteExecutor, now: number): Promise<void> {

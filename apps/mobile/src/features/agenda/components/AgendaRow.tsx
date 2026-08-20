@@ -9,9 +9,11 @@ import {
 } from '@od/ui';
 import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
-import { PendingIndicator } from '@/components/PendingIndicator';
+import { PendingLabel } from '@/components/PendingIndicator';
+import { useCompletionCommitState } from '@/features/agenda/hooks/useCompletionCommitLock';
 import { isFutureRecurringOccurrence } from '@/features/agenda/model/rowScope';
 import {
+  type AgendaRowIntentState,
   pendingCreateAllowsOpen,
   useAgendaRowIntentState,
 } from '@/hooks/usePendingIntents';
@@ -64,6 +66,8 @@ export interface AgendaRowProps {
    */
   connectorAbove?: boolean;
   connectorBelow?: boolean;
+  /** Locked only until this row reflects its SQLite-committed completion state. */
+  completionLocked?: boolean;
   onOpen: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onOpenReschedule?: (item: AgendaItem) => void;
@@ -73,6 +77,12 @@ export interface AgendaRowProps {
   onAccessibilityAction?: (event: AccessibilityActionEvent) => void;
   onBodyFocus?: () => void;
   onBodyBlur?: () => void;
+}
+
+interface AgendaRowWithIntentStateProps extends AgendaRowProps {
+  intentState: AgendaRowIntentState;
+  /** Durable local value used only while the wider Agenda projection catches up. */
+  completionCheckedOverride?: boolean;
 }
 
 const COMPLETED_STATUSES = new Set<AgendaItem['status']>([
@@ -86,6 +96,7 @@ function bodyLabel(
   item: AgendaItem,
   checked: boolean,
   untimedContextLabel: string,
+  pending: boolean,
 ): string {
   const parts = [item.title];
   if (checked) parts.push(outcomeVerb(item.type));
@@ -102,11 +113,34 @@ function bodyLabel(
       `with ${item.participantAvatars.map(({ displayName }) => displayName).join(', ')}`,
     );
   }
+  if (pending) parts.push('Pending, saved on this device and waiting to sync');
   return parts.join(', ');
 }
 
 /** The shared agenda row body; gestures and optimistic state are added by their owning tasks. */
-export function AgendaRow({
+export function AgendaRow(props: AgendaRowProps) {
+  const intentState = useAgendaRowIntentState(
+    props.item.activityId,
+    props.item.occurrenceDate,
+  );
+  const completion = useCompletionCommitState(
+    props.item,
+    intentState.failedCompletionIntentIds,
+  );
+  return (
+    <AgendaRowWithIntentState
+      {...props}
+      completionLocked={props.completionLocked ?? completion.locked}
+      {...(completion.checkedOverride === undefined
+        ? {}
+        : { completionCheckedOverride: completion.checkedOverride })}
+      intentState={intentState}
+    />
+  );
+}
+
+/** Presentation for gesture owners that already subscribed to this row's intent state. */
+export function AgendaRowWithIntentState({
   item,
   today,
   untimedContextLabel = 'today',
@@ -117,6 +151,8 @@ export function AgendaRow({
   dense = false,
   connectorAbove = false,
   connectorBelow = false,
+  completionLocked = false,
+  completionCheckedOverride,
   onOpen,
   onToggleComplete,
   onOpenReschedule,
@@ -126,19 +162,16 @@ export function AgendaRow({
   onAccessibilityAction,
   onBodyFocus,
   onBodyBlur,
-}: AgendaRowProps) {
+  intentState,
+}: AgendaRowWithIntentStateProps) {
   const theme = useTheme();
-  const checked = COMPLETED_STATUSES.has(item.status);
+  const checked = completionCheckedOverride ?? COMPLETED_STATUSES.has(item.status);
   /**
    * Derived from the intent log, not from `AgendaItem` (P2-50). No field was added to any
    * shared schema: the server cannot report that a row it has never seen is pending, and a
    * DTO field would be a second source of truth for something only this device knows.
    */
-  const {
-    pendingCreate,
-    recurrenceEdit,
-    mutationInert: inert,
-  } = useAgendaRowIntentState(item.activityId);
+  const { pendingCreate, recurrenceEdit, mutationInert: inert } = intentState;
   const openInert =
     recurrenceEdit.inert || (pendingCreate.pending && !pendingCreateAllowsOpen);
   const skipped = SKIPPED_STATUSES.has(item.status);
@@ -269,6 +302,7 @@ export function AgendaRow({
     subtitlePrefix === undefined
       ? item.subtitle
       : [subtitlePrefix, item.subtitle].filter((part) => part !== undefined).join(' · ');
+  const hasMetadata = subtitleLine !== undefined || recurrenceMeta !== undefined;
 
   /**
    * The timeline's spine — **two halves with a halo round the marker**.
@@ -407,14 +441,14 @@ export function AgendaRow({
            *
            * A server-directed action against an entity the server has never seen has nowhere
            * to go. Absent rather than disabled, so a capability probe finds nothing — and the
-           * `Pending` indicator in the trailing slot is what says why, in words, rather than
+           * `Pending` indicator on the metadata line is what says why, in words, rather than
            * leaving a greyed control as the only signal (§6.4).
            */
           hasCheckbox={item.hasCheckbox && !inert}
           checked={checked}
           title={item.title}
-          disabled={futureRecurringCompletion}
-          {...(onToggleComplete === undefined || inert
+          disabled={futureRecurringCompletion || completionLocked}
+          {...(onToggleComplete === undefined || inert || completionLocked
             ? {}
             : { onChange: (next) => onToggleComplete(item, next) })}
         />
@@ -433,7 +467,12 @@ export function AgendaRow({
         <Touchable
           disabled={openInert}
           accessibilityRole="button"
-          accessibilityLabel={bodyLabel(item, checked, untimedContextLabel)}
+          accessibilityLabel={bodyLabel(
+            item,
+            checked,
+            untimedContextLabel,
+            pendingCreate.pending,
+          )}
           {...(accessibilityActions === undefined ? {} : { accessibilityActions })}
           {...(onAccessibilityAction === undefined ? {} : { onAccessibilityAction })}
           {...(onBodyFocus === undefined ? {} : { onFocus: onBodyFocus })}
@@ -544,29 +583,55 @@ export function AgendaRow({
               {item.noteExcerpt}
             </Text>
           )}
-          {subtitleLine === undefined && recurrenceMeta === undefined ? null : (
-            <Text variant="footnote" color={metaColor} numberOfLines={1}>
-              {subtitleLine === undefined ? null : (
-                <Text variant="footnote" color={metaColor} testID="agenda-row-subtitle">
-                  {subtitleLine}
+          {!hasMetadata && !pendingCreate.pending ? null : (
+            <View
+              testID="agenda-row-metadata"
+              style={{
+                alignSelf: 'stretch',
+                minWidth: 0,
+                flexDirection: 'row',
+                alignItems: 'center',
+              }}
+            >
+              {!hasMetadata ? null : (
+                <View style={{ flexShrink: 1, minWidth: 0 }}>
+                  <Text variant="footnote" color={metaColor} numberOfLines={1}>
+                    {subtitleLine === undefined ? null : (
+                      <Text
+                        variant="footnote"
+                        color={metaColor}
+                        testID="agenda-row-subtitle"
+                      >
+                        {subtitleLine}
+                      </Text>
+                    )}
+                    {subtitleLine === undefined || recurrenceMeta === undefined
+                      ? null
+                      : ' · '}
+                    {recurrenceMeta === undefined ? null : (
+                      <Text
+                        variant="footnote"
+                        color={metaColor}
+                        accessibilityLabel={
+                          showsRecurrence
+                            ? (item.recurrenceDescription ?? '')
+                            : `Snoozed from ${formatWallTime(item.originalTime ?? '')} to ${formatWallTime(item.time ?? '')}`
+                        }
+                        testID="agenda-badge-recurrence"
+                      >
+                        {showsRecurrence ? `↻ ${recurrenceMeta}` : recurrenceMeta}
+                      </Text>
+                    )}
+                  </Text>
+                </View>
+              )}
+              {!hasMetadata || !pendingCreate.pending ? null : (
+                <Text variant="footnote" color={metaColor}>
+                  {' · '}
                 </Text>
               )}
-              {subtitleLine === undefined || recurrenceMeta === undefined ? null : ' · '}
-              {recurrenceMeta === undefined ? null : (
-                <Text
-                  variant="footnote"
-                  color={metaColor}
-                  accessibilityLabel={
-                    showsRecurrence
-                      ? (item.recurrenceDescription ?? '')
-                      : `Snoozed from ${formatWallTime(item.originalTime ?? '')} to ${formatWallTime(item.time ?? '')}`
-                  }
-                  testID="agenda-badge-recurrence"
-                >
-                  {showsRecurrence ? `↻ ${recurrenceMeta}` : recurrenceMeta}
-                </Text>
-              )}
-            </Text>
+              {pendingCreate.pending ? <PendingLabel /> : null}
+            </View>
           )}
         </Touchable>
 
@@ -577,12 +642,6 @@ export function AgendaRow({
          * point. What is left for this strip is the overdue chip, the avatars and the RSVP slot,
          * in their canonical order.
          */}
-        {/**
-         * §5.4's trailing-slot indicator. It is the row's half of "says why in words": the
-         * checkbox is absent above, and this is what explains the absence rather than leaving
-         * a gap the user has to interpret.
-         */}
-        <PendingIndicator entityId={item.activityId} />
         {recurrenceEdit.message === undefined ? null : (
           <Text
             variant="footnote"

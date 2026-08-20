@@ -72,25 +72,36 @@ export class ActivityAgendaLegacyImportTarget implements LegacyImportTarget {
     sourceId: string,
     intent: LegacyIntentImport,
   ): Promise<void> {
-    const appended = await this.outbox.append(transaction.database, {
-      intentId: intent.intentId,
-      mutationKey: intent.mutationKey,
-      variables: intent.variables,
-      entityId: intent.entityId,
-      orderingKey: intent.orderingKey,
-      ...(intent.dependsOnIntentId === undefined
-        ? {}
-        : { dependsOnIntentId: intent.dependsOnIntentId }),
-      ...(intent.compensationForIntentId === undefined
-        ? {}
-        : { compensationForIntentId: intent.compensationForIntentId }),
-    });
+    const appended = await this.outbox.append(
+      transaction.database,
+      {
+        intentId: intent.intentId,
+        mutationKey: intent.mutationKey,
+        variables: intent.variables,
+        entityId: intent.entityId,
+        orderingKey: intent.orderingKey,
+        ...(intent.dependsOnIntentId === undefined
+          ? {}
+          : { dependsOnIntentId: intent.dependsOnIntentId }),
+        ...(intent.compensationForIntentId === undefined
+          ? {}
+          : { compensationForIntentId: intent.compensationForIntentId }),
+      },
+      intent.createdAt,
+    );
+    if (intent.attempts !== undefined) {
+      await transaction.database.run(
+        'UPDATE outbox_intents SET attempts = ? WHERE intent_id = ?;',
+        [intent.attempts, intent.intentId],
+      );
+    }
     const restoredStatus = intent.status === 'in_flight' ? 'queued' : intent.status;
     if (restoredStatus === 'needs_attention') {
-      await this.outbox.needsAttention(transaction.database, appended.intent.intentId, {
-        kind: 'parked',
-        reason: 'legacy_unknown',
-      });
+      await this.outbox.needsAttention(
+        transaction.database,
+        appended.intent.intentId,
+        intent.attention ?? { kind: 'parked', reason: 'legacy_unknown' },
+      );
     } else if (restoredStatus === 'acknowledged') {
       await transaction.database.run(
         "UPDATE outbox_intents SET status = 'acknowledged' WHERE intent_id = ?;",
@@ -98,6 +109,13 @@ export class ActivityAgendaLegacyImportTarget implements LegacyImportTarget {
       );
     } else if (restoredStatus !== 'queued') {
       throw new Error(`Unsupported legacy intent status: ${intent.status}`);
+    }
+    if (intent.clockWitness !== undefined) {
+      await transaction.database.run(
+        `UPDATE outbox_meta SET clock_witness = MAX(clock_witness, ?)
+         WHERE singleton = 1;`,
+        [intent.clockWitness],
+      );
     }
     await transaction.database.run(
       `INSERT INTO legacy_intent_imports (

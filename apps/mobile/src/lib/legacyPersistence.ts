@@ -33,11 +33,11 @@ import { field, stringField } from '@/lib/unknown';
 export async function importLegacyPausedMutations(
   log: IntentLog,
   platform = Platform.OS,
+  snapshot?: NativeLegacyPersistenceSnapshot,
 ): Promise<number> {
   if (platform !== 'ios') return 0;
-  const stored: unknown = await Promise.resolve(queryPersister.restoreClient()).catch(
-    () => undefined,
-  );
+  const stored: unknown =
+    snapshot === undefined ? await restoreNativeLegacyClient() : snapshot.storedClient;
   if (typeof stored !== 'object' || stored === null) return 0;
   const clientState = field(stored, 'clientState');
   const mutations = field(clientState, 'mutations');
@@ -82,10 +82,18 @@ export async function importLegacyPausedMutations(
       intentId = `${baseIntentId}~legacy-${suffix}`;
       suffix += 1;
     }
-    await log.append({
-      intentId,
-      ...semantic,
-    });
+    const submittedAt = mutation.state?.submittedAt;
+    const failureCount = mutation.state?.failureCount;
+    await log.appendMigrated(
+      {
+        intentId,
+        ...semantic,
+      },
+      {
+        createdAt: typeof submittedAt === 'number' ? submittedAt : Date.now(),
+        attempts: typeof failureCount === 'number' ? failureCount : 0,
+      },
+    );
     imported += 1;
   }
   return imported;
@@ -129,6 +137,27 @@ export interface NativeLegacyPersistenceSnapshot {
   readonly domainRecordKeys: readonly string[];
   readonly domainMutationCount: number;
   readonly ownerUserId?: string;
+  /** The exact envelope inventoried above; import and retirement must not re-read it. */
+  readonly storedClient?: unknown;
+}
+
+const LEGACY_RESTORE_DEADLINE_MS = 2_000;
+
+async function restoreNativeLegacyClient(): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(queryPersister.restoreClient()),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Native legacy persistence read exceeded 2 seconds.')),
+          LEGACY_RESTORE_DEADLINE_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /** Inventories the native cache source before its receipt is written. */
@@ -136,9 +165,16 @@ export async function inspectNativeLegacyPersistence(
   platform = Platform.OS,
 ): Promise<NativeLegacyPersistenceSnapshot> {
   if (platform !== 'ios') return { domainRecordKeys: [], domainMutationCount: 0 };
-  const stored: unknown = await Promise.resolve(queryPersister.restoreClient()).catch(
-    () => undefined,
-  );
+  const stored: unknown = await restoreNativeLegacyClient();
+  return inspectNativeLegacyStoredClient(stored, platform);
+}
+
+/** Inventories the exact restore result already bounded by HydrationGate. */
+export function inspectNativeLegacyStoredClient(
+  stored: unknown,
+  platform = Platform.OS,
+): NativeLegacyPersistenceSnapshot {
+  if (platform !== 'ios') return { domainRecordKeys: [], domainMutationCount: 0 };
   if (stored === undefined) return { domainRecordKeys: [], domainMutationCount: 0 };
   const clientState = dehydratedStateFrom(stored);
   if (clientState === undefined) {
@@ -155,7 +191,7 @@ export async function inspectNativeLegacyPersistence(
   )?.state.data;
   const profileUserId = field(profile, 'userId');
   const ownerUserId = typeof profileUserId === 'string' ? profileUserId : undefined;
-  return {
+  const snapshot: NativeLegacyPersistenceSnapshot = {
     domainRecordKeys: domainQueries.map(
       (query, index) =>
         `query:${query.queryHash || JSON.stringify(query.queryKey) || index + 1}`,
@@ -163,6 +199,11 @@ export async function inspectNativeLegacyPersistence(
     domainMutationCount: domainMutations.length,
     ...(ownerUserId === undefined ? {} : { ownerUserId }),
   };
+  Object.defineProperty(snapshot, 'storedClient', {
+    value: stored,
+    enumerable: false,
+  });
+  return snapshot;
 }
 
 function mutationSemantic(mutation: DehydratedState['mutations'][number]):
@@ -198,11 +239,11 @@ export async function retireNativeActivityAgendaPersistence(
   client: QueryClient,
   log: IntentLog,
   platform = Platform.OS,
+  snapshot?: NativeLegacyPersistenceSnapshot,
 ): Promise<void> {
   if (platform !== 'ios') return;
-  const stored: unknown = await Promise.resolve(queryPersister.restoreClient()).catch(
-    () => undefined,
-  );
+  const stored: unknown =
+    snapshot === undefined ? await restoreNativeLegacyClient() : snapshot.storedClient;
   if (stored !== undefined) {
     const clientState = dehydratedStateFrom(stored);
     if (clientState === undefined) {

@@ -918,7 +918,7 @@ export function projectPendingActivityCreate(
  * Without this, `setQueriesData` has nothing to update on a first offline launch and Today
  * falls through to its no-data error even though the durable create is valid local data. The
  * seeded window is immediately stale and contains only this device's pending projection; the
- * offline bar communicates that the rest of the server view is unavailable.
+ * connectivity status communicates that the rest of the server view is unavailable.
  */
 function seedPendingTodayWindow(
   client: QueryClient,

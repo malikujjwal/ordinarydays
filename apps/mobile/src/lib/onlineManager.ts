@@ -22,13 +22,13 @@ export function localReachabilityConfiguration(
     reachabilityMethod: 'GET',
     reachabilityTest: async (response) => response.ok,
     /**
-     * **Timings widened 2026-08-18, after the founder saw the offline bar on a healthy LAN.**
+     * **Timings widened 2026-08-18, after the founder saw the offline status on a healthy LAN.**
      *
      * These were one second across the board. `reachabilityLongTimeout` is the gap between
      * probes *while connected*, so the app was asking a laptop across WiFi for `/v1/health`
      * every second and calling the connection dead if it took longer than two — which it
      * regularly does over Expo Go on a real network. Every one of those false negatives put
-     * `onlineManager` offline, which surfaced §5.4's bar and, until it was coalesced, kicked
+     * `onlineManager` offline, which surfaced §5.4's status and, until it was coalesced, kicked
      * off a reminder refresh.
      *
      * The proxy flow P2-37 needs this for is unaffected: when the proxy blocks the port the

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SqliteDatabase } from '@/lib/sqlite/database';
 import {
+  FOUNDATION_MIGRATIONS,
   runMigrations,
   type SqliteMigration,
   SqliteMigrationError,
@@ -127,5 +128,91 @@ describe('versioned SQLite migrations', () => {
         { version: 1, name: 'expected', apply: async () => undefined },
       ]),
     ).rejects.toBeInstanceOf(SqliteMigrationError);
+  });
+
+  it('seeks targeted Agenda writes by activity and occurrence before viewer date', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+
+    const previousMigrations = FOUNDATION_MIGRATIONS.slice(0, -1);
+    await runMigrations(database, previousMigrations);
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.all("SELECT name FROM pragma_index_info('agenda_rows_activity');"),
+    ).toEqual([
+      { name: 'activity_id' },
+      { name: 'occurrence_date' },
+      { name: 'viewer_date' },
+    ]);
+
+    const lookupPlan = await database.all(
+      `EXPLAIN QUERY PLAN
+       SELECT viewer_date FROM agenda_rows
+       WHERE activity_id = ? AND occurrence_date IS ?
+       ORDER BY viewer_date
+       LIMIT 1;`,
+      ['act_index_probe', '2026-08-19'],
+    );
+    const deletePlan = await database.all(
+      `EXPLAIN QUERY PLAN
+       DELETE FROM agenda_rows
+       WHERE activity_id = ? AND occurrence_date IS ?;`,
+      ['act_index_probe', '2026-08-19'],
+    );
+    const targetDayPlan = await database.all(
+      `EXPLAIN QUERY PLAN
+       SELECT viewer_date, section, sort_order, activity_id FROM agenda_rows
+       WHERE viewer_date = (
+         SELECT viewer_date FROM agenda_rows
+         WHERE activity_id = ? AND occurrence_date IS ?
+         ORDER BY viewer_date
+         LIMIT 1
+       )
+       ORDER BY viewer_date, section, sort_order, activity_id;`,
+      ['act_index_probe', '2026-08-19'],
+    );
+    const usesTargetIndex = (rows: readonly Record<string, unknown>[]) =>
+      rows.some((row) =>
+        String(row.detail).includes(
+          'agenda_rows_activity (activity_id=? AND occurrence_date=?)',
+        ),
+      );
+
+    expect(usesTargetIndex(lookupPlan)).toBe(true);
+    expect(usesTargetIndex(deletePlan)).toBe(true);
+    expect(usesTargetIndex(targetDayPlan)).toBe(true);
+    expect(
+      targetDayPlan.some((row) => String(row.detail).includes('agenda_rows_window')),
+    ).toBe(true);
+  });
+
+  it('scans only unresolved outbox rows for capacity and pending-create checks', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    const capacityPlan = await database.all(
+      `EXPLAIN QUERY PLAN
+       SELECT COUNT(*) FROM outbox_intents
+       WHERE status IN ('queued', 'in_flight', 'needs_attention');`,
+    );
+    const createPlan = await database.all(
+      `EXPLAIN QUERY PLAN
+       SELECT intent_id FROM outbox_intents
+       WHERE entity_id = ?
+         AND status IN ('queued', 'in_flight', 'needs_attention')
+         AND json_extract(mutation_key_json, '$[0]') = 'activity'
+         AND json_extract(mutation_key_json, '$[1]') = 'create'
+       LIMIT 1;`,
+      ['act_index_probe'],
+    );
+
+    expect(
+      capacityPlan.some((row) => String(row.detail).includes('outbox_intents_replay')),
+    ).toBe(true);
+    expect(
+      createPlan.some((row) =>
+        String(row.detail).includes('outbox_intents_active_entity_mutation'),
+      ),
+    ).toBe(true);
   });
 });

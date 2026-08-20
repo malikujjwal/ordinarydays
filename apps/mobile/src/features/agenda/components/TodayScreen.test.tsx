@@ -2,7 +2,7 @@ import { fixedClock, type Instant } from '@od/shared/time';
 import type { Activity, AgendaItem } from '@od/shared/types';
 import { colors, ThemeProvider } from '@od/ui';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { AccessibilityInfo } from 'react-native';
@@ -136,6 +136,7 @@ function mount(ui: ReactNode, client = createClient()) {
 }
 
 afterEach(async () => {
+  onlineManager.setOnline(true);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   await AsyncStorage.clear();
@@ -876,11 +877,10 @@ describe('TodayScreen', () => {
     );
 
     await waitFor(() => expect(reduceMotion).toHaveBeenCalled());
-    fireEvent.click(
-      screen.getAllByRole('checkbox', {
-        name: 'Quiet transition, not completed',
-      })[0] as Element,
-    );
+    const checkboxes = await screen.findAllByRole('checkbox', {
+      name: 'Quiet transition, not completed',
+    });
+    fireEvent.click(checkboxes[0] as Element);
 
     expect(onToggleComplete).toHaveBeenCalledOnce();
     expect(screen.queryByTestId('completion-transition-row')).toBeNull();
@@ -1000,6 +1000,24 @@ describe('TodayScreen day header', () => {
     await openToday([row(1, { title: 'Later', time: '18:00' })]);
     expect(screen.getByTestId('today-screen-caption').textContent).toBe(
       'Thursday, August 6',
+    );
+  });
+
+  it('puts compact offline status between Today and the fixed completion count', async () => {
+    onlineManager.setOnline(false);
+    await openToday([row(1, { title: 'Later', time: '18:00' })]);
+
+    const title = screen.getByRole('heading', { name: 'Today' });
+    const status = screen.getByTestId('connectivity-status');
+    const slot = screen.getByTestId('today-screen-title-accessory-slot');
+    const count = screen.getByTestId('today-day-count');
+    expect(status.textContent).toBe('Offline');
+    expect(slot.style.flexGrow).toBe('1');
+    expect(title.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(status.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
 

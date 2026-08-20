@@ -963,6 +963,25 @@ describe('the durable intent log', () => {
     expect(runner.dispatched).toEqual([{ activityId: 'act-other' }]);
   });
 
+  it('discards the complete dependent chain behind a blocked write', async () => {
+    const log = new IntentLog(USER, fakeStorage());
+    await log.hydrate();
+    await log.append(intentInput({ intentId: 'blocked-root' }));
+    await log.append({
+      ...intentInput({ intentId: 'dependent-one' }),
+      dependsOnIntentId: 'blocked-root',
+    });
+    await log.append({
+      ...intentInput({ intentId: 'dependent-two' }),
+      dependsOnIntentId: 'dependent-one',
+    });
+    await log.park('blocked-root', 'Needs a decision', 'ambiguous_collision');
+
+    await log.discard('blocked-root');
+
+    expect(log.snapshot().intents).toEqual([]);
+  });
+
   it('atomically cancels a queued original and it never replays', async () => {
     const log = new IntentLog(USER, fakeStorage());
     await log.hydrate();

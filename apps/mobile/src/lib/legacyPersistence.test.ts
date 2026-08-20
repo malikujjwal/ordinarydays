@@ -125,6 +125,24 @@ describe('legacy persistence migration', () => {
     expect(restoreClient).not.toHaveBeenCalled();
   });
 
+  it('treats an iOS restore failure as unavailable evidence, never as an empty source', async () => {
+    vi.spyOn(queryPersister, 'restoreClient').mockRejectedValue(
+      new Error('storage unavailable'),
+    );
+    const log = new IntentLog(USER, memoryStorage());
+    await log.hydrate();
+
+    await expect(inspectNativeLegacyPersistence('ios')).rejects.toThrow(
+      'storage unavailable',
+    );
+    await expect(importLegacyPausedMutations(log, 'ios')).rejects.toThrow(
+      'storage unavailable',
+    );
+    await expect(
+      retireNativeActivityAgendaPersistence(new QueryClient(), log, 'ios'),
+    ).rejects.toThrow('storage unavailable');
+  });
+
   it('retires native query and paused-mutation persistence only after preservation', async () => {
     const legacy = {
       timestamp: Date.now(),

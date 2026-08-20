@@ -59,7 +59,7 @@ export function HydrationGate({
          * the empty client that was rendering while it was still in flight. The app
          * becomes interactive now either way; only the *saving* waits.
          */
-        const nativeSession = await startSession(queryClient);
+        const nativeSession = await startSession(queryClient, outcome);
         if (!active) {
           nativeSession?.stop();
           return;

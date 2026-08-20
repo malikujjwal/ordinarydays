@@ -266,6 +266,30 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ]);
   });
 
+  it('defensively refuses every follow-up write while create is unacknowledged', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'still-pending-create' },
+      clock,
+    );
+
+    const result = await coordinator.patch(
+      ACTIVITY,
+      'impossible-pending-edit',
+      { title: 'Must not apply' },
+      'v1',
+    );
+
+    expect(result).toMatchObject({
+      kind: 'refused',
+      error: expect.objectContaining({
+        message: 'This activity will unlock once it finishes syncing.',
+      }),
+    });
+    expect((await outbox.all()).map((intent) => intent.intentId)).toEqual([
+      'still-pending-create',
+    ]);
+  });
+
   it('cancels a queued completion and its projection atomically during Undo', async () => {
     await coordinator.create(
       { input: createInput(), idempotencyKey: 'create-before-complete' },
@@ -295,6 +319,42 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     expect(
       (await outbox.all()).some((intent) => intent.intentId === 'complete-one'),
     ).toBe(false);
+  });
+
+  it('shares one local transaction for identical completion taps on the same target', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'create-before-double-tap' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await outbox.acknowledge(transaction.database, 'create-before-double-tap');
+    });
+
+    const first = coordinator.complete(
+      ACTIVITY,
+      'double-tap-first',
+      { occurrenceDate: '2026-08-19' },
+      true,
+      'scheduled',
+      clock,
+    );
+    const duplicate = coordinator.complete(
+      ACTIVITY,
+      'double-tap-duplicate',
+      { occurrenceDate: '2026-08-19' },
+      true,
+      'scheduled',
+      clock,
+    );
+
+    expect(duplicate).toBe(first);
+    await expect(first).resolves.toMatchObject({
+      kind: 'accepted',
+      intent: { intentId: 'double-tap-first' },
+    });
+    expect((await outbox.all()).map(({ intentId }) => intentId)).not.toContain(
+      'double-tap-duplicate',
+    );
   });
 
   it('projects an explicit occurrence completion without scanning or rewriting its series', async () => {
@@ -395,6 +455,17 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       { input: createInput(), idempotencyKey: 'create-for-edit' },
       clock,
     );
+    await transactions.run(async (transaction) => {
+      await outbox.acknowledge(transaction.database, 'create-for-edit');
+      await transaction.database.run(
+        "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
+        [ACTIVITY],
+      );
+      await transaction.database.run(
+        "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ?;",
+        [ACTIVITY],
+      );
+    });
     await coordinator.patch(
       ACTIVITY,
       'title-edit',
@@ -711,5 +782,163 @@ describe('Activity/Agenda transactional SQLite slice', () => {
         local_state: 'needs_attention',
       },
     ]);
+  });
+
+  it('duplicates through a client-minted local create and returns an openable copy', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'duplicate-source-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+    });
+
+    const result = await coordinator.duplicate(
+      ACTIVITY,
+      OTHER,
+      'duplicate-as-create',
+      clock,
+    );
+
+    expect(result.kind).toBe('accepted');
+    expect(await activities.read({ kind: 'activity', activityId: OTHER })).toMatchObject({
+      activity: {
+        activityId: OTHER,
+        title: 'Offline daily task (copy)',
+        status: 'saved',
+      },
+    });
+    expect((await outbox.all())[0]).toMatchObject({
+      entityId: OTHER,
+      mutationKey: ['activity', 'create'],
+      status: 'queued',
+    });
+  });
+
+  it('retries attention with a fresh identity and re-applies the local projection', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'retry-source-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+    });
+    await coordinator.patch(
+      ACTIVITY,
+      'rejected-patch',
+      { title: 'Retry this title' },
+      '2026-08-19T00:00:00Z',
+    );
+    await transactions.run(async (transaction) => {
+      await outbox.needsAttention(
+        transaction.database,
+        'rejected-patch',
+        { kind: 'rejected', status: 422 },
+        'Rejected title',
+      );
+      await transaction.database.run(
+        "UPDATE activities SET title = 'Offline daily task', local_state = 'canonical' WHERE activity_id = ?;",
+        [ACTIVITY],
+      );
+      await transaction.database.run(
+        "UPDATE agenda_rows SET title = 'Offline daily task', local_state = 'canonical' WHERE activity_id = ?;",
+        [ACTIVITY],
+      );
+    });
+
+    const retried = await coordinator.retryAttention(
+      'rejected-patch',
+      'fresh-patch',
+      clock,
+    );
+
+    expect(retried.kind).toBe('accepted');
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'fresh-patch',
+      status: 'queued',
+      attempts: 0,
+      variables: expect.objectContaining({ intentId: 'fresh-patch' }),
+    });
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity.title,
+    ).toBe('Retry this title');
+  });
+
+  it('discards an untrusted parked projection instead of leaving it visible as truth', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'discard-source-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+    });
+    await coordinator.patch(
+      ACTIVITY,
+      'expired-patch',
+      { title: 'Untrusted old edit' },
+      '2026-08-19T00:00:00Z',
+    );
+    await transactions.run((transaction) =>
+      outbox.needsAttention(
+        transaction.database,
+        'expired-patch',
+        { kind: 'parked', reason: 'replay_age_expired' },
+        'Too old to replay automatically.',
+      ),
+    );
+
+    await expect(coordinator.discardAttention('expired-patch')).resolves.toBe(true);
+
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await activities.read({ kind: 'activity', activityId: ACTIVITY }),
+    ).toBeUndefined();
+  });
+
+  it('keeps a stale detail pull from overwriting an unresolved occurrence move', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'occurrence-guard-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+    });
+    const stale = await activities.read({
+      kind: 'occurrence',
+      activityId: ACTIVITY,
+      date: '2026-08-20',
+    });
+    if (stale === undefined) throw new Error('missing stale occurrence fixture');
+
+    await coordinator.schedule(
+      ACTIVITY,
+      'guarded-occurrence-move',
+      {
+        occurrenceDate: '2026-08-20',
+        date: '2026-08-21',
+        time: '10:30',
+        timezone: 'America/New_York',
+      },
+      clock,
+    );
+    await transactions.run((transaction) => activities.putCanonical(transaction, stale));
+
+    expect(
+      (
+        await activities.read({
+          kind: 'occurrence',
+          activityId: ACTIVITY,
+          date: '2026-08-20',
+        })
+      )?.occurrence,
+    ).toMatchObject({ nominalDate: '2026-08-20', date: '2026-08-21', time: '10:30' });
   });
 });

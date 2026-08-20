@@ -1,3 +1,4 @@
+import { systemClock, type TimeZone, toWallTime } from '@od/shared/time';
 import { onlineManager } from '@tanstack/react-query';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { Intent } from '@/lib/intentLog';
@@ -101,12 +102,34 @@ export function useRecurrenceEditState(
 /** One SQLite-backed subscription/effect for the two pieces of state each row needs. */
 export function useAgendaRowIntentState(
   entityId: string | undefined,
+  occurrenceDate?: string,
 ): AgendaRowIntentState {
-  return agendaRowIntentState(useEntityIntents(entityId), entityId);
+  return agendaRowIntentState(useEntityIntents(entityId), entityId, occurrenceDate);
 }
 
 export async function cancelPendingCreate(intentId: string): Promise<boolean> {
   return requireActiveNativeState().coordinator.cancelPendingCreate(intentId);
+}
+
+export async function retryBlockedIntent(intentId: string): Promise<boolean> {
+  const timezone = (Intl.DateTimeFormat().resolvedOptions().timeZone ||
+    'UTC') as TimeZone;
+  const now = systemClock.now();
+  const freshIntentId = (await import('expo-crypto')).randomUUID();
+  const result = await requireActiveNativeState().coordinator.retryAttention(
+    intentId,
+    freshIntentId,
+    {
+      today: systemClock.todayIn(timezone),
+      currentMinute: toWallTime(now, timezone),
+    },
+  );
+  if (result.kind === 'refused') throw result.error;
+  return true;
+}
+
+export async function discardBlockedIntent(intentId: string): Promise<boolean> {
+  return requireActiveNativeState().coordinator.discardAttention(intentId);
 }
 
 export function useBlockedIntents(): readonly Intent[] {

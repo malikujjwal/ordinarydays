@@ -1,5 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { AccessibilityInfo, Animated } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 import { Bowl, Plus } from '../icons/index';
 import { ThemeProvider } from '../theme/ThemeProvider';
@@ -218,6 +219,58 @@ describe('interaction', () => {
 
     box.click();
     expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  it('animates only a changed committed Checkbox value with the fast motion token', () => {
+    const timing = vi.spyOn(Animated, 'timing');
+    const mounted = wrap(<Checkbox checked={false} label="Gym" testID="gym-check" />);
+    timing.mockClear();
+
+    mounted.rerender(
+      <ThemeProvider scheme="light">
+        <Checkbox checked label="Gym" testID="gym-check" />
+      </ThemeProvider>,
+    );
+
+    expect(timing).toHaveBeenCalledTimes(2);
+    expect(timing).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ duration: 120, useNativeDriver: true }),
+    );
+    timing.mockRestore();
+  });
+
+  it('settles a changed Checkbox instantly when Reduce Motion is enabled', async () => {
+    const reduceMotion = vi
+      .spyOn(AccessibilityInfo, 'isReduceMotionEnabled')
+      .mockResolvedValue(true);
+    const timing = vi.spyOn(Animated, 'timing');
+    const mounted = wrap(<Checkbox checked={false} label="Gym" />);
+    await act(async () => undefined);
+    timing.mockClear();
+
+    mounted.rerender(
+      <ThemeProvider scheme="light">
+        <Checkbox checked label="Gym" />
+      </ThemeProvider>,
+    );
+
+    expect(timing).not.toHaveBeenCalled();
+    timing.mockRestore();
+    reduceMotion.mockRestore();
+  });
+
+  it('shares one Reduce Motion listener across a list of Checkboxes', () => {
+    const addListener = vi.spyOn(AccessibilityInfo, 'addEventListener');
+    wrap(
+      <>
+        <Checkbox checked={false} label="First task" />
+        <Checkbox checked={false} label="Second task" />
+      </>,
+    );
+
+    expect(addListener).toHaveBeenCalledOnce();
+    addListener.mockRestore();
   });
 
   it('SegmentedControl reports which tab is selected', () => {

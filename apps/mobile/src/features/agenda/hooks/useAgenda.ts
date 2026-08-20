@@ -26,6 +26,8 @@ export interface UseAgendaOptions {
   days?: number;
   /** The P2-20 minute ticker supplies this value so crossing midnight changes the key. */
   now?: Instant;
+  /** Native-only narrow-read hint; web query invalidation is already cache-coalesced. */
+  incrementalLocalTargetReconciliation?: boolean;
 }
 
 /** The one hook used by Today and by every multi-day agenda consumer. */

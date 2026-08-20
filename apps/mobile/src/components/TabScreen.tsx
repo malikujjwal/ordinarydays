@@ -30,6 +30,8 @@ export interface TabScreenProps {
   children: ReactNode;
   testID: string;
   headerAction?: ReactNode;
+  /** Optional content between the title and trailing action, in a stable flexible slot. */
+  titleAccessory?: ReactNode;
   /**
    * The date line **above** the serif title (`design-system.md` §7.1, P2-44).
    *
@@ -68,6 +70,7 @@ export function TabScreen({
   children,
   testID,
   headerAction,
+  titleAccessory,
   caption,
   belowHeader,
   bleedBody = false,
@@ -100,14 +103,35 @@ export function TabScreen({
             minHeight: theme.layout.hitTarget,
             flexDirection: 'row',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: theme.space[4],
+            gap: theme.space[3],
           }}
         >
           <Text variant="display" color="textDisplay" accessibilityRole="header">
             {title}
           </Text>
-          {headerAction}
+          {titleAccessory === undefined ? null : (
+            /**
+             * This flexible middle slot always exists while its child renders, even when that
+             * child returns nothing. The title stays pinned left and actions stay pinned right;
+             * on a narrow screen only the accessory may ellipsise.
+             */
+            <View
+              testID={`${testID}-title-accessory-slot`}
+              style={{ flex: 1, minWidth: 0, alignItems: 'flex-start' }}
+            >
+              {titleAccessory}
+            </View>
+          )}
+          {headerAction === undefined ? null : (
+            <View
+              style={{
+                flexShrink: 0,
+                ...(titleAccessory === undefined ? { marginLeft: 'auto' } : {}),
+              }}
+            >
+              {headerAction}
+            </View>
+          )}
         </View>
         {belowHeader === undefined ? null : (
           /**

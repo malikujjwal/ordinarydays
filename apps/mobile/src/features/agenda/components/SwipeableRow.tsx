@@ -11,6 +11,7 @@ import {
   useAnimatedReaction,
   useSharedValue,
 } from 'react-native-reanimated';
+import { useCompletionCommitState } from '@/features/agenda/hooks/useCompletionCommitLock';
 import {
   type AgendaSwipeAction,
   agendaAccessibilityActions,
@@ -18,7 +19,7 @@ import {
   allAgendaSwipeActions,
 } from '@/features/agenda/model/swipeActions';
 import { useAgendaRowIntentState } from '@/hooks/usePendingIntents';
-import { AgendaRow, type AgendaRowProps } from './AgendaRow';
+import { type AgendaRowProps, AgendaRowWithIntentState } from './AgendaRow';
 
 const ACTION_WIDTH = 88;
 const FULL_SWIPE_OVERSHOOT = 72;
@@ -108,10 +109,17 @@ function ActionPanel({
 
 /** Native agenda gestures. The web-equivalent controls live in SwipeableRow.web.tsx. */
 export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps) {
-  const { mutationInert: inert } = useAgendaRowIntentState(item.activityId);
-  const actions = inert
-    ? { positive: [] as AgendaSwipeAction[], secondary: [] as AgendaSwipeAction[] }
-    : agendaSwipeActions(item);
+  const intentState = useAgendaRowIntentState(item.activityId, item.occurrenceDate);
+  const { mutationInert: inert } = intentState;
+  const completion = useCompletionCommitState(
+    item,
+    intentState.failedCompletionIntentIds,
+  );
+  const completionLocked = rowProps.completionLocked ?? completion.locked;
+  const actions =
+    inert || completionLocked
+      ? { positive: [] as AgendaSwipeAction[], secondary: [] as AgendaSwipeAction[] }
+      : agendaSwipeActions(item);
   const accessibilityActions = agendaAccessibilityActions(actions);
   const dispatch = useCallback(
     (selected: AgendaSwipeAction) => onAction?.(item, selected),
@@ -120,7 +128,7 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
 
   return (
     <ReanimatedSwipeable
-      enabled={!inert}
+      enabled={!inert && !completionLocked}
       testID={`swipeable-row-${item.activityId}`}
       friction={1}
       overshootFriction={1}
@@ -162,9 +170,14 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
             ),
           })}
     >
-      <AgendaRow
+      <AgendaRowWithIntentState
         {...rowProps}
         item={item}
+        completionLocked={completionLocked}
+        {...(completion.checkedOverride === undefined
+          ? {}
+          : { completionCheckedOverride: completion.checkedOverride })}
+        intentState={intentState}
         accessibilityActions={accessibilityActions}
         onAccessibilityAction={({ nativeEvent }) => {
           const selected = allAgendaSwipeActions(actions).find(

@@ -1,7 +1,7 @@
 import { ApiError } from '@od/shared/client';
 import { MAX_AGENDA_DAYS } from '@od/shared/constants';
 import { toWallDate, toWallTime, type WallDate } from '@od/shared/time';
-import type { AgendaData, AgendaItem } from '@od/shared/types';
+import type { AgendaItem } from '@od/shared/types';
 import {
   Card,
   DatePicker,
@@ -24,7 +24,6 @@ import { useAgenda } from '../hooks/useAgenda';
 import { useAgendaActivityActions } from '../hooks/useAgendaActivityActions';
 import {
   buildUpcomingSections,
-  formatDateHeading,
   type UpcomingListItem,
   type UpcomingMonthSection,
 } from '../model/plansWindow';
@@ -61,17 +60,21 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const tick = useMinuteTicker();
-  const agenda = useAgenda({ now: tick.instant, days: MAX_AGENDA_DAYS });
+  const agenda = useAgenda({
+    now: tick.instant,
+    days: MAX_AGENDA_DAYS,
+    incrementalLocalTargetReconciliation: true,
+  });
   const today = toWallDate(tick.instant, agenda.timezone);
   const currentMinute = toWallTime(tick.instant, agenda.timezone);
   const actions = useAgendaActivityActions({
     today,
     currentMinute,
     timezone: agenda.timezone,
+    ...(agenda.data === undefined ? {} : { agendaData: agenda.data }),
   });
   const sections = useMemo(
-    () =>
-      agenda.data === undefined ? [] : buildUpcomingSections(agenda.data as AgendaData),
+    () => (agenda.data === undefined ? [] : buildUpcomingSections(agenda.data)),
     [agenda.data],
   );
   const [selectedGap, setSelectedGap] = useState<SelectedGap>();
@@ -115,7 +118,7 @@ export function PlansScreen({ onOpen, onAdd }: PlansScreenProps) {
                 today={today}
                 showTime
                 divider={false}
-                untimedContextLabel={formatDateHeading(item.date)}
+                untimedContextLabel={item.label}
                 onOpen={onOpen}
                 onToggleComplete={actions.toggleComplete}
                 onOpenReschedule={(row) =>

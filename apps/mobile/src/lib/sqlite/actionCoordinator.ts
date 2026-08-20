@@ -29,6 +29,11 @@ export type NativeActionResult =
   | { readonly kind: 'refused'; readonly error: Error };
 
 export class NativeActivityActionCoordinator {
+  private readonly completionCommits = new Map<
+    string,
+    { readonly completed: boolean; readonly promise: Promise<NativeActionResult> }
+  >();
+
   constructor(
     readonly ownerUserId: string,
     private readonly transactions: SerializedTransactionRunner,
@@ -46,14 +51,26 @@ export class NativeActivityActionCoordinator {
     );
   }
 
-  duplicate(activityId: string, idempotencyKey: string): Promise<NativeActionResult> {
-    return this.accept((transaction) =>
-      this.service.appendOnly(transaction, 'duplicate', { activityId, idempotencyKey }),
+  duplicate(
+    activityId: string,
+    copyActivityId: string,
+    idempotencyKey: string,
+    clock: ProjectionClock,
+  ): Promise<NativeActionResult> {
+    return this.acceptExisting(activityId, (transaction) =>
+      this.service.duplicate(
+        transaction,
+        this.ownerUserId,
+        activityId,
+        copyActivityId,
+        idempotencyKey,
+        clock,
+      ),
     );
   }
 
   remove(activityId: string, intentId: string): Promise<NativeActionResult> {
-    return this.accept((transaction) =>
+    return this.acceptExisting(activityId, (transaction) =>
       this.service.remove(transaction, { activityId, intentId }),
     );
   }
@@ -63,7 +80,7 @@ export class NativeActivityActionCoordinator {
     selectedDate: string,
     idempotencyKey: string,
   ): Promise<NativeActionResult> {
-    return this.accept((transaction) =>
+    return this.acceptExisting(activityId, (transaction) =>
       this.service.appendOnly(transaction, 'convert-recurrence', {
         activityId,
         idempotencyKey,
@@ -86,7 +103,9 @@ export class NativeActivityActionCoordinator {
       ifMatch,
       ...(changeNames === undefined ? {} : { changeNames }),
     };
-    return this.accept((transaction) => this.service.patch(transaction, variables));
+    return this.acceptExisting(activityId, (transaction) =>
+      this.service.patch(transaction, variables),
+    );
   }
 
   schedule(
@@ -96,7 +115,7 @@ export class NativeActivityActionCoordinator {
     clock: ProjectionClock,
   ): Promise<NativeActionResult> {
     const variables: ActivityScheduleVariables = { activityId, idempotencyKey, input };
-    return this.accept((transaction) =>
+    return this.acceptExisting(activityId, (transaction) =>
       this.service.schedule(transaction, variables, clock),
     );
   }
@@ -109,10 +128,22 @@ export class NativeActivityActionCoordinator {
     restoredStatus: 'saved' | 'scheduled',
     clock: ProjectionClock,
   ): Promise<NativeActionResult> {
+    const target = JSON.stringify([activityId, input.occurrenceDate ?? null]);
+    const current = this.completionCommits.get(target);
+    if (current?.completed === completed) return current.promise;
+
     const variables: ActivityCompletionVariables = { activityId, idempotencyKey, input };
-    return this.accept((transaction) =>
+    const promise = this.acceptExisting(activityId, (transaction) =>
       this.service.complete(transaction, variables, completed, restoredStatus, clock),
     );
+    this.completionCommits.set(target, { completed, promise });
+    const release = () => {
+      if (this.completionCommits.get(target)?.promise === promise) {
+        this.completionCommits.delete(target);
+      }
+    };
+    void promise.then(release, release);
+    return promise;
   }
 
   async undoCompletion(
@@ -124,6 +155,7 @@ export class NativeActivityActionCoordinator {
   ): Promise<NativeActionResult> {
     try {
       const outcome = await this.transactions.run(async (transaction) => {
+        transaction.changed('anytime');
         const original = await this.outbox.get(transaction.database, originalIntentId);
         if (original?.status === 'queued') {
           const cancelled = await this.outbox.cancelQueued(
@@ -149,7 +181,7 @@ export class NativeActivityActionCoordinator {
           clock,
           original === undefined ? undefined : { originalIntentId },
         );
-      });
+      }, 'interactive');
       if (outcome.kind === 'cancelled') return outcome;
       this.sync.request('accepted-action');
       return { kind: 'accepted', status: 'queued', intent: outcome.intent };
@@ -163,7 +195,7 @@ export class NativeActivityActionCoordinator {
     skipped: boolean,
     clock: ProjectionClock,
   ): Promise<NativeActionResult> {
-    return this.accept((transaction) =>
+    return this.acceptExisting(variables.activityId, (transaction) =>
       this.service.skip(transaction, variables, skipped, clock),
     );
   }
@@ -174,13 +206,13 @@ export class NativeActivityActionCoordinator {
     renderedDate: string,
     clock: ProjectionClock,
   ): Promise<NativeActionResult> {
-    return this.accept((transaction) =>
+    return this.acceptExisting(variables.activityId, (transaction) =>
       this.service.snooze(transaction, variables, snoozed, renderedDate, clock),
     );
   }
 
   addReminder(variables: ActivityReminderVariables): Promise<NativeActionResult> {
-    return this.accept((transaction) =>
+    return this.acceptExisting(variables.activityId, (transaction) =>
       this.service.addReminder(transaction, this.ownerUserId, variables),
     );
   }
@@ -188,7 +220,7 @@ export class NativeActivityActionCoordinator {
   removeReminder(
     variables: ActivityReminderDeleteVariables,
   ): Promise<NativeActionResult> {
-    return this.accept((transaction) =>
+    return this.acceptExisting(variables.activityId, (transaction) =>
       this.service.removeReminder(transaction, variables),
     );
   }
@@ -224,21 +256,95 @@ export class NativeActivityActionCoordinator {
       transaction.changed('reminders');
       transaction.changed('outbox');
       return true;
-    });
+    }, 'interactive');
+  }
+
+  async retryAttention(
+    intentId: string,
+    freshIntentId: string,
+    clock: ProjectionClock,
+  ): Promise<NativeActionResult> {
+    try {
+      const intent = await this.transactions.run(async (transaction) => {
+        const retried = await this.outbox.retryAttention(
+          transaction.database,
+          intentId,
+          freshIntentId,
+        );
+        if (retried === undefined || retried.status !== 'queued') {
+          throw new Error('This change is no longer waiting for recovery.');
+        }
+        await this.service.reprojectRetry(transaction, this.ownerUserId, retried, clock);
+        transaction.changed('outbox');
+        transaction.changed('anytime');
+        return retried;
+      }, 'interactive');
+      this.sync.request('accepted-action');
+      return { kind: 'accepted', status: 'queued', intent };
+    } catch (error) {
+      return { kind: 'refused', error: asError(error) };
+    }
+  }
+
+  async discardAttention(intentId: string): Promise<boolean> {
+    const discarded = await this.transactions.run(async (transaction) => {
+      const intent = await this.outbox.get(transaction.database, intentId);
+      if (intent?.status !== 'needs_attention') return false;
+      if (!(await this.outbox.discardAttention(transaction.database, intentId))) {
+        return false;
+      }
+      if (
+        intent.mutationKey[1] === 'create' ||
+        (intent.attention?.kind === 'parked' &&
+          intent.attention.reason !== 'predecessor_rejected')
+      ) {
+        await transaction.database.run(
+          'DELETE FROM activity_reminders WHERE activity_id = ?;',
+          [intent.entityId],
+        );
+        await transaction.database.run(
+          'DELETE FROM activity_occurrences WHERE activity_id = ?;',
+          [intent.entityId],
+        );
+        await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
+          intent.entityId,
+        ]);
+        await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
+          intent.entityId,
+        ]);
+        transaction.changed(`activity:${intent.entityId}`);
+        transaction.changed('agenda');
+        transaction.changed('reminders');
+      }
+      transaction.changed('outbox');
+      transaction.changed('anytime');
+      return true;
+    }, 'interactive');
+    if (discarded) this.sync.request('manual');
+    return discarded;
   }
 
   private async accept(
     operation: (transaction: TransactionContext) => Promise<TransactionalIntentResult>,
   ): Promise<NativeActionResult> {
     const startedAt = Date.now();
+    let transactionStartedAt = startedAt;
     try {
-      const result = await this.transactions.run(operation);
+      const result = await this.transactions.run(async (transaction) => {
+        transactionStartedAt = Date.now();
+        const accepted = await operation(transaction);
+        transaction.changed('anytime');
+        return accepted;
+      }, 'interactive');
       if (__DEV__) {
+        const completedAt = Date.now();
         console.info('native_action_committed', {
           intentId: result.intent.intentId,
           mutation: result.intent.mutationKey.join('.'),
           activityId: result.intent.entityId,
-          durationMs: Date.now() - startedAt,
+          queueWaitMs: transactionStartedAt - startedAt,
+          transactionMs: completedAt - transactionStartedAt,
+          durationMs: completedAt - startedAt,
         });
       }
       this.sync.request('accepted-action');
@@ -253,6 +359,18 @@ export class NativeActivityActionCoordinator {
       }
       return { kind: 'refused', error: failure };
     }
+  }
+
+  private acceptExisting(
+    activityId: string,
+    operation: (transaction: TransactionContext) => Promise<TransactionalIntentResult>,
+  ): Promise<NativeActionResult> {
+    return this.accept(async (transaction) => {
+      if (await this.outbox.hasUnacknowledgedCreate(transaction.database, activityId)) {
+        throw new Error('This activity will unlock once it finishes syncing.');
+      }
+      return operation(transaction);
+    });
   }
 }
 

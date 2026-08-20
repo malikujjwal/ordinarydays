@@ -257,6 +257,52 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           ON reminder_tombstones (activity_id, reminder_id);
       `),
   },
+  {
+    version: 4,
+    name: 'native-anytime-index',
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE anytime_rows (
+          activity_id TEXT PRIMARY KEY NOT NULL,
+          type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL,
+          time TEXT,
+          end_time TEXT,
+          is_recurring INTEGER NOT NULL CHECK (is_recurring IN (0, 1)),
+          participant_count INTEGER NOT NULL,
+          location_label TEXT,
+          subtitle TEXT
+        );
+        CREATE INDEX anytime_rows_title
+          ON anytime_rows (title COLLATE NOCASE, activity_id);
+      `),
+  },
+  {
+    version: 5,
+    name: 'agenda-target-lookup-index',
+    apply: (database) =>
+      database.exec(`
+        DROP INDEX agenda_rows_activity;
+        CREATE INDEX agenda_rows_activity
+          ON agenda_rows (activity_id, occurrence_date, viewer_date);
+      `),
+  },
+  {
+    version: 6,
+    name: 'outbox-active-write-indexes',
+    apply: (database) =>
+      database.exec(`
+        CREATE INDEX outbox_intents_active_entity_mutation
+          ON outbox_intents (
+            entity_id,
+            json_extract(mutation_key_json, '$[0]'),
+            json_extract(mutation_key_json, '$[1]'),
+            seq
+          )
+          WHERE status IN ('queued', 'in_flight', 'needs_attention');
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

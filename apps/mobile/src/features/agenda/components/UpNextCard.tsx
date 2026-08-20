@@ -1,6 +1,7 @@
 import type { AgendaItem } from '@od/shared/types';
 import { Button, Card, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
 import { View } from 'react-native';
+import { useCompletionCommitLock } from '@/features/agenda/hooks/useCompletionCommitLock';
 import {
   type AgendaSwipeAction,
   agendaSwipeActions,
@@ -63,6 +64,7 @@ export function UpNextCard({
   onAction,
 }: UpNextCardProps) {
   const theme = useTheme();
+  const completionLocked = useCompletionCommitLock(selection.item);
   const actions = allAgendaSwipeActions(agendaSwipeActions(selection.item)).filter(
     (action) => CARD_ACTIONS.has(action.name),
   );
@@ -138,6 +140,7 @@ export function UpNextCard({
               subtitlePrefix={formatWallTime(selection.time)}
               divider={false}
               dense
+              completionLocked={completionLocked}
               onOpen={onOpen}
               {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}
               {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
@@ -164,6 +167,7 @@ export function UpNextCard({
                   variant="ghost"
                   size="sm"
                   flush
+                  disabled={completionLocked && action.name === 'complete'}
                   onPress={() => onAction(selection.item, action)}
                   testID={`up-next-action-${action.name}`}
                 />

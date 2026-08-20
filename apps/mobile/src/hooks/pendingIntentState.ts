@@ -17,6 +17,22 @@ export interface AgendaRowIntentState {
   pendingCreate: PendingCreateState;
   recurrenceEdit: RecurrenceEditState;
   mutationInert: boolean;
+  /** Completion overrides owned by these failed intents must yield to restored server truth. */
+  failedCompletionIntentIds: readonly string[];
+}
+
+const COMPLETION_MUTATIONS = new Set(['complete', 'uncomplete']);
+
+function completionOccurrenceDate(intent: Intent): string | undefined | null {
+  if (typeof intent.variables !== 'object' || intent.variables === null) return null;
+  const input = (intent.variables as { readonly input?: unknown }).input;
+  if (typeof input !== 'object' || input === null) return null;
+  const occurrenceDate = (input as { readonly occurrenceDate?: unknown }).occurrenceDate;
+  return occurrenceDate === undefined
+    ? undefined
+    : typeof occurrenceDate === 'string'
+      ? occurrenceDate
+      : null;
 }
 
 export function pendingCreateState(
@@ -28,7 +44,7 @@ export function pendingCreateState(
       intent.entityId === entityId &&
       intent.mutationKey[0] === 'activity' &&
       intent.mutationKey[1] === 'create' &&
-      (intent.status === 'queued' || intent.status === 'in_flight'),
+      intent.status !== 'acknowledged',
   );
   return {
     pending: create !== undefined,
@@ -70,6 +86,7 @@ export function recurrenceEditState(intents: readonly Intent[]): RecurrenceEditS
 export function agendaRowIntentState(
   intents: readonly Intent[],
   entityId: string | undefined,
+  occurrenceDate?: string,
 ): AgendaRowIntentState {
   const pendingCreate = pendingCreateState(intents, entityId);
   const recurrenceEdit = recurrenceEditState(intents);
@@ -77,5 +94,14 @@ export function agendaRowIntentState(
     pendingCreate,
     recurrenceEdit,
     mutationInert: pendingCreate.pending || recurrenceEdit.inert,
+    failedCompletionIntentIds: intents
+      .filter(
+        (intent) =>
+          intent.status === 'needs_attention' &&
+          intent.mutationKey[0] === 'activity' &&
+          COMPLETION_MUTATIONS.has(intent.mutationKey[1] ?? '') &&
+          completionOccurrenceDate(intent) === occurrenceDate,
+      )
+      .map((intent) => intent.intentId),
   };
 }

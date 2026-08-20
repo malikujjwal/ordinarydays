@@ -97,4 +97,45 @@ describe('native pending intent selectors', () => {
     expect(listeners.size).toBe(1);
     mounted.unmount();
   });
+
+  it('matches failed completion intents to the exact recurring occurrence', async () => {
+    const all = vi.fn(async () =>
+      ['2026-08-20', '2026-08-21'].map((occurrenceDate, index) => ({
+        intentId: `intent-complete-${index + 1}`,
+        mutationKey: ['activity', 'complete'],
+        variables: {
+          activityId: 'act_01J0000000000000000000000A',
+          input: { occurrenceDate },
+        },
+        entityId: 'act_01J0000000000000000000000A',
+        orderingKey: 'activity:act_01J0000000000000000000000A',
+        status: 'needs_attention' as const,
+        createdAt: 1_787_097_600_000 + index,
+        seq: index + 1,
+        attempts: 1,
+        attention: { kind: 'rejected' as const, status: 409 },
+      })),
+    );
+    nativeState.current = {
+      account: {
+        subscriptions: {
+          subscribe: () => () => undefined,
+          version: () => 1,
+        },
+      },
+      outbox: { all },
+      coordinator: { ownerUserId: 'usr_01J0000000000000000000000A' },
+    };
+
+    const mounted = renderHook(() =>
+      useAgendaRowIntentState('act_01J0000000000000000000000A', '2026-08-21'),
+    );
+
+    await waitFor(() =>
+      expect(mounted.result.current.failedCompletionIntentIds).toEqual([
+        'intent-complete-2',
+      ]),
+    );
+    mounted.unmount();
+  });
 });

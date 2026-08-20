@@ -6,6 +6,7 @@ import { type ActivityScope, scopeToWire } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
 import { useCallback, useRef, useState } from 'react';
 import { useClock } from '@/hooks/useClock';
+import { nextActivityId } from '@/lib/activityIds';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
 
@@ -83,12 +84,19 @@ export function useActivityActions(activityId: string): ActivityActions {
 
   return {
     duplicate: async () => {
+      const copyActivityId = nextActivityId();
       const result = await accepted(() =>
-        state.coordinator.duplicate(activityId, randomUUID()),
+        state.coordinator.duplicate(
+          activityId,
+          copyActivityId,
+          randomUUID(),
+          projectionClock(),
+        ),
       );
       if (result === undefined || !resultOk(result)) return undefined;
-      // The server assigns the duplicate id. Its canonical response is installed by sync.
-      return undefined;
+      return (
+        await state.activities.read({ kind: 'activity', activityId: copyActivityId })
+      )?.activity;
     },
     remove: async () => {
       const result = await accepted(() =>

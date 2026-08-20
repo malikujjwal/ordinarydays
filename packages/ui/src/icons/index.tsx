@@ -176,6 +176,43 @@ export const Repeat = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+/** A local or remote change that cannot currently reach the cloud. */
+export const CloudOff = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M7.2 18H6a4 4 0 0 1-.7-7.9A6.7 6.7 0 0 1 17.8 9a4.5 4.5 0 0 1 .2 9h-1.2"
+      stroke={color}
+      {...stroke}
+    />
+    <Path d="M4 4l16 16" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** Cloud work in progress. The arrows stay static; status text carries the live update. */
+export const CloudSync = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M6.5 15H6a4 4 0 0 1-.7-7.9A6.7 6.7 0 0 1 17.8 6a4.5 4.5 0 0 1 1.4 8.8"
+      stroke={color}
+      {...stroke}
+    />
+    <Path d="M9 16a4 4 0 0 1 6.8-1.5M16 12.5v2.4h-2.4" stroke={color} {...stroke} />
+    <Path d="M16 18a4 4 0 0 1-6.8 1.5M9 21.5v-2.4h2.4" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** Cloud work completed successfully. */
+export const CloudCheck = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M7.2 18H6a4 4 0 0 1-.7-7.9A6.7 6.7 0 0 1 17.8 9a4.5 4.5 0 0 1 .2 9h-1.2"
+      stroke={color}
+      {...stroke}
+    />
+    <Path d="M9 17l2.2 2.2L16 14.4" stroke={color} {...stroke} />
+  </Frame>
+);
+
 /** The `⋯` overflow control (`interaction-contract.md` U6). Three dots, never a chevron. */
 export const MoreHorizontal = ({ size, color }: IconProps) => (
   <Frame size={size}>

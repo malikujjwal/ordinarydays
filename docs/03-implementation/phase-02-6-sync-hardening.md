@@ -25,7 +25,7 @@ deliberately **not** in this phase. It is specified as P2-58 and parked.
 
 **Why this is a gate and not a feature.**
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md#54-offline)
-§5.4 has promised a `Pending` row indicator, an offline bar, and optimistically applied
+§5.4 has promised a `Pending` row indicator, visible connectivity state, and optimistically applied
 queued writes since Phase 2 began. None of the three exists. Worse, the 2026-08-13 review of
 `apps/mobile/src/lib/persister.ts` found queued mutations stored **inside the disposable
 query-cache envelope**, where three independent paths destroy them silently:
@@ -143,7 +143,7 @@ SQLite migration tasks are serial because each establishes the invariant used by
 the user can always see that they exist.
 
 **Files.** `apps/mobile/src/lib/{persister.ts,intentLog.ts,queryClient.ts,mutationDefaults.ts}`,
-`packages/shared/src/constants.ts` (`MAX_AUTOMATIC_INTENT_AGE_DAYS`), the offline bar and
+`packages/shared/src/constants.ts` (`MAX_AUTOMATIC_INTENT_AGE_DAYS`), the connectivity status and
 `Pending` indicator components, `docs` amendments listed in the phase preamble. Inventory is
 a minimum.
 
@@ -177,7 +177,7 @@ a minimum.
   `needs_attention/parked`: no automatic write, an online read-only `GET` may reconcile a
   create, and only an explicit user retry (fresh id, fresh idempotency key) or discard
   resolves it. Cancellation is valid only in `queued`.
-- **Visible.** The §5.4 offline bar and the `Pending` row indicator, both entity-generic and
+- **Visible.** The §5.4 compact header status and the `Pending` row indicator, both entity-generic and
   copy-parameterised so Phase 3's `Plan will finish syncing` and P2-57's reminder copy are
   parameters, not new systems. The 200-intent cap moves here from `MutationCache.onMutate`;
   `needs_attention` intents count toward it (they hold real user data).
@@ -269,8 +269,8 @@ from the log — no field is added to shared DTO schemas.
 absent-or-disabled-with-words on a row whose `CREATE` is unacknowledged; the detail screen
 explains: `Waiting to sync — you can cancel it, and everything else unlocks once it's
 synced.` Cancel is offered in `queued` only, removes intent + projection, sends nothing.
-A reminder attached to a pending activity states it is not armed until sync (until P2-57
-lands, and its copy then changes to the armed-locally wording). Structured
+A reminder attached to a pending activity states it is armed locally and waiting to sync
+(local scheduling landed in P2-57). Structured
 `needs_attention` intents render their §5.4 banners from here.
 
 **Tests.** No completion/reschedule/edit affordance on a pending row (capability probe, not
@@ -589,6 +589,24 @@ Domain-specific Activity and reminder tombstones suppress stale resurrection. Or
 coverage pulls version-guard returned projections and cannot overwrite an unresolved local
 or recurrence-reconciliation representation. The targeted strong read owns recurrence
 replacement, including zero rows, and clears Retry state only in that commit.
+
+**Contract-remediation record — 2026-08-19.** Permanent 4xx rejection now restores the
+strong Activity/Agenda server snapshot before exposing structured recovery; later writes in
+the same ordering domain park behind that rejection instead of having their projection
+silently overwritten. The app exposes explicit Retry (fresh mutation identity, same queue
+position, local reprojection) and Discard (including the complete dependent chain). Pending
+creates remain inert through `needs_attention`, while their locally armed reminders and
+recovery state are stated truthfully. Occurrence pulls and older acknowledgements cannot
+overwrite a later local occurrence or recurrence edit.
+
+Native Anytime now owns a complete saved-task index in the account SQLite database, overlays
+accepted local changes immediately, and refreshes collection pages through the serialized
+network owner without using TanStack as a native domain store. Duplicate uses an ordinary
+client-minted Activity create, so its exact closed copy set is visible and durable offline.
+Legacy retirement consumes the exact bounded persistence snapshot that hydration already
+read, preserves queue age/attempt/attention/clock evidence, and defers retirement on read,
+timeout, or inventory failure. Agenda materialization uses indexed membership for Up Next,
+and swipe rows share one outbox subscription with their row presentation.
 
 **Tests.** Existing endpoint push/pull adapters, coverage gaps, tombstones, deletions,
 stale-version rejection and canonical-response install are exercised against fixtures.

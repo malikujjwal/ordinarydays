@@ -177,4 +177,46 @@ describe('P2-62 Activity/Agenda legacy target', () => {
     expect(await database?.all('SELECT * FROM outbox_intents;')).toEqual([]);
     expect(await database?.all('SELECT * FROM legacy_import_receipts;')).toEqual([]);
   });
+
+  it('preserves legacy replay age, attempts, attention and clock evidence', async () => {
+    const importer = new LegacyImporter(
+      transactions,
+      new ActivityAgendaLegacyImportTarget(activities, agenda, outbox),
+      async () => 'metadata-source',
+    );
+    await importer.import({
+      sourceId: 'legacy-metadata',
+      baseCandidates: [],
+      intents: [
+        {
+          recordKey: 'old-rejection',
+          intentId: 'old-rejection-id',
+          mutationKey: ['activity', 'patch'],
+          variables: {
+            activityId: ACTIVITY,
+            intentId: 'old-rejection-id',
+            input: { title: 'Old title' },
+            ifMatch: 'v1',
+          },
+          entityId: ACTIVITY,
+          orderingKey: `activity:${ACTIVITY}`,
+          status: 'needs_attention',
+          createdAt: 1_700_000_000_000,
+          attempts: 4,
+          attention: { kind: 'rejected', status: 422, code: 'validation_failed' },
+          clockWitness: 1_800_000_000_000,
+        },
+      ],
+    });
+
+    expect((await outbox.all())[0]).toMatchObject({
+      createdAt: 1_700_000_000_000,
+      attempts: 4,
+      status: 'needs_attention',
+      attention: { kind: 'rejected', status: 422, code: 'validation_failed' },
+    });
+    expect(
+      await database?.first('SELECT clock_witness FROM outbox_meta WHERE singleton = 1;'),
+    ).toEqual({ clock_witness: 1_800_000_000_000 });
+  });
 });

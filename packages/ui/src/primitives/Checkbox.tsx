@@ -1,6 +1,7 @@
-import { View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated } from 'react-native';
 import { Check } from '../icons/index';
-import { useTheme } from '../theme/index';
+import { useMotion, useTheme } from '../theme/index';
 import { Touchable } from './Touchable';
 
 /**
@@ -30,7 +31,38 @@ export function Checkbox({
   testID,
 }: CheckboxProps) {
   const theme = useTheme();
+  const motion = useMotion();
   const visual = 24;
+  const previousChecked = useRef(checked);
+  const scale = useRef(new Animated.Value(1)).current;
+  const checkProgress = useRef(new Animated.Value(checked ? 1 : 0)).current;
+
+  useEffect(() => {
+    const changed = previousChecked.current !== checked;
+    previousChecked.current = checked;
+    const finalProgress = checked ? 1 : 0;
+    if (!changed || motion.duration.fast === 0) {
+      scale.setValue(1);
+      checkProgress.setValue(finalProgress);
+      return;
+    }
+
+    scale.setValue(0.88);
+    const transition = Animated.parallel([
+      Animated.timing(scale, {
+        toValue: 1,
+        duration: motion.duration.fast,
+        useNativeDriver: true,
+      }),
+      Animated.timing(checkProgress, {
+        toValue: finalProgress,
+        duration: motion.duration.fast,
+        useNativeDriver: true,
+      }),
+    ]);
+    transition.start();
+    return () => transition.stop();
+  }, [checkProgress, checked, motion.duration.fast, scale]);
 
   return (
     <Touchable
@@ -57,7 +89,8 @@ export function Checkbox({
       testID={testID}
       style={{ alignItems: 'center', justifyContent: 'center' }}
     >
-      <View
+      <Animated.View
+        testID={testID === undefined ? undefined : `${testID}-visual`}
         style={{
           width: visual,
           height: visual,
@@ -68,10 +101,28 @@ export function Checkbox({
           borderWidth: checked ? 0 : 1.5,
           borderColor: disabled ? theme.colors.textDisabled : theme.colors.borderStrong,
           opacity: disabled ? 0.5 : 1,
+          transform: [{ scale }],
         }}
       >
-        {checked ? <Check size={16} color={theme.colors.textInverse} /> : null}
-      </View>
+        <Animated.View
+          aria-hidden
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={{
+            opacity: checkProgress,
+            transform: [
+              {
+                scale: checkProgress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0.7, 1],
+                }),
+              },
+            ],
+          }}
+        >
+          <Check size={16} color={theme.colors.textInverse} />
+        </Animated.View>
+      </Animated.View>
     </Touchable>
   );
 }

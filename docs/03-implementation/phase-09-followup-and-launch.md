@@ -484,15 +484,18 @@ render pass. For rule 13: a member removed while offline with twelve queued item
 
 **What to build.** The visible surface of the above.
 
-**Approach.** A persistent 20 pt bar under the header reading `Offline — changes will sync.` —
-no modal, nothing blocking. A queued row shows a small `Pending` dot in its trailing slot, in a
-neutral colour, never an error colour. Undo behaves normally. The 200-mutation cap produces the
+**Approach.** A compact status occupies the flexible middle of Today's header without moving
+the title or completion count: cloud-off + `Offline` or `<n> waiting`, cloud-sync + `Syncing…`,
+then cloud-check + `Synced` for 2 seconds before becoming quiet. No modal, nothing blocking. A
+queued row shows cloud-off + `Pending` at the end of its existing metadata line, in a neutral
+colour, never an error colour. Undo behaves normally. The 200-mutation cap produces the
 specified refusal. A single connectivity blip does not clear the queue: the queue is cleared
 only by successful flushes.
 
-**Tests.** The bar appears and disappears with connectivity; the pending dot; the cap copy;
-a connectivity flap does not lose queued items; the indicator is announced to screen readers
-once, politely, not on every state change.
+**Tests.** The header states follow connectivity and replayable queue depth without shifting
+the title or action slot; the inline pending marker; the cap copy; a connectivity flap does
+not lose queued items; the indicator is announced to screen readers once, politely, not on
+every state change.
 
 ---
 

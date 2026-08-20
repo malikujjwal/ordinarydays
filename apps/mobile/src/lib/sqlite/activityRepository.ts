@@ -321,11 +321,14 @@ export class ActivityRepository {
       true,
     );
     if (detail.occurrence !== undefined) {
-      await this.putOccurrenceProjection(
-        transaction.database,
-        detail.activity,
-        detail.occurrence,
-      );
+      const occurrenceKey = `${detail.activity.activityId}:${detail.occurrence.nominalDate}`;
+      if (!guards.protectedOccurrenceKeys.has(occurrenceKey)) {
+        await this.putOccurrenceProjection(
+          transaction.database,
+          detail.activity,
+          detail.occurrence,
+        );
+      }
     }
     transaction.changed(this.scope(detail.activity.activityId));
     transaction.changed('reminders');
@@ -469,11 +472,7 @@ export class ActivityRepository {
     activity: Activity,
   ): Promise<void> {
     const current = await this.readWithin(transaction.database, activity.activityId);
-    await transaction.database.run(
-      "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
-      [activity.activityId],
-    );
-    await this.putCanonical(transaction, {
+    await this.acceptCanonicalDetailResponse(transaction, {
       activity,
       reminders: current?.reminders ?? [],
       ...(current?.capabilities === undefined
@@ -483,6 +482,18 @@ export class ActivityRepository {
         ? {}
         : { completedOccurrenceCount: current.completedOccurrenceCount }),
     });
+  }
+
+  /** Installs an authoritative detail projection while settling its accepted local write. */
+  async acceptCanonicalDetailResponse(
+    transaction: TransactionContext,
+    detail: ActivityDetail,
+  ): Promise<void> {
+    await transaction.database.run(
+      "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
+      [detail.activity.activityId],
+    );
+    await this.putCanonical(transaction, detail);
   }
 
   async acceptCanonicalOccurrence(

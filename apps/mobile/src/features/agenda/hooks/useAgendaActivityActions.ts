@@ -39,6 +39,7 @@ export interface UseAgendaActivityActionsOptions {
   today: string;
   currentMinute: string;
   timezone: string;
+  agendaData?: AgendaData;
   getScrollOffset?: () => number;
   restoreScrollOffset?: (offset: number) => void;
 }
@@ -431,5 +432,11 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
     [options, queryClient, scheduleMutation],
   );
 
-  return { toggleComplete, onAgendaAction, resolvePassed, snooze, moveToTomorrow };
+  return {
+    toggleComplete,
+    onAgendaAction,
+    resolvePassed,
+    snooze,
+    moveToTomorrow,
+  };
 }

@@ -236,7 +236,9 @@ export function ActivityDetailScreen({
 
   const activity = detail.detail?.activity;
   const authoritativeActivity =
-    activity !== undefined && !('pending' in activity) ? activity : undefined;
+    activity !== undefined && !pendingCreate.pending && !('pending' in activity)
+      ? activity
+      : undefined;
   const showResolutionPrompt =
     resolutionOccurrenceDate !== undefined &&
     activity?.status === 'scheduled' &&
@@ -433,7 +435,7 @@ export function ActivityDetailScreen({
           onPress={onBack}
           testID="detail-back"
         />
-        {activity === undefined ? null : (
+        {activity === undefined || pendingCreate.pending ? null : (
           <IconButton
             icon={MoreHorizontal}
             label="More"
@@ -477,6 +479,7 @@ export function ActivityDetailScreen({
            * task asks for, rather than a styled-disabled button that still exists.
            */
           pending={pendingCreate.pending}
+          pendingNeedsAttention={pendingCreate.status === 'needs_attention'}
           canCancelPending={pendingCreate.canCancel}
           onCancelPending={() => void cancelPending()}
           cancellingPending={cancellingPending}
@@ -820,6 +823,7 @@ export function ActivityDetailScreen({
 interface LoadedProps {
   /** The create has not been acknowledged, so the server knows nothing about this row. */
   pending: boolean;
+  pendingNeedsAttention: boolean;
   canCancelPending: boolean;
   onCancelPending: () => void;
   cancellingPending: boolean;
@@ -910,6 +914,7 @@ function Loaded({
   resolutionKind,
   resolutionOutcome,
   pending,
+  pendingNeedsAttention,
   canCancelPending,
   onCancelPending,
   cancellingPending,
@@ -938,8 +943,10 @@ function Loaded({
         <PendingNotice
           message={
             canCancelPending
-              ? 'Waiting to sync — you can cancel it, and everything else unlocks once it’s synced.'
-              : 'Syncing now — everything else unlocks once it’s synced.'
+              ? `This ${activity.objectKind} is saved on this device and waiting to sync. You can cancel it before syncing starts.`
+              : pendingNeedsAttention
+                ? `This ${activity.objectKind} couldn’t sync. Use Retry or Discard in the message at the top of the screen.`
+                : `This ${activity.objectKind} is syncing now. Its actions will appear when syncing finishes.`
           }
           busy={cancellingPending}
           {...(canCancelPending ? { onCancel: onCancelPending } : {})}
@@ -977,17 +984,23 @@ function Loaded({
       <View style={{ gap: theme.space[5] }} testID="detail-header">
         {/** Title and type/audience are one header unit, not two unrelated form rows. */}
         <View style={{ gap: theme.space[2] }}>
-          <InlineText
-            label="Title"
-            value={activity.title}
-            hideLabel
-            appearance="bare"
-            textVariant="display"
-            onCommit={async (title) => {
-              await detail.patch({ title });
-            }}
-            testID="detail-title"
-          />
+          {pending ? (
+            <Text variant="display" color="textPrimary" testID="detail-title">
+              {activity.title}
+            </Text>
+          ) : (
+            <InlineText
+              label="Title"
+              value={activity.title}
+              hideLabel
+              appearance="bare"
+              textVariant="display"
+              onCommit={async (title) => {
+                await detail.patch({ title });
+              }}
+              testID="detail-title"
+            />
+          )}
           <Text variant="subhead" color="textSecondary" testID="detail-subtitle">
             {subtitleFor(
               activity,
@@ -1015,7 +1028,7 @@ function Loaded({
                   recurrenceDescription: describeRecurrence(activity.recurrence, today),
                 })}
           today={today}
-          onPressDate={onOpenReschedule}
+          onPressDate={pending ? undefined : onOpenReschedule}
           onPressAddress={undefined}
         />
 
@@ -1201,12 +1214,12 @@ function Loaded({
                 value={
                   /**
                    * A reminder on a pending activity states its **true** armed state (§5.4).
-                   * Nothing is scheduled for an entity the server has never seen, and saying
-                   * otherwise would promise a notification that cannot arrive. P2-57 changes
-                   * this to the armed-locally wording once local scheduling exists.
+                   * P2-57 schedules the client-minted reminder locally before the create
+                   * reaches the server, so the copy names both that local truth and the
+                   * outstanding sync instead of promising server acknowledgement.
                    */
-                  pending
-                    ? 'Not armed until synced'
+                  pending && (detail.detail?.reminders.length ?? 0) > 0
+                    ? 'Armed on this device · waiting to sync'
                     : reminderSummary(
                         detail.detail?.reminders ?? [],
                         activity.schedule?.time !== undefined,
@@ -1246,18 +1259,26 @@ function Loaded({
                 }
                 testID="section-notes"
               >
-                <InlineText
-                  label="Notes"
-                  value={activity.notes ?? ''}
-                  hideLabel
-                  appearance="bare"
-                  multiline
-                  placeholder="Add notes"
-                  onCommit={async (notes) => {
-                    await detail.patch({ notes });
-                  }}
-                  testID="detail-notes"
-                />
+                {pending ? (
+                  <Text variant="body" color="textSecondary" testID="detail-notes">
+                    {activity.notes?.trim() === '' || activity.notes === undefined
+                      ? 'No notes'
+                      : activity.notes}
+                  </Text>
+                ) : (
+                  <InlineText
+                    label="Notes"
+                    value={activity.notes ?? ''}
+                    hideLabel
+                    appearance="bare"
+                    multiline
+                    placeholder="Add notes"
+                    onCommit={async (notes) => {
+                      await detail.patch({ notes });
+                    }}
+                    testID="detail-notes"
+                  />
+                )}
               </DisclosureRow>
             );
           }

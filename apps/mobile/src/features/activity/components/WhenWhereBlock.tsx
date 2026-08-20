@@ -35,7 +35,7 @@ export interface WhenWhereBlockProps {
   reminders: Reminder[];
   recurrenceDescription?: string;
   today: WallDate;
-  onPressDate: () => void;
+  onPressDate: (() => void) | undefined;
   onPressAddress: (() => void) | undefined;
 }
 
@@ -57,7 +57,12 @@ export function WhenWhereBlock({
         <Touchable
           square={false}
           accessibilityRole="button"
-          accessibilityLabel={`${formatSchedule(schedule, today)}, tap to edit`}
+          accessibilityLabel={
+            onPressDate === undefined
+              ? formatSchedule(schedule, today)
+              : `${formatSchedule(schedule, today)}, tap to edit`
+          }
+          disabled={onPressDate === undefined}
           onPress={onPressDate}
           testID="when-where-date"
         >
@@ -79,7 +84,7 @@ export function WhenWhereBlock({
                */}
               <View
                 style={{
-                  borderBottomWidth: 1,
+                  borderBottomWidth: onPressDate === undefined ? 0 : 1,
                   borderBottomColor: theme.colors.borderStrong,
                   borderStyle: 'dashed',
                   paddingBottom: theme.space[1],
@@ -97,9 +102,11 @@ export function WhenWhereBlock({
                * and the frames draw it as the quietest thing in the header. Accenting both put
                * two competing signals on one line.
                */}
-              <Text variant="footnote" color="textMuted">
-                Tap to edit
-              </Text>
+              {onPressDate === undefined ? null : (
+                <Text variant="footnote" color="textMuted">
+                  Tap to edit
+                </Text>
+              )}
             </View>
 
             {!scheduled ? null : (

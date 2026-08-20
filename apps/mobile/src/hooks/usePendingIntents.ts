@@ -1,7 +1,7 @@
 import { onlineManager } from '@tanstack/react-query';
 import { useCallback, useSyncExternalStore } from 'react';
 import type { Intent } from '@/lib/intentLog';
-import { getActiveIntentLog } from '@/lib/intentReplay';
+import { getActiveIntentLog, requestActiveIntentReplay } from '@/lib/intentReplay';
 import {
   type AgendaRowIntentState,
   agendaRowIntentState,
@@ -100,8 +100,9 @@ export function useRecurrenceEditState(
 /** One entity subscription for the two pieces of state every agenda row needs. */
 export function useAgendaRowIntentState(
   entityId: string | undefined,
+  occurrenceDate?: string,
 ): AgendaRowIntentState {
-  return agendaRowIntentState(useEntityIntents(entityId), entityId);
+  return agendaRowIntentState(useEntityIntents(entityId), entityId, occurrenceDate);
 }
 
 /** Cancels a queued create, removing the intent. Returns false if it was already dispatched. */
@@ -111,6 +112,27 @@ export async function cancelPendingCreate(intentId: string): Promise<boolean> {
   return log.cancel(intentId);
 }
 
+export async function retryBlockedIntent(intentId: string): Promise<boolean> {
+  const freshIntentId = globalThis.crypto.randomUUID();
+  const retried = await getActiveIntentLog()?.retry(intentId, freshIntentId);
+  if (retried?.status !== 'queued') return false;
+  void requestActiveIntentReplay('enqueue');
+  return true;
+}
+
+export async function discardBlockedIntent(intentId: string): Promise<boolean> {
+  const log = getActiveIntentLog();
+  if (log === undefined) return false;
+  const before = log
+    .snapshot()
+    .intents.some(
+      (intent) => intent.intentId === intentId && intent.status === 'needs_attention',
+    );
+  if (!before) return false;
+  await log.discard(intentId);
+  return true;
+}
+
 /** Intents the user has to resolve: permanently rejected, or parked by age or clock doubt. */
 export function useBlockedIntents(): readonly Intent[] {
   const intents = usePendingIntents();
@@ -118,10 +140,10 @@ export function useBlockedIntents(): readonly Intent[] {
 }
 
 /**
- * Connectivity as the offline bar means it.
+ * Connectivity as the compact tab-header status means it.
  *
  * `onlineManager` rather than a raw NetInfo subscription, so the bar and the replay trigger
- * can never disagree about whether the app is online — a bar that says "Offline" while the
+ * can never disagree about whether the app is online — a label that says "Offline" while the
  * queue is draining is worse than no bar.
  */
 export function useIsOffline(): boolean {

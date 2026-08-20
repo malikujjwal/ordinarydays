@@ -2685,6 +2685,12 @@ describe('a pending activity', () => {
           type: 'task',
           title: 'Pending offline task',
           schedule: { date: TODAY, time: '09:00', timezone: 'America/New_York' },
+          reminders: [
+            {
+              reminderId: 'rem_01J0000000000000000000000A',
+              offsetMinutes: -15,
+            },
+          ],
         },
       },
       entityId: ID,
@@ -2702,9 +2708,7 @@ describe('a pending activity', () => {
 
     await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
     expect(screen.queryByTestId('detail-error')).toBeNull();
-    expect(screen.getByTestId('detail-title').getAttribute('value')).toBe(
-      'Pending offline task',
-    );
+    expect(screen.getByTestId('detail-title').textContent).toBe('Pending offline task');
     expect(sent).toHaveLength(0);
   });
 
@@ -2716,10 +2720,17 @@ describe('a pending activity', () => {
     await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
     // Absent, not disabled: there is no server row for a completion to reach.
     expect(screen.queryByTestId('detail-complete')).toBeNull();
+    expect(screen.queryByTestId('detail-overflow')).toBeNull();
+    expect(screen.getByTestId('when-where-date').getAttribute('aria-disabled')).toBe(
+      'true',
+    );
 
     const notice = screen.getByTestId('pending-notice');
     expect(notice.getAttribute('aria-live')).toBe('polite');
-    expect(notice.textContent).toContain('Waiting to sync');
+    expect(notice.textContent).toContain(
+      'This task is saved on this device and waiting to sync.',
+    );
+    expect(notice.textContent).toContain('You can cancel it before syncing starts.');
   });
 
   it('offers no repeat or reminder editing while unacknowledged', async () => {
@@ -2730,11 +2741,10 @@ describe('a pending activity', () => {
     await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
     /**
      * The rows still render — hiding them would make the screen look like a different object
-     * — but neither opens a sheet, and the reminder states its true armed state rather than
-     * implying a notification that cannot arrive.
+     * — but neither opens a sheet, and the reminder states both its local and sync state.
      */
     expect(screen.getByTestId('section-reminders').textContent).toContain(
-      'Not armed until synced',
+      'Armed on this device · waiting to sync',
     );
   });
 
@@ -2764,6 +2774,21 @@ describe('a pending activity', () => {
     await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
     expect(screen.queryByTestId('pending-cancel')).toBeNull();
     // The sentence changes with the button, rather than the button going quietly grey.
-    expect(screen.getByTestId('pending-notice').textContent).toContain('Syncing now');
+    expect(screen.getByTestId('pending-notice').textContent).toContain(
+      'This task is syncing now. Its actions will appear when syncing finishes.',
+    );
+  });
+
+  it('points a permanently blocked create to the recovery message', async () => {
+    const log = await pendingCreateLog();
+    await log.fail('create-intent', 'rejected');
+    stubFetch({ status: 200, body: detailBody(task()) });
+    mount();
+
+    await waitFor(() => expect(screen.getByTestId('pending-notice')).toBeTruthy());
+    expect(screen.queryByTestId('pending-cancel')).toBeNull();
+    expect(screen.getByTestId('pending-notice').textContent).toContain(
+      'This task couldn’t sync. Use Retry or Discard in the message at the top of the screen.',
+    );
   });
 });

@@ -1,8 +1,9 @@
 import { addWallDays } from '@od/shared/recurrence';
-import type { ActivityOutcome, AgendaItem } from '@od/shared/types';
+import type { ActivityOutcome, AgendaData, AgendaItem } from '@od/shared/types';
 import { scopeToWire } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { completionCommitGateFor } from '@/features/agenda/completionCommitGate';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
 import {
@@ -16,6 +17,7 @@ export interface UseAgendaActivityActionsOptions {
   today: string;
   currentMinute: string;
   timezone: string;
+  agendaData?: AgendaData;
   getScrollOffset?: () => number;
   restoreScrollOffset?: (offset: number) => void;
 }
@@ -27,14 +29,31 @@ function refused(message: string): void {
 /** Native Activity/Agenda actions publish only SQLite state committed with their outbox row. */
 export function useAgendaActivityActions(options: UseAgendaActivityActionsOptions) {
   const state = requireActiveNativeState();
+  const completionGate = completionCommitGateFor(state.coordinator);
+  const latestAgendaData = useRef(options.agendaData);
+  latestAgendaData.current = options.agendaData;
+  useEffect(
+    () => completionGate.reconcile(options.agendaData),
+    [completionGate, options.agendaData],
+  );
+  const settleCompletion = useCallback(
+    (item: AgendaItem, checked: boolean, accepted: boolean) => {
+      completionGate.settle(item, checked, accepted);
+      // The SQLite-backed Agenda refresh can finish before the transaction promise settles.
+      // Reconcile again with the latest render so that ordering cannot leave the row locked.
+      if (accepted) completionGate.reconcile(latestAgendaData.current);
+    },
+    [completionGate],
+  );
 
   const toggleComplete = useCallback(
     (item: AgendaItem, checked: boolean) => {
       if (wouldCompleteWholeSeries(item)) return;
       if (checked && isFutureRecurringOccurrence(item, options.today)) return;
-      const wireScope = scopeToWire(scopeForRow(item));
       const originalIntentId = randomUUID();
       const inverseIntentId = randomUUID();
+      if (!completionGate.begin(item, checked, originalIntentId)) return;
+      const wireScope = scopeToWire(scopeForRow(item));
       const scrollOffset = options.getScrollOffset?.() ?? 0;
       void state.coordinator
         .complete(
@@ -46,6 +65,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
           options,
         )
         .then((result) => {
+          settleCompletion(item, checked, result.kind !== 'refused');
           if (result.kind === 'refused') {
             refused(result.error.message);
             return;
@@ -54,6 +74,8 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
             message: checked ? 'Task completed' : 'Completion undone',
             onCommit: () => undefined,
             onUndo: () => {
+              const inverseChecked = !checked;
+              if (!completionGate.begin(item, inverseChecked, inverseIntentId)) return;
               const inverse = {
                 activityId: item.activityId,
                 idempotencyKey: inverseIntentId,
@@ -63,11 +85,12 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
                 .undoCompletion(
                   originalIntentId,
                   inverse,
-                  !checked,
+                  inverseChecked,
                   item.status === 'saved' ? 'saved' : 'scheduled',
                   options,
                 )
                 .then((undo) => {
+                  settleCompletion(item, inverseChecked, undo.kind !== 'refused');
                   if (undo.kind === 'refused') refused(undo.error.message);
                   else options.restoreScrollOffset?.(scrollOffset);
                 });
@@ -75,7 +98,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
           });
         });
     },
-    [options, state],
+    [completionGate, options, settleCompletion, state],
   );
 
   const onAgendaAction = useCallback(
@@ -98,6 +121,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         idempotencyKey: randomUUID(),
         input: { outcome, ...scopeToWire(scopeForRow(item)) },
       };
+      if (!completionGate.begin(item, true, variables.idempotencyKey)) return;
       const request = state.coordinator.complete(
         item.activityId,
         variables.idempotencyKey,
@@ -107,10 +131,11 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         options,
       );
       void request.then((result) => {
+        settleCompletion(item, true, result.kind !== 'refused');
         if (result.kind === 'refused') refused(result.error.message);
       });
     },
-    [options, state],
+    [completionGate, options, settleCompletion, state],
   );
 
   const snooze = useCallback(
@@ -163,5 +188,11 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
     [options, state],
   );
 
-  return { toggleComplete, onAgendaAction, resolvePassed, snooze, moveToTomorrow };
+  return {
+    toggleComplete,
+    onAgendaAction,
+    resolvePassed,
+    snooze,
+    moveToTomorrow,
+  };
 }

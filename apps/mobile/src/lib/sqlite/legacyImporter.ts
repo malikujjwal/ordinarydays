@@ -1,5 +1,6 @@
 import { systemClock } from '@od/shared/time';
 import { textColumn } from '@/lib/sqlite/database';
+import type { OutboxAttention } from '@/lib/sqlite/outbox';
 import type { RepositoryScope } from '@/lib/sqlite/subscriptions';
 import type {
   SerializedTransactionRunner,
@@ -38,6 +39,10 @@ export interface LegacyIntentImport {
   readonly entityId: string;
   readonly orderingKey: string;
   readonly status: string;
+  readonly createdAt?: number;
+  readonly attempts?: number;
+  readonly attention?: OutboxAttention;
+  readonly clockWitness?: number;
   readonly dependsOnIntentId?: string;
   readonly compensationForIntentId?: string;
 }

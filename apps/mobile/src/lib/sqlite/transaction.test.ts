@@ -55,6 +55,142 @@ describe('serialized SQLite transactions and subscriptions', () => {
     ]);
   });
 
+  it('lets an interactive write pass queued maintenance without interrupting the active transaction', async () => {
+    let releaseActive: (() => void) | undefined;
+    const activeMayCommit = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const entered: string[] = [];
+    const active = transactions.run(async () => {
+      entered.push('active-normal');
+      await activeMayCommit;
+    });
+    const queuedNormal = transactions.run(async () => {
+      entered.push('queued-normal');
+    });
+    const interactive = transactions.run(async () => {
+      entered.push('interactive');
+    }, 'interactive');
+
+    await vi.waitFor(() => expect(entered).toEqual(['active-normal']));
+    releaseActive?.();
+    await Promise.all([active, queuedNormal, interactive]);
+
+    expect(entered).toEqual(['active-normal', 'interactive', 'queued-normal']);
+  });
+
+  it('admits maintenance after four interactive transactions', async () => {
+    let releaseActive: (() => void) | undefined;
+    const activeMayCommit = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const entered: string[] = [];
+    const active = transactions.run(async () => {
+      entered.push('active');
+      await activeMayCommit;
+    });
+    const normal = transactions.run(async () => {
+      entered.push('normal');
+    });
+    const interactive = Array.from({ length: 6 }, (_, index) =>
+      transactions.run(async () => {
+        entered.push(`interactive-${index + 1}`);
+      }, 'interactive'),
+    );
+
+    await vi.waitFor(() => expect(entered).toEqual(['active']));
+    releaseActive?.();
+    await Promise.all([active, normal, ...interactive]);
+
+    expect(entered).toEqual([
+      'active',
+      'interactive-1',
+      'interactive-2',
+      'interactive-3',
+      'interactive-4',
+      'normal',
+      'interactive-5',
+      'interactive-6',
+    ]);
+  });
+
+  it('lets an interactive write pass a background read during its admission window', async () => {
+    const entered: string[] = [];
+    const background = transactions.read(async () => {
+      entered.push('background');
+    }, 20);
+    const interactive = transactions.run(async () => {
+      entered.push('interactive');
+    }, 'interactive');
+
+    await Promise.all([background, interactive]);
+
+    expect(entered).toEqual(['interactive', 'background']);
+  });
+
+  it('never interrupts an active read with an interactive write', async () => {
+    let releaseRead: (() => void) | undefined;
+    const readMayFinish = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const entered: string[] = [];
+    const background = transactions.read(async () => {
+      entered.push('background-start');
+      await readMayFinish;
+      entered.push('background-finish');
+    });
+
+    await vi.waitFor(() => expect(entered).toEqual(['background-start']));
+    const interactive = transactions.run(async () => {
+      entered.push('interactive');
+    }, 'interactive');
+    await Promise.resolve();
+    expect(entered).toEqual(['background-start']);
+
+    releaseRead?.();
+    await Promise.all([background, interactive]);
+    expect(entered).toEqual(['background-start', 'background-finish', 'interactive']);
+  });
+
+  it('admits a ready background read after four foreground jobs', async () => {
+    let releaseActive: (() => void) | undefined;
+    const activeMayFinish = new Promise<void>((resolve) => {
+      releaseActive = resolve;
+    });
+    const entered: string[] = [];
+    const active = transactions.read(async () => {
+      entered.push('active-read');
+      await activeMayFinish;
+    });
+    await vi.waitFor(() => expect(entered).toEqual(['active-read']));
+
+    const background = transactions.read(async () => {
+      entered.push('background-read');
+    });
+    const normal = transactions.run(async () => {
+      entered.push('normal');
+    });
+    const interactive = Array.from({ length: 6 }, (_, index) =>
+      transactions.run(async () => {
+        entered.push(`interactive-${index + 1}`);
+      }, 'interactive'),
+    );
+    releaseActive?.();
+    await Promise.all([active, background, normal, ...interactive]);
+
+    expect(entered).toEqual([
+      'active-read',
+      'interactive-1',
+      'interactive-2',
+      'interactive-3',
+      'interactive-4',
+      'background-read',
+      'normal',
+      'interactive-5',
+      'interactive-6',
+    ]);
+  });
+
   it('publishes only changed scopes and only after commit', async () => {
     const valuesListener = vi.fn();
     const otherListener = vi.fn();
@@ -96,5 +232,41 @@ describe('serialized SQLite transactions and subscriptions', () => {
     expect(await database?.all('SELECT * FROM values_test;')).toEqual([]);
     expect(listener).not.toHaveBeenCalled();
     expect(subscriptions.version('values')).toBe(0);
+  });
+
+  it('continues draining after a driver throws before returning a transaction promise', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    vi.spyOn(database, 'transaction').mockImplementationOnce(() => {
+      throw new Error('driver refused');
+    });
+
+    const failed = transactions.run(async () => undefined);
+    const recovered = transactions.run(async ({ database: transaction }) => {
+      await transaction.run('INSERT INTO values_test VALUES (?, ?);', [
+        'recovered',
+        'yes',
+      ]);
+    });
+
+    await expect(failed).rejects.toThrow('driver refused');
+    await expect(recovered).resolves.toBeUndefined();
+    expect(await database.all('SELECT id FROM values_test;')).toEqual([
+      { id: 'recovered' },
+    ]);
+  });
+
+  it('continues draining after a scheduled read fails', async () => {
+    const failed = transactions.read(async () => {
+      throw new Error('read refused');
+    });
+    const recovered = transactions.run(async ({ database: transaction }) => {
+      await transaction.run('INSERT INTO values_test VALUES (?, ?);', [
+        'after-read-failure',
+        'yes',
+      ]);
+    }, 'interactive');
+
+    await expect(failed).rejects.toThrow('read refused');
+    await expect(recovered).resolves.toBeUndefined();
   });
 });

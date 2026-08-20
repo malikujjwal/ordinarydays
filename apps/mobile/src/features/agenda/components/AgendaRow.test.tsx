@@ -117,6 +117,29 @@ describe('AgendaRow affordances', () => {
     expect(onToggleComplete).not.toHaveBeenCalled();
   });
 
+  it('keeps a committing checkbox visible and locked while the row body still opens', () => {
+    const onOpen = vi.fn();
+    const onToggleComplete = vi.fn();
+    mount(
+      <AgendaRow
+        item={item('task', { title: 'Call the dentist' })}
+        completionLocked
+        onOpen={onOpen}
+        onToggleComplete={onToggleComplete}
+      />,
+    );
+
+    const checkbox = screen.getByRole('checkbox', {
+      name: 'Call the dentist, not completed',
+    });
+    expect(checkbox.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(checkbox);
+    expect(onToggleComplete).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('agenda-row-body'));
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
   it("allows completing today's recurring occurrence", () => {
     mount(
       <AgendaRow
@@ -631,6 +654,31 @@ describe('a pending row', () => {
     );
 
     expect(screen.getByTestId('pending-indicator').textContent).toBe('Pending');
+    expect(screen.getByTestId('agenda-row-body').getAttribute('aria-label')).toContain(
+      'saved on this device and waiting to sync',
+    );
+  });
+
+  it('keeps Pending on the metadata line after recurrence without widening the row', async () => {
+    setActiveIntentLog(await pendingLog('create'));
+    mount(
+      <AgendaRow
+        item={item('task', {
+          activityId: PENDING_ID,
+          noteExcerpt: 'Ask about the crown estimate',
+          isRecurring: true,
+          recurrenceDescription: 'Daily',
+        })}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    const metadata = screen.getByTestId('agenda-row-metadata');
+    const pending = screen.getByTestId('pending-indicator');
+    expect(metadata.textContent).toBe('↻ Daily · Pending');
+    expect(metadata.style.flexDirection).toBe('row');
+    expect(metadata.contains(pending)).toBe(true);
+    expect(pending.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 
   it('keeps the checkbox when only a completion is queued', async () => {
@@ -651,7 +699,7 @@ describe('a pending row', () => {
     expect(screen.queryByRole('checkbox')).not.toBeNull();
   });
 
-  it('does not present a permanently failed create as an actively pending create', async () => {
+  it('keeps a permanently failed create locked until Retry or Discard', async () => {
     const log = await pendingLog('create');
     await log.fail('intent-create', 'rejected');
     setActiveIntentLog(log);
@@ -663,8 +711,8 @@ describe('a pending row', () => {
       />,
     );
 
-    expect(screen.queryByRole('checkbox')).not.toBeNull();
-    expect(screen.queryByTestId('pending-indicator')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByTestId('pending-indicator')).not.toBeNull();
   });
 
   it('keeps a queued recurrence edit inert and explains that it will update online', async () => {

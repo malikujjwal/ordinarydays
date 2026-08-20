@@ -45,6 +45,7 @@ export type ParkedIntentReason =
   | 'clock_uncertainty'
   | 'replay_age_expired'
   | 'ambiguous_collision'
+  | 'predecessor_rejected'
   | 'legacy_unknown';
 
 export interface ParkedIntentAttention {
@@ -223,6 +224,7 @@ function v2Attention(value: unknown): IntentAttention | undefined {
     (candidate.reason === 'clock_uncertainty' ||
       candidate.reason === 'replay_age_expired' ||
       candidate.reason === 'ambiguous_collision' ||
+      candidate.reason === 'predecessor_rejected' ||
       candidate.reason === 'legacy_unknown')
   ) {
     return { kind: 'parked', reason: candidate.reason };
@@ -439,6 +441,23 @@ export interface IntentAppendInput {
   readonly compensationForIntentId?: string;
 }
 
+function retryVariables(value: unknown, freshIntentId: string): unknown {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('Blocked intent variables are malformed.');
+  }
+  const variables = value as Record<string, unknown>;
+  const hasIntentId = typeof variables.intentId === 'string';
+  const hasIdempotencyKey = typeof variables.idempotencyKey === 'string';
+  if (!hasIntentId && !hasIdempotencyKey) {
+    throw new Error('Blocked intent has no retry identity.');
+  }
+  return {
+    ...variables,
+    ...(hasIntentId ? { intentId: freshIntentId } : {}),
+    ...(hasIdempotencyKey ? { idempotencyKey: freshIntentId } : {}),
+  };
+}
+
 export type UndoLogResult =
   | { readonly kind: 'cancelled' }
   | { readonly kind: 'dependent'; readonly intent: Intent }
@@ -632,6 +651,21 @@ export class IntentLog {
    * the action happened.
    */
   append(input: IntentAppendInput): Promise<Intent> {
+    return this.appendWithMetadata(input);
+  }
+
+  /** Migration-only append that retains the legacy queue's replay-age evidence. */
+  appendMigrated(
+    input: IntentAppendInput,
+    metadata: { readonly createdAt: number; readonly attempts: number },
+  ): Promise<Intent> {
+    return this.appendWithMetadata(input, metadata);
+  }
+
+  private appendWithMetadata(
+    input: IntentAppendInput,
+    metadata?: { readonly createdAt: number; readonly attempts: number },
+  ): Promise<Intent> {
     return this.write((current) => {
       const existing = current.intents.find(
         (intent) => intent.intentId === input.intentId,
@@ -652,9 +686,9 @@ export class IntentLog {
         variables: input.variables,
         entityId: input.entityId,
         status: 'queued',
-        createdAt: this.clock(),
+        createdAt: metadata?.createdAt ?? this.clock(),
         seq: current.nextSeq,
-        attempts: 0,
+        attempts: metadata?.attempts ?? 0,
         ...(input.dependsOnIntentId === undefined
           ? {}
           : { dependsOnIntentId: input.dependsOnIntentId }),
@@ -973,17 +1007,69 @@ export class IntentLog {
     return this.write((current) => {
       const target = current.intents.find((intent) => intent.intentId === intentId);
       if (target?.status !== 'needs_attention') return [current, target];
+      const doomed = new Set([intentId]);
+      let added = true;
+      while (added) {
+        added = false;
+        for (const intent of current.intents) {
+          if (
+            !doomed.has(intent.intentId) &&
+            ((intent.dependsOnIntentId !== undefined &&
+              doomed.has(intent.dependsOnIntentId)) ||
+              (intent.compensationForIntentId !== undefined &&
+                doomed.has(intent.compensationForIntentId)))
+          ) {
+            doomed.add(intent.intentId);
+            added = true;
+          }
+        }
+      }
       return [
         {
           ...current,
-          intents: current.intents.filter(
-            (intent) =>
-              intent.intentId !== intentId &&
-              intent.dependsOnIntentId !== intentId &&
-              intent.compensationForIntentId !== intentId,
-          ),
+          intents: current.intents.filter((intent) => !doomed.has(intent.intentId)),
         },
         undefined,
+      ];
+    });
+  }
+
+  /** User-directed retry with a fresh mutation identity while retaining queue order. */
+  retry(intentId: string, freshIntentId: string): Promise<Intent | undefined> {
+    return this.write((current) => {
+      const target = current.intents.find((intent) => intent.intentId === intentId);
+      if (target?.status !== 'needs_attention') return [current, target];
+      if (current.intents.some((intent) => intent.intentId === freshIntentId)) {
+        throw new IntentLogInvariantError(freshIntentId);
+      }
+      const now = this.clock();
+      const { lastError: _lastError, ...retryBase } = withoutAttention(target);
+      const retried: Intent = {
+        ...retryBase,
+        intentId: freshIntentId,
+        variables: retryVariables(target.variables, freshIntentId),
+        status: 'queued',
+        createdAt: now,
+        attempts: 0,
+      };
+      return [
+        {
+          ...current,
+          intents: current.intents.map((intent) => {
+            if (intent.intentId === intentId) return retried;
+            return {
+              ...intent,
+              ...(intent.dependsOnIntentId === intentId
+                ? { dependsOnIntentId: freshIntentId }
+                : {}),
+              ...(intent.compensationForIntentId === intentId
+                ? { compensationForIntentId: freshIntentId }
+                : {}),
+            };
+          }),
+          clockWitness: Math.max(current.clockWitness, now),
+        },
+        retried,
       ];
     });
   }

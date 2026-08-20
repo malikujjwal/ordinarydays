@@ -1,6 +1,7 @@
 import { Text, Touchable, useTheme } from '@od/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View } from 'react-native';
+import { useCompletionCommitState } from '@/features/agenda/hooks/useCompletionCommitLock';
 import {
   type AgendaSwipeAction,
   type AgendaSwipeActionName,
@@ -10,7 +11,7 @@ import {
 } from '@/features/agenda/model/swipeActions';
 import { useAgendaRowIntentState } from '@/hooks/usePendingIntents';
 import { canResolvePassedAgendaItem } from '@/lib/passedPlanResolution';
-import { AgendaRow, type AgendaRowProps } from './AgendaRow';
+import { type AgendaRowProps, AgendaRowWithIntentState } from './AgendaRow';
 
 export interface SwipeableRowProps extends AgendaRowProps {
   onAction?: (item: AgendaRowProps['item'], action: AgendaSwipeAction) => void;
@@ -65,13 +66,19 @@ function subscribeToRowKeyboard(
 export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps) {
   const theme = useTheme();
   const wrapper = useRef<View>(null);
-  const { mutationInert: inert } = useAgendaRowIntentState(item.activityId);
+  const intentState = useAgendaRowIntentState(item.activityId, item.occurrenceDate);
+  const { mutationInert: inert } = intentState;
+  const completion = useCompletionCommitState(
+    item,
+    intentState.failedCompletionIntentIds,
+  );
+  const completionLocked = rowProps.completionLocked ?? completion.locked;
   const actions = useMemo(
     () =>
-      inert
+      inert || completionLocked
         ? { positive: [] as AgendaSwipeAction[], secondary: [] as AgendaSwipeAction[] }
         : agendaSwipeActions(item),
-    [inert, item],
+    [completionLocked, inert, item],
   );
   const allActions = useMemo(() => allAgendaSwipeActions(actions), [actions]);
   const [hovered, setHovered] = useState(false);
@@ -80,7 +87,8 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
   const [menuOpen, setMenuOpen] = useState(false);
   const hasResolutionPrompt =
     rowProps.onOpenResolution !== undefined && canResolvePassedAgendaItem(item);
-  const controlsVisible = !inert && (hovered || focusWithin || rowFocused || menuOpen);
+  const controlsVisible =
+    !inert && !completionLocked && (hovered || focusWithin || rowFocused || menuOpen);
   const { onOpen, onToggleComplete } = rowProps;
 
   const dispatch = useCallback(
@@ -128,7 +136,11 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
 
       const checked =
         item.status === 'completed' || item.status === 'completed_occurrence';
-      if ((event.key === ' ' || key === 'spacebar') && item.hasCheckbox) {
+      if (
+        (event.key === ' ' || key === 'spacebar') &&
+        item.hasCheckbox &&
+        !completionLocked
+      ) {
         event.preventDefault();
         onToggleComplete?.(item, !checked);
         return;
@@ -151,7 +163,16 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
     };
 
     return subscribeToRowKeyboard(element, onKeyDown);
-  }, [actions.positive, dispatch, findAction, inert, item, onOpen, onToggleComplete]);
+  }, [
+    actions.positive,
+    completionLocked,
+    dispatch,
+    findAction,
+    inert,
+    item,
+    onOpen,
+    onToggleComplete,
+  ]);
 
   const accessibilityActions = agendaAccessibilityActions(actions);
   const positive = actions.positive[0];
@@ -164,9 +185,14 @@ export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps)
       onPointerLeave={() => setHovered(false)}
       style={{ position: 'relative' }}
     >
-      <AgendaRow
+      <AgendaRowWithIntentState
         {...rowProps}
         item={item}
+        completionLocked={completionLocked}
+        {...(completion.checkedOverride === undefined
+          ? {}
+          : { completionCheckedOverride: completion.checkedOverride })}
+        intentState={intentState}
         accessibilityActions={accessibilityActions}
         onAccessibilityAction={({ nativeEvent }) => {
           const selected = allActions.find(({ name }) => name === nativeEvent.actionName);

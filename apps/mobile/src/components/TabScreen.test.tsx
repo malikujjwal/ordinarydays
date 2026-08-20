@@ -44,6 +44,30 @@ describe('TabScreen', () => {
     expect(pressed).toBe(true);
   });
 
+  it('keeps a flexible connectivity slot between the title and fixed actions', () => {
+    wrap(
+      <TabScreen
+        title="Today"
+        testID="today-screen"
+        titleAccessory={<Text>Offline</Text>}
+        headerAction={<Text testID="day-count">4 of 19 done</Text>}
+      >
+        <Text>Body</Text>
+      </TabScreen>,
+    );
+
+    const title = screen.getByRole('heading', { name: 'Today' });
+    const statusSlot = screen.getByTestId('today-screen-title-accessory-slot');
+    const count = screen.getByTestId('day-count');
+    expect(statusSlot.style.flexGrow).toBe('1');
+    expect(
+      title.compareDocumentPosition(statusSlot) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(
+      statusSlot.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   it('does not reserve a permanent band for the floating Add button', () => {
     wrap(
       <TabScreen title="Today" testID="today-screen">

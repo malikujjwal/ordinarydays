@@ -120,6 +120,10 @@ export function dehydratedStateFrom(value: unknown): DehydratedState | undefined
 export interface RestoreOutcome {
   status: 'restored' | 'empty' | 'discarded' | 'timedOut';
   safeToPersist: Promise<void>;
+  /** Exact bounded evidence consumed by native legacy migration without another read. */
+  nativeLegacyPersistence?:
+    | { readonly kind: 'available'; readonly storedClient: unknown }
+    | { readonly kind: 'unavailable'; readonly error: Error };
 }
 
 export async function restorePersistedClient(
@@ -132,8 +136,10 @@ export async function restorePersistedClient(
   });
 
   let timedOut = false;
+  let restoreFailure: Error | undefined;
   const restored = Promise.resolve(queryPersister.restoreClient())
-    .catch(async () => {
+    .catch(async (error: unknown) => {
+      restoreFailure = error instanceof Error ? error : new Error(String(error));
       if (platform !== 'ios') {
         await Promise.resolve(queryPersister.removeClient()).catch(() => undefined);
       }
@@ -170,18 +176,36 @@ export async function restorePersistedClient(
   if (timer !== undefined) clearTimeout(timer);
 
   if (value === 'timeout') {
-    return { status: 'timedOut', safeToPersist: lateSettled };
+    return {
+      status: 'timedOut',
+      safeToPersist: lateSettled,
+      nativeLegacyPersistence: {
+        kind: 'unavailable',
+        error: new Error('Native legacy persistence read exceeded 2 seconds.'),
+      },
+    };
   }
   settleLate?.();
   if (value === undefined) {
-    return { status: 'empty', safeToPersist: Promise.resolve() };
+    return {
+      status: 'empty',
+      safeToPersist: Promise.resolve(),
+      nativeLegacyPersistence:
+        restoreFailure === undefined
+          ? { kind: 'available', storedClient: undefined }
+          : { kind: 'unavailable', error: restoreFailure },
+    };
   }
   if (!validStoredClient(value)) {
     /* Native migration still needs an expired/buster-old envelope's paused mutations. */
     if (platform !== 'ios') {
       await Promise.resolve(queryPersister.removeClient()).catch(() => undefined);
     }
-    return { status: 'discarded', safeToPersist: Promise.resolve() };
+    return {
+      status: 'discarded',
+      safeToPersist: Promise.resolve(),
+      nativeLegacyPersistence: { kind: 'available', storedClient: value },
+    };
   }
   hydrate(
     client,
@@ -189,7 +213,11 @@ export async function restorePersistedClient(
       ? withoutNativeActivityState(value.clientState)
       : value.clientState,
   );
-  return { status: 'restored', safeToPersist: Promise.resolve() };
+  return {
+    status: 'restored',
+    safeToPersist: Promise.resolve(),
+    nativeLegacyPersistence: { kind: 'available', storedClient: value },
+  };
 }
 
 /**

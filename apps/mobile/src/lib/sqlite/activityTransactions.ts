@@ -1,3 +1,4 @@
+import { MAX_TITLE_LEN } from '@od/shared';
 import type {
   CreateActivityInput,
   PatchActivityInput,
@@ -89,6 +90,13 @@ export interface ActivityIdentityVariables {
   readonly intentId?: string;
 }
 
+function variablesObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('Durable activity variables are malformed.');
+  }
+  return value as Record<string, unknown>;
+}
+
 function mutation(
   name: string,
   intentId: string,
@@ -149,6 +157,7 @@ export class ActivityTransactionService {
     variables: ActivityCreateVariables,
     clock: ProjectionClock,
     mintedAt: string = systemClock.now(),
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const activityId = variables.input.activityId;
     if (activityId === undefined)
@@ -157,7 +166,7 @@ export class ActivityTransactionService {
       transaction.database,
       mutation('create', variables.idempotencyKey, activityId, variables),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     const pending = pendingActivityFromInput(variables.input, activityId, mintedAt);
     const { pending: _pending, ...pendingFields } = pending;
     const activity = activitySchema.parse({
@@ -199,15 +208,47 @@ export class ActivityTransactionService {
     return appended;
   }
 
+  async duplicate(
+    transaction: TransactionContext,
+    ownerUserId: string,
+    sourceActivityId: string,
+    copyActivityId: string,
+    idempotencyKey: string,
+    clock: ProjectionClock,
+  ): Promise<TransactionalIntentResult> {
+    const source = await this.activities.read({
+      kind: 'activity',
+      activityId: sourceActivityId,
+    });
+    if (source === undefined) throw new Error('No activity loaded to duplicate.');
+    const suffix = ' (copy)';
+    const room = MAX_TITLE_LEN - suffix.length;
+    const shared = {
+      activityId: copyActivityId,
+      title: `${source.activity.title.slice(0, room).trimEnd()}${suffix}`,
+      ...(source.activity.notes === undefined ? {} : { notes: source.activity.notes }),
+      ...(source.activity.location === undefined
+        ? {}
+        : { location: source.activity.location }),
+      details: source.activity.details,
+    };
+    const input: CreateActivityInput =
+      source.activity.objectKind === 'task'
+        ? { ...shared, objectKind: 'task', type: 'task' }
+        : { ...shared, objectKind: 'plan', type: source.activity.type };
+    return this.create(transaction, ownerUserId, { input, idempotencyKey }, clock);
+  }
+
   async remove(
     transaction: TransactionContext,
     variables: { readonly activityId: string; readonly intentId: string },
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const appended = await this.outbox.append(
       transaction.database,
       mutation('delete', variables.intentId, variables.activityId, variables),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     await transaction.database.run(
       'DELETE FROM activity_reminders WHERE activity_id = ?;',
       [variables.activityId],
@@ -232,12 +273,13 @@ export class ActivityTransactionService {
   async patch(
     transaction: TransactionContext,
     variables: ActivityPatchVariables,
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const appended = await this.outbox.append(
       transaction.database,
       mutation('patch', variables.intentId, variables.activityId, variables),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     const current = await transaction.database.first(
       `SELECT activity.recurrence_json,
         EXISTS (
@@ -279,12 +321,13 @@ export class ActivityTransactionService {
     transaction: TransactionContext,
     variables: ActivityScheduleVariables,
     clock: ProjectionClock,
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const appended = await this.outbox.append(
       transaction.database,
       mutation('schedule', variables.idempotencyKey, variables.activityId, variables),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     const occurrenceDate = variables.input.occurrenceDate;
     if (occurrenceDate === undefined) {
       await this.activities.scheduleLocal(
@@ -338,6 +381,7 @@ export class ActivityTransactionService {
     restoredStatus: 'saved' | 'scheduled',
     clock: ProjectionClock,
     dependency?: { readonly originalIntentId: string },
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const name = completed ? 'complete' : 'uncomplete';
     const appended = await this.outbox.append(
@@ -355,7 +399,7 @@ export class ActivityTransactionService {
             },
       ),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     await this.projectCompletion(
       transaction,
       variables,
@@ -440,13 +484,14 @@ export class ActivityTransactionService {
     variables: ActivityCompletionVariables,
     skipped: boolean,
     clock: ProjectionClock,
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const name = skipped ? 'skip' : 'uncomplete';
     const appended = await this.outbox.append(
       transaction.database,
       mutation(name, variables.idempotencyKey, variables.activityId, variables),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     const occurrenceDate = variables.input.occurrenceDate;
     if (occurrenceDate === undefined) {
       await this.activities.setStatusLocal(
@@ -499,13 +544,14 @@ export class ActivityTransactionService {
     snoozed: boolean,
     renderedDate: string,
     clock: ProjectionClock,
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const name = snoozed ? 'snooze' : 'unsnooze';
     const appended = await this.outbox.append(
       transaction.database,
       mutation(name, variables.idempotencyKey, variables.activityId, variables),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     const occurrenceDate = variables.input.occurrenceDate;
     if (occurrenceDate === undefined) {
       await transaction.database.run(
@@ -554,6 +600,7 @@ export class ActivityTransactionService {
     transaction: TransactionContext,
     ownerUserId: string,
     variables: ActivityReminderVariables,
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const appended = await this.outbox.append(
       transaction.database,
@@ -564,7 +611,7 @@ export class ActivityTransactionService {
         variables,
       ),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     await transaction.database.run(
       `INSERT INTO activity_reminders (
         reminder_id, activity_id, owner_user_id, offset_minutes, channel, local_state
@@ -587,12 +634,13 @@ export class ActivityTransactionService {
   async removeReminder(
     transaction: TransactionContext,
     variables: ActivityReminderDeleteVariables,
+    projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const appended = await this.outbox.append(
       transaction.database,
       mutation('reminder-delete', variables.intentId, variables.activityId, variables),
     );
-    if (appended.kind === 'existing') return appended;
+    if (appended.kind === 'existing' && !projectExisting) return appended;
     await transaction.database.run(
       'DELETE FROM activity_reminders WHERE reminder_id = ?;',
       [variables.reminderId],
@@ -601,6 +649,118 @@ export class ActivityTransactionService {
     transaction.changed('reminders');
     transaction.changed('outbox');
     return appended;
+  }
+
+  /** Re-applies the accepted local projection after a user-directed attention retry. */
+  async reprojectRetry(
+    transaction: TransactionContext,
+    ownerUserId: string,
+    intent: OutboxIntent,
+    clock: ProjectionClock,
+  ): Promise<void> {
+    const name = intent.mutationKey[1];
+    const variables = variablesObject(intent.variables);
+    if (name === 'create') {
+      await this.create(
+        transaction,
+        ownerUserId,
+        variables as unknown as ActivityCreateVariables,
+        clock,
+        systemClock.now(),
+        true,
+      );
+      return;
+    }
+    if (name === 'duplicate' || name === 'convert-recurrence') return;
+    const detail = await this.activities.read({
+      kind: 'activity',
+      activityId: intent.entityId,
+    });
+    /*
+     * Imported legacy work may not have a native projection to rebuild. The durable retry
+     * still has to be dispatchable; its acknowledgement will install canonical server truth.
+     */
+    if (detail === undefined) return;
+    if (name === 'delete') {
+      await this.remove(
+        transaction,
+        variables as unknown as {
+          readonly activityId: string;
+          readonly intentId: string;
+        },
+        true,
+      );
+      return;
+    }
+    if (name === 'patch') {
+      await this.patch(transaction, variables as unknown as ActivityPatchVariables, true);
+      return;
+    }
+    if (name === 'schedule') {
+      await this.schedule(
+        transaction,
+        variables as unknown as ActivityScheduleVariables,
+        clock,
+        true,
+      );
+      return;
+    }
+    const restoredStatus =
+      detail?.activity.schedule === undefined ? 'saved' : 'scheduled';
+    if (name === 'complete' || name === 'uncomplete') {
+      await this.complete(
+        transaction,
+        variables as unknown as ActivityCompletionVariables,
+        name === 'complete',
+        restoredStatus,
+        clock,
+        undefined,
+        true,
+      );
+      return;
+    }
+    if (name === 'skip') {
+      await this.skip(
+        transaction,
+        variables as unknown as ActivityCompletionVariables,
+        true,
+        clock,
+        true,
+      );
+      return;
+    }
+    if (name === 'snooze' || name === 'unsnooze') {
+      const snoozeVariables = variables as unknown as ActivitySnoozeVariables;
+      await this.snooze(
+        transaction,
+        snoozeVariables,
+        name === 'snooze',
+        snoozeVariables.input.occurrenceDate ??
+          detail?.activity.schedule?.date ??
+          clock.today,
+        clock,
+        true,
+      );
+      return;
+    }
+    if (name === 'reminder-create') {
+      await this.addReminder(
+        transaction,
+        ownerUserId,
+        variables as unknown as ActivityReminderVariables,
+        true,
+      );
+      return;
+    }
+    if (name === 'reminder-delete') {
+      await this.removeReminder(
+        transaction,
+        variables as unknown as ActivityReminderDeleteVariables,
+        true,
+      );
+      return;
+    }
+    throw new Error(`Unsupported blocked activity mutation: ${name ?? 'unknown'}.`);
   }
 
   async cancelQueuedAndProjectInverse(
