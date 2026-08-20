@@ -12,7 +12,11 @@ export interface SqliteExecutionMetrics {
   readonly durationMs: number;
 }
 
-/** The deliberately small SQL surface repositories may use. */
+/**
+ * The deliberately small SQL surface repositories may use. `first` and `all` are read-only by
+ * contract; the serialized writer enforces that rule at runtime so RETURNING cannot bypass its
+ * dirty/revision tracker.
+ */
 export interface SqliteReader {
   first(sql: string, parameters?: SqliteParameters): Promise<SqliteRow | undefined>;
   all(sql: string, parameters?: SqliteParameters): Promise<readonly SqliteRow[]>;

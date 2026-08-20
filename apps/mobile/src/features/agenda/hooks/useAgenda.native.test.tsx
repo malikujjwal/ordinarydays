@@ -913,6 +913,12 @@ describe('native useAgenda', () => {
     };
     const staleDay = { ...initialDay };
     const committedDay = { ...initialDay };
+    const serverDay = {
+      date: '2026-08-20',
+      schedule: [],
+      anytime: [],
+      earlier: [],
+    };
     const initial: AgendaData = {
       days: [initialDay],
       warnings: ['duplicate_occurrence:initial'],
@@ -931,7 +937,16 @@ describe('native useAgenda', () => {
         commitRevision: 3,
         source: 'reader' as const,
       })
-      .mockImplementationOnce(() => staleFull.promise);
+      .mockImplementationOnce(() => staleFull.promise)
+      .mockResolvedValueOnce({
+        data: {
+          days: [committedDay, serverDay],
+          warnings: ['duplicate_occurrence:server-correction'],
+        },
+        covered: true,
+        commitRevision: 5,
+        source: 'reader' as const,
+      });
     const state = {
       agenda: {
         subscribe: (
@@ -996,9 +1011,13 @@ describe('native useAgenda', () => {
       await staleFull.promise;
     });
     expect(mounted.result.current.data?.days[0]).toBe(committedDay);
-    expect(mounted.result.current.data?.warnings).toEqual([
-      'duplicate_occurrence:initial',
-    ]);
+    await waitFor(() => expect(readSnapshot).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(mounted.result.current.data?.warnings).toEqual([
+        'duplicate_occurrence:server-correction',
+      ]),
+    );
+    expect(mounted.result.current.data?.days).toEqual([committedDay, serverDay]);
 
     mounted.unmount();
     client.clear();

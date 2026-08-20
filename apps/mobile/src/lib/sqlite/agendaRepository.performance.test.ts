@@ -155,7 +155,12 @@ describe('AgendaRepository hot paths', () => {
         inSnapshot = true;
         const data = await task(reader);
         inSnapshot = false;
-        return { data, commitRevision: 17, source: 'reader' };
+        return {
+          data,
+          commitRevision: 17,
+          source: 'reader',
+          metrics: { callCount: 3, durationMs: 4 },
+        };
       },
     };
     const agenda = new AgendaRepository(
@@ -165,10 +170,12 @@ describe('AgendaRepository hot paths', () => {
       projectionReader,
     );
 
-    await expect(agenda.readSnapshot(coverage)).resolves.toMatchObject({
+    const snapshot = await agenda.readSnapshot(coverage);
+    expect(snapshot).toMatchObject({
       commitRevision: 17,
       source: 'reader',
       covered: true,
+      metrics: { callCount: 3, durationMs: 4 },
       data: {
         days: [
           { date: '2026-08-20', schedule: [], anytime: [], earlier: [] },
@@ -190,6 +197,7 @@ describe('AgendaRepository hot paths', () => {
         data: await task(reader),
         commitRevision: 22,
         source: 'reader',
+        metrics: { callCount: 2, durationMs: 3 },
       }),
     };
     const agenda = new AgendaRepository(
@@ -204,6 +212,7 @@ describe('AgendaRepository hot paths', () => {
     ).resolves.toMatchObject({
       commitRevision: 22,
       source: 'reader',
+      metrics: { callCount: 2, durationMs: 3 },
       days: [{ date: '2026-08-20', schedule: [], anytime: [], earlier: [] }],
     });
     expect(reader.all).toHaveBeenCalledOnce();

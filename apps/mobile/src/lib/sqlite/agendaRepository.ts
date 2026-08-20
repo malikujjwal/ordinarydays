@@ -378,7 +378,7 @@ export class AgendaRepository {
         : this.projectionReader
             .snapshot((database) => this.readRawSnapshotWith(database, coverage))
             .then((snapshot) => ({
-              ...this.decodeSnapshot(snapshot.data, coverage),
+              ...this.decodeSnapshot(snapshot.data, coverage, snapshot.metrics),
               commitRevision: snapshot.commitRevision,
               source: snapshot.source,
             }))
@@ -417,7 +417,7 @@ export class AgendaRepository {
         this.readRawDaysWith(database, dates),
       );
       return {
-        ...this.decodeDays(snapshot.data, dates),
+        ...this.decodeDays(snapshot.data, dates, snapshot.metrics),
         commitRevision: snapshot.commitRevision,
         source: snapshot.source,
       };
@@ -696,7 +696,7 @@ export class AgendaRepository {
     return { days: daysFromRows(rows, date, date), warnings: [] };
   }
 
-  /** Replaces only one explicit materialized identity after its local transaction commits. */
+  /** Replaces one explicit identity and persists the affected day's derived presentation. */
   async replaceLocalTargetRows(
     transaction: TransactionContext,
     activityId: string,
@@ -723,6 +723,7 @@ export class AgendaRepository {
       state,
       () => undefined,
     );
+    await this.updateMaterializedDayDerivations(transaction.database, data.days);
     const changedDates = new Set(data.days.map((day) => day.date));
     if (changedDates.size === 0) {
       // A target absent from all materialized days has no safe date to merge incrementally.
@@ -939,13 +940,14 @@ export class AgendaRepository {
   private decodeSnapshot(
     raw: RawAgendaSnapshot,
     coverage: AgendaCoverage,
+    metrics: SqliteExecutionMetrics = raw.metrics,
   ): Pick<AgendaCommittedSnapshot, 'data' | 'covered' | 'metrics'> {
     const decodeStartedAt = Date.now();
     const data = agendaDataFromRows(raw.rows, coverage, raw.metadata);
     return {
       data,
       covered: raw.metadata !== undefined,
-      metrics: { ...raw.metrics, decodeMs: Date.now() - decodeStartedAt },
+      metrics: { ...metrics, decodeMs: Date.now() - decodeStartedAt },
     };
   }
 
@@ -981,12 +983,13 @@ export class AgendaRepository {
   private decodeDays(
     raw: RawAgendaDays,
     dates: readonly string[],
+    metrics: SqliteExecutionMetrics = raw.metrics,
   ): Pick<AgendaDaysSnapshot, 'days' | 'metrics'> {
     const decodeStartedAt = Date.now();
     const days = daysForDates(raw.rows, dates);
     return {
       days,
-      metrics: { ...raw.metrics, decodeMs: Date.now() - decodeStartedAt },
+      metrics: { ...metrics, decodeMs: Date.now() - decodeStartedAt },
     };
   }
 
@@ -1060,6 +1063,57 @@ export class AgendaRepository {
       version,
       suppressedActivityIds,
     );
+  }
+
+  /**
+   * Completion reads and re-partitions one indexed day. The target row owns its domain fields,
+   * but Up Next, section membership and order are properties of the whole day. Persist those
+   * derived fields in bounded batches without changing another Activity's canonical/local state.
+   */
+  private async updateMaterializedDayDerivations(
+    database: SqliteExecutor,
+    days: readonly AgendaDay[],
+  ): Promise<void> {
+    const rows: Array<readonly [string, string, number, number]> = [];
+    for (const day of days) {
+      const upNextIdentity =
+        day.upNext === undefined
+          ? undefined
+          : occurrenceIdentity(day.upNext.activityId, day.upNext.occurrenceDate);
+      const sections = [
+        ['schedule', day.schedule],
+        ['anytime', day.anytime],
+        ['earlier', day.earlier],
+      ] as const;
+      for (const [section, items] of sections) {
+        for (const [order, item] of items.entries()) {
+          rows.push([
+            rowId(day.date, item),
+            section,
+            order,
+            occurrenceIdentity(item.activityId, item.occurrenceDate) === upNextIdentity
+              ? 1
+              : 0,
+          ]);
+        }
+      }
+    }
+    for (let offset = 0; offset < rows.length; offset += INSERT_CHUNK_SIZE) {
+      const chunk = rows.slice(offset, offset + INSERT_CHUNK_SIZE);
+      const values = chunk.map(() => '(?, ?, ?, ?)').join(', ');
+      await database.run(
+        `WITH derived(row_id, section, sort_order, is_up_next) AS (VALUES ${values})
+         UPDATE agenda_rows SET
+           section = (SELECT section FROM derived WHERE derived.row_id = agenda_rows.row_id),
+           sort_order = (SELECT sort_order FROM derived WHERE derived.row_id = agenda_rows.row_id),
+           is_up_next = (SELECT is_up_next FROM derived WHERE derived.row_id = agenda_rows.row_id)
+         WHERE row_id IN (SELECT row_id FROM derived)
+           AND (section IS NOT (SELECT section FROM derived WHERE derived.row_id = agenda_rows.row_id)
+             OR sort_order IS NOT (SELECT sort_order FROM derived WHERE derived.row_id = agenda_rows.row_id)
+             OR is_up_next IS NOT (SELECT is_up_next FROM derived WHERE derived.row_id = agenda_rows.row_id));`,
+        chunk.flat(),
+      );
+    }
   }
 
   /** Inserts already-materialized rows in bounded bridge calls after their owner deleted them. */

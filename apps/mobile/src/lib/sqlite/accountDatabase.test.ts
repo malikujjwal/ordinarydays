@@ -128,11 +128,13 @@ describe('account SQLite lifecycle', () => {
     });
     releaseSnapshot?.();
 
-    await expect(pending).resolves.toEqual({
+    const snapshot = await pending;
+    expect(snapshot).toMatchObject({
       data: [{ id: 'before', value: 'one' }],
       commitRevision: 1,
       source: 'reader',
     });
+    expect(snapshot.metrics.callCount).toBe(2);
     await expect(
       account.projections.snapshot((reader) =>
         (reader as SqliteExecutor).run('INSERT INTO account_test_values VALUES (?, ?);', [

@@ -230,6 +230,69 @@ describe('serialized SQLite transactions and subscriptions', () => {
     expect(await readCommitRevision(openedDatabase())).toBe(1);
   });
 
+  it('isolates a throwing listener after commit and still resolves the durable write', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const healthy = vi.fn();
+    subscriptions.subscribe('values', () => {
+      throw new Error('broken subscriber');
+    });
+    subscriptions.subscribe('values', healthy);
+
+    await expect(
+      transactions.runCommitted(async ({ database: transaction, changed }) => {
+        await transaction.run('INSERT INTO values_test VALUES (?, ?);', [
+          'committed-despite-listener',
+          'yes',
+        ]);
+        changed('values');
+        return 'accepted';
+      }),
+    ).resolves.toEqual({ value: 'accepted', commitRevision: 1 });
+
+    expect(healthy).toHaveBeenCalledWith({ scope: 'values', commitRevision: 1 });
+    expect(
+      await openedDatabase().first('SELECT value FROM values_test WHERE id = ?;', [
+        'committed-despite-listener',
+      ]),
+    ).toEqual({ value: 'yes' });
+    expect(warning).toHaveBeenCalledWith('native_subscription_listener_failed', {
+      scope: 'values',
+      message: 'broken subscriber',
+    });
+    warning.mockRestore();
+  });
+
+  it('rejects mutations sent through first or all before they can bypass revision tracking', async () => {
+    await openedDatabase().run('INSERT INTO values_test VALUES (?, ?);', [
+      'returning-guard',
+      'before',
+    ]);
+
+    await expect(
+      transactions.run(({ database: transaction }) =>
+        transaction.first(
+          'UPDATE values_test SET value = ? WHERE id = ? RETURNING value;',
+          ['after-first', 'returning-guard'],
+        ),
+      ),
+    ).rejects.toThrow('first accepts read-only SQL');
+    await expect(
+      transactions.run(({ database: transaction }) =>
+        transaction.all(
+          'UPDATE values_test SET value = ? WHERE id = ? RETURNING value;',
+          ['after-all', 'returning-guard'],
+        ),
+      ),
+    ).rejects.toThrow('all accepts read-only SQL');
+
+    expect(
+      await openedDatabase().first('SELECT value FROM values_test WHERE id = ?;', [
+        'returning-guard',
+      ]),
+    ).toEqual({ value: 'before' });
+    expect(await readCommitRevision(openedDatabase())).toBe(0);
+  });
+
   it('increments exactly once for a multi-statement, multi-scope commit', async () => {
     const valuesListener = vi.fn();
     const otherListener = vi.fn();

@@ -31,7 +31,18 @@ export class RepositorySubscriptions {
         scope,
         ...(commitRevision === undefined ? {} : { commitRevision }),
       };
-      for (const listener of this.listeners.get(scope) ?? []) listener(metadata);
+      for (const listener of this.listeners.get(scope) ?? []) {
+        try {
+          listener(metadata);
+        } catch (error) {
+          if (__DEV__) {
+            console.warn('native_subscription_listener_failed', {
+              scope,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
     }
   }
 }

@@ -20,6 +20,7 @@ import { SerializedTransactionRunner } from './transaction';
 const OWNER = 'usr_01J0000000000000000000000A';
 const ACTIVITY = 'act_01J0000000000000000000000A';
 const OTHER = 'act_01J0000000000000000000000B';
+const THIRD = 'act_01J0000000000000000000000C';
 const REMINDER = 'rem_01J0000000000000000000000A';
 const clock = { today: '2026-08-19', currentMinute: '08:00' };
 
@@ -407,6 +408,103 @@ describe('Activity/Agenda transactional SQLite slice', () => {
         local_state: 'canonical',
       },
     ]);
+  });
+
+  it("persists the affected day's Up Next promotion and ordering without taking ownership of peer rows", async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'create-before-day-derivation' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await outbox.acknowledge(transaction.database, 'create-before-day-derivation');
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+    });
+    const materialized = await agenda.read({
+      from: '2026-08-19',
+      to: '2026-08-21',
+      timezone: 'America/New_York',
+    });
+    const target = materialized.days[0]?.schedule[0];
+    if (target === undefined)
+      throw new Error('Expected the recurring target projection.');
+    const next = {
+      ...target,
+      activityId: OTHER,
+      title: 'Next scheduled task',
+      time: '10:00',
+      isRecurring: false,
+    };
+    const earlier = {
+      ...target,
+      activityId: THIRD,
+      title: 'Existing earlier task',
+      time: '07:00',
+      isRecurring: false,
+    };
+    await transactions.run((transaction) =>
+      agenda.installCanonical(
+        transaction,
+        {
+          from: '2026-08-19',
+          to: '2026-08-21',
+          tz: 'America/New_York',
+        },
+        {
+          ...materialized,
+          days: materialized.days.map((day) =>
+            day.date === '2026-08-19'
+              ? {
+                  ...day,
+                  schedule: [target, next],
+                  earlier: [earlier],
+                  upNext: target,
+                }
+              : day,
+          ),
+        },
+      ),
+    );
+
+    await coordinator.complete(
+      ACTIVITY,
+      'complete-and-rederive-day',
+      { occurrenceDate: '2026-08-19' },
+      true,
+      'scheduled',
+      { ...clock, currentMinute: '09:30' },
+    );
+
+    const rows = await database.all(
+      `SELECT activity_id, section, sort_order, is_up_next, local_state, status
+       FROM agenda_rows WHERE viewer_date = ?;`,
+      ['2026-08-19'],
+    );
+    expect(rows.find((row) => row.activity_id === ACTIVITY)).toEqual({
+      activity_id: ACTIVITY,
+      section: 'earlier',
+      sort_order: 0,
+      is_up_next: 0,
+      local_state: 'queued',
+      status: 'completed_occurrence',
+    });
+    expect(rows.find((row) => row.activity_id === THIRD)).toEqual({
+      activity_id: THIRD,
+      section: 'earlier',
+      sort_order: 1,
+      is_up_next: 0,
+      local_state: 'canonical',
+      status: 'scheduled',
+    });
+    expect(rows.find((row) => row.activity_id === OTHER)).toEqual({
+      activity_id: OTHER,
+      section: 'schedule',
+      sort_order: 0,
+      is_up_next: 1,
+      local_state: 'canonical',
+      status: 'scheduled',
+    });
   });
 
   it('stores a dependent inverse when Complete is already in flight and preserves wire order', async () => {

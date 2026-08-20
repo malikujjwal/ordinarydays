@@ -1,9 +1,11 @@
 import { readCommitRevision } from '@/lib/sqlite/commitRevision';
-import type {
-  SqliteDatabase,
-  SqliteDatabaseFactory,
-  SqliteReader,
-  SqliteSnapshotConnection,
+import {
+  measureSqliteReader,
+  type SqliteDatabase,
+  type SqliteDatabaseFactory,
+  type SqliteExecutionMetrics,
+  type SqliteReader,
+  type SqliteSnapshotConnection,
 } from '@/lib/sqlite/database';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
 
@@ -11,6 +13,8 @@ export interface RevisionedProjectionSnapshot<T> {
   readonly data: T;
   readonly commitRevision: number;
   readonly source: 'reader' | 'writer-fallback';
+  /** All SQLite bridge calls in the snapshot, including the revision freshness fence. */
+  readonly metrics: SqliteExecutionMetrics;
 }
 
 export interface RevisionedProjectionReader {
@@ -94,10 +98,11 @@ export class AccountProjectionReader implements RevisionedProjectionReader {
     reader: SqliteReader,
     task: (reader: SqliteReader) => Promise<T>,
   ): Promise<Omit<RevisionedProjectionSnapshot<T>, 'source'>> {
+    const measured = measureSqliteReader(reader);
     /* Reading the revision first establishes the WAL snapshot fenced around all rows below. */
-    const commitRevision = await readCommitRevision(reader);
-    const data = await task(reader);
-    return { data, commitRevision };
+    const commitRevision = await readCommitRevision(measured.reader);
+    const data = await task(measured.reader);
+    return { data, commitRevision, metrics: measured.metrics() };
   }
 
   private async detach(reader: SqliteSnapshotConnection): Promise<void> {

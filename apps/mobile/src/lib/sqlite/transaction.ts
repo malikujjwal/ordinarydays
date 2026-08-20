@@ -67,6 +67,13 @@ export interface SqliteReadScheduler {
 const MAX_INTERACTIVE_BURST = 4;
 const MAX_FOREGROUND_BURST = 4;
 
+function assertReadOnlyQuery(method: 'first' | 'all', sql: string): void {
+  if (/^\s*(?:SELECT|EXPLAIN)\b/i.test(sql)) return;
+  throw new Error(
+    `SQLite ${method} accepts read-only SQL inside a serialized transaction; use run or exec for mutations.`,
+  );
+}
+
 /**
  * One process-wide queue per open account database, with notifications after commit only.
  *
@@ -298,8 +305,14 @@ export class SerializedTransactionRunner {
         const observable = measured?.executor ?? transaction;
         let dirty = false;
         const tracked: SqliteExecutor = {
-          first: (sql, parameters) => observable.first(sql, parameters),
-          all: (sql, parameters) => observable.all(sql, parameters),
+          first: (sql, parameters) => {
+            assertReadOnlyQuery('first', sql);
+            return observable.first(sql, parameters);
+          },
+          all: (sql, parameters) => {
+            assertReadOnlyQuery('all', sql);
+            return observable.all(sql, parameters);
+          },
           exec: async (sql) => {
             await observable.exec(sql);
             dirty = true;
@@ -338,7 +351,16 @@ export class SerializedTransactionRunner {
                 queued.commit.commitRevision = commitRevision;
               }
               if (changedScopes.size > 0) {
-                this.subscriptions.publish(changedScopes, commitRevision);
+                try {
+                  this.subscriptions.publish(changedScopes, commitRevision);
+                } catch (error) {
+                  /* A notification bug cannot turn an already-durable commit into a refusal. */
+                  if (__DEV__) {
+                    console.warn('native_subscription_publish_failed', {
+                      message: error instanceof Error ? error.message : String(error),
+                    });
+                  }
+                }
               }
             }
             queued.resolve(result);

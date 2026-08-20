@@ -270,6 +270,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
       let reloadLastRequestedAt: number | undefined;
       let localReadRunning = false;
       const pendingLocalDates = new Map<string, number | undefined>();
+      let fullRetryAfterLocal = false;
+      let fullRetryRequiredRevision: number | undefined;
       let localTimer: ReturnType<typeof setTimeout> | undefined;
       let localBurstStartedAt: number | undefined;
       let localLastRequestedAt: number | undefined;
@@ -437,8 +439,14 @@ export function useAgenda(options: UseAgendaOptions = {}) {
             }
             const current = latestData.current;
             if (current === undefined) {
+              const trailingRevision = maximumRevision(
+                fullRetryRequiredRevision,
+                requiredRevision,
+              );
+              fullRetryAfterLocal = false;
+              fullRetryRequiredRevision = undefined;
               reconciliationGeneration.current += 1;
-              requestReload(requiredRevision, true);
+              requestReload(trailingRevision, true);
               continue;
             }
             const applyStartedAt = Date.now();
@@ -466,6 +474,15 @@ export function useAgenda(options: UseAgendaOptions = {}) {
                 resultApplicationMs,
               });
             }
+            if (fullRetryAfterLocal) {
+              const trailingRevision = maximumRevision(
+                fullRetryRequiredRevision,
+                requiredRevision,
+              );
+              fullRetryAfterLocal = false;
+              fullRetryRequiredRevision = undefined;
+              requestReload(trailingRevision, true);
+            }
           }
         } catch (error) {
           /* A narrow-read failure falls back to the established full committed snapshot. */
@@ -474,8 +491,15 @@ export function useAgenda(options: UseAgendaOptions = {}) {
               message: error instanceof Error ? error.message : String(error),
             });
           }
+          const trailingRevision = [...pendingLocalDates.values()].reduce(
+            maximumRevision,
+            fullRetryRequiredRevision,
+          );
+          pendingLocalDates.clear();
+          fullRetryAfterLocal = false;
+          fullRetryRequiredRevision = undefined;
           reconciliationGeneration.current += 1;
-          requestReload(undefined);
+          requestReload(trailingRevision);
         } finally {
           localReadRunning = false;
           if (isCurrent() && pendingLocalDates.size > 0) {
@@ -488,14 +512,23 @@ export function useAgenda(options: UseAgendaOptions = {}) {
         reconciliationGeneration.current += 1;
         if (invalidation.kind !== 'local-day' || !incrementalLocalTargetReconciliation) {
           pendingLocalDates.clear();
+          fullRetryAfterLocal = false;
+          fullRetryRequiredRevision = undefined;
           if (localTimer !== undefined) clearTimeout(localTimer);
           localTimer = undefined;
           requestReload(invalidation.commitRevision);
           return;
         }
-        if (reloadRequested && !reloadRunning) {
+        if (reloadRequested) {
           requestReload(invalidation.commitRevision);
           return;
+        }
+        if (reloadRunning) {
+          fullRetryAfterLocal = true;
+          fullRetryRequiredRevision = maximumRevision(
+            fullRetryRequiredRevision,
+            invalidation.commitRevision,
+          );
         }
         const now = Date.now();
         localBurstStartedAt ??= now;
@@ -516,6 +549,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
           reconciliationGeneration.current += 1;
           reloadRequested = false;
           reloadRequiredRevision = undefined;
+          fullRetryAfterLocal = false;
+          fullRetryRequiredRevision = undefined;
           pendingLocalDates.clear();
           if (reloadTimer !== undefined) clearTimeout(reloadTimer);
           if (localTimer !== undefined) clearTimeout(localTimer);
@@ -549,6 +584,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
         pendingLocalDates.clear();
         reloadRequested = false;
         reloadRequiredRevision = undefined;
+        fullRetryAfterLocal = false;
+        fullRetryRequiredRevision = undefined;
         if (reloadTimer !== undefined) clearTimeout(reloadTimer);
         if (localTimer !== undefined) clearTimeout(localTimer);
         /* A later focus must read afresh rather than share a snapshot started before blur. */

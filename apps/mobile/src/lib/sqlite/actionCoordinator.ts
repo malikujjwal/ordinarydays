@@ -381,7 +381,11 @@ export class NativeActivityActionCoordinator {
           transactionMs: metrics.transactionMs,
           sqliteCalls: metrics.callCount,
           sqliteCallMs: metrics.durationMs,
-          transactionJsMs: Math.max(0, metrics.transactionMs - metrics.durationMs),
+          /* Includes JS work plus native BEGIN/COMMIT and bridge overhead around SQL calls. */
+          transactionEnvelopeRemainderMs: Math.max(
+            0,
+            metrics.transactionMs - metrics.durationMs,
+          ),
           commitRevision,
           durationMs: completedAt - startedAt,
         });
