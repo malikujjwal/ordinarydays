@@ -13,6 +13,7 @@ import {
   nativeVisibleAgendaQuery,
 } from '@/lib/sqlite/agendaCoverage';
 import type { AgendaInvalidation } from '@/lib/sqlite/agendaRepository';
+import { recordNativePerformanceMetric } from '@/lib/sqlite/nativePerformance';
 import { getActiveNativeState, requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { TODAY_AGENDA_INCLUDE } from '../keys';
 import { resolveAgendaTimezone } from '../timezone';
@@ -136,6 +137,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
             source: 'writer-fallback' as const,
           }))
         : await shared;
+    const durationMs = Date.now() - startedAt;
+    recordNativePerformanceMetric('agenda_full_window_reader', durationMs);
     if (__DEV__) {
       console.info('native_agenda_read_completed', {
         from: coverage.from,
@@ -153,7 +156,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
         sqliteCalls: metrics?.callCount,
         sqliteCallMs: metrics?.durationMs,
         decodeMs: metrics?.decodeMs,
-        durationMs: Date.now() - startedAt,
+        durationMs,
       });
     }
     return {
@@ -192,12 +195,14 @@ export function useAgenda(options: UseAgendaOptions = {}) {
         data,
         error: current.error,
       }));
+      const resultApplicationMs = Date.now() - startedAt;
+      recordNativePerformanceMetric('agenda_result_application', resultApplicationMs);
       if (__DEV__) {
         console.info('native_agenda_result_applied', {
           kind: 'full',
           from: coverage.from,
           to: coverage.to,
-          resultApplicationMs: Date.now() - startedAt,
+          resultApplicationMs,
         });
       }
     },
@@ -396,6 +401,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
                     metrics: undefined,
                   };
             const { days } = snapshot;
+            const durationMs = Date.now() - startedAt;
+            recordNativePerformanceMetric('agenda_targeted_reader', durationMs);
             if (__DEV__) {
               console.info('native_agenda_local_days_read_completed', {
                 dates,
@@ -409,7 +416,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
                 sqliteCalls: snapshot.metrics?.callCount,
                 sqliteCallMs: snapshot.metrics?.durationMs,
                 decodeMs: snapshot.metrics?.decodeMs,
-                durationMs: Date.now() - startedAt,
+                durationMs,
               });
             }
             if (!isCurrent()) return;
@@ -446,12 +453,17 @@ export function useAgenda(options: UseAgendaOptions = {}) {
               data,
               error: visible.error,
             }));
+            const resultApplicationMs = Date.now() - applyStartedAt;
+            recordNativePerformanceMetric(
+              'agenda_result_application',
+              resultApplicationMs,
+            );
             if (__DEV__) {
               console.info('native_agenda_result_applied', {
                 kind: 'local-days',
                 dates,
                 commitRevision: snapshot.commitRevision ?? 0,
-                resultApplicationMs: Date.now() - applyStartedAt,
+                resultApplicationMs,
               });
             }
           }

@@ -608,6 +608,71 @@ read, preserves queue age/attempt/attention/clock evidence, and defers retiremen
 timeout, or inventory failure. Agenda materialization uses indexed membership for Up Next,
 and swipe rows share one outbox subscription with their row presentation.
 
+**SQLite concurrency addendum — 2026-08-20.** The account database now has one serialized
+writer and exactly one private, query-only WAL projection reader. The reader opens only after
+the writer has enabled WAL, asserted the owner and completed migrations. It serves committed
+Today/Plans full-window and targeted-day snapshots only; every read that can decide a write,
+including completion projection, Undo, sync installation and outbox ordering, remains on the
+writer. A reader failure falls back to a short explicit read transaction on the drained writer
+and starts one bounded recreation attempt. Session close drains and closes both connections.
+
+Migration 7 adds one persisted account-wide `commit_revision`. A transaction that changes
+observable rows increments it exactly once in the same writer commit, then publishes only its
+declared scopes with the committed revision as metadata. Revision is a freshness fence, not an
+invalidation feed: an `outbox`-only change may advance it but does not wake Agenda. Projection
+rows, coverage metadata and revision are read from one explicit WAL snapshot. A consumer
+applies the result only when its revision is at least the relevant publication revision and its
+request generation, focus/app state and unique native session still match. Local-day bursts
+coalesce after 90 ms idle and are forced through after 250 ms; canonical/server invalidations
+still dominate with a full-window read. Today now uses the same targeted local-day path as
+Plans while retaining its two-day startup/canonical window. The completion presentation gate
+is still exact-intent and post-commit, and now refuses to clear from a projection older than
+that completion's commit revision and viewer date.
+
+Development timing intentionally distinguishes scheduler wait, writer transaction envelope,
+Expo SQLite calls, repository decoding and React/result application. Expo SQLite 16 does not
+expose `sqlite3_profile` or `sqlite3_interrupt`: `sqliteCallMs` therefore includes native
+engine stepping, row materialization and the JS bridge and is not labelled pure engine time.
+Decoding/transformation occurs after the WAL snapshot closes. Every ten samples the app emits
+`native_performance_summary` with rolling p50/p95/max for `completion_queue_wait`,
+`completion_writer_transaction`, `agenda_targeted_reader`, `agenda_full_window_reader` and
+`agenda_result_application` (bounded to the latest 100 samples).
+
+**Required Expo Go device pass.** Run this on a physical device with Metro development logs
+visible, recording the `native_action_committed`, `native_agenda_read_completed`,
+`native_agenda_local_days_read_completed`, `native_agenda_result_applied`, reader fallback and
+`native_performance_summary` events:
+
+1. Cold-launch Today, complete/uncomplete 20 ordinary rows, and save the first two performance
+   summaries. Continue the same session through at least 60 total toggles while alternating
+   Today and Plans. The checkbox may change only after `native_action_committed`, must not wait
+   for the later Agenda read, and the long-session completion queue/writer p95 must not show a
+   rising queue caused by full or targeted Agenda reads.
+2. During a full 62-day Plans refresh, toggle a visible row in Today or Plans. The writer commit
+   must finish while the projection read is outstanding; the older full result must not reverse
+   the checkbox. Bursts on one or several dates must produce one bounded targeted batch rather
+   than one read per publication. Canonical/manual refresh must still log a full-window read.
+3. Blur/freeze Today behind Plans, background/foreground the app during an outstanding read,
+   then return. The inactive screen must log no targeted work and no stale application; the
+   focused screen must refresh once. Repeat with a sign-out and a different-account sign-in
+   while a read is outstanding. No old-account row or post-close callback may appear.
+4. In airplane mode create a task, complete/uncomplete it, Undo before sync, relaunch, reconnect
+   and wait for convergence. Then open Activity Details: the correct Complete/Undo action and
+   pending state must appear promptly. Repeat a recurring occurrence and Undo after sync.
+   Verify offline/online status and pending-row indicators throughout.
+5. Exercise a permanent rejection fixture and a canonical server correction. Rejection must
+   clear only the exact intent's completion override; a correction must replace the committed
+   local projection through a full invalidation. Retry/discard, the 200-pending-write cap,
+   create barrier and per-entity FIFO copy/behavior remain unchanged.
+6. Compare the cold and long-session rolling p50/p95/max summaries, and retain max events with
+   their adjacent per-operation logs. There must be no `native_projection_reader_fallback`
+   under ordinary use, no repeated `native_projection_reader_recreated`, no read storm, and no
+   steadily retained read operation after navigation or backgrounding. Expo Go does not expose
+   its database/WAL files or native profiling hooks; direct WAL-file size inspection and forced
+   lock/fault injection require a development build, while bounded snapshot lifetime,
+   query-only enforcement, busy fallback and connection closure are covered by automated
+   adapter/account tests.
+
 **Tests.** Existing endpoint push/pull adapters, coverage gaps, tombstones, deletions,
 stale-version rejection and canonical-response install are exercised against fixtures.
 Real-device acceptance repeats every P2-62 transition and adds: recurrence edit retains rows

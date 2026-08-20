@@ -128,7 +128,10 @@ export function TodayScreen({
   const insets = useSafeAreaInsets();
   const motion = useMotion();
   const tick = useMinuteTicker();
-  const agenda = useAgenda({ now: tick.instant });
+  const agenda = useAgenda({
+    now: tick.instant,
+    incrementalLocalTargetReconciliation: true,
+  });
   const { showSkipped, setShowSkipped } = useShowSkippedPreference();
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [showAllEarlier, setShowAllEarlier] = useState(false);

@@ -12,6 +12,7 @@ import type {
   ProjectionClock,
   TransactionalIntentResult,
 } from '@/lib/sqlite/activityTransactions';
+import { recordNativePerformanceMetric } from '@/lib/sqlite/nativePerformance';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { NativeSyncEngine } from '@/lib/sqlite/syncEngine';
 import type {
@@ -155,37 +156,42 @@ export class NativeActivityActionCoordinator {
     clock: ProjectionClock,
   ): Promise<NativeActionResult> {
     try {
-      const { value: outcome, commitRevision } = await this.transactions.runCommitted(
-        async (transaction) => {
-          transaction.changed('anytime');
-          const original = await this.outbox.get(transaction.database, originalIntentId);
-          if (original?.status === 'queued') {
-            const cancelled = await this.outbox.cancelQueued(
-              transaction.database,
-              originalIntentId,
-            );
-            if (!cancelled)
-              throw new Error('The original action was claimed during Undo.');
-            await this.service.projectCompletion(
-              transaction,
-              inverse,
-              completed,
-              restoredStatus,
-              clock,
-            );
-            transaction.changed('outbox');
-            return { kind: 'cancelled' as const };
-          }
-          return this.service.complete(
+      const {
+        value: outcome,
+        commitRevision,
+        metrics,
+      } = await this.transactions.runMeasured(async (transaction) => {
+        transaction.changed('anytime');
+        const original = await this.outbox.get(transaction.database, originalIntentId);
+        if (original?.status === 'queued') {
+          const cancelled = await this.outbox.cancelQueued(
+            transaction.database,
+            originalIntentId,
+          );
+          if (!cancelled) throw new Error('The original action was claimed during Undo.');
+          await this.service.projectCompletion(
             transaction,
             inverse,
             completed,
             restoredStatus,
             clock,
-            original === undefined ? undefined : { originalIntentId },
           );
-        },
-        'interactive',
+          transaction.changed('outbox');
+          return { kind: 'cancelled' as const };
+        }
+        return this.service.complete(
+          transaction,
+          inverse,
+          completed,
+          restoredStatus,
+          clock,
+          original === undefined ? undefined : { originalIntentId },
+        );
+      }, 'interactive');
+      recordNativePerformanceMetric('completion_queue_wait', metrics.queueWaitMs);
+      recordNativePerformanceMetric(
+        'completion_writer_transaction',
+        metrics.transactionMs,
       );
       if (outcome.kind === 'cancelled') return { ...outcome, commitRevision };
       this.sync.request('accepted-action');
@@ -357,6 +363,14 @@ export class NativeActivityActionCoordinator {
         transaction.changed('anytime');
         return accepted;
       }, 'interactive');
+      const mutation = result.intent.mutationKey[1];
+      if (mutation === 'complete' || mutation === 'uncomplete') {
+        recordNativePerformanceMetric('completion_queue_wait', metrics.queueWaitMs);
+        recordNativePerformanceMetric(
+          'completion_writer_transaction',
+          metrics.transactionMs,
+        );
+      }
       if (__DEV__) {
         const completedAt = Date.now();
         console.info('native_action_committed', {
