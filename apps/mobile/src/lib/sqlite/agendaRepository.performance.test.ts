@@ -2,6 +2,7 @@ import type { Activity, OccurrenceDetailProjection } from '@od/shared/types';
 import { describe, expect, it, vi } from 'vitest';
 import { AgendaRepository } from './agendaRepository';
 import type { SqliteExecutor, SqliteReader } from './database';
+import type { RevisionedProjectionReader } from './projectionReader';
 import { RepositorySubscriptions } from './subscriptions';
 import type { SqliteReadScheduler, TransactionContext } from './transaction';
 
@@ -43,15 +44,19 @@ describe('AgendaRepository hot paths', () => {
         warnings: [],
       },
     );
-    subscriptions.publish(changed);
+    subscriptions.publish(changed, 12);
     expect(invalidated).toHaveBeenCalledExactlyOnceWith({
       kind: 'local-day',
       date: '2026-08-20',
+      commitRevision: 12,
     });
     expect(agenda.version(coverage)).toBe(1);
 
-    subscriptions.publish(new Set(['agenda']));
-    expect(invalidated).toHaveBeenLastCalledWith({ kind: 'immediate' });
+    subscriptions.publish(new Set(['agenda']), 13);
+    expect(invalidated).toHaveBeenLastCalledWith({
+      kind: 'immediate',
+      commitRevision: 13,
+    });
     expect(agenda.version(coverage)).toBe(2);
     stop();
   });
@@ -131,6 +136,78 @@ describe('AgendaRepository hot paths', () => {
     expect(delays[0]).toBeGreaterThan(0);
     expect(reader.all).toHaveBeenCalledOnce();
     expect(reader.first).toHaveBeenCalledOnce();
+  });
+
+  it('routes committed UI rows and metadata through one revisioned reader snapshot', async () => {
+    let inSnapshot = false;
+    const reader: SqliteReader = {
+      all: vi.fn(async () => {
+        expect(inSnapshot).toBe(true);
+        return [];
+      }),
+      first: vi.fn(async () => {
+        expect(inSnapshot).toBe(true);
+        return { warnings_json: '[]', projection_versions_json: null };
+      }),
+    };
+    const projectionReader: RevisionedProjectionReader = {
+      snapshot: async (task) => {
+        inSnapshot = true;
+        const data = await task(reader);
+        inSnapshot = false;
+        return { data, commitRevision: 17, source: 'reader' };
+      },
+    };
+    const agenda = new AgendaRepository(
+      reader,
+      new RepositorySubscriptions(),
+      undefined,
+      projectionReader,
+    );
+
+    await expect(agenda.readSnapshot(coverage)).resolves.toMatchObject({
+      commitRevision: 17,
+      source: 'reader',
+      covered: true,
+      data: {
+        days: [
+          { date: '2026-08-20', schedule: [], anytime: [], earlier: [] },
+          { date: '2026-08-21', schedule: [], anytime: [], earlier: [] },
+        ],
+      },
+    });
+    expect(reader.all).toHaveBeenCalledOnce();
+    expect(reader.first).toHaveBeenCalledOnce();
+  });
+
+  it('returns targeted days with the revision from their exact reader snapshot', async () => {
+    const reader: SqliteReader = {
+      all: vi.fn(async () => []),
+      first: vi.fn(async () => undefined),
+    };
+    const projectionReader: RevisionedProjectionReader = {
+      snapshot: async (task) => ({
+        data: await task(reader),
+        commitRevision: 22,
+        source: 'reader',
+      }),
+    };
+    const agenda = new AgendaRepository(
+      reader,
+      new RepositorySubscriptions(),
+      undefined,
+      projectionReader,
+    );
+
+    await expect(
+      agenda.readDaysSnapshot(coverage, ['2026-08-20']),
+    ).resolves.toMatchObject({
+      commitRevision: 22,
+      source: 'reader',
+      days: [{ date: '2026-08-20', schedule: [], anytime: [], earlier: [] }],
+    });
+    expect(reader.all).toHaveBeenCalledOnce();
+    expect(reader.first).not.toHaveBeenCalled();
   });
 
   it('projects one target day with one indexed SQLite read and no coverage lookup', async () => {

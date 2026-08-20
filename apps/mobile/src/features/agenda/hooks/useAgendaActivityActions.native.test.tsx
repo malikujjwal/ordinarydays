@@ -74,6 +74,7 @@ describe('native Agenda completion gate', () => {
       kind: 'accepted';
       status: 'queued';
       intent: { intentId: string };
+      commitRevision: number;
     }>();
     const complete = vi.fn(() => pending.promise);
     const coordinator = { complete, undoCompletion: vi.fn() };
@@ -99,12 +100,14 @@ describe('native Agenda completion gate', () => {
         kind: 'accepted',
         status: 'queued',
         intent: { intentId: 'completion-1' },
+        commitRevision: 1,
       });
       await pending.promise;
     });
     expect(gate.isLocked(scheduled)).toBe(true);
 
     mounted.rerender({ data: agenda(task('completed')) });
+    act(() => gate.reconcile(agenda(task('completed')), 1));
     await waitFor(() => expect(gate.isLocked(scheduled)).toBe(false));
   });
 
@@ -134,6 +137,7 @@ describe('native Agenda completion gate', () => {
       kind: 'accepted';
       status: 'queued';
       intent: { intentId: string };
+      commitRevision: number;
     }>();
     const complete = vi.fn(() => pending.promise);
     const coordinator = { complete, undoCompletion: vi.fn() };
@@ -147,6 +151,7 @@ describe('native Agenda completion gate', () => {
 
     act(() => mounted.result.current.toggleComplete(scheduled, true));
     mounted.rerender({ data: agenda(task('completed')) });
+    act(() => gate.reconcile(agenda(task('completed')), 1));
     expect(gate.isLocked(scheduled)).toBe(true);
 
     await act(async () => {
@@ -154,6 +159,7 @@ describe('native Agenda completion gate', () => {
         kind: 'accepted',
         status: 'queued',
         intent: { intentId: 'completion-1' },
+        commitRevision: 1,
       });
       await pending.promise;
     });

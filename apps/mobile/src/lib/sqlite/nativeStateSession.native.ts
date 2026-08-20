@@ -71,6 +71,7 @@ async function startSession(
     account.database,
     account.subscriptions,
     account.transactions,
+    account.projections,
   );
   const anytime = new AnytimeRepository(account.database, account.subscriptions);
   const outbox = new OutboxRepository(account.database);

@@ -35,17 +35,17 @@ describe('completion commit gate', () => {
     const gate = new CompletionCommitGate();
     const scheduled = item();
 
-    expect(gate.begin(scheduled, true)).toBe(true);
-    expect(gate.begin(scheduled, true)).toBe(false);
+    expect(gate.begin(scheduled, true, undefined, '2026-08-20')).toBe(true);
+    expect(gate.begin(scheduled, true, undefined, '2026-08-20')).toBe(false);
     expect(gate.isLocked(scheduled)).toBe(true);
     expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe('committing');
 
-    gate.settle(scheduled, true, true);
+    gate.settle(scheduled, true, true, 5);
     expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe('committed-checked');
-    gate.reconcile(agenda(scheduled));
+    gate.reconcile(agenda(scheduled), 5);
     expect(gate.isLocked(scheduled)).toBe(true);
 
-    gate.reconcile(agenda(item({ status: 'completed' })));
+    gate.reconcile(agenda(item({ status: 'completed' })), 5);
     expect(gate.isLocked(scheduled)).toBe(false);
   });
 
@@ -55,8 +55,8 @@ describe('completion commit gate', () => {
     const second = item({ isRecurring: true, occurrenceDate: '2026-08-21' });
 
     expect(completionTargetKey(first)).not.toBe(completionTargetKey(second));
-    expect(gate.begin(first, true)).toBe(true);
-    expect(gate.begin(second, true)).toBe(true);
+    expect(gate.begin(first, true, undefined, '2026-08-20')).toBe(true);
+    expect(gate.begin(second, true, undefined, '2026-08-21')).toBe(true);
     gate.settle(first, true, false);
     expect(gate.isLocked(first)).toBe(false);
     expect(gate.isLocked(second)).toBe(true);
@@ -66,15 +66,15 @@ describe('completion commit gate', () => {
     const gate = new CompletionCommitGate();
     const scheduled = item();
 
-    expect(gate.begin(scheduled, true)).toBe(true);
-    gate.settle(scheduled, true, true);
-    expect(gate.begin(scheduled, false)).toBe(true);
+    expect(gate.begin(scheduled, true, undefined, '2026-08-20')).toBe(true);
+    gate.settle(scheduled, true, true, 5);
+    expect(gate.begin(scheduled, false, undefined, '2026-08-20')).toBe(true);
     expect(gate.isLocked(scheduled)).toBe(true);
     expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
       'committing-from-checked',
     );
 
-    gate.settle(scheduled, false, true);
+    gate.settle(scheduled, false, true, 6);
     expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
       'committed-unchecked',
     );
@@ -84,9 +84,9 @@ describe('completion commit gate', () => {
     const gate = new CompletionCommitGate();
     const scheduled = item();
 
-    gate.begin(scheduled, true);
-    gate.settle(scheduled, true, true);
-    gate.begin(scheduled, false);
+    gate.begin(scheduled, true, undefined, '2026-08-20');
+    gate.settle(scheduled, true, true, 5);
+    gate.begin(scheduled, false, undefined, '2026-08-20');
     gate.settle(scheduled, false, false);
 
     expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe('committed-checked');
@@ -97,9 +97,9 @@ describe('completion commit gate', () => {
     const gate = new CompletionCommitGate();
     const scheduled = item();
 
-    gate.begin(scheduled, true);
-    gate.settle(scheduled, true, true);
-    gate.reconcile(agenda());
+    gate.begin(scheduled, true, undefined, '2026-08-20');
+    gate.settle(scheduled, true, true, 5);
+    gate.reconcile(agenda(), 5);
 
     expect(gate.isLocked(scheduled)).toBe(false);
   });
@@ -108,8 +108,8 @@ describe('completion commit gate', () => {
     const gate = new CompletionCommitGate();
     const scheduled = item();
 
-    gate.begin(scheduled, true, 'intent-complete');
-    gate.settle(scheduled, true, true);
+    gate.begin(scheduled, true, 'intent-complete', '2026-08-20');
+    gate.settle(scheduled, true, true, 5);
     gate.rejectIntent('intent-unrelated');
     expect(gate.isLocked(scheduled)).toBe(true);
 
@@ -126,9 +126,45 @@ describe('completion commit gate', () => {
     gate.subscribe(completionTargetKey(first), firstListener);
     gate.subscribe(completionTargetKey(second), secondListener);
 
-    gate.begin(first, true);
+    gate.begin(first, true, undefined, '2026-08-20');
 
     expect(firstListener).toHaveBeenCalledOnce();
     expect(secondListener).not.toHaveBeenCalled();
+  });
+
+  it('keeps a committed override until an exact or later projection revision arrives', () => {
+    const gate = new CompletionCommitGate();
+    const scheduled = item();
+    const completed = agenda(item({ status: 'completed' }));
+
+    gate.begin(scheduled, true, 'revision-fenced', '2026-08-20');
+    gate.settle(scheduled, true, true, 10);
+    gate.reconcile(completed, 9);
+    expect(gate.isLocked(scheduled)).toBe(true);
+
+    gate.reconcile(completed, 10);
+    expect(gate.isLocked(scheduled)).toBe(false);
+
+    gate.begin(scheduled, true, 'later-revision', '2026-08-20');
+    gate.settle(scheduled, true, true, 11);
+    gate.reconcile(completed, 12);
+    expect(gate.isLocked(scheduled)).toBe(false);
+  });
+
+  it('does not let an old matching projection clear a newer inverse commit', () => {
+    const gate = new CompletionCommitGate();
+    const scheduled = item();
+
+    gate.begin(scheduled, true, 'complete', '2026-08-20');
+    gate.settle(scheduled, true, true, 10);
+    gate.begin(scheduled, false, 'inverse', '2026-08-20');
+    gate.reconcile(agenda(scheduled), 9);
+    gate.settle(scheduled, false, true, 11);
+
+    expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
+      'committed-unchecked',
+    );
+    gate.reconcile(agenda(scheduled), 11);
+    expect(gate.isLocked(scheduled)).toBe(false);
   });
 });

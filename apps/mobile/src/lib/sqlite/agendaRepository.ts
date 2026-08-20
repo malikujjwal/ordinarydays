@@ -20,6 +20,7 @@ import {
   type SqliteRow,
 } from '@/lib/sqlite/database';
 import { readCanonicalOutboxGuards } from '@/lib/sqlite/outbox';
+import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
 import type { SqliteReadScheduler, TransactionContext } from '@/lib/sqlite/transaction';
 
@@ -40,12 +41,27 @@ export interface AgendaReadMetrics extends SqliteExecutionMetrics {
 export interface AgendaCommittedSnapshot {
   readonly data: AgendaData;
   readonly covered: boolean;
+  readonly commitRevision: number;
+  readonly source: 'reader' | 'writer-fallback';
   readonly metrics: AgendaReadMetrics;
 }
 
 export interface AgendaDaysSnapshot {
   readonly days: AgendaDay[];
+  readonly commitRevision: number;
+  readonly source: 'reader' | 'writer-fallback';
   readonly metrics: AgendaReadMetrics;
+}
+
+interface RawAgendaSnapshot {
+  readonly rows: readonly SqliteRow[];
+  readonly metadata: SqliteRow | undefined;
+  readonly metrics: SqliteExecutionMetrics;
+}
+
+interface RawAgendaDays {
+  readonly rows: readonly SqliteRow[];
+  readonly metrics: SqliteExecutionMetrics;
 }
 
 const AGENDA_SCOPE = 'agenda';
@@ -283,6 +299,7 @@ export class AgendaRepository {
     private readonly reader: SqliteReader,
     private readonly subscriptions: RepositorySubscriptions,
     private readonly readScheduler?: SqliteReadScheduler,
+    private readonly projectionReader?: RevisionedProjectionReader,
   ) {}
 
   scope(coverage: AgendaCoverage): string {
@@ -326,7 +343,12 @@ export class AgendaRepository {
   }
 
   async read(coverage: AgendaCoverage): Promise<AgendaData> {
-    return (await this.readSnapshot(coverage)).data;
+    const read = (database: SqliteReader) => this.readSnapshotWith(database, coverage);
+    return (
+      this.readScheduler === undefined
+        ? await read(this.reader)
+        : await this.readScheduler.read(read, AGENDA_BACKGROUND_READ_DELAY_MS)
+    ).data;
   }
 
   /** Shares one in-flight committed snapshot across equivalent mounted Agenda consumers. */
@@ -336,14 +358,30 @@ export class AgendaRepository {
     const key = `${this.scope(coverage)}:${this.version(coverage)}`;
     const current = this.snapshots.get(key);
     if (current !== undefined) return current;
-    const read = () => this.readSnapshotWith(this.reader, coverage);
+    const legacyRead = async (): Promise<AgendaCommittedSnapshot> => ({
+      ...(await this.readSnapshotWith(this.reader, coverage)),
+      commitRevision: 0,
+      source: 'writer-fallback',
+    });
     const promise = (
-      this.readScheduler === undefined
-        ? read()
-        : this.readScheduler.read(
-            (database) => this.readSnapshotWith(database, coverage),
-            AGENDA_BACKGROUND_READ_DELAY_MS,
-          )
+      this.projectionReader === undefined
+        ? this.readScheduler === undefined
+          ? legacyRead()
+          : this.readScheduler.read(
+              async (database) => ({
+                ...(await this.readSnapshotWith(database, coverage)),
+                commitRevision: 0,
+                source: 'writer-fallback' as const,
+              }),
+              AGENDA_BACKGROUND_READ_DELAY_MS,
+            )
+        : this.projectionReader
+            .snapshot((database) => this.readRawSnapshotWith(database, coverage))
+            .then((snapshot) => ({
+              ...this.decodeSnapshot(snapshot.data, coverage),
+              commitRevision: snapshot.commitRevision,
+              source: snapshot.source,
+            }))
     ).finally(() => {
       if (this.snapshots.get(key) === promise) this.snapshots.delete(key);
     });
@@ -367,9 +405,28 @@ export class AgendaRepository {
       .filter((date) => date >= coverage.from && date <= coverage.to)
       .sort();
     if (dates.length === 0) {
-      return { days: [], metrics: { callCount: 0, durationMs: 0, decodeMs: 0 } };
+      return {
+        days: [],
+        commitRevision: 0,
+        source: 'writer-fallback',
+        metrics: { callCount: 0, durationMs: 0, decodeMs: 0 },
+      };
     }
-    const read = (database: SqliteReader) => this.readDaysWith(database, dates);
+    if (this.projectionReader !== undefined) {
+      const snapshot = await this.projectionReader.snapshot((database) =>
+        this.readRawDaysWith(database, dates),
+      );
+      return {
+        ...this.decodeDays(snapshot.data, dates),
+        commitRevision: snapshot.commitRevision,
+        source: snapshot.source,
+      };
+    }
+    const read = async (database: SqliteReader): Promise<AgendaDaysSnapshot> => ({
+      ...(await this.readDaysWith(database, dates)),
+      commitRevision: 0,
+      source: 'writer-fallback',
+    });
     return this.readScheduler === undefined
       ? read(this.reader)
       : this.readScheduler.read(read);
@@ -846,6 +903,20 @@ export class AgendaRepository {
     database: SqliteReader,
     coverage: AgendaCoverage,
   ): Promise<AgendaCommittedSnapshot> {
+    return {
+      ...this.decodeSnapshot(
+        await this.readRawSnapshotWith(database, coverage),
+        coverage,
+      ),
+      commitRevision: 0,
+      source: 'writer-fallback',
+    };
+  }
+
+  private async readRawSnapshotWith(
+    database: SqliteReader,
+    coverage: AgendaCoverage,
+  ): Promise<RawAgendaSnapshot> {
     const measured = measureSqliteReader(database);
     const rows = await measured.reader.all(
       `SELECT ${AGENDA_READ_COLUMNS} FROM agenda_rows
@@ -858,16 +929,23 @@ export class AgendaRepository {
        WHERE from_date = ? AND to_date = ? AND timezone = ? AND include_key = ?;`,
       [coverage.from, coverage.to, coverage.timezone, includeKey(coverage.include)],
     );
+    return {
+      rows,
+      metadata,
+      metrics: measured.metrics(),
+    };
+  }
+
+  private decodeSnapshot(
+    raw: RawAgendaSnapshot,
+    coverage: AgendaCoverage,
+  ): Pick<AgendaCommittedSnapshot, 'data' | 'covered' | 'metrics'> {
     const decodeStartedAt = Date.now();
-    const data = agendaDataFromRows(rows, coverage, metadata);
-    const sqlite = measured.metrics();
+    const data = agendaDataFromRows(raw.rows, coverage, raw.metadata);
     return {
       data,
-      covered: metadata !== undefined,
-      metrics: {
-        ...sqlite,
-        decodeMs: Date.now() - decodeStartedAt,
-      },
+      covered: raw.metadata !== undefined,
+      metrics: { ...raw.metrics, decodeMs: Date.now() - decodeStartedAt },
     };
   }
 
@@ -875,6 +953,17 @@ export class AgendaRepository {
     database: SqliteReader,
     dates: readonly string[],
   ): Promise<AgendaDaysSnapshot> {
+    return {
+      ...this.decodeDays(await this.readRawDaysWith(database, dates), dates),
+      commitRevision: 0,
+      source: 'writer-fallback',
+    };
+  }
+
+  private async readRawDaysWith(
+    database: SqliteReader,
+    dates: readonly string[],
+  ): Promise<RawAgendaDays> {
     const measured = measureSqliteReader(database);
     const placeholders = dates.map(() => '?').join(', ');
     const rows = await measured.reader.all(
@@ -883,15 +972,21 @@ export class AgendaRepository {
        ORDER BY viewer_date, section, sort_order, activity_id;`,
       dates,
     );
+    return {
+      rows,
+      metrics: measured.metrics(),
+    };
+  }
+
+  private decodeDays(
+    raw: RawAgendaDays,
+    dates: readonly string[],
+  ): Pick<AgendaDaysSnapshot, 'days' | 'metrics'> {
     const decodeStartedAt = Date.now();
-    const days = daysForDates(rows, dates);
-    const sqlite = measured.metrics();
+    const days = daysForDates(raw.rows, dates);
     return {
       days,
-      metrics: {
-        ...sqlite,
-        decodeMs: Date.now() - decodeStartedAt,
-      },
+      metrics: { ...raw.metrics, decodeMs: Date.now() - decodeStartedAt },
     };
   }
 

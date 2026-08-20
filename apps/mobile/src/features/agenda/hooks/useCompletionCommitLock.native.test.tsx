@@ -53,13 +53,13 @@ describe('native completion lock subscription', () => {
     expect(mounted.result.current).toBe(false);
 
     act(() => {
-      gate.begin(task, true);
+      gate.begin(task, true, undefined, '2026-08-20');
     });
     expect(mounted.result.current).toBe(true);
 
     act(() => {
-      gate.settle(task, true, true);
-      gate.reconcile(completed);
+      gate.settle(task, true, true, 1);
+      gate.reconcile(completed, 1);
     });
     expect(mounted.result.current).toBe(false);
   });
@@ -75,7 +75,7 @@ describe('native completion lock subscription', () => {
     });
 
     act(() => {
-      gate.begin(task, true);
+      gate.begin(task, true, undefined, '2026-08-20');
     });
     expect(mounted.result.current).toEqual({
       locked: true,
@@ -83,12 +83,12 @@ describe('native completion lock subscription', () => {
     });
 
     act(() => {
-      gate.settle(task, true, true);
+      gate.settle(task, true, true, 1);
     });
     expect(mounted.result.current).toEqual({ locked: true, checkedOverride: true });
 
     act(() => {
-      gate.reconcile(completed);
+      gate.reconcile(completed, 1);
     });
     expect(mounted.result.current).toEqual({
       locked: false,

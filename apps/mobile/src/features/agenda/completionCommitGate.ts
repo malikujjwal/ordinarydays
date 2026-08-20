@@ -4,6 +4,8 @@ interface CommittedCompletion {
   readonly checked: boolean;
   readonly phase: 'committed';
   readonly intentId: string | undefined;
+  readonly viewerDate: string;
+  readonly requiredRevision: number;
 }
 
 type CompletionCommit =
@@ -13,6 +15,7 @@ type CompletionCommit =
       /** Keeps the last durable visual state while an inverse write is still in flight. */
       readonly previousCommitted: CommittedCompletion | undefined;
       readonly intentId: string | undefined;
+      readonly viewerDate: string;
     }
   | CommittedCompletion;
 
@@ -32,18 +35,13 @@ export function completionTargetKey(
   return JSON.stringify([target.activityId, target.occurrenceDate ?? null]);
 }
 
-function projectedItem(data: AgendaData, key: string): AgendaItem | undefined {
-  for (const day of data.days) {
-    const items = [
-      ...(day.upNext === undefined ? [] : [day.upNext]),
-      ...day.schedule,
-      ...day.anytime,
-      ...day.earlier,
-    ];
-    const item = items.find((candidate) => completionTargetKey(candidate) === key);
-    if (item !== undefined) return item;
-  }
-  return undefined;
+function projectedItems(day: AgendaData['days'][number]): AgendaItem[] {
+  return [
+    ...(day.upNext === undefined ? [] : [day.upNext]),
+    ...day.schedule,
+    ...day.anytime,
+    ...day.earlier,
+  ];
 }
 
 /**
@@ -53,8 +51,17 @@ function projectedItem(data: AgendaData, key: string): AgendaItem | undefined {
 export class CompletionCommitGate {
   private readonly commits = new Map<string, CompletionCommit>();
   private readonly listeners = new Map<string, Set<() => void>>();
+  private readonly latestDays = new Map<
+    string,
+    { readonly revision: number; readonly items: ReadonlyMap<string, AgendaItem> }
+  >();
 
-  begin(item: AgendaItem, checked: boolean, intentId?: string): boolean {
+  begin(
+    item: AgendaItem,
+    checked: boolean,
+    intentId: string | undefined,
+    viewerDate: string,
+  ): boolean {
     const key = completionTargetKey(item);
     const current = this.commits.get(key);
     if (
@@ -68,17 +75,32 @@ export class CompletionCommitGate {
       phase: 'committing',
       previousCommitted: current?.phase === 'committed' ? current : undefined,
       intentId,
+      viewerDate,
     });
     this.publish(key);
     return true;
   }
 
-  settle(item: AgendaItem, checked: boolean, accepted: boolean): void {
+  settle(
+    item: AgendaItem,
+    checked: boolean,
+    accepted: boolean,
+    commitRevision?: number,
+  ): void {
     const key = completionTargetKey(item);
     const current = this.commits.get(key);
     if (current?.checked !== checked) return;
     if (accepted) {
-      this.commits.set(key, { checked, phase: 'committed', intentId: current.intentId });
+      if (commitRevision === undefined) {
+        throw new Error('An accepted completion must carry its SQLite commit revision.');
+      }
+      this.commits.set(key, {
+        checked,
+        phase: 'committed',
+        intentId: current.intentId,
+        viewerDate: current.viewerDate,
+        requiredRevision: commitRevision,
+      });
     } else if (
       current.phase === 'committing' &&
       current.previousCommitted !== undefined
@@ -86,6 +108,7 @@ export class CompletionCommitGate {
       this.commits.set(key, current.previousCommitted);
     } else this.commits.delete(key);
     this.publish(key);
+    if (accepted) this.reconcileKnown(key);
   }
 
   /** Releases a durable visual override after its outbox intent is permanently rejected. */
@@ -97,16 +120,18 @@ export class CompletionCommitGate {
     }
   }
 
-  reconcile(data: AgendaData | undefined): void {
-    if (data === undefined) return;
-    for (const [key, commit] of this.commits) {
-      if (commit.phase !== 'committed') continue;
-      const item = projectedItem(data, key);
-      if (item === undefined || COMPLETED.has(item.status) === commit.checked) {
-        this.commits.delete(key);
-        this.publish(key);
-      }
+  reconcile(data: AgendaData, snapshotRevision: number): void {
+    for (const day of data.days) {
+      const previous = this.latestDays.get(day.date);
+      if (previous !== undefined && previous.revision > snapshotRevision) continue;
+      this.latestDays.set(day.date, {
+        revision: snapshotRevision,
+        items: new Map(
+          projectedItems(day).map((item) => [completionTargetKey(item), item]),
+        ),
+      });
     }
+    for (const key of this.commits.keys()) this.reconcileKnown(key);
   }
 
   isLocked(item: Pick<AgendaItem, 'activityId' | 'occurrenceDate'>): boolean {
@@ -146,6 +171,18 @@ export class CompletionCommitGate {
 
   private publish(key: string): void {
     for (const listener of this.listeners.get(key) ?? []) listener();
+  }
+
+  private reconcileKnown(key: string): void {
+    const commit = this.commits.get(key);
+    if (commit?.phase !== 'committed') return;
+    const day = this.latestDays.get(commit.viewerDate);
+    if (day === undefined || day.revision < commit.requiredRevision) return;
+    const item = day.items.get(key);
+    if (item === undefined || COMPLETED.has(item.status) === commit.checked) {
+      this.commits.delete(key);
+      this.publish(key);
+    }
   }
 }
 

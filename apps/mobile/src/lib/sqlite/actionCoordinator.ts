@@ -26,7 +26,7 @@ export type NativeActionResult =
       readonly intent: OutboxIntent;
       readonly commitRevision: number;
     }
-  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'cancelled'; readonly commitRevision: number }
   | { readonly kind: 'refused'; readonly error: Error };
 
 export class NativeActivityActionCoordinator {
@@ -187,7 +187,7 @@ export class NativeActivityActionCoordinator {
         },
         'interactive',
       );
-      if (outcome.kind === 'cancelled') return outcome;
+      if (outcome.kind === 'cancelled') return { ...outcome, commitRevision };
       this.sync.request('accepted-action');
       return {
         kind: 'accepted',

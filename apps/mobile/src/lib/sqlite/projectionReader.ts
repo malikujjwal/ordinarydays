@@ -13,6 +13,12 @@ export interface RevisionedProjectionSnapshot<T> {
   readonly source: 'reader' | 'writer-fallback';
 }
 
+export interface RevisionedProjectionReader {
+  snapshot<T>(
+    task: (reader: SqliteReader) => Promise<T>,
+  ): Promise<RevisionedProjectionSnapshot<T>>;
+}
+
 function isBusyOrLocked(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /(?:error code (?:5|6)|sqlite_busy|sqlite_locked|database is (?:busy|locked))/i.test(
@@ -21,7 +27,7 @@ function isBusyOrLocked(error: unknown): boolean {
 }
 
 /** Owns the account's sole concurrent reader and a correctness-first writer fallback. */
-export class AccountProjectionReader {
+export class AccountProjectionReader implements RevisionedProjectionReader {
   private reader: SqliteSnapshotConnection | undefined;
   private recreation: Promise<void> | undefined;
   private closing = false;

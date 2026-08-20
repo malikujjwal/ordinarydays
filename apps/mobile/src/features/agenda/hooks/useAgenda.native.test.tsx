@@ -5,6 +5,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
+import type { AgendaInvalidation } from '@/lib/sqlite/agendaRepository';
 import { useAgenda } from './useAgenda.native';
 
 const nativeState = vi.hoisted(() => ({ current: undefined as unknown }));
@@ -19,7 +20,12 @@ const focusState = vi.hoisted(() => {
 });
 
 vi.mock('@/lib/sqlite/nativeState', () => ({
-  requireActiveNativeState: () => nativeState.current,
+  getActiveNativeState: () => nativeState.current,
+  requireActiveNativeState: () => {
+    const state = nativeState.current as { coordinator?: object };
+    state.coordinator ??= state;
+    return state;
+  },
 }));
 
 vi.mock('expo-router', async () => {
@@ -677,7 +683,7 @@ describe('native useAgenda', () => {
     client.clear();
   });
 
-  it('shares an in-flight focused read with a concurrent manual refresh', async () => {
+  it('shares the initial focused read with refresh and rereads after sync settles', async () => {
     const pending = deferred<AgendaData>();
     const committed: AgendaData = {
       days: [{ date: '2026-08-19', schedule: [], anytime: [], earlier: [] }],
@@ -721,9 +727,410 @@ describe('native useAgenda', () => {
       pending.resolve(committed);
       await refresh;
     });
-    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(2);
     expect(pullAgenda).toHaveBeenCalledTimes(1);
     expect(mounted.result.current.data).toEqual(committed);
+    mounted.unmount();
+    client.clear();
+  });
+
+  it.each([
+    { label: 'exact', snapshotRevision: 5 },
+    { label: 'later', snapshotRevision: 8 },
+  ])(
+    'accepts a $label targeted snapshot at or above the required revision',
+    async ({ snapshotRevision }) => {
+      let listener: ((invalidation: AgendaInvalidation) => void) | undefined;
+      const initialDay = {
+        date: '2026-08-19',
+        schedule: [],
+        anytime: [],
+        earlier: [],
+      };
+      const acceptedDay = { ...initialDay };
+      const initial: AgendaData = { days: [initialDay], warnings: [] };
+      const readDaysSnapshot = vi.fn(async () => ({
+        days: [acceptedDay],
+        commitRevision: snapshotRevision,
+        source: 'reader' as const,
+      }));
+      const state = {
+        agenda: {
+          subscribe: (
+            _coverage: unknown,
+            next: (invalidation: AgendaInvalidation) => void,
+          ) => {
+            listener = next;
+            return () => undefined;
+          },
+          scope: () => 'agenda:revision-acceptance',
+          readSnapshot: async () => ({
+            data: initial,
+            covered: true,
+            commitRevision: 1,
+            source: 'reader' as const,
+          }),
+          readDaysSnapshot,
+          recordSyncError: async () => undefined,
+        },
+        sync: { pullAgenda: vi.fn() },
+        account: { transactions: { run: vi.fn() } },
+      };
+      nativeState.current = state;
+      const client = new QueryClient();
+      client.setQueryData(['me'], { timezone: 'UTC' });
+      const wrapper = ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>
+          <ClockProvider clock={fixedClock(NOW)}>{children}</ClockProvider>
+        </QueryClientProvider>
+      );
+      const mounted = renderHook(
+        () =>
+          useAgenda({
+            days: 62,
+            now: NOW,
+            incrementalLocalTargetReconciliation: true,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(mounted.result.current.data).toBe(initial));
+
+      act(() =>
+        listener?.({
+          kind: 'local-day',
+          date: '2026-08-19',
+          commitRevision: 5,
+        }),
+      );
+      await waitFor(() => expect(mounted.result.current.data?.days[0]).toBe(acceptedDay));
+      expect(readDaysSnapshot).toHaveBeenCalledTimes(1);
+
+      mounted.unmount();
+      client.clear();
+    },
+  );
+
+  it('discards a targeted snapshot below its required revision and coalesces one retry', async () => {
+    let listener: ((invalidation: AgendaInvalidation) => void) | undefined;
+    const initialDay = {
+      date: '2026-08-19',
+      schedule: [],
+      anytime: [],
+      earlier: [],
+    };
+    const staleDay = { ...initialDay };
+    const acceptedDay = { ...initialDay };
+    const initial: AgendaData = { days: [initialDay], warnings: [] };
+    const stale = deferred<{
+      days: AgendaData['days'];
+      commitRevision: number;
+      source: 'reader';
+    }>();
+    const accepted = deferred<{
+      days: AgendaData['days'];
+      commitRevision: number;
+      source: 'reader';
+    }>();
+    const readDaysSnapshot = vi
+      .fn()
+      .mockImplementationOnce(() => stale.promise)
+      .mockImplementationOnce(() => accepted.promise);
+    const state = {
+      agenda: {
+        subscribe: (
+          _coverage: unknown,
+          next: (invalidation: AgendaInvalidation) => void,
+        ) => {
+          listener = next;
+          return () => undefined;
+        },
+        scope: () => 'agenda:revision-retry',
+        readSnapshot: async () => ({
+          data: initial,
+          covered: true,
+          commitRevision: 1,
+          source: 'reader' as const,
+        }),
+        readDaysSnapshot,
+        recordSyncError: async () => undefined,
+      },
+      sync: { pullAgenda: vi.fn() },
+      account: { transactions: { run: vi.fn() } },
+    };
+    nativeState.current = state;
+    const client = new QueryClient();
+    client.setQueryData(['me'], { timezone: 'UTC' });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ClockProvider clock={fixedClock(NOW)}>{children}</ClockProvider>
+      </QueryClientProvider>
+    );
+    const mounted = renderHook(
+      () =>
+        useAgenda({
+          days: 62,
+          now: NOW,
+          incrementalLocalTargetReconciliation: true,
+        }),
+      { wrapper },
+    );
+    await waitFor(() => expect(mounted.result.current.data).toBe(initial));
+
+    act(() =>
+      listener?.({
+        kind: 'local-day',
+        date: '2026-08-19',
+        commitRevision: 5,
+      }),
+    );
+    await waitFor(() => expect(readDaysSnapshot).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      stale.resolve({ days: [staleDay], commitRevision: 4, source: 'reader' });
+      await stale.promise;
+    });
+    expect(mounted.result.current.data?.days[0]).toBe(initialDay);
+    await waitFor(() => expect(readDaysSnapshot).toHaveBeenCalledTimes(2));
+    expect(readDaysSnapshot).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      accepted.resolve({ days: [acceptedDay], commitRevision: 5, source: 'reader' });
+      await accepted.promise;
+    });
+    await waitFor(() => expect(mounted.result.current.data?.days[0]).toBe(acceptedDay));
+    expect(readDaysSnapshot).toHaveBeenCalledTimes(2);
+
+    mounted.unmount();
+    client.clear();
+  });
+
+  it('does not let a full snapshot started before a local commit overwrite its day', async () => {
+    let listener: ((invalidation: AgendaInvalidation) => void) | undefined;
+    const initialDay = {
+      date: '2026-08-19',
+      schedule: [],
+      anytime: [],
+      earlier: [],
+    };
+    const staleDay = { ...initialDay };
+    const committedDay = { ...initialDay };
+    const initial: AgendaData = {
+      days: [initialDay],
+      warnings: ['duplicate_occurrence:initial'],
+    };
+    const staleFull = deferred<{
+      data: AgendaData;
+      covered: boolean;
+      commitRevision: number;
+      source: 'reader';
+    }>();
+    const readSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: initial,
+        covered: true,
+        commitRevision: 3,
+        source: 'reader' as const,
+      })
+      .mockImplementationOnce(() => staleFull.promise);
+    const state = {
+      agenda: {
+        subscribe: (
+          _coverage: unknown,
+          next: (invalidation: AgendaInvalidation) => void,
+        ) => {
+          listener = next;
+          return () => undefined;
+        },
+        scope: () => 'agenda:full-local-race',
+        readSnapshot,
+        readDaysSnapshot: vi.fn(async () => ({
+          days: [committedDay],
+          commitRevision: 5,
+          source: 'reader' as const,
+        })),
+        recordSyncError: async () => undefined,
+      },
+      sync: { pullAgenda: vi.fn() },
+      account: { transactions: { run: vi.fn() } },
+    };
+    nativeState.current = state;
+    const client = new QueryClient();
+    client.setQueryData(['me'], { timezone: 'UTC' });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ClockProvider clock={fixedClock(NOW)}>{children}</ClockProvider>
+      </QueryClientProvider>
+    );
+    const mounted = renderHook(
+      () =>
+        useAgenda({
+          days: 62,
+          now: NOW,
+          incrementalLocalTargetReconciliation: true,
+        }),
+      { wrapper },
+    );
+    await waitFor(() => expect(mounted.result.current.data).toBe(initial));
+
+    act(() => listener?.({ kind: 'immediate', commitRevision: 4 }));
+    await waitFor(() => expect(readSnapshot).toHaveBeenCalledTimes(2));
+    act(() =>
+      listener?.({
+        kind: 'local-day',
+        date: '2026-08-19',
+        commitRevision: 5,
+      }),
+    );
+    await waitFor(() => expect(mounted.result.current.data?.days[0]).toBe(committedDay));
+
+    await act(async () => {
+      staleFull.resolve({
+        data: {
+          days: [staleDay],
+          warnings: ['duplicate_occurrence:stale'],
+        },
+        covered: true,
+        commitRevision: 4,
+        source: 'reader',
+      });
+      await staleFull.promise;
+    });
+    expect(mounted.result.current.data?.days[0]).toBe(committedDay);
+    expect(mounted.result.current.data?.warnings).toEqual([
+      'duplicate_occurrence:initial',
+    ]);
+
+    mounted.unmount();
+    client.clear();
+  });
+
+  it('drops an in-flight snapshot when the active native session changes', async () => {
+    const pending = deferred<{
+      data: AgendaData;
+      covered: boolean;
+      commitRevision: number;
+      source: 'reader';
+    }>();
+    const oldState = {
+      agenda: {
+        subscribe: () => () => undefined,
+        scope: () => 'agenda:old-session',
+        readSnapshot: () => pending.promise,
+        recordSyncError: async () => undefined,
+      },
+      sync: { pullAgenda: vi.fn() },
+      account: { transactions: { run: vi.fn() } },
+    };
+    nativeState.current = oldState;
+    const client = new QueryClient();
+    client.setQueryData(['me'], { timezone: 'UTC' });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ClockProvider clock={fixedClock(NOW)}>{children}</ClockProvider>
+      </QueryClientProvider>
+    );
+    const mounted = renderHook(() => useAgenda({ now: NOW }), { wrapper });
+
+    nativeState.current = { sessionId: 'new-session' };
+    await act(async () => {
+      pending.resolve({
+        data: {
+          days: [{ date: '2026-08-19', schedule: [], anytime: [], earlier: [] }],
+          warnings: ['duplicate_occurrence:old-session-must-not-apply'],
+        },
+        covered: true,
+        commitRevision: 6,
+        source: 'reader',
+      });
+      await pending.promise;
+    });
+    expect(mounted.result.current.status).toBe('pending');
+    expect(mounted.result.current.data).toBeUndefined();
+
+    mounted.unmount();
+    client.clear();
+  });
+
+  it('bounds a continuous targeted invalidation burst at 250ms', async () => {
+    vi.useFakeTimers();
+    let listener: ((invalidation: AgendaInvalidation) => void) | undefined;
+    const initial: AgendaData = {
+      days: [
+        { date: '2026-08-19', schedule: [], anytime: [], earlier: [] },
+        { date: '2026-08-20', schedule: [], anytime: [], earlier: [] },
+        { date: '2026-08-21', schedule: [], anytime: [], earlier: [] },
+      ],
+      warnings: [],
+    };
+    const readDaysSnapshot = vi.fn(
+      async (_coverage: unknown, dates: readonly string[]) => ({
+        days: initial.days.filter((day) => dates.includes(day.date)),
+        commitRevision: 9,
+        source: 'reader' as const,
+      }),
+    );
+    const state = {
+      agenda: {
+        subscribe: (
+          _coverage: unknown,
+          next: (invalidation: AgendaInvalidation) => void,
+        ) => {
+          listener = next;
+          return () => undefined;
+        },
+        scope: () => 'agenda:bounded-burst',
+        readSnapshot: async () => ({
+          data: initial,
+          covered: true,
+          commitRevision: 1,
+          source: 'reader' as const,
+        }),
+        readDaysSnapshot,
+        recordSyncError: async () => undefined,
+      },
+      sync: { pullAgenda: vi.fn() },
+      account: { transactions: { run: vi.fn() } },
+    };
+    nativeState.current = state;
+    const client = new QueryClient();
+    client.setQueryData(['me'], { timezone: 'UTC' });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ClockProvider clock={fixedClock(NOW)}>{children}</ClockProvider>
+      </QueryClientProvider>
+    );
+    const mounted = renderHook(
+      () =>
+        useAgenda({
+          days: 62,
+          now: NOW,
+          incrementalLocalTargetReconciliation: true,
+        }),
+      { wrapper },
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => listener?.({ kind: 'local-day', date: '2026-08-19', commitRevision: 9 }));
+    await act(async () => vi.advanceTimersByTimeAsync(80));
+    act(() => listener?.({ kind: 'local-day', date: '2026-08-20', commitRevision: 9 }));
+    await act(async () => vi.advanceTimersByTimeAsync(80));
+    act(() => listener?.({ kind: 'local-day', date: '2026-08-21', commitRevision: 9 }));
+    await act(async () => vi.advanceTimersByTimeAsync(80));
+    act(() => listener?.({ kind: 'local-day', date: '2026-08-19', commitRevision: 9 }));
+    await act(async () => vi.advanceTimersByTimeAsync(9));
+    expect(readDaysSnapshot).not.toHaveBeenCalled();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(readDaysSnapshot).toHaveBeenCalledTimes(1);
+    expect(readDaysSnapshot.mock.calls[0]?.[1]).toEqual([
+      '2026-08-19',
+      '2026-08-20',
+      '2026-08-21',
+    ]);
+
     mounted.unmount();
     client.clear();
   });

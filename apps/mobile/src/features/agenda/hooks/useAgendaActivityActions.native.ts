@@ -2,8 +2,12 @@ import { addWallDays } from '@od/shared/recurrence';
 import type { ActivityOutcome, AgendaData, AgendaItem } from '@od/shared/types';
 import { scopeToWire } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
-import { useCallback, useEffect, useRef } from 'react';
-import { completionCommitGateFor } from '@/features/agenda/completionCommitGate';
+import { useCallback } from 'react';
+import {
+  completionCommitGateFor,
+  completionTargetKey,
+} from '@/features/agenda/completionCommitGate';
+import type { NativeActionResult } from '@/lib/sqlite/actionCoordinator';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { useToast } from '@/stores/toast';
 import {
@@ -26,22 +30,32 @@ function refused(message: string): void {
   useToast.getState().show({ message, tone: 'error', duration: 10000 });
 }
 
+function viewerDateFor(data: AgendaData | undefined, item: AgendaItem): string {
+  const key = completionTargetKey(item);
+  for (const day of data?.days ?? []) {
+    const found = [
+      ...(day.upNext === undefined ? [] : [day.upNext]),
+      ...day.schedule,
+      ...day.anytime,
+      ...day.earlier,
+    ].some((candidate) => completionTargetKey(candidate) === key);
+    if (found) return day.date;
+  }
+  return item.occurrenceDate ?? '';
+}
+
 /** Native Activity/Agenda actions publish only SQLite state committed with their outbox row. */
 export function useAgendaActivityActions(options: UseAgendaActivityActionsOptions) {
   const state = requireActiveNativeState();
   const completionGate = completionCommitGateFor(state.coordinator);
-  const latestAgendaData = useRef(options.agendaData);
-  latestAgendaData.current = options.agendaData;
-  useEffect(
-    () => completionGate.reconcile(options.agendaData),
-    [completionGate, options.agendaData],
-  );
   const settleCompletion = useCallback(
-    (item: AgendaItem, checked: boolean, accepted: boolean) => {
-      completionGate.settle(item, checked, accepted);
-      // The SQLite-backed Agenda refresh can finish before the transaction promise settles.
-      // Reconcile again with the latest render so that ordering cannot leave the row locked.
-      if (accepted) completionGate.reconcile(latestAgendaData.current);
+    (item: AgendaItem, checked: boolean, result: NativeActionResult) => {
+      completionGate.settle(
+        item,
+        checked,
+        result.kind !== 'refused',
+        result.kind === 'refused' ? undefined : result.commitRevision,
+      );
     },
     [completionGate],
   );
@@ -52,7 +66,8 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       if (checked && isFutureRecurringOccurrence(item, options.today)) return;
       const originalIntentId = randomUUID();
       const inverseIntentId = randomUUID();
-      if (!completionGate.begin(item, checked, originalIntentId)) return;
+      const viewerDate = viewerDateFor(options.agendaData, item);
+      if (!completionGate.begin(item, checked, originalIntentId, viewerDate)) return;
       const wireScope = scopeToWire(scopeForRow(item));
       const scrollOffset = options.getScrollOffset?.() ?? 0;
       void state.coordinator
@@ -65,7 +80,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
           options,
         )
         .then((result) => {
-          settleCompletion(item, checked, result.kind !== 'refused');
+          settleCompletion(item, checked, result);
           if (result.kind === 'refused') {
             refused(result.error.message);
             return;
@@ -75,7 +90,10 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
             onCommit: () => undefined,
             onUndo: () => {
               const inverseChecked = !checked;
-              if (!completionGate.begin(item, inverseChecked, inverseIntentId)) return;
+              if (
+                !completionGate.begin(item, inverseChecked, inverseIntentId, viewerDate)
+              )
+                return;
               const inverse = {
                 activityId: item.activityId,
                 idempotencyKey: inverseIntentId,
@@ -90,7 +108,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
                   options,
                 )
                 .then((undo) => {
-                  settleCompletion(item, inverseChecked, undo.kind !== 'refused');
+                  settleCompletion(item, inverseChecked, undo);
                   if (undo.kind === 'refused') refused(undo.error.message);
                   else options.restoreScrollOffset?.(scrollOffset);
                 });
@@ -121,7 +139,15 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         idempotencyKey: randomUUID(),
         input: { outcome, ...scopeToWire(scopeForRow(item)) },
       };
-      if (!completionGate.begin(item, true, variables.idempotencyKey)) return;
+      if (
+        !completionGate.begin(
+          item,
+          true,
+          variables.idempotencyKey,
+          viewerDateFor(options.agendaData, item),
+        )
+      )
+        return;
       const request = state.coordinator.complete(
         item.activityId,
         variables.idempotencyKey,
@@ -131,7 +157,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         options,
       );
       void request.then((result) => {
-        settleCompletion(item, true, result.kind !== 'refused');
+        settleCompletion(item, true, result);
         if (result.kind === 'refused') refused(result.error.message);
       });
     },
