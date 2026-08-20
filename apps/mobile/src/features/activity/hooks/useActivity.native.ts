@@ -2,7 +2,14 @@ import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schem
 import { type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type { ActivityDetail, ActivityDetailTarget } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { CONFLICT_MESSAGE } from '@/features/activity/model/conflict';
 import { useClock } from '@/hooks/useClock';
 import { newLocalId } from '@/lib/localIds';
@@ -61,6 +68,7 @@ export function useActivityDetail(
   const [saving, setSaving] = useState(false);
   const [savingReminder, setSavingReminder] = useState(false);
   const [reminderError, setReminderError] = useState<string>();
+  const automaticPullKey = useRef<string | undefined>(undefined);
 
   const load = useCallback(async () => {
     const committed = await state.activities.read(target);
@@ -92,10 +100,36 @@ export function useActivityDetail(
 
   useEffect(() => {
     void version;
-    void load().then((committed) => {
-      if (committed === undefined) refetch();
+    void load().then(async (committed) => {
+      const unresolvedCreate = (await state.outbox.forEntity(activityId)).some(
+        (intent) =>
+          intent.mutationKey[0] === 'activity' &&
+          intent.mutationKey[1] === 'create' &&
+          intent.status !== 'acknowledged',
+      );
+      const needsCanonicalDetail =
+        committed === undefined ||
+        !(await state.activities.hasCanonicalCapabilities(activityId));
+      const pullKey = `${target.kind}:${targetActivityId}:${targetDate ?? ''}:${committed?.activity.updatedAt ?? 'missing'}`;
+      if (
+        needsCanonicalDetail &&
+        !unresolvedCreate &&
+        automaticPullKey.current !== pullKey
+      ) {
+        automaticPullKey.current = pullKey;
+        refetch();
+      }
     });
-  }, [load, refetch, version]);
+  }, [
+    activityId,
+    load,
+    refetch,
+    state,
+    target.kind,
+    targetActivityId,
+    targetDate,
+    version,
+  ]);
 
   const run = useCallback(
     async (operation: () => ReturnType<typeof state.coordinator.patch>) => {

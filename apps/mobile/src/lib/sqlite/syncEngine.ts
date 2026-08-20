@@ -21,6 +21,8 @@ import {
   agendaCoverageForQuery,
   agendaQueryForCoverage,
   agendaQueryKey,
+  latestNativeAgendaCoverage,
+  nativeVisibleAgendaQuery,
 } from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
@@ -68,6 +70,13 @@ function isPermanent(error: unknown): boolean {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function agendaRowCount(data: AgendaData): number {
+  return data.days.reduce(
+    (count, day) => count + day.schedule.length + day.anytime.length + day.earlier.length,
+    0,
+  );
 }
 
 function rejectedAttention(error: unknown) {
@@ -191,6 +200,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private networkTail: Promise<void> = Promise.resolve();
   private pullRequested = false;
   private pulling = false;
+  private coverageSnapshotActive = false;
+  private readonly activeCoverageKeys = new Set<string>();
   private readonly requestedCoverages = new Map<string, AgendaQuery>();
   private cycleError: Error | undefined;
   private readonly push: ActivityPushAdapter;
@@ -245,18 +256,18 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   }
 
   async pullAgenda(request: AgendaQuery): Promise<AgendaData> {
-    this.queueCoverage(request);
+    const nativeRequest = this.queueCoverage(request);
     await this.syncNow();
-    return this.agenda.read({
-      from: request.from,
-      to: request.to,
-      timezone: request.tz,
-      ...(request.include === undefined ? {} : { include: request.include }),
-    });
+    return this.agenda.read(agendaCoverageForQuery(nativeRequest));
   }
 
   async pullActivity(target: ActivityDetailTarget): Promise<ActivityDetail> {
-    await this.syncNow();
+    /*
+     * A targeted detail read must not wait for every remembered agenda window. The network
+     * lane still orders it behind the request already on the wire, while enqueueing it here
+     * lets it run before the next coverage pull. Repository guards prevent its response from
+     * overwriting unresolved local work for this Activity.
+     */
     return this.serialNetwork(async () => {
       let detail: ActivityDetail;
       try {
@@ -346,6 +357,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         this.pulling = true;
         const pullError = await this.pullKnownCoverage().finally(() => {
           this.pulling = false;
+          this.coverageSnapshotActive = false;
+          this.activeCoverageKeys.clear();
         });
         if (pullError !== undefined) {
           this.cycleError = pullError;
@@ -356,8 +369,11 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   }
 
   private async execute(intent: OutboxIntent): Promise<'continue' | 'blocked'> {
+    const startedAt = Date.now();
+    let phase: 'push' | 'settlement' = 'push';
     try {
       const response = await this.serialNetwork(() => this.push.execute(intent));
+      phase = 'settlement';
       await this.transactions.run(async (transaction) => {
         const later = await transaction.database.first(
           `SELECT intent_id FROM outbox_intents
@@ -471,20 +487,47 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         );
         transaction.changed('outbox');
       });
+      if (__DEV__) {
+        console.info('native_outbox_intent_settled', {
+          intentId: intent.intentId,
+          mutation: intent.mutationKey.join('.'),
+          activityId: intent.entityId,
+          durationMs: Date.now() - startedAt,
+        });
+      }
       this.retryIndex = 0;
       return 'continue';
     } catch (error) {
-      const collision = await this.recoverCreateCollision(intent, error);
+      /*
+       * Metro's Hermes transform does not reliably retain a catch binding inside the nested
+       * async transaction below. Copy it into the generator's function scope before crossing
+       * that boundary; otherwise an offline request leaves the intent in-flight and raises
+       * `ReferenceError: Property 'error' doesn't exist`.
+       */
+      const failure = error instanceof Error ? error : new Error(String(error));
+      const permanent = isPermanent(failure);
+      if (__DEV__) {
+        console.warn('native_outbox_intent_failed', {
+          intentId: intent.intentId,
+          mutation: intent.mutationKey.join('.'),
+          activityId: intent.entityId,
+          phase,
+          permanent,
+          durationMs: Date.now() - startedAt,
+          message: failure.message,
+        });
+      }
+      const collision = await this.recoverCreateCollision(intent, failure);
       if (collision === 'recovered' || collision === 'parked') return 'continue';
       if (collision === 'retry') return 'blocked';
-      this.cycleError ??= error instanceof Error ? error : new Error(String(error));
+      this.cycleError ??= failure;
       await this.transactions.run(async (transaction) => {
-        if (isPermanent(error)) {
+        if (permanent) {
           await this.outbox.needsAttention(
             transaction.database,
             intent.intentId,
-            rejectedAttention(error),
-            message(error),
+            rejectedAttention(failure),
+            failure.message,
           );
           await this.activities.setLocalState(
             transaction,
@@ -500,34 +543,70 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           await this.outbox.requeue(
             transaction.database,
             intent.intentId,
-            message(error),
+            failure.message,
           );
         }
         transaction.changed('outbox');
       });
-      if (!isPermanent(error)) this.scheduleRetry();
-      return isPermanent(error) ? 'continue' : 'blocked';
+      if (!permanent) this.scheduleRetry();
+      return permanent ? 'continue' : 'blocked';
     }
   }
 
   private async pullKnownCoverage(): Promise<Error | undefined> {
     const requests = new Map<string, AgendaQuery>();
-    for (const coverage of await this.agenda.coverage()) {
+    /**
+     * Coverage receipts are durable offline evidence, not a forever-growing refresh queue.
+     * Today and rolling Plans/reminder windows advance each day; replaying every historical
+     * receipt makes foreground work grow without bound. Keep the latest stored window in
+     * each timezone/include domain, then add every explicitly requested window below.
+     */
+    for (const coverage of latestNativeAgendaCoverage(await this.agenda.coverage())) {
       const request = agendaQueryForCoverage(coverage);
       requests.set(agendaQueryKey(request), request);
     }
     for (const [key, request] of this.requestedCoverages) requests.set(key, request);
     this.requestedCoverages.clear();
+    this.activeCoverageKeys.clear();
+    for (const key of requests.keys()) this.activeCoverageKeys.add(key);
+    this.coverageSnapshotActive = true;
     let firstError: Error | undefined;
     for (const request of requests.values()) {
       const coverage = agendaCoverageForQuery(request);
+      const pullStartedAt = Date.now();
       try {
+        if (__DEV__) console.info('native_agenda_pull_started', { request });
         const data = await this.serialNetwork(() => this.pull.agenda(request));
+        const receivedAt = Date.now();
+        if (__DEV__) {
+          console.info('native_agenda_pull_received', {
+            request,
+            rows: agendaRowCount(data),
+            projectionVersions: data.projectionVersions?.length ?? 0,
+            warnings: data.warnings,
+            networkDurationMs: receivedAt - pullStartedAt,
+          });
+        }
         await this.transactions.run((transaction) =>
           this.agenda.installCanonical(transaction, request, data),
         );
+        if (__DEV__) {
+          const committed = await this.agenda.read(coverage);
+          console.info('native_agenda_pull_committed', {
+            request,
+            rows: agendaRowCount(committed),
+            installDurationMs: Date.now() - receivedAt,
+            totalDurationMs: Date.now() - pullStartedAt,
+          });
+        }
       } catch (error) {
         const failure = error instanceof Error ? error : new Error(String(error));
+        if (__DEV__) {
+          console.info('native_agenda_pull_failed', {
+            request,
+            message: failure.message,
+          });
+        }
         firstError ??= failure;
         await this.transactions.run((transaction) =>
           this.agenda.recordSyncError(transaction, coverage, failure.message),
@@ -538,12 +617,27 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   }
 
   /** A coverage registered after the active pull snapshot must cause one more bounded pass. */
-  private queueCoverage(request: AgendaQuery): void {
-    this.requestedCoverages.set(agendaQueryKey(request), request);
-    if (this.pulling) {
-      this.pullRequested = true;
-      this.requested = true;
+  private queueCoverage(request: AgendaQuery): AgendaQuery {
+    const nativeRequest = nativeVisibleAgendaQuery(request);
+    const key = agendaQueryKey(nativeRequest);
+    /*
+     * Mounted native screens can all ask for their committed window on the same foreground
+     * transition. If this exact window is already in the active snapshot, its caller can await
+     * that pull; scheduling another full pass only repeats canonical installation and delays
+     * the next local transaction. A genuinely new window still gets one bounded follow-up.
+     */
+    if (this.pulling && this.coverageSnapshotActive && this.activeCoverageKeys.has(key)) {
+      return nativeRequest;
     }
+    this.requestedCoverages.set(key, nativeRequest);
+    if (this.pulling) {
+      /* Requests arriving while the snapshot is still being collected join that snapshot. */
+      if (this.coverageSnapshotActive) {
+        this.pullRequested = true;
+        this.requested = true;
+      }
+    }
+    return nativeRequest;
   }
 
   private async recoverCreateCollision(

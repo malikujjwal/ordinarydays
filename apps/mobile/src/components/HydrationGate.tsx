@@ -97,10 +97,6 @@ export function HydrationGate({
     if (failed) {
       return (
         <View
-          testID="startup-error"
-          accessible
-          accessibilityLabel={STARTUP_ERROR_MESSAGE}
-          accessibilityLiveRegion="polite"
           style={{
             flex: 1,
             justifyContent: 'center',
@@ -109,15 +105,17 @@ export function HydrationGate({
             backgroundColor: theme.colors.surface,
           }}
         >
-          <Text variant="subhead" color="textPrimary" numberOfLines={0}>
+          <Text
+            variant="subhead"
+            color="textPrimary"
+            numberOfLines={0}
+            accessibilityRole="alert"
+            accessibilityLabel={STARTUP_ERROR_MESSAGE}
+            accessibilityLiveRegion="polite"
+          >
             {STARTUP_ERROR_MESSAGE}
           </Text>
-          <Button
-            label="Retry"
-            variant="secondary"
-            onPress={retry}
-            testID="startup-retry"
-          />
+          <Button label="Retry" variant="secondary" onPress={retry} />
         </View>
       );
     }

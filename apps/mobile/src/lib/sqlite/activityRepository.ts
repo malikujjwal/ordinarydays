@@ -115,6 +115,19 @@ function occurrenceFromRow(row: SqliteRow): OccurrenceDetailProjection {
   };
 }
 
+function occurrenceFromAgendaRow(row: SqliteRow): OccurrenceDetailProjection {
+  const time = text(row, 'time');
+  const endTime = text(row, 'end_time');
+  return {
+    nominalDate: text(row, 'occurrence_date') ?? '',
+    date: text(row, 'viewer_date') ?? '',
+    ...(time === undefined ? {} : { time }),
+    ...(endTime === undefined ? {} : { endTime }),
+    status: text(row, 'status') as OccurrenceDetailProjection['status'],
+    isSnoozed: number(row, 'is_snoozed') === 1,
+  };
+}
+
 function valuesFor(
   activity: Activity,
   detail?: ActivityDetail,
@@ -190,6 +203,20 @@ export class ActivityRepository {
     return this.subscriptions.version(this.scope(activityId));
   }
 
+  /** Whether a targeted server detail has installed its authorisation projection. */
+  async hasCanonicalCapabilities(activityId: string): Promise<boolean> {
+    const row = await this.reader.first(
+      `SELECT capabilities_json, local_state FROM activities
+       WHERE activity_id = ?;`,
+      [activityId],
+    );
+    return (
+      row !== undefined &&
+      text(row, 'local_state') === 'canonical' &&
+      text(row, 'capabilities_json') !== undefined
+    );
+  }
+
   async read(target: ActivityDetailTarget): Promise<ActivityDetail | undefined> {
     const row = await this.reader.first(
       'SELECT * FROM activities WHERE activity_id = ?;',
@@ -197,27 +224,52 @@ export class ActivityRepository {
     );
     if (row === undefined) return undefined;
     const reminders = await this.readReminders(target.activityId);
-    const capabilities = json<ActivityDetail['capabilities']>(
+    const storedCapabilities = json<ActivityDetail['capabilities']>(
       text(row, 'capabilities_json'),
     );
     const completedOccurrenceCount = number(row, 'completed_occurrence_count');
-    const detail: ActivityDetail = {
+    if (target.kind === 'activity') {
+      return {
+        activity: activityFromRow(row),
+        reminders,
+        ...(storedCapabilities === undefined ? {} : { capabilities: storedCapabilities }),
+        ...(completedOccurrenceCount === undefined ? {} : { completedOccurrenceCount }),
+      };
+    }
+    const occurrenceRow = await this.reader.first(
+      'SELECT * FROM activity_occurrences WHERE activity_id = ? AND nominal_date = ?;',
+      [target.activityId, target.date],
+    );
+    /*
+     * Agenda is already an authoritative materialized occurrence projection. A collection
+     * pull can arrive before this occurrence's targeted detail read, so use that committed row
+     * instead of falling back to the series anchor date and series-level capabilities.
+     */
+    const agendaRow = await this.reader.first(
+      `SELECT * FROM agenda_rows
+       WHERE activity_id = ? AND occurrence_date = ?
+       ORDER BY CASE WHEN local_state = 'canonical' THEN 1 ELSE 0 END, viewer_date
+       LIMIT 1;`,
+      [target.activityId, target.date],
+    );
+    const occurrence =
+      occurrenceRow === undefined
+        ? agendaRow === undefined
+          ? undefined
+          : occurrenceFromAgendaRow(agendaRow)
+        : occurrenceFromRow(occurrenceRow);
+    const occurrenceCapabilities =
+      agendaRow === undefined
+        ? undefined
+        : json<ActivityDetail['capabilities']>(text(agendaRow, 'capabilities_json'));
+    const capabilities = occurrenceCapabilities ?? storedCapabilities;
+    return {
       activity: activityFromRow(row),
       reminders,
       ...(capabilities === undefined ? {} : { capabilities }),
       ...(completedOccurrenceCount === undefined ? {} : { completedOccurrenceCount }),
+      ...(occurrence === undefined ? {} : { occurrence }),
     };
-    if (target.kind === 'activity') return detail;
-    const occurrence = await this.reader.first(
-      'SELECT * FROM activity_occurrences WHERE activity_id = ? AND nominal_date = ?;',
-      [target.activityId, target.date],
-    );
-    return occurrence === undefined
-      ? detail
-      : {
-          ...detail,
-          occurrence: occurrenceFromRow(occurrence),
-        };
   }
 
   async putCanonical(
@@ -268,6 +320,13 @@ export class ActivityRepository {
       'canonical',
       true,
     );
+    if (detail.occurrence !== undefined) {
+      await this.putOccurrenceProjection(
+        transaction.database,
+        detail.activity,
+        detail.occurrence,
+      );
+    }
     transaction.changed(this.scope(detail.activity.activityId));
     transaction.changed('reminders');
     return true;
@@ -448,7 +507,17 @@ export class ActivityRepository {
     if (projection.nominalDate !== nominalDate) {
       throw new Error('Canonical occurrence identity did not match the durable action.');
     }
-    await transaction.database.run(
+    await this.putOccurrenceProjection(transaction.database, activity, projection);
+    transaction.changed(this.scope(activity.activityId));
+    return projection;
+  }
+
+  private async putOccurrenceProjection(
+    database: SqliteExecutor,
+    activity: Activity,
+    projection: OccurrenceDetailProjection,
+  ): Promise<void> {
+    await database.run(
       `INSERT INTO activity_occurrences (
         activity_id, nominal_date, viewer_date, time, end_time, status,
         is_snoozed, completed_at, local_state, canonical_version
@@ -460,7 +529,7 @@ export class ActivityRepository {
         canonical_version=excluded.canonical_version;`,
       [
         activity.activityId,
-        nominalDate,
+        projection.nominalDate,
         projection.date,
         projection.time ?? null,
         projection.endTime ?? null,
@@ -470,8 +539,6 @@ export class ActivityRepository {
         activity.updatedAt,
       ],
     );
-    transaction.changed(this.scope(activity.activityId));
-    return projection;
   }
 
   async setStatusLocal(

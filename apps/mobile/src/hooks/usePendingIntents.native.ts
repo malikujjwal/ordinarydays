@@ -2,13 +2,50 @@ import { onlineManager } from '@tanstack/react-query';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { Intent } from '@/lib/intentLog';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
-import type { OutboxIntent } from '@/lib/sqlite/outbox';
+import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
+import {
+  type AgendaRowIntentState,
+  agendaRowIntentState,
+  type PendingCreateState,
+  pendingCreateState,
+  type RecurrenceEditState,
+  recurrenceEditState,
+} from './pendingIntentState';
+
+export type { AgendaRowIntentState, PendingCreateState, RecurrenceEditState };
+
+/** Native pending rows may open their committed SQLite-backed, read-only detail. */
+export const pendingCreateAllowsOpen = true;
 
 function legacyShape(ownerUserId: string, intent: OutboxIntent): Intent {
   return {
     ...intent,
     ownerUserId,
   };
+}
+
+interface OutboxSnapshot {
+  readonly version: number;
+  readonly ownerUserId: string;
+  readonly rows: Promise<readonly Intent[]>;
+}
+
+const snapshots = new WeakMap<OutboxRepository, OutboxSnapshot>();
+
+function readOutbox(
+  outbox: OutboxRepository,
+  ownerUserId: string,
+  version: number,
+): Promise<readonly Intent[]> {
+  const current = snapshots.get(outbox);
+  if (current?.version === version && current.ownerUserId === ownerUserId) {
+    return current.rows;
+  }
+  const rows = outbox
+    .all()
+    .then((intents) => intents.map((intent) => legacyShape(ownerUserId, intent)));
+  snapshots.set(outbox, { version, ownerUserId, rows });
+  return rows;
 }
 
 function useOutbox(entityId?: string): readonly Intent[] {
@@ -20,16 +57,18 @@ function useOutbox(entityId?: string): readonly Intent[] {
   );
   const [rows, setRows] = useState<readonly Intent[]>([]);
   useEffect(() => {
-    void version;
     let active = true;
-    const read =
-      entityId === undefined ? state.outbox.all() : state.outbox.forEntity(entityId);
-    void read.then((intents) => {
-      if (active)
-        setRows(
-          intents.map((intent) => legacyShape(state.coordinator.ownerUserId, intent)),
-        );
-    });
+    void readOutbox(state.outbox, state.coordinator.ownerUserId, version).then(
+      (intents) => {
+        if (active) {
+          setRows(
+            entityId === undefined
+              ? intents
+              : intents.filter((intent) => intent.entityId === entityId),
+          );
+        }
+      },
+    );
     return () => {
       active = false;
     };
@@ -49,61 +88,21 @@ export function useIsPending(entityId: string | undefined): boolean {
   return useEntityIntents(entityId).some((intent) => intent.status !== 'acknowledged');
 }
 
-export interface PendingCreateState {
-  pending: boolean;
-  canCancel: boolean;
-  intentId: string | undefined;
-  status: Intent['status'] | undefined;
-}
-
 export function usePendingCreate(entityId: string | undefined): PendingCreateState {
-  const create = useEntityIntents(entityId).find(
-    (intent) =>
-      intent.mutationKey[0] === 'activity' &&
-      intent.mutationKey[1] === 'create' &&
-      (intent.status === 'queued' || intent.status === 'in_flight'),
-  );
-  return {
-    pending: create !== undefined,
-    canCancel: create?.status === 'queued',
-    intentId: create?.intentId,
-    status: create?.status,
-  };
-}
-
-export interface RecurrenceEditState {
-  inert: boolean;
-  message: string | undefined;
-  status: 'idle' | 'queued' | 'updating' | 'retry' | 'failed';
+  return pendingCreateState(useEntityIntents(entityId), entityId);
 }
 
 export function useRecurrenceEditState(
   entityId: string | undefined,
 ): RecurrenceEditState {
-  const edit = [...useEntityIntents(entityId)].reverse().find((intent) => {
-    if (intent.mutationKey[1] !== 'patch') return false;
-    const input = (intent.variables as { input?: unknown } | undefined)?.input;
-    return (
-      typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
-    );
-  });
-  if (edit === undefined) return { inert: false, message: undefined, status: 'idle' };
-  if (edit.status === 'queued') {
-    return { inert: true, message: 'Will update when online', status: 'queued' };
-  }
-  if (edit.status === 'in_flight') {
-    return { inert: true, message: 'Updating schedule…', status: 'updating' };
-  }
-  if (edit.status === 'acknowledged') {
-    return edit.lastError === undefined
-      ? { inert: true, message: 'Updating schedule…', status: 'updating' }
-      : { inert: true, message: "Couldn't refresh schedule · Retry", status: 'retry' };
-  }
-  return {
-    inert: false,
-    message: edit.lastError ?? 'Schedule update needs attention',
-    status: 'failed',
-  };
+  return recurrenceEditState(useEntityIntents(entityId));
+}
+
+/** One SQLite-backed subscription/effect for the two pieces of state each row needs. */
+export function useAgendaRowIntentState(
+  entityId: string | undefined,
+): AgendaRowIntentState {
+  return agendaRowIntentState(useEntityIntents(entityId), entityId);
 }
 
 export async function cancelPendingCreate(intentId: string): Promise<boolean> {

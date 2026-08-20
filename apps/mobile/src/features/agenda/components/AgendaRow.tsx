@@ -11,7 +11,10 @@ import type { AccessibilityActionEvent } from 'react-native';
 import { View } from 'react-native';
 import { PendingIndicator } from '@/components/PendingIndicator';
 import { isFutureRecurringOccurrence } from '@/features/agenda/model/rowScope';
-import { usePendingCreate, useRecurrenceEditState } from '@/hooks/usePendingIntents';
+import {
+  pendingCreateAllowsOpen,
+  useAgendaRowIntentState,
+} from '@/hooks/usePendingIntents';
 import {
   canResolvePassedAgendaItem,
   outcomeVerb,
@@ -131,9 +134,13 @@ export function AgendaRow({
    * shared schema: the server cannot report that a row it has never seen is pending, and a
    * DTO field would be a second source of truth for something only this device knows.
    */
-  const { pending: pendingCreate } = usePendingCreate(item.activityId);
-  const recurrenceEdit = useRecurrenceEditState(item.activityId);
-  const inert = pendingCreate || recurrenceEdit.inert;
+  const {
+    pendingCreate,
+    recurrenceEdit,
+    mutationInert: inert,
+  } = useAgendaRowIntentState(item.activityId);
+  const openInert =
+    recurrenceEdit.inert || (pendingCreate.pending && !pendingCreateAllowsOpen);
   const skipped = SKIPPED_STATUSES.has(item.status);
   const dimmed = item.isPast || checked || skipped;
   const formattedTime = item.time === undefined ? undefined : formatWallTime(item.time);
@@ -359,7 +366,7 @@ export function AgendaRow({
         accessibilityElementsHidden
         importantForAccessibility="no-hide-descendants"
         focusable={false}
-        disabled={inert}
+        disabled={openInert}
         onPress={() => onOpen(item)}
         testID="agenda-row-backdrop"
         style={{
@@ -424,7 +431,7 @@ export function AgendaRow({
         style={{ flex: 1, minWidth: 0, gap: theme.space[2] }}
       >
         <Touchable
-          disabled={inert}
+          disabled={openInert}
           accessibilityRole="button"
           accessibilityLabel={bodyLabel(item, checked, untimedContextLabel)}
           {...(accessibilityActions === undefined ? {} : { accessibilityActions })}

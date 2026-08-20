@@ -2,6 +2,19 @@ import { onlineManager } from '@tanstack/react-query';
 import { useCallback, useSyncExternalStore } from 'react';
 import type { Intent } from '@/lib/intentLog';
 import { getActiveIntentLog } from '@/lib/intentReplay';
+import {
+  type AgendaRowIntentState,
+  agendaRowIntentState,
+  type PendingCreateState,
+  pendingCreateState,
+  type RecurrenceEditState,
+  recurrenceEditState,
+} from './pendingIntentState';
+
+export type { AgendaRowIntentState, PendingCreateState, RecurrenceEditState };
+
+/** Web retains P2-50's existing inert pending-row behaviour. */
+export const pendingCreateAllowsOpen = false;
 
 /**
  * Reads the active intent log reactively.
@@ -71,36 +84,9 @@ export function useIsPending(entityId: string | undefined): boolean {
  * `canCancel` is `queued` only. A request already on the wire cannot be retracted, so an
  * `in_flight` intent offers no cancel rather than a cancel that might silently do nothing.
  */
-export interface PendingCreateState {
-  pending: boolean;
-  canCancel: boolean;
-  intentId: string | undefined;
-  status: Intent['status'] | undefined;
-}
-
 export function usePendingCreate(entityId: string | undefined): PendingCreateState {
   const intents = useEntityIntents(entityId);
-  if (entityId === undefined) {
-    return { pending: false, canCancel: false, intentId: undefined, status: undefined };
-  }
-  const create = intents.find(
-    (intent) =>
-      intent.entityId === entityId &&
-      intent.mutationKey[1] === 'create' &&
-      (intent.status === 'queued' || intent.status === 'in_flight'),
-  );
-  return {
-    pending: create !== undefined,
-    canCancel: create?.status === 'queued',
-    intentId: create?.intentId,
-    status: create?.status,
-  };
-}
-
-export interface RecurrenceEditState {
-  inert: boolean;
-  message: string | undefined;
-  status: 'idle' | 'queued' | 'updating' | 'retry' | 'failed';
+  return pendingCreateState(intents, entityId);
 }
 
 /** Durable row presentation for recurrence PATCH lifecycle only; CREATE never enters it. */
@@ -108,32 +94,14 @@ export function useRecurrenceEditState(
   entityId: string | undefined,
 ): RecurrenceEditState {
   const intents = useEntityIntents(entityId);
-  const edit = [...intents].reverse().find((intent) => {
-    if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'patch') {
-      return false;
-    }
-    const input = (intent.variables as { input?: unknown } | undefined)?.input;
-    return (
-      typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
-    );
-  });
-  if (edit === undefined) return { inert: false, message: undefined, status: 'idle' };
-  if (edit.status === 'queued') {
-    return { inert: true, message: 'Will update when online', status: 'queued' };
-  }
-  if (edit.status === 'in_flight') {
-    return { inert: true, message: 'Updating schedule…', status: 'updating' };
-  }
-  if (edit.status === 'acknowledged') {
-    return edit.lastError === undefined
-      ? { inert: true, message: 'Updating schedule…', status: 'updating' }
-      : { inert: true, message: "Couldn't refresh schedule · Retry", status: 'retry' };
-  }
-  return {
-    inert: false,
-    message: edit.lastError ?? 'Schedule update needs attention',
-    status: 'failed',
-  };
+  return recurrenceEditState(intents);
+}
+
+/** One entity subscription for the two pieces of state every agenda row needs. */
+export function useAgendaRowIntentState(
+  entityId: string | undefined,
+): AgendaRowIntentState {
+  return agendaRowIntentState(useEntityIntents(entityId), entityId);
 }
 
 /** Cancels a queued create, removing the intent. Returns false if it was already dispatched. */

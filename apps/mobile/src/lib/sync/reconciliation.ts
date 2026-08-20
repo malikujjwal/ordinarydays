@@ -4,7 +4,10 @@ import { systemClock, toWallTime } from '@od/shared/time';
 import type { ActivityAgendaData } from '@od/shared/types';
 import { apiClient } from '@/lib/apiClient';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
-import { agendaQueryForCoverage } from '@/lib/sqlite/agendaCoverage';
+import {
+  agendaQueryForCoverage,
+  latestNativeAgendaCoverage,
+} from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
@@ -52,7 +55,7 @@ export class RecurrenceReconciler {
   private async reconcile(intent: OutboxIntent): Promise<boolean> {
     const expectedVersion = intent.reconciliationVersion;
     if (expectedVersion === undefined) return true;
-    const coverages = await this.agenda.coverage();
+    const coverages = latestNativeAgendaCoverage(await this.agenda.coverage());
     try {
       const responses: Array<{
         readonly request: AgendaQuery;

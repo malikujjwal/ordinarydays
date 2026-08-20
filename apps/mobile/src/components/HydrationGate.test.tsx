@@ -45,8 +45,7 @@ describe('HydrationGate', () => {
     const install = vi.fn(() => () => undefined);
     renderGate({ startSession, subscribe, install });
 
-    await screen.findByTestId('startup-error');
-    expect(screen.getByText(STARTUP_ERROR_MESSAGE)).toBeDefined();
+    await screen.findByRole('alert', { name: STARTUP_ERROR_MESSAGE });
     expect(screen.queryByText('gate-children')).toBeNull();
     expect(warn).toHaveBeenCalledWith(
       'native_state_session_failed',
@@ -55,7 +54,7 @@ describe('HydrationGate', () => {
     expect(subscribe).not.toHaveBeenCalled();
     expect(install).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTestId('startup-retry'));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await screen.findByText('gate-children');
     expect(startSession).toHaveBeenCalledTimes(2);
@@ -73,7 +72,8 @@ describe('HydrationGate', () => {
       startSession,
     });
 
-    await screen.findByTestId('startup-error');
+    await screen.findByRole('alert', { name: STARTUP_ERROR_MESSAGE });
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined();
     expect(screen.queryByText('gate-children')).toBeNull();
     expect(startSession).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(

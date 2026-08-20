@@ -3,16 +3,14 @@ import type { AgendaQuery } from '@od/shared/schemas';
 import { type Instant, toWallDate } from '@od/shared/time';
 import type { AgendaData } from '@od/shared/types';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useClock } from '@/hooks/useClock';
+import {
+  agendaCoverageForQuery,
+  nativeVisibleAgendaQuery,
+} from '@/lib/sqlite/agendaCoverage';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { TODAY_AGENDA_INCLUDE } from '../keys';
 import { resolveAgendaTimezone } from '../timezone';
@@ -47,8 +45,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
   const windowFrom = options.window?.from;
   const windowTo = options.window?.to;
   const windowInclude = options.window?.include;
-  const request = useMemo<AgendaQuery>(
-    () =>
+  const request = useMemo<AgendaQuery>(() => {
+    const requested =
       windowFrom !== undefined && windowTo !== undefined
         ? {
             from: windowFrom,
@@ -67,23 +65,10 @@ export function useAgenda(options: UseAgendaOptions = {}) {
               from: today,
               to: addWallDays(today, options.days - 1),
               tz: timezone,
-            },
-    [windowFrom, windowTo, windowInclude, options.days, today, timezone],
-  );
-  const coverage = useMemo(
-    () => ({
-      from: request.from,
-      to: request.to,
-      timezone: request.tz,
-      ...(request.include === undefined ? {} : { include: request.include }),
-    }),
-    [request],
-  );
-  const version = useSyncExternalStore(
-    (listener) => state.agenda.subscribe(coverage, listener),
-    () => state.agenda.version(coverage),
-    () => 0,
-  );
+            };
+    return nativeVisibleAgendaQuery(requested);
+  }, [windowFrom, windowTo, windowInclude, options.days, today, timezone]);
+  const coverage = useMemo(() => agendaCoverageForQuery(request), [request]);
   const [view, setView] = useState<NativeAgendaView>({
     status: 'pending',
     error: null,
@@ -91,10 +76,26 @@ export function useAgenda(options: UseAgendaOptions = {}) {
   const initialAttempted = useRef<string | undefined>(undefined);
 
   const loadCommitted = useCallback(async () => {
+    const startedAt = Date.now();
     const [data, covered] = await Promise.all([
       state.agenda.read(coverage),
       state.agenda.hasCoverage(coverage),
     ]);
+    if (__DEV__) {
+      console.info('native_agenda_read_completed', {
+        from: coverage.from,
+        to: coverage.to,
+        include: coverage.include,
+        dayCount: data.days.length,
+        itemCount: data.days.reduce(
+          (count, day) =>
+            count + day.schedule.length + day.anytime.length + day.earlier.length,
+          0,
+        ),
+        covered,
+        durationMs: Date.now() - startedAt,
+      });
+    }
     setView((current) => ({
       status:
         covered ||
@@ -110,7 +111,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
   }, [state, coverage]);
 
   const refetch = useCallback(async () => {
-    const committed = await loadCommitted();
+    await loadCommitted();
     try {
       const data = await state.sync.pullAgenda(request);
       setView({
@@ -124,6 +125,12 @@ export function useAgenda(options: UseAgendaOptions = {}) {
       await state.account.transactions.run((transaction) =>
         state.agenda.recordSyncError(transaction, coverage, failure.message),
       );
+      /**
+       * A serialized cycle can install this coverage and still reject because another known
+       * coverage failed. Re-read after settlement: using the pre-sync snapshot here lets the
+       * late error overwrite the committed publish and strand Today on a blocking error.
+       */
+      const committed = await loadCommitted();
       const hasRows = committed.data.days.some(
         (day) => day.schedule.length + day.anytime.length + day.earlier.length > 0,
       );
@@ -136,26 +143,33 @@ export function useAgenda(options: UseAgendaOptions = {}) {
     }
   }, [state, loadCommitted, request, coverage]);
 
-  useEffect(() => {
-    void version;
-    void loadCommitted();
-  }, [loadCommitted, version]);
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const reload = () => {
+        if (active) void loadCommitted();
+      };
+      const stopAgenda = state.agenda.subscribe(coverage, reload);
+      const appState = AppState.addEventListener('change', (next) => {
+        if (next === 'active') void refetch();
+      });
+      reload();
 
-  useEffect(() => {
-    const key = state.agenda.scope(coverage);
-    if (initialAttempted.current === key) return;
-    initialAttempted.current = key;
-    void state.agenda.hasCoverage(coverage).then((covered) => {
-      if (!covered) void refetch();
-    });
-  }, [coverage, refetch, state]);
+      const key = state.agenda.scope(coverage);
+      if (initialAttempted.current !== key) {
+        initialAttempted.current = key;
+        void state.agenda.hasCoverage(coverage).then((covered) => {
+          if (active && !covered) void refetch();
+        });
+      }
 
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (next) => {
-      if (next === 'active') void refetch();
-    });
-    return () => subscription.remove();
-  }, [refetch]);
+      return () => {
+        active = false;
+        stopAgenda();
+        appState.remove();
+      };
+    }, [coverage, loadCommitted, refetch, state]),
+  );
 
   return { ...view, refetch, timezone };
 }

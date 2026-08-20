@@ -37,8 +37,21 @@ function includeKey(include: string | undefined): string {
   return include ?? '';
 }
 
+function occurrenceIdentity(activityId: string, occurrenceDate?: string): string {
+  return JSON.stringify([activityId, occurrenceDate ?? null]);
+}
+
+function rowIdFromParts(
+  date: string,
+  activityId: string,
+  occurrenceDate?: string,
+): string {
+  /* Expo SQLite on iOS truncates bound text at NUL, so persisted keys must be NUL-free. */
+  return JSON.stringify([date, activityId, occurrenceDate ?? null]);
+}
+
 function rowId(date: string, item: AgendaItem): string {
-  return `${date}\u0000${item.activityId}\u0000${item.occurrenceDate ?? ''}`;
+  return rowIdFromParts(date, item.activityId, item.occurrenceDate);
 }
 
 /**
@@ -141,13 +154,17 @@ function itemValues(
   ];
 }
 
-const INSERT_ROW = `INSERT INTO agenda_rows (
+const AGENDA_ROW_COLUMNS = `
   row_id, viewer_date, section, sort_order, is_up_next, activity_id, occurrence_date,
   parent_activity_id, type, title, status, time, end_time, is_recurring,
   recurrence_description, is_snoozed, original_time, has_checkbox,
   capabilities_json, participant_avatars_json, participant_count, location_label,
   subtitle, note_excerpt, is_past, overdue_from_date, local_state, canonical_version
-) VALUES (${Array.from({ length: 28 }, () => '?').join(', ')});`;
+`;
+const AGENDA_ROW_PLACEHOLDERS = Array.from({ length: 28 }, () => '?').join(', ');
+const INSERT_ROW = `INSERT INTO agenda_rows (${AGENDA_ROW_COLUMNS})
+  VALUES (${AGENDA_ROW_PLACEHOLDERS});`;
+const INSERT_CHUNK_SIZE = 25;
 
 export class AgendaRepository {
   constructor(
@@ -237,6 +254,22 @@ export class AgendaRepository {
       ...guards.protectedActivityIds,
       ...staleActivityIds,
     ]);
+    if (__DEV__) {
+      console.info('native_agenda_install_guards', {
+        request,
+        returnedRows: data.days.reduce(
+          (count, day) =>
+            count + day.schedule.length + day.anytime.length + day.earlier.length,
+          0,
+        ),
+        returnedActivities: returnedActivityIds.size,
+        existingActivities: coveredActivityIds.size,
+        protectedActivities: guards.protectedActivityIds.size,
+        staleActivities: staleActivityIds.size,
+        deletedActivities: guards.deletedActivityIds.size,
+        reconcilingActivities: guards.reconcilingActivityIds.size,
+      });
+    }
     for (const activityId of coveredActivityIds) {
       if (preservedActivityIds.has(activityId)) continue;
       /* Absence is authoritative only inside this exact covered range. */
@@ -247,15 +280,13 @@ export class AgendaRepository {
         [activityId, request.from, request.to],
       );
     }
+    await this.insertCanonicalDays(
+      transaction.database,
+      data.days,
+      (item) => versions.get(item.activityId),
+      new Set([...guards.deletedActivityIds, ...preservedActivityIds]),
+    );
     for (const day of data.days) {
-      await this.insertDay(
-        transaction.database,
-        day,
-        'canonical',
-        (item) => versions.get(item.activityId),
-        true,
-        new Set([...guards.deletedActivityIds, ...preservedActivityIds]),
-      );
       for (const item of itemsOf(day)) {
         coveredActivityIds.add(item.activityId);
         if (preservedActivityIds.has(item.activityId)) continue;
@@ -362,7 +393,9 @@ export class AgendaRepository {
       ]);
     }
     transaction.changed('agenda');
-    if (request.include === 'reminders') transaction.changed('reminders');
+    if (request.include?.split(',').includes('reminders') === true) {
+      transaction.changed('reminders');
+    }
   }
 
   async replaceLocalActivityRows(
@@ -374,22 +407,74 @@ export class AgendaRepository {
     await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
       activityId,
     ]);
-    for (const day of data.days) {
-      const onlyActivity: AgendaDay = {
-        date: day.date,
-        schedule: day.schedule.filter((item) => item.activityId === activityId),
-        anytime: day.anytime.filter((item) => item.activityId === activityId),
-        earlier: day.earlier.filter((item) => item.activityId === activityId),
-        ...(day.upNext?.activityId === activityId ? { upNext: day.upNext } : {}),
-      };
-      await this.insertDay(
-        transaction.database,
-        onlyActivity,
-        state,
-        () => undefined,
-        false,
-      );
-    }
+    const onlyActivityDays = data.days.map<AgendaDay>((day) => ({
+      date: day.date,
+      schedule: day.schedule.filter((item) => item.activityId === activityId),
+      anytime: day.anytime.filter((item) => item.activityId === activityId),
+      earlier: day.earlier.filter((item) => item.activityId === activityId),
+      ...(day.upNext?.activityId === activityId ? { upNext: day.upNext } : {}),
+    }));
+    await this.insertMaterializedDays(
+      transaction.database,
+      onlyActivityDays,
+      state,
+      () => undefined,
+    );
+    transaction.changed('agenda');
+  }
+
+  /**
+   * Reads the one materialized day needed to project an explicit Activity/occurrence action.
+   *
+   * Completion and Undo used to read every retained coverage day, then rewrite every row for
+   * the Activity. The target identity first narrows this to one viewer day; reading the rest of
+   * that day preserves section ordering and `upNext` without making a one-row action scale with
+   * the 62-day recurrence window.
+   */
+  async readMaterializedTargetDay(
+    database: SqliteReader,
+    activityId: string,
+    occurrenceDate?: string,
+  ): Promise<AgendaData> {
+    const target = await database.first(
+      `SELECT viewer_date FROM agenda_rows
+       WHERE activity_id = ? AND occurrence_date IS ?
+       ORDER BY viewer_date
+       LIMIT 1;`,
+      [activityId, occurrenceDate ?? null],
+    );
+    const date = target === undefined ? undefined : text(target, 'viewer_date');
+    if (date === undefined) return { days: [], warnings: [] };
+    return this.readWith(database, { from: date, to: date, timezone: 'UTC' });
+  }
+
+  /** Replaces only one explicit materialized identity after its local transaction commits. */
+  async replaceLocalTargetRows(
+    transaction: TransactionContext,
+    activityId: string,
+    occurrenceDate: string | undefined,
+    data: AgendaData,
+    state: 'queued' | 'needs_attention' = 'queued',
+  ): Promise<void> {
+    await transaction.database.run(
+      'DELETE FROM agenda_rows WHERE activity_id = ? AND occurrence_date IS ?;',
+      [activityId, occurrenceDate ?? null],
+    );
+    const isTarget = (item: AgendaItem): boolean =>
+      item.activityId === activityId && item.occurrenceDate === occurrenceDate;
+    const targetDays = data.days.map<AgendaDay>((day) => ({
+      date: day.date,
+      schedule: day.schedule.filter(isTarget),
+      anytime: day.anytime.filter(isTarget),
+      earlier: day.earlier.filter(isTarget),
+      ...(day.upNext !== undefined && isTarget(day.upNext) ? { upNext: day.upNext } : {}),
+    }));
+    await this.insertMaterializedDays(
+      transaction.database,
+      targetDays,
+      state,
+      () => undefined,
+    );
     transaction.changed('agenda');
   }
 
@@ -464,7 +549,7 @@ export class AgendaRepository {
          is_snoozed = ?, local_state = 'canonical', canonical_version = ?
        WHERE activity_id = ? AND occurrence_date = ?;`,
       [
-        `${projection.date}\u0000${activity.activityId}\u0000${projection.nominalDate}`,
+        rowIdFromParts(projection.date, activity.activityId, projection.nominalDate),
         projection.date,
         projection.status,
         projection.time ?? null,
@@ -585,7 +670,7 @@ export class AgendaRepository {
     const upNextIdentity =
       day.upNext === undefined
         ? undefined
-        : `${day.upNext.activityId}\u0000${day.upNext.occurrenceDate ?? ''}`;
+        : occurrenceIdentity(day.upNext.activityId, day.upNext.occurrenceDate);
     for (const [section, items] of sections) {
       for (const [order, item] of items.entries()) {
         if (suppressedActivityIds.has(item.activityId)) continue;
@@ -618,11 +703,73 @@ export class AgendaRepository {
             order,
             item,
             state,
-            `${item.activityId}\u0000${item.occurrenceDate ?? ''}` === upNextIdentity,
+            occurrenceIdentity(item.activityId, item.occurrenceDate) === upNextIdentity,
             version(item),
           ),
         );
       }
+    }
+  }
+
+  private async insertCanonicalDays(
+    database: SqliteExecutor,
+    days: readonly AgendaDay[],
+    version: (item: AgendaItem) => string | undefined,
+    suppressedActivityIds: ReadonlySet<string>,
+  ): Promise<void> {
+    await this.insertMaterializedDays(
+      database,
+      days,
+      'canonical',
+      version,
+      suppressedActivityIds,
+    );
+  }
+
+  /** Inserts already-materialized rows in bounded bridge calls after their owner deleted them. */
+  private async insertMaterializedDays(
+    database: SqliteExecutor,
+    days: readonly AgendaDay[],
+    state: 'canonical' | 'queued' | 'updating' | 'needs_attention',
+    version: (item: AgendaItem) => string | undefined,
+    suppressedActivityIds: ReadonlySet<string> = new Set(),
+  ): Promise<void> {
+    const rows: Array<readonly (string | number | null)[]> = [];
+    for (const day of days) {
+      const sections = [
+        ['schedule', day.schedule],
+        ['anytime', day.anytime],
+        ['earlier', day.earlier],
+      ] as const;
+      const upNextIdentity =
+        day.upNext === undefined
+          ? undefined
+          : occurrenceIdentity(day.upNext.activityId, day.upNext.occurrenceDate);
+      for (const [section, items] of sections) {
+        for (const [order, item] of items.entries()) {
+          if (suppressedActivityIds.has(item.activityId)) continue;
+          rows.push(
+            itemValues(
+              day.date,
+              section,
+              order,
+              item,
+              state,
+              occurrenceIdentity(item.activityId, item.occurrenceDate) === upNextIdentity,
+              version(item),
+            ),
+          );
+        }
+      }
+    }
+    for (let offset = 0; offset < rows.length; offset += INSERT_CHUNK_SIZE) {
+      const chunk = rows.slice(offset, offset + INSERT_CHUNK_SIZE);
+      await database.run(
+        `INSERT INTO agenda_rows (${AGENDA_ROW_COLUMNS}) VALUES ${chunk
+          .map(() => `(${AGENDA_ROW_PLACEHOLDERS})`)
+          .join(', ')} ON CONFLICT DO NOTHING;`,
+        chunk.flat(),
+      );
     }
   }
 }

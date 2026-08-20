@@ -81,7 +81,16 @@ export function installOnlineManager(client: QueryClient): () => void {
     }
 
     return NetInfo.addEventListener((state) => {
-      setOnline(state.isConnected === true && state.isInternetReachable !== false);
+      const online = state.isConnected === true && state.isInternetReachable !== false;
+      if (__DEV__) {
+        console.info('native_connectivity_changed', {
+          type: state.type,
+          isConnected: state.isConnected,
+          isInternetReachable: state.isInternetReachable,
+          online,
+        });
+      }
+      setOnline(online);
     });
   });
 

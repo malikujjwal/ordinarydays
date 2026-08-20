@@ -297,6 +297,55 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ).toBe(false);
   });
 
+  it('projects an explicit occurrence completion without scanning or rewriting its series', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'create-before-targeted-complete' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await outbox.acknowledge(transaction.database, 'create-before-targeted-complete');
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+    });
+    const readWindow = vi.spyOn(agenda, 'readMaterializedWindow');
+    const replaceSeries = vi.spyOn(agenda, 'replaceLocalActivityRows');
+
+    await coordinator.complete(
+      ACTIVITY,
+      'targeted-complete',
+      { occurrenceDate: '2026-08-20' },
+      true,
+      'scheduled',
+      clock,
+    );
+
+    expect(readWindow).not.toHaveBeenCalled();
+    expect(replaceSeries).not.toHaveBeenCalled();
+    expect(
+      await database?.all(
+        `SELECT occurrence_date, status, local_state FROM agenda_rows
+         WHERE activity_id = ? ORDER BY occurrence_date;`,
+        [ACTIVITY],
+      ),
+    ).toEqual([
+      {
+        occurrence_date: '2026-08-19',
+        status: 'scheduled',
+        local_state: 'canonical',
+      },
+      {
+        occurrence_date: '2026-08-20',
+        status: 'completed_occurrence',
+        local_state: 'queued',
+      },
+      {
+        occurrence_date: '2026-08-21',
+        status: 'scheduled',
+        local_state: 'canonical',
+      },
+    ]);
+  });
+
   it('stores a dependent inverse when Complete is already in flight and preserves wire order', async () => {
     await coordinator.create(
       { input: createInput(), idempotencyKey: 'create-for-racing-undo' },

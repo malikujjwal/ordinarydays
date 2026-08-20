@@ -451,6 +451,7 @@ Section-level empty states on Today are specified in
 | Class | Presentation | Recovery |
 | --- | --- | --- |
 | Screen-level load failure (no cached data) | Full-screen: `Couldn't load this.` plus the request id in small text | `Try again` |
+| Native local-state startup failure | Full-screen: `Couldn't open your data.` The app remains blocked so it never renders without its account-scoped SQLite state. | `Retry` repeats persisted-cache restoration and native session startup |
 | Screen-level refresh failure (cached data present) | Cached content stays. A dismissible banner: `Couldn't refresh.` | `Try again` |
 | Mutation failure | The optimistic change reverts; error toast naming what failed: `Couldn't complete "Gym."` | `Retry` |
 | `409 conflict` on a shared plan | `This plan changed while you were editing.` Client refetches; non-overlapping edits are re-applied, overlapping ones are dropped and named. | `Review` |
@@ -465,8 +466,9 @@ Section-level empty states on Today are specified in
 | `500 internal` | `Something went wrong.` plus the request id | `Try again` |
 
 Error copy never shows a stack trace, an error code, or the word "error" in the heading.
-The `requestId` is always shown in small text and is long-press-copyable, so a support
-message can name it.
+When an API failure supplies a `requestId`, it is always shown in small text and is
+long-press-copyable, so a support message can name it. A local startup failure has no
+request id to invent.
 
 ### 5.4 Offline
 

@@ -8,7 +8,7 @@ import {
   agendaSwipeActions,
   allAgendaSwipeActions,
 } from '@/features/agenda/model/swipeActions';
-import { usePendingCreate, useRecurrenceEditState } from '@/hooks/usePendingIntents';
+import { useAgendaRowIntentState } from '@/hooks/usePendingIntents';
 import { canResolvePassedAgendaItem } from '@/lib/passedPlanResolution';
 import { AgendaRow, type AgendaRowProps } from './AgendaRow';
 
@@ -65,9 +65,7 @@ function subscribeToRowKeyboard(
 export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps) {
   const theme = useTheme();
   const wrapper = useRef<View>(null);
-  const pendingCreate = usePendingCreate(item.activityId).pending;
-  const recurrenceEdit = useRecurrenceEditState(item.activityId);
-  const inert = pendingCreate || recurrenceEdit.inert;
+  const { mutationInert: inert } = useAgendaRowIntentState(item.activityId);
   const actions = useMemo(
     () =>
       inert

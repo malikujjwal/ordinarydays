@@ -17,7 +17,7 @@ import {
   agendaSwipeActions,
   allAgendaSwipeActions,
 } from '@/features/agenda/model/swipeActions';
-import { usePendingCreate, useRecurrenceEditState } from '@/hooks/usePendingIntents';
+import { useAgendaRowIntentState } from '@/hooks/usePendingIntents';
 import { AgendaRow, type AgendaRowProps } from './AgendaRow';
 
 const ACTION_WIDTH = 88;
@@ -108,9 +108,7 @@ function ActionPanel({
 
 /** Native agenda gestures. The web-equivalent controls live in SwipeableRow.web.tsx. */
 export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps) {
-  const pendingCreate = usePendingCreate(item.activityId).pending;
-  const recurrenceEdit = useRecurrenceEditState(item.activityId);
-  const inert = pendingCreate || recurrenceEdit.inert;
+  const { mutationInert: inert } = useAgendaRowIntentState(item.activityId);
   const actions = inert
     ? { positive: [] as AgendaSwipeAction[], secondary: [] as AgendaSwipeAction[] }
     : agendaSwipeActions(item);

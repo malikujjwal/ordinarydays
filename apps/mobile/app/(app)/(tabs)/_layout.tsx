@@ -1,5 +1,6 @@
 import { navIcons, useBreakpoint, useTheme } from '@od/ui';
 import { type Href, Tabs, useRouter, useSegments } from 'expo-router';
+import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { tabBarBottomOffset } from '@/components/globalAddLayout';
 import { ShellFrame } from '@/features/shell/components/ShellFrame';
@@ -58,6 +59,7 @@ export default function TabsLayout() {
       <Tabs
         screenOptions={{
           headerShown: false,
+          freezeOnBlur: Platform.OS !== 'web',
           tabBarActiveTintColor: theme.colors.accent,
           tabBarInactiveTintColor: theme.colors.textSecondary,
           /**

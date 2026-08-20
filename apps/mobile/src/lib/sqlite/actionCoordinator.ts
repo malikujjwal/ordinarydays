@@ -230,12 +230,28 @@ export class NativeActivityActionCoordinator {
   private async accept(
     operation: (transaction: TransactionContext) => Promise<TransactionalIntentResult>,
   ): Promise<NativeActionResult> {
+    const startedAt = Date.now();
     try {
       const result = await this.transactions.run(operation);
+      if (__DEV__) {
+        console.info('native_action_committed', {
+          intentId: result.intent.intentId,
+          mutation: result.intent.mutationKey.join('.'),
+          activityId: result.intent.entityId,
+          durationMs: Date.now() - startedAt,
+        });
+      }
       this.sync.request('accepted-action');
       return { kind: 'accepted', status: 'queued', intent: result.intent };
     } catch (error) {
-      return { kind: 'refused', error: asError(error) };
+      const failure = asError(error);
+      if (__DEV__) {
+        console.warn('native_action_refused', {
+          durationMs: Date.now() - startedAt,
+          message: failure.message,
+        });
+      }
+      return { kind: 'refused', error: failure };
     }
   }
 }

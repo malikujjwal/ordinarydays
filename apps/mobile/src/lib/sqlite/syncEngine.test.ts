@@ -240,6 +240,43 @@ describe('serialized native convergence guard', () => {
     });
   }
 
+  it('reads occurrence date and capabilities from committed Agenda rows', async () => {
+    const activity = await seedRecurring();
+    const target = {
+      kind: 'occurrence' as const,
+      activityId: ACTIVITY,
+      date: '2026-08-19',
+    };
+
+    const fromAgenda = await activities.read(target);
+    expect(fromAgenda).toMatchObject({
+      activity: { schedule: { date: '2026-08-19' } },
+      occurrence: { nominalDate: '2026-08-19', date: '2026-08-19' },
+      capabilities: { complete: true, skip: true, snooze: true },
+    });
+
+    await transactions.run((transaction) =>
+      activities.putCanonical(transaction, {
+        activity,
+        reminders: [],
+        capabilities: { complete: true, skip: true, snooze: true },
+        occurrence: {
+          nominalDate: '2026-08-20',
+          date: '2026-08-20',
+          time: '09:00',
+          status: 'scheduled',
+          isSnoozed: false,
+        },
+      }),
+    );
+    await database?.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [ACTIVITY]);
+
+    expect(await activities.read({ ...target, date: '2026-08-20' })).toMatchObject({
+      occurrence: { nominalDate: '2026-08-20', date: '2026-08-20' },
+      capabilities: { complete: true, skip: true, snooze: true },
+    });
+  });
+
   it('recovers an abandoned claim on restart without changing identity or attempts', async () => {
     let originalSequence = 0;
     let abandonedBeforeRestart: Awaited<ReturnType<OutboxRepository['get']>>;
@@ -989,6 +1026,60 @@ describe('serialized native convergence guard', () => {
     ).toBe('2026-08-19T02:00:00.000Z');
   });
 
+  it('clears Pending after a transiently offline create receives its canonical response', async () => {
+    await transactions.run((transaction) =>
+      service.create(
+        transaction,
+        OWNER,
+        {
+          input: {
+            activityId: OTHER,
+            objectKind: 'plan',
+            type: 'custom',
+            title: 'Offline plan',
+            schedule: { date: '2026-08-19', time: '10:00', timezone: 'UTC' },
+          },
+          idempotencyKey: 'offline-create',
+        },
+        clock,
+        '2026-08-19T01:00:00.000Z',
+      ),
+    );
+    const local = await activities.read({ kind: 'activity', activityId: OTHER });
+    if (local === undefined) throw new Error('missing offline create fixture');
+    const canonical = {
+      ...local.activity,
+      updatedAt: '2026-08-19T02:00:00.000Z',
+    };
+    const create = vi
+      .fn<ActivityPushTransport['create']>()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(canonical);
+    const sync = syncEngine({ push: { ...pushTransport(), create } });
+
+    await expect(sync.syncNow()).rejects.toThrow('offline');
+    expect(await outbox.forEntity(OTHER)).toMatchObject([
+      { intentId: 'offline-create', status: 'queued' },
+    ]);
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(await outbox.forEntity(OTHER)).toEqual([]);
+    expect(
+      await database?.first('SELECT local_state FROM activities WHERE activity_id = ?;', [
+        OTHER,
+      ]),
+    ).toEqual({ local_state: 'canonical' });
+    expect(
+      await database?.all(
+        'SELECT DISTINCT local_state FROM agenda_rows WHERE activity_id = ?;',
+        [OTHER],
+      ),
+    ).toEqual([{ local_state: 'canonical' }]);
+  });
+
   it('coalesces foreground, reconnect and manual requests into one in-flight pull', async () => {
     let release: (() => void) | undefined;
     const pending = new Promise<void>((resolve) => {
@@ -1046,7 +1137,67 @@ describe('serialized native convergence guard', () => {
       from: '2026-08-20',
       to: '2026-08-20',
       tz: 'UTC',
+      include: 'anytime_unscheduled,overdue',
     });
+  });
+
+  it('does not repeat coverage already present in the active pull snapshot', async () => {
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const agendaPull = vi.fn(
+      async (request: Parameters<ActivityPullAdapter['agenda']>[0]) => {
+        await pending;
+        return pullAdapter().agenda(request);
+      },
+    );
+    const sync = syncEngine({ pull: { ...pullAdapter(), agenda: agendaPull } });
+
+    sync.request('foreground');
+    await vi.waitFor(() => expect(agendaPull).toHaveBeenCalledTimes(1));
+    const sameCoverage = sync.pullAgenda({
+      from: '2026-08-19',
+      to: '2026-08-19',
+      tz: 'UTC',
+    });
+    release?.();
+
+    await sameCoverage;
+    sync.stop();
+    expect(agendaPull).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes only the latest persisted window in each coverage domain', async () => {
+    await database?.exec(`
+      INSERT INTO agenda_coverage
+        (from_date, to_date, timezone, include_key, refreshed_at, warnings_json)
+      VALUES
+        ('2026-08-20', '2026-10-20', 'UTC', '', 'now', '[]'),
+        ('2026-08-21', '2026-10-21', 'UTC', '', 'now', '[]'),
+        ('2026-08-19', '2026-08-26', 'UTC', 'reminders', 'now', '[]'),
+        ('2026-08-20', '2026-08-27', 'UTC', 'reminders', 'now', '[]');
+    `);
+    const agendaPull = vi.fn(pullAdapter().agenda);
+    const sync = syncEngine({ pull: { ...pullAdapter(), agenda: agendaPull } });
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(agendaPull.mock.calls.map(([request]) => request)).toEqual([
+      {
+        from: '2026-08-21',
+        to: '2026-10-21',
+        tz: 'UTC',
+        include: 'anytime_unscheduled,overdue',
+      },
+      {
+        from: '2026-08-20',
+        to: '2026-08-27',
+        tz: 'UTC',
+        include: 'anytime_unscheduled,overdue,reminders',
+      },
+    ]);
   });
 
   it('reports one in-flight pull failure to every concurrent manual caller', async () => {
@@ -1067,6 +1218,44 @@ describe('serialized native convergence guard', () => {
 
     await expect(first).rejects.toThrow('offline together');
     await expect(second).rejects.toThrow('offline together');
+    sync.stop();
+  });
+
+  it('prioritizes a targeted detail read ahead of the next background coverage pull', async () => {
+    const canonical = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (canonical === undefined) throw new Error('missing activity fixture');
+    await database?.run(
+      `INSERT INTO agenda_coverage
+        (from_date, to_date, timezone, include_key, refreshed_at, warnings_json)
+       VALUES ('2026-08-19', '2026-08-26', 'UTC', 'reminders', 'now', '[]');`,
+    );
+    let releaseFirst: (() => void) | undefined;
+    const first = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const order: string[] = [];
+    const agendaPull = vi.fn(async () => {
+      order.push(`agenda-${agendaPull.mock.calls.length}`);
+      if (agendaPull.mock.calls.length === 1) await first;
+      return { days: [], warnings: [] };
+    });
+    const activityPull = vi.fn(async () => {
+      order.push('activity');
+      return canonical;
+    });
+    const sync = syncEngine({
+      pull: { ...pullAdapter(), agenda: agendaPull, activity: activityPull },
+    });
+
+    const foreground = sync.syncNow();
+    await vi.waitFor(() => expect(agendaPull).toHaveBeenCalledTimes(1));
+    const detail = sync.pullActivity({ kind: 'activity', activityId: ACTIVITY });
+    releaseFirst?.();
+
+    await expect(detail).resolves.toMatchObject({ activity: { activityId: ACTIVITY } });
+    await vi.waitFor(() => expect(agendaPull).toHaveBeenCalledTimes(2));
+    expect(order).toEqual(['agenda-1', 'activity', 'agenda-2']);
+    await foreground;
     sync.stop();
   });
 
@@ -1134,6 +1323,38 @@ describe('serialized native convergence guard', () => {
     expect(
       await database?.all('SELECT * FROM agenda_rows WHERE activity_id = ?;', [ACTIVITY]),
     ).toEqual([]);
+  });
+
+  it('persists distinct NUL-free row identities for multiple activities on one date', async () => {
+    const coverage = { from: '2026-08-19', to: '2026-08-19', timezone: 'UTC' };
+    const current = await agenda.read(coverage);
+    const item = current.days[0]?.anytime[0];
+    if (item === undefined) throw new Error('missing agenda projection fixture');
+
+    await transactions.run((transaction) =>
+      agenda.installCanonical(
+        transaction,
+        { from: coverage.from, to: coverage.to, tz: coverage.timezone },
+        {
+          days: [
+            {
+              date: coverage.from,
+              schedule: [],
+              anytime: [item, { ...item, activityId: OTHER, title: 'Second activity' }],
+              earlier: [],
+            },
+          ],
+          warnings: [],
+        },
+      ),
+    );
+
+    const rows = await database?.all(
+      'SELECT row_id, activity_id FROM agenda_rows ORDER BY activity_id;',
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows?.map((row) => row.activity_id)).toEqual([ACTIVITY, OTHER]);
+    expect(rows?.every((row) => !String(row.row_id).includes('\u0000'))).toBe(true);
   });
 
   it('applies an authoritative detail tombstone without returning an uninstalled body', async () => {
@@ -1213,6 +1434,7 @@ describe('serialized native convergence guard', () => {
         from: '2026-08-19',
         to: '2026-08-19',
         timezone: 'UTC',
+        include: 'anytime_unscheduled,overdue',
       }),
     ).toBe('targeted read offline');
 
@@ -1237,6 +1459,7 @@ describe('serialized native convergence guard', () => {
         from: '2026-08-19',
         to: '2026-08-19',
         timezone: 'UTC',
+        include: 'anytime_unscheduled,overdue',
       }),
     ).toBeUndefined();
   });

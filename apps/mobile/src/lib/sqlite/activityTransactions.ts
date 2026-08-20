@@ -409,7 +409,11 @@ export class ActivityTransactionService {
       );
       transaction.changed(this.activities.scope(variables.activityId));
     }
-    const current = await this.agenda.readMaterializedWindow(transaction.database);
+    const current = await this.agenda.readMaterializedTargetDay(
+      transaction.database,
+      variables.activityId,
+      occurrenceDate,
+    );
     const projected = negative
       ? applySkip(current, {
           activityId: variables.activityId,
@@ -423,9 +427,10 @@ export class ActivityTransactionService {
           ...clock,
           ...(completed ? { completed: true } : { completed: false, restoredStatus }),
         });
-    await this.agenda.replaceLocalActivityRows(
+    await this.agenda.replaceLocalTargetRows(
       transaction,
       variables.activityId,
+      occurrenceDate,
       projected,
     );
   }
@@ -465,7 +470,11 @@ export class ActivityTransactionService {
       );
       transaction.changed(this.activities.scope(variables.activityId));
     }
-    const current = await this.agenda.readMaterializedWindow(transaction.database);
+    const current = await this.agenda.readMaterializedTargetDay(
+      transaction.database,
+      variables.activityId,
+      occurrenceDate,
+    );
     const projected = applySkip(current, {
       activityId: variables.activityId,
       ...(variables.input.occurrenceDate === undefined
@@ -474,9 +483,10 @@ export class ActivityTransactionService {
       ...clock,
       skipped,
     });
-    await this.agenda.replaceLocalActivityRows(
+    await this.agenda.replaceLocalTargetRows(
       transaction,
       variables.activityId,
+      occurrenceDate,
       projected,
     );
     transaction.changed('outbox');
