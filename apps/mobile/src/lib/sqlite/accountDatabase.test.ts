@@ -8,6 +8,7 @@ import {
   AccountOwnerMismatchError,
   accountDatabaseFilename,
 } from '@/lib/sqlite/accountDatabase';
+import type { SqliteExecutor } from '@/lib/sqlite/database';
 import { FOUNDATION_MIGRATIONS, type SqliteMigration } from '@/lib/sqlite/migrations';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
 
@@ -88,6 +89,104 @@ describe('account SQLite lifecycle', () => {
         'SELECT commit_revision FROM native_commit_state WHERE singleton = 1;',
       ),
     ).toEqual({ commit_revision: 1 });
+  });
+
+  it('reads rows and revision from one read-only WAL snapshot', async () => {
+    const databases = manager();
+    const account = await databases.open(ACCOUNT_A);
+    await account.transactions.run(async ({ database, changed }) => {
+      await database.run('INSERT INTO account_test_values VALUES (?, ?);', [
+        'before',
+        'one',
+      ]);
+      changed('values');
+    });
+    let releaseSnapshot: (() => void) | undefined;
+    let markSnapshotStarted: (() => void) | undefined;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      markSnapshotStarted = resolve;
+    });
+    const snapshotMayFinish = new Promise<void>((resolve) => {
+      releaseSnapshot = resolve;
+    });
+    const pending = account.projections.snapshot(async (reader) => {
+      const rows = await reader.all(
+        'SELECT id, value FROM account_test_values ORDER BY id;',
+      );
+      markSnapshotStarted?.();
+      await snapshotMayFinish;
+      return rows;
+    });
+    await snapshotStarted;
+
+    await account.transactions.run(async ({ database, changed }) => {
+      await database.run('INSERT INTO account_test_values VALUES (?, ?);', [
+        'after',
+        'two',
+      ]);
+      changed('values');
+    });
+    releaseSnapshot?.();
+
+    await expect(pending).resolves.toEqual({
+      data: [{ id: 'before', value: 'one' }],
+      commitRevision: 1,
+      source: 'reader',
+    });
+    await expect(
+      account.projections.snapshot((reader) =>
+        (reader as SqliteExecutor).run('INSERT INTO account_test_values VALUES (?, ?);', [
+          'forbidden',
+          'no',
+        ]),
+      ),
+    ).rejects.toThrow();
+    expect(
+      await account.database.first(
+        'SELECT value FROM account_test_values WHERE id = ?;',
+        ['forbidden'],
+      ),
+    ).toBeUndefined();
+  });
+
+  it('falls back to the writer after reader-open failure and recreates one reader', async () => {
+    const base = createNodeSqliteFactory(directory);
+    let readerAttempts = 0;
+    databases = new AccountDatabaseManager({
+      factory: {
+        ...base,
+        openReader: async (filename) => {
+          readerAttempts += 1;
+          if (readerAttempts === 1) throw new Error('simulated reader open failure');
+          return base.openReader(filename);
+        },
+      },
+      hash: nodeHash,
+      migrations: testMigrations,
+    });
+    const account = await databases.open(ACCOUNT_A);
+    await account.transactions.run(async ({ database, changed }) => {
+      await database.run('INSERT INTO account_test_values VALUES (?, ?);', [
+        'fallback',
+        'yes',
+      ]);
+      changed('values');
+    });
+
+    const fallback = await account.projections.snapshot((reader) =>
+      reader.first('SELECT value FROM account_test_values WHERE id = ?;', ['fallback']),
+    );
+    expect(fallback).toMatchObject({
+      data: { value: 'yes' },
+      commitRevision: 1,
+      source: 'writer-fallback',
+    });
+    await expect.poll(() => readerAttempts).toBe(2);
+    const recreated = await account.projections.snapshot((reader) =>
+      reader.first('SELECT value FROM account_test_values WHERE id = ?;', ['fallback']),
+    );
+    expect(recreated.source).toBe('reader');
+    expect(readerAttempts).toBe(2);
   });
 
   it('isolates account files and never exposes one account row after switching', async () => {

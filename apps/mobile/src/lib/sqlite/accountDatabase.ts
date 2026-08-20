@@ -1,4 +1,8 @@
-import type { SqliteDatabase, SqliteDatabaseFactory } from '@/lib/sqlite/database';
+import type {
+  SqliteDatabase,
+  SqliteDatabaseFactory,
+  SqliteSnapshotConnection,
+} from '@/lib/sqlite/database';
 import { numberColumn, textColumn } from '@/lib/sqlite/database';
 import { expoSqliteDatabaseFactory } from '@/lib/sqlite/expoDatabase';
 import {
@@ -6,6 +10,7 @@ import {
   runMigrations,
   type SqliteMigration,
 } from '@/lib/sqlite/migrations';
+import { AccountProjectionReader } from '@/lib/sqlite/projectionReader';
 import { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
 import { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
 
@@ -86,13 +91,34 @@ async function assertOwner(
 export class AccountDatabase {
   readonly subscriptions = new RepositorySubscriptions();
   readonly transactions: SerializedTransactionRunner;
+  readonly projections: AccountProjectionReader;
+  private closePromise: Promise<void> | undefined;
 
   constructor(
     readonly accountNamespace: string,
     readonly filename: string,
     readonly database: SqliteDatabase,
+    factory: SqliteDatabaseFactory,
+    reader?: SqliteSnapshotConnection,
   ) {
     this.transactions = new SerializedTransactionRunner(database, this.subscriptions);
+    this.projections = new AccountProjectionReader(
+      filename,
+      database,
+      this.transactions,
+      factory,
+      reader,
+    );
+  }
+
+  close(): Promise<void> {
+    if (this.closePromise !== undefined) return this.closePromise;
+    this.closePromise = (async () => {
+      await this.projections.close();
+      await this.transactions.shutdown();
+      await this.database.close();
+    })();
+    return this.closePromise;
   }
 }
 
@@ -122,15 +148,32 @@ export class AccountDatabaseManager {
       await this.quarantineCurrent();
       const filename = await accountDatabaseFilename(accountNamespace, this.hash);
       const database = await this.factory.open(filename);
+      let reader: SqliteSnapshotConnection | undefined;
       try {
         await configureConnection(database);
         await assertOwner(database, filename, accountNamespace);
         await runMigrations(database, this.migrations);
+        try {
+          reader = await this.factory.openReader(filename);
+        } catch (error) {
+          if (__DEV__) {
+            console.warn('native_projection_reader_open_failed', {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
       } catch (error) {
+        await reader?.close().catch(() => undefined);
         await database.close().catch(() => undefined);
         throw error;
       }
-      const opened = new AccountDatabase(accountNamespace, filename, database);
+      const opened = new AccountDatabase(
+        accountNamespace,
+        filename,
+        database,
+        this.factory,
+        reader,
+      );
       this.quarantined.delete(filename);
       this.current = opened;
       return opened;
@@ -139,6 +182,17 @@ export class AccountDatabaseManager {
 
   signOut(): Promise<void> {
     return this.serial(() => this.quarantineCurrent());
+  }
+
+  /** Releases exactly the lease being stopped; a stale session cannot close a newer one. */
+  release(account: AccountDatabase): Promise<void> {
+    return this.serial(async () => {
+      if (this.current === account) {
+        await this.quarantineCurrent();
+        return;
+      }
+      await account.close();
+    });
   }
 
   purgeConfirmedAccount(accountNamespace: string): Promise<void> {
@@ -159,7 +213,7 @@ export class AccountDatabaseManager {
     if (current === undefined) return;
     this.current = undefined;
     this.quarantined.add(current.filename);
-    await current.database.close();
+    await current.close();
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {

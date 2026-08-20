@@ -6,8 +6,10 @@ import type {
   SqliteDatabaseFactory,
   SqliteExecutor,
   SqliteParameters,
+  SqliteReader,
   SqliteRow,
   SqliteRunResult,
+  SqliteSnapshotConnection,
   SqliteValue,
 } from '../src/lib/sqlite/database';
 
@@ -42,16 +44,8 @@ function row(value: unknown): SqliteRow {
   return result;
 }
 
-function executor(database: DatabaseSync): SqliteExecutor {
+function reader(database: DatabaseSync): SqliteReader {
   return {
-    exec: async (sql) => database.exec(sql),
-    run: async (sql, values): Promise<SqliteRunResult> => {
-      const result = database.prepare(sql).run(...parameters(values));
-      return {
-        changes: Number(result.changes),
-        lastInsertRowId: Number(result.lastInsertRowid),
-      };
-    },
     first: async (sql, values) => {
       const value = database.prepare(sql).get(...parameters(values));
       return value === undefined ? undefined : row(value);
@@ -61,6 +55,20 @@ function executor(database: DatabaseSync): SqliteExecutor {
         .prepare(sql)
         .all(...parameters(values))
         .map(row),
+  };
+}
+
+function executor(database: DatabaseSync): SqliteExecutor {
+  return {
+    ...reader(database),
+    exec: async (sql) => database.exec(sql),
+    run: async (sql, values): Promise<SqliteRunResult> => {
+      const result = database.prepare(sql).run(...parameters(values));
+      return {
+        changes: Number(result.changes),
+        lastInsertRowId: Number(result.lastInsertRowid),
+      };
+    },
   };
 }
 
@@ -100,7 +108,64 @@ class NodeSqliteDatabase implements SqliteDatabase {
     }
   }
 
+  async readTransaction<T>(task: (reader: SqliteReader) => Promise<T>): Promise<T> {
+    this.database.exec('BEGIN;');
+    try {
+      const result = await task(reader(this.database));
+      this.database.exec('COMMIT;');
+      return result;
+    } catch (error) {
+      this.database.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.database.close();
+  }
+}
+
+class NodeSqliteSnapshotConnection implements SqliteSnapshotConnection {
+  private readonly reader: SqliteReader;
+  private tail: Promise<void> = Promise.resolve();
+  private closing = false;
+  private closed = false;
+
+  constructor(private readonly database: DatabaseSync) {
+    this.reader = reader(database);
+  }
+
+  snapshot<T>(task: (reader: SqliteReader) => Promise<T>): Promise<T> {
+    if (this.closing || this.closed) {
+      return Promise.reject(new Error('SQLite projection reader is closed.'));
+    }
+    const pending = this.tail.then(async () => {
+      if (this.closing || this.closed) {
+        throw new Error('SQLite projection reader is closed.');
+      }
+      this.database.exec('BEGIN;');
+      try {
+        const result = await task(this.reader);
+        this.database.exec('COMMIT;');
+        return result;
+      } catch (error) {
+        this.database.exec('ROLLBACK;');
+        throw error;
+      }
+    });
+    this.tail = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closing = true;
+    await this.tail;
     if (this.closed) return;
     this.closed = true;
     this.database.close();
@@ -115,6 +180,28 @@ export function createNodeSqliteFactory(directory: string): SqliteDatabaseFactor
   };
   return {
     open: async (filename) => new NodeSqliteDatabase(new DatabaseSync(pathFor(filename))),
+    openReader: async (filename) => {
+      const database = new DatabaseSync(pathFor(filename), {
+        readOnly: true,
+        timeout: 100,
+      });
+      try {
+        database.exec('PRAGMA query_only = ON;');
+        const journalMode = database.prepare('PRAGMA journal_mode;').get() as
+          | { journal_mode?: unknown }
+          | undefined;
+        const queryOnly = database.prepare('PRAGMA query_only;').get() as
+          | { query_only?: unknown }
+          | undefined;
+        if (journalMode?.journal_mode !== 'wal' || Number(queryOnly?.query_only) !== 1) {
+          throw new Error('SQLite projection reader configuration was not retained.');
+        }
+        return new NodeSqliteSnapshotConnection(database);
+      } catch (error) {
+        database.close();
+        throw error;
+      }
+    },
     delete: async (filename) => {
       const path = pathFor(filename);
       await Promise.all(

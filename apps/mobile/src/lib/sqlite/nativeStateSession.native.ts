@@ -15,7 +15,11 @@ import { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
 import { LegacyImporter } from '@/lib/sqlite/legacyImporter';
 import { migrateNativeLegacyState } from '@/lib/sqlite/legacyMigration';
-import { type NativeStateSession, setActiveNativeState } from '@/lib/sqlite/nativeState';
+import {
+  getActiveNativeState,
+  type NativeStateSession,
+  setActiveNativeState,
+} from '@/lib/sqlite/nativeState';
 import { OutboxRepository } from '@/lib/sqlite/outbox';
 import { recoverAbandonedOutbox } from '@/lib/sqlite/sessionRecovery';
 import { SerializedNativeSyncEngine } from '@/lib/sqlite/syncEngine';
@@ -23,8 +27,17 @@ import { SerializedNativeSyncEngine } from '@/lib/sqlite/syncEngine';
 const databases = new AccountDatabaseManager();
 let activeSession: NativeStateSession | undefined;
 let activeOwnerUserId: string | undefined;
-let startup: Promise<NativeStateSession | undefined> | undefined;
-let startupOwnerUserId: string | undefined;
+let transition: Promise<void> = Promise.resolve();
+let nextSessionId = 1;
+
+function serialTransition<T>(task: () => Promise<T>): Promise<T> {
+  const pending = transition.then(task, task);
+  transition = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  return pending;
+}
 
 export async function startNativeStateSession(
   queryClient: QueryClient,
@@ -32,18 +45,17 @@ export async function startNativeStateSession(
 ): Promise<NativeStateSession | undefined> {
   const ownerUserId = await httpClientConfig.tokenProvider.getIdentity();
   if (ownerUserId === undefined) return undefined;
-  if (activeSession !== undefined && activeOwnerUserId === ownerUserId) {
-    return activeSession;
-  }
-  if (activeSession !== undefined) activeSession.stop();
-  if (startup !== undefined && startupOwnerUserId === ownerUserId) return startup;
-  if (startup !== undefined) await startup;
-  startupOwnerUserId = ownerUserId;
-  startup = startSession(queryClient, ownerUserId, restoreOutcome).finally(() => {
-    startup = undefined;
-    startupOwnerUserId = undefined;
+  return serialTransition(async () => {
+    if (activeSession !== undefined && activeOwnerUserId === ownerUserId) {
+      return activeSession;
+    }
+    if (activeSession !== undefined) {
+      const previous = activeSession;
+      previous.stop();
+      await previous.closed;
+    }
+    return startSession(queryClient, ownerUserId, restoreOutcome);
   });
-  return startup;
 }
 
 async function startSession(
@@ -52,6 +64,8 @@ async function startSession(
   restoreOutcome?: RestoreOutcome,
 ): Promise<NativeStateSession | undefined> {
   const account = await databases.open(ownerUserId);
+  const sessionId = `native-session-${nextSessionId}`;
+  nextSessionId += 1;
   const activities = new ActivityRepository(account.database, account.subscriptions);
   const agenda = new AgendaRepository(
     account.database,
@@ -116,17 +130,6 @@ async function startSession(
     outbox,
     sync,
   );
-  setActiveNativeState({
-    account,
-    activities,
-    agenda,
-    anytime,
-    outbox,
-    coordinator,
-    sync,
-  });
-  activeOwnerUserId = ownerUserId;
-
   const stopOnline = onlineManager.subscribe((online) => {
     if (online) sync.request('connectivity');
   });
@@ -136,22 +139,44 @@ async function startSession(
   sync.request('foreground');
 
   let stopped = false;
+  let resolveClosed: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
   const session: NativeStateSession = {
+    sessionId,
     queryPersistenceSafe: migration.queryPersistenceSafe,
+    closed,
     stop: () => {
       if (stopped) return;
       stopped = true;
       sync.stop();
       stopOnline();
       appState.remove();
-      setActiveNativeState(undefined);
+      if (getActiveNativeState()?.sessionId === sessionId) {
+        setActiveNativeState(undefined);
+      }
       if (activeSession === session) {
         activeSession = undefined;
         activeOwnerUserId = undefined;
       }
-      void databases.signOut();
+      void databases.release(account).then(
+        () => resolveClosed?.(),
+        () => resolveClosed?.(),
+      );
     },
   };
+  setActiveNativeState({
+    sessionId,
+    account,
+    activities,
+    agenda,
+    anytime,
+    outbox,
+    coordinator,
+    sync,
+  });
+  activeOwnerUserId = ownerUserId;
   activeSession = session;
   return session;
 }

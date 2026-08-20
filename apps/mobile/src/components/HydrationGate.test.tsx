@@ -11,6 +11,15 @@ function restoreOutcome() {
   return { status: 'empty' as const, safeToPersist: Promise.resolve() };
 }
 
+function nativeSession() {
+  return {
+    sessionId: 'hydration-test-session',
+    stop: () => undefined,
+    closed: Promise.resolve(),
+    queryPersistenceSafe: true as const,
+  };
+}
+
 function renderGate(overrides: Partial<GateProps>) {
   return render(
     <SafeAreaProvider>
@@ -18,10 +27,7 @@ function renderGate(overrides: Partial<GateProps>) {
         <HydrationGate
           install={() => () => undefined}
           restore={async () => restoreOutcome()}
-          startSession={async () => ({
-            stop: () => undefined,
-            queryPersistenceSafe: true,
-          })}
+          startSession={async () => nativeSession()}
           subscribe={() => () => undefined}
           {...overrides}
         >
@@ -40,7 +46,7 @@ describe('HydrationGate', () => {
     const startSession = vi
       .fn<NonNullable<GateProps['startSession']>>()
       .mockRejectedValueOnce(new Error('the account database would not open'))
-      .mockResolvedValueOnce({ stop: () => undefined, queryPersistenceSafe: true });
+      .mockResolvedValueOnce(nativeSession());
     const subscribe = vi.fn(() => () => undefined);
     const install = vi.fn(() => () => undefined);
     renderGate({ startSession, subscribe, install });

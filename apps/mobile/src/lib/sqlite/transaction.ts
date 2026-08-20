@@ -81,6 +81,9 @@ export class SerializedTransactionRunner {
   private interactiveBurst = 0;
   private foregroundBurst = 0;
   private wakeTimer: ReturnType<typeof setTimeout> | undefined;
+  private closing = false;
+  private shutdownPromise: Promise<void> | undefined;
+  private resolveShutdown: (() => void) | undefined;
 
   constructor(
     private readonly database: SqliteDatabase,
@@ -145,6 +148,9 @@ export class SerializedTransactionRunner {
     measurement?: MutableTransactionExecutionMetrics,
     commit?: MutableTransactionCommit,
   ): Promise<T> {
+    if (this.closing) {
+      return Promise.reject(new Error('SQLite writer scheduler is closed.'));
+    }
     const pending = new Promise<T>((resolve, reject) => {
       const queued: QueuedTransaction<T> = {
         kind: 'transaction',
@@ -170,6 +176,9 @@ export class SerializedTransactionRunner {
    * always finishes before the next transaction starts.
    */
   read<T>(task: (database: SqliteReader) => Promise<T>, delayMs = 0): Promise<T> {
+    if (this.closing) {
+      return Promise.reject(new Error('SQLite writer scheduler is closed.'));
+    }
     const pending = new Promise<T>((resolve, reject) => {
       const queued: QueuedRead<T> = {
         kind: 'read',
@@ -182,6 +191,21 @@ export class SerializedTransactionRunner {
     });
     this.drain();
     return pending;
+  }
+
+  /** Rejects queued presentation reads, drains accepted writes, then becomes permanently inert. */
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise !== undefined) return this.shutdownPromise;
+    this.closing = true;
+    this.clearWakeTimer();
+    const error = new Error('SQLite writer scheduler is closed.');
+    for (const read of this.background.splice(0)) read.reject(error);
+    this.shutdownPromise = new Promise<void>((resolve) => {
+      this.resolveShutdown = resolve;
+    });
+    this.drain();
+    this.settleShutdown();
+    return this.shutdownPromise;
   }
 
   private next(): QueuedDatabaseWork<unknown> | undefined {
@@ -230,6 +254,7 @@ export class SerializedTransactionRunner {
         this.interactiveBurst = 0;
         this.foregroundBurst = 0;
         this.clearWakeTimer();
+        this.settleShutdown();
       } else {
         this.scheduleBackgroundWake();
       }
@@ -240,6 +265,7 @@ export class SerializedTransactionRunner {
     const finish = () => {
       this.running = false;
       this.drain();
+      this.settleShutdown();
     };
     if (queued.kind === 'read') {
       let execution: Promise<unknown>;
@@ -346,5 +372,18 @@ export class SerializedTransactionRunner {
     if (this.wakeTimer === undefined) return;
     clearTimeout(this.wakeTimer);
     this.wakeTimer = undefined;
+  }
+
+  private settleShutdown(): void {
+    if (
+      !this.closing ||
+      this.running ||
+      this.interactive.length > 0 ||
+      this.normal.length > 0
+    ) {
+      return;
+    }
+    this.resolveShutdown?.();
+    this.resolveShutdown = undefined;
   }
 }

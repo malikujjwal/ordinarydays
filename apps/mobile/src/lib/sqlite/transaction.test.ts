@@ -382,4 +382,35 @@ describe('serialized SQLite transactions and subscriptions', () => {
     await expect(failed).rejects.toThrow('read refused');
     await expect(recovered).resolves.toBeUndefined();
   });
+
+  it('drains accepted writes, rejects queued reads, and stays inert after shutdown', async () => {
+    let releaseRead: (() => void) | undefined;
+    const readMayFinish = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const activeRead = transactions.read(() => readMayFinish);
+    await Promise.resolve();
+    const queuedRead = transactions.read(async () => 'must-not-run');
+    const acceptedWrite = transactions.run(async ({ database: transaction }) => {
+      await transaction.run('INSERT INTO values_test VALUES (?, ?);', [
+        'during-shutdown',
+        'committed',
+      ]);
+    });
+
+    const shutdown = transactions.shutdown();
+    await expect(queuedRead).rejects.toThrow('scheduler is closed');
+    await expect(transactions.run(async () => undefined)).rejects.toThrow(
+      'scheduler is closed',
+    );
+    releaseRead?.();
+    await expect(activeRead).resolves.toBeUndefined();
+    await expect(acceptedWrite).resolves.toBeUndefined();
+    await expect(shutdown).resolves.toBeUndefined();
+    expect(
+      await database?.first('SELECT value FROM values_test WHERE id = ?;', [
+        'during-shutdown',
+      ]),
+    ).toEqual({ value: 'committed' });
+  });
 });

@@ -25,11 +25,19 @@ export interface SqliteExecutor extends SqliteReader {
 
 export interface SqliteDatabase extends SqliteExecutor {
   transaction<T>(task: (transaction: SqliteExecutor) => Promise<T>): Promise<T>;
+  readTransaction<T>(task: (reader: SqliteReader) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
+}
+
+/** One private connection whose only public operation is a short explicit read snapshot. */
+export interface SqliteSnapshotConnection {
+  snapshot<T>(task: (reader: SqliteReader) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 
 export interface SqliteDatabaseFactory {
   open(filename: string): Promise<SqliteDatabase>;
+  openReader(filename: string): Promise<SqliteSnapshotConnection>;
   delete(filename: string): Promise<void>;
 }
 

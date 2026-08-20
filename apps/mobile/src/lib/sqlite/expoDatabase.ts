@@ -6,5 +6,6 @@ import type { SqliteDatabaseFactory } from '@/lib/sqlite/database';
  */
 export const expoSqliteDatabaseFactory: SqliteDatabaseFactory = {
   open: () => Promise.reject(new Error('Native SQLite is unavailable on web.')),
+  openReader: () => Promise.reject(new Error('Native SQLite is unavailable on web.')),
   delete: () => Promise.reject(new Error('Native SQLite is unavailable on web.')),
 };
