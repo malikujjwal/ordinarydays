@@ -26,8 +26,12 @@ import type { SqliteReadScheduler, TransactionContext } from '@/lib/sqlite/trans
 export type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
 
 export type AgendaInvalidation =
-  | { readonly kind: 'immediate' }
-  | { readonly kind: 'local-day'; readonly date: string };
+  | { readonly kind: 'immediate'; readonly commitRevision?: number }
+  | {
+      readonly kind: 'local-day';
+      readonly date: string;
+      readonly commitRevision?: number;
+    };
 
 export interface AgendaReadMetrics extends SqliteExecutionMetrics {
   readonly decodeMs: number;
@@ -289,12 +293,23 @@ export class AgendaRepository {
     coverage: AgendaCoverage,
     listener: (invalidation: AgendaInvalidation) => void,
   ): () => void {
-    const stopImmediate = this.subscriptions.subscribe(AGENDA_SCOPE, () =>
-      listener({ kind: 'immediate' }),
+    const stopImmediate = this.subscriptions.subscribe(AGENDA_SCOPE, (metadata) =>
+      listener({
+        kind: 'immediate',
+        ...(metadata.commitRevision === undefined
+          ? {}
+          : { commitRevision: metadata.commitRevision }),
+      }),
     );
     const stopLocalDays = datesInCoverage(coverage).map((date) =>
-      this.subscriptions.subscribe(localDayScope(date), () =>
-        listener({ kind: 'local-day', date }),
+      this.subscriptions.subscribe(localDayScope(date), (metadata) =>
+        listener({
+          kind: 'local-day',
+          date,
+          ...(metadata.commitRevision === undefined
+            ? {}
+            : { commitRevision: metadata.commitRevision }),
+        }),
       ),
     );
     return () => {

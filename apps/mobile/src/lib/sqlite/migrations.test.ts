@@ -215,4 +215,22 @@ describe('versioned SQLite migrations', () => {
       ),
     ).toBe(true);
   });
+
+  it('adds a durable zero-based account commit revision without changing it on rerun', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, -1));
+
+    expect(
+      await database.first(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'native_commit_state';",
+      ),
+    ).toBeUndefined();
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first('SELECT singleton, commit_revision FROM native_commit_state;'),
+    ).toEqual({ singleton: 1, commit_revision: 0 });
+  });
 });

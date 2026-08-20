@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readCommitRevision } from '@/lib/sqlite/commitRevision';
 import type { SqliteDatabase } from '@/lib/sqlite/database';
 import { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
 import { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
@@ -13,11 +14,21 @@ describe('serialized SQLite transactions and subscriptions', () => {
   let subscriptions: RepositorySubscriptions;
   let transactions: SerializedTransactionRunner;
 
+  const openedDatabase = (): SqliteDatabase => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    return database;
+  };
+
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'ordinarydays-transactions-'));
     database = await createNodeSqliteFactory(directory).open('transactions.sqlite');
     await database.exec(
-      'CREATE TABLE values_test (id TEXT PRIMARY KEY, value TEXT NOT NULL);',
+      `CREATE TABLE values_test (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+       CREATE TABLE native_commit_state (
+         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+         commit_revision INTEGER NOT NULL CHECK (commit_revision >= 0)
+       );
+       INSERT INTO native_commit_state VALUES (1, 0);`,
     );
     subscriptions = new RepositorySubscriptions();
     transactions = new SerializedTransactionRunner(database, subscriptions);
@@ -212,6 +223,85 @@ describe('serialized SQLite transactions and subscriptions', () => {
     expect(otherListener).not.toHaveBeenCalled();
     expect(subscriptions.version('values')).toBe(1);
     expect(subscriptions.version('other')).toBe(0);
+    expect(valuesListener).toHaveBeenCalledWith({
+      scope: 'values',
+      commitRevision: 1,
+    });
+    expect(await readCommitRevision(openedDatabase())).toBe(1);
+  });
+
+  it('increments exactly once for a multi-statement, multi-scope commit', async () => {
+    const valuesListener = vi.fn();
+    const otherListener = vi.fn();
+    subscriptions.subscribe('values', valuesListener);
+    subscriptions.subscribe('other', otherListener);
+
+    const committed = await transactions.runCommitted(async (transaction) => {
+      await transaction.database.run('INSERT INTO values_test VALUES (?, ?);', [
+        'one',
+        '1',
+      ]);
+      await transaction.database.run('INSERT INTO values_test VALUES (?, ?);', [
+        'two',
+        '2',
+      ]);
+      transaction.changed('values');
+      transaction.changed('other');
+      return 'committed';
+    });
+
+    expect(committed).toEqual({ value: 'committed', commitRevision: 1 });
+    expect(await readCommitRevision(openedDatabase())).toBe(1);
+    expect(valuesListener).toHaveBeenCalledWith({
+      scope: 'values',
+      commitRevision: 1,
+    });
+    expect(otherListener).toHaveBeenCalledWith({
+      scope: 'other',
+      commitRevision: 1,
+    });
+  });
+
+  it('does not advance or publish for a read-only or zero-change transaction', async () => {
+    const listener = vi.fn();
+    subscriptions.subscribe('values', listener);
+
+    const readOnly = await transactions.runCommitted(async ({ database: transaction }) =>
+      transaction.first('SELECT commit_revision FROM native_commit_state;'),
+    );
+    await transactions.run(async ({ database: transaction, changed }) => {
+      await transaction.run('UPDATE values_test SET value = ? WHERE id = ?;', [
+        'missing',
+        'missing',
+      ]);
+      changed('values');
+    });
+
+    expect(readOnly.commitRevision).toBe(0);
+    expect(await readCommitRevision(openedDatabase())).toBe(0);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('keeps unrelated scoped revisions from becoming Agenda invalidations', async () => {
+    const agendaListener = vi.fn();
+    const outboxListener = vi.fn();
+    subscriptions.subscribe('agenda', agendaListener);
+    subscriptions.subscribe('outbox', outboxListener);
+
+    await transactions.run(async ({ database: transaction, changed }) => {
+      await transaction.run('INSERT INTO values_test VALUES (?, ?);', [
+        'outbox-only',
+        'yes',
+      ]);
+      changed('outbox');
+    });
+
+    expect(await readCommitRevision(openedDatabase())).toBe(1);
+    expect(outboxListener).toHaveBeenCalledWith({
+      scope: 'outbox',
+      commitRevision: 1,
+    });
+    expect(agendaListener).not.toHaveBeenCalled();
   });
 
   it('measures queue wait, SQLite calls, and the complete transaction envelope separately', async () => {
@@ -229,7 +319,8 @@ describe('serialized SQLite transactions and subscriptions', () => {
     );
 
     expect(value).toEqual({ value: 'yes' });
-    expect(metrics.callCount).toBe(2);
+    /* INSERT, SELECT, then the centralized revision UPDATE ... RETURNING. */
+    expect(metrics.callCount).toBe(3);
     expect(metrics.queueWaitMs).toBeGreaterThanOrEqual(0);
     expect(metrics.durationMs).toBeGreaterThanOrEqual(0);
     expect(metrics.transactionMs).toBeGreaterThanOrEqual(metrics.durationMs);
@@ -253,6 +344,7 @@ describe('serialized SQLite transactions and subscriptions', () => {
     expect(await database?.all('SELECT * FROM values_test;')).toEqual([]);
     expect(listener).not.toHaveBeenCalled();
     expect(subscriptions.version('values')).toBe(0);
+    expect(await readCommitRevision(openedDatabase())).toBe(0);
   });
 
   it('continues draining after a driver throws before returning a transaction promise', async () => {

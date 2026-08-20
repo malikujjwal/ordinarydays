@@ -384,7 +384,8 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             Date.now(),
             blockedOrderingKeys,
           );
-          if (intent !== undefined) transaction.changed('outbox');
+          /* claimNext also advances durable clock/expiry state when no intent is claimable. */
+          transaction.changed('outbox');
           return intent;
         });
         if (claimed === undefined) break;

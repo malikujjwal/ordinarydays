@@ -24,6 +24,7 @@ export type NativeActionResult =
       readonly kind: 'accepted';
       readonly status: 'queued';
       readonly intent: OutboxIntent;
+      readonly commitRevision: number;
     }
   | { readonly kind: 'cancelled' }
   | { readonly kind: 'refused'; readonly error: Error };
@@ -154,37 +155,46 @@ export class NativeActivityActionCoordinator {
     clock: ProjectionClock,
   ): Promise<NativeActionResult> {
     try {
-      const outcome = await this.transactions.run(async (transaction) => {
-        transaction.changed('anytime');
-        const original = await this.outbox.get(transaction.database, originalIntentId);
-        if (original?.status === 'queued') {
-          const cancelled = await this.outbox.cancelQueued(
-            transaction.database,
-            originalIntentId,
-          );
-          if (!cancelled) throw new Error('The original action was claimed during Undo.');
-          await this.service.projectCompletion(
+      const { value: outcome, commitRevision } = await this.transactions.runCommitted(
+        async (transaction) => {
+          transaction.changed('anytime');
+          const original = await this.outbox.get(transaction.database, originalIntentId);
+          if (original?.status === 'queued') {
+            const cancelled = await this.outbox.cancelQueued(
+              transaction.database,
+              originalIntentId,
+            );
+            if (!cancelled)
+              throw new Error('The original action was claimed during Undo.');
+            await this.service.projectCompletion(
+              transaction,
+              inverse,
+              completed,
+              restoredStatus,
+              clock,
+            );
+            transaction.changed('outbox');
+            return { kind: 'cancelled' as const };
+          }
+          return this.service.complete(
             transaction,
             inverse,
             completed,
             restoredStatus,
             clock,
+            original === undefined ? undefined : { originalIntentId },
           );
-          transaction.changed('outbox');
-          return { kind: 'cancelled' as const };
-        }
-        return this.service.complete(
-          transaction,
-          inverse,
-          completed,
-          restoredStatus,
-          clock,
-          original === undefined ? undefined : { originalIntentId },
-        );
-      }, 'interactive');
+        },
+        'interactive',
+      );
       if (outcome.kind === 'cancelled') return outcome;
       this.sync.request('accepted-action');
-      return { kind: 'accepted', status: 'queued', intent: outcome.intent };
+      return {
+        kind: 'accepted',
+        status: 'queued',
+        intent: outcome.intent,
+        commitRevision,
+      };
     } catch (error) {
       return { kind: 'refused', error: asError(error) };
     }
@@ -255,6 +265,7 @@ export class NativeActivityActionCoordinator {
       transaction.changed('agenda');
       transaction.changed('reminders');
       transaction.changed('outbox');
+      transaction.changed('anytime');
       return true;
     }, 'interactive');
   }
@@ -265,22 +276,30 @@ export class NativeActivityActionCoordinator {
     clock: ProjectionClock,
   ): Promise<NativeActionResult> {
     try {
-      const intent = await this.transactions.run(async (transaction) => {
-        const retried = await this.outbox.retryAttention(
-          transaction.database,
-          intentId,
-          freshIntentId,
-        );
-        if (retried === undefined || retried.status !== 'queued') {
-          throw new Error('This change is no longer waiting for recovery.');
-        }
-        await this.service.reprojectRetry(transaction, this.ownerUserId, retried, clock);
-        transaction.changed('outbox');
-        transaction.changed('anytime');
-        return retried;
-      }, 'interactive');
+      const { value: intent, commitRevision } = await this.transactions.runCommitted(
+        async (transaction) => {
+          const retried = await this.outbox.retryAttention(
+            transaction.database,
+            intentId,
+            freshIntentId,
+          );
+          if (retried === undefined || retried.status !== 'queued') {
+            throw new Error('This change is no longer waiting for recovery.');
+          }
+          await this.service.reprojectRetry(
+            transaction,
+            this.ownerUserId,
+            retried,
+            clock,
+          );
+          transaction.changed('outbox');
+          transaction.changed('anytime');
+          return retried;
+        },
+        'interactive',
+      );
       this.sync.request('accepted-action');
-      return { kind: 'accepted', status: 'queued', intent };
+      return { kind: 'accepted', status: 'queued', intent, commitRevision };
     } catch (error) {
       return { kind: 'refused', error: asError(error) };
     }
@@ -329,14 +348,15 @@ export class NativeActivityActionCoordinator {
   ): Promise<NativeActionResult> {
     const startedAt = Date.now();
     try {
-      const { value: result, metrics } = await this.transactions.runMeasured(
-        async (transaction) => {
-          const accepted = await operation(transaction);
-          transaction.changed('anytime');
-          return accepted;
-        },
-        'interactive',
-      );
+      const {
+        value: result,
+        commitRevision,
+        metrics,
+      } = await this.transactions.runMeasured(async (transaction) => {
+        const accepted = await operation(transaction);
+        transaction.changed('anytime');
+        return accepted;
+      }, 'interactive');
       if (__DEV__) {
         const completedAt = Date.now();
         console.info('native_action_committed', {
@@ -348,11 +368,17 @@ export class NativeActivityActionCoordinator {
           sqliteCalls: metrics.callCount,
           sqliteCallMs: metrics.durationMs,
           transactionJsMs: Math.max(0, metrics.transactionMs - metrics.durationMs),
+          commitRevision,
           durationMs: completedAt - startedAt,
         });
       }
       this.sync.request('accepted-action');
-      return { kind: 'accepted', status: 'queued', intent: result.intent };
+      return {
+        kind: 'accepted',
+        status: 'queued',
+        intent: result.intent,
+        commitRevision,
+      };
     } catch (error) {
       const failure = asError(error);
       if (__DEV__) {

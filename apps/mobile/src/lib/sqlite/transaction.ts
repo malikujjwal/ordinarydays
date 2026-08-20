@@ -1,3 +1,4 @@
+import { incrementCommitRevision, readCommitRevision } from '@/lib/sqlite/commitRevision';
 import {
   measureSqliteExecutor,
   type SqliteDatabase,
@@ -30,6 +31,15 @@ interface MutableTransactionExecutionMetrics {
   sqlite: (() => SqliteExecutionMetrics) | undefined;
 }
 
+interface MutableTransactionCommit {
+  commitRevision: number | undefined;
+}
+
+export interface CommittedTransactionResult<T> {
+  readonly value: T;
+  readonly commitRevision: number;
+}
+
 interface QueuedTransaction<T> {
   readonly kind: 'transaction';
   readonly task: (context: TransactionContext) => Promise<T>;
@@ -37,6 +47,7 @@ interface QueuedTransaction<T> {
   readonly reject: (reason: unknown) => void;
   readonly enqueuedAt: number;
   readonly measurement?: MutableTransactionExecutionMetrics;
+  readonly commit?: MutableTransactionCommit;
 }
 
 interface QueuedRead<T> {
@@ -88,6 +99,7 @@ export class SerializedTransactionRunner {
     priority: TransactionPriority = 'normal',
   ): Promise<{
     readonly value: T;
+    readonly commitRevision: number;
     readonly metrics: TransactionExecutionMetrics;
   }> {
     const measurement: MutableTransactionExecutionMetrics = {
@@ -95,10 +107,15 @@ export class SerializedTransactionRunner {
       transactionMs: 0,
       sqlite: undefined,
     };
-    return this.enqueue(task, priority, measurement).then((value) => {
+    const commit: MutableTransactionCommit = { commitRevision: undefined };
+    return this.enqueue(task, priority, measurement, commit).then((value) => {
       const sqlite = measurement.sqlite?.() ?? { callCount: 0, durationMs: 0 };
+      if (commit.commitRevision === undefined) {
+        throw new Error('SQLite transaction did not report a commit revision.');
+      }
       return {
         value,
+        commitRevision: commit.commitRevision,
         metrics: {
           queueWaitMs: measurement.queueWaitMs,
           transactionMs: measurement.transactionMs,
@@ -109,10 +126,24 @@ export class SerializedTransactionRunner {
     });
   }
 
+  runCommitted<T>(
+    task: (context: TransactionContext) => Promise<T>,
+    priority: TransactionPriority = 'normal',
+  ): Promise<CommittedTransactionResult<T>> {
+    const commit: MutableTransactionCommit = { commitRevision: undefined };
+    return this.enqueue(task, priority, undefined, commit).then((value) => {
+      if (commit.commitRevision === undefined) {
+        throw new Error('SQLite transaction did not report a commit revision.');
+      }
+      return { value, commitRevision: commit.commitRevision };
+    });
+  }
+
   private enqueue<T>(
     task: (context: TransactionContext) => Promise<T>,
     priority: TransactionPriority,
     measurement?: MutableTransactionExecutionMetrics,
+    commit?: MutableTransactionCommit,
   ): Promise<T> {
     const pending = new Promise<T>((resolve, reject) => {
       const queued: QueuedTransaction<T> = {
@@ -122,6 +153,7 @@ export class SerializedTransactionRunner {
         reject,
         enqueuedAt: Date.now(),
         ...(measurement === undefined ? {} : { measurement }),
+        ...(commit === undefined ? {} : { commit }),
       };
       const queue = priority === 'interactive' ? this.interactive : this.normal;
       queue.push(queued as QueuedTransaction<unknown>);
@@ -222,13 +254,14 @@ export class SerializedTransactionRunner {
       return;
     }
     const changedScopes = new Set<RepositoryScope>();
+    let commitRevision: number | undefined;
     const transactionStartedAt = Date.now();
     if (queued.measurement !== undefined) {
       queued.measurement.queueWaitMs = transactionStartedAt - queued.enqueuedAt;
     }
     let execution: Promise<unknown>;
     try {
-      execution = this.database.transaction((transaction) => {
+      execution = this.database.transaction(async (transaction) => {
         const measured =
           queued.measurement === undefined
             ? undefined
@@ -236,10 +269,31 @@ export class SerializedTransactionRunner {
         if (queued.measurement !== undefined) {
           queued.measurement.sqlite = measured?.metrics;
         }
-        return queued.task({
-          database: measured?.executor ?? transaction,
+        const observable = measured?.executor ?? transaction;
+        let dirty = false;
+        const tracked: SqliteExecutor = {
+          first: (sql, parameters) => observable.first(sql, parameters),
+          all: (sql, parameters) => observable.all(sql, parameters),
+          exec: async (sql) => {
+            await observable.exec(sql);
+            dirty = true;
+          },
+          run: async (sql, parameters) => {
+            const result = await observable.run(sql, parameters);
+            if (result.changes > 0) dirty = true;
+            return result;
+          },
+        };
+        const result = await queued.task({
+          database: tracked,
           changed: (scope) => changedScopes.add(scope),
         });
+        if (dirty) {
+          commitRevision = await incrementCommitRevision(observable);
+        } else if (queued.commit !== undefined) {
+          commitRevision = await readCommitRevision(observable);
+        }
+        return result;
       });
     } catch (error) {
       queued.reject(error);
@@ -253,7 +307,14 @@ export class SerializedTransactionRunner {
             queued.measurement.transactionMs = Date.now() - transactionStartedAt;
           }
           try {
-            this.subscriptions.publish(changedScopes);
+            if (commitRevision !== undefined) {
+              if (queued.commit !== undefined) {
+                queued.commit.commitRevision = commitRevision;
+              }
+              if (changedScopes.size > 0) {
+                this.subscriptions.publish(changedScopes, commitRevision);
+              }
+            }
             queued.resolve(result);
           } catch (error) {
             queued.reject(error);

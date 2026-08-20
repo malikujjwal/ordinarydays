@@ -83,6 +83,11 @@ describe('account SQLite lifecycle', () => {
         ['survives'],
       ),
     ).toEqual({ value: 'yes' });
+    expect(
+      await reopened.database.first(
+        'SELECT commit_revision FROM native_commit_state WHERE singleton = 1;',
+      ),
+    ).toEqual({ commit_revision: 1 });
   });
 
   it('isolates account files and never exposes one account row after switching', async () => {
@@ -98,6 +103,9 @@ describe('account SQLite lifecycle', () => {
     const accountB = await databases.open(ACCOUNT_B);
 
     expect(await accountB.database.all('SELECT * FROM account_test_values;')).toEqual([]);
+    expect(
+      await accountB.database.first('SELECT commit_revision FROM native_commit_state;'),
+    ).toEqual({ commit_revision: 0 });
     await accountB.transactions.run(async ({ database }) => {
       await database.run('INSERT INTO account_test_values (id, value) VALUES (?, ?);', [
         'b-only',
@@ -108,6 +116,9 @@ describe('account SQLite lifecycle', () => {
     expect(await reopenedA.database.all('SELECT * FROM account_test_values;')).toEqual([
       { id: 'a-only', value: 'secret-a' },
     ]);
+    expect(
+      await reopenedA.database.first('SELECT commit_revision FROM native_commit_state;'),
+    ).toEqual({ commit_revision: 1 });
   });
 
   it('closes and quarantines on sign-out without age-deleting unresolved work', async () => {

@@ -303,6 +303,18 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           WHERE status IN ('queued', 'in_flight', 'needs_attention');
       `),
   },
+  {
+    version: 7,
+    name: 'account-commit-revision',
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE native_commit_state (
+          singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+          commit_revision INTEGER NOT NULL CHECK (commit_revision >= 0)
+        );
+        INSERT INTO native_commit_state (singleton, commit_revision) VALUES (1, 0);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

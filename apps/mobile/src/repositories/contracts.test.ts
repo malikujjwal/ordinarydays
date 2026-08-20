@@ -83,6 +83,11 @@ describe('typed repository contract', () => {
         PRIMARY KEY (group_id, id)
       );
       CREATE INDEX repository_test_values_group ON repository_test_values (group_id, id);
+      CREATE TABLE native_commit_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        commit_revision INTEGER NOT NULL CHECK (commit_revision >= 0)
+      );
+      INSERT INTO native_commit_state VALUES (1, 0);
     `);
   });
 

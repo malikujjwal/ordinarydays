@@ -1,5 +1,9 @@
 export type RepositoryScope = string;
-export type RepositoryListener = () => void;
+export interface RepositoryInvalidationMetadata {
+  readonly scope: RepositoryScope;
+  readonly commitRevision?: number;
+}
+export type RepositoryListener = (metadata: RepositoryInvalidationMetadata) => void;
 
 /** Account-local invalidation versions suitable for `useSyncExternalStore`. */
 export class RepositorySubscriptions {
@@ -20,10 +24,14 @@ export class RepositorySubscriptions {
     return this.versions.get(scope) ?? 0;
   }
 
-  publish(scopes: ReadonlySet<RepositoryScope>): void {
+  publish(scopes: ReadonlySet<RepositoryScope>, commitRevision?: number): void {
     for (const scope of scopes) {
       this.versions.set(scope, this.version(scope) + 1);
-      for (const listener of this.listeners.get(scope) ?? []) listener();
+      const metadata: RepositoryInvalidationMetadata = {
+        scope,
+        ...(commitRevision === undefined ? {} : { commitRevision }),
+      };
+      for (const listener of this.listeners.get(scope) ?? []) listener(metadata);
     }
   }
 }

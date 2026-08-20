@@ -225,11 +225,11 @@ describe('Activity/Agenda transactional SQLite slice', () => {
   });
 
   it('makes repeated triggers idempotent and preserves per-entity barriers without globally blocking', async () => {
-    await coordinator.create(
+    const firstCreate = await coordinator.create(
       { input: createInput(), idempotencyKey: 'same-create' },
       clock,
     );
-    await coordinator.create(
+    const repeatedCreate = await coordinator.create(
       { input: createInput(), idempotencyKey: 'same-create' },
       clock,
     );
@@ -251,6 +251,8 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     expect(await database?.all('SELECT activity_id FROM activities;')).toEqual([
       { activity_id: ACTIVITY },
     ]);
+    expect(firstCreate).toMatchObject({ kind: 'accepted', commitRevision: 1 });
+    expect(repeatedCreate).toMatchObject({ kind: 'accepted', commitRevision: 1 });
     const first = await transactions.run(({ database: transaction }) =>
       outbox.claimNext(transaction),
     );
