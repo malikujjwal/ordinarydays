@@ -1,4 +1,10 @@
-import type { SqliteDatabase, SqliteExecutor, SqliteReader } from '@/lib/sqlite/database';
+import {
+  measureSqliteExecutor,
+  type SqliteDatabase,
+  type SqliteExecutionMetrics,
+  type SqliteExecutor,
+  type SqliteReader,
+} from '@/lib/sqlite/database';
 import type {
   RepositoryScope,
   RepositorySubscriptions,
@@ -11,11 +17,26 @@ export interface TransactionContext {
 
 export type TransactionPriority = 'interactive' | 'normal';
 
+export interface TransactionExecutionMetrics extends SqliteExecutionMetrics {
+  /** Time admitted work spent waiting behind already-running or higher-priority work. */
+  readonly queueWaitMs: number;
+  /** Full BEGIN/task/COMMIT envelope, including JS work between SQLite calls. */
+  readonly transactionMs: number;
+}
+
+interface MutableTransactionExecutionMetrics {
+  queueWaitMs: number;
+  transactionMs: number;
+  sqlite: (() => SqliteExecutionMetrics) | undefined;
+}
+
 interface QueuedTransaction<T> {
   readonly kind: 'transaction';
   readonly task: (context: TransactionContext) => Promise<T>;
   readonly resolve: (value: T) => void;
   readonly reject: (reason: unknown) => void;
+  readonly enqueuedAt: number;
+  readonly measurement?: MutableTransactionExecutionMetrics;
 }
 
 interface QueuedRead<T> {
@@ -59,12 +80,48 @@ export class SerializedTransactionRunner {
     task: (context: TransactionContext) => Promise<T>,
     priority: TransactionPriority = 'normal',
   ): Promise<T> {
+    return this.enqueue(task, priority);
+  }
+
+  runMeasured<T>(
+    task: (context: TransactionContext) => Promise<T>,
+    priority: TransactionPriority = 'normal',
+  ): Promise<{
+    readonly value: T;
+    readonly metrics: TransactionExecutionMetrics;
+  }> {
+    const measurement: MutableTransactionExecutionMetrics = {
+      queueWaitMs: 0,
+      transactionMs: 0,
+      sqlite: undefined,
+    };
+    return this.enqueue(task, priority, measurement).then((value) => {
+      const sqlite = measurement.sqlite?.() ?? { callCount: 0, durationMs: 0 };
+      return {
+        value,
+        metrics: {
+          queueWaitMs: measurement.queueWaitMs,
+          transactionMs: measurement.transactionMs,
+          callCount: sqlite.callCount,
+          durationMs: sqlite.durationMs,
+        },
+      };
+    });
+  }
+
+  private enqueue<T>(
+    task: (context: TransactionContext) => Promise<T>,
+    priority: TransactionPriority,
+    measurement?: MutableTransactionExecutionMetrics,
+  ): Promise<T> {
     const pending = new Promise<T>((resolve, reject) => {
       const queued: QueuedTransaction<T> = {
         kind: 'transaction',
         task,
         resolve,
         reject,
+        enqueuedAt: Date.now(),
+        ...(measurement === undefined ? {} : { measurement }),
       };
       const queue = priority === 'interactive' ? this.interactive : this.normal;
       queue.push(queued as QueuedTransaction<unknown>);
@@ -165,28 +222,50 @@ export class SerializedTransactionRunner {
       return;
     }
     const changedScopes = new Set<RepositoryScope>();
+    const transactionStartedAt = Date.now();
+    if (queued.measurement !== undefined) {
+      queued.measurement.queueWaitMs = transactionStartedAt - queued.enqueuedAt;
+    }
     let execution: Promise<unknown>;
     try {
-      execution = this.database.transaction((transaction) =>
-        queued.task({
-          database: transaction,
+      execution = this.database.transaction((transaction) => {
+        const measured =
+          queued.measurement === undefined
+            ? undefined
+            : measureSqliteExecutor(transaction);
+        if (queued.measurement !== undefined) {
+          queued.measurement.sqlite = measured?.metrics;
+        }
+        return queued.task({
+          database: measured?.executor ?? transaction,
           changed: (scope) => changedScopes.add(scope),
-        }),
-      );
+        });
+      });
     } catch (error) {
       queued.reject(error);
       finish();
       return;
     }
     void execution
-      .then((result) => {
-        try {
-          this.subscriptions.publish(changedScopes);
-          queued.resolve(result);
-        } catch (error) {
+      .then(
+        (result) => {
+          if (queued.measurement !== undefined) {
+            queued.measurement.transactionMs = Date.now() - transactionStartedAt;
+          }
+          try {
+            this.subscriptions.publish(changedScopes);
+            queued.resolve(result);
+          } catch (error) {
+            queued.reject(error);
+          }
+        },
+        (error) => {
+          if (queued.measurement !== undefined) {
+            queued.measurement.transactionMs = Date.now() - transactionStartedAt;
+          }
           queued.reject(error);
-        }
-      }, queued.reject)
+        },
+      )
       .then(finish, finish);
   }
 

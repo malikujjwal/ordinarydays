@@ -39,6 +39,11 @@ interface NativeAgendaView {
 interface CommittedAgendaView {
   readonly data: AgendaData;
   readonly covered: boolean;
+  readonly metrics?: {
+    readonly callCount: number;
+    readonly durationMs: number;
+    readonly decodeMs: number;
+  };
 }
 
 function mergeAgendaDays(data: AgendaData, replacements: AgendaData['days']): AgendaData {
@@ -111,12 +116,12 @@ export function useAgenda(options: UseAgendaOptions = {}) {
   const readCommitted = useCallback(async (): Promise<CommittedAgendaView> => {
     const startedAt = Date.now();
     const shared = state.agenda.readSnapshot?.(coverage);
-    const { data, covered } =
+    const { data, covered, metrics } =
       shared === undefined
         ? await Promise.all([
             state.agenda.read(coverage),
             state.agenda.hasCoverage(coverage),
-          ]).then(([data, covered]) => ({ data, covered }))
+          ]).then(([data, covered]) => ({ data, covered, metrics: undefined }))
         : await shared;
     if (__DEV__) {
       console.info('native_agenda_read_completed', {
@@ -130,10 +135,13 @@ export function useAgenda(options: UseAgendaOptions = {}) {
           0,
         ),
         covered,
+        sqliteCalls: metrics?.callCount,
+        sqliteCallMs: metrics?.durationMs,
+        decodeMs: metrics?.decodeMs,
         durationMs: Date.now() - startedAt,
       });
     }
-    return { data, covered };
+    return { data, covered, ...(metrics === undefined ? {} : { metrics }) };
   }, [state, coverage]);
 
   const readCommittedOnce = useCallback((): Promise<CommittedAgendaView> => {
@@ -147,20 +155,32 @@ export function useAgenda(options: UseAgendaOptions = {}) {
     return promise;
   }, [readCommitted]);
 
-  const applyCommitted = useCallback(({ data, covered }: CommittedAgendaView) => {
-    latestData.current = data;
-    setView((current) => ({
-      status:
-        covered ||
-        data.days.some(
-          (day) => day.schedule.length + day.anytime.length + day.earlier.length > 0,
-        )
-          ? 'success'
-          : current.status,
-      data,
-      error: current.error,
-    }));
-  }, []);
+  const applyCommitted = useCallback(
+    ({ data, covered }: CommittedAgendaView) => {
+      const startedAt = Date.now();
+      latestData.current = data;
+      setView((current) => ({
+        status:
+          covered ||
+          data.days.some(
+            (day) => day.schedule.length + day.anytime.length + day.earlier.length > 0,
+          )
+            ? 'success'
+            : current.status,
+        data,
+        error: current.error,
+      }));
+      if (__DEV__) {
+        console.info('native_agenda_result_applied', {
+          kind: 'full',
+          from: coverage.from,
+          to: coverage.to,
+          resultApplicationMs: Date.now() - startedAt,
+        });
+      }
+    },
+    [coverage.from, coverage.to],
+  );
 
   const loadCommitted = useCallback(async () => {
     const committed = await readCommittedOnce();
@@ -270,7 +290,14 @@ export function useAgenda(options: UseAgendaOptions = {}) {
             pendingLocalDates.clear();
             const generation = reconciliationGeneration.current;
             const startedAt = Date.now();
-            const days = await state.agenda.readDays(coverage, dates);
+            const snapshot =
+              typeof state.agenda.readDaysSnapshot === 'function'
+                ? await state.agenda.readDaysSnapshot(coverage, dates)
+                : {
+                    days: await state.agenda.readDays(coverage, dates),
+                    metrics: undefined,
+                  };
+            const { days } = snapshot;
             if (__DEV__) {
               console.info('native_agenda_local_days_read_completed', {
                 dates,
@@ -279,6 +306,9 @@ export function useAgenda(options: UseAgendaOptions = {}) {
                     count + day.schedule.length + day.anytime.length + day.earlier.length,
                   0,
                 ),
+                sqliteCalls: snapshot.metrics?.callCount,
+                sqliteCallMs: snapshot.metrics?.durationMs,
+                decodeMs: snapshot.metrics?.decodeMs,
                 durationMs: Date.now() - startedAt,
               });
             }
@@ -290,12 +320,20 @@ export function useAgenda(options: UseAgendaOptions = {}) {
               continue;
             }
             const data = mergeAgendaDays(current, days);
+            const applyStartedAt = Date.now();
             latestData.current = data;
             setView((visible) => ({
               status: 'success',
               data,
               error: visible.error,
             }));
+            if (__DEV__) {
+              console.info('native_agenda_result_applied', {
+                kind: 'local-days',
+                dates,
+                resultApplicationMs: Date.now() - applyStartedAt,
+              });
+            }
           }
         } catch (error) {
           /* A narrow-read failure falls back to the established full committed snapshot. */

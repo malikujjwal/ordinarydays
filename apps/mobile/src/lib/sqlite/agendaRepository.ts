@@ -12,7 +12,13 @@ import type {
 } from '@od/shared/types';
 import { partitionAgenda } from '@/lib/agenda/partition';
 import type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
-import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
+import {
+  measureSqliteReader,
+  type SqliteExecutionMetrics,
+  type SqliteExecutor,
+  type SqliteReader,
+  type SqliteRow,
+} from '@/lib/sqlite/database';
 import { readCanonicalOutboxGuards } from '@/lib/sqlite/outbox';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
 import type { SqliteReadScheduler, TransactionContext } from '@/lib/sqlite/transaction';
@@ -22,6 +28,21 @@ export type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
 export type AgendaInvalidation =
   | { readonly kind: 'immediate' }
   | { readonly kind: 'local-day'; readonly date: string };
+
+export interface AgendaReadMetrics extends SqliteExecutionMetrics {
+  readonly decodeMs: number;
+}
+
+export interface AgendaCommittedSnapshot {
+  readonly data: AgendaData;
+  readonly covered: boolean;
+  readonly metrics: AgendaReadMetrics;
+}
+
+export interface AgendaDaysSnapshot {
+  readonly days: AgendaDay[];
+  readonly metrics: AgendaReadMetrics;
+}
 
 const AGENDA_SCOPE = 'agenda';
 const AGENDA_LOCAL_DAY_SCOPE_PREFIX = 'agenda:local-day:';
@@ -252,10 +273,7 @@ const INSERT_CHUNK_SIZE = 25;
 const AGENDA_BACKGROUND_READ_DELAY_MS = 16;
 
 export class AgendaRepository {
-  private readonly snapshots = new Map<
-    string,
-    Promise<{ readonly data: AgendaData; readonly covered: boolean }>
-  >();
+  private readonly snapshots = new Map<string, Promise<AgendaCommittedSnapshot>>();
 
   constructor(
     private readonly reader: SqliteReader,
@@ -297,9 +315,7 @@ export class AgendaRepository {
   }
 
   /** Shares one in-flight committed snapshot across equivalent mounted Agenda consumers. */
-  readSnapshot(
-    coverage: AgendaCoverage,
-  ): Promise<{ readonly data: AgendaData; readonly covered: boolean }> {
+  readSnapshot(coverage: AgendaCoverage): Promise<AgendaCommittedSnapshot> {
     // A commit published after an older read began must not make a newly mounted consumer
     // share that pre-commit snapshot after it already missed the invalidation event.
     const key = `${this.scope(coverage)}:${this.version(coverage)}`;
@@ -325,10 +341,19 @@ export class AgendaRepository {
     coverage: AgendaCoverage,
     requestedDates: readonly string[],
   ): Promise<AgendaDay[]> {
+    return (await this.readDaysSnapshot(coverage, requestedDates)).days;
+  }
+
+  async readDaysSnapshot(
+    coverage: AgendaCoverage,
+    requestedDates: readonly string[],
+  ): Promise<AgendaDaysSnapshot> {
     const dates = [...new Set(requestedDates)]
       .filter((date) => date >= coverage.from && date <= coverage.to)
       .sort();
-    if (dates.length === 0) return [];
+    if (dates.length === 0) {
+      return { days: [], metrics: { callCount: 0, durationMs: 0, decodeMs: 0 } };
+    }
     const read = (database: SqliteReader) => this.readDaysWith(database, dates);
     return this.readScheduler === undefined
       ? read(this.reader)
@@ -805,36 +830,54 @@ export class AgendaRepository {
   private async readSnapshotWith(
     database: SqliteReader,
     coverage: AgendaCoverage,
-  ): Promise<{ readonly data: AgendaData; readonly covered: boolean }> {
-    const rows = await database.all(
+  ): Promise<AgendaCommittedSnapshot> {
+    const measured = measureSqliteReader(database);
+    const rows = await measured.reader.all(
       `SELECT ${AGENDA_READ_COLUMNS} FROM agenda_rows
        WHERE viewer_date BETWEEN ? AND ?
        ORDER BY viewer_date, section, sort_order, activity_id;`,
       [coverage.from, coverage.to],
     );
-    const metadata = await database.first(
+    const metadata = await measured.reader.first(
       `SELECT warnings_json, projection_versions_json FROM agenda_coverage
        WHERE from_date = ? AND to_date = ? AND timezone = ? AND include_key = ?;`,
       [coverage.from, coverage.to, coverage.timezone, includeKey(coverage.include)],
     );
+    const decodeStartedAt = Date.now();
+    const data = agendaDataFromRows(rows, coverage, metadata);
+    const sqlite = measured.metrics();
     return {
-      data: agendaDataFromRows(rows, coverage, metadata),
+      data,
       covered: metadata !== undefined,
+      metrics: {
+        ...sqlite,
+        decodeMs: Date.now() - decodeStartedAt,
+      },
     };
   }
 
   private async readDaysWith(
     database: SqliteReader,
     dates: readonly string[],
-  ): Promise<AgendaDay[]> {
+  ): Promise<AgendaDaysSnapshot> {
+    const measured = measureSqliteReader(database);
     const placeholders = dates.map(() => '?').join(', ');
-    const rows = await database.all(
+    const rows = await measured.reader.all(
       `SELECT ${AGENDA_READ_COLUMNS} FROM agenda_rows
        WHERE viewer_date IN (${placeholders})
        ORDER BY viewer_date, section, sort_order, activity_id;`,
       dates,
     );
-    return daysForDates(rows, dates);
+    const decodeStartedAt = Date.now();
+    const days = daysForDates(rows, dates);
+    const sqlite = measured.metrics();
+    return {
+      days,
+      metrics: {
+        ...sqlite,
+        decodeMs: Date.now() - decodeStartedAt,
+      },
+    };
   }
 
   private async insertDay(

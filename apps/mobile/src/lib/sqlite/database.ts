@@ -7,6 +7,11 @@ export interface SqliteRunResult {
   readonly lastInsertRowId: number;
 }
 
+export interface SqliteExecutionMetrics {
+  readonly callCount: number;
+  readonly durationMs: number;
+}
+
 /** The deliberately small SQL surface repositories may use. */
 export interface SqliteReader {
   first(sql: string, parameters?: SqliteParameters): Promise<SqliteRow | undefined>;
@@ -26,6 +31,68 @@ export interface SqliteDatabase extends SqliteExecutor {
 export interface SqliteDatabaseFactory {
   open(filename: string): Promise<SqliteDatabase>;
   delete(filename: string): Promise<void>;
+}
+
+interface MutableSqliteExecutionMetrics {
+  callCount: number;
+  durationMs: number;
+}
+
+/** Measures time spent awaiting SQLite calls, separate from repository transformation work. */
+export function measureSqliteReader(reader: SqliteReader): {
+  readonly reader: SqliteReader;
+  metrics(): SqliteExecutionMetrics;
+} {
+  const metrics: MutableSqliteExecutionMetrics = { callCount: 0, durationMs: 0 };
+  const measure = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    metrics.callCount += 1;
+    try {
+      return await operation();
+    } finally {
+      metrics.durationMs += Date.now() - startedAt;
+    }
+  };
+  return {
+    reader: {
+      first: (sql, parameters) => measure(() => reader.first(sql, parameters)),
+      all: (sql, parameters) => measure(() => reader.all(sql, parameters)),
+    },
+    metrics: () => ({ ...metrics }),
+  };
+}
+
+/** Extends read measurement to the mutation methods used inside writer transactions. */
+export function measureSqliteExecutor(executor: SqliteExecutor): {
+  readonly executor: SqliteExecutor;
+  metrics(): SqliteExecutionMetrics;
+} {
+  const measured = measureSqliteReader(executor);
+  const metrics = measured.metrics;
+  const additional: MutableSqliteExecutionMetrics = { callCount: 0, durationMs: 0 };
+  const measure = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    additional.callCount += 1;
+    try {
+      return await operation();
+    } finally {
+      additional.durationMs += Date.now() - startedAt;
+    }
+  };
+  return {
+    executor: {
+      ...measured.reader,
+      exec: (sql) => measure(() => executor.exec(sql)),
+      run: (sql, parameters) => measure(() => executor.run(sql, parameters)),
+    },
+    metrics: () => {
+      const reads = metrics();
+      return {
+        callCount: reads.callCount + additional.callCount,
+        durationMs: reads.durationMs + additional.durationMs,
+      };
+    },
+  };
 }
 
 export function textColumn(

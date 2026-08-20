@@ -328,22 +328,26 @@ export class NativeActivityActionCoordinator {
     operation: (transaction: TransactionContext) => Promise<TransactionalIntentResult>,
   ): Promise<NativeActionResult> {
     const startedAt = Date.now();
-    let transactionStartedAt = startedAt;
     try {
-      const result = await this.transactions.run(async (transaction) => {
-        transactionStartedAt = Date.now();
-        const accepted = await operation(transaction);
-        transaction.changed('anytime');
-        return accepted;
-      }, 'interactive');
+      const { value: result, metrics } = await this.transactions.runMeasured(
+        async (transaction) => {
+          const accepted = await operation(transaction);
+          transaction.changed('anytime');
+          return accepted;
+        },
+        'interactive',
+      );
       if (__DEV__) {
         const completedAt = Date.now();
         console.info('native_action_committed', {
           intentId: result.intent.intentId,
           mutation: result.intent.mutationKey.join('.'),
           activityId: result.intent.entityId,
-          queueWaitMs: transactionStartedAt - startedAt,
-          transactionMs: completedAt - transactionStartedAt,
+          queueWaitMs: metrics.queueWaitMs,
+          transactionMs: metrics.transactionMs,
+          sqliteCalls: metrics.callCount,
+          sqliteCallMs: metrics.durationMs,
+          transactionJsMs: Math.max(0, metrics.transactionMs - metrics.durationMs),
           durationMs: completedAt - startedAt,
         });
       }

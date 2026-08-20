@@ -214,6 +214,27 @@ describe('serialized SQLite transactions and subscriptions', () => {
     expect(subscriptions.version('other')).toBe(0);
   });
 
+  it('measures queue wait, SQLite calls, and the complete transaction envelope separately', async () => {
+    const { value, metrics } = await transactions.runMeasured(
+      async ({ database: transaction }) => {
+        await transaction.run('INSERT INTO values_test VALUES (?, ?);', [
+          'measured',
+          'yes',
+        ]);
+        return transaction.first('SELECT value FROM values_test WHERE id = ?;', [
+          'measured',
+        ]);
+      },
+      'interactive',
+    );
+
+    expect(value).toEqual({ value: 'yes' });
+    expect(metrics.callCount).toBe(2);
+    expect(metrics.queueWaitMs).toBeGreaterThanOrEqual(0);
+    expect(metrics.durationMs).toBeGreaterThanOrEqual(0);
+    expect(metrics.transactionMs).toBeGreaterThanOrEqual(metrics.durationMs);
+  });
+
   it('rolls writes and notifications back when a transaction fails', async () => {
     const listener = vi.fn();
     subscriptions.subscribe('values', listener);
