@@ -650,7 +650,7 @@ remaining paths as follows:
 | Live web | Base `.ts` hooks; `queryClient.ts`; `agendaCache.ts`; `mutationDefaults.ts`; `durableAction.ts` | Online-first TanStack/HTTP adapter. It has optimistic cache projection but no durable mutation queue. |
 | Migration-only | `legacyIntentLog.ts`; `legacyPersistence.ts`; `sqlite/legacyMigration.ts`; the unfiltered legacy evidence path in `persister.ts` | Reads/normalizes owner-scoped pre-cutover data, imports with SQLite receipts, and retires it only after proof. It has no runtime replay or presentation role. |
 | Test-only | Migration fixtures and pure selector/repository harnesses | Exercise compatibility and contracts without registering another production queue. |
-| Removed as unreachable | `intentReplay.ts`, its registry/backoff/replay state, MutationCache write-ahead/settlement branches, web pending-log reads, and reminder/cache no-op subscriptions | No production caller ever installed the old log or replay target after P2-63; retaining them only made a second authority easier to reintroduce. |
+| Removed as unreachable | `intentReplay.ts`, its registry/backoff/replay state, MutationCache write-ahead/settlement branches, web pending-log/detail reads, reminder/cache no-op subscriptions, and the orphaned pre-SQLite collision helper | No production caller ever installed the old log or replay target after P2-63; native collision recovery already lives in the SQLite sync engine. Retaining these paths only made a second authority easier to reintroduce. |
 
 Native now resolves `queryClient.native.ts`, which supports non-domain queries such as the
 profile but does not install Activity mutation defaults or a MutationCache replay seam.

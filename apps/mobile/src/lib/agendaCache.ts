@@ -267,11 +267,7 @@ export async function reconcileRecurrenceEdit(
   const keys = client
     .getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })
     .map(([key]) => key as AgendaQueryKey);
-  /**
-   * No cached window means there is nothing to reconcile yet, not that canonical topology was
-   * proved. Keep the acknowledged receipt clean and durable; the first later Agenda read arms
-   * that exact window from the receipt and performs its targeted read before returning data.
-   */
+  /** No cached web window means a later query will load canonical topology normally. */
   if (keys.length === 0) return undefined;
   let complete = true;
   await Promise.all(
@@ -494,8 +490,8 @@ export async function reconcileAgendaProjection(
  * because they project into the cache first and treat the refetch as confirmation.
  *
  * Everything here is projected from the **server's response**, so there is no rollback path
- * and no invented identifier: by the time this runs the write is durable and its canonical
- * shape is known. Each projection is idempotent, so a refetch that did win the race cannot
+ * and no invented identifier: by the time this runs the server has acknowledged the write
+ * and its canonical shape is known. Each projection is idempotent, so a refetch that did win the race cannot
  * produce a duplicate row.
  */
 export function projectActivityWrite(
@@ -516,7 +512,7 @@ export function projectActivityWrite(
       applyCreate(agenda, {
         activity,
         ...clock,
-        // A create may already be represented by its durable local projection. The 201 is
+        // A create may already be represented by its in-memory optimistic projection. The 201 is
         // canonical and replaces those provisional rows atomically across each window.
         ...(tag === 'create' ? { reconcile: true } : {}),
       }),
@@ -683,9 +679,8 @@ export function projectActivityWrite(
    * reached Today, because a mounted tab has nothing to trigger a refetch. Plans looked
    * correct only because navigating to it remounts and refetches.
    *
-   * Projecting here rather than in either screen means one behaviour for the row checkbox, the
-   * swipe action, the passed-plan sheet, the detail button, and a mutation replayed from the
-   * offline queue after a restart.
+   * Projecting here rather than in either screen means one in-process web behaviour for the
+   * row checkbox, swipe action, passed-plan sheet, and detail button.
    */
   if (tag === 'complete' || tag === 'uncomplete' || tag === 'skip') {
     /**
@@ -847,12 +842,11 @@ export interface PendingActivityCreateProjection {
 }
 
 /**
- * Projects a durable, unacknowledged create into every cached agenda window.
+ * Projects a web create optimistically into every cached agenda window.
  *
- * The global MutationCache appends the intent first; TanStack then invokes the create
- * default's `onMutate`, which calls this function. That preserves Phase 2.6's ordering:
- * durable write, local projection, network request. It is also safe to call again during
- * replay or cold-start restoration because `applyPendingCreate` is idempotent.
+ * TanStack invokes the create default's `onMutate` before its network request. This projection
+ * is in-memory and rolls back on failure; it is not native durability and does not survive a
+ * process restart. `applyPendingCreate` remains idempotent within the process.
  */
 export function projectPendingActivityCreate(
   client: QueryClient,
@@ -890,10 +884,9 @@ export function projectPendingActivityCreate(
 /**
  * Gives Today a minimal local window when no server response has ever been cached.
  *
- * Without this, `setQueriesData` has nothing to update on a first offline launch and Today
- * falls through to its no-data error even though the durable create is valid local data. The
- * seeded window is immediately stale and contains only this device's pending projection; the
- * connectivity status communicates that the rest of the server view is unavailable.
+ * Without this, `setQueriesData` has nothing to update when the web cache has no Today window.
+ * The seeded window is immediately stale and contains only the current in-memory optimistic
+ * create until the request succeeds or rolls back.
  */
 function seedPendingTodayWindow(
   client: QueryClient,
@@ -943,10 +936,9 @@ const ACTIVITY_MUTATION_TAGS: ReadonlySet<string> = new Set(
 /**
  * Projects completion state across every cached surface before its request settles.
  *
- * The agenda row, ordinary detail and occurrence detail are one user-visible fact even while
- * the durable intent is queued offline. The returned rollback restores the same snapshots if
- * the coordinator refuses or permanently rejects that fact; transient transport failure keeps
- * every projection in place for replay.
+ * The agenda row, ordinary detail and occurrence detail are one user-visible fact while the
+ * web request is in flight. The returned rollback restores the same snapshots on any failed
+ * request. Native completion presentation is committed transactionally in SQLite instead.
  */
 export function projectOptimisticCompletion(
   client: QueryClient,

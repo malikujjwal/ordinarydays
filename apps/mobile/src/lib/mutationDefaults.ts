@@ -63,7 +63,7 @@ export interface DeleteActivityVariables {
 
 export interface PatchActivityVariables {
   activityId: string;
-  /** Stable logical-write identity retained across persistence, replay and settlement. */
+  /** Stable logical-write identity retained across transport retries and settlement. */
   intentId: string;
   input: PatchActivityInput;
   ifMatch: string;
@@ -166,8 +166,7 @@ export function refreshActivityDetails(
  * cannot fire. Completing or snoozing from a Today row always worked for the same reason
  * inverted: nothing unmounts, so the handler survives long enough to run.
  *
- * The `MutationCache` outlives every component and every screen, and it also covers mutations
- * replayed from the offline queue after a restart, which have no component at all.
+ * The web `MutationCache` outlives every component and screen for the life of the process.
  *
  * Every activity mutation key is `['activity', <name>]`. Reminder writes leave lists and
  * agenda windows untouched.
@@ -178,7 +177,7 @@ export function changesActivityLists(mutationKey: unknown): boolean {
   return scope === 'activity' && name !== 'reminder-create' && name !== 'reminder-delete';
 }
 
-/** Registers every function a dehydrated mutation can need after its component is gone. */
+/** Registers the process-wide web mutation functions and optimistic handlers. */
 export function registerActivityMutationDefaults(
   client: QueryClient,
   httpClient: HttpClient = apiClient,

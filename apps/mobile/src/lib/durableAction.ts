@@ -3,7 +3,6 @@ import type { IntentAttention, RejectedIntentAttention } from '@/lib/intent';
 /** Online-first web action lifecycle. Native resolves actions through the SQLite coordinator. */
 export type DurableActionStatus =
   | 'refused'
-  | 'queued'
   | 'in_flight'
   | 'acknowledged'
   | 'needs_attention';

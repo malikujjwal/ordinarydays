@@ -1,23 +1,12 @@
-import { expandRecurrence } from '@od/shared/recurrence';
-import { type CreateActivityInput, createActivityInput } from '@od/shared/schemas';
-import type {
-  Activity,
-  ActivityDetail,
-  ActivityDetailTarget,
-  OccurrenceDetailProjection,
-} from '@od/shared/types';
-import type { Intent } from '@/lib/intent';
+import type { CreateActivityInput } from '@od/shared/schemas';
+import type { Activity } from '@od/shared/types';
 
 type WithoutOwner<T> = T extends Activity ? Omit<T, 'ownerId'> : never;
 
 /** Local user-authored state. Server identity authority has not arrived yet. */
 export type PendingActivity = WithoutOwner<Activity> & { readonly pending: true };
 
-export type PendingActivityDetail = Omit<ActivityDetail, 'activity'> & {
-  readonly activity: PendingActivity;
-};
-
-/** Builds the non-authoritative Activity shape used while its durable create is pending. */
+/** Builds the non-authoritative Activity shape stored by a native SQLite create transaction. */
 export function pendingActivityFromInput(
   input: CreateActivityInput,
   activityId: string,
@@ -57,81 +46,4 @@ export function pendingActivityFromInput(
   return input.objectKind === 'task'
     ? { ...common, objectKind: 'task', type: 'task' }
     : { ...common, objectKind: 'plan', type: input.type };
-}
-
-/**
- * Reconstructs the detail view for an entity the server has not acknowledged yet.
- *
- * The create intent contains every user-authored field. No server read is useful here—the
- * expected server answer is 404 until replay succeeds—so pending detail renders from that
- * durable source and exposes no server-directed capabilities.
- */
-export function pendingActivityDetailFromIntent(
-  intent: Intent,
-  target: ActivityDetailTarget,
-): PendingActivityDetail | undefined {
-  if (
-    intent.entityId !== target.activityId ||
-    intent.mutationKey[0] !== 'activity' ||
-    intent.mutationKey[1] !== 'create' ||
-    intent.status === 'acknowledged'
-  ) {
-    return undefined;
-  }
-  const rawInput = (intent.variables as { input?: unknown } | undefined)?.input;
-  const parsed = createActivityInput.safeParse(rawInput);
-  if (!parsed.success || parsed.data.activityId !== target.activityId) return undefined;
-
-  const activity = pendingActivityFromInput(
-    parsed.data,
-    target.activityId,
-    new Date(intent.createdAt).toISOString(),
-  );
-  const reminders = (parsed.data.reminders ?? []).flatMap((reminder) =>
-    reminder.reminderId === undefined
-      ? []
-      : [
-          {
-            reminderId: reminder.reminderId,
-            activityId: target.activityId,
-            userId: intent.ownerUserId,
-            offsetMinutes: reminder.offsetMinutes,
-            channel: 'push' as const,
-          },
-        ],
-  );
-  let occurrence: OccurrenceDetailProjection | undefined;
-  if (target.kind === 'occurrence') {
-    const recurrence = activity.recurrence;
-    const schedule = activity.schedule;
-    if (
-      recurrence === undefined ||
-      schedule === undefined ||
-      !expandRecurrence(recurrence, target.date, target.date, schedule.timezone).includes(
-        target.date,
-      )
-    ) {
-      return undefined;
-    }
-    const segment = [...recurrence.segments]
-      .reverse()
-      .find((candidate) => candidate.effectiveFrom <= target.date);
-    const time = segment?.time ?? schedule.time;
-    const endTime = segment?.endTime ?? schedule.endTime;
-    occurrence = {
-      nominalDate: target.date,
-      date: target.date,
-      ...(time === undefined ? {} : { time }),
-      ...(endTime === undefined ? {} : { endTime }),
-      status: 'scheduled',
-      isSnoozed: false,
-    };
-  }
-
-  return {
-    activity,
-    reminders,
-    capabilities: { complete: false, skip: false, snooze: false },
-    ...(occurrence === undefined ? {} : { occurrence }),
-  };
 }

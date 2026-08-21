@@ -23,7 +23,6 @@ import {
   droppedMessage,
   resolveConflict,
 } from '@/features/activity/model/conflict';
-import { usePendingIntents } from '@/hooks/usePendingIntents';
 import { apiClient } from '@/lib/apiClient';
 import type {
   ConvertRecurrenceVariables,
@@ -34,10 +33,6 @@ import type {
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
 import { patchChangeNames } from '@/lib/patchChangeNames';
-import {
-  type PendingActivityDetail,
-  pendingActivityDetailFromIntent,
-} from '@/lib/pendingActivity';
 import { activityDetailKey, activityKey } from '@/lib/queryKeys';
 
 /**
@@ -58,7 +53,7 @@ export { activityKey };
 
 export interface ActivityDetailView {
   status: 'pending' | 'success' | 'error';
-  detail?: ActivityDetail | PendingActivityDetail;
+  detail?: ActivityDetail;
   /** `interaction-contract.md` §5.3 copy for the screen-level failure. */
   message?: string;
   requestId?: string;
@@ -66,7 +61,7 @@ export interface ActivityDetailView {
   isSaving: boolean;
   /** Commits one field and reports whether the server accepted it. */
   patch: (input: PatchActivityInput) => Promise<boolean>;
-  /** Sole scheduling mutation; its enqueue-time key is persisted with mutation variables. */
+  /** Sole scheduling mutation; its stable key is retained across transport retries. */
   schedule: (input: ScheduleActivityInput) => Promise<boolean>;
   /** Atomic Does-not-repeat conversion for one explicitly selected occurrence. */
   convertToOneOff: (selectedDate: string) => Promise<boolean>;
@@ -107,10 +102,6 @@ export function useActivityDetail(
   const activityId = target.activityId;
   const queryKey = activityDetailKey(target);
   const queryClient = useQueryClient();
-  const pendingIntents = usePendingIntents();
-  const pendingDetail = pendingIntents
-    .map((intent) => pendingActivityDetailFromIntent(intent, target))
-    .find((detail) => detail !== undefined);
   const [conflict, setConflict] = useState<ActivityDetailView['conflict']>(undefined);
   const [editError, setEditError] = useState<string | undefined>(undefined);
   const [reminderError, setReminderError] = useState<string | undefined>(undefined);
@@ -118,8 +109,6 @@ export function useActivityDetail(
   const query = useQuery({
     queryKey,
     queryFn: ({ signal }) => getActivity(apiClient, target, signal),
-    // A pending create has no server row to read. Its durable intent is the detail source.
-    enabled: pendingDetail === undefined,
     /**
      * `always`, overriding the app-wide `offlineFirst`, for the reason written out in
      * `useHealth`: under `offlineFirst` a network-class failure pauses the query rather than
@@ -269,16 +258,11 @@ export function useActivityDetail(
     onError: (error: unknown) => setReminderError(describe(error).message),
   });
 
-  const failure =
-    pendingDetail !== undefined || query.error === null
-      ? undefined
-      : describe(query.error);
+  const failure = query.error === null ? undefined : describe(query.error);
 
   return {
-    status: pendingDetail === undefined ? query.status : 'success',
-    refetch: () => {
-      if (pendingDetail === undefined) void query.refetch();
-    },
+    status: query.status,
+    refetch: () => void query.refetch(),
     isSaving:
       mutation.isPending || scheduleMutation.isPending || convertMutation.isPending,
     isSavingReminder:
@@ -310,7 +294,7 @@ export function useActivityDetail(
         });
         return true;
       } catch {
-        // The inline error state owns the failure; the enqueue-time key stays in variables.
+        // The inline error state owns the failure; the retry key stays in variables.
         return false;
       }
     },
@@ -351,11 +335,7 @@ export function useActivityDetail(
       }
     },
     acknowledgeConflict: () => setConflict(undefined),
-    ...(pendingDetail === undefined
-      ? query.data === undefined
-        ? {}
-        : { detail: query.data }
-      : { detail: pendingDetail }),
+    ...(query.data === undefined ? {} : { detail: query.data }),
     ...(failure === undefined
       ? {}
       : {

@@ -85,8 +85,9 @@ export function useCreateActivity(): CreateActivityResult {
      * and kind imply, and this hook has no business working out which.
      *
      * Saving closes the compose surface, so component callbacks cannot own cache refresh.
-     * The process-wide `MutationCache` in `queryClient.ts` projects and invalidates this write
-     * exactly once whether this component is mounted, unmounted, or replaying after restart.
+     * The process-wide web `MutationCache` in `queryClient.ts` projects and invalidates this
+     * write even if this component unmounts after the HTTP request starts. Web does not retain
+     * a durable mutation across a process restart.
      */
   });
 
