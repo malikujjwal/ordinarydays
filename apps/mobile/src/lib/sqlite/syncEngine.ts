@@ -1,4 +1,4 @@
-import { ApiError } from '@od/shared/client';
+import { ApiError, NetworkError } from '@od/shared/client';
 import { addWallDays } from '@od/shared/recurrence';
 import {
   type AgendaQuery,
@@ -74,6 +74,11 @@ function isPermanent(error: unknown): boolean {
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Expected loss of transport is queue state, not a user-recoverable rejection. */
+function queuedError(error: Error): string | undefined {
+  return error instanceof NetworkError ? undefined : error.message;
 }
 
 function agendaRowCount(data: AgendaData): number {
@@ -606,7 +611,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           await this.outbox.requeue(
             transaction.database,
             intent.intentId,
-            failure.message,
+            queuedError(failure),
           );
           transaction.changed('outbox');
         });
@@ -902,7 +907,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           await this.outbox.requeue(
             transaction.database,
             intent.intentId,
-            failure.message,
+            queuedError(failure),
           );
           transaction.changed('outbox');
         });

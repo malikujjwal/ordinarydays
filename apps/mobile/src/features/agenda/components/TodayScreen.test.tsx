@@ -612,7 +612,7 @@ describe('TodayScreen', () => {
     );
   });
 
-  it('removes a completed overdue row without projecting it into Earlier today', async () => {
+  it('moves a completed overdue row into Earlier today and advances Today progress', async () => {
     vi.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
     const overdue = row(1, {
       title: 'Old paperwork',
@@ -622,7 +622,9 @@ describe('TodayScreen', () => {
     const client = createClient();
     const onToggleComplete = vi.fn((changed: AgendaItem) => {
       client.setQueriesData({ queryKey: ['agenda'] }, (cached: unknown) => {
-        const data = cached as { days?: Array<{ anytime?: AgendaItem[] }> } | undefined;
+        const data = cached as
+          | { days?: Array<{ anytime?: AgendaItem[]; earlier?: AgendaItem[] }> }
+          | undefined;
         if (data?.days?.[0]?.anytime === undefined) return cached;
         return {
           ...data,
@@ -631,6 +633,7 @@ describe('TodayScreen', () => {
             anytime: day.anytime?.filter(
               (item) => item.activityId !== changed.activityId,
             ),
+            earlier: [...(day.earlier ?? []), { ...changed, status: 'completed' }],
           })),
         };
       });
@@ -655,9 +658,12 @@ describe('TodayScreen', () => {
       screen.getByRole('checkbox', { name: 'Old paperwork, not completed' }),
     );
 
-    await waitFor(() => expect(screen.queryByText('Old paperwork')).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByTestId('today-day-count').textContent).toBe('1 of 1 done'),
+    );
     expect(screen.queryByTestId('today-anytime')).toBeNull();
-    expect(screen.queryByTestId('today-earlier')).toBeNull();
+    expect(screen.getByTestId('today-earlier')).toBeDefined();
+    expect(screen.getByTestId('today-earlier-toggle').textContent).toContain('1 done');
   });
 
   it('opens the neutral passed-item chooser and returns the exact selected outcome', async () => {

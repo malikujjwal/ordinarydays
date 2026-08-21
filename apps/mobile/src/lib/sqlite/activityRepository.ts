@@ -287,12 +287,21 @@ export class ActivityRepository {
        LIMIT 1;`,
       [target.activityId, target.date],
     );
+    /*
+     * A committed local Agenda row owns the occurrence presentation until acknowledgement.
+     * Preferring an older canonical occurrence row here made an all-future time edit visible
+     * on every Agenda row while the open occurrence detail kept today's previous time.
+     */
+    const localAgendaOwnsProjection =
+      agendaRow !== undefined && text(agendaRow, 'local_state') !== 'canonical';
     const occurrence =
-      occurrenceRow === undefined
-        ? agendaRow === undefined
-          ? undefined
-          : occurrenceFromAgendaRow(agendaRow)
-        : occurrenceFromRow(occurrenceRow);
+      localAgendaOwnsProjection && agendaRow !== undefined
+        ? occurrenceFromAgendaRow(agendaRow)
+        : occurrenceRow === undefined
+          ? agendaRow === undefined
+            ? undefined
+            : occurrenceFromAgendaRow(agendaRow)
+          : occurrenceFromRow(occurrenceRow);
     const occurrenceCapabilities =
       agendaRow === undefined
         ? undefined

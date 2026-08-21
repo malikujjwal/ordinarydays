@@ -161,7 +161,7 @@ describe('a completion recorded anywhere reaches the agenda cache', () => {
     expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
   });
 
-  it('restores an overdue row removed by an optimistic completion', () => {
+  it('keeps an overdue row completed through the optimistic transition and can roll back', () => {
     const client = seeded(row({ overdueFromDate: '2026-08-11' }));
 
     const rollback = projectOptimisticCompletion(client, {
@@ -169,7 +169,7 @@ describe('a completion recorded anywhere reaches the agenda cache', () => {
       completed: true,
     });
 
-    expect(statusOf(client, 'act_STANDUP')).toBeUndefined();
+    expect(statusOf(client, 'act_STANDUP')).toBe('completed');
     rollback();
     expect(statusOf(client, 'act_STANDUP')).toBe('scheduled');
   });

@@ -280,7 +280,7 @@ Query parameters:
 | Param | Effect |
 | --- | --- |
 | `include=anytime_unscheduled` | Merges the undated Anytime bucket into the first day. Today uses this; a multi-day Plans view does not. |
-| `include=overdue` | Rolls incomplete, non-recurring **tasks** with a date in the past forward onto the first day, each carrying `overdueFromDate`. Capped at 30 days back. Never applies to recurring occurrences or non-task types. See `../01-product/today-and-tasks.md` §7. |
+| `include=overdue` | Rolls incomplete, non-recurring **tasks** with a date in the past forward onto the first day, each carrying `overdueFromDate`. A rolled task completed on that viewer-local day remains in the projection as completed so Today progress stays coherent. Capped at 30 days back. Never applies to recurring occurrences or non-task types. See `../01-product/today-and-tasks.md` §7. |
 | `include=reminders` | Attaches the authenticated caller's own `REM#<userId>#` rows to the AgendaItems emitted for the requested window. Never returns another user's row. Reserved for the local notification scheduler's independent eight-day background request; the Today screen does not request it. |
 
 Tokens may be combined. Today requests `from=today&to=today` with

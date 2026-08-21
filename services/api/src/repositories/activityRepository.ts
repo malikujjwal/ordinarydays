@@ -914,8 +914,9 @@ export async function listByBucket(
 /**
  * Reads the bounded scheduled-index window that may roll forward onto Today.
  *
- * The repository owns all three index predicates so the agenda service cannot accidentally
- * revive a non-task, a terminal task, or a recurring series after a refactor.
+ * The repository owns the stable index predicates. Completed rows remain candidates because
+ * the Agenda service may retain one completed today in Earlier Today; it applies that
+ * timezone-sensitive predicate after hydrating `completedAt` from META.
  */
 export async function listOverdueTaskCandidates(
   userId: string,
@@ -930,7 +931,9 @@ export async function listOverdueTaskCandidates(
 
   return rows.filter(
     (row) =>
-      row.type === 'task' && row.status === 'scheduled' && row.isRecurring === false,
+      row.type === 'task' &&
+      (row.status === 'scheduled' || row.status === 'completed') &&
+      row.isRecurring === false,
   );
 }
 

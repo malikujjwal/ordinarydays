@@ -964,11 +964,26 @@ describe('overdue roll-forward', () => {
     });
     const completed = activity({
       status: 'completed',
+      title: 'Completed overdue today',
       completedAt: now,
       schedule: { date: '2026-08-05', timezone: 'UTC' },
     });
+    const completedYesterday = activity({
+      status: 'completed',
+      title: 'Completed overdue yesterday',
+      completedAt: '2026-08-05T19:00:00.000Z',
+      schedule: { date: '2026-08-04', timezone: 'UTC' },
+    });
     const anytime = activity({ status: 'saved', title: 'Ordinary Anytime task' });
-    const subjects = [cutoff, recent, tooOld, event, recurring, completed];
+    const subjects = [
+      cutoff,
+      recent,
+      tooOld,
+      event,
+      recurring,
+      completed,
+      completedYesterday,
+    ];
     const before = structuredClone(subjects);
     const subject = fixture({
       activities: [...subjects, anytime],
@@ -1000,6 +1015,9 @@ describe('overdue roll-forward', () => {
       ['At the cutoff', '2026-07-07'],
       ['Call apartment office', '2026-08-04'],
       ['Ordinary Anytime task', undefined],
+    ]);
+    expect(result.days[0]?.earlier.map((row) => row.activity.title)).toEqual([
+      'Completed overdue today',
     ]);
     expect(subjects).toEqual(before);
   });
@@ -1034,7 +1052,7 @@ describe('overdue roll-forward', () => {
     });
 
     await expect(
-      rollForwardOverdue('usr_alice', '2026-08-06', subject.dependencies),
+      rollForwardOverdue('usr_alice', '2026-08-06', 'UTC', subject.dependencies),
     ).resolves.toEqual([
       expect.objectContaining({
         activity: overdue,

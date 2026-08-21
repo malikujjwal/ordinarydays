@@ -253,7 +253,7 @@ export async function assembleAgenda(
       ? listBucketToExhaustion(input.userId, 'N', { ascending: false }, dependencies)
       : Promise.resolve([]),
     input.includeOverdue === true
-      ? rollForwardOverdue(input.userId, today, dependencies)
+      ? rollForwardOverdue(input.userId, today, input.timezone, dependencies)
       : Promise.resolve([]),
   ]);
 
@@ -379,6 +379,7 @@ function observedProjectionVersions(
 export async function rollForwardOverdue(
   userId: string,
   today: string,
+  timezone: string,
   dependencies: AgendaDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<UnhydratedAgendaCandidate[]> {
   const from = addWallDays(today, -OVERDUE_WINDOW_DAYS);
@@ -391,9 +392,13 @@ export async function rollForwardOverdue(
   const hydrated = await hydrateSelected(index, dependencies, 'overdue');
 
   return hydrated.flatMap((activity) => {
+    const completedToday =
+      activity.status === 'completed' &&
+      activity.completedAt !== undefined &&
+      formatInTimeZone(new Date(activity.completedAt), timezone, WALL_DATE) === today;
     if (
       activity.type !== 'task' ||
-      activity.status !== 'scheduled' ||
+      (activity.status !== 'scheduled' && !completedToday) ||
       activity.recurrence !== undefined ||
       activity.schedule === undefined ||
       activity.schedule.date < from ||

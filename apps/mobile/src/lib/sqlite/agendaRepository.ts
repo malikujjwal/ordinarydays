@@ -27,11 +27,16 @@ import type { SqliteReadScheduler, TransactionContext } from '@/lib/sqlite/trans
 export type { AgendaCoverage } from '@/lib/sqlite/agendaCoverage';
 
 export type AgendaInvalidation =
-  | { readonly kind: 'immediate'; readonly commitRevision?: number }
+  | {
+      readonly kind: 'immediate';
+      readonly commitRevision?: number;
+      readonly urgent?: boolean;
+    }
   | {
       readonly kind: 'local-day';
       readonly date: string;
       readonly commitRevision?: number;
+      readonly urgent?: boolean;
     };
 
 export interface AgendaReadMetrics extends SqliteExecutionMetrics {
@@ -65,6 +70,7 @@ interface RawAgendaDays {
 }
 
 const AGENDA_SCOPE = 'agenda';
+const AGENDA_INTERACTIVE_SCOPE = 'agenda:interactive';
 const AGENDA_LOCAL_DAY_SCOPE_PREFIX = 'agenda:local-day:';
 
 function localDayScope(date: string): string {
@@ -318,11 +324,23 @@ export class AgendaRepository {
           : { commitRevision: metadata.commitRevision }),
       }),
     );
+    const stopInteractive = this.subscriptions.subscribe(
+      AGENDA_INTERACTIVE_SCOPE,
+      (metadata) =>
+        listener({
+          kind: 'immediate',
+          urgent: true,
+          ...(metadata.commitRevision === undefined
+            ? {}
+            : { commitRevision: metadata.commitRevision }),
+        }),
+    );
     const stopLocalDays = datesInCoverage(coverage).map((date) =>
       this.subscriptions.subscribe(localDayScope(date), (metadata) =>
         listener({
           kind: 'local-day',
           date,
+          urgent: true,
           ...(metadata.commitRevision === undefined
             ? {}
             : { commitRevision: metadata.commitRevision }),
@@ -331,6 +349,7 @@ export class AgendaRepository {
     );
     return () => {
       stopImmediate();
+      stopInteractive();
       for (const stop of stopLocalDays) stop();
     };
   }
@@ -338,7 +357,8 @@ export class AgendaRepository {
   version(coverage: AgendaCoverage): number {
     return datesInCoverage(coverage).reduce(
       (version, date) => version + this.subscriptions.version(localDayScope(date)),
-      this.subscriptions.version(AGENDA_SCOPE),
+      this.subscriptions.version(AGENDA_SCOPE) +
+        this.subscriptions.version(AGENDA_INTERACTIVE_SCOPE),
     );
   }
 
@@ -665,7 +685,7 @@ export class AgendaRepository {
       () => undefined,
     );
     await this.updateMaterializedDayDerivations(transaction.database, data.days);
-    transaction.changed('agenda');
+    transaction.changed(AGENDA_INTERACTIVE_SCOPE);
   }
 
   /**

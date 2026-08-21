@@ -155,11 +155,5 @@ export function applyCompletion(
     : variables.restoredStatus;
   const next = { ...found.item, status };
 
-  // Completing a rolled-forward overdue row resolves its original dated task. The next
-  // server agenda has neither the duplicate in Anytime nor a synthetic Earlier Today row.
-  if (variables.completed && found.item.overdueFromDate !== undefined) {
-    return replaceAgendaItem(agenda, variables, undefined, found.sourceDate, variables);
-  }
-
   return replaceAgendaItem(agenda, variables, next, found.sourceDate, variables);
 }

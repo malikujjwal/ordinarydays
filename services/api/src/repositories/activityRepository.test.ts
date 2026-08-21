@@ -670,7 +670,10 @@ describe('overdue task window', () => {
 
     await expect(
       listOverdueTaskCandidates(ALICE, '2026-07-07', '2026-08-05'),
-    ).resolves.toEqual([eligible]);
+    ).resolves.toEqual([
+      eligible,
+      { ...eligible, activityId: 'act_done', status: 'completed' },
+    ]);
 
     expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0]?.input).toMatchObject({
       IndexName: 'GSI1',

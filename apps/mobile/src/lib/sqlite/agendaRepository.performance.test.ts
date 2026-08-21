@@ -49,15 +49,33 @@ describe('AgendaRepository hot paths', () => {
       kind: 'local-day',
       date: '2026-08-20',
       commitRevision: 12,
+      urgent: true,
     });
     expect(agenda.version(coverage)).toBe(1);
 
-    subscriptions.publish(new Set(['agenda']), 13);
+    changed.clear();
+    await agenda.replaceLocalActivityRows(
+      { database: executor, changed: (scope) => changed.add(scope) },
+      'act_target',
+      {
+        days: [{ date: '2026-08-20', schedule: [], anytime: [], earlier: [] }],
+        warnings: [],
+      },
+    );
+    subscriptions.publish(changed, 13);
     expect(invalidated).toHaveBeenLastCalledWith({
       kind: 'immediate',
       commitRevision: 13,
+      urgent: true,
     });
     expect(agenda.version(coverage)).toBe(2);
+
+    subscriptions.publish(new Set(['agenda']), 14);
+    expect(invalidated).toHaveBeenLastCalledWith({
+      kind: 'immediate',
+      commitRevision: 14,
+    });
+    expect(agenda.version(coverage)).toBe(3);
     stop();
   });
 

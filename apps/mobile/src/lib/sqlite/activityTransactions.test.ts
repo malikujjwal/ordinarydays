@@ -141,7 +141,14 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     const agendaListener = vi.fn();
     const reminderListener = vi.fn();
     subscriptions.subscribe(`activity:${ACTIVITY}`, activityListener);
-    subscriptions.subscribe('agenda', agendaListener);
+    agenda.subscribe(
+      {
+        from: '2026-08-19',
+        to: '2026-08-21',
+        timezone: 'America/New_York',
+      },
+      agendaListener,
+    );
     subscriptions.subscribe('reminders', reminderListener);
 
     const accepted = await coordinator.create(
@@ -877,6 +884,12 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     await transactions.run(async (transaction) => {
       await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
       await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+      await transaction.database.run(
+        `INSERT INTO activity_occurrences (
+          activity_id, nominal_date, viewer_date, time, status, is_snoozed, local_state
+        ) VALUES (?, '2026-08-19', '2026-08-19', '09:00', 'scheduled', 0, 'canonical');`,
+        [ACTIVITY],
+      );
       await transaction.database.run('DELETE FROM outbox_intents;');
     });
 
@@ -911,6 +924,9 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       { occurrence_date: '2026-08-20', time: '13:30' },
       { occurrence_date: '2026-08-21', time: '13:30' },
     ]);
+    await expect(
+      activities.read({ kind: 'occurrence', activityId: ACTIVITY, date: '2026-08-19' }),
+    ).resolves.toMatchObject({ occurrence: { date: '2026-08-19', time: '13:30' } });
   });
 
   it('retains canonical recurrence rows and marks them updating for an existing-series edit', async () => {

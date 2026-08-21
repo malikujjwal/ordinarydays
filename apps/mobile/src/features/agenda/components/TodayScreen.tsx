@@ -365,9 +365,12 @@ export function TodayScreen({
     activeCompletionTransitions,
     'schedule',
   );
-  const anytime = cappedAnytime(
-    withCompletionTransitions(sections.anytime, activeCompletionTransitions, 'anytime'),
+  const projectedAnytime = withCompletionTransitions(
+    sections.anytime,
+    activeCompletionTransitions,
+    'anytime',
   );
+  const anytime = cappedAnytime(projectedAnytime);
   const overdue = anytime.items.filter((item) => item.overdueFromDate !== undefined);
   const currentAnytime = anytime.items.filter(
     (item) => item.overdueFromDate === undefined,
@@ -406,7 +409,7 @@ export function TodayScreen({
   const earlierDoneCount = projectedEarlier.filter(
     (item) => item.status === 'completed' || item.status === 'completed_occurrence',
   ).length;
-  const visibleItems = [...sections.schedule, ...sections.anytime, ...projectedEarlier];
+  const visibleItems = [...schedule, ...projectedAnytime, ...projectedEarlier];
   const isFullyEmpty = visibleItems.length === 0;
   /**
    * `2 of 6 done` over the day as rendered. UP NEXT is excluded by construction: it duplicates a

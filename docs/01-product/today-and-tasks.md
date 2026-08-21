@@ -281,8 +281,8 @@ divider beneath it (amended 2026-08-17; see the decision below).
 > immediately; the at-most-300 ms delay belongs only to the section relocation. The row never
 > travels down the screen. With Reduce Motion enabled, the hold and insert/remove animation
 > are removed and the completed row relocates immediately. A rolled-forward overdue row uses
-> the same checked-then-fade acknowledgement but leaves Today instead of entering EARLIER
-> TODAY, as specified in §7.6.
+> the same checked-then-fade acknowledgement and enters EARLIER TODAY too: because it was
+> counted in Today's denominator, completing it today must advance Today's numerator.
 
 ### 2.5 Empty states
 
@@ -904,7 +904,8 @@ Details:
    collapse behind a `+7 more overdue` row that expands in place. No badge count is shown
    anywhere else in the app.
 5. Completing a rolled-forward task completes the original activity with its original date.
-   `completedAt` is now; `schedule.date` is unchanged. Its history is honest.
+   `completedAt` is now; `schedule.date` is unchanged. Its history is honest, while the Today
+   projection moves it to EARLIER TODAY so the progress figure advances.
 6. Tapping the date chip opens the reschedule sheet pre-set to today, which is the one-tap
    path for "yes, do it today". The app never does this automatically.
 7. **Recurring occurrences never roll forward.** A missed Monday gym is gone. Reviving it

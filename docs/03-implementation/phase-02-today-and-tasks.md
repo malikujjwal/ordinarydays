@@ -94,7 +94,7 @@ Anytime list. This is the phase where the product becomes usable daily.
 > TODAY. The network request still starts immediately and the transition never animates a row
 > travelling through the screen. `useMotion()` and Reanimated's system Reduce Motion setting
 > remove the hold and fade when requested. A rolled-forward overdue row acknowledges the check
-> the same way, then leaves Today per P2-29 rather than entering EARLIER TODAY.
+> the same way, then enters EARLIER TODAY so the progress figure that counted it advances.
 
 > **Post-Phase-2 cache follow-up — 2026-08-11.** After every Phase 2 task and gate is complete,
 > fix the known same-device Plans → Today cache gap: a successful create, schedule or relevant
@@ -1206,7 +1206,8 @@ and to the Zod schema in `packages/shared` **before** the client uses them.
 - The 30-day cut-off is not negotiable: without it, one abandoned month poisons Today
   permanently. Older items remain reachable through `GET /v1/activities?filter=past`.
 - Completing a rolled-forward task completes the **original** activity with its original
-  date. `completedAt` is now; `schedule.date` is unchanged. Its history stays honest.
+  date. `completedAt` is now; `schedule.date` is unchanged. Its history stays honest while a
+  Today projection keeps it in EARLIER TODAY for the rest of that viewer-local day.
 
 **Tests.** Integration: a task dated 4 Aug appears on 6 Aug with `overdueFromDate:
 '2026-08-04'` and its stored date unchanged; a task dated 40 days ago does not appear; an
@@ -2485,10 +2486,9 @@ nothing; this task renders it per
   it today" path, which the app never takes automatically. The `Do today` swipe action
   (gesture table) commits `POST .../schedule` with today's date directly (P2-12, P2-22).
 - Overdue rows are never UP NEXT (§2.1 — they have no clock time today).
-- Completing a rolled-forward row completes the **original** activity: the optimistic
-  model (P2-23) removes it from ANYTIME, and it does not join EARLIER TODAY — that section
-  holds items *timed today* (§2.4), and this item's honest home is its own past date in
-  Plans (decision recorded here — raise in PR if wrong).
+- Completing a rolled-forward row completes the **original** activity and moves its Today
+  projection from ANYTIME to EARLIER TODAY. Its stored schedule date remains unchanged, but a
+  row counted in Today's denominator must advance Today's numerator when completed today.
 - Accessibility: the chip's accessibility label is the full form — `Overdue from Tuesday
   4 August` — never the abbreviation; the collapse row announces the hidden count and its
   expanded/collapsed state.
@@ -2499,8 +2499,9 @@ Render: six overdue fixtures produce three rows plus `+3 more overdue`; expandin
 all six in place with no navigation event and no refetch (mock transport call count
 unchanged); chip tap opens the reschedule sheet pre-set to today; the chip carries the
 de-emphasis token, asserted against the design-system token rather than a hex literal.
-Completing a rolled-forward row removes it from ANYTIME without inserting it into EARLIER
-TODAY. The no-mutation and 30-day-window guarantees are P2-09's integration tests.
+Completing a rolled-forward row removes it from ANYTIME and inserts it into EARLIER TODAY
+when `completedAt` falls on today in the viewer timezone. The no-mutation and 30-day-window
+guarantees are P2-09's integration tests.
 
 ---
 

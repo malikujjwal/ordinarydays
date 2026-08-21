@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ApiError } from '@od/shared/client';
+import { ApiError, NetworkError } from '@od/shared/client';
 import type { CreateActivityInput } from '@od/shared/schemas';
 import type { Activity } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
@@ -1061,6 +1061,37 @@ describe('serialized native convergence guard', () => {
         attempts: intent.attempts,
       })),
     ).toEqual([{ id: 'offline-edit', status: 'queued', attempts: 1 }]);
+  });
+
+  it('requeues an expected transport failure without presenting it as a rejected change', async () => {
+    client.setMutationDefaults(['activity', 'patch'], {
+      mutationFn: async () => {
+        throw new NetworkError(
+          'The request could not be sent.',
+          new TypeError('offline'),
+        );
+      },
+    });
+    const sync = syncEngine();
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'transport-offline-edit',
+        input: { title: 'Still committed offline' },
+        ifMatch: 'v1',
+      }),
+    );
+
+    await expect(sync.syncNow()).rejects.toThrow('The request could not be sent.');
+    sync.stop();
+
+    const [queued] = await outbox.all();
+    expect(queued).toMatchObject({
+      intentId: 'transport-offline-edit',
+      status: 'queued',
+      attempts: 1,
+    });
+    expect(queued?.lastError).toBeUndefined();
   });
 
   it('lets an unrelated ordering key converge behind a transiently blocked key', async () => {

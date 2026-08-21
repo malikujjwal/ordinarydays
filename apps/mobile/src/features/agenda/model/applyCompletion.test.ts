@@ -53,14 +53,19 @@ describe('applyCompletion', () => {
     ).toEqual(cached);
   });
 
-  it('removes a completed rolled-forward task without inserting it into Earlier today', () => {
+  it('moves a completed rolled-forward task into Earlier today so Today progress advances', () => {
     const cached = workedExampleDayResponse();
     const expected = workedExampleDayResponse();
     const day = expected.days[0];
     if (day === undefined) throw new Error('The worked example fixture is incomplete.');
+    const overdue = day.anytime.find(
+      ({ activityId }) => activityId === WORKED_EXAMPLE_ACTIVITY_IDS.apartment,
+    );
+    if (overdue === undefined) throw new Error('The overdue fixture is incomplete.');
     day.anytime = day.anytime.filter(
       ({ activityId }) => activityId !== WORKED_EXAMPLE_ACTIVITY_IDS.apartment,
     );
+    day.earlier = [...day.earlier, { ...overdue, status: 'completed' }];
 
     expect(
       applyCompletion(cached, {

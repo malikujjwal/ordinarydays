@@ -312,6 +312,8 @@ export class OutboxPresentationStore {
           intent.status === 'needs_attention' ||
           (intent.status === 'queued' &&
             intent.lastError !== undefined &&
+            /* Compatibility for transport errors persisted before they stopped carrying UI errors. */
+            intent.lastError !== 'The request could not be sent.' &&
             changesRecurrenceTopology(intent)),
       ),
     );

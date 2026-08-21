@@ -1153,4 +1153,94 @@ describe('native useAgenda', () => {
     mounted.unmount();
     client.clear();
   });
+
+  it('starts committed reads immediately for interactive full and targeted writes', async () => {
+    vi.useFakeTimers();
+    let listener: ((invalidation: AgendaInvalidation) => void) | undefined;
+    let revision = 1;
+    const initial: AgendaData = {
+      days: [
+        { date: '2026-08-19', schedule: [], anytime: [], earlier: [] },
+        { date: '2026-08-20', schedule: [], anytime: [], earlier: [] },
+      ],
+      warnings: [],
+    };
+    const firstDay = initial.days[0];
+    if (firstDay === undefined) throw new Error('Expected a first agenda day.');
+    const readSnapshot = vi.fn(async () => ({
+      data: initial,
+      covered: true,
+      commitRevision: revision,
+      source: 'reader' as const,
+    }));
+    const readDaysSnapshot = vi.fn(async () => ({
+      days: [firstDay],
+      commitRevision: revision,
+      source: 'reader' as const,
+    }));
+    const state = {
+      agenda: {
+        subscribe: (
+          _coverage: unknown,
+          next: (invalidation: AgendaInvalidation) => void,
+        ) => {
+          listener = next;
+          return () => undefined;
+        },
+        scope: () => 'agenda:interactive-leading-edge',
+        readSnapshot,
+        readDaysSnapshot,
+        recordSyncError: async () => undefined,
+      },
+      sync: { pullAgenda: vi.fn() },
+      account: { transactions: { run: vi.fn() } },
+    };
+    nativeState.current = state;
+    const client = new QueryClient();
+    client.setQueryData(['me'], { timezone: 'UTC' });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <ClockProvider clock={fixedClock(NOW)}>{children}</ClockProvider>
+      </QueryClientProvider>
+    );
+    const mounted = renderHook(
+      () =>
+        useAgenda({
+          now: NOW,
+          incrementalLocalTargetReconciliation: true,
+        }),
+      { wrapper },
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(readSnapshot).toHaveBeenCalledOnce();
+
+    readSnapshot.mockClear();
+    revision = 2;
+    await act(async () => {
+      listener?.({ kind: 'immediate', urgent: true, commitRevision: 2 });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(readSnapshot).toHaveBeenCalledOnce();
+
+    revision = 3;
+    await act(async () => {
+      listener?.({
+        kind: 'local-day',
+        date: '2026-08-19',
+        urgent: true,
+        commitRevision: 3,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(readDaysSnapshot).toHaveBeenCalledOnce();
+
+    mounted.unmount();
+    client.clear();
+  });
 });

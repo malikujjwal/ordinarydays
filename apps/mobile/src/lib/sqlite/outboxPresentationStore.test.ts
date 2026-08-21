@@ -289,8 +289,18 @@ describe('OutboxPresentationStore', () => {
       attempts: 1,
       seq: 2,
     });
+    const offlineRecurrence = intent('offline-recurrence', 'offline-series', {
+      mutationKey: ['activity', 'patch'],
+      variables: {
+        activityId: 'offline-series',
+        input: { recurrence: { mode: 'fixed', segments: [] } },
+      },
+      lastError: 'The request could not be sent.',
+      attempts: 1,
+      seq: 3,
+    });
     const projections = new ProjectionQueue([
-      Promise.resolve(snapshot([failedRecurrence, failedTitle], 1)),
+      Promise.resolve(snapshot([failedRecurrence, failedTitle, offlineRecurrence], 1)),
     ]);
     const store = new OutboxPresentationStore(
       'user-a',
@@ -299,7 +309,7 @@ describe('OutboxPresentationStore', () => {
     );
 
     store.start();
-    await vi.waitFor(() => expect(store.getSnapshot().pending).toHaveLength(2));
+    await vi.waitFor(() => expect(store.getSnapshot().pending).toHaveLength(3));
 
     expect(store.getSnapshot().blocked.map(({ intentId }) => intentId)).toEqual([
       'failed-recurrence',

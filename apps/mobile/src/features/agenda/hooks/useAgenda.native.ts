@@ -268,6 +268,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
       let reloadTimer: ReturnType<typeof setTimeout> | undefined;
       let reloadBurstStartedAt: number | undefined;
       let reloadLastRequestedAt: number | undefined;
+      let reloadUrgentRequested = false;
       let localReadRunning = false;
       const pendingLocalDates = new Map<string, number | undefined>();
       let fullRetryAfterLocal = false;
@@ -275,6 +276,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
       let localTimer: ReturnType<typeof setTimeout> | undefined;
       let localBurstStartedAt: number | undefined;
       let localLastRequestedAt: number | undefined;
+      let localUrgentRequested = false;
       /**
        * `freezeOnBlur` can suspend the component before React finishes an effect cleanup. The
        * navigation object remains live, so every invalidation also checks actual route focus.
@@ -321,6 +323,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
             reloadRequested = false;
             const requiredRevision = reloadRequiredRevision;
             reloadRequiredRevision = undefined;
+            reloadUrgentRequested = false;
             const generation = reloadGeneration;
             reloadBurstStartedAt = undefined;
             reloadLastRequestedAt = undefined;
@@ -354,7 +357,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
           reloadRunning = false;
           /* Covers a publication arriving after the loop condition but before `finally`. */
           if (isCurrent() && reloadRequested) {
-            scheduleAtBound('full', drainReloads);
+            if (reloadUrgentRequested) void drainReloads();
+            else scheduleAtBound('full', drainReloads);
           }
         }
       };
@@ -370,8 +374,10 @@ export function useAgenda(options: UseAgendaOptions = {}) {
         );
         reloadGeneration = reconciliationGeneration.current;
         committedRead.current = undefined;
-        if (immediate) void drainReloads();
-        else scheduleAtBound('full', drainReloads);
+        if (immediate) {
+          reloadUrgentRequested = true;
+          void drainReloads();
+        } else scheduleAtBound('full', drainReloads);
       };
 
       /**
@@ -389,6 +395,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
               undefined,
             );
             pendingLocalDates.clear();
+            localUrgentRequested = false;
             const generation = reconciliationGeneration.current;
             localBurstStartedAt = undefined;
             localLastRequestedAt = undefined;
@@ -503,7 +510,8 @@ export function useAgenda(options: UseAgendaOptions = {}) {
         } finally {
           localReadRunning = false;
           if (isCurrent() && pendingLocalDates.size > 0) {
-            scheduleAtBound('local', drainLocalDates);
+            if (localUrgentRequested) void drainLocalDates();
+            else scheduleAtBound('local', drainLocalDates);
           }
         }
       };
@@ -514,13 +522,14 @@ export function useAgenda(options: UseAgendaOptions = {}) {
           pendingLocalDates.clear();
           fullRetryAfterLocal = false;
           fullRetryRequiredRevision = undefined;
+          localUrgentRequested = false;
           if (localTimer !== undefined) clearTimeout(localTimer);
           localTimer = undefined;
-          requestReload(invalidation.commitRevision);
+          requestReload(invalidation.commitRevision, invalidation.urgent === true);
           return;
         }
         if (reloadRequested) {
-          requestReload(invalidation.commitRevision);
+          requestReload(invalidation.commitRevision, invalidation.urgent === true);
           return;
         }
         if (reloadRunning) {
@@ -540,7 +549,10 @@ export function useAgenda(options: UseAgendaOptions = {}) {
             invalidation.commitRevision,
           ),
         );
-        scheduleAtBound('local', drainLocalDates);
+        if (invalidation.urgent === true) {
+          localUrgentRequested = true;
+          void drainLocalDates();
+        } else scheduleAtBound('local', drainLocalDates);
       };
       const stopAgenda = state.agenda.subscribe(coverage, reload);
       const appState = AppState.addEventListener('change', (next) => {
@@ -549,8 +561,10 @@ export function useAgenda(options: UseAgendaOptions = {}) {
           reconciliationGeneration.current += 1;
           reloadRequested = false;
           reloadRequiredRevision = undefined;
+          reloadUrgentRequested = false;
           fullRetryAfterLocal = false;
           fullRetryRequiredRevision = undefined;
+          localUrgentRequested = false;
           pendingLocalDates.clear();
           if (reloadTimer !== undefined) clearTimeout(reloadTimer);
           if (localTimer !== undefined) clearTimeout(localTimer);
@@ -584,8 +598,10 @@ export function useAgenda(options: UseAgendaOptions = {}) {
         pendingLocalDates.clear();
         reloadRequested = false;
         reloadRequiredRevision = undefined;
+        reloadUrgentRequested = false;
         fullRetryAfterLocal = false;
         fullRetryRequiredRevision = undefined;
+        localUrgentRequested = false;
         if (reloadTimer !== undefined) clearTimeout(reloadTimer);
         if (localTimer !== undefined) clearTimeout(localTimer);
         /* A later focus must read afresh rather than share a snapshot started before blur. */

@@ -527,11 +527,11 @@ export class OutboxRepository {
   async requeue(
     database: SqliteExecutor,
     intentId: string,
-    error: string,
+    error?: string,
   ): Promise<void> {
     await database.run(
       "UPDATE outbox_intents SET status = 'queued', last_error = ? WHERE intent_id = ? AND status = 'in_flight';",
-      [error, intentId],
+      [error ?? null, intentId],
     );
   }
 
