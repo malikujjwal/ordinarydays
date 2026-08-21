@@ -803,6 +803,116 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     expect(await agenda.syncError(coverage)).toBe('offline');
   });
 
+  it('projects an all-future recurrence time change while offline', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'series-time-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+      await transaction.database.run('DELETE FROM outbox_intents;');
+    });
+    const before = await database?.all(
+      'SELECT row_id FROM agenda_rows WHERE activity_id = ? ORDER BY row_id;',
+      [ACTIVITY],
+    );
+
+    const result = await coordinator.patch(
+      ACTIVITY,
+      'recurrence-time-edit',
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            { freq: 'daily', interval: 1, effectiveFrom: '2026-08-19' },
+            {
+              freq: 'daily',
+              interval: 1,
+              effectiveFrom: '2026-08-20',
+              time: '11:00',
+            },
+          ],
+        },
+        editedFromDate: '2026-08-20',
+      },
+      '2026-08-19T00:00:00Z',
+      clock,
+    );
+
+    expect(result.kind).toBe('accepted');
+    expect(
+      await database?.all(
+        `SELECT row_id, occurrence_date, time, local_state FROM agenda_rows
+         WHERE activity_id = ? ORDER BY occurrence_date;`,
+        [ACTIVITY],
+      ),
+    ).toEqual([
+      {
+        row_id: before?.[0]?.row_id,
+        occurrence_date: '2026-08-19',
+        time: '09:00',
+        local_state: 'updating',
+      },
+      {
+        row_id: before?.[1]?.row_id,
+        occurrence_date: '2026-08-20',
+        time: '11:00',
+        local_state: 'updating',
+      },
+      {
+        row_id: before?.[2]?.row_id,
+        occurrence_date: '2026-08-21',
+        time: '11:00',
+        local_state: 'updating',
+      },
+    ]);
+  });
+
+  it('projects a same-day recurrence time correction while offline', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'same-day-time-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+      await transaction.database.run('DELETE FROM outbox_intents;');
+    });
+
+    const result = await coordinator.patch(
+      ACTIVITY,
+      'same-day-time-edit',
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            {
+              freq: 'daily',
+              interval: 1,
+              effectiveFrom: '2026-08-19',
+              time: '13:30',
+            },
+          ],
+        },
+      },
+      '2026-08-19T00:00:00Z',
+      clock,
+    );
+
+    expect(result.kind).toBe('accepted');
+    expect(
+      await database?.all(
+        'SELECT occurrence_date, time FROM agenda_rows WHERE activity_id = ? ORDER BY occurrence_date;',
+        [ACTIVITY],
+      ),
+    ).toEqual([
+      { occurrence_date: '2026-08-19', time: '13:30' },
+      { occurrence_date: '2026-08-20', time: '13:30' },
+      { occurrence_date: '2026-08-21', time: '13:30' },
+    ]);
+  });
+
   it('retains canonical recurrence rows and marks them updating for an existing-series edit', async () => {
     await coordinator.create(
       { input: createInput(), idempotencyKey: 'series-create' },
@@ -829,6 +939,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
         editedFromDate: '2026-08-19',
       },
       '2026-08-19T00:00:00Z',
+      clock,
     );
 
     expect(result.kind).toBe('accepted');
@@ -1163,11 +1274,17 @@ describe('Activity/Agenda transactional SQLite slice', () => {
           mode: 'fixed',
           segments: [
             { freq: 'daily', interval: 1, effectiveFrom: '2026-08-19' },
-            { freq: 'weekly', interval: 1, effectiveFrom: '2026-08-20' },
+            {
+              freq: 'daily',
+              interval: 1,
+              effectiveFrom: '2026-08-20',
+              time: '11:00',
+            },
           ],
         },
       },
       '2026-08-19T00:00:00Z',
+      clock,
     );
     const failNextAttempt = async () => {
       await transactions.run(async (transaction) => {
@@ -1182,6 +1299,23 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       });
     };
     await failNextAttempt();
+    expect(
+      await database.all(
+        'SELECT occurrence_date, time FROM agenda_rows WHERE activity_id = ? ORDER BY occurrence_date;',
+        [ACTIVITY],
+      ),
+    ).toEqual([
+      { occurrence_date: '2026-08-19', time: '09:00' },
+      { occurrence_date: '2026-08-20', time: '11:00' },
+      { occurrence_date: '2026-08-21', time: '11:00' },
+    ]);
+    /* Simulates a queued intent persisted by the prior build, which did not project timing. */
+    await transactions.run(async (transaction) => {
+      await transaction.database.run(
+        "UPDATE agenda_rows SET time = '09:00' WHERE activity_id = ?;",
+        [ACTIVITY],
+      );
+    });
     request.mockClear();
 
     const retried = await coordinator.retryBlocked(
@@ -1196,13 +1330,23 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       status: 'queued',
       lastError: 'Schedule service unavailable.',
     });
+    expect(
+      await database.all(
+        'SELECT occurrence_date, time FROM agenda_rows WHERE activity_id = ? ORDER BY occurrence_date;',
+        [ACTIVITY],
+      ),
+    ).toEqual([
+      { occurrence_date: '2026-08-19', time: '09:00' },
+      { occurrence_date: '2026-08-20', time: '11:00' },
+      { occurrence_date: '2026-08-21', time: '11:00' },
+    ]);
     expect(request).toHaveBeenCalledWith('accepted-action');
 
     await failNextAttempt();
     request.mockClear();
-    await expect(coordinator.discardBlocked('failed-recurrence-patch')).resolves.toBe(
-      true,
-    );
+    await expect(
+      coordinator.discardBlocked('failed-recurrence-patch', clock),
+    ).resolves.toBe(true);
 
     expect(await outbox.all()).toEqual([]);
     expect(
@@ -1212,10 +1356,14 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ).toEqual({ local_state: 'canonical' });
     expect(
       await database.all(
-        'SELECT DISTINCT local_state FROM agenda_rows WHERE activity_id = ?;',
+        'SELECT occurrence_date, time, local_state FROM agenda_rows WHERE activity_id = ? ORDER BY occurrence_date;',
         [ACTIVITY],
       ),
-    ).toEqual([{ local_state: 'canonical' }]);
+    ).toEqual([
+      { occurrence_date: '2026-08-19', time: '09:00', local_state: 'canonical' },
+      { occurrence_date: '2026-08-20', time: '09:00', local_state: 'canonical' },
+      { occurrence_date: '2026-08-21', time: '09:00', local_state: 'canonical' },
+    ]);
     expect(request).toHaveBeenCalledWith('manual');
   });
 
@@ -1244,7 +1392,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       ),
     );
 
-    await expect(coordinator.discardBlocked('expired-patch')).resolves.toBe(true);
+    await expect(coordinator.discardBlocked('expired-patch', clock)).resolves.toBe(true);
 
     expect(await outbox.all()).toEqual([]);
     expect(

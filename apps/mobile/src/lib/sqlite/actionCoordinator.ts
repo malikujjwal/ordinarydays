@@ -97,6 +97,7 @@ export class NativeActivityActionCoordinator {
     intentId: string,
     input: PatchActivityInput,
     ifMatch: string,
+    clock?: ProjectionClock,
     changeNames?: readonly string[],
   ): Promise<NativeActionResult> {
     const variables: ActivityPatchVariables = {
@@ -107,7 +108,7 @@ export class NativeActivityActionCoordinator {
       ...(changeNames === undefined ? {} : { changeNames }),
     };
     return this.acceptExisting(activityId, (transaction) =>
-      this.service.patch(transaction, variables),
+      this.service.patch(transaction, variables, clock),
     );
   }
 
@@ -291,7 +292,17 @@ export class NativeActivityActionCoordinator {
             current.lastError !== undefined &&
             changesRecurrenceTopology(current)
           ) {
-            /* Keep the error actionable until the sync engine actually claims this retry. */
+            /*
+             * Keep the error actionable until the sync engine claims this retry, but repair
+             * projections written by an older app build before recurrence timing was local.
+             */
+            await this.service.reprojectRetry(
+              transaction,
+              this.ownerUserId,
+              current,
+              clock,
+            );
+            transaction.changed('anytime');
             return current;
           }
           const retried = await this.outbox.retryAttention(
@@ -321,7 +332,7 @@ export class NativeActivityActionCoordinator {
     }
   }
 
-  async discardBlocked(intentId: string): Promise<boolean> {
+  async discardBlocked(intentId: string, clock: ProjectionClock): Promise<boolean> {
     const discarded = await this.transactions.run(async (transaction) => {
       const intent = await this.outbox.get(transaction.database, intentId);
       if (
@@ -339,7 +350,7 @@ export class NativeActivityActionCoordinator {
         }
         /* Later local writes own the row state; otherwise the cancelled patch was the owner. */
         if (later.length === 0) {
-          await this.service.restoreCancelledRecurrenceEdit(transaction, intent.entityId);
+          await this.service.restoreCancelledRecurrenceEdit(transaction, intent, clock);
         }
         transaction.changed('outbox');
         transaction.changed('anytime');

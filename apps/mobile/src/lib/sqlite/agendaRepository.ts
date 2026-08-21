@@ -646,7 +646,7 @@ export class AgendaRepository {
     transaction: TransactionContext,
     activityId: string,
     data: AgendaData,
-    state: 'queued' | 'updating' | 'needs_attention' = 'queued',
+    state: 'canonical' | 'queued' | 'updating' | 'needs_attention' = 'queued',
   ): Promise<void> {
     await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
       activityId,
@@ -664,6 +664,7 @@ export class AgendaRepository {
       state,
       () => undefined,
     );
+    await this.updateMaterializedDayDerivations(transaction.database, data.days);
     transaction.changed('agenda');
   }
 

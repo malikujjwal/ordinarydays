@@ -4,16 +4,25 @@ import type {
   PatchActivityInput,
   ScheduleActivityInput,
 } from '@od/shared/schemas';
-import { activity as activitySchema } from '@od/shared/schemas';
+import {
+  activity as activitySchema,
+  recurrence as recurrenceSchema,
+} from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
 import type {
   Activity,
   ActivityOutcome,
   AgendaData,
   AgendaItem,
+  Recurrence,
+  RecurrenceSegment,
   Reminder,
 } from '@od/shared/types';
-import { applyCompletion } from '@/features/agenda/model/applyCompletion';
+import {
+  applyCompletion,
+  projectDay,
+  uniqueItems,
+} from '@/features/agenda/model/applyCompletion';
 import { applyCreate } from '@/features/agenda/model/applyCreate';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
@@ -141,6 +150,123 @@ function updateAgendaActivity(data: AgendaData, activity: Activity): AgendaData 
       earlier: day.earlier.map(update),
       ...(day.upNext === undefined ? {} : { upNext: update(day.upNext) }),
     })),
+  };
+}
+
+interface RecurrenceTiming {
+  readonly time: string | undefined;
+  readonly endTime: string | undefined;
+}
+
+function segmentAt(
+  recurrence: Recurrence,
+  occurrenceDate: string,
+): RecurrenceSegment | undefined {
+  return [...recurrence.segments]
+    .reverse()
+    .find((segment) => segment.effectiveFrom <= occurrenceDate);
+}
+
+function cadenceKey(segment: RecurrenceSegment | undefined): string | undefined {
+  if (segment === undefined) return undefined;
+  return JSON.stringify({
+    freq: segment.freq,
+    interval: segment.interval,
+    byWeekday: segment.byWeekday,
+    byMonthDay: segment.byMonthDay,
+    byMonth: segment.byMonth,
+    rrule: segment.rrule,
+  });
+}
+
+function timingAt(
+  recurrence: Recurrence,
+  occurrenceDate: string,
+  fallback: RecurrenceTiming,
+): RecurrenceTiming {
+  const segment = segmentAt(recurrence, occurrenceDate);
+  return {
+    time: segment?.time ?? fallback.time,
+    endTime: segment?.endTime ?? fallback.endTime,
+  };
+}
+
+function sameTiming(left: RecurrenceTiming, right: RecurrenceTiming): boolean {
+  return left.time === right.time && left.endTime === right.endTime;
+}
+
+/**
+ * Optimistically projects only the safe subset of a recurrence edit: timing changes whose
+ * cadence is unchanged. Existing occurrence overrides and snoozes remain authoritative, while
+ * frequency/date topology still waits for the server's canonical reconciliation response.
+ */
+function applyRecurrenceTiming(
+  data: AgendaData,
+  activityId: string,
+  previous: Recurrence,
+  next: Recurrence,
+  fallback: RecurrenceTiming,
+  clock: ProjectionClock,
+): { readonly data: AgendaData; readonly changed: boolean } {
+  let changed = false;
+  const days = data.days.map((day) => {
+    let changedDay = false;
+    const items = uniqueItems(day).map((item) => {
+      if (
+        item.activityId !== activityId ||
+        item.occurrenceDate === undefined ||
+        item.isSnoozed
+      ) {
+        return item;
+      }
+      const previousSegment = segmentAt(previous, item.occurrenceDate);
+      const nextSegment = segmentAt(next, item.occurrenceDate);
+      if (cadenceKey(previousSegment) !== cadenceKey(nextSegment)) return item;
+      const previousTiming = timingAt(previous, item.occurrenceDate, fallback);
+      const nextTiming = timingAt(next, item.occurrenceDate, fallback);
+      if (
+        sameTiming(previousTiming, nextTiming) ||
+        item.time !== previousTiming.time ||
+        item.endTime !== previousTiming.endTime
+      ) {
+        return item;
+      }
+      const projected: AgendaItem = {
+        ...item,
+        ...(nextTiming.time === undefined ? {} : { time: nextTiming.time }),
+        ...(nextTiming.endTime === undefined ? {} : { endTime: nextTiming.endTime }),
+        isPast:
+          day.date < clock.today ||
+          (day.date === clock.today &&
+            nextTiming.time !== undefined &&
+            (nextTiming.endTime ?? nextTiming.time) <= clock.currentMinute),
+      };
+      if (nextTiming.time === undefined) delete projected.time;
+      if (nextTiming.endTime === undefined) delete projected.endTime;
+      changed = true;
+      changedDay = true;
+      return projected;
+    });
+    return changedDay ? projectDay(day, items, clock) : day;
+  });
+  return { data: changed ? { ...data, days } : data, changed };
+}
+
+function parsedRecurrence(value: unknown): Recurrence | undefined {
+  try {
+    const candidate = typeof value === 'string' ? (JSON.parse(value) as unknown) : value;
+    const parsed = recurrenceSchema.safeParse(candidate);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function storedTiming(row: Record<string, unknown> | undefined): RecurrenceTiming {
+  return {
+    time: typeof row?.schedule_time === 'string' ? row.schedule_time : undefined,
+    endTime:
+      typeof row?.schedule_end_time === 'string' ? row.schedule_end_time : undefined,
   };
 }
 
@@ -273,6 +399,7 @@ export class ActivityTransactionService {
   async patch(
     transaction: TransactionContext,
     variables: ActivityPatchVariables,
+    clock?: ProjectionClock,
     projectExisting = false,
   ): Promise<TransactionalIntentResult> {
     const appended = await this.outbox.append(
@@ -281,7 +408,8 @@ export class ActivityTransactionService {
     );
     if (appended.kind === 'existing' && !projectExisting) return appended;
     const current = await transaction.database.first(
-      `SELECT activity.recurrence_json,
+      `SELECT activity.recurrence_json, activity.schedule_time,
+        activity.schedule_end_time,
         EXISTS (
           SELECT 1 FROM outbox_intents create_intent
           WHERE create_intent.entity_id = activity.activity_id
@@ -295,7 +423,34 @@ export class ActivityTransactionService {
       current?.has_pending_create === 0 && Object.hasOwn(variables.input, 'recurrence');
     if (recurrenceEdit) {
       await this.activities.setLocalState(transaction, variables.activityId, 'updating');
-      await this.agenda.markActivityRows(transaction, variables.activityId, 'updating');
+      const previous = parsedRecurrence(current?.recurrence_json);
+      const next = variables.input.recurrence;
+      if (previous !== undefined && next != null && clock !== undefined) {
+        const projected = applyRecurrenceTiming(
+          await this.agenda.readMaterializedWindow(transaction.database),
+          variables.activityId,
+          previous,
+          next,
+          storedTiming(current),
+          clock,
+        );
+        if (projected.changed) {
+          await this.agenda.replaceLocalActivityRows(
+            transaction,
+            variables.activityId,
+            projected.data,
+            'updating',
+          );
+        } else {
+          await this.agenda.markActivityRows(
+            transaction,
+            variables.activityId,
+            'updating',
+          );
+        }
+      } else {
+        await this.agenda.markActivityRows(transaction, variables.activityId, 'updating');
+      }
     } else {
       const activity = await this.activities.patchLocal(
         transaction,
@@ -693,7 +848,12 @@ export class ActivityTransactionService {
       return;
     }
     if (name === 'patch') {
-      await this.patch(transaction, variables as unknown as ActivityPatchVariables, true);
+      await this.patch(
+        transaction,
+        variables as unknown as ActivityPatchVariables,
+        clock,
+        true,
+      );
       return;
     }
     if (name === 'schedule') {
@@ -763,21 +923,57 @@ export class ActivityTransactionService {
     throw new Error(`Unsupported blocked activity mutation: ${name ?? 'unknown'}.`);
   }
 
-  /** A queued recurrence patch changes only row state until its acknowledgement is installed. */
+  /** Restores canonical row state and reverses any safe timing projection owned by this patch. */
   async restoreCancelledRecurrenceEdit(
     transaction: TransactionContext,
-    activityId: string,
+    intent: OutboxIntent,
+    clock: ProjectionClock,
   ): Promise<void> {
-    await transaction.database.run(
-      "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ? AND local_state = 'updating';",
+    const activityId = intent.entityId;
+    const row = await transaction.database.first(
+      `SELECT recurrence_json, schedule_time, schedule_end_time
+       FROM activities WHERE activity_id = ?;`,
       [activityId],
     );
-    await transaction.database.run(
-      "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ? AND local_state = 'updating';",
-      [activityId],
-    );
-    transaction.changed(this.activities.scope(activityId));
-    transaction.changed('agenda');
+    const canonical = parsedRecurrence(row?.recurrence_json);
+    const variables = variablesObject(intent.variables);
+    const input = variables.input;
+    const pending =
+      typeof input === 'object' && input !== null
+        ? (input as { readonly recurrence?: unknown }).recurrence
+        : undefined;
+    const queued = parsedRecurrence(pending);
+    if (canonical !== undefined && queued !== undefined) {
+      const restored = applyRecurrenceTiming(
+        await this.agenda.readMaterializedWindow(transaction.database),
+        activityId,
+        queued,
+        canonical,
+        storedTiming(row),
+        clock,
+      );
+      if (restored.changed) {
+        await this.agenda.replaceLocalActivityRows(
+          transaction,
+          activityId,
+          restored.data,
+          'canonical',
+        );
+      } else {
+        await transaction.database.run(
+          "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ? AND local_state = 'updating';",
+          [activityId],
+        );
+        transaction.changed('agenda');
+      }
+    } else {
+      await transaction.database.run(
+        "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ? AND local_state = 'updating';",
+        [activityId],
+      );
+      transaction.changed('agenda');
+    }
+    await this.activities.setLocalState(transaction, activityId, 'canonical');
   }
 
   async cancelQueuedAndProjectInverse(

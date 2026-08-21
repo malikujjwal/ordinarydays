@@ -337,12 +337,18 @@ export function useActivityDetail(
         setEditError(firstIssue?.message ?? 'This change is not valid.');
         return Promise.resolve(false);
       }
+      const timezone = (detail.activity.schedule?.timezone ?? 'UTC') as TimeZone;
+      const now = clock.now();
       return run(() =>
         state.coordinator.patch(
           activityId,
           randomUUID(),
           parsed.data,
           detail.activity.updatedAt,
+          {
+            today: toWallDate(now, timezone),
+            currentMinute: toWallTime(now, timezone),
+          },
           patchChangeNames(parsed.data),
         ),
       );

@@ -28,6 +28,16 @@ function useGlobalOutbox(): OutboxPresentationSnapshot {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+function projectionClock() {
+  const timezone = (Intl.DateTimeFormat().resolvedOptions().timeZone ||
+    'UTC') as TimeZone;
+  const now = systemClock.now();
+  return {
+    today: systemClock.todayIn(timezone),
+    currentMinute: toWallTime(now, timezone),
+  };
+}
+
 export function usePendingIntents(): readonly Intent[] {
   return useGlobalOutbox().pending;
 }
@@ -83,24 +93,21 @@ export async function cancelPendingCreate(intentId: string): Promise<boolean> {
 }
 
 export async function retryBlockedIntent(intentId: string): Promise<boolean> {
-  const timezone = (Intl.DateTimeFormat().resolvedOptions().timeZone ||
-    'UTC') as TimeZone;
-  const now = systemClock.now();
   const freshIntentId = (await import('expo-crypto')).randomUUID();
   const result = await requireActiveNativeState().coordinator.retryBlocked(
     intentId,
     freshIntentId,
-    {
-      today: systemClock.todayIn(timezone),
-      currentMinute: toWallTime(now, timezone),
-    },
+    projectionClock(),
   );
   if (result.kind === 'refused') throw result.error;
   return true;
 }
 
 export async function discardBlockedIntent(intentId: string): Promise<boolean> {
-  return requireActiveNativeState().coordinator.discardBlocked(intentId);
+  return requireActiveNativeState().coordinator.discardBlocked(
+    intentId,
+    projectionClock(),
+  );
 }
 
 export function useBlockedIntents(): readonly Intent[] {
