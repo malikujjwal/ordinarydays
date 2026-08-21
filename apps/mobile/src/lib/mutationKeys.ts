@@ -28,3 +28,30 @@ export type ActivityMutationName = keyof typeof activityMutationKeys;
  * it — which is exactly how `patch` and `delete` came to sit unprojected.
  */
 export type ActivityMutationTag = (typeof activityMutationKeys)[ActivityMutationName][1];
+
+interface ActivityMutationDescriptor {
+  readonly mutationKey: readonly unknown[];
+  readonly variables: unknown;
+}
+
+/**
+ * Whether one durable Activity mutation changes recurrence topology.
+ *
+ * Sync reconciliation and row presentation intentionally share this predicate: while the
+ * server and local projections may temporarily retain the old occurrence rows, those rows must
+ * stay inert until the topology response has been installed. Keeping the persisted mutation
+ * tags here prevents `convert-recurrence` and recurrence-bearing patches from drifting apart.
+ */
+export function changesRecurrenceTopology({
+  mutationKey,
+  variables,
+}: ActivityMutationDescriptor): boolean {
+  if (mutationKey[0] !== 'activity') return false;
+  if (mutationKey[1] === 'convert-recurrence') return true;
+  if (mutationKey[1] !== 'patch') return false;
+  if (typeof variables !== 'object' || variables === null) return false;
+  const input = (variables as { readonly input?: unknown }).input;
+  return (
+    typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
+  );
+}

@@ -1,9 +1,13 @@
 import type { AgendaData, AgendaItem } from '@od/shared/types';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { completionCommitGateFor } from '@/features/agenda/completionCommitGate';
+import {
+  completionCommitGateFor,
+  completionTargetKey,
+} from '@/features/agenda/completionCommitGate';
 import { useToast } from '@/stores/toast';
 import { useAgendaActivityActions } from './useAgendaActivityActions.native';
+import { useCompletionCommitState } from './useCompletionCommitLock.native';
 
 const nativeState = vi.hoisted(() => ({ current: undefined as unknown }));
 let nextId = 0;
@@ -19,12 +23,15 @@ vi.mock('expo-crypto', () => ({
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
+  readonly reject: (error: unknown) => void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const task = (status: AgendaItem['status'] = 'scheduled'): AgendaItem => ({
@@ -84,7 +91,10 @@ describe('native Agenda completion gate', () => {
     const gate = completionCommitGateFor(coordinator);
     const scheduled = task();
     const mounted = renderHook(
-      ({ data }: { data: AgendaData }) => useAgendaActivityActions(options(data)),
+      ({ data }: { data: AgendaData }) => ({
+        ...useAgendaActivityActions(options(data)),
+        completion: useCompletionCommitState(scheduled),
+      }),
       { initialProps: { data: agenda(scheduled) } },
     );
 
@@ -94,6 +104,10 @@ describe('native Agenda completion gate', () => {
     });
     expect(complete).toHaveBeenCalledOnce();
     expect(gate.isLocked(scheduled)).toBe(true);
+    expect(mounted.result.current.completion).toEqual({
+      locked: true,
+      checkedOverride: true,
+    });
 
     await act(async () => {
       pending.resolve({
@@ -130,6 +144,119 @@ describe('native Agenda completion gate', () => {
     await waitFor(() => expect(gate.isLocked(scheduled)).toBe(false));
     act(() => mounted.result.current.toggleComplete(scheduled, true));
     await waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+  });
+
+  it('rolls the immediate value back when the SQLite promise rejects', async () => {
+    const complete = vi.fn(async () => {
+      throw new Error('database closed');
+    });
+    const coordinator = { complete, undoCompletion: vi.fn() };
+    nativeState.current = { coordinator };
+    const scheduled = task();
+    const gate = completionCommitGateFor(coordinator);
+    const mounted = renderHook(() =>
+      useAgendaActivityActions(options(agenda(scheduled))),
+    );
+
+    act(() => mounted.result.current.toggleComplete(scheduled, true));
+    expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
+      'committing-checked',
+    );
+    await waitFor(() => expect(gate.isLocked(scheduled)).toBe(false));
+  });
+
+  it('assigns undated completion ownership to the Anytime projection', async () => {
+    const complete = vi.fn(async () => ({
+      kind: 'accepted' as const,
+      status: 'queued' as const,
+      intent: { intentId: 'anytime-complete' },
+      commitRevision: 3,
+    }));
+    const coordinator = { complete, undoCompletion: vi.fn() };
+    nativeState.current = { coordinator };
+    const saved = task('saved');
+    const gate = completionCommitGateFor(coordinator);
+    const mounted = renderHook(() =>
+      useAgendaActivityActions({
+        today: '2026-08-20',
+        currentMinute: '12:00',
+        timezone: 'America/New_York',
+        completionProjection: 'anytime',
+      }),
+    );
+
+    act(() => mounted.result.current.toggleComplete(saved, true));
+    await waitFor(() =>
+      expect(gate.snapshotForKey(completionTargetKey(saved))).toBe('committed-checked'),
+    );
+    gate.reconcile(agenda(task('completed')), 3);
+    expect(gate.isLocked(saved)).toBe(true);
+    gate.reconcileAnytime([], 3);
+    expect(gate.isLocked(saved)).toBe(false);
+  });
+
+  it('settles the old gate without presenting session-stale feedback', async () => {
+    const pending = deferred<{
+      kind: 'accepted';
+      status: 'queued';
+      intent: { intentId: string };
+      commitRevision: number;
+    }>();
+    const complete = vi.fn(() => pending.promise);
+    const coordinator = { complete, undoCompletion: vi.fn() };
+    const oldState = { coordinator };
+    nativeState.current = oldState;
+    const scheduled = task();
+    const gate = completionCommitGateFor(coordinator);
+    const mounted = renderHook(() =>
+      useAgendaActivityActions(options(agenda(scheduled))),
+    );
+
+    act(() => mounted.result.current.toggleComplete(scheduled, true));
+    nativeState.current = { coordinator: {} };
+    await act(async () => {
+      pending.resolve({
+        kind: 'accepted',
+        status: 'queued',
+        intent: { intentId: 'completion-1' },
+        commitRevision: 1,
+      });
+      await pending.promise;
+    });
+
+    expect(gate.isLocked(scheduled)).toBe(true);
+    expect(useToast.getState().current).toBeUndefined();
+  });
+
+  it('finishes the session-owned gate after the initiating row unmounts', async () => {
+    const pending = deferred<{
+      kind: 'accepted';
+      status: 'queued';
+      intent: { intentId: string };
+      commitRevision: number;
+    }>();
+    const complete = vi.fn(() => pending.promise);
+    const coordinator = { complete, undoCompletion: vi.fn() };
+    nativeState.current = { coordinator };
+    const scheduled = task();
+    const gate = completionCommitGateFor(coordinator);
+    const mounted = renderHook(() =>
+      useAgendaActivityActions(options(agenda(scheduled))),
+    );
+
+    act(() => mounted.result.current.toggleComplete(scheduled, true));
+    mounted.unmount();
+    await act(async () => {
+      pending.resolve({
+        kind: 'accepted',
+        status: 'queued',
+        intent: { intentId: 'completion-1' },
+        commitRevision: 4,
+      });
+      await pending.promise;
+    });
+
+    expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe('committed-checked');
   });
 
   it('unlocks when the SQLite projection refresh arrives before the transaction settles', async () => {

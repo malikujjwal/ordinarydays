@@ -1,3 +1,4 @@
+import { isRetryable } from '@od/shared/client';
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import { type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type { ActivityDetail, ActivityDetailTarget } from '@od/shared/types';
@@ -15,9 +16,26 @@ import { useClock } from '@/hooks/useClock';
 import { newLocalId } from '@/lib/localIds';
 import { patchChangeNames } from '@/lib/mutationDefaults';
 import { activityKey } from '@/lib/queryKeys';
-import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
+import { getActiveNativeState, requireActiveNativeState } from '@/lib/sqlite/nativeState';
+import { CanonicalActivityInstallDeferredError } from '@/lib/sqlite/syncEngine';
 
 export { activityKey };
+
+const CAPABILITY_RETRY_DELAYS_MS = [500, 2_000, 10_000] as const;
+const HYDRATION_RETRY_MESSAGE =
+  "Latest details are still syncing. We'll retry automatically.";
+
+function manualHydrationMessage(error: unknown): string {
+  return error instanceof CanonicalActivityInstallDeferredError
+    ? HYDRATION_RETRY_MESSAGE
+    : error instanceof Error
+      ? error.message
+      : String(error);
+}
+
+function shouldRetryCapabilityHydration(error: unknown): boolean {
+  return error instanceof CanonicalActivityInstallDeferredError || isRetryable(error);
+}
 
 export interface ActivityDetailView {
   status: 'pending' | 'success' | 'error';
@@ -64,70 +82,221 @@ export function useActivityDetail(
   );
   const [detail, setDetail] = useState<ActivityDetail>();
   const [status, setStatus] = useState<'pending' | 'success' | 'error'>('pending');
-  const [message, setMessage] = useState<string>();
+  const [loadMessage, setLoadMessage] = useState<string>();
+  const [editError, setEditError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [savingReminder, setSavingReminder] = useState(false);
   const [reminderError, setReminderError] = useState<string>();
+  const [hydrationRetry, setHydrationRetry] = useState(0);
+  const mounted = useRef(false);
+  const requestGeneration = useRef(0);
   const automaticPullKey = useRef<string | undefined>(undefined);
+  const automaticPullInFlight = useRef<string | undefined>(undefined);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const retryIndex = useRef(0);
+  const targetKey = `${target.kind}:${targetActivityId}:${targetDate ?? ''}`;
 
-  const load = useCallback(async () => {
-    const committed = await state.activities.read(target);
-    if (committed !== undefined) {
-      setDetail(committed);
-      setStatus('success');
-    }
-    return committed;
-  }, [state, target]);
+  const isCurrentRequest = useCallback(
+    (generation: number) =>
+      mounted.current &&
+      requestGeneration.current === generation &&
+      getActiveNativeState() === state,
+    [state],
+  );
+
+  const clearRetry = useCallback(() => {
+    if (retryTimer.current !== undefined) clearTimeout(retryTimer.current);
+    retryTimer.current = undefined;
+  }, []);
+
+  const scheduleRetry = useCallback(() => {
+    if (!mounted.current || getActiveNativeState() !== state) return;
+    if (retryTimer.current !== undefined) return;
+    const delay =
+      CAPABILITY_RETRY_DELAYS_MS[
+        Math.min(retryIndex.current, CAPABILITY_RETRY_DELAYS_MS.length - 1)
+      ];
+    retryIndex.current += 1;
+    retryTimer.current = setTimeout(() => {
+      retryTimer.current = undefined;
+      if (mounted.current && getActiveNativeState() === state) {
+        setHydrationRetry((current) => current + 1);
+      }
+    }, delay);
+  }, [state]);
+
+  const load = useCallback(
+    async (generation: number) => {
+      const committed = await state.activities.read(target);
+      if (!isCurrentRequest(generation)) return undefined;
+      if (committed !== undefined) {
+        setDetail(committed);
+        setStatus('success');
+      }
+      return committed;
+    },
+    [isCurrentRequest, state, target],
+  );
 
   const refetch = useCallback(() => {
+    clearRetry();
+    const generation = requestGeneration.current + 1;
+    requestGeneration.current = generation;
     void (async () => {
-      await load();
+      const committed = await load(generation);
+      if (!isCurrentRequest(generation)) return;
+      const hydrationState = await state.activities.capabilityHydrationState(activityId);
+      if (!isCurrentRequest(generation)) return;
+      if (hydrationState === 'deferred') {
+        if (committed === undefined) {
+          setStatus('error');
+          setLoadMessage(HYDRATION_RETRY_MESSAGE);
+        }
+        return;
+      }
+      const pullKey = `${targetKey}:${committed?.activity.updatedAt ?? 'missing'}`;
       try {
         const canonical = await state.sync.pullActivity(target);
+        if (!isCurrentRequest(generation)) return;
         setDetail(canonical);
         setStatus('success');
-        setMessage(undefined);
+        setLoadMessage(undefined);
+        const hydrated = await state.activities.hasInstalledCapabilities(activityId);
+        if (!isCurrentRequest(generation)) return;
+        if (hydrated) {
+          automaticPullKey.current = pullKey;
+          retryIndex.current = 0;
+          clearRetry();
+        } else {
+          scheduleRetry();
+        }
       } catch (error) {
         const retained = await state.activities.read(target);
+        if (!isCurrentRequest(generation)) return;
         if (retained === undefined) {
           setDetail(undefined);
           setStatus('error');
+        } else {
+          setDetail(retained);
+          setStatus('success');
         }
-        setMessage(error instanceof Error ? error.message : String(error));
+        setLoadMessage(manualHydrationMessage(error));
+        if (shouldRetryCapabilityHydration(error)) {
+          scheduleRetry();
+        } else {
+          automaticPullKey.current = `${targetKey}:${retained?.activity.updatedAt ?? 'missing'}`;
+          retryIndex.current = 0;
+          clearRetry();
+        }
       }
     })();
-  }, [state, load, target]);
+  }, [
+    activityId,
+    clearRetry,
+    isCurrentRequest,
+    load,
+    scheduleRetry,
+    state,
+    target,
+    targetKey,
+  ]);
+
+  useEffect(() => {
+    void state;
+    void targetKey;
+    mounted.current = true;
+    automaticPullKey.current = undefined;
+    automaticPullInFlight.current = undefined;
+    retryIndex.current = 0;
+    return () => {
+      mounted.current = false;
+      requestGeneration.current += 1;
+      automaticPullInFlight.current = undefined;
+      clearRetry();
+    };
+  }, [clearRetry, state, targetKey]);
 
   useEffect(() => {
     void version;
-    void load().then(async (committed) => {
-      const unresolvedCreate = (await state.outbox.forEntity(activityId)).some(
-        (intent) =>
-          intent.mutationKey[0] === 'activity' &&
-          intent.mutationKey[1] === 'create' &&
-          intent.status !== 'acknowledged',
-      );
+    void hydrationRetry;
+    const generation = requestGeneration.current + 1;
+    requestGeneration.current = generation;
+    void load(generation).then(async (committed) => {
+      if (!isCurrentRequest(generation)) return;
+      const hydrationState = await state.activities.capabilityHydrationState(activityId);
+      if (!isCurrentRequest(generation)) return;
+      if (hydrationState === 'deferred') {
+        clearRetry();
+        return;
+      }
       const needsCanonicalDetail =
-        committed === undefined ||
-        !(await state.activities.hasCanonicalCapabilities(activityId));
-      const pullKey = `${target.kind}:${targetActivityId}:${targetDate ?? ''}:${committed?.activity.updatedAt ?? 'missing'}`;
+        committed === undefined || hydrationState === 'missing';
+      const pullKey = `${targetKey}:${committed?.activity.updatedAt ?? 'missing'}`;
       if (
         needsCanonicalDetail &&
-        !unresolvedCreate &&
-        automaticPullKey.current !== pullKey
+        automaticPullKey.current !== pullKey &&
+        automaticPullInFlight.current === undefined
       ) {
-        automaticPullKey.current = pullKey;
-        refetch();
+        clearRetry();
+        automaticPullInFlight.current = pullKey;
+        try {
+          const canonical = await state.sync.pullActivity(target);
+          if (!isCurrentRequest(generation)) return;
+          setDetail(canonical);
+          setStatus('success');
+          setLoadMessage(undefined);
+          const hydrated = await state.activities.hasInstalledCapabilities(activityId);
+          if (!isCurrentRequest(generation)) return;
+          if (hydrated) {
+            automaticPullKey.current = pullKey;
+            retryIndex.current = 0;
+            clearRetry();
+          } else {
+            scheduleRetry();
+          }
+        } catch (error) {
+          if (!isCurrentRequest(generation)) return;
+          const retained = await state.activities.read(target);
+          if (!isCurrentRequest(generation)) return;
+          if (retained === undefined) {
+            setDetail(undefined);
+            setStatus('error');
+          } else {
+            setDetail(retained);
+            setStatus('success');
+          }
+          const retryable = shouldRetryCapabilityHydration(error);
+          setLoadMessage(
+            retained === undefined
+              ? retryable
+                ? HYDRATION_RETRY_MESSAGE
+                : manualHydrationMessage(error)
+              : undefined,
+          );
+          if (retryable) {
+            scheduleRetry();
+          } else {
+            automaticPullKey.current = `${targetKey}:${retained?.activity.updatedAt ?? 'missing'}`;
+            retryIndex.current = 0;
+            clearRetry();
+          }
+        } finally {
+          if (automaticPullInFlight.current === pullKey) {
+            automaticPullInFlight.current = undefined;
+          }
+        }
       }
     });
   }, [
     activityId,
+    clearRetry,
+    hydrationRetry,
+    isCurrentRequest,
     load,
-    refetch,
+    scheduleRetry,
     state,
-    target.kind,
-    targetActivityId,
-    targetDate,
+    target,
+    targetKey,
     version,
   ]);
 
@@ -137,10 +306,10 @@ export function useActivityDetail(
       try {
         const result = await operation();
         if (result.kind === 'refused') {
-          setMessage(result.error.message);
+          setEditError(result.error.message);
           return false;
         }
-        setMessage(undefined);
+        setEditError(undefined);
         return true;
       } finally {
         setSaving(false);
@@ -152,7 +321,8 @@ export function useActivityDetail(
   return {
     status,
     ...(detail === undefined ? {} : { detail }),
-    ...(message === undefined ? {} : { message, editError: message }),
+    ...(loadMessage === undefined ? {} : { message: loadMessage }),
+    ...(editError === undefined ? {} : { editError }),
     refetch,
     isSaving: saving,
     patch: (input) => {
@@ -220,6 +390,6 @@ export function useActivityDetail(
     isSavingReminder: savingReminder,
     ...(reminderError === undefined ? {} : { reminderError }),
     acknowledgeConflict: () =>
-      setMessage((current) => (current === CONFLICT_MESSAGE ? undefined : current)),
+      setEditError((current) => (current === CONFLICT_MESSAGE ? undefined : current)),
   };
 }

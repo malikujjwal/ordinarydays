@@ -315,6 +315,29 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         INSERT INTO native_commit_state (singleton, commit_revision) VALUES (1, 0);
       `),
   },
+  {
+    version: 8,
+    name: 'local-activity-canonical-version-repair',
+    apply: async (database) => {
+      await database.run(
+        `UPDATE activities SET canonical_version = NULL
+         WHERE canonical_version IS NOT NULL
+           AND (
+             (
+               local_state = 'canonical'
+               AND capabilities_json IS NULL
+             )
+             OR EXISTS (
+               SELECT 1 FROM outbox_intents
+               WHERE outbox_intents.entity_id = activities.activity_id
+                 AND outbox_intents.status IN ('queued', 'in_flight', 'needs_attention')
+                 AND json_extract(outbox_intents.mutation_key_json, '$[0]') = 'activity'
+                 AND json_extract(outbox_intents.mutation_key_json, '$[1]') = 'create'
+             )
+           );`,
+      );
+    },
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

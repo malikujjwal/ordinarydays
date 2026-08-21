@@ -30,7 +30,11 @@ import { applySnooze } from '@/features/agenda/model/applySnooze';
 import { resolveAgendaTimezone } from '@/features/agenda/timezone';
 import { apiClient } from '@/lib/apiClient';
 import { getActiveIntentLog } from '@/lib/intentReplay';
-import { type ActivityMutationTag, activityMutationKeys } from '@/lib/mutationKeys';
+import {
+  type ActivityMutationTag,
+  activityMutationKeys,
+  changesRecurrenceTopology,
+} from '@/lib/mutationKeys';
 import { activityDetailKey, activityKey } from '@/lib/queryKeys';
 
 const AGENDA_KEY = ['agenda'] as const;
@@ -152,7 +156,7 @@ export function guardAgendaResponse(
   return result;
 }
 
-/** Arms per-window protection before a recurrence PATCH can leave the device. */
+/** Arms per-window protection before a recurrence-topology write can leave the device. */
 export function protectRecurrenceEdit(client: QueryClient, activityId: string): void {
   let windows = pendingByClient.get(client);
   if (windows === undefined) {
@@ -254,17 +258,23 @@ type ActivityAgendaLoader = (
   query: AgendaQuery,
 ) => Promise<ActivityAgendaData>;
 
-/** Strongly reconciles every applicable cached window for one acknowledged recurrence PATCH. */
+/** Strongly reconciles every applicable cached window for one acknowledged topology write. */
 export async function reconcileRecurrenceEdit(
   client: QueryClient,
   activityId: string,
   version: string,
   load: ActivityAgendaLoader = (id, query) => getActivityAgenda(apiClient, id, query),
-): Promise<boolean> {
+): Promise<boolean | undefined> {
   expectProtectedVersion(client, activityId, version);
   const keys = client
     .getQueriesData<AgendaData>({ queryKey: AGENDA_KEY })
     .map(([key]) => key as AgendaQueryKey);
+  /**
+   * No cached window means there is nothing to reconcile yet, not that canonical topology was
+   * proved. Keep the acknowledged receipt clean and durable; the first later Agenda read arms
+   * that exact window from the receipt and performs its targeted read before returning data.
+   */
+  if (keys.length === 0) return undefined;
   let complete = true;
   await Promise.all(
     keys.map(async (key) => {
@@ -308,6 +318,11 @@ export async function loadAgendaWithReconciliation(
     readonly targeted?: ActivityAgendaLoader;
   } = {},
 ): Promise<AgendaData> {
+  restoreRecurrenceEditProtectionForQuery(
+    client,
+    queryKey,
+    getActiveIntentLog()?.snapshot().intents ?? [],
+  );
   let result = guardAgendaResponse(
     client,
     queryKey,
@@ -591,15 +606,7 @@ export function projectActivityWrite(
         ...clock,
       }),
     );
-    if (typeof activity.updatedAt === 'string') {
-      void reconcileAgendaProjection(client, {
-        activityId: activity.activityId,
-        version: activity.updatedAt,
-        ...(activity.schedule?.date === undefined
-          ? {}
-          : { relevantDate: activity.schedule.date }),
-      });
-    }
+    /** The shared protected-write lifecycle performs the one targeted canonical read. */
     return true;
   }
 
@@ -966,6 +973,46 @@ export interface RecurrenceEditProjectionIntent {
   readonly reconciliationVersion?: string;
 }
 
+/** Arms a newly-created Agenda window from receipts that predate that query cache entry. */
+function restoreRecurrenceEditProtectionForQuery(
+  client: QueryClient,
+  queryKey: AgendaQueryKey,
+  intents: readonly RecurrenceEditProjectionIntent[],
+): void {
+  let windows = pendingByClient.get(client);
+  if (windows === undefined) {
+    windows = new Map();
+    pendingByClient.set(client, windows);
+  }
+  const id = keyId(queryKey);
+  const pending = windows.get(id) ?? new Map<string, PendingExpectation>();
+  for (const intent of intents) {
+    if (
+      !isRecurrenceEditMutation(intent.mutationKey, intent.variables) ||
+      (intent.status !== 'queued' &&
+        intent.status !== 'in_flight' &&
+        intent.status !== 'acknowledged')
+    ) {
+      continue;
+    }
+    const current = pending.get(intent.entityId);
+    if (current !== undefined && current.kind !== 'protected') continue;
+    const currentVersion = current?.kind === 'protected' ? current.version : undefined;
+    const nextVersion = intent.reconciliationVersion;
+    const version =
+      nextVersion === undefined
+        ? currentVersion
+        : currentVersion === undefined || nextVersion > currentVersion
+          ? nextVersion
+          : currentVersion;
+    pending.set(intent.entityId, {
+      kind: 'protected',
+      ...(version === undefined ? {} : { version }),
+    });
+  }
+  if (pending.size > 0) windows.set(id, pending);
+}
+
 /** Restores per-activity protection from the durable log after a process restart. */
 export function restoreRecurrenceEditProtection(
   client: QueryClient,
@@ -974,8 +1021,6 @@ export function restoreRecurrenceEditProtection(
   let restored = 0;
   for (const intent of intents) {
     if (
-      intent.mutationKey[0] !== 'activity' ||
-      intent.mutationKey[1] !== 'patch' ||
       !isRecurrenceEditMutation(intent.mutationKey, intent.variables) ||
       (intent.status !== 'queued' &&
         intent.status !== 'in_flight' &&
@@ -1233,14 +1278,14 @@ function inputOf(variables: unknown): object | undefined {
   return typeof input === 'object' && input !== null ? input : undefined;
 }
 
-/** Whether this PATCH changes series projection rather than ordinary row text. */
+/** Whether this mutation changes series topology and needs protected reconciliation. */
 export function isRecurrenceEditMutation(
   mutationKey: MutationKey | undefined,
   variables: unknown,
 ): boolean {
-  if (activityMutationTag(mutationKey) !== 'patch') return false;
-  const input = inputOf(variables);
-  return input !== undefined && Object.hasOwn(input, 'recurrence');
+  return (
+    Array.isArray(mutationKey) && changesRecurrenceTopology({ mutationKey, variables })
+  );
 }
 
 /** Both a bare Activity and a `{ activity }` envelope reach this from different endpoints. */

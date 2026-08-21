@@ -4,7 +4,8 @@ interface CommittedCompletion {
   readonly checked: boolean;
   readonly phase: 'committed';
   readonly intentId: string | undefined;
-  readonly viewerDate: string;
+  /** Undefined identifies the undated Anytime projection. */
+  readonly viewerDate: string | undefined;
   readonly requiredRevision: number;
 }
 
@@ -15,15 +16,15 @@ type CompletionCommit =
       /** Keeps the last durable visual state while an inverse write is still in flight. */
       readonly previousCommitted: CommittedCompletion | undefined;
       readonly intentId: string | undefined;
-      readonly viewerDate: string;
+      /** Undefined identifies the undated Anytime projection. */
+      readonly viewerDate: string | undefined;
     }
   | CommittedCompletion;
 
 export type CompletionCommitSnapshot =
   | 'idle'
-  | 'committing'
-  | 'committing-from-checked'
-  | 'committing-from-unchecked'
+  | 'committing-checked'
+  | 'committing-unchecked'
   | 'committed-checked'
   | 'committed-unchecked';
 
@@ -55,12 +56,15 @@ export class CompletionCommitGate {
     string,
     { readonly revision: number; readonly items: ReadonlyMap<string, AgendaItem> }
   >();
+  private latestAnytime:
+    | { readonly revision: number; readonly targetKeys: ReadonlySet<string> }
+    | undefined;
 
   begin(
     item: AgendaItem,
     checked: boolean,
     intentId: string | undefined,
-    viewerDate: string,
+    viewerDate: string | undefined,
   ): boolean {
     const key = completionTargetKey(item);
     const current = this.commits.get(key);
@@ -106,6 +110,9 @@ export class CompletionCommitGate {
       current.previousCommitted !== undefined
     ) {
       this.commits.set(key, current.previousCommitted);
+      this.publish(key);
+      this.reconcileKnown(key);
+      return;
     } else this.commits.delete(key);
     this.publish(key);
     if (accepted) this.reconcileKnown(key);
@@ -134,6 +141,26 @@ export class CompletionCommitGate {
     for (const key of this.commits.keys()) this.reconcileKnown(key);
   }
 
+  /** Reconciles completion locks owned by the undated saved-task projection. */
+  reconcileAnytime(
+    items: readonly Pick<AgendaItem, 'activityId' | 'occurrenceDate'>[],
+    snapshotRevision: number,
+  ): void {
+    if (
+      this.latestAnytime !== undefined &&
+      this.latestAnytime.revision > snapshotRevision
+    ) {
+      return;
+    }
+    this.latestAnytime = {
+      revision: snapshotRevision,
+      targetKeys: new Set(items.map(completionTargetKey)),
+    };
+    for (const [key, commit] of this.commits) {
+      if (commit.viewerDate === undefined) this.reconcileKnown(key);
+    }
+  }
+
   isLocked(item: Pick<AgendaItem, 'activityId' | 'occurrenceDate'>): boolean {
     return this.isKeyLocked(completionTargetKey(item));
   }
@@ -143,9 +170,9 @@ export class CompletionCommitGate {
   }
 
   /**
-   * A primitive snapshot lets a single row render the last SQLite-committed value without
-   * waiting for a large Agenda projection to be rebuilt. `committing` deliberately has no
-   * value: the UI does not move until the local transaction has actually succeeded.
+   * A primitive snapshot lets a single row show the requested value while its SQLite write is
+   * pending, then retain the durable value until the committed Agenda projection catches up.
+   * Refusal restores `previousCommitted` or exposes the unchanged repository projection.
    */
   snapshotForKey(key: string): CompletionCommitSnapshot {
     const current = this.commits.get(key);
@@ -153,10 +180,7 @@ export class CompletionCommitGate {
     if (current.phase === 'committed') {
       return current.checked ? 'committed-checked' : 'committed-unchecked';
     }
-    if (current.previousCommitted === undefined) return 'committing';
-    return current.previousCommitted.checked
-      ? 'committing-from-checked'
-      : 'committing-from-unchecked';
+    return current.checked ? 'committing-checked' : 'committing-unchecked';
   }
 
   subscribe(key: string, listener: () => void): () => void {
@@ -176,6 +200,16 @@ export class CompletionCommitGate {
   private reconcileKnown(key: string): void {
     const commit = this.commits.get(key);
     if (commit?.phase !== 'committed') return;
+    if (commit.viewerDate === undefined) {
+      const anytime = this.latestAnytime;
+      if (anytime === undefined || anytime.revision < commit.requiredRevision) return;
+      const present = anytime.targetKeys.has(key);
+      if (present === !commit.checked) {
+        this.commits.delete(key);
+        this.publish(key);
+      }
+      return;
+    }
     const day = this.latestDays.get(commit.viewerDate);
     if (day === undefined || day.revision < commit.requiredRevision) return;
     const item = day.items.get(key);

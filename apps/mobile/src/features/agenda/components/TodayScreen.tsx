@@ -600,7 +600,7 @@ export function TodayScreen({
         )}
         {schedule.length === 0 && showEmptySchedule ? (
           <View testID="today-schedule" style={{ gap: theme.space[2] }}>
-            <SectionHeader title="Schedule" />
+            <SectionHeader title="Schedule" variant="sectionLabel" />
             <View
               style={{ minHeight: theme.layout.rowMinHeight, justifyContent: 'center' }}
             >
@@ -612,6 +612,7 @@ export function TodayScreen({
         ) : schedule.length === 0 ? null : (
           <AgendaSection
             title="Schedule"
+            headerVariant="sectionLabel"
             items={schedule}
             testID="today-schedule"
             showTime
@@ -626,6 +627,7 @@ export function TodayScreen({
         {visibleAnytime.length === 0 ? null : (
           <AgendaSection
             title="Anytime"
+            headerVariant="sectionLabel"
             /**
              * **Everything the section holds**, not what is currently on screen — a count that
              * moved when the overdue collapse opened would be reporting the viewport rather than

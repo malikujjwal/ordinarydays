@@ -59,7 +59,7 @@ export function TomorrowPreview({ items }: TomorrowPreviewProps) {
 
   return (
     <View testID="today-tomorrow" style={{ gap: theme.space[2] }}>
-      <SectionHeader title="Tomorrow" count={items.length} />
+      <SectionHeader title="Tomorrow" count={items.length} variant="sectionLabel" />
       {items.slice(0, TOMORROW_PREVIEW_LIMIT).map((item) => (
         <View
           /**
@@ -80,13 +80,11 @@ export function TomorrowPreview({ items }: TomorrowPreviewProps) {
             </Text>
           </View>
           {/**
-           * **Title loud, time quiet — the same scan pattern as Today** (founder, 2026-08-17).
-           * Both runs were `textSecondary`, so a title read as metadata and the eye had nothing
-           * to land on. `bodyStrong` matches the row title Today just established; the time stays
-           * the quiet anchor beside it. One line only: this is foresight, not a list to work.
+           * Tomorrow is a quiet preview rather than today's working list. Keep the title at the
+           * body size but regular weight; the time remains the quieter anchor beside it.
            */}
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text variant="bodyStrong" color="textPrimary" numberOfLines={1}>
+            <Text variant="body" color="textPrimary" numberOfLines={1}>
               {item.title}
             </Text>
           </View>

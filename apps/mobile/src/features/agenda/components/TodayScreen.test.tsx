@@ -1,4 +1,4 @@
-import { fixedClock, type Instant } from '@od/shared/time';
+import { fixedClock, type Instant, type WallTime } from '@od/shared/time';
 import type { Activity, AgendaItem } from '@od/shared/types';
 import { colors, ThemeProvider } from '@od/ui';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -9,7 +9,9 @@ import { AccessibilityInfo } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClockProvider } from '@/hooks/useClock';
+import type { AgendaRowIntentState } from '@/hooks/usePendingIntents';
 import { TodayScreen } from './TodayScreen';
+import { UpNextCardWithState } from './UpNextCard';
 
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'idem-test-key' }));
 
@@ -236,6 +238,8 @@ describe('TodayScreen', () => {
      */
     const headings = screen.getAllByRole('heading').map((heading) => heading.textContent);
     expect(headings).toEqual(['Today', 'Earlier today', 'Schedule', 'Anytime']);
+    expect(screen.getByRole('heading', { name: 'Schedule' }).style.fontSize).toBe('12px');
+    expect(screen.getByRole('heading', { name: /^Anytime/ }).style.fontSize).toBe('12px');
 
     first.unmount();
     stubFetch(response([row(4, { title: 'Only anytime' })]));
@@ -1120,7 +1124,10 @@ describe('the Tomorrow preview', () => {
     );
 
     const preview = within(await screen.findByTestId('today-tomorrow'));
-    expect(preview.getByText('Tomorrow thing')).toBeDefined();
+    expect(preview.getByText('Tomorrow thing').style.fontWeight).toBe('400');
+    expect(preview.getByRole('heading', { name: /^Tomorrow/ }).style.fontSize).toBe(
+      '12px',
+    );
     expect(preview.getByText('9:00 AM')).toBeDefined();
     /**
      * **Nothing in it is interactive** (founder, 2026-08-17: "no click and open task is required
@@ -1293,5 +1300,95 @@ describe('TodayScreen timeline furniture', () => {
     const body = card.getByTestId('agenda-row-body');
     expect(body.getAttribute('aria-label')).toContain('Groceries');
     expect(actions.getAttribute('aria-hidden')).toBeNull();
+  });
+
+  it('makes the whole Up Next card inert while recurrence topology reconciles', () => {
+    const timed = row(1, {
+      title: 'Recurring groceries',
+      time: '17:30',
+      occurrenceDate: '2026-08-06',
+      isRecurring: true,
+    });
+    const onOpen = vi.fn();
+    const onAction = vi.fn();
+    const intentState: AgendaRowIntentState = {
+      pendingCreate: {
+        pending: false,
+        canCancel: false,
+        intentId: undefined,
+        status: undefined,
+      },
+      recurrenceEdit: {
+        inert: true,
+        message: 'Updating schedule…',
+        status: 'updating',
+      },
+      mutationInert: true,
+      failedCompletionIntentIds: [],
+    };
+
+    mount(
+      <UpNextCardWithState
+        selection={{
+          item: timed,
+          time: '17:30' as WallTime,
+          relativeTime: 'in 2 hours',
+        }}
+        intentState={intentState}
+        completion={{ locked: false, checkedOverride: undefined }}
+        onOpen={onOpen}
+        onAction={onAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('up-next-backdrop'));
+    fireEvent.click(screen.getByTestId('agenda-row-body'));
+
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('up-next-quick-actions')).toBeNull();
+    expect(screen.getByTestId('up-next-recurrence-state').textContent).toBe(
+      'Updating schedule…',
+    );
+  });
+
+  it('locks every Up Next quick action while completion commits', () => {
+    const timed = row(1, { title: 'Groceries', time: '17:30' });
+    const onAction = vi.fn();
+    const intentState: AgendaRowIntentState = {
+      pendingCreate: {
+        pending: false,
+        canCancel: false,
+        intentId: undefined,
+        status: undefined,
+      },
+      recurrenceEdit: { inert: false, message: undefined, status: 'idle' },
+      mutationInert: false,
+      failedCompletionIntentIds: [],
+    };
+
+    mount(
+      <UpNextCardWithState
+        selection={{
+          item: timed,
+          time: '17:30' as WallTime,
+          relativeTime: 'in 2 hours',
+        }}
+        intentState={intentState}
+        completion={{ locked: true, checkedOverride: true }}
+        onOpen={() => {}}
+        onAction={onAction}
+      />,
+    );
+
+    const actions = within(screen.getByTestId('up-next-quick-actions'));
+    const complete = actions.getByRole('button', { name: 'Complete' });
+    const snooze = actions.getByRole('button', { name: 'Snooze' });
+    expect(complete.hasAttribute('disabled')).toBe(true);
+    expect(snooze.hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(complete);
+    fireEvent.click(snooze);
+    expect(onAction).not.toHaveBeenCalled();
   });
 });

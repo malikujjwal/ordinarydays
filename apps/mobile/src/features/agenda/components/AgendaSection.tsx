@@ -19,6 +19,7 @@ export interface AgendaSectionProps {
    * to track how many are complete". A count is not a progress figure, so the guard holds.
    */
   headerCount?: number;
+  headerVariant?: 'caption' | 'sectionLabel';
   footer?: ReactNode;
   interstitial?: ReactNode;
   interstitialAfterIndex?: number;
@@ -44,6 +45,7 @@ export function AgendaSection({
   items,
   headerAction,
   headerCount,
+  headerVariant,
   footer,
   interstitial,
   interstitialAfterIndex,
@@ -71,6 +73,7 @@ export function AgendaSection({
     <View testID={testID} style={{ gap: theme.space[0] }}>
       <SectionHeader
         title={title}
+        {...(headerVariant === undefined ? {} : { variant: headerVariant })}
         {...(headerCount === undefined ? {} : { count: headerCount })}
         {...(headerAction === undefined ? {} : { action: headerAction })}
       />

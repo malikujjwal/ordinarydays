@@ -429,7 +429,7 @@ describe('persisted mutation defaults', () => {
     );
   });
 
-  it('replays one persisted recurrence PATCH exactly once under its stable intent id', async () => {
+  it('replays one persisted recurrence PATCH once and defers its empty-cache proof', async () => {
     const storage = fakeIntentStorage();
     const log = new IntentLog(INTENT_USER, storage);
     await log.hydrate();
@@ -463,7 +463,54 @@ describe('persisted mutation defaults', () => {
         replayIntents(target, relaunched),
         replayIntents(target, relaunched),
       ]);
-      await vi.waitFor(() => expect(relaunched.snapshot().intents).toHaveLength(0));
+      expect(relaunched.snapshot().intents).toEqual([
+        expect.objectContaining({
+          intentId: variables.intentId,
+          status: 'acknowledged',
+          reconciliationVersion: activity.updatedAt,
+        }),
+      ]);
+    } finally {
+      setActiveIntentLog(undefined);
+    }
+
+    expect(fake.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays one recurrence conversion and defers its empty-cache proof', async () => {
+    const storage = fakeIntentStorage();
+    const log = new IntentLog(INTENT_USER, storage);
+    await log.hydrate();
+    const variables: ConvertRecurrenceVariables = {
+      activityId: ACTIVITY_ID,
+      input: { selectedDate: '2026-08-12' },
+      idempotencyKey: 'convert-recurrence-stable',
+    };
+    await log.append({
+      intentId: variables.idempotencyKey,
+      mutationKey: activityMutationKeys.convertRecurrence,
+      variables,
+      entityId: ACTIVITY_ID,
+    });
+
+    const relaunched = new IntentLog(INTENT_USER, storage);
+    await relaunched.hydrate();
+    const target = createOfflineQueryClient();
+    const fake = fakeHttpClient();
+    registerActivityMutationDefaults(target, fake.client);
+    setActiveIntentLog(relaunched);
+    try {
+      await Promise.all([
+        replayIntents(target, relaunched),
+        replayIntents(target, relaunched),
+      ]);
+      expect(relaunched.snapshot().intents).toEqual([
+        expect.objectContaining({
+          intentId: variables.idempotencyKey,
+          status: 'acknowledged',
+          reconciliationVersion: activity.updatedAt,
+        }),
+      ]);
     } finally {
       setActiveIntentLog(undefined);
     }

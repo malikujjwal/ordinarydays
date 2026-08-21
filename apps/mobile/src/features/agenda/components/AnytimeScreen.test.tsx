@@ -20,16 +20,20 @@ const state = vi.hoisted(() => ({
   },
   toggleComplete: vi.fn(),
   onAgendaAction: vi.fn(),
+  actionOptions: vi.fn(),
 }));
 
 vi.mock('@/features/agenda/hooks/useAnytime', () => ({
   useAnytime: () => state.view,
 }));
 vi.mock('@/features/agenda/hooks/useAgendaActivityActions', () => ({
-  useAgendaActivityActions: () => ({
-    toggleComplete: state.toggleComplete,
-    onAgendaAction: state.onAgendaAction,
-  }),
+  useAgendaActivityActions: (options: unknown) => {
+    state.actionOptions(options);
+    return {
+      toggleComplete: state.toggleComplete,
+      onAgendaAction: state.onAgendaAction,
+    };
+  },
 }));
 
 const row = (activityId: string, title: string): ActivityListItem => ({
@@ -65,6 +69,7 @@ beforeEach(() => {
   state.view.loadMore.mockReset();
   state.toggleComplete.mockReset();
   state.onAgendaAction.mockReset();
+  state.actionOptions.mockReset();
 });
 
 describe('AnytimeScreen', () => {
@@ -72,6 +77,9 @@ describe('AnytimeScreen', () => {
     const mounted = mount();
 
     expect(screen.getByRole('heading', { name: 'Anytime' })).toBeDefined();
+    expect(state.actionOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ completionProjection: 'anytime' }),
+    );
     expect(screen.getByRole('progressbar', { name: 'Loading' }).children).toHaveLength(5);
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(mounted.onBack).toHaveBeenCalledOnce();

@@ -182,13 +182,16 @@ describe('Card', () => {
     expect(onPress).toHaveBeenCalledOnce();
   });
 
-  it('renders the hero surface with its own tint', () => {
+  it.each(schemes)('renders the hero surface with its own %s tint', (scheme) => {
     wrap(
       <Card hero radius="xl" elevation="e3" testID="hero">
         <Text>Dentist</Text>
       </Card>,
+      scheme,
     );
-    expect(screen.getByTestId('hero')).toBeDefined();
+    expect(getComputedStyle(screen.getByTestId('hero')).backgroundColor).toBe(
+      cssRgb(colors[scheme].upNextSurface),
+    );
   });
 });
 

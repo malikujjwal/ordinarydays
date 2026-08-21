@@ -33,6 +33,7 @@ export function AnytimeScreen({ onBack, onOpenAgendaItem }: AnytimeScreenProps) 
     today,
     currentMinute: toWallTime(now, anytime.timezone),
     timezone: anytime.timezone,
+    completionProjection: 'anytime',
     getScrollOffset: () => scrollOffset.current,
     restoreScrollOffset: (offset) => {
       requestAnimationFrame(() =>

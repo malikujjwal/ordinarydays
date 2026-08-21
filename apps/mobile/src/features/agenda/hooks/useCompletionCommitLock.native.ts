@@ -9,18 +9,18 @@ import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 
 export interface CompletionCommitState {
   readonly locked: boolean;
-  /** Present only after SQLite committed (or while its committed inverse is in flight). */
+  /** Requested value while committing, then the durable override until projection catches up. */
   readonly checkedOverride: boolean | undefined;
 }
 
 function stateFromSnapshot(snapshot: CompletionCommitSnapshot): CompletionCommitState {
-  if (snapshot === 'committed-checked' || snapshot === 'committing-from-checked') {
+  if (snapshot === 'committed-checked' || snapshot === 'committing-checked') {
     return { locked: true, checkedOverride: true };
   }
-  if (snapshot === 'committed-unchecked' || snapshot === 'committing-from-unchecked') {
+  if (snapshot === 'committed-unchecked' || snapshot === 'committing-unchecked') {
     return { locked: true, checkedOverride: false };
   }
-  return { locked: snapshot === 'committing', checkedOverride: undefined };
+  return { locked: false, checkedOverride: undefined };
 }
 
 /** Subscribes only the target row; unrelated completion commits cannot re-render it. */

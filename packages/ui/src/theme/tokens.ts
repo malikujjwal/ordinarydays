@@ -93,6 +93,14 @@ export const type = {
     weight: '600',
     letterSpacing: 0,
   },
+  /** Today screen's Schedule, Anytime and Tomorrow labels. */
+  sectionLabel: {
+    family: 'sans',
+    size: 12,
+    lineHeight: 15,
+    weight: '600',
+    letterSpacing: 0.8,
+  },
   /** Uppercase; the mock tracks its section labels wide. */
   caption: {
     family: 'sans',

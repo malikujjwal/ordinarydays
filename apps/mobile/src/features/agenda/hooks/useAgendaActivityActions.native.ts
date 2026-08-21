@@ -22,6 +22,8 @@ export interface UseAgendaActivityActionsOptions {
   currentMinute: string;
   timezone: string;
   agendaData?: AgendaData;
+  /** Anytime has its own revisioned saved-task projection instead of an Agenda day. */
+  completionProjection?: 'agenda' | 'anytime';
   getScrollOffset?: () => number;
   restoreScrollOffset?: (offset: number) => void;
 }
@@ -30,9 +32,25 @@ function refused(message: string): void {
   useToast.getState().show({ message, tone: 'error', duration: 10000 });
 }
 
-function viewerDateFor(data: AgendaData | undefined, item: AgendaItem): string {
+function isCurrentSession(state: ReturnType<typeof requireActiveNativeState>): boolean {
+  try {
+    return requireActiveNativeState() === state;
+  } catch {
+    return false;
+  }
+}
+
+function failureMessage(): string {
+  return "Couldn't save that change.";
+}
+
+function viewerDateFor(
+  options: UseAgendaActivityActionsOptions,
+  item: AgendaItem,
+): string | undefined {
+  if (options.completionProjection === 'anytime') return undefined;
   const key = completionTargetKey(item);
-  for (const day of data?.days ?? []) {
+  for (const day of options.agendaData?.days ?? []) {
     const found = [
       ...(day.upNext === undefined ? [] : [day.upNext]),
       ...day.schedule,
@@ -41,7 +59,7 @@ function viewerDateFor(data: AgendaData | undefined, item: AgendaItem): string {
     ].some((candidate) => completionTargetKey(candidate) === key);
     if (found) return day.date;
   }
-  return item.occurrenceDate ?? '';
+  return item.occurrenceDate ?? options.today;
 }
 
 /** Native Activity/Agenda actions publish only SQLite state committed with their outbox row. */
@@ -66,7 +84,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
       if (checked && isFutureRecurringOccurrence(item, options.today)) return;
       const originalIntentId = randomUUID();
       const inverseIntentId = randomUUID();
-      const viewerDate = viewerDateFor(options.agendaData, item);
+      const viewerDate = viewerDateFor(options, item);
       if (!completionGate.begin(item, checked, originalIntentId, viewerDate)) return;
       const wireScope = scopeToWire(scopeForRow(item));
       const scrollOffset = options.getScrollOffset?.() ?? 0;
@@ -81,6 +99,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         )
         .then((result) => {
           settleCompletion(item, checked, result);
+          if (!isCurrentSession(state)) return;
           if (result.kind === 'refused') {
             refused(result.error.message);
             return;
@@ -89,6 +108,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
             message: checked ? 'Task completed' : 'Completion undone',
             onCommit: () => undefined,
             onUndo: () => {
+              if (!isCurrentSession(state)) return;
               const inverseChecked = !checked;
               if (
                 !completionGate.begin(item, inverseChecked, inverseIntentId, viewerDate)
@@ -109,11 +129,20 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
                 )
                 .then((undo) => {
                   settleCompletion(item, inverseChecked, undo);
+                  if (!isCurrentSession(state)) return;
                   if (undo.kind === 'refused') refused(undo.error.message);
                   else options.restoreScrollOffset?.(scrollOffset);
+                })
+                .catch(() => {
+                  completionGate.settle(item, inverseChecked, false);
+                  if (isCurrentSession(state)) refused(failureMessage());
                 });
             },
           });
+        })
+        .catch(() => {
+          completionGate.settle(item, checked, false);
+          if (isCurrentSession(state)) refused(failureMessage());
         });
     },
     [completionGate, options, settleCompletion, state],
@@ -144,7 +173,7 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
           item,
           true,
           variables.idempotencyKey,
-          viewerDateFor(options.agendaData, item),
+          viewerDateFor(options, item),
         )
       )
         return;
@@ -156,10 +185,17 @@ export function useAgendaActivityActions(options: UseAgendaActivityActionsOption
         'scheduled',
         options,
       );
-      void request.then((result) => {
-        settleCompletion(item, true, result);
-        if (result.kind === 'refused') refused(result.error.message);
-      });
+      void request
+        .then((result) => {
+          settleCompletion(item, true, result);
+          if (isCurrentSession(state) && result.kind === 'refused') {
+            refused(result.error.message);
+          }
+        })
+        .catch(() => {
+          completionGate.settle(item, true, false);
+          if (isCurrentSession(state)) refused(failureMessage());
+        });
     },
     [completionGate, options, settleCompletion, state],
   );

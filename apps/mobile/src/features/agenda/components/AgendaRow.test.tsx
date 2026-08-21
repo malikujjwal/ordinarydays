@@ -432,6 +432,93 @@ describe('the note line', () => {
      */
     expect(screen.getByTestId('agenda-row-note').style.webkitLineClamp).not.toBe('2');
   });
+
+  it('keeps the preferred compact size after completion', () => {
+    const rendered = mount(
+      <AgendaRow
+        item={item('task', { noteExcerpt: 'Ask about the crown estimate' })}
+        onOpen={() => {}}
+      />,
+    );
+    const openSize = screen.getByTestId('agenda-row-note').style.fontSize;
+
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <AgendaRow
+          item={item('task', {
+            status: 'completed',
+            noteExcerpt: 'Ask about the crown estimate',
+          })}
+          onOpen={() => {}}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(openSize).toBe('13px');
+    expect(screen.getByTestId('agenda-row-note').style.fontSize).toBe(openSize);
+  });
+
+  it('keeps the dense Up Next preview to one title and one combined metadata line', () => {
+    const title = 'A long Up Next title that would otherwise wrap onto another line';
+    mount(
+      <AgendaRow
+        dense
+        subtitlePrefix="9:30 AM"
+        item={item('task', {
+          title,
+          noteExcerpt:
+            'This note remains available in the ordinary row and Activity Detail',
+          subtitle: 'Morning routine',
+          isRecurring: true,
+          recurrenceDescription: 'Daily',
+        })}
+        onOpen={() => {}}
+      />,
+    );
+
+    expect(screen.getByText(title)).toBeDefined();
+    const rowSource = readFileSync(
+      resolve(process.cwd(), 'src/features/agenda/components/AgendaRow.tsx'),
+      'utf8',
+    );
+    expect(rowSource).toContain('numberOfLines={dense ? 1 : undefined}');
+    expect(screen.queryByTestId('agenda-row-note')).toBeNull();
+    expect(screen.getByTestId('agenda-row-metadata').textContent).toBe(
+      '9:30 AM · Morning routine · ↻ Daily',
+    );
+  });
+});
+
+describe('completion typography', () => {
+  it.each([
+    [false, { fontSize: '16px', fontWeight: '600' }],
+    [true, { fontSize: '15px', fontWeight: '400' }],
+  ] as const)('keeps the task title stable when isPast is %s', (isPast, expected) => {
+    const rendered = mount(
+      <AgendaRow item={item('task', { isPast })} onOpen={() => {}} />,
+    );
+    const openTitle = screen.getByText('Evening plan');
+    const openTypography = {
+      fontSize: openTitle.style.fontSize,
+      fontWeight: openTitle.style.fontWeight,
+    };
+
+    rendered.rerender(
+      <ThemeProvider scheme="light">
+        <AgendaRow
+          item={item('task', { isPast, status: 'completed' })}
+          onOpen={() => {}}
+        />
+      </ThemeProvider>,
+    );
+    const completedTitle = screen.getByText('Evening plan');
+
+    expect(openTypography).toEqual(expected);
+    expect({
+      fontSize: completedTitle.style.fontSize,
+      fontWeight: completedTitle.style.fontWeight,
+    }).toEqual(openTypography);
+  });
 });
 
 describe('AgendaRow vertical alignment', () => {
@@ -479,6 +566,32 @@ describe('AgendaRow vertical alignment', () => {
     );
 
     expect(screen.getByTestId('agenda-row-body').style.justifyContent).toBe('flex-start');
+  });
+
+  it('keeps the dense checkbox visual inside the clipped Up Next card edge', () => {
+    mount(
+      <AgendaRow
+        dense
+        subtitlePrefix="9:30 AM"
+        item={item('task', { title: 'Up Next task' })}
+        onOpen={() => {}}
+        onToggleComplete={() => {}}
+      />,
+    );
+
+    const row = screen.getByTestId(`agenda-row-${item('task').activityId}`);
+    const leading = screen.getByTestId('agenda-row-leading');
+    const target = screen.getByTestId('agenda-leading-checkbox');
+    const visual = screen.getByTestId('agenda-leading-checkbox-visual');
+    const visualTop =
+      Number.parseFloat(row.style.paddingTop) +
+      Number.parseFloat(leading.style.marginTop) +
+      (Number.parseFloat(target.style.minHeight) -
+        Number.parseFloat(visual.style.height)) /
+        2;
+
+    expect(Number.parseFloat(row.style.paddingTop)).toBe(space[1]);
+    expect(visualTop).toBeGreaterThanOrEqual(0);
   });
 
   /** The chip takes the rail on an untimed row, which is the only time it renders there. */
@@ -737,6 +850,29 @@ describe('a pending row', () => {
     expect(screen.getByTestId('agenda-row-recurrence-state').textContent).toBe(
       'Will update when online',
     );
+  });
+
+  it('omits transient recurrence status from the dense Up Next preview', async () => {
+    const log = new IntentLog('usr_01J0000000000000000000000A', memoryStorage());
+    await log.hydrate();
+    await log.append({
+      intentId: 'intent-repeat',
+      mutationKey: ['activity', 'patch'],
+      variables: { input: { recurrence: null } },
+      entityId: PENDING_ID,
+    });
+    setActiveIntentLog(log);
+    mount(
+      <AgendaRow
+        dense
+        subtitlePrefix="9:30 AM"
+        item={item('task', { activityId: PENDING_ID, isRecurring: true })}
+        onOpen={vi.fn()}
+        onToggleComplete={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId('agenda-row-recurrence-state')).toBeNull();
   });
 
   it('shows retry copy after acknowledgement when the canonical read fails', async () => {

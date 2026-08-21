@@ -626,8 +626,24 @@ request generation, focus/app state and unique native session still match. Local
 coalesce after 90 ms idle and are forced through after 250 ms; canonical/server invalidations
 still dominate with a full-window read. Today now uses the same targeted local-day path as
 Plans while retaining its two-day startup/canonical window. The completion presentation gate
-is still exact-intent and post-commit, and now refuses to clear from a projection older than
-that completion's commit revision and viewer date.
+is still exact-intent: it shows and locks the requested checkbox value while the serialized
+SQLite write is pending, rolls back on refusal, then retains an accepted value until a
+projection at or after that completion's commit revision covers its viewer date.
+
+One session-owned outbox presentation store holds the sole `outbox` invalidation subscription.
+It reads presentation-only intent snapshots through the same WAL projection reader, fences them
+with the invalidation's commit revision plus an in-memory request generation, and coalesces a
+burst behind one trailing read. A failed final read remains dirty and retries with capped delayed
+backoff until it succeeds, a newer invalidation supersedes it, or session shutdown cancels it.
+Stable global, entity and exact-occurrence snapshots let rows subscribe without scanning the
+whole outbox or waking unrelated occurrences. Sync decisions, claims, retries, cancellation,
+ownership checks and every other write-sensitive outbox read stay on the serialized
+writer-backed repository.
+
+Anytime uses its own presentation-only WAL snapshot for saved-task rows plus revision. The
+completion gate treats row absence as the committed completion projection and row presence as
+the committed Undo projection, but only at or after the action's commit revision. This avoids an
+undated task depending on an unrelated Agenda-day refresh to unlock.
 
 Development timing intentionally distinguishes scheduler wait, writer transaction envelope,
 Expo SQLite calls, repository decoding and React/result application. Expo SQLite 16 does not
@@ -645,9 +661,10 @@ visible, recording the `native_action_committed`, `native_agenda_read_completed`
 
 1. Cold-launch Today, complete/uncomplete 20 ordinary rows, and save the first two performance
    summaries. Continue the same session through at least 60 total toggles while alternating
-   Today and Plans. The checkbox may change only after `native_action_committed`, must not wait
-   for the later Agenda read, and the long-session completion queue/writer p95 must not show a
-   rising queue caused by full or targeted Agenda reads.
+   Today and Plans. The checkbox must show the requested value immediately while locked, must
+   roll back if the local write is refused, and after `native_action_committed` must not wait for
+   the later Agenda read. The long-session completion queue/writer p95 must not show a rising
+   queue caused by full or targeted Agenda reads.
 2. During a full 62-day Plans refresh, toggle a visible row in Today or Plans. The writer commit
    must finish while the projection read is outstanding; the older full result must not reverse
    the checkbox. Bursts on one or several dates must produce one bounded targeted batch rather

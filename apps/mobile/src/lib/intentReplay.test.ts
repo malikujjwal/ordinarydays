@@ -121,4 +121,33 @@ describe('level-triggered intent replay', () => {
     expect(target.dispatch).toHaveBeenCalledTimes(6);
     expect(log.pending()).toHaveLength(1);
   });
+
+  it('retains a recurrence conversion until canonical topology reconciliation', async () => {
+    const log = new IntentLog(USER, storage());
+    await log.hydrate();
+    await log.append({
+      intentId: 'convert-recurrence',
+      mutationKey: ['activity', 'convert-recurrence'],
+      variables: {
+        activityId: ENTITY,
+        input: { selectedDate: '2026-08-21' },
+        idempotencyKey: 'convert-recurrence',
+      },
+      entityId: ENTITY,
+    });
+    const target = runner(async () => ({
+      activity: { updatedAt: '2026-08-21T15:00:00.000Z' },
+    }));
+    stopReplay = registerIntentReplayTarget(target, log);
+
+    await requestActiveIntentReplay('enqueue');
+
+    expect(log.snapshot().intents).toEqual([
+      expect.objectContaining({
+        intentId: 'convert-recurrence',
+        status: 'acknowledged',
+        reconciliationVersion: '2026-08-21T15:00:00.000Z',
+      }),
+    ]);
+  });
 });

@@ -38,7 +38,9 @@ describe('completion commit gate', () => {
     expect(gate.begin(scheduled, true, undefined, '2026-08-20')).toBe(true);
     expect(gate.begin(scheduled, true, undefined, '2026-08-20')).toBe(false);
     expect(gate.isLocked(scheduled)).toBe(true);
-    expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe('committing');
+    expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
+      'committing-checked',
+    );
 
     gate.settle(scheduled, true, true, 5);
     expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe('committed-checked');
@@ -71,7 +73,7 @@ describe('completion commit gate', () => {
     expect(gate.begin(scheduled, false, undefined, '2026-08-20')).toBe(true);
     expect(gate.isLocked(scheduled)).toBe(true);
     expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
-      'committing-from-checked',
+      'committing-unchecked',
     );
 
     gate.settle(scheduled, false, true, 6);
@@ -91,6 +93,43 @@ describe('completion commit gate', () => {
 
     expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe('committed-checked');
     expect(gate.isLocked(scheduled)).toBe(true);
+  });
+
+  it('reconsiders a projection that arrived before a failed inverse settled', () => {
+    const gate = new CompletionCommitGate();
+    const scheduled = item();
+
+    gate.begin(scheduled, true, 'complete', '2026-08-20');
+    gate.settle(scheduled, true, true, 5);
+    gate.begin(scheduled, false, 'undo', '2026-08-20');
+
+    // The checked projection cannot settle the in-flight inverse, but it is retained.
+    gate.reconcile(agenda(item({ status: 'completed' })), 5);
+    expect(gate.snapshotForKey(completionTargetKey(scheduled))).toBe(
+      'committing-unchecked',
+    );
+
+    gate.settle(scheduled, false, false);
+    expect(gate.isLocked(scheduled)).toBe(false);
+  });
+
+  it('uses revision-fenced Anytime presence to acknowledge completion and Undo', () => {
+    const gate = new CompletionCommitGate();
+    const saved = item({ status: 'saved' });
+
+    gate.begin(saved, true, 'complete-anytime', undefined);
+    gate.settle(saved, true, true, 7);
+    gate.reconcileAnytime([], 6);
+    expect(gate.isLocked(saved)).toBe(true);
+    gate.reconcileAnytime([], 7);
+    expect(gate.isLocked(saved)).toBe(false);
+
+    gate.begin(saved, false, 'undo-anytime', undefined);
+    gate.settle(saved, false, true, 8);
+    gate.reconcileAnytime([], 8);
+    expect(gate.isLocked(saved)).toBe(true);
+    gate.reconcileAnytime([saved], 8);
+    expect(gate.isLocked(saved)).toBe(false);
   });
 
   it('unlocks an accepted completion when the row leaves the current projection', () => {

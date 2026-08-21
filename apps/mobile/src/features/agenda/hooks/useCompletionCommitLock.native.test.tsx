@@ -64,7 +64,7 @@ describe('native completion lock subscription', () => {
     expect(mounted.result.current).toBe(false);
   });
 
-  it('exposes a value only after SQLite accepts the write, then clears on projection', () => {
+  it('exposes the requested value immediately, then retains it through projection', () => {
     const coordinator = {};
     nativeState.current = { coordinator };
     const gate = completionCommitGateFor(coordinator);
@@ -79,7 +79,7 @@ describe('native completion lock subscription', () => {
     });
     expect(mounted.result.current).toEqual({
       locked: true,
-      checkedOverride: undefined,
+      checkedOverride: true,
     });
 
     act(() => {
@@ -89,6 +89,30 @@ describe('native completion lock subscription', () => {
 
     act(() => {
       gate.reconcile(completed, 1);
+    });
+    expect(mounted.result.current).toEqual({
+      locked: false,
+      checkedOverride: undefined,
+    });
+  });
+
+  it('shows an uncompletion immediately and restores the committed check on refusal', () => {
+    const coordinator = {};
+    nativeState.current = { coordinator };
+    const completedTask = { ...task, status: 'completed' as const };
+    const gate = completionCommitGateFor(coordinator);
+    const mounted = renderHook(() => useCompletionCommitState(completedTask));
+
+    act(() => {
+      gate.begin(completedTask, false, 'inverse', '2026-08-20');
+    });
+    expect(mounted.result.current).toEqual({
+      locked: true,
+      checkedOverride: false,
+    });
+
+    act(() => {
+      gate.settle(completedTask, false, false);
     });
     expect(mounted.result.current).toEqual({
       locked: false,

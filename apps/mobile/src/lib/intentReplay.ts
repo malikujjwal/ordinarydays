@@ -3,6 +3,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/apiClient';
 import { recoverFromCollision } from '@/lib/collisionRecovery';
 import type { Intent, IntentLog } from '@/lib/intentLog';
+import { changesRecurrenceTopology } from '@/lib/mutationKeys';
 
 /**
  * The bridge from the durable log to TanStack's execution machinery.
@@ -306,9 +307,20 @@ async function replayPass(
     result.attempted += 1;
     try {
       const data = await runIntent(client, claimed);
-      await (isRecurrencePatch(claimed)
-        ? log.acknowledgeForReconciliation(claimed.intentId, activityVersionFrom(data))
-        : log.acknowledge(claimed.intentId));
+      if (changesRecurrenceTopology(claimed)) {
+        const settled = log
+          .snapshot()
+          .intents.find((candidate) => candidate.intentId === claimed.intentId);
+        /** A targeted-read failure settled inside the mutation must retain its Retry state. */
+        if (settled?.status !== 'acknowledged' || settled.lastError === undefined) {
+          await log.acknowledgeForReconciliation(
+            claimed.intentId,
+            activityVersionFrom(data),
+          );
+        }
+      } else {
+        await log.acknowledge(claimed.intentId);
+      }
       result.acknowledged += 1;
     } catch (error) {
       const collidedId = isCreateCollision(claimed, error)
@@ -348,16 +360,6 @@ async function replayPass(
     }
   }
   return result;
-}
-
-function isRecurrencePatch(intent: Intent): boolean {
-  if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'patch') {
-    return false;
-  }
-  const input = (intent.variables as { input?: unknown } | undefined)?.input;
-  return (
-    typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
-  );
 }
 
 function activityVersionFrom(data: unknown): string | undefined {

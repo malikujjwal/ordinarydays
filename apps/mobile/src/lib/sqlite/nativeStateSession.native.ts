@@ -21,6 +21,7 @@ import {
   setActiveNativeState,
 } from '@/lib/sqlite/nativeState';
 import { OutboxRepository } from '@/lib/sqlite/outbox';
+import { OutboxPresentationStore } from '@/lib/sqlite/outboxPresentationStore';
 import { recoverAbandonedOutbox } from '@/lib/sqlite/sessionRecovery';
 import { SerializedNativeSyncEngine } from '@/lib/sqlite/syncEngine';
 
@@ -73,7 +74,11 @@ async function startSession(
     account.transactions,
     account.projections,
   );
-  const anytime = new AnytimeRepository(account.database, account.subscriptions);
+  const anytime = new AnytimeRepository(
+    account.database,
+    account.subscriptions,
+    account.projections,
+  );
   const outbox = new OutboxRepository(account.database);
   const importer = new LegacyImporter(
     account.transactions,
@@ -131,6 +136,12 @@ async function startSession(
     outbox,
     sync,
   );
+  const outboxPresentation = new OutboxPresentationStore(
+    ownerUserId,
+    account.subscriptions,
+    account.projections,
+  );
+  outboxPresentation.start();
   const stopOnline = onlineManager.subscribe((online) => {
     if (online) sync.request('connectivity');
   });
@@ -151,6 +162,7 @@ async function startSession(
     stop: () => {
       if (stopped) return;
       stopped = true;
+      outboxPresentation.stop();
       sync.stop();
       stopOnline();
       appState.remove();
@@ -174,6 +186,7 @@ async function startSession(
     agenda,
     anytime,
     outbox,
+    outboxPresentation,
     coordinator,
     sync,
   });

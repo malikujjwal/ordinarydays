@@ -10,6 +10,7 @@ import { AnytimeRepository } from './anytimeRepository';
 import type { SqliteDatabase } from './database';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { OutboxRepository } from './outbox';
+import type { RevisionedProjectionReader } from './projectionReader';
 import { RepositorySubscriptions } from './subscriptions';
 import { SerializedTransactionRunner } from './transaction';
 
@@ -30,9 +31,19 @@ describe('native Anytime SQLite index', () => {
 
   it('replaces the complete server index and reads it without a query cache', async () => {
     if (database === undefined) throw new Error('test database not open');
+    const currentDatabase = database;
     const subscriptions = new RepositorySubscriptions();
     const transactions = new SerializedTransactionRunner(database, subscriptions);
-    const anytime = new AnytimeRepository(database, subscriptions);
+    const projections: RevisionedProjectionReader = {
+      snapshot: <T>(task: Parameters<RevisionedProjectionReader['snapshot']>[0]) =>
+        currentDatabase.readTransaction(async (reader) => ({
+          data: (await task(reader)) as T,
+          commitRevision: 9,
+          source: 'reader' as const,
+          metrics: { callCount: 3, durationMs: 1 },
+        })),
+    };
+    const anytime = new AnytimeRepository(database, subscriptions, projections);
 
     await transactions.run((transaction) =>
       anytime.replaceCanonical(transaction, [
@@ -56,6 +67,10 @@ describe('native Anytime SQLite index', () => {
     );
 
     expect((await anytime.read()).map((item) => item.title)).toEqual(['First', 'Second']);
+    await expect(anytime.readSnapshot()).resolves.toMatchObject({
+      commitRevision: 9,
+      items: [{ title: 'First' }, { title: 'Second' }],
+    });
 
     await transactions.run((transaction) =>
       anytime.replaceCanonical(transaction, [

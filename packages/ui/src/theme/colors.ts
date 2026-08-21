@@ -51,6 +51,8 @@ export interface SemanticColors {
   accent: string;
   accentDeep: string;
   accentSurface: string;
+  /** The Up Next hero fill; separate from selected-row and chip surfaces. */
+  upNextSurface: string;
   /** Decorative accent-surface outline. Never a control boundary. */
   accentBorder: string;
   /**
@@ -98,6 +100,7 @@ const light: SemanticColors = {
   accent: '#8B6374',
   accentDeep: '#795565',
   accentSurface: '#EEE3E7',
+  upNextSurface: '#FBF7F9',
   accentBorder: '#C7AAB6',
   accentControl: '#8B6374',
 
@@ -166,6 +169,7 @@ const dark: SemanticColors = {
   accent: '#9F667F',
   accentDeep: '#AD748C',
   accentSurface: '#2D2026',
+  upNextSurface: '#292620',
   accentBorder: '#5A3A49',
   accentControl: '#AD748C',
 

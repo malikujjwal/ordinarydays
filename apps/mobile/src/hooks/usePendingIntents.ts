@@ -89,7 +89,7 @@ export function usePendingCreate(entityId: string | undefined): PendingCreateSta
   return pendingCreateState(intents, entityId);
 }
 
-/** Durable row presentation for recurrence PATCH lifecycle only; CREATE never enters it. */
+/** Durable row presentation for recurrence-topology lifecycle only; CREATE never enters it. */
 export function useRecurrenceEditState(
   entityId: string | undefined,
 ): RecurrenceEditState {

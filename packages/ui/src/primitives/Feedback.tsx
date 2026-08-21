@@ -19,11 +19,18 @@ export interface SectionHeaderProps {
   title: string;
   count?: number;
   action?: React.ReactNode;
+  variant?: 'caption' | 'sectionLabel';
   testID?: string;
 }
 
 /** `UP NEXT · IN 2H 15M`, `EARLIER TODAY`, `SCHEDULE`. Caption, uppercase, wide-tracked. */
-export function SectionHeader({ title, count, action, testID }: SectionHeaderProps) {
+export function SectionHeader({
+  title,
+  count,
+  action,
+  variant = 'caption',
+  testID,
+}: SectionHeaderProps) {
   const theme = useTheme();
 
   return (
@@ -48,7 +55,7 @@ export function SectionHeader({ title, count, action, testID }: SectionHeaderPro
        * writes `title="UP NEXT"` to make a test pass.
        */}
       <Text
-        variant="caption"
+        variant={variant}
         color="textSecondary"
         role="heading"
         aria-level={2}
@@ -70,7 +77,7 @@ export function SectionHeader({ title, count, action, testID }: SectionHeaderPro
       {action === undefined ? null : (
         <View
           style={{
-            marginVertical: -(theme.layout.hitTarget - type.caption.lineHeight) / 2,
+            marginVertical: -(theme.layout.hitTarget - type[variant].lineHeight) / 2,
           }}
         >
           {action}
@@ -87,7 +94,7 @@ export function SectionHeader({ title, count, action, testID }: SectionHeaderPro
        */}
       {action !== undefined || count === undefined ? null : (
         <Text
-          variant="caption"
+          variant={variant}
           color="textMuted"
           aria-hidden
           accessibilityElementsHidden

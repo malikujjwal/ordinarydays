@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApiError } from '@od/shared/client';
+import type { CreateActivityInput } from '@od/shared/schemas';
 import type { Activity } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,12 +19,16 @@ import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { OutboxRepository } from './outbox';
 import { recoverAbandonedOutbox } from './sessionRecovery';
 import { RepositorySubscriptions } from './subscriptions';
-import { SerializedNativeSyncEngine } from './syncEngine';
+import {
+  CanonicalActivityInstallDeferredError,
+  SerializedNativeSyncEngine,
+} from './syncEngine';
 import { SerializedTransactionRunner } from './transaction';
 
 const OWNER = 'usr_01J0000000000000000000000A';
 const ACTIVITY = 'act_01J0000000000000000000000A';
 const OTHER = 'act_01J0000000000000000000000B';
+const THIRD = 'act_01J0000000000000000000000C';
 const clock = { today: '2026-08-19', currentMinute: '08:00' };
 
 describe('serialized native convergence guard', () => {
@@ -279,6 +284,42 @@ describe('serialized native convergence guard', () => {
       occurrence: { nominalDate: '2026-08-20', date: '2026-08-20' },
       capabilities: { complete: true, skip: true, snooze: true },
     });
+  });
+
+  it('reports a targeted detail pull as refused when its server version is stale', async () => {
+    const current = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (current === undefined) throw new Error('missing targeted stale-version fixture');
+    const newer = {
+      ...current,
+      activity: {
+        ...current.activity,
+        title: 'Newer installed server truth',
+        updatedAt: '2026-08-19T05:00:00.000Z',
+      },
+      capabilities: { complete: true, skip: true, snooze: true },
+    };
+    await transactions.run((transaction) =>
+      activities.installAcknowledgedActivity(transaction, newer.activity, newer),
+    );
+    const stale = {
+      ...newer,
+      activity: {
+        ...newer.activity,
+        title: 'Older targeted response',
+        updatedAt: '2026-08-19T04:00:00.000Z',
+      },
+    };
+    const sync = syncEngine({
+      pull: { ...pullAdapter(), activity: async () => stale },
+    });
+
+    await expect(
+      sync.pullActivity({ kind: 'activity', activityId: ACTIVITY }),
+    ).rejects.toBeInstanceOf(CanonicalActivityInstallDeferredError);
+    sync.stop();
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity.title,
+    ).toBe('Newer installed server truth');
   });
 
   it('coalesces a complete paged Anytime refresh into one SQLite replacement', async () => {
@@ -1266,6 +1307,274 @@ describe('serialized native convergence guard', () => {
     ).toBe('2026-08-19T02:00:00.000Z');
   });
 
+  it.each([
+    ['Task', false],
+    ['Task', true],
+    ['Plan', false],
+    ['Plan', true],
+  ] as const)(
+    'installs clock-skewed canonical capabilities for a %s (scheduled=%s)',
+    async (kind, scheduled) => {
+      const input: CreateActivityInput =
+        kind === 'Task'
+          ? {
+              activityId: OTHER,
+              objectKind: 'task',
+              type: 'task',
+              title: `${kind} created ahead of server`,
+              ...(scheduled
+                ? { schedule: { date: '2026-08-19', time: '10:00', timezone: 'UTC' } }
+                : {}),
+            }
+          : {
+              activityId: OTHER,
+              objectKind: 'plan',
+              type: 'custom',
+              title: `${kind} created ahead of server`,
+              ...(scheduled
+                ? { schedule: { date: '2026-08-19', time: '10:00', timezone: 'UTC' } }
+                : {}),
+            };
+      await transactions.run((transaction) =>
+        service.create(
+          transaction,
+          OWNER,
+          { input, idempotencyKey: `clock-skew-${kind}-${scheduled}` },
+          clock,
+          '2026-08-19T23:00:00.000Z',
+        ),
+      );
+      expect(
+        await database?.first(
+          'SELECT canonical_version FROM activities WHERE activity_id = ?;',
+          [OTHER],
+        ),
+      ).toEqual({ canonical_version: null });
+      const local = await activities.read({ kind: 'activity', activityId: OTHER });
+      if (local === undefined) throw new Error('missing clock-skew create fixture');
+      const serverVersion = '2026-08-19T02:00:00.000Z';
+      const canonicalActivity: Activity = {
+        ...local.activity,
+        createdAt: '2026-08-19T01:00:00.000Z',
+        lastActivityAt: serverVersion,
+        updatedAt: serverVersion,
+      };
+      const canonicalDetail = {
+        activity: canonicalActivity,
+        reminders: [],
+        capabilities: { complete: true, skip: true, snooze: true },
+        completedOccurrenceCount: 0,
+      };
+      const create = vi.fn(async () => canonicalActivity);
+      const pullActivity = vi.fn(async () => canonicalDetail);
+      const sync = syncEngine({
+        push: { ...pushTransport(), create },
+        pull: { ...pullAdapter(), activity: pullActivity },
+      });
+
+      await sync.syncNow();
+      sync.stop();
+
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(pullActivity).toHaveBeenCalledTimes(1);
+      expect(await outbox.forEntity(OTHER)).toEqual([]);
+      expect(
+        await database?.first(
+          `SELECT local_state, canonical_version
+           FROM activities WHERE activity_id = ?;`,
+          [OTHER],
+        ),
+      ).toEqual({ local_state: 'canonical', canonical_version: serverVersion });
+      expect(
+        (await activities.read({ kind: 'activity', activityId: OTHER }))?.capabilities
+          ?.complete,
+      ).toBe(true);
+    },
+  );
+
+  it('acknowledges a create without overwriting a later local intent', async () => {
+    await transactions.run((transaction) =>
+      service.create(
+        transaction,
+        OWNER,
+        {
+          input: {
+            activityId: OTHER,
+            objectKind: 'task',
+            type: 'task',
+            title: 'Initial local create',
+          },
+          idempotencyKey: 'create-before-later-intent',
+        },
+        clock,
+        '2026-08-19T23:00:00.000Z',
+      ),
+    );
+    const local = await activities.read({ kind: 'activity', activityId: OTHER });
+    if (local === undefined) throw new Error('missing later-create-intent fixture');
+    let releaseCreate: ((activity: Activity) => void) | undefined;
+    let releasePatch: ((activity: Activity) => void) | undefined;
+    const createResponse = new Promise<Activity>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const patchResponse = new Promise<Activity>((resolve) => {
+      releasePatch = resolve;
+    });
+    const create = vi.fn(() => createResponse);
+    const patch = vi.fn(() => patchResponse);
+    const sync = syncEngine({ push: { ...pushTransport(), create, patch } });
+    const running = sync.syncNow();
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+
+    await transactions.run(async (transaction) => {
+      await outbox.append(transaction.database, {
+        intentId: 'later-create-patch',
+        mutationKey: ['activity', 'patch'],
+        variables: {
+          activityId: OTHER,
+          intentId: 'later-create-patch',
+          input: { title: 'Later local title' },
+          ifMatch: 'v0',
+          changeNames: ['title'],
+        },
+        entityId: OTHER,
+      });
+      await activities.patchLocal(
+        transaction,
+        OTHER,
+        { title: 'Later local title' },
+        'queued',
+      );
+      transaction.changed('outbox');
+    });
+    releaseCreate?.({
+      ...local.activity,
+      title: 'Create response title',
+      updatedAt: '2026-08-19T02:00:00.000Z',
+    });
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+
+    expect(
+      (await activities.read({ kind: 'activity', activityId: OTHER }))?.activity.title,
+    ).toBe('Later local title');
+    expect(await outbox.forEntity(OTHER)).toMatchObject([
+      { intentId: 'later-create-patch', status: 'in_flight' },
+    ]);
+    const later = await activities.read({ kind: 'activity', activityId: OTHER });
+    if (later === undefined) throw new Error('missing later local projection');
+    releasePatch?.({
+      ...later.activity,
+      updatedAt: '2026-08-19T03:00:00.000Z',
+    });
+    await running;
+    sync.stop();
+  });
+
+  it('keeps distinct identities and capabilities across create-delete-create at one time', async () => {
+    const serverActivities = new Map<string, Activity>();
+    const create = vi.fn<ActivityPushTransport['create']>(async (input) => {
+      if (input.activityId === undefined) throw new Error('missing stable create id');
+      const local = await activities.read({
+        kind: 'activity',
+        activityId: input.activityId,
+      });
+      if (local === undefined) throw new Error('missing repeated-create projection');
+      const canonicalActivity = {
+        ...local.activity,
+        updatedAt:
+          input.activityId === OTHER
+            ? '2026-08-19T02:00:00.000Z'
+            : '2026-08-19T04:00:00.000Z',
+      };
+      serverActivities.set(input.activityId, canonicalActivity);
+      return canonicalActivity;
+    });
+    const remove = vi.fn<ActivityPushTransport['remove']>(async (activityId) => {
+      serverActivities.delete(activityId);
+    });
+    const pullActivity = vi.fn<ActivityPullAdapter['activity']>(async (target) => {
+      const activity = serverActivities.get(target.activityId);
+      if (activity === undefined) throw new Error('missing repeated-create server row');
+      return {
+        activity,
+        reminders: [],
+        capabilities: { complete: true, skip: true, snooze: true },
+      };
+    });
+    const sync = syncEngine({
+      push: { ...pushTransport(), create, remove },
+      pull: { ...pullAdapter(), activity: pullActivity },
+    });
+    const sameTime = {
+      date: '2026-08-19',
+      time: '10:00',
+      timezone: 'UTC',
+    } as const;
+
+    await transactions.run((transaction) =>
+      service.create(
+        transaction,
+        OWNER,
+        {
+          input: {
+            activityId: OTHER,
+            objectKind: 'task',
+            type: 'task',
+            title: 'First identity',
+            schedule: sameTime,
+          },
+          idempotencyKey: 'repeat-create-one',
+        },
+        clock,
+        '2026-08-19T23:00:00.000Z',
+      ),
+    );
+    await sync.syncNow();
+    expect(
+      (await activities.read({ kind: 'activity', activityId: OTHER }))?.capabilities
+        ?.complete,
+    ).toBe(true);
+
+    await transactions.run((transaction) =>
+      service.remove(transaction, {
+        activityId: OTHER,
+        intentId: 'repeat-delete-one',
+      }),
+    );
+    await sync.syncNow();
+    expect(
+      await activities.read({ kind: 'activity', activityId: OTHER }),
+    ).toBeUndefined();
+
+    await transactions.run((transaction) =>
+      service.create(
+        transaction,
+        OWNER,
+        {
+          input: {
+            activityId: THIRD,
+            objectKind: 'task',
+            type: 'task',
+            title: 'Final identity',
+            schedule: sameTime,
+          },
+          idempotencyKey: 'repeat-create-two',
+        },
+        clock,
+        '2026-08-20T23:00:00.000Z',
+      ),
+    );
+    await sync.syncNow();
+    sync.stop();
+
+    expect(OTHER).not.toBe(THIRD);
+    expect(await outbox.forEntity(THIRD)).toEqual([]);
+    expect(await activities.read({ kind: 'activity', activityId: THIRD })).toMatchObject({
+      activity: { activityId: THIRD, title: 'Final identity' },
+      capabilities: { complete: true },
+    });
+  });
+
   it('clears Pending after a transiently offline create receives its canonical response', async () => {
     await transactions.run((transaction) =>
       service.create(
@@ -1354,10 +1663,11 @@ describe('serialized native convergence guard', () => {
     );
     const local = await activities.read({ kind: 'activity', activityId: OTHER });
     if (local === undefined) throw new Error('missing create enrichment fixture');
-    const create = vi.fn(async () => ({
+    const canonicalActivity = {
       ...local.activity,
       updatedAt: '2026-08-19T02:00:00.000Z',
-    }));
+    };
+    const create = vi.fn(async () => canonicalActivity);
     const detail = vi.fn(async () => {
       throw new Error('detail projection is not readable yet');
     });
@@ -1373,10 +1683,35 @@ describe('serialized native convergence guard', () => {
     expect(detail).toHaveBeenCalledTimes(1);
     expect(await outbox.forEntity(OTHER)).toEqual([]);
     expect(
-      await database?.first('SELECT local_state FROM activities WHERE activity_id = ?;', [
-        OTHER,
-      ]),
-    ).toEqual({ local_state: 'canonical' });
+      await database?.first(
+        `SELECT local_state, canonical_version, capabilities_json
+         FROM activities WHERE activity_id = ?;`,
+        [OTHER],
+      ),
+    ).toEqual({
+      local_state: 'canonical',
+      canonical_version: canonicalActivity.updatedAt,
+      capabilities_json: null,
+    });
+
+    const hydrate = syncEngine({
+      pull: {
+        ...pullAdapter(),
+        activity: async () => ({
+          activity: canonicalActivity,
+          reminders: [],
+          capabilities: { complete: true, skip: true, snooze: true },
+        }),
+      },
+    });
+    await expect(
+      hydrate.pullActivity({ kind: 'activity', activityId: OTHER }),
+    ).resolves.toMatchObject({ capabilities: { complete: true } });
+    hydrate.stop();
+    expect(
+      (await activities.read({ kind: 'activity', activityId: OTHER }))?.activity
+        .updatedAt,
+    ).toBe(canonicalActivity.updatedAt);
   });
 
   it('coalesces foreground, reconnect and manual requests into one in-flight pull', async () => {
@@ -1679,8 +2014,91 @@ describe('serialized native convergence guard', () => {
     ).toMatchObject({ activity_id: ACTIVITY });
   });
 
+  it('reconciles Agenda topology after converting a recurrence to a one-off', async () => {
+    const activity = await seedRecurring();
+    const before = await agenda.read({
+      from: '2026-08-19',
+      to: '2026-08-19',
+      timezone: 'UTC',
+    });
+    const recurringItem = before.days[0]?.schedule.find(
+      (item) => item.activityId === ACTIVITY,
+    );
+    if (recurringItem === undefined) throw new Error('missing recurring Agenda row');
+    expect(recurringItem.isRecurring).toBe(true);
+
+    await transactions.run((transaction) =>
+      service.appendOnly(transaction, 'convert-recurrence', {
+        activityId: ACTIVITY,
+        idempotencyKey: 'convert-to-one-off',
+        input: { selectedDate: '2026-08-19' },
+      }),
+    );
+    const { recurrence: _recurrence, ...oneOff } = activity;
+    const converted: Activity = {
+      ...oneOff,
+      updatedAt: '2026-08-19T12:00:00.000Z',
+    };
+    const {
+      occurrenceDate: _occurrenceDate,
+      recurrenceDescription: _recurrenceDescription,
+      ...oneOffItem
+    } = recurringItem;
+    const targeted = vi.fn(async () => ({
+      activityId: ACTIVITY,
+      activityVersion: converted.updatedAt,
+      rows: [
+        {
+          date: '2026-08-19',
+          item: { ...oneOffItem, isRecurring: false },
+        },
+      ],
+    }));
+    const convertRecurrence = vi.fn(async () => converted);
+    const sync = syncEngine({
+      push: { ...pushTransport(), convertRecurrence },
+      targeted: { load: targeted },
+    });
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(convertRecurrence).toHaveBeenCalledTimes(1);
+    expect(targeted).toHaveBeenCalledTimes(1);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity,
+    ).toMatchObject({
+      activityId: ACTIVITY,
+      updatedAt: converted.updatedAt,
+    });
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity
+        .recurrence,
+    ).toBeUndefined();
+    expect(
+      await database?.first(
+        `SELECT is_recurring, recurrence_description, occurrence_date, local_state
+         FROM agenda_rows WHERE activity_id = ? LIMIT 1;`,
+        [ACTIVITY],
+      ),
+    ).toMatchObject({
+      is_recurring: 0,
+      recurrence_description: null,
+      occurrence_date: null,
+      local_state: 'canonical',
+    });
+  });
+
   it('retains recurrence rows and receipt on targeted failure, then accepts zero rows on Retry', async () => {
     const activity = await seedRecurring();
+    await transactions.run((transaction) =>
+      activities.installAcknowledgedActivity(transaction, activity, {
+        activity,
+        reminders: [],
+        capabilities: { complete: true, skip: true, snooze: true },
+      }),
+    );
     await transactions.run((transaction) =>
       service.patch(transaction, {
         activityId: ACTIVITY,
@@ -1722,6 +2140,10 @@ describe('serialized native convergence guard', () => {
         [ACTIVITY],
       ),
     ).toMatchObject({ local_state: 'updating' });
+    expect(await activities.hasInstalledCapabilities(ACTIVITY)).toBe(true);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.capabilities,
+    ).toEqual({ complete: true, skip: true, snooze: true });
     expect((await outbox.all())[0]).toMatchObject({
       intentId: 'recurrence-change',
       status: 'acknowledged',

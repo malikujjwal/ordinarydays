@@ -29,7 +29,7 @@ function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Owns the version-proven strong read required after an existing-series PATCH. */
+/** Owns the version-proven strong read required after recurrence topology changes. */
 export class RecurrenceReconciler {
   constructor(
     private readonly transactions: SerializedTransactionRunner,

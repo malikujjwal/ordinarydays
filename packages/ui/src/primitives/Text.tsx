@@ -33,7 +33,7 @@ export interface TextProps extends Omit<RNTextProps, 'style' | 'allowFontScaling
    * (§5.1), so completion is a check **and** a strike **and** a dimmed row, not just olive.
    */
   struck?: boolean;
-  /** Uppercase is applied by the `caption` variant automatically; this is not a prop. */
+  /** Uppercase is applied by the caption-family variants automatically; this is not a prop. */
   children: React.ReactNode;
 }
 
@@ -70,7 +70,9 @@ export function Text({
       style={[
         font,
         { color: resolved },
-        variant === 'caption' ? { textTransform: 'uppercase' } : null,
+        variant === 'caption' || variant === 'sectionLabel'
+          ? { textTransform: 'uppercase' }
+          : null,
         struck ? { textDecorationLine: 'line-through' } : null,
         align === undefined ? null : { textAlign: align },
       ]}

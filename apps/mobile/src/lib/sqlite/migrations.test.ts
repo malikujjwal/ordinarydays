@@ -218,7 +218,7 @@ describe('versioned SQLite migrations', () => {
 
   it('adds a durable zero-based account commit revision without changing it on rerun', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
-    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, -1));
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 6));
 
     expect(
       await database.first(
@@ -232,5 +232,60 @@ describe('versioned SQLite migrations', () => {
     expect(
       await database.first('SELECT singleton, commit_revision FROM native_commit_state;'),
     ).toEqual({ singleton: 1, commit_revision: 0 });
+  });
+
+  it('repairs only provable local-create and legacy missing-capability versions', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, -1));
+    const insert = async (
+      activityId: string,
+      localState: string,
+      capabilities: string | null,
+    ) =>
+      database?.run(
+        `INSERT INTO activities (
+          activity_id, owner_id, object_kind, type, status, title,
+          participant_count, child_count, expense_total_cents, visibility,
+          details_json, ics_sequence, created_at, last_activity_at, updated_at,
+          schema_version, local_state, capabilities_json, canonical_version
+        ) VALUES (?, 'usr_owner', 'task', 'task', 'scheduled', 'Migration row',
+          0, 0, 0, 'private', '{"kind":"task"}', 0,
+          '2026-08-19T00:00:00.000Z', '2026-08-19T23:00:00.000Z',
+          '2026-08-19T23:00:00.000Z', 1, ?, ?, '2026-08-19T23:00:00.000Z');`,
+        [activityId, localState, capabilities],
+      );
+    await insert('act_local_create', 'queued', null);
+    await insert('act_edited_server', 'queued', null);
+    await insert('act_legacy_missing_capabilities', 'canonical', null);
+    await insert('act_healthy_server', 'canonical', '{"complete":true}');
+    await database.run(
+      `INSERT INTO outbox_intents (
+        intent_id, mutation_key_json, variables_json, entity_id, ordering_key,
+        status, created_at, seq, attempts, semantic_key
+      ) VALUES (
+        'intent_local_create', '["activity","create"]', '{}', 'act_local_create',
+        'activity:act_local_create', 'queued', 1, 1, 0, 'create:act_local_create'
+      );`,
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.all(
+        `SELECT activity_id, canonical_version FROM activities
+         ORDER BY activity_id;`,
+      ),
+    ).toEqual([
+      {
+        activity_id: 'act_edited_server',
+        canonical_version: '2026-08-19T23:00:00.000Z',
+      },
+      {
+        activity_id: 'act_healthy_server',
+        canonical_version: '2026-08-19T23:00:00.000Z',
+      },
+      { activity_id: 'act_legacy_missing_capabilities', canonical_version: null },
+      { activity_id: 'act_local_create', canonical_version: null },
+    ]);
   });
 });

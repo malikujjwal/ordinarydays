@@ -7,6 +7,7 @@ import type {
   ActivityDetailTarget,
   ActivityOutcome,
   PlanType,
+  Recurrence,
 } from '@od/shared/types';
 import { type ActivityScope, activityScope, occurrenceScope } from '@od/shared/types';
 import {
@@ -163,6 +164,17 @@ export function ActivityDetailScreen({
   const [remindersOpen, setRemindersOpen] = useState(false);
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const targetIdentity =
+    target.kind === 'activity'
+      ? `activity:${target.activityId}`
+      : `occurrence:${target.activityId}:${target.date}`;
+  const [promotedOccurrence, setPromotedOccurrence] = useState<
+    | {
+        targetIdentity: string;
+        date: string;
+      }
+    | undefined
+  >(undefined);
   /**
    * The snooze sheet prunes options that are already past, so the minute has to keep moving
    * **while that sheet is open** — a value captured at mount would start offering times the
@@ -244,8 +256,49 @@ export function ActivityDetailScreen({
     activity?.status === 'scheduled' &&
     detail.detail?.capabilities?.complete === true &&
     !resolutionDismissed;
-  /** The server echoes only the explicit nominal occurrence target supplied by navigation. */
-  const actionOccurrenceDate = detail.detail?.occurrence?.nominalDate;
+  /**
+   * The server normally echoes the explicit nominal occurrence target supplied by navigation.
+   * There is one safe transition exception: this mounted screen can turn the one-off it was
+   * already about into a series. Preserve that exact former one-off date so the action remains
+   * occurrence-scoped after the response gains recurrence. A generic series route never sets
+   * this value and therefore still cannot complete the whole series accidentally.
+   */
+  const actionOccurrenceDate =
+    detail.detail?.occurrence?.nominalDate ??
+    (activity?.recurrence === undefined ||
+    promotedOccurrence?.targetIdentity !== targetIdentity
+      ? undefined
+      : promotedOccurrence.date);
+
+  async function commitRecurrence(recurrence: Recurrence | undefined): Promise<boolean> {
+    if (authoritativeActivity === undefined) return false;
+    const promotedDate =
+      authoritativeActivity.recurrence === undefined && recurrence !== undefined
+        ? authoritativeActivity.schedule?.date
+        : undefined;
+    if (promotedDate !== undefined) {
+      // Establish the scope before the server response updates the cached Activity to recurring.
+      // Otherwise that render can briefly look like a generic series and hide Complete.
+      setPromotedOccurrence({ targetIdentity, date: promotedDate });
+    }
+    const accepted = await detail.patch({
+      recurrence: recurrence ?? null,
+      ...(recurrence !== undefined &&
+      authoritativeActivity.recurrence !== undefined &&
+      recurrence.segments.length > authoritativeActivity.recurrence.segments.length &&
+      actionOccurrenceDate !== undefined
+        ? { editedFromDate: actionOccurrenceDate }
+        : {}),
+    });
+    if (!accepted && promotedDate !== undefined) {
+      setPromotedOccurrence((current) =>
+        current?.targetIdentity === targetIdentity && current.date === promotedDate
+          ? undefined
+          : current,
+      );
+    }
+    return accepted;
+  }
 
   /**
    * A series reached without an occurrence offers no completion control.
@@ -621,18 +674,7 @@ export function ActivityDetailScreen({
               {...(authoritativeActivity.recurrence === undefined
                 ? {}
                 : { value: authoritativeActivity.recurrence })}
-              onCommit={(recurrence) =>
-                detail.patch({
-                  recurrence: recurrence ?? null,
-                  ...(recurrence !== undefined &&
-                  authoritativeActivity.recurrence !== undefined &&
-                  recurrence.segments.length >
-                    authoritativeActivity.recurrence.segments.length &&
-                  actionOccurrenceDate !== undefined
-                    ? { editedFromDate: actionOccurrenceDate }
-                    : {}),
-                })
-              }
+              onCommit={commitRecurrence}
               {...(actionOccurrenceDate === undefined
                 ? {}
                 : {

@@ -1,9 +1,9 @@
 import { systemClock, type TimeZone, toWallTime } from '@od/shared/time';
 import { onlineManager } from '@tanstack/react-query';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import type { Intent } from '@/lib/intentLog';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
-import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
+import type { OutboxPresentationSnapshot } from '@/lib/sqlite/outboxPresentationStore';
 import {
   type AgendaRowIntentState,
   agendaRowIntentState,
@@ -18,71 +18,31 @@ export type { AgendaRowIntentState, PendingCreateState, RecurrenceEditState };
 /** Native pending rows may open their committed SQLite-backed, read-only detail. */
 export const pendingCreateAllowsOpen = true;
 
-function legacyShape(ownerUserId: string, intent: OutboxIntent): Intent {
-  return {
-    ...intent,
-    ownerUserId,
-  };
-}
-
-interface OutboxSnapshot {
-  readonly version: number;
-  readonly ownerUserId: string;
-  readonly rows: Promise<readonly Intent[]>;
-}
-
-const snapshots = new WeakMap<OutboxRepository, OutboxSnapshot>();
-
-function readOutbox(
-  outbox: OutboxRepository,
-  ownerUserId: string,
-  version: number,
-): Promise<readonly Intent[]> {
-  const current = snapshots.get(outbox);
-  if (current?.version === version && current.ownerUserId === ownerUserId) {
-    return current.rows;
-  }
-  const rows = outbox
-    .all()
-    .then((intents) => intents.map((intent) => legacyShape(ownerUserId, intent)));
-  snapshots.set(outbox, { version, ownerUserId, rows });
-  return rows;
-}
-
-function useOutbox(entityId?: string): readonly Intent[] {
-  const state = requireActiveNativeState();
-  const version = useSyncExternalStore(
-    (listener) => state.account.subscriptions.subscribe('outbox', listener),
-    () => state.account.subscriptions.version('outbox'),
-    () => 0,
+function useGlobalOutbox(): OutboxPresentationSnapshot {
+  const store = requireActiveNativeState().outboxPresentation;
+  const subscribe = useCallback(
+    (listener: () => void) => store.subscribe(listener),
+    [store],
   );
-  const [rows, setRows] = useState<readonly Intent[]>([]);
-  useEffect(() => {
-    let active = true;
-    void readOutbox(state.outbox, state.coordinator.ownerUserId, version).then(
-      (intents) => {
-        if (active) {
-          setRows(
-            entityId === undefined
-              ? intents
-              : intents.filter((intent) => intent.entityId === entityId),
-          );
-        }
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [entityId, state, version]);
-  return rows;
+  const getSnapshot = useCallback(() => store.getSnapshot(), [store]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function usePendingIntents(): readonly Intent[] {
-  return useOutbox().filter((intent) => intent.status !== 'acknowledged');
+  return useGlobalOutbox().pending;
 }
 
 export function useEntityIntents(entityId: string | undefined): readonly Intent[] {
-  return useOutbox(entityId);
+  const store = requireActiveNativeState().outboxPresentation;
+  const subscribe = useCallback(
+    (listener: () => void) => store.subscribeEntity(entityId, listener),
+    [entityId, store],
+  );
+  const getSnapshot = useCallback(
+    () => store.getEntitySnapshot(entityId),
+    [entityId, store],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function useIsPending(entityId: string | undefined): boolean {
@@ -104,7 +64,18 @@ export function useAgendaRowIntentState(
   entityId: string | undefined,
   occurrenceDate?: string,
 ): AgendaRowIntentState {
-  return agendaRowIntentState(useEntityIntents(entityId), entityId, occurrenceDate);
+  const store = requireActiveNativeState().outboxPresentation;
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      store.subscribeOccurrence(entityId, occurrenceDate, listener),
+    [entityId, occurrenceDate, store],
+  );
+  const getSnapshot = useCallback(
+    () => store.getOccurrenceSnapshot(entityId, occurrenceDate),
+    [entityId, occurrenceDate, store],
+  );
+  const intents = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return agendaRowIntentState(intents, entityId, occurrenceDate);
 }
 
 export async function cancelPendingCreate(intentId: string): Promise<boolean> {
@@ -133,7 +104,7 @@ export async function discardBlockedIntent(intentId: string): Promise<boolean> {
 }
 
 export function useBlockedIntents(): readonly Intent[] {
-  return usePendingIntents().filter((intent) => intent.status === 'needs_attention');
+  return useGlobalOutbox().blocked;
 }
 
 export function useIsOffline(): boolean {

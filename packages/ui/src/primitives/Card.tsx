@@ -48,7 +48,7 @@ export function Card({
 
   const style = [
     {
-      backgroundColor: hero ? theme.colors.accentSurface : theme.colors.surfaceRaised,
+      backgroundColor: hero ? theme.colors.upNextSurface : theme.colors.surfaceRaised,
       borderRadius: theme.radius[radius],
       padding: theme.space[padding],
       ...(paddingBottom === undefined
@@ -59,7 +59,7 @@ export function Card({
     hero && theme.scheme === 'light' ? ({ boxShadow: upNextShadow } as object) : null,
     /**
      * **A left edge, not a rim** — corrected 2026-08-17 against `design-system.md` §7.1, which
-     * has always specified "accentSurface fill · 3 pt accentDeep left border" and which the
+     * specifies a tinted fill and 3 pt accentDeep left border, and which the
      * founder's frames draw the same way.
      *
      * It was built as a 1 px `accentBorder` box on all four sides. Outlined like that the card

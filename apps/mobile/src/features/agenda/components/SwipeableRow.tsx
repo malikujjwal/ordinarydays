@@ -11,14 +11,20 @@ import {
   useAnimatedReaction,
   useSharedValue,
 } from 'react-native-reanimated';
-import { useCompletionCommitState } from '@/features/agenda/hooks/useCompletionCommitLock';
+import {
+  type CompletionCommitState,
+  useCompletionCommitState,
+} from '@/features/agenda/hooks/useCompletionCommitLock';
 import {
   type AgendaSwipeAction,
   agendaAccessibilityActions,
   agendaSwipeActions,
   allAgendaSwipeActions,
 } from '@/features/agenda/model/swipeActions';
-import { useAgendaRowIntentState } from '@/hooks/usePendingIntents';
+import {
+  type AgendaRowIntentState,
+  useAgendaRowIntentState,
+} from '@/hooks/usePendingIntents';
 import { type AgendaRowProps, AgendaRowWithIntentState } from './AgendaRow';
 
 const ACTION_WIDTH = 88;
@@ -26,6 +32,11 @@ const FULL_SWIPE_OVERSHOOT = 72;
 
 export interface SwipeableRowProps extends AgendaRowProps {
   onAction?: (item: AgendaRowProps['item'], action: AgendaSwipeAction) => void;
+}
+
+export interface SwipeableRowWithStateProps extends SwipeableRowProps {
+  intentState: AgendaRowIntentState;
+  completion: CompletionCommitState;
 }
 
 interface ActionPanelProps {
@@ -110,11 +121,30 @@ function ActionPanel({
 /** Native agenda gestures. The web-equivalent controls live in SwipeableRow.web.tsx. */
 export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps) {
   const intentState = useAgendaRowIntentState(item.activityId, item.occurrenceDate);
-  const { mutationInert: inert } = intentState;
   const completion = useCompletionCommitState(
     item,
     intentState.failedCompletionIntentIds,
   );
+  return (
+    <SwipeableRowWithState
+      {...rowProps}
+      item={item}
+      {...(onAction === undefined ? {} : { onAction })}
+      intentState={intentState}
+      completion={completion}
+    />
+  );
+}
+
+/** Gesture presentation for a parent that already owns this row's keyed state. */
+export function SwipeableRowWithState({
+  item,
+  onAction,
+  intentState,
+  completion,
+  ...rowProps
+}: SwipeableRowWithStateProps) {
+  const { mutationInert: inert } = intentState;
   const completionLocked = rowProps.completionLocked ?? completion.locked;
   const actions =
     inert || completionLocked

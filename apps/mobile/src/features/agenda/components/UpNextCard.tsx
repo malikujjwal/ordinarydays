@@ -1,14 +1,23 @@
 import type { AgendaItem } from '@od/shared/types';
 import { Button, Card, formatWallTime, Text, Touchable, useTheme } from '@od/ui';
 import { View } from 'react-native';
-import { useCompletionCommitLock } from '@/features/agenda/hooks/useCompletionCommitLock';
+import {
+  type CompletionCommitState,
+  useCompletionCommitState,
+} from '@/features/agenda/hooks/useCompletionCommitLock';
+import { scopeForRow } from '@/features/agenda/model/rowScope';
 import {
   type AgendaSwipeAction,
   agendaSwipeActions,
   allAgendaSwipeActions,
 } from '@/features/agenda/model/swipeActions';
 import type { UpNextSelection } from '@/features/agenda/model/upNext';
-import { SwipeableRow } from './SwipeableRow';
+import {
+  type AgendaRowIntentState,
+  pendingCreateAllowsOpen,
+  useAgendaRowIntentState,
+} from '@/hooks/usePendingIntents';
+import { SwipeableRowWithState } from './SwipeableRow';
 
 export interface UpNextCardProps {
   selection: UpNextSelection;
@@ -16,6 +25,11 @@ export interface UpNextCardProps {
   onOpenReschedule?: (item: AgendaItem) => void;
   onToggleComplete?: (item: AgendaItem, checked: boolean) => void;
   onAction?: (item: AgendaItem, action: AgendaSwipeAction) => void;
+}
+
+export interface UpNextCardWithStateProps extends UpNextCardProps {
+  intentState: AgendaRowIntentState;
+  completion: CompletionCommitState;
 }
 
 /**
@@ -40,7 +54,7 @@ const CARD_ACTIONS = new Set(['complete', 'snooze']);
  *   ◇  Dentist appointment                  type marker · bodyStrong
  *      2:30 PM · Jefferson Dental Center    subhead
  *      Complete   Snooze                    footnoteStrong text actions
- *  accentSurface fill · 3 pt accentDeep left border
+ *  upNextSurface fill · 3 pt accentDeep left border
  * ```
  *
  * Three things the first build got wrong, each of which made it outsize the day beneath it: the
@@ -56,15 +70,42 @@ const CARD_ACTIONS = new Set(['complete', 'snooze']);
  * nothing important lives behind a gesture alone, so the visible button is the real path and the
  * rotor action is the accelerator.
  */
-export function UpNextCard({
+export function UpNextCard({ selection, ...props }: UpNextCardProps) {
+  const scope = scopeForRow(selection.item);
+  const intentState = useAgendaRowIntentState(
+    selection.item.activityId,
+    scope.kind === 'occurrence' ? scope.date : undefined,
+  );
+  const completion = useCompletionCommitState(
+    selection.item,
+    intentState.failedCompletionIntentIds,
+  );
+  return (
+    <UpNextCardWithState
+      {...props}
+      selection={selection}
+      intentState={intentState}
+      completion={completion}
+    />
+  );
+}
+
+/** Card presentation sharing one keyed intent/completion snapshot with its dense row. */
+export function UpNextCardWithState({
   selection,
   onOpen,
   onOpenReschedule,
   onToggleComplete,
   onAction,
-}: UpNextCardProps) {
+  intentState,
+  completion,
+}: UpNextCardWithStateProps) {
   const theme = useTheme();
-  const completionLocked = useCompletionCommitLock(selection.item);
+  const completionLocked = completion.locked;
+  const mutationInert = intentState.mutationInert;
+  const openInert =
+    intentState.recurrenceEdit.inert ||
+    (intentState.pendingCreate.pending && !pendingCreateAllowsOpen);
   const actions = allAgendaSwipeActions(agendaSwipeActions(selection.item)).filter(
     (action) => CARD_ACTIONS.has(action.name),
   );
@@ -101,6 +142,7 @@ export function UpNextCard({
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           focusable={false}
+          disabled={openInert}
           onPress={() => onOpen(selection.item)}
           testID="up-next-backdrop"
           style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
@@ -134,13 +176,14 @@ export function UpNextCard({
           </Text>
 
           <View pointerEvents="box-none" style={{ marginTop: theme.space[5] }}>
-            <SwipeableRow
+            <SwipeableRowWithState
               item={selection.item}
               subtitleColor="textPrimary"
               subtitlePrefix={formatWallTime(selection.time)}
               divider={false}
               dense
-              completionLocked={completionLocked}
+              intentState={intentState}
+              completion={completion}
               onOpen={onOpen}
               {...(onOpenReschedule === undefined ? {} : { onOpenReschedule })}
               {...(onToggleComplete === undefined ? {} : { onToggleComplete })}
@@ -148,7 +191,21 @@ export function UpNextCard({
             />
           </View>
 
-          {actions.length === 0 || onAction === undefined ? null : (
+          {intentState.recurrenceEdit.inert ? (
+            <View
+              testID="up-next-recurrence-state"
+              pointerEvents="none"
+              style={{
+                minHeight: theme.layout.hitTarget,
+                marginTop: theme.space[1],
+                justifyContent: 'center',
+              }}
+            >
+              <Text variant="footnote" color="textSecondary">
+                {intentState.recurrenceEdit.message}
+              </Text>
+            </View>
+          ) : actions.length === 0 || onAction === undefined ? null : (
             <View
               testID="up-next-quick-actions"
               pointerEvents="box-none"
@@ -167,7 +224,7 @@ export function UpNextCard({
                   variant="ghost"
                   size="sm"
                   flush
-                  disabled={completionLocked && action.name === 'complete'}
+                  disabled={mutationInert || completionLocked}
                   onPress={() => onAction(selection.item, action)}
                   testID={`up-next-action-${action.name}`}
                 />

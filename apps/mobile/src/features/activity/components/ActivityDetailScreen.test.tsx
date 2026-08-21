@@ -1243,6 +1243,53 @@ describe('editing in place', () => {
     );
   });
 
+  it('keeps a one-off completion occurrence-scoped when Repeat turns it into a series', async () => {
+    const current = task({
+      schedule: { date: TODAY, time: '08:00', timezone: 'America/New_York' },
+    });
+    const recurring = task({
+      ...current,
+      updatedAt: '2026-08-12T12:00:00.000Z',
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ freq: 'daily', effectiveFrom: TODAY, time: '08:00' }],
+      },
+    });
+    stubFetch(
+      { status: 200, body: detailBody(current) },
+      { status: 200, body: { data: recurring, meta: { requestId: 'req_patch' } } },
+      {
+        status: 200,
+        body: {
+          data: { activity: recurring, occurrenceDate: TODAY, outcome: 'done' },
+          meta: { requestId: 'req_complete' },
+        },
+      },
+    );
+    mount();
+    await loaded();
+
+    expect(screen.getByTestId('detail-complete')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: /^Repeat/ }));
+    fireEvent.change(screen.getByTestId('repeat-option'), {
+      target: { value: 'daily' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply repeat' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Repeats daily · No reminder')).toBeDefined(),
+    );
+    fireEvent.click(screen.getByTestId('detail-complete'));
+
+    await waitFor(() =>
+      expect(sent.filter((request) => request.method === 'POST')).toHaveLength(1),
+    );
+    expect(sent.find((request) => request.method === 'POST')).toMatchObject({
+      url: expect.stringMatching(new RegExp(`/v1/activities/${ID}/complete$`)),
+      body: { occurrenceDate: TODAY, outcome: 'done' },
+    });
+  });
+
   it('converts Does not repeat through the selected-occurrence operation', async () => {
     const current = task({
       schedule: { date: '2026-08-01', time: '08:00', timezone: 'America/New_York' },

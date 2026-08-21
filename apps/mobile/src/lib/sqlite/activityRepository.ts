@@ -17,6 +17,8 @@ import type { TransactionContext } from '@/lib/sqlite/transaction';
 
 export type NativeRowState = 'canonical' | 'queued' | 'updating' | 'needs_attention';
 
+export type CapabilityHydrationState = 'installed' | 'missing' | 'deferred';
+
 function text(row: SqliteRow, column: string): string | undefined {
   const value = row[column];
   return typeof value === 'string' ? value : undefined;
@@ -128,9 +130,10 @@ function occurrenceFromAgendaRow(row: SqliteRow): OccurrenceDetailProjection {
   };
 }
 
-function valuesFor(
+function activityValues(
   activity: Activity,
-  detail?: ActivityDetail,
+  detail: ActivityDetail | undefined,
+  canonicalVersion: string | null,
 ): readonly (string | number | null)[] {
   return [
     activity.activityId,
@@ -168,8 +171,20 @@ function valuesFor(
     activity.schemaVersion,
     detail?.capabilities === undefined ? null : JSON.stringify(detail.capabilities),
     detail?.completedOccurrenceCount ?? null,
-    activity.updatedAt,
+    canonicalVersion,
   ];
+}
+
+/** Local projections never manufacture a server-authored canonical version. */
+function localActivityValues(activity: Activity): readonly (string | number | null)[] {
+  return activityValues(activity, undefined, null);
+}
+
+/** Canonical installers explicitly source their fence from the server response. */
+function canonicalActivityValues(
+  detail: ActivityDetail,
+): readonly (string | number | null)[] {
+  return activityValues(detail.activity, detail, detail.activity.updatedAt);
 }
 
 const ACTIVITY_COLUMNS = `
@@ -203,18 +218,38 @@ export class ActivityRepository {
     return this.subscriptions.version(this.scope(activityId));
   }
 
-  /** Whether a targeted server detail has installed its authorisation projection. */
-  async hasCanonicalCapabilities(activityId: string): Promise<boolean> {
+  /** Whether a server-authored authorisation projection has ever been installed. */
+  async hasInstalledCapabilities(activityId: string): Promise<boolean> {
     const row = await this.reader.first(
-      `SELECT capabilities_json, local_state FROM activities
-       WHERE activity_id = ?;`,
+      'SELECT capabilities_json FROM activities WHERE activity_id = ?;',
       [activityId],
     );
-    return (
-      row !== undefined &&
-      text(row, 'local_state') === 'canonical' &&
-      text(row, 'capabilities_json') !== undefined
+    return row !== undefined && text(row, 'capabilities_json') !== undefined;
+  }
+
+  /**
+   * Presentation-only readiness check for targeted capability hydration.
+   *
+   * Capability provenance and local projection state are deliberately separate: an edit
+   * preserves already-installed capabilities, while a genuinely missing projection must wait
+   * until the same guards used by canonical installation no longer protect local work.
+   */
+  async capabilityHydrationState(activityId: string): Promise<CapabilityHydrationState> {
+    const row = await this.reader.first(
+      'SELECT capabilities_json, local_state FROM activities WHERE activity_id = ?;',
+      [activityId],
     );
+    if (row !== undefined && text(row, 'capabilities_json') !== undefined) {
+      return 'installed';
+    }
+    if (row !== undefined && text(row, 'local_state') !== 'canonical') {
+      return 'deferred';
+    }
+    const guards = await readCanonicalOutboxGuards(this.reader);
+    return guards.protectedActivityIds.has(activityId) ||
+      guards.reconcilingActivityIds.has(activityId)
+      ? 'deferred'
+      : 'missing';
   }
 
   async read(target: ActivityDetailTarget): Promise<ActivityDetail | undefined> {
@@ -288,6 +323,81 @@ export class ActivityRepository {
     if (existingVersion !== undefined && existingVersion > detail.activity.updatedAt)
       return false;
     if (localState !== undefined && localState !== 'canonical') return false;
+    return this.installCanonicalDetail(transaction, detail, {
+      preserveLocalReminders: true,
+      guards,
+    });
+  }
+
+  /**
+   * Installs the exact authoritative Activity acknowledged by a durable write.
+   *
+   * The sync owner checks for a later intent before calling this operation. Unlike a
+   * background detail pull, the row is expected to still be local because the acknowledged
+   * intent owns that projection. The row becomes canonical only as part of the successful
+   * authoritative upsert.
+   */
+  async installAcknowledgedActivity(
+    transaction: TransactionContext,
+    activity: Activity,
+    enrichment?: ActivityDetail,
+  ): Promise<boolean> {
+    const current = await this.readWithin(transaction.database, activity.activityId);
+    const usableEnrichment =
+      enrichment?.activity.activityId === activity.activityId &&
+      enrichment.activity.updatedAt >= activity.updatedAt
+        ? enrichment
+        : undefined;
+    const authoritativeActivity = usableEnrichment?.activity ?? activity;
+    const detail: ActivityDetail = {
+      activity: authoritativeActivity,
+      reminders: usableEnrichment?.reminders ?? current?.reminders ?? [],
+      ...(usableEnrichment?.capabilities === undefined
+        ? current?.capabilities === undefined
+          ? {}
+          : { capabilities: current.capabilities }
+        : { capabilities: usableEnrichment.capabilities }),
+      ...(usableEnrichment?.completedOccurrenceCount === undefined
+        ? current?.completedOccurrenceCount === undefined
+          ? {}
+          : { completedOccurrenceCount: current.completedOccurrenceCount }
+        : { completedOccurrenceCount: usableEnrichment.completedOccurrenceCount }),
+      ...(usableEnrichment?.occurrence === undefined
+        ? {}
+        : { occurrence: usableEnrichment.occurrence }),
+    };
+    return this.installCanonicalDetail(transaction, detail, {
+      preserveLocalReminders: false,
+    });
+  }
+
+  /** Restores server truth after a permanent rejection without bypassing via local_state. */
+  async restoreCanonicalAfterRejection(
+    transaction: TransactionContext,
+    detail: ActivityDetail,
+  ): Promise<boolean> {
+    return this.installCanonicalDetail(transaction, detail, {
+      preserveLocalReminders: false,
+    });
+  }
+
+  private async installCanonicalDetail(
+    transaction: TransactionContext,
+    detail: ActivityDetail,
+    options: {
+      readonly preserveLocalReminders: boolean;
+      readonly guards?: Awaited<ReturnType<typeof readCanonicalOutboxGuards>>;
+    },
+  ): Promise<boolean> {
+    const existing = await transaction.database.first(
+      'SELECT canonical_version FROM activities WHERE activity_id = ?;',
+      [detail.activity.activityId],
+    );
+    const existingVersion =
+      existing === undefined ? undefined : text(existing, 'canonical_version');
+    if (existingVersion !== undefined && existingVersion > detail.activity.updatedAt) {
+      return false;
+    }
     await transaction.database.run(
       `INSERT INTO activities (${ACTIVITY_COLUMNS}, local_state)
        VALUES (${ACTIVITY_PLACEHOLDERS}, 'canonical')
@@ -311,18 +421,18 @@ export class ActivityRepository {
          schema_version=excluded.schema_version, capabilities_json=excluded.capabilities_json,
          completed_occurrence_count=excluded.completed_occurrence_count,
          canonical_version=excluded.canonical_version, local_state='canonical';`,
-      valuesFor(detail.activity, detail),
+      canonicalActivityValues(detail),
     );
     await this.replaceReminders(
       transaction.database,
       detail.activity.activityId,
       detail.reminders,
       'canonical',
-      true,
+      options.preserveLocalReminders,
     );
     if (detail.occurrence !== undefined) {
       const occurrenceKey = `${detail.activity.activityId}:${detail.occurrence.nominalDate}`;
-      if (!guards.protectedOccurrenceKeys.has(occurrenceKey)) {
+      if (options.guards?.protectedOccurrenceKeys.has(occurrenceKey) !== true) {
         await this.putOccurrenceProjection(
           transaction.database,
           detail.activity,
@@ -403,7 +513,7 @@ export class ActivityRepository {
          location_json=excluded.location_json, details_json=excluded.details_json,
          completed_at=excluded.completed_at, snoozed_until=excluded.snoozed_until,
          outcome=excluded.outcome, updated_at=excluded.updated_at, local_state=excluded.local_state;`,
-      [...valuesFor(activity), state],
+      [...localActivityValues(activity), state],
     );
     await this.replaceReminders(
       transaction.database,
@@ -465,35 +575,6 @@ export class ActivityRepository {
       [state, activityId],
     );
     transaction.changed(this.scope(activityId));
-  }
-
-  async acceptCanonicalResponse(
-    transaction: TransactionContext,
-    activity: Activity,
-  ): Promise<void> {
-    const current = await this.readWithin(transaction.database, activity.activityId);
-    await this.acceptCanonicalDetailResponse(transaction, {
-      activity,
-      reminders: current?.reminders ?? [],
-      ...(current?.capabilities === undefined
-        ? {}
-        : { capabilities: current.capabilities }),
-      ...(current?.completedOccurrenceCount === undefined
-        ? {}
-        : { completedOccurrenceCount: current.completedOccurrenceCount }),
-    });
-  }
-
-  /** Installs an authoritative detail projection while settling its accepted local write. */
-  async acceptCanonicalDetailResponse(
-    transaction: TransactionContext,
-    detail: ActivityDetail,
-  ): Promise<void> {
-    await transaction.database.run(
-      "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
-      [detail.activity.activityId],
-    );
-    await this.putCanonical(transaction, detail);
   }
 
   async acceptCanonicalOccurrence(

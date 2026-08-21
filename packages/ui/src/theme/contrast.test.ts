@@ -71,8 +71,9 @@ describe.each(schemes)('%s scheme — body text meets AA 4.5:1', (scheme) => {
  *
  * The two-surface matrix above is §5.1's promise, and it is not enough for this token: a text
  * action is a ghost `Button`, and ghost buttons sit inside sheets (`surfaceOverlay`), on a
- * selected row (`accentSurface`) and beside inputs (`surfaceInput`) as well as on the page. The
- * dark value was chosen to clear the gate on all five, so all five are asserted — a later
+ * selected row (`accentSurface`), on Up Next (`upNextSurface`) and beside inputs
+ * (`surfaceInput`) as well as on the page. The dark value was chosen to clear the gate on every
+ * such surface, so all are asserted — a later
  * "simplify it back to `accentDeep`" then fails here rather than shipping a 4.06:1 label.
  */
 describe.each(schemes)('%s scheme — text actions are readable anywhere', (scheme) => {
@@ -84,6 +85,7 @@ describe.each(schemes)('%s scheme — text actions are readable anywhere', (sche
     'surfaceOverlay',
     'surfaceInput',
     'accentSurface',
+    'upNextSurface',
   ] as const)('textAction on %s', (surface) => {
     expect(
       contrastRatio(palette.textAction, palette[surface]),
@@ -152,7 +154,7 @@ describe('light scheme — accentDeep is the readable accent text', () => {
 });
 
 /**
- * Text on `accentSurface` — the UP NEXT card, a selected row tint, an accent chip.
+ * Text on `accentSurface` — a selected row tint or accent chip.
  *
  * Light is `textPrimary` only, on the founder's 2026-08-12 decision: `textSecondary` measures
  * 4.45:1 there, so the supplied `accentSurface` is kept exactly and the role is narrowed
@@ -177,6 +179,17 @@ describe('text on the accent surface', () => {
       ).toBeGreaterThanOrEqual(AA_BODY);
     },
   );
+});
+
+describe.each(schemes)('%s scheme — text on the Up Next surface', (scheme) => {
+  const palette = colors[scheme];
+
+  it('keeps primary card text readable', () => {
+    expect(
+      contrastRatio(palette.textPrimary, palette.upNextSurface),
+      `${scheme}: textPrimary on upNextSurface is ${ratioOf(palette.textPrimary, palette.upNextSurface)}:1`,
+    ).toBeGreaterThanOrEqual(AA_BODY);
+  });
 });
 
 /**
@@ -310,6 +323,7 @@ describe('the founder-approved palettes are exactly these values', () => {
       accent: '#8B6374',
       accentDeep: '#795565',
       accentSurface: '#EEE3E7',
+      upNextSurface: '#FBF7F9',
       accentBorder: '#C7AAB6',
       accentControl: '#8B6374',
       // Darkened from the supplied `#667747` on the founder's 2026-08-12 decision; sage
@@ -337,6 +351,7 @@ describe('the founder-approved palettes are exactly these values', () => {
       accent: '#9F667F',
       accentDeep: '#AD748C',
       accentSurface: '#2D2026',
+      upNextSurface: '#292620',
       accentBorder: '#5A3A49',
       accentControl: '#AD748C',
       success: '#A7B690',

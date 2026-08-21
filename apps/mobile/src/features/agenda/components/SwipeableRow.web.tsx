@@ -1,7 +1,10 @@
 import { Text, Touchable, useTheme } from '@od/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View } from 'react-native';
-import { useCompletionCommitState } from '@/features/agenda/hooks/useCompletionCommitLock';
+import {
+  type CompletionCommitState,
+  useCompletionCommitState,
+} from '@/features/agenda/hooks/useCompletionCommitLock';
 import {
   type AgendaSwipeAction,
   type AgendaSwipeActionName,
@@ -9,12 +12,20 @@ import {
   agendaSwipeActions,
   allAgendaSwipeActions,
 } from '@/features/agenda/model/swipeActions';
-import { useAgendaRowIntentState } from '@/hooks/usePendingIntents';
+import {
+  type AgendaRowIntentState,
+  useAgendaRowIntentState,
+} from '@/hooks/usePendingIntents';
 import { canResolvePassedAgendaItem } from '@/lib/passedPlanResolution';
 import { type AgendaRowProps, AgendaRowWithIntentState } from './AgendaRow';
 
 export interface SwipeableRowProps extends AgendaRowProps {
   onAction?: (item: AgendaRowProps['item'], action: AgendaSwipeAction) => void;
+}
+
+export interface SwipeableRowWithStateProps extends SwipeableRowProps {
+  intentState: AgendaRowIntentState;
+  completion: CompletionCommitState;
 }
 
 const editableTarget = (target: EventTarget | null): boolean => {
@@ -64,14 +75,33 @@ function subscribeToRowKeyboard(
 
 /** Web uses hover/focus controls and keyboard shortcuts in place of swipe gestures. */
 export function SwipeableRow({ item, onAction, ...rowProps }: SwipeableRowProps) {
-  const theme = useTheme();
-  const wrapper = useRef<View>(null);
   const intentState = useAgendaRowIntentState(item.activityId, item.occurrenceDate);
-  const { mutationInert: inert } = intentState;
   const completion = useCompletionCommitState(
     item,
     intentState.failedCompletionIntentIds,
   );
+  return (
+    <SwipeableRowWithState
+      {...rowProps}
+      item={item}
+      {...(onAction === undefined ? {} : { onAction })}
+      intentState={intentState}
+      completion={completion}
+    />
+  );
+}
+
+/** Web gesture presentation for a parent that already owns this row's keyed state. */
+export function SwipeableRowWithState({
+  item,
+  onAction,
+  intentState,
+  completion,
+  ...rowProps
+}: SwipeableRowWithStateProps) {
+  const theme = useTheme();
+  const wrapper = useRef<View>(null);
+  const { mutationInert: inert } = intentState;
   const completionLocked = rowProps.completionLocked ?? completion.locked;
   const actions = useMemo(
     () =>

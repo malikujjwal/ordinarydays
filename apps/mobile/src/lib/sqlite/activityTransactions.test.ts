@@ -13,6 +13,7 @@ import type { SqliteDatabase } from './database';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { setActiveNativeState } from './nativeState';
 import { OutboxRepository } from './outbox';
+import type { OutboxPresentationStore } from './outboxPresentationStore';
 import { RepositorySubscriptions } from './subscriptions';
 import type { NativeSyncEngine } from './syncEngine';
 import { SerializedTransactionRunner } from './transaction';
@@ -118,6 +119,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       activities,
       agenda,
       outbox,
+      outboxPresentation: {} as OutboxPresentationStore,
       coordinator,
       sync,
     });
@@ -175,6 +177,177 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     ).toBe('scheduled');
     expect((await outbox.all()).map((intent) => intent.intentId)).toEqual(['create-one']);
   });
+
+  it('keeps canonical_version server-authored across local creation and mutations', async () => {
+    await transactions.run((transaction) =>
+      service.create(
+        transaction,
+        OWNER,
+        { input: createInput(), idempotencyKey: 'canonical-version-create' },
+        clock,
+        '2026-08-19T23:00:00.000Z',
+      ),
+    );
+    expect(
+      await database?.first(
+        'SELECT canonical_version FROM activities WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual({ canonical_version: null });
+
+    const local = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (local === undefined) throw new Error('missing local canonical-version fixture');
+    const canonicalVersion = '2026-08-19T02:00:00.000Z';
+    const canonical = {
+      ...local,
+      activity: {
+        ...local.activity,
+        title: 'Server title',
+        updatedAt: canonicalVersion,
+      },
+      capabilities: { complete: true, skip: true, snooze: true },
+    };
+    await transactions.run(async (transaction) => {
+      await activities.installAcknowledgedActivity(
+        transaction,
+        canonical.activity,
+        canonical,
+      );
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      transaction.changed('outbox');
+    });
+
+    const expectCanonicalVersion = async () =>
+      expect(
+        await database?.first(
+          'SELECT canonical_version FROM activities WHERE activity_id = ?;',
+          [ACTIVITY],
+        ),
+      ).toEqual({ canonical_version: canonicalVersion });
+    await expectCanonicalVersion();
+
+    await transactions.run((transaction) =>
+      activities.patchLocal(
+        transaction,
+        ACTIVITY,
+        { title: 'Local patch', recurrence: null },
+        'queued',
+      ),
+    );
+    await expectCanonicalVersion();
+    await transactions.run((transaction) =>
+      activities.scheduleLocal(transaction, ACTIVITY, {
+        date: '2026-08-20',
+        time: '10:00',
+        timezone: 'America/New_York',
+      }),
+    );
+    await expectCanonicalVersion();
+    await transactions.run((transaction) =>
+      activities.setStatusLocal(
+        transaction,
+        ACTIVITY,
+        'completed',
+        'done',
+        '2026-08-20T14:00:00.000Z',
+      ),
+    );
+    await expectCanonicalVersion();
+    await transactions.run((transaction) =>
+      activities.setLocalState(transaction, ACTIVITY, 'needs_attention'),
+    );
+    await expectCanonicalVersion();
+
+    await transactions.run((transaction) =>
+      transaction.database.run(
+        "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
+        [ACTIVITY],
+      ),
+    );
+    const older = {
+      ...canonical,
+      activity: {
+        ...canonical.activity,
+        title: 'Genuinely stale server title',
+        updatedAt: '2026-08-19T01:00:00.000Z',
+      },
+    };
+    await expect(
+      transactions.run((transaction) => activities.putCanonical(transaction, older)),
+    ).resolves.toBe(false);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity.title,
+    ).toBe('Local patch');
+    await expectCanonicalVersion();
+  });
+
+  it('reports a new local create as missing capabilities and defers hydration', async () => {
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'missing-capabilities-create' },
+      clock,
+    );
+
+    expect(await activities.hasInstalledCapabilities(ACTIVITY)).toBe(false);
+    expect(await activities.capabilityHydrationState(ACTIVITY)).toBe('deferred');
+
+    await transactions.run((transaction) =>
+      activities.setLocalState(transaction, ACTIVITY, 'canonical'),
+    );
+    expect(await activities.capabilityHydrationState(ACTIVITY)).toBe('deferred');
+
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      transaction.changed('outbox');
+    });
+    expect(await activities.capabilityHydrationState(ACTIVITY)).toBe('missing');
+  });
+
+  it.each(['queued', 'updating'] as const)(
+    'keeps installed server capabilities while local_state is %s',
+    async (localState) => {
+      await coordinator.create(
+        {
+          input: { ...createInput(), reminders: [] },
+          idempotencyKey: `capabilities-${localState}`,
+        },
+        clock,
+      );
+      const local = await activities.read({
+        kind: 'activity',
+        activityId: ACTIVITY,
+      });
+      if (local === undefined) throw new Error('missing capability-state fixture');
+      const canonical = {
+        ...local,
+        activity: {
+          ...local.activity,
+          updatedAt: '2026-08-19T02:00:00.000Z',
+        },
+        capabilities: { complete: true, skip: true, snooze: true },
+      };
+      await transactions.run(async (transaction) => {
+        await activities.installAcknowledgedActivity(
+          transaction,
+          canonical.activity,
+          canonical,
+        );
+        await transaction.database.run('DELETE FROM outbox_intents;');
+        await activities.patchLocal(
+          transaction,
+          ACTIVITY,
+          { title: `Locally edited while ${localState}` },
+          localState,
+        );
+        transaction.changed('outbox');
+      });
+
+      expect(await activities.hasInstalledCapabilities(ACTIVITY)).toBe(true);
+      expect(await activities.capabilityHydrationState(ACTIVITY)).toBe('installed');
+      expect(
+        (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.capabilities,
+      ).toEqual({ complete: true, skip: true, snooze: true });
+    },
+  );
 
   it('rolls back both halves and publishes nothing when acceptance is interrupted', async () => {
     const listener = vi.fn();
@@ -808,6 +981,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       activities,
       agenda,
       outbox,
+      outboxPresentation: {} as OutboxPresentationStore,
       coordinator,
       sync,
     });

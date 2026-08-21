@@ -40,6 +40,7 @@ export interface UseAgendaActivityActionsOptions {
   currentMinute: string;
   timezone: string;
   agendaData?: AgendaData;
+  completionProjection?: 'agenda' | 'anytime';
   getScrollOffset?: () => number;
   restoreScrollOffset?: (offset: number) => void;
 }

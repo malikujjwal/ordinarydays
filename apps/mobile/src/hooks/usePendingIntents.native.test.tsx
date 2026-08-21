@@ -1,5 +1,6 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Intent } from '@/lib/intentLog';
 import {
   pendingCreateAllowsOpen,
   useAgendaRowIntentState,
@@ -13,129 +14,193 @@ vi.mock('@/lib/sqlite/nativeState', () => ({
   requireActiveNativeState: () => nativeState.current,
 }));
 
+function presentation(rows: readonly Intent[]) {
+  const pending = rows.filter((intent) => intent.status !== 'acknowledged');
+  const blocked = pending.filter((intent) => intent.status === 'needs_attention');
+  const global = { pending, blocked };
+  const entities = new Map<string | undefined, readonly Intent[]>();
+  const occurrences = new Map<string, readonly Intent[]>();
+  return {
+    subscribe: vi.fn(() => () => undefined),
+    getSnapshot: vi.fn(() => global),
+    subscribeEntity: vi.fn(() => () => undefined),
+    getEntitySnapshot: vi.fn((entityId: string | undefined) => {
+      const current = entities.get(entityId);
+      if (current !== undefined) return current;
+      const next = rows.filter((intent) => intent.entityId === entityId);
+      entities.set(entityId, next);
+      return next;
+    }),
+    subscribeOccurrence: vi.fn(() => () => undefined),
+    getOccurrenceSnapshot: vi.fn(
+      (entityId: string | undefined, occurrenceDate?: string) => {
+        const key = JSON.stringify([entityId, occurrenceDate ?? null]);
+        const current = occurrences.get(key);
+        if (current !== undefined) return current;
+        const next = rows.filter((intent) => {
+          if (intent.entityId !== entityId) return false;
+          if (!['complete', 'uncomplete'].includes(intent.mutationKey[1] ?? '')) {
+            return true;
+          }
+          const input = (intent.variables as { input?: { occurrenceDate?: string } })
+            .input;
+          return input?.occurrenceDate === occurrenceDate;
+        });
+        occurrences.set(key, next);
+        return next;
+      },
+    ),
+  };
+}
+
+function row(
+  intentId: string,
+  entityId: string,
+  overrides: Partial<Intent> = {},
+): Intent {
+  return {
+    intentId,
+    ownerUserId: 'usr_01J0000000000000000000000A',
+    mutationKey: ['activity', 'create'],
+    variables: {},
+    entityId,
+    status: 'queued',
+    createdAt: 1_787_097_600_000,
+    seq: 1,
+    attempts: 0,
+    ...overrides,
+  };
+}
+
 describe('native pending intent selectors', () => {
   afterEach(() => {
     nativeState.current = undefined;
     vi.restoreAllMocks();
   });
 
-  it('shares one SQLite outbox snapshot across every selector for a committed version', async () => {
-    let version = 0;
-    const listeners = new Set<() => void>();
-    const all = vi.fn(async () => []);
-    const forEntity = vi.fn(async () => []);
+  it('reads stable keyed and aggregate snapshots from the session store', () => {
+    const first = 'act_01J0000000000000000000000A';
+    const second = 'act_01J0000000000000000000000B';
+    const store = presentation([row('intent-create', first)]);
     nativeState.current = {
-      account: {
-        subscriptions: {
-          subscribe: (_scope: string, listener: () => void) => {
-            listeners.add(listener);
-            return () => listeners.delete(listener);
-          },
-          version: () => version,
-        },
-      },
-      outbox: { all, forEntity },
+      outboxPresentation: store,
       coordinator: { ownerUserId: 'usr_01J0000000000000000000000A' },
     };
 
     const mounted = renderHook(() => ({
-      first: usePendingCreate('act_01J0000000000000000000000A'),
-      second: usePendingCreate('act_01J0000000000000000000000B'),
+      first: usePendingCreate(first),
+      second: usePendingCreate(second),
       all: usePendingIntents(),
     }));
 
-    await waitFor(() => expect(all).toHaveBeenCalledTimes(1));
-    expect(forEntity).not.toHaveBeenCalled();
-
-    act(() => {
-      version += 1;
-      for (const listener of listeners) listener();
-    });
-    await waitFor(() => expect(all).toHaveBeenCalledTimes(2));
-    expect(forEntity).not.toHaveBeenCalled();
+    expect(mounted.result.current.first.pending).toBe(true);
+    expect(mounted.result.current.second.pending).toBe(false);
+    expect(mounted.result.current.all).toHaveLength(1);
+    expect(store.subscribe).toHaveBeenCalledOnce();
+    expect(store.subscribeEntity).toHaveBeenCalledTimes(2);
     mounted.unmount();
   });
 
-  it('derives both agenda-row gates from one entity subscription', async () => {
-    const listeners = new Set<() => void>();
-    const all = vi.fn(async () => [
-      {
-        intentId: 'intent-create',
-        mutationKey: ['activity', 'create'],
-        variables: {},
-        entityId: 'act_01J0000000000000000000000A',
-        orderingKey: 'activity:act_01J0000000000000000000000A',
-        status: 'queued',
-        createdAt: 1_787_097_600_000,
-        seq: 1,
-        attempts: 0,
-      },
-    ]);
+  it('derives both agenda-row gates from one exact occurrence snapshot', () => {
+    const entityId = 'act_01J0000000000000000000000A';
+    const store = presentation([row('intent-create', entityId)]);
     nativeState.current = {
-      account: {
-        subscriptions: {
-          subscribe: (_scope: string, listener: () => void) => {
-            listeners.add(listener);
-            return () => listeners.delete(listener);
-          },
-          version: () => 0,
-        },
-      },
-      outbox: { all },
+      outboxPresentation: store,
       coordinator: { ownerUserId: 'usr_01J0000000000000000000000A' },
     };
 
-    const mounted = renderHook(() =>
-      useAgendaRowIntentState('act_01J0000000000000000000000A'),
-    );
+    const mounted = renderHook(() => useAgendaRowIntentState(entityId));
 
-    await waitFor(() => expect(mounted.result.current.pendingCreate.pending).toBe(true));
+    expect(mounted.result.current.pendingCreate.pending).toBe(true);
     expect(mounted.result.current.mutationInert).toBe(true);
     expect(mounted.result.current.recurrenceEdit.status).toBe('idle');
     expect(pendingCreateAllowsOpen).toBe(true);
-    expect(all).toHaveBeenCalledOnce();
-    expect(listeners.size).toBe(1);
+    expect(store.subscribeOccurrence).toHaveBeenCalledOnce();
     mounted.unmount();
   });
 
-  it('matches failed completion intents to the exact recurring occurrence', async () => {
-    const all = vi.fn(async () =>
-      ['2026-08-20', '2026-08-21'].map((occurrenceDate, index) => ({
-        intentId: `intent-complete-${index + 1}`,
-        mutationKey: ['activity', 'complete'],
-        variables: {
-          activityId: 'act_01J0000000000000000000000A',
-          input: { occurrenceDate },
-        },
-        entityId: 'act_01J0000000000000000000000A',
-        orderingKey: 'activity:act_01J0000000000000000000000A',
-        status: 'needs_attention' as const,
-        createdAt: 1_787_097_600_000 + index,
-        seq: index + 1,
-        attempts: 1,
-        attention: { kind: 'rejected' as const, status: 409 },
-      })),
+  it('matches failed completion intents to the exact recurring occurrence', () => {
+    const entityId = 'act_01J0000000000000000000000A';
+    const store = presentation(
+      ['2026-08-20', '2026-08-21'].map((occurrenceDate, index) =>
+        row(`intent-complete-${index + 1}`, entityId, {
+          mutationKey: ['activity', 'complete'],
+          variables: { activityId: entityId, input: { occurrenceDate } },
+          status: 'needs_attention',
+          seq: index + 1,
+          attempts: 1,
+          attention: { kind: 'rejected', status: 409 },
+        }),
+      ),
     );
     nativeState.current = {
-      account: {
-        subscriptions: {
-          subscribe: () => () => undefined,
-          version: () => 1,
-        },
-      },
-      outbox: { all },
+      outboxPresentation: store,
       coordinator: { ownerUserId: 'usr_01J0000000000000000000000A' },
     };
 
-    const mounted = renderHook(() =>
-      useAgendaRowIntentState('act_01J0000000000000000000000A', '2026-08-21'),
-    );
+    const mounted = renderHook(() => useAgendaRowIntentState(entityId, '2026-08-21'));
 
-    await waitFor(() =>
-      expect(mounted.result.current.failedCompletionIntentIds).toEqual([
-        'intent-complete-2',
-      ]),
-    );
+    expect(mounted.result.current.failedCompletionIntentIds).toEqual([
+      'intent-complete-2',
+    ]);
+    mounted.unmount();
+  });
+
+  it.each([
+    {
+      label: 'queued',
+      status: 'queued' as const,
+      expected: { inert: true, status: 'queued', message: 'Will update when online' },
+    },
+    {
+      label: 'in flight',
+      status: 'in_flight' as const,
+      expected: { inert: true, status: 'updating', message: 'Updating schedule…' },
+    },
+    {
+      label: 'acknowledged and reconciling',
+      status: 'acknowledged' as const,
+      expected: { inert: true, status: 'updating', message: 'Updating schedule…' },
+    },
+    {
+      label: 'waiting for reconciliation retry',
+      status: 'acknowledged' as const,
+      lastError: 'network',
+      expected: {
+        inert: true,
+        status: 'retry',
+        message: "Couldn't refresh schedule · Retry",
+      },
+    },
+    {
+      label: 'permanently rejected',
+      status: 'needs_attention' as const,
+      lastError: 'The recurrence conversion was rejected.',
+      expected: {
+        inert: false,
+        status: 'failed',
+        message: 'The recurrence conversion was rejected.',
+      },
+    },
+  ])('classifies a $label recurrence conversion consistently', (fixture) => {
+    const entityId = 'act_01J0000000000000000000000A';
+    const store = presentation([
+      row('intent-convert', entityId, {
+        mutationKey: ['activity', 'convert-recurrence'],
+        variables: { activityId: entityId, input: { selectedDate: '2026-08-21' } },
+        status: fixture.status,
+        ...(fixture.lastError === undefined ? {} : { lastError: fixture.lastError }),
+      }),
+    ]);
+    nativeState.current = {
+      outboxPresentation: store,
+      coordinator: { ownerUserId: 'usr_01J0000000000000000000000A' },
+    };
+
+    const mounted = renderHook(() => useAgendaRowIntentState(entityId, '2026-08-21'));
+
+    expect(mounted.result.current.recurrenceEdit).toEqual(fixture.expected);
+    expect(mounted.result.current.mutationInert).toBe(fixture.expected.inert);
     mounted.unmount();
   });
 });

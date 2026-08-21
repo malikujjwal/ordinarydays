@@ -1,4 +1,5 @@
 import { MAX_AUTOMATIC_INTENT_AGE_DAYS, MAX_OFFLINE_MUTATIONS } from '@od/shared';
+import { changesRecurrenceTopology } from '@/lib/mutationKeys';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 
 export type OutboxStatus = 'queued' | 'in_flight' | 'acknowledged' | 'needs_attention';
@@ -175,7 +176,7 @@ export async function readCanonicalOutboxGuards(
     }
     if (
       activityId !== undefined &&
-      mutationKey[1] === 'patch' &&
+      changesRecurrenceTopology({ mutationKey, variables }) &&
       stringValue(row, 'status') === 'acknowledged'
     ) {
       reconcilingActivityIds.add(activityId);
@@ -287,6 +288,15 @@ function intentFromRow(row: SqliteRow): OutboxIntent {
   };
 }
 
+/** Presentation readers use the same decoder without gaining access to mutation methods. */
+export async function readOutboxIntents(
+  reader: SqliteReader,
+): Promise<readonly OutboxIntent[]> {
+  return (await reader.all('SELECT * FROM outbox_intents ORDER BY seq;')).map(
+    intentFromRow,
+  );
+}
+
 export class OutboxRepository {
   constructor(private readonly reader: SqliteReader) {}
 
@@ -369,9 +379,7 @@ export class OutboxRepository {
   }
 
   async all(): Promise<readonly OutboxIntent[]> {
-    return (await this.reader.all('SELECT * FROM outbox_intents ORDER BY seq;')).map(
-      intentFromRow,
-    );
+    return readOutboxIntents(this.reader);
   }
 
   async get(database: SqliteReader, intentId: string): Promise<OutboxIntent | undefined> {

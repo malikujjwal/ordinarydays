@@ -17,6 +17,7 @@ import type {
   Occurrence,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
+import { changesRecurrenceTopology } from '@/lib/mutationKeys';
 import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
 import {
   agendaCoverageForQuery,
@@ -103,15 +104,6 @@ function activityFromResponse(response: unknown): Activity | undefined {
   return parsed.success ? (parsed.data as Activity) : undefined;
 }
 
-function isRecurrencePatch(intent: OutboxIntent): boolean {
-  if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'patch')
-    return false;
-  const input = field(intent.variables, 'input');
-  return (
-    typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
-  );
-}
-
 const OCCURRENCE_MUTATIONS = new Set([
   'complete',
   'uncomplete',
@@ -193,6 +185,14 @@ export class PendingActivityDeletionError extends Error {
   constructor(readonly activityId: string) {
     super('This activity is pending deletion.');
     this.name = 'PendingActivityDeletionError';
+  }
+}
+
+/** A valid detail response that could not cross canonical freshness/local-write guards. */
+export class CanonicalActivityInstallDeferredError extends Error {
+  constructor(readonly activityId: string) {
+    super("Latest details are still syncing. We'll retry automatically.");
+    this.name = 'CanonicalActivityInstallDeferredError';
   }
 }
 
@@ -287,9 +287,12 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         }
         throw error;
       }
-      await this.transactions.run((transaction) =>
+      const accepted = await this.transactions.run((transaction) =>
         this.activities.putCanonical(transaction, detail),
       );
+      if (!accepted) {
+        throw new CanonicalActivityInstallDeferredError(target.activityId);
+      }
       const installed = await this.activities.read(target);
       if (installed === undefined)
         throw new PendingActivityDeletionError(target.activityId);
@@ -459,7 +462,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
            LIMIT 1;`,
           [intent.orderingKey, intent.seq],
         );
-        const recurrencePatch = isRecurrencePatch(intent);
+        const recurrenceMutation = changesRecurrenceTopology(intent);
         const activity = pushedActivity;
         let canonicalOccurrence: CanonicalOccurrenceResponse | undefined;
         if (later === undefined) {
@@ -494,22 +497,23 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             canonicalOccurrence.activity,
             projection,
           );
-        } else if (later === undefined && installable !== undefined && !recurrencePatch) {
-          if (createdDetail === undefined) {
-            await this.activities.acceptCanonicalResponse(transaction, installable);
-          } else {
-            await this.activities.acceptCanonicalDetailResponse(
-              transaction,
-              createdDetail,
-            );
-          }
+        } else if (
+          later === undefined &&
+          installable !== undefined &&
+          !recurrenceMutation
+        ) {
+          await this.activities.installAcknowledgedActivity(
+            transaction,
+            installable,
+            createdDetail,
+          );
           await this.agenda.acceptCanonicalActivitySummary(transaction, installable);
         }
-        if (recurrencePatch && later === undefined) {
+        if (recurrenceMutation && later === undefined) {
           if (activity === undefined) {
-            throw new Error('Recurrence PATCH acknowledgement omitted its Activity.');
+            throw new Error('Recurrence acknowledgement omitted its Activity.');
           }
-          await this.activities.acceptCanonicalResponse(transaction, activity);
+          await this.activities.installAcknowledgedActivity(transaction, activity);
           await this.activities.setLocalState(transaction, intent.entityId, 'updating');
           await this.agenda.markActivityRows(transaction, intent.entityId, 'updating');
         }
@@ -557,7 +561,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         await this.outbox.acknowledge(
           transaction.database,
           intent.intentId,
-          recurrencePatch && later === undefined ? activity?.updatedAt : undefined,
+          recurrenceMutation && later === undefined ? activity?.updatedAt : undefined,
         );
         transaction.changed('outbox');
       });
@@ -680,24 +684,21 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         );
       }
       if (canonical !== undefined) {
-        await transaction.database.run(
-          "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
-          [intent.entityId],
+        const restored = await this.activities.restoreCanonicalAfterRejection(
+          transaction,
+          canonical,
         );
-        await transaction.database.run(
-          "UPDATE activity_reminders SET local_state = 'canonical' WHERE activity_id = ?;",
-          [intent.entityId],
-        );
-        await transaction.database.run(
-          "UPDATE activity_occurrences SET local_state = 'canonical' WHERE activity_id = ?;",
-          [intent.entityId],
-        );
-        await transaction.database.run(
-          "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ?;",
-          [intent.entityId],
-        );
-        await this.activities.putCanonical(transaction, canonical);
-        await this.anytime?.acceptCanonicalActivity(transaction, canonical.activity);
+        if (restored) {
+          await transaction.database.run(
+            "UPDATE activity_occurrences SET local_state = 'canonical' WHERE activity_id = ?;",
+            [intent.entityId],
+          );
+          await transaction.database.run(
+            "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ?;",
+            [intent.entityId],
+          );
+          await this.anytime?.acceptCanonicalActivity(transaction, canonical.activity);
+        }
         if (canonicalAgendas !== undefined && canonicalAgendas.length > 0) {
           for (const snapshot of canonicalAgendas) {
             await this.agenda.installCanonical(
@@ -872,8 +873,20 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
       );
       await this.transactions.run(async (transaction) => {
-        await this.activities.acceptCanonicalResponse(transaction, detail.activity);
-        await this.activities.putCanonical(transaction, detail);
+        const later = await transaction.database.first(
+          `SELECT intent_id FROM outbox_intents
+           WHERE ordering_key = ? AND seq > ?
+             AND status IN ('queued', 'in_flight', 'needs_attention')
+           LIMIT 1;`,
+          [intent.orderingKey, intent.seq],
+        );
+        if (later === undefined) {
+          await this.activities.installAcknowledgedActivity(
+            transaction,
+            detail.activity,
+            detail,
+          );
+        }
         await this.outbox.acknowledge(transaction.database, intent.intentId);
         transaction.changed('outbox');
       });

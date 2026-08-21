@@ -46,8 +46,9 @@ export interface AgendaRowProps {
   /** Cards turn off the ordinary list divider while retaining this same row body. */
   divider?: boolean;
   /**
-   * Drops the row's own vertical padding and list minimum — for a row inside a `Card`, which
-   * supplies both already (P2-44).
+   * Drops the row's ordinary vertical padding and list minimum — for a row inside a `Card`,
+   * which supplies both already (P2-44). It retains a 2 pt optical top inset so the lifted
+   * 24 pt checkbox visual remains inside the card's clipped rounded edge.
    *
    * Without it the UP NEXT card paid for its padding twice and stood a third taller than it
    * needed to, which is most of what the founder meant by the card being disproportionate. It
@@ -233,18 +234,18 @@ export function AgendaRowWithIntentState({
    * next row's first, against 4 pt between a title and its own badge — a 6:1 ratio, so the eye
    * reads the grouping without a separator to help it.
    */
-  const rowPaddingY = dense ? theme.space[0] : theme.space[4];
+  const rowPaddingTop = dense ? theme.space[1] : theme.space[4];
+  const rowPaddingBottom = dense ? theme.space[1] : theme.space[4] + theme.space[1];
   /**
    * **How far the leading control is lifted**, so its 44 pt box centres on the title's first
    * line rather than on the row (founder, 2026-08-17).
    */
   /**
-   * The title's own variant: a resolved row settles to `subhead`, an open one is `bodyStrong`.
-   * The lift below is computed **from this**, not from `bodyStrong` — hard-coding the open
-   * variant left every completed row's glyph half a point out, which is the same
-   * duplicated-position mistake in miniature.
+   * Timeline context may de-emphasize a past/skipped row, but completion itself never changes
+   * the title's measure or weight. This keeps both current and already-past tasks stable when
+   * their checkbox changes.
    */
-  const titleVariant = dimmed ? 'subhead' : 'bodyStrong';
+  const titleVariant = item.isPast || skipped ? 'subhead' : 'bodyStrong';
   const leadingLift = (theme.layout.hitTarget - typeScale[titleVariant].lineHeight) / 2;
   /**
    * **Where anything that must sit on the title's line starts.**
@@ -255,7 +256,7 @@ export function AgendaRowWithIntentState({
    * the marker, then the time, then the connector's origin, then the chip. One value, and they
    * move together or not at all.
    */
-  const railTop = rowPaddingY - leadingLift;
+  const railTop = rowPaddingTop - leadingLift;
   /**
    * **The marker's real centre, lift included.**
    *
@@ -265,7 +266,7 @@ export function AgendaRowWithIntentState({
    * instead of drawing down". The same failure as the time column carrying `space[5]` after the
    * padding changed: a second copy of a position that moved.
    */
-  const markerCentreY = rowPaddingY - leadingLift + theme.layout.hitTarget / 2;
+  const markerCentreY = rowPaddingTop - leadingLift + theme.layout.hitTarget / 2;
 
   /**
    * **One secondary line, not two** — founder, 2026-08-17: "as you add more metadata, I'd combine
@@ -358,14 +359,14 @@ export function AgendaRowWithIntentState({
          * apart — well over §6.1's 8 pt minimum between adjacent targets, which is the number
          * that stops this going lower.
          */
-        paddingTop: rowPaddingY,
+        paddingTop: rowPaddingTop,
         /**
          * **Two points more below than above** (founder, 2026-08-17: "add extra 2pts of space
          * after every row"). It goes on the row's own padding rather than on the section's gap so
          * the connector, which runs to the row's bottom edge, still meets the next row's marker —
          * a gap between rows would break the thread by exactly this much.
          */
-        paddingBottom: rowPaddingY + theme.space[1],
+        paddingBottom: rowPaddingBottom,
         borderBottomWidth: divider ? 1 : 0,
         borderBottomColor: theme.colors.border,
         /**
@@ -520,19 +521,14 @@ export function AgendaRowWithIntentState({
            * them and made every row read as two equal lines.
            */}
           {/**
-           * **A resolved row recedes a notch further** — founder, 2026-08-17: three struck
-           * two-line titles in a row dominated the screen even though they were finished, and
-           * the eye could not find the unfinished one beneath them.
-           *
-           * The check and the strike stay; what changes is the title's weight and ink —
-           * `bodyStrong`/`textPrimary` becomes `body`/`textMuted`, which is 4.77:1 light and
-           * 6.33:1 dark, so it is quieter **and** compliant where the old 0.62 opacity was
-           * neither.
+           * Completion stays visible through the check, strike and muted ink. The surrounding
+           * timeline context still chooses the typography, so checking a row never changes it.
            */}
           <Text
             variant={titleVariant}
             color={dimmed ? 'textMuted' : 'textPrimary'}
             struck={checked}
+            numberOfLines={dense ? 1 : undefined}
           >
             {item.title}
           </Text>
@@ -560,22 +556,15 @@ export function AgendaRowWithIntentState({
            * lines; that is the founder's own sketch and the cost of showing a note at all.
            *
            * The server sends one clamped line (`noteExcerpt`), so this renders it verbatim rather
-           * than slicing 4,000 characters on the client.
+           * than slicing 4,000 characters on the client. The dense Up Next preview deliberately
+           * omits it: that card keeps a stable two-line content budget without imposing a fixed
+           * height or adding empty bottom padding. The same note remains in every ordinary row
+           * and in Activity Detail.
            */}
-          {item.noteExcerpt === undefined ? null : (
+          {dense || item.noteExcerpt === undefined ? null : (
             <Text
-              /**
-               * **Size carries the hierarchy; colour reinforces it where the palette can.**
-               *
-               * In light, `textSecondary` and `textMuted` are the *same hex* — P2-40 collapsed
-               * them because the founder's supplied muted is 2.7:1 and cannot be readable text.
-               * So a three-tier colour ladder exists only in dark, and the note/metadata step has
-               * to be a type step in both: `subhead` over `footnote`.
-               *
-               * A resolved row drops the note to `footnote` as well, so the struck `subhead`
-               * title still leads a stack that is otherwise one flat muted colour.
-               */
-              variant={dimmed ? 'footnote' : 'subhead'}
+              /** Notes keep the preferred compact size before and after completion. */
+              variant="footnote"
               color={noteColor}
               numberOfLines={1}
               testID="agenda-row-note"
@@ -642,7 +631,7 @@ export function AgendaRowWithIntentState({
          * point. What is left for this strip is the overdue chip, the avatars and the RSVP slot,
          * in their canonical order.
          */}
-        {recurrenceEdit.message === undefined ? null : (
+        {dense || recurrenceEdit.message === undefined ? null : (
           <Text
             variant="footnote"
             color={recurrenceEdit.status === 'failed' ? 'danger' : 'textSecondary'}

@@ -96,7 +96,7 @@ function settleIntent(
  * Mutation retries are disabled here.
  */
 export function createOfflineQueryClient(): QueryClient {
-  const client = new QueryClient({
+  const client: QueryClient = new QueryClient({
     mutationCache: new MutationCache({
       /**
        * **The write-ahead point** (P2-48, `tech-stack.md` §3.4 mechanism 4).
@@ -186,7 +186,7 @@ export function createOfflineQueryClient(): QueryClient {
        * return pre-write data and cache it. Writing the server's own response into the cache
        * is what makes the change visible; the invalidation behind it is reconciliation.
        */
-      onSuccess: (data, variables, _context, mutation) => {
+      onSuccess: (data, variables, _context, mutation): Promise<void> | undefined => {
         const { mutationKey } = mutation.options;
         const recurrenceEdit = isRecurrenceEditMutation(mutationKey, variables);
         const recurrenceVersion = recurrenceEdit ? activityVersionFrom(data) : undefined;
@@ -196,15 +196,21 @@ export function createOfflineQueryClient(): QueryClient {
         refreshActivityDetails(client, mutationKey, variables);
         if (!changesActivityLists(mutationKey)) return;
         projectActivityWrite(client, mutationKey, data, variables);
+        let recurrenceReconciliation: Promise<void> | undefined;
         if (recurrenceEdit) {
           const activityId = entityIdFor(variables);
           const version = recurrenceVersion;
           const intentId = intentIdFor(variables);
           if (version !== undefined) {
-            void reconcileRecurrenceEdit(client, activityId, version).then((proved) => {
+            recurrenceReconciliation = reconcileRecurrenceEdit(
+              client,
+              activityId,
+              version,
+            ).then((proved) => {
               const log = getActiveIntentLog();
-              if (proved) void log?.acknowledge(intentId);
-              else {
+              if (proved === true)
+                return log?.acknowledge(intentId).then(() => undefined);
+              if (proved === false) {
                 void log?.failReconciliation(
                   intentId,
                   "Couldn't refresh schedule · Retry",
@@ -214,6 +220,7 @@ export function createOfflineQueryClient(): QueryClient {
           }
         }
         refreshActivityLists(client);
+        return recurrenceReconciliation;
       },
     }),
     defaultOptions: {

@@ -1,7 +1,11 @@
 import { activityListItem } from '@od/shared/schemas';
 import type { Activity, ActivityListItem } from '@od/shared/types';
 import type { SqliteReader, SqliteRow } from '@/lib/sqlite/database';
-import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
+import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
+import type {
+  RepositoryInvalidationMetadata,
+  RepositorySubscriptions,
+} from '@/lib/sqlite/subscriptions';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
 
 function text(row: SqliteRow, column: string): string | undefined {
@@ -57,6 +61,55 @@ function belongsInAnytime(activity: Activity): boolean {
   );
 }
 
+async function readAnytimeItems(
+  reader: SqliteReader,
+): Promise<readonly ActivityListItem[]> {
+  const canonical = await reader.all('SELECT * FROM anytime_rows;');
+  const rows = new Map<string, ActivityListItem>();
+  for (const row of canonical) {
+    const item = fromRow(row);
+    rows.set(item.activityId, item);
+  }
+  const localActivities = await reader.all(
+    `SELECT activity_id, object_kind, type, title, status, schedule_date,
+            schedule_time AS time, schedule_end_time AS end_time,
+            CASE WHEN recurrence_json IS NULL THEN 0 ELSE 1 END AS is_recurring,
+            participant_count, json_extract(location_json, '$.label') AS location_label,
+            NULL AS subtitle
+     FROM activities
+     WHERE local_state <> 'canonical';`,
+  );
+  for (const row of localActivities) {
+    const activityId = text(row, 'activity_id');
+    if (activityId === undefined) continue;
+    const inAnytime =
+      text(row, 'object_kind') === 'task' &&
+      text(row, 'status') === 'saved' &&
+      text(row, 'schedule_date') === undefined;
+    if (inAnytime) rows.set(activityId, fromRow(row));
+    else rows.delete(activityId);
+  }
+  for (const row of await reader.all(
+    `SELECT entity_id FROM outbox_intents
+     WHERE status IN ('queued', 'in_flight', 'needs_attention')
+       AND json_extract(mutation_key_json, '$[0]') = 'activity'
+       AND json_extract(mutation_key_json, '$[1]') = 'delete';`,
+  )) {
+    const activityId = text(row, 'entity_id');
+    if (activityId !== undefined) rows.delete(activityId);
+  }
+  return [...rows.values()].sort(
+    (left, right) =>
+      left.title.localeCompare(right.title) ||
+      left.activityId.localeCompare(right.activityId),
+  );
+}
+
+export interface AnytimeCommittedSnapshot {
+  readonly items: readonly ActivityListItem[];
+  readonly commitRevision: number;
+}
+
 /** Complete, SQLite-owned saved-task index behind the native Anytime screen. */
 export class AnytimeRepository {
   private readonly scope = 'anytime';
@@ -64,52 +117,24 @@ export class AnytimeRepository {
   constructor(
     private readonly reader: SqliteReader,
     private readonly subscriptions: RepositorySubscriptions,
+    private readonly projections?: RevisionedProjectionReader,
   ) {}
 
-  subscribe(listener: () => void): () => void {
+  subscribe(listener: (metadata: RepositoryInvalidationMetadata) => void): () => void {
     return this.subscriptions.subscribe(this.scope, listener);
   }
 
   async read(): Promise<readonly ActivityListItem[]> {
-    const canonical = await this.reader.all('SELECT * FROM anytime_rows;');
-    const rows = new Map<string, ActivityListItem>();
-    for (const row of canonical) {
-      const item = fromRow(row);
-      rows.set(item.activityId, item);
+    return readAnytimeItems(this.reader);
+  }
+
+  /** Presentation-only rows and revision from one WAL snapshot. */
+  async readSnapshot(): Promise<AnytimeCommittedSnapshot> {
+    if (this.projections === undefined) {
+      return { items: await this.read(), commitRevision: 0 };
     }
-    const localActivities = await this.reader.all(
-      `SELECT activity_id, object_kind, type, title, status, schedule_date,
-              schedule_time AS time, schedule_end_time AS end_time,
-              CASE WHEN recurrence_json IS NULL THEN 0 ELSE 1 END AS is_recurring,
-              participant_count, json_extract(location_json, '$.label') AS location_label,
-              NULL AS subtitle
-       FROM activities
-       WHERE local_state <> 'canonical';`,
-    );
-    for (const row of localActivities) {
-      const activityId = text(row, 'activity_id');
-      if (activityId === undefined) continue;
-      const inAnytime =
-        text(row, 'object_kind') === 'task' &&
-        text(row, 'status') === 'saved' &&
-        text(row, 'schedule_date') === undefined;
-      if (inAnytime) rows.set(activityId, fromRow(row));
-      else rows.delete(activityId);
-    }
-    for (const row of await this.reader.all(
-      `SELECT entity_id FROM outbox_intents
-       WHERE status IN ('queued', 'in_flight', 'needs_attention')
-         AND json_extract(mutation_key_json, '$[0]') = 'activity'
-         AND json_extract(mutation_key_json, '$[1]') = 'delete';`,
-    )) {
-      const activityId = text(row, 'entity_id');
-      if (activityId !== undefined) rows.delete(activityId);
-    }
-    return [...rows.values()].sort(
-      (left, right) =>
-        left.title.localeCompare(right.title) ||
-        left.activityId.localeCompare(right.activityId),
-    );
+    const snapshot = await this.projections.snapshot(readAnytimeItems);
+    return { items: snapshot.data, commitRevision: snapshot.commitRevision };
   }
 
   async replaceCanonical(

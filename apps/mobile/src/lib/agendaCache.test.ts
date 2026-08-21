@@ -14,6 +14,8 @@ import {
   restorePendingActivityCreates,
   restoreRecurrenceEditProtection,
 } from '@/lib/agendaCache';
+import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
+import { setActiveIntentLog } from '@/lib/intentReplay';
 
 /**
  * The regression this file exists for.
@@ -31,6 +33,19 @@ import {
 
 const TODAY = '2026-08-13';
 const KEY = ['agenda', TODAY, TODAY, 'America/New_York', 'anytime_unscheduled,overdue'];
+
+function memoryIntentStorage(): IntentLogStorage {
+  const values = new Map<string, string>();
+  return {
+    getItem: async (key) => values.get(key) ?? null,
+    setItem: async (key, value) => {
+      values.set(key, value);
+    },
+    removeItem: async (key) => {
+      values.delete(key);
+    },
+  };
+}
 
 const row = (patch: Partial<AgendaItem> = {}): AgendaItem => ({
   activityId: 'act_STANDUP',
@@ -631,10 +646,15 @@ describe('a patch reaches the agenda cache', () => {
     expect(rowOf(client)?.occurrenceDate).toBe(TODAY);
   });
 
-  it('classifies only recurrence-changing PATCHes as recurrence edits', () => {
+  it('classifies every recurrence-topology mutation and excludes ordinary writes', () => {
     expect(
       isRecurrenceEditMutation(['activity', 'patch'], {
         input: { recurrence: daily },
+      }),
+    ).toBe(true);
+    expect(
+      isRecurrenceEditMutation(['activity', 'convert-recurrence'], {
+        input: { selectedDate: TODAY },
       }),
     ).toBe(true);
     expect(
@@ -759,6 +779,145 @@ describe('activity-scoped recurrence reconciliation', () => {
       warnings: [],
     });
     expect(refreshed.days[0]?.schedule[0]?.activityId).toBe('act_STANDUP');
+  });
+
+  it('restores conversion protection and its proven version after restart', () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    expect(
+      restoreRecurrenceEditProtection(client, [
+        {
+          intentId: 'intent-convert',
+          entityId: 'act_STANDUP',
+          mutationKey: ['activity', 'convert-recurrence'],
+          variables: {
+            activityId: 'act_STANDUP',
+            input: { selectedDate: TODAY },
+            idempotencyKey: 'intent-convert',
+          },
+          status: 'acknowledged',
+          reconciliationVersion: version,
+        },
+      ]),
+    ).toBe(1);
+
+    const refreshed = guardAgendaResponse(client, KEY, {
+      days: [{ date: TODAY, schedule: [], anytime: [], earlier: [] }],
+      warnings: [],
+      projectionVersions: [
+        { activityId: 'act_STANDUP', version: '2026-08-14T09:59:59.000Z' },
+      ],
+    });
+    expect(refreshed.days[0]?.schedule[0]?.activityId).toBe('act_STANDUP');
+  });
+
+  it('clears a restored conversion receipt only after targeted version proof', async () => {
+    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
+    const log = new IntentLog('usr_TEST', memoryIntentStorage());
+    await log.hydrate();
+    const variables = {
+      activityId: 'act_STANDUP',
+      input: { selectedDate: TODAY },
+      idempotencyKey: 'intent-convert',
+    };
+    await log.append({
+      intentId: variables.idempotencyKey,
+      entityId: variables.activityId,
+      mutationKey: ['activity', 'convert-recurrence'],
+      variables,
+    });
+    await log.acknowledgeForReconciliation(variables.idempotencyKey, version);
+    restoreRecurrenceEditProtection(client, log.snapshot().intents);
+    setActiveIntentLog(log);
+    try {
+      expect(
+        await reconcileRecurrenceEdit(
+          client,
+          variables.activityId,
+          version,
+          async () => ({
+            activityId: variables.activityId,
+            activityVersion: version,
+            rows: [
+              {
+                date: TODAY,
+                item: row({ isRecurring: false }),
+              },
+            ],
+          }),
+        ),
+      ).toBe(true);
+      await vi.waitFor(() => expect(log.snapshot().intents).toHaveLength(0));
+    } finally {
+      setActiveIntentLog(undefined);
+    }
+  });
+
+  it('defers an empty-cache receipt and proves it through the first later window', async () => {
+    const client = new QueryClient();
+    const log = new IntentLog('usr_TEST', memoryIntentStorage());
+    await log.hydrate();
+    const variables = {
+      activityId: 'act_STANDUP',
+      input: { selectedDate: TODAY },
+      idempotencyKey: 'intent-convert-later-window',
+    };
+    await log.append({
+      intentId: variables.idempotencyKey,
+      entityId: variables.activityId,
+      mutationKey: ['activity', 'convert-recurrence'],
+      variables,
+    });
+    await log.acknowledgeForReconciliation(variables.idempotencyKey, version);
+    setActiveIntentLog(log);
+    try {
+      const targeted = vi.fn(async () => ({
+        activityId: variables.activityId,
+        activityVersion: version,
+        rows: [{ date: TODAY, item: row({ isRecurring: false, title: 'Canonical' }) }],
+      }));
+
+      expect(
+        await reconcileRecurrenceEdit(client, variables.activityId, version, targeted),
+      ).toBeUndefined();
+      expect(targeted).not.toHaveBeenCalled();
+      expect(log.snapshot().intents).toEqual([
+        expect.objectContaining({
+          intentId: variables.idempotencyKey,
+          status: 'acknowledged',
+          reconciliationVersion: version,
+        }),
+      ]);
+
+      const result = await loadAgendaWithReconciliation(
+        client,
+        KEY as never,
+        { from: TODAY, to: TODAY, tz: 'America/New_York' },
+        undefined,
+        {
+          ordinary: async () => ({
+            days: [
+              {
+                date: TODAY,
+                schedule: [row({ isRecurring: true, title: 'Stale series' })],
+                anytime: [],
+                earlier: [],
+              },
+            ],
+            warnings: [],
+          }),
+          targeted,
+        },
+      );
+
+      expect(targeted).toHaveBeenCalledOnce();
+      expect(result.days[0]?.schedule[0]).toMatchObject({
+        title: 'Canonical',
+        isRecurring: false,
+      });
+      await vi.waitFor(() => expect(log.snapshot().intents).toHaveLength(0));
+    } finally {
+      setActiveIntentLog(undefined);
+    }
   });
 
   it('preserves protected rows on failure while accepting unaffected refresh rows', async () => {

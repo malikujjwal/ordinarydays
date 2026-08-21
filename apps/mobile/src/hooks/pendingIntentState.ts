@@ -1,4 +1,5 @@
 import type { Intent } from '@/lib/intentLog';
+import { changesRecurrenceTopology } from '@/lib/mutationKeys';
 
 export interface PendingCreateState {
   pending: boolean;
@@ -55,15 +56,7 @@ export function pendingCreateState(
 }
 
 export function recurrenceEditState(intents: readonly Intent[]): RecurrenceEditState {
-  const edit = [...intents].reverse().find((intent) => {
-    if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'patch') {
-      return false;
-    }
-    const input = (intent.variables as { input?: unknown } | undefined)?.input;
-    return (
-      typeof input === 'object' && input !== null && Object.hasOwn(input, 'recurrence')
-    );
-  });
+  const edit = [...intents].reverse().find(changesRecurrenceTopology);
   if (edit === undefined) return { inert: false, message: undefined, status: 'idle' };
   if (edit.status === 'queued') {
     return { inert: true, message: 'Will update when online', status: 'queued' };
