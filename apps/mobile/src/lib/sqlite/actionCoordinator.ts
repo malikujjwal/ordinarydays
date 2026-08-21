@@ -1,5 +1,6 @@
 import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
 import type { ActivityOutcome } from '@od/shared/types';
+import { changesRecurrenceTopology } from '@/lib/mutationKeys';
 import type {
   ActivityCompletionVariables,
   ActivityCreateVariables,
@@ -276,7 +277,7 @@ export class NativeActivityActionCoordinator {
     }, 'interactive');
   }
 
-  async retryAttention(
+  async retryBlocked(
     intentId: string,
     freshIntentId: string,
     clock: ProjectionClock,
@@ -284,6 +285,15 @@ export class NativeActivityActionCoordinator {
     try {
       const { value: intent, commitRevision } = await this.transactions.runCommitted(
         async (transaction) => {
+          const current = await this.outbox.get(transaction.database, intentId);
+          if (
+            current?.status === 'queued' &&
+            current.lastError !== undefined &&
+            changesRecurrenceTopology(current)
+          ) {
+            /* Keep the error actionable until the sync engine actually claims this retry. */
+            return current;
+          }
           const retried = await this.outbox.retryAttention(
             transaction.database,
             intentId,
@@ -311,9 +321,30 @@ export class NativeActivityActionCoordinator {
     }
   }
 
-  async discardAttention(intentId: string): Promise<boolean> {
+  async discardBlocked(intentId: string): Promise<boolean> {
     const discarded = await this.transactions.run(async (transaction) => {
       const intent = await this.outbox.get(transaction.database, intentId);
+      if (
+        intent?.status === 'queued' &&
+        intent.lastError !== undefined &&
+        changesRecurrenceTopology(intent)
+      ) {
+        const later = await this.outbox.laterInOrdering(
+          transaction.database,
+          intent.orderingKey,
+          intent.seq,
+        );
+        if (!(await this.outbox.cancelQueued(transaction.database, intentId))) {
+          return false;
+        }
+        /* Later local writes own the row state; otherwise the cancelled patch was the owner. */
+        if (later.length === 0) {
+          await this.service.restoreCancelledRecurrenceEdit(transaction, intent.entityId);
+        }
+        transaction.changed('outbox');
+        transaction.changed('anytime');
+        return true;
+      }
       if (intent?.status !== 'needs_attention') return false;
       if (!(await this.outbox.discardAttention(transaction.database, intentId))) {
         return false;

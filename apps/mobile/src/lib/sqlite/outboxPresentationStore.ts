@@ -1,4 +1,5 @@
 import type { Intent } from '@/lib/intent';
+import { changesRecurrenceTopology } from '@/lib/mutationKeys';
 import { type OutboxIntent, readOutboxIntents } from '@/lib/sqlite/outbox';
 import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
 import type {
@@ -306,7 +307,13 @@ export class OutboxPresentationStore {
     );
     const blocked = stableItems(
       previousGlobal.blocked,
-      pending.filter((intent) => intent.status === 'needs_attention'),
+      pending.filter(
+        (intent) =>
+          intent.status === 'needs_attention' ||
+          (intent.status === 'queued' &&
+            intent.lastError !== undefined &&
+            changesRecurrenceTopology(intent)),
+      ),
     );
     const nextGlobal =
       pending === previousGlobal.pending && blocked === previousGlobal.blocked

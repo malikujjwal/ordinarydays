@@ -271,6 +271,42 @@ describe('OutboxPresentationStore', () => {
     store.stop();
   });
 
+  it('offers recovery for a failed queued recurrence write without exposing ordinary retries', async () => {
+    const failedRecurrence = intent('failed-recurrence', 'series', {
+      mutationKey: ['activity', 'patch'],
+      variables: {
+        activityId: 'series',
+        input: { recurrence: { mode: 'fixed', segments: [] } },
+      },
+      lastError: 'Schedule service unavailable.',
+      attempts: 1,
+      seq: 1,
+    });
+    const failedTitle = intent('failed-title', 'other', {
+      mutationKey: ['activity', 'patch'],
+      variables: { activityId: 'other', input: { title: 'Later' } },
+      lastError: 'Schedule service unavailable.',
+      attempts: 1,
+      seq: 2,
+    });
+    const projections = new ProjectionQueue([
+      Promise.resolve(snapshot([failedRecurrence, failedTitle], 1)),
+    ]);
+    const store = new OutboxPresentationStore(
+      'user-a',
+      new RepositorySubscriptions(),
+      projections,
+    );
+
+    store.start();
+    await vi.waitFor(() => expect(store.getSnapshot().pending).toHaveLength(2));
+
+    expect(store.getSnapshot().blocked.map(({ intentId }) => intentId)).toEqual([
+      'failed-recurrence',
+    ]);
+    store.stop();
+  });
+
   it('does not apply after shutdown or expose an old account to the next session', async () => {
     const pending = deferred<RevisionedProjectionSnapshot<readonly OutboxIntent[]>>();
     const projections = new ProjectionQueue([pending.promise]);

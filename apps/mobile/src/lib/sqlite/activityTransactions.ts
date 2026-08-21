@@ -763,6 +763,23 @@ export class ActivityTransactionService {
     throw new Error(`Unsupported blocked activity mutation: ${name ?? 'unknown'}.`);
   }
 
+  /** A queued recurrence patch changes only row state until its acknowledgement is installed. */
+  async restoreCancelledRecurrenceEdit(
+    transaction: TransactionContext,
+    activityId: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ? AND local_state = 'updating';",
+      [activityId],
+    );
+    await transaction.database.run(
+      "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ? AND local_state = 'updating';",
+      [activityId],
+    );
+    transaction.changed(this.activities.scope(activityId));
+    transaction.changed('agenda');
+  }
+
   async cancelQueuedAndProjectInverse(
     transaction: TransactionContext,
     originalIntentId: string,

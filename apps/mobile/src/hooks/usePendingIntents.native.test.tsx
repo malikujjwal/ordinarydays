@@ -153,6 +153,16 @@ describe('native pending intent selectors', () => {
       expected: { inert: true, status: 'queued', message: 'Schedule update pending' },
     },
     {
+      label: 'failed but still queued for retry',
+      status: 'queued' as const,
+      lastError: 'Schedule service unavailable.',
+      expected: {
+        inert: true,
+        status: 'failed',
+        message: 'Schedule service unavailable.',
+      },
+    },
+    {
       label: 'in flight',
       status: 'in_flight' as const,
       expected: { inert: true, status: 'updating', message: 'Updating schedule…' },

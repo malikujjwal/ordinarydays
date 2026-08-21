@@ -87,7 +87,7 @@ export async function retryBlockedIntent(intentId: string): Promise<boolean> {
     'UTC') as TimeZone;
   const now = systemClock.now();
   const freshIntentId = (await import('expo-crypto')).randomUUID();
-  const result = await requireActiveNativeState().coordinator.retryAttention(
+  const result = await requireActiveNativeState().coordinator.retryBlocked(
     intentId,
     freshIntentId,
     {
@@ -100,7 +100,7 @@ export async function retryBlockedIntent(intentId: string): Promise<boolean> {
 }
 
 export async function discardBlockedIntent(intentId: string): Promise<boolean> {
-  return requireActiveNativeState().coordinator.discardAttention(intentId);
+  return requireActiveNativeState().coordinator.discardBlocked(intentId);
 }
 
 export function useBlockedIntents(): readonly Intent[] {

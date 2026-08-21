@@ -60,7 +60,9 @@ export function recurrenceEditState(intents: readonly Intent[]): RecurrenceEditS
   if (edit === undefined) return { inert: false, message: undefined, status: 'idle' };
   if (edit.status === 'queued') {
     /* Queued does not prove the device is offline; it may be waiting behind another write. */
-    return { inert: true, message: 'Schedule update pending', status: 'queued' };
+    return edit.lastError === undefined
+      ? { inert: true, message: 'Schedule update pending', status: 'queued' }
+      : { inert: true, message: edit.lastError, status: 'failed' };
   }
   if (edit.status === 'in_flight') {
     return { inert: true, message: 'Updating schedule…', status: 'updating' };

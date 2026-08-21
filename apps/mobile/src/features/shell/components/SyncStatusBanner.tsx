@@ -16,12 +16,15 @@ export function SyncStatusBanner() {
   const queueMessage = useSyncStatus((state) => state.queueMessage);
   const conflictChanges = useSyncStatus((state) => state.conflictChanges);
   /**
-   * Intents the queue could not land (P2-48).
+   * Intents the queue could not land, including a recurrence write whose latest automatic
+   * attempt failed (P2-48).
    *
    * Structured `needs_attention` covers permanent rejection and writes parked by age or an
-   * untrusted clock. Both hold words the user typed and both are retained until the user
-   * acts, so both belong in the one banner §5.4 already specifies rather than in a second
-   * surface. The count is of writes, which is what `<n> changes` means here.
+   * untrusted clock. A retryable recurrence failure remains queued for automatic recovery,
+   * but it also needs an explicit escape hatch because that write keeps occurrence controls
+   * inert. All of them belong in the one account-level banner §5.4 already specifies rather
+   * than in a second subscription surface. The count is of writes, which is what `<n>
+   * changes` means here.
    */
   const blocked = useBlockedIntents();
   const [actingOn, setActingOn] = useState<string>();

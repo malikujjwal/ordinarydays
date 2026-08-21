@@ -1126,7 +1126,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       );
     });
 
-    const retried = await coordinator.retryAttention(
+    const retried = await coordinator.retryBlocked(
       'rejected-patch',
       'fresh-patch',
       clock,
@@ -1142,6 +1142,81 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     expect(
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity.title,
     ).toBe('Retry this title');
+  });
+
+  it('retries or discards a failed queued recurrence edit without trapping its rows', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await coordinator.create(
+      { input: createInput(), idempotencyKey: 'recover-recurrence-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+    });
+    await coordinator.patch(
+      ACTIVITY,
+      'failed-recurrence-patch',
+      {
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            { freq: 'daily', interval: 1, effectiveFrom: '2026-08-19' },
+            { freq: 'weekly', interval: 1, effectiveFrom: '2026-08-20' },
+          ],
+        },
+      },
+      '2026-08-19T00:00:00Z',
+    );
+    const failNextAttempt = async () => {
+      await transactions.run(async (transaction) => {
+        const claimed = await outbox.claimNext(transaction.database);
+        if (claimed === undefined) throw new Error('Expected a queued recurrence edit.');
+        await outbox.requeue(
+          transaction.database,
+          claimed.intentId,
+          'Schedule service unavailable.',
+        );
+        transaction.changed('outbox');
+      });
+    };
+    await failNextAttempt();
+    request.mockClear();
+
+    const retried = await coordinator.retryBlocked(
+      'failed-recurrence-patch',
+      'unused-fresh-id',
+      clock,
+    );
+
+    expect(retried.kind).toBe('accepted');
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'failed-recurrence-patch',
+      status: 'queued',
+      lastError: 'Schedule service unavailable.',
+    });
+    expect(request).toHaveBeenCalledWith('accepted-action');
+
+    await failNextAttempt();
+    request.mockClear();
+    await expect(coordinator.discardBlocked('failed-recurrence-patch')).resolves.toBe(
+      true,
+    );
+
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await database.first('SELECT local_state FROM activities WHERE activity_id = ?;', [
+        ACTIVITY,
+      ]),
+    ).toEqual({ local_state: 'canonical' });
+    expect(
+      await database.all(
+        'SELECT DISTINCT local_state FROM agenda_rows WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual([{ local_state: 'canonical' }]);
+    expect(request).toHaveBeenCalledWith('manual');
   });
 
   it('discards an untrusted parked projection instead of leaving it visible as truth', async () => {
@@ -1169,7 +1244,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       ),
     );
 
-    await expect(coordinator.discardAttention('expired-patch')).resolves.toBe(true);
+    await expect(coordinator.discardBlocked('expired-patch')).resolves.toBe(true);
 
     expect(await outbox.all()).toEqual([]);
     expect(
