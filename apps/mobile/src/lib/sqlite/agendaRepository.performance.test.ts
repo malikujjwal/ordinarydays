@@ -247,12 +247,22 @@ describe('AgendaRepository hot paths', () => {
     const agenda = new AgendaRepository(executor, new RepositorySubscriptions());
 
     await expect(
-      agenda.readMaterializedTargetDay(executor, 'act_target', '2026-08-20'),
+      agenda.readMaterializedTargetDay(
+        executor,
+        'act_target',
+        '2026-08-20',
+        '2026-08-21',
+      ),
     ).resolves.toEqual({ days: [], warnings: [] });
 
     expect(executor.all).toHaveBeenCalledOnce();
     expect(executor.first).not.toHaveBeenCalled();
     expect(vi.mocked(executor.all).mock.calls[0]?.[0]).toContain('WHERE viewer_date =');
+    expect(vi.mocked(executor.all).mock.calls[0]?.[1]).toEqual([
+      'act_target',
+      '2026-08-20',
+      '2026-08-21',
+    ]);
   });
 
   it('refreshes requested Plans days without reading coverage metadata or the full window', async () => {

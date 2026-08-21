@@ -174,8 +174,8 @@ export function AgendaRowWithIntentState({
    * DTO field would be a second source of truth for something only this device knows.
    */
   const { pendingCreate, recurrenceEdit, mutationInert: inert } = intentState;
-  const openInert =
-    recurrenceEdit.inert || (pendingCreate.pending && !pendingCreateAllowsOpen);
+  /* A queued schedule edit blocks conflicting mutations, never inspection/navigation. */
+  const openInert = pendingCreate.pending && !pendingCreateAllowsOpen;
   const skipped = SKIPPED_STATUSES.has(item.status);
   const dimmed = item.isPast || checked || skipped;
   const formattedTime = item.time === undefined ? undefined : formatWallTime(item.time);

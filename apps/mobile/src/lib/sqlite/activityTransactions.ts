@@ -313,7 +313,11 @@ export class ActivityTransactionService {
     });
     await this.activities.putLocal(transaction, activity, reminders);
     const current = await this.agenda.readMaterializedWindow(transaction.database);
-    const projected = applyCreate(current, { activity, ...clock });
+    const projected = applyCreate(current, {
+      activity,
+      ...clock,
+      undatedDestinationDate: clock.today,
+    });
     await this.agenda.replaceLocalActivityRows(transaction, activityId, projected);
     transaction.changed('outbox');
     return appended;
@@ -612,6 +616,7 @@ export class ActivityTransactionService {
       transaction.database,
       variables.activityId,
       occurrenceDate,
+      clock.today,
     );
     const projected = negative
       ? applySkip(current, {
@@ -674,6 +679,7 @@ export class ActivityTransactionService {
       transaction.database,
       variables.activityId,
       occurrenceDate,
+      clock.today,
     );
     const projected = applySkip(current, {
       activityId: variables.activityId,

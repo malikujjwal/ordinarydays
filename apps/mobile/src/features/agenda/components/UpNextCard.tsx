@@ -103,9 +103,7 @@ export function UpNextCardWithState({
   const theme = useTheme();
   const completionLocked = completion.locked;
   const mutationInert = intentState.mutationInert;
-  const openInert =
-    intentState.recurrenceEdit.inert ||
-    (intentState.pendingCreate.pending && !pendingCreateAllowsOpen);
+  const openInert = intentState.pendingCreate.pending && !pendingCreateAllowsOpen;
   const actions = allAgendaSwipeActions(agendaSwipeActions(selection.item)).filter(
     (action) => CARD_ACTIONS.has(action.name),
   );

@@ -700,17 +700,18 @@ export class AgendaRepository {
     database: SqliteReader,
     activityId: string,
     occurrenceDate?: string,
+    preferredViewerDate?: string,
   ): Promise<AgendaData> {
     const rows = await database.all(
       `SELECT ${AGENDA_READ_COLUMNS} FROM agenda_rows
        WHERE viewer_date = (
          SELECT viewer_date FROM agenda_rows
          WHERE activity_id = ? AND occurrence_date IS ?
-         ORDER BY viewer_date
+         ORDER BY CASE WHEN viewer_date = ? THEN 0 ELSE 1 END, viewer_date
          LIMIT 1
        )
        ORDER BY viewer_date, section, sort_order, activity_id;`,
-      [activityId, occurrenceDate ?? null],
+      [activityId, occurrenceDate ?? null, preferredViewerDate ?? null],
     );
     const date = rows[0] === undefined ? undefined : text(rows[0], 'viewer_date');
     if (date === undefined) return { days: [], warnings: [] };

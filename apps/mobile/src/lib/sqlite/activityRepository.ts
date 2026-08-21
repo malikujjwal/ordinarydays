@@ -289,13 +289,21 @@ export class ActivityRepository {
     );
     /*
      * A committed local Agenda row owns the occurrence presentation until acknowledgement.
-     * Preferring an older canonical occurrence row here made an all-future time edit visible
-     * on every Agenda row while the open occurrence detail kept today's previous time.
+     * After reconciliation, its canonical version also wins over an older targeted occurrence
+     * projection. Otherwise an all-future time edit reverts in detail as soon as both rows are
+     * canonical, even while every Agenda row correctly shows the acknowledged time.
      */
-    const localAgendaOwnsProjection =
-      agendaRow !== undefined && text(agendaRow, 'local_state') !== 'canonical';
+    const occurrenceVersion =
+      occurrenceRow === undefined ? undefined : text(occurrenceRow, 'canonical_version');
+    const agendaVersion =
+      agendaRow === undefined ? undefined : text(agendaRow, 'canonical_version');
+    const agendaOwnsProjection =
+      agendaRow !== undefined &&
+      (text(agendaRow, 'local_state') !== 'canonical' ||
+        (agendaVersion !== undefined &&
+          (occurrenceVersion === undefined || agendaVersion > occurrenceVersion)));
     const occurrence =
-      localAgendaOwnsProjection && agendaRow !== undefined
+      agendaOwnsProjection && agendaRow !== undefined
         ? occurrenceFromAgendaRow(agendaRow)
         : occurrenceRow === undefined
           ? agendaRow === undefined

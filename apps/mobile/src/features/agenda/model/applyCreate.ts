@@ -16,6 +16,8 @@ export interface CreateProjectionVariables extends AgendaProjectionClock {
     Activity,
     'activityId' | 'type' | 'title' | 'schedule' | 'recurrence' | 'parentActivityId'
   >;
+  /** Native aggregate windows pin an undated create to the current viewer day. */
+  undatedDestinationDate?: string;
   /**
    * Replace a row this window already holds instead of leaving it (P2-49).
    *
@@ -57,9 +59,11 @@ export function applyCreate(
     return applyRecurringCreate(agenda, variables);
   }
 
-  // An undated Task belongs to the ANYTIME bucket of the window's first day; a dated one
-  // belongs to its own date. Either way, a create outside this window is not ours to place.
-  const destinationDate = date ?? agenda.days[0]?.date;
+  // An undated Task belongs to the ANYTIME bucket of the query window's first day. Native's
+  // aggregate materialization supplies the current viewer day explicitly because its retained
+  // coverage can start in the past. A dated create belongs to its own date in either adapter.
+  const destinationDate =
+    date ?? variables.undatedDestinationDate ?? agenda.days[0]?.date;
   if (destinationDate === undefined) return agenda;
   if (!agenda.days.some((day) => day.date === destinationDate)) return agenda;
 

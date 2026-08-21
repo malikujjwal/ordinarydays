@@ -158,9 +158,10 @@ occurrence-targeted and server-guarded.
 Replace “mark stale with no refetch for up to 60 seconds” with activity-scoped versioned
 reconciliation. Classify only a recurrence-changing PATCH of an existing Activity; recurring
 CREATE remains locally expandable and never enters this state. A queued offline series edit
-retains the last canonical occurrence rows, makes them inert, and survives restart through
-the durable intent log. A stale or unproven ordinary GSI response may update unaffected
-Activities but may never erase those protected rows.
+retains the last canonical occurrence rows and survives restart through the SQLite outbox.
+Conflicting mutation controls remain inert, but the row body still opens committed detail—a
+pending write must never trap an Activity behind a dead row. A stale or unproven ordinary GSI
+response may update unaffected Activities but may never erase those protected rows.
 
 After PATCH acknowledgement, bypass discovery with the strongly consistent targeted
 `ACT#<id>` agenda read in `api-contract.md` §2.2 / `data-model.md` pattern 4d. Atomically splice

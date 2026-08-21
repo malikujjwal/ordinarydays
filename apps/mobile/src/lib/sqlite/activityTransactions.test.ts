@@ -185,6 +185,108 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     expect((await outbox.all()).map((intent) => intent.intentId)).toEqual(['create-one']);
   });
 
+  it('pins an undated create to today when retained coverage begins on an older date', async () => {
+    await database?.run(
+      `INSERT INTO agenda_coverage
+        (from_date, to_date, timezone, include_key, refreshed_at, warnings_json)
+       VALUES (?, ?, ?, '', ?, '[]');`,
+      ['2026-08-01', '2026-08-02', 'America/New_York', '2026-08-19T00:00:00Z'],
+    );
+    const {
+      schedule: _schedule,
+      recurrence: _recurrence,
+      ...undated
+    } = createInput(OTHER);
+
+    const accepted = await coordinator.create(
+      { input: undated, idempotencyKey: 'undated-create' },
+      clock,
+    );
+
+    expect(accepted.kind).toBe('accepted');
+    await expect(
+      database?.all(
+        `SELECT viewer_date, section, status FROM agenda_rows
+         WHERE activity_id = ? ORDER BY viewer_date;`,
+        [OTHER],
+      ),
+    ).resolves.toEqual([
+      { viewer_date: '2026-08-19', section: 'anytime', status: 'saved' },
+    ]);
+  });
+
+  it('completes the today copy of an undated task when older coverage retains another copy', async () => {
+    const {
+      schedule: _schedule,
+      recurrence: _recurrence,
+      ...undated
+    } = createInput(OTHER);
+    await coordinator.create(
+      { input: undated, idempotencyKey: 'undated-complete-create' },
+      clock,
+    );
+    const today = await agenda.read({
+      from: '2026-08-19',
+      to: '2026-08-21',
+      timezone: 'America/New_York',
+    });
+    const item = today.days[0]?.anytime[0];
+    if (item === undefined) throw new Error('Expected the undated task in Today.');
+    await transactions.run(async (transaction) => {
+      await transaction.database.run("UPDATE activities SET local_state = 'canonical';");
+      await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await agenda.installCanonical(
+        transaction,
+        { from: '2026-08-01', to: '2026-08-01', tz: 'America/New_York' },
+        {
+          days: [
+            {
+              date: '2026-08-01',
+              schedule: [],
+              anytime: [item],
+              earlier: [],
+            },
+          ],
+          warnings: [],
+        },
+      );
+    });
+    const invalidation = vi.fn();
+    const stop = agenda.subscribe(
+      {
+        from: '2026-08-19',
+        to: '2026-08-21',
+        timezone: 'America/New_York',
+      },
+      invalidation,
+    );
+
+    const accepted = await coordinator.complete(
+      OTHER,
+      'undated-complete',
+      {},
+      true,
+      'saved',
+      clock,
+    );
+    stop();
+
+    expect(accepted.kind).toBe('accepted');
+    expect(invalidation).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'local-day', date: '2026-08-19', urgent: true }),
+    );
+    await expect(
+      database?.all(
+        `SELECT viewer_date, section, status FROM agenda_rows
+         WHERE activity_id = ? ORDER BY viewer_date;`,
+        [OTHER],
+      ),
+    ).resolves.toEqual([
+      { viewer_date: '2026-08-19', section: 'earlier', status: 'completed' },
+    ]);
+  });
+
   it('keeps canonical_version server-authored across local creation and mutations', async () => {
     await transactions.run((transaction) =>
       service.create(
@@ -886,8 +988,12 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       await transaction.database.run("UPDATE agenda_rows SET local_state = 'canonical';");
       await transaction.database.run(
         `INSERT INTO activity_occurrences (
-          activity_id, nominal_date, viewer_date, time, status, is_snoozed, local_state
-        ) VALUES (?, '2026-08-19', '2026-08-19', '09:00', 'scheduled', 0, 'canonical');`,
+          activity_id, nominal_date, viewer_date, time, status, is_snoozed,
+          local_state, canonical_version
+        ) VALUES (
+          ?, '2026-08-19', '2026-08-19', '09:00', 'scheduled', 0,
+          'canonical', '2026-08-19T00:00:00Z'
+        );`,
         [ACTIVITY],
       );
       await transaction.database.run('DELETE FROM outbox_intents;');
@@ -924,6 +1030,21 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       { occurrence_date: '2026-08-20', time: '13:30' },
       { occurrence_date: '2026-08-21', time: '13:30' },
     ]);
+    await expect(
+      activities.read({ kind: 'occurrence', activityId: ACTIVITY, date: '2026-08-19' }),
+    ).resolves.toMatchObject({ occurrence: { date: '2026-08-19', time: '13:30' } });
+    await transactions.run(async (transaction) => {
+      await transaction.database.run(
+        `UPDATE agenda_rows SET local_state = 'canonical',
+           canonical_version = '2026-08-19T01:00:00Z'
+         WHERE activity_id = ?;`,
+        [ACTIVITY],
+      );
+      await transaction.database.run(
+        "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
+        [ACTIVITY],
+      );
+    });
     await expect(
       activities.read({ kind: 'occurrence', activityId: ACTIVITY, date: '2026-08-19' }),
     ).resolves.toMatchObject({ occurrence: { date: '2026-08-19', time: '13:30' } });

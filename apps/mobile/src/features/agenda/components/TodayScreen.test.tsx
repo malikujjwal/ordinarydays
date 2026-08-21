@@ -1308,7 +1308,7 @@ describe('TodayScreen timeline furniture', () => {
     expect(actions.getAttribute('aria-hidden')).toBeNull();
   });
 
-  it('makes the whole Up Next card inert while recurrence topology reconciles', () => {
+  it('keeps Up Next inspectable while recurrence topology blocks mutations', () => {
     const timed = row(1, {
       title: 'Recurring groceries',
       time: '17:30',
@@ -1348,9 +1348,11 @@ describe('TodayScreen timeline furniture', () => {
     );
 
     fireEvent.click(screen.getByTestId('up-next-backdrop'));
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(timed);
+    onOpen.mockClear();
     fireEvent.click(screen.getByTestId('agenda-row-body'));
 
-    expect(onOpen).not.toHaveBeenCalled();
+    expect(onOpen).toHaveBeenCalledExactlyOnceWith(timed);
     expect(onAction).not.toHaveBeenCalled();
     expect(screen.queryByTestId('up-next-quick-actions')).toBeNull();
     expect(screen.getByTestId('up-next-recurrence-state').textContent).toBe(
