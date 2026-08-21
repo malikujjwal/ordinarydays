@@ -1,16 +1,12 @@
 import { ApiError, type CreationTarget } from '@od/shared/client';
 import type { Activity } from '@od/shared/types';
 import { useMutation } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   type DraftFields,
   toCreateActivityInput,
 } from '@/features/compose/model/targets';
-import {
-  type CreateActivityVariables,
-  hasDurableActivityCreateQueue,
-  waitForActivityCreateAcceptance,
-} from '@/lib/mutationDefaults';
+import type { CreateActivityVariables } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
 import { useComposeDraft } from '@/stores/composeDraft';
 
@@ -72,15 +68,6 @@ export function useCreateActivity(): CreateActivityResult {
   const takeIdempotencyKey = useComposeDraft((s) => s.takeIdempotencyKey);
   const takeActivityId = useComposeDraft((s) => s.takeActivityId);
   const [localError, setLocalError] = useState<Error>();
-  const acceptanceDisposers = useRef(new Set<() => void>());
-
-  useEffect(
-    () => () => {
-      for (const dispose of acceptanceDisposers.current) dispose();
-      acceptanceDisposers.current.clear();
-    },
-    [],
-  );
 
   const mutation = useMutation<Activity, Error, CreateActivityVariables>({
     mutationKey: activityMutationKeys.create,
@@ -119,20 +106,8 @@ export function useCreateActivity(): CreateActivityResult {
           input: { ...input, activityId: takeActivityId() },
           idempotencyKey,
         } satisfies CreateActivityVariables;
-        if (!hasDurableActivityCreateQueue()) {
-          await mutation.mutateAsync(variables);
-          return true;
-        }
-        const acceptance = waitForActivityCreateAcceptance(idempotencyKey);
-        acceptanceDisposers.current.add(acceptance.dispose);
-        try {
-          mutation.mutate(variables);
-          await acceptance.promise;
-          return true;
-        } finally {
-          acceptanceDisposers.current.delete(acceptance.dispose);
-          acceptance.dispose();
-        }
+        await mutation.mutateAsync(variables);
+        return true;
       } catch (error) {
         setLocalError(error instanceof Error ? error : new Error(String(error)));
         // Swallowed on purpose: the error is already on `mutation.error` and is rendered as

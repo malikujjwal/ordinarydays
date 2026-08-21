@@ -1,7 +1,7 @@
 import { systemClock, type TimeZone, toWallTime } from '@od/shared/time';
 import { onlineManager } from '@tanstack/react-query';
 import { useCallback, useSyncExternalStore } from 'react';
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import type { OutboxPresentationSnapshot } from '@/lib/sqlite/outboxPresentationStore';
 import {

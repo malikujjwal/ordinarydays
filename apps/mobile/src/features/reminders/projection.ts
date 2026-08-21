@@ -1,7 +1,7 @@
 import { expandRecurrence } from '@od/shared/recurrence';
 import type { WallDate } from '@od/shared/time';
 import type { Recurrence } from '@od/shared/types';
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 
 /**
  * The bounded reminder projection (P2-57).
@@ -13,9 +13,10 @@ import type { Intent } from '@/lib/intentLog';
  * recompute what to arm. This is the persisted substitute: today → +7 days, reminder-relevant
  * fields only, small enough to keep on disk and re-read on a cold start.
  *
- * It is deliberately **not** a replica. ADR-055's scope guard is explicit that the log is a
- * write-ahead record and this is "a bounded derived projection for one device capability".
- * Nothing here is authoritative; everything is rebuildable from the server plus the log.
+ * It is deliberately **not** a replica. This is a bounded derived projection for one device
+ * capability. Nothing here is authoritative: native rebuilds it from committed SQLite rows
+ * plus unresolved SQLite outbox creates, while web uses its persisted server projection and
+ * passes no pending creates.
  *
  * ## The hybrid rule, which is the correctness core
  *
@@ -27,9 +28,9 @@ import type { Intent } from '@/lib/intentLog';
  *    made the server's projection authoritative precisely so nothing downstream would guess,
  *    and locally re-expanding a series would arm a reminder for a day the user already
  *    skipped.
- * 2. **Pending local activities are expanded with the shared `expandRecurrence`.** Safe for
+ * 2. **Pending native creates are expanded with the shared `expandRecurrence`.** Safe for
  *    exactly the reason the first case is not: the server has never seen these, so no
- *    override can exist for them. There is nothing to be wrong about.
+ *    override can exist for them. Web passes an empty set because it has no durable queue.
  *
  * Getting this backwards in either direction is a real defect — locally expanding a
  * server-known series arms skipped days, and refusing to expand a pending one means a

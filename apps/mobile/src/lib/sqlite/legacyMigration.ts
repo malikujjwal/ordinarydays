@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { QueryClient } from '@tanstack/react-query';
-import { IntentLog, intentLogKey } from '@/lib/intentLog';
+import { LegacyIntentLog, legacyIntentLogKey } from '@/lib/legacyIntentLog';
 import {
   importLegacyPausedMutations,
   inspectNativeLegacyPersistence,
@@ -18,23 +18,23 @@ export interface LegacyMigrationImporter {
 
 export interface NativeLegacyMigrationDependencies {
   readonly hasIntentLog: (ownerUserId: string) => Promise<boolean>;
-  readonly createIntentLog: (ownerUserId: string) => IntentLog;
+  readonly createIntentLog: (ownerUserId: string) => LegacyIntentLog;
   readonly inspectPersistence: () => Promise<NativeLegacyPersistenceSnapshot>;
   readonly importPausedMutations: (
-    log: IntentLog,
+    log: LegacyIntentLog,
     snapshot: NativeLegacyPersistenceSnapshot,
   ) => Promise<number>;
   readonly retirePersistence: (
     client: QueryClient,
-    log: IntentLog,
+    log: LegacyIntentLog,
     snapshot: NativeLegacyPersistenceSnapshot,
   ) => Promise<void>;
 }
 
 const nativeDependencies: NativeLegacyMigrationDependencies = {
   hasIntentLog: async (ownerUserId) =>
-    (await AsyncStorage.getItem(intentLogKey(ownerUserId))) !== null,
-  createIntentLog: (ownerUserId) => new IntentLog(ownerUserId),
+    (await AsyncStorage.getItem(legacyIntentLogKey(ownerUserId))) !== null,
+  createIntentLog: (ownerUserId) => new LegacyIntentLog(ownerUserId),
   inspectPersistence: () => inspectNativeLegacyPersistence('ios'),
   importPausedMutations: (log, snapshot) =>
     importLegacyPausedMutations(log, 'ios', snapshot),

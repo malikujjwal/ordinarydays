@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 import { pendingActivityDetailFromIntent } from '@/lib/pendingActivity';
 
 const ACTIVITY_ID = 'act_01J0000000000000000000000A';

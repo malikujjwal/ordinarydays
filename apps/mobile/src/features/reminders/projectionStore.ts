@@ -11,9 +11,10 @@ import type { ServerReminderSource } from './projection';
  * local notifications exist for. Storing the last good answer is what breaks that dependency:
  * the network fills this store when it can, and arming reads only the store.
  *
- * **Its own key, and disposable.** Unlike the intent log, everything here is reconstructable
- * from the server, so it may be discarded freely. It is a cache, and it is kept separate from
- * the query cache only because it must survive that cache's buster and outlive one session.
+ * **Its own key, and disposable.** Everything here is reconstructable from the server, so it
+ * may be discarded freely. It is a web reminder cache, kept separate from the query cache only
+ * because it must survive that cache's buster and outlive one session. Native reminder
+ * scheduling resolves a platform adapter that reads committed SQLite rows instead.
  */
 
 const KEY = 'ordinarydays-reminder-projection-v1';
@@ -49,9 +50,8 @@ function isStored(value: unknown): value is StoredProjection {
 /**
  * The last stored projection, or `undefined`.
  *
- * A malformed or unreadable store returns `undefined` rather than throwing: arming still has
- * the intent log to work from, and a device with pending offline creates and a corrupt cache
- * should still fire those reminders.
+ * A malformed or unreadable web store returns `undefined` rather than throwing. Arming can
+ * safely produce an empty plan until the server projection is refreshed.
  */
 export async function loadProjection(
   storage: ProjectionStorage = AsyncStorage,
@@ -73,7 +73,7 @@ export async function saveProjection(
   await storage.setItem(KEY, JSON.stringify(projection));
 }
 
-/** Sign-out disposal. The intent log is quarantined instead; this is only a cache. */
+/** Sign-out disposal. This web reminder metadata is only a reconstructable cache. */
 export async function clearProjection(
   storage: ProjectionStorage = AsyncStorage,
 ): Promise<void> {

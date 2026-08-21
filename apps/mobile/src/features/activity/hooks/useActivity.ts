@@ -25,15 +25,15 @@ import {
 } from '@/features/activity/model/conflict';
 import { usePendingIntents } from '@/hooks/usePendingIntents';
 import { apiClient } from '@/lib/apiClient';
-import {
-  type ConvertRecurrenceVariables,
-  type PatchActivityVariables,
-  patchChangeNames,
-  type ReminderCreateVariables,
-  type ReminderDeleteVariables,
-  type ScheduleActivityVariables,
+import type {
+  ConvertRecurrenceVariables,
+  PatchActivityVariables,
+  ReminderCreateVariables,
+  ReminderDeleteVariables,
+  ScheduleActivityVariables,
 } from '@/lib/mutationDefaults';
 import { activityMutationKeys } from '@/lib/mutationKeys';
+import { patchChangeNames } from '@/lib/patchChangeNames';
 import {
   type PendingActivityDetail,
   pendingActivityDetailFromIntent,

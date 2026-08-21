@@ -6,7 +6,7 @@ import type {
   ActivityDetailTarget,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 
 type WithoutOwner<T> = T extends Activity ? Omit<T, 'ownerId'> : never;
 

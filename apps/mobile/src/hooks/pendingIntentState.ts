@@ -1,4 +1,4 @@
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 import { changesRecurrenceTopology } from '@/lib/mutationKeys';
 
 export interface PendingCreateState {

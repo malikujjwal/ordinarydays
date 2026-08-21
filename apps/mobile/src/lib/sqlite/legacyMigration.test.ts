@@ -1,6 +1,10 @@
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
-import { IntentLog, type IntentLogStorage, intentLogKey } from '@/lib/intentLog';
+import {
+  LegacyIntentLog,
+  type LegacyIntentLogStorage,
+  legacyIntentLogKey,
+} from '@/lib/legacyIntentLog';
 import {
   type LegacyMigrationImporter,
   migrateNativeLegacyState,
@@ -12,7 +16,7 @@ const OTHER_OWNER = 'usr_01J0000000000000000000000B';
 const ACTIVITY = 'act_01J0000000000000000000000A';
 
 function memoryStorage(initial: Readonly<Record<string, string>> = {}): {
-  readonly storage: IntentLogStorage;
+  readonly storage: LegacyIntentLogStorage;
   readonly values: Map<string, string>;
 } {
   const values = new Map(Object.entries(initial));
@@ -47,7 +51,7 @@ function importedOutcome(sourceId: string) {
 }
 
 function dependencies(
-  log: IntentLog,
+  log: LegacyIntentLog,
   overrides: Partial<NativeLegacyMigrationDependencies> = {},
 ): NativeLegacyMigrationDependencies {
   return {
@@ -66,7 +70,7 @@ function dependencies(
 describe('native legacy migration startup boundary', () => {
   it('defers an unowned mutation without opening or retiring its source', async () => {
     const { storage } = memoryStorage();
-    const log = new IntentLog(OWNER, storage);
+    const log = new LegacyIntentLog(OWNER, storage);
     const createIntentLog = vi.fn(() => log);
     const retirePersistence = vi.fn(async () => undefined);
     const importer: LegacyMigrationImporter = { import: vi.fn() };
@@ -94,9 +98,9 @@ describe('native legacy migration startup boundary', () => {
 
   it('keeps the account log when SQLite import verification fails', async () => {
     const { storage, values } = memoryStorage();
-    const log = new IntentLog(OWNER, storage);
+    const log = new LegacyIntentLog(OWNER, storage);
     await log.hydrate();
-    await log.append({
+    await log.appendMigrated({
       intentId: 'legacy-complete',
       mutationKey: ['activity', 'complete'],
       variables: { activityId: ACTIVITY, idempotencyKey: 'legacy-complete' },
@@ -124,13 +128,13 @@ describe('native legacy migration startup boundary', () => {
       queryPersistenceSafe: false,
       error: expect.objectContaining({ message: 'read-back verification failed' }),
     });
-    expect(values.has(intentLogKey(OWNER))).toBe(true);
+    expect(values.has(legacyIntentLogKey(OWNER))).toBe(true);
     expect(retirePersistence).not.toHaveBeenCalled();
   });
 
   it('records unproven query records as ambiguous before retirement', async () => {
     const { storage } = memoryStorage();
-    const log = new IntentLog(OWNER, storage);
+    const log = new LegacyIntentLog(OWNER, storage);
     const imported = vi.fn(
       async (source: Parameters<LegacyMigrationImporter['import']>[0]) =>
         importedOutcome(source.sourceId),

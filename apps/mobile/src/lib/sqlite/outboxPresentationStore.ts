@@ -1,4 +1,4 @@
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 import { type OutboxIntent, readOutboxIntents } from '@/lib/sqlite/outbox';
 import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
 import type {

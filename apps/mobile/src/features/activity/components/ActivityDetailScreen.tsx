@@ -131,7 +131,8 @@ export function ActivityDetailScreen({
   const detail = useActivityDetail(target);
   const actions = useActivityActions(activityId);
   /**
-   * Derived from the intent log, never from a field on the Activity (P2-50). Pending-ness is
+   * Derived from pending-intent presentation, never from a field on the Activity (P2-50).
+   * Native reads the account SQLite outbox presentation store. Pending-ness is
    * a property of what this device has queued, not of the entity — the server has no idea
    * this row exists, so it has nothing to tell us about it and no DTO carries it.
    */

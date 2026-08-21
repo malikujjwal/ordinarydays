@@ -2,8 +2,6 @@ import type { HttpClient } from '@od/shared/client';
 import type { Activity } from '@od/shared/types';
 import type { MutationKey, QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
-import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
-import { replayIntents, setActiveIntentLog } from '@/lib/intentReplay';
 import {
   type ActivityPostVariables,
   type ConvertRecurrenceVariables,
@@ -20,22 +18,6 @@ import { activityMutationKeys } from '@/lib/mutationKeys';
 import { shouldWarnBeforeUnload } from '@/lib/onlineManager';
 import { dehydratePersistedClient } from '@/lib/persister';
 import { createOfflineQueryClient } from '@/lib/queryClient';
-
-const INTENT_USER = 'usr_01J0000000000000000000000Z';
-
-/** In-memory storage so an intent-log round trip crosses a real process boundary. */
-function fakeIntentStorage(): IntentLogStorage {
-  const data = new Map<string, string>();
-  return {
-    getItem: async (key) => data.get(key) ?? null,
-    setItem: async (key, value) => {
-      data.set(key, value);
-    },
-    removeItem: async (key) => {
-      data.delete(key);
-    },
-  };
-}
 
 const ACTIVITY_ID = 'act_01J0000000000000000000000A';
 const IDEMPOTENCY_KEY = '00000000-0000-4000-8000-000000000001';
@@ -333,53 +315,6 @@ describe('the query client defaults', () => {
 });
 
 describe('persisted mutation defaults', () => {
-  it('carries all thirteen mutations through the intent log, not the query envelope', async () => {
-    /**
-     * **Amended by P2-48.** This used to dehydrate the thirteen mutations into the query
-     * envelope and resume them from there, which is exactly the arrangement that let a
-     * buster bump or an age check delete queued user writes. The durability boundary is now
-     * the intent log; what this proves is unchanged in substance — every one of the thirteen
-     * registered defaults survives a process boundary and resolves against the real HTTP
-     * client — but it proves it across the store that is actually allowed to hold them.
-     */
-    const source = createOfflineQueryClient();
-    for (const entry of cases) addPausedMutation(source, entry.key, entry.variables);
-    expect(dehydratePersistedClient(source).mutations).toHaveLength(0);
-
-    const storage = fakeIntentStorage();
-    const log = new IntentLog(INTENT_USER, storage);
-    await log.hydrate();
-    for (const [index, entry] of cases.entries()) {
-      await log.append({
-        intentId: `intent-${index}`,
-        mutationKey: entry.key.map(String),
-        variables: entry.variables,
-        entityId: `entity-${index}`,
-      });
-    }
-
-    // The process boundary: a second log over the same storage, as a relaunch builds.
-    const relaunched = new IntentLog(INTENT_USER, storage);
-    await relaunched.hydrate();
-    expect(relaunched.pending()).toHaveLength(13);
-
-    const target = createOfflineQueryClient();
-    const fake = fakeHttpClient();
-    registerActivityMutationDefaults(target, fake.client);
-    const result = await replayIntents(target, relaunched);
-
-    expect(result).toMatchObject({ attempted: 13, acknowledged: 13, failed: 0 });
-    expect(fake.request).toHaveBeenCalledTimes(13);
-    expect(relaunched.pending()).toHaveLength(0);
-  });
-
-  /**
-   * **The 201st-write refusal moved to `intentLog.test.ts` (P2-48)**, along with the cap
-   * itself. It is not dropped coverage: the replacement asserts the same refusal *and* the
-   * thing this version could not, that structured `needs_attention` intents count toward
-   * the 200. Counting live TanStack mutations undercounted by exactly the stuck writes.
-   */
-
   it('persists queries and never a mutation, on either platform', () => {
     const source = createOfflineQueryClient();
     source.setQueryData(['agenda', '2026-08-12'], { sections: [] });
@@ -427,94 +362,5 @@ describe('persisted mutation defaults', () => {
     expect(headers.every((value) => value?.['Idempotency-Key'] === IDEMPOTENCY_KEY)).toBe(
       true,
     );
-  });
-
-  it('replays one persisted recurrence PATCH once and defers its empty-cache proof', async () => {
-    const storage = fakeIntentStorage();
-    const log = new IntentLog(INTENT_USER, storage);
-    await log.hydrate();
-    const variables: PatchActivityVariables = {
-      activityId: ACTIVITY_ID,
-      intentId: 'patch-recurrence-stable',
-      input: {
-        recurrence: {
-          mode: 'fixed',
-          segments: [{ freq: 'daily', effectiveFrom: '2026-08-12' }],
-        },
-      },
-      ifMatch: activity.updatedAt,
-      changeNames: ['Repeat'],
-    };
-    await log.append({
-      intentId: variables.intentId,
-      mutationKey: activityMutationKeys.patch,
-      variables,
-      entityId: ACTIVITY_ID,
-    });
-
-    const relaunched = new IntentLog(INTENT_USER, storage);
-    await relaunched.hydrate();
-    const target = createOfflineQueryClient();
-    const fake = fakeHttpClient();
-    registerActivityMutationDefaults(target, fake.client);
-    setActiveIntentLog(relaunched);
-    try {
-      await Promise.all([
-        replayIntents(target, relaunched),
-        replayIntents(target, relaunched),
-      ]);
-      expect(relaunched.snapshot().intents).toEqual([
-        expect.objectContaining({
-          intentId: variables.intentId,
-          status: 'acknowledged',
-          reconciliationVersion: activity.updatedAt,
-        }),
-      ]);
-    } finally {
-      setActiveIntentLog(undefined);
-    }
-
-    expect(fake.request).toHaveBeenCalledTimes(1);
-  });
-
-  it('replays one recurrence conversion and defers its empty-cache proof', async () => {
-    const storage = fakeIntentStorage();
-    const log = new IntentLog(INTENT_USER, storage);
-    await log.hydrate();
-    const variables: ConvertRecurrenceVariables = {
-      activityId: ACTIVITY_ID,
-      input: { selectedDate: '2026-08-12' },
-      idempotencyKey: 'convert-recurrence-stable',
-    };
-    await log.append({
-      intentId: variables.idempotencyKey,
-      mutationKey: activityMutationKeys.convertRecurrence,
-      variables,
-      entityId: ACTIVITY_ID,
-    });
-
-    const relaunched = new IntentLog(INTENT_USER, storage);
-    await relaunched.hydrate();
-    const target = createOfflineQueryClient();
-    const fake = fakeHttpClient();
-    registerActivityMutationDefaults(target, fake.client);
-    setActiveIntentLog(relaunched);
-    try {
-      await Promise.all([
-        replayIntents(target, relaunched),
-        replayIntents(target, relaunched),
-      ]);
-      expect(relaunched.snapshot().intents).toEqual([
-        expect.objectContaining({
-          intentId: variables.idempotencyKey,
-          status: 'acknowledged',
-          reconciliationVersion: activity.updatedAt,
-        }),
-      ]);
-    } finally {
-      setActiveIntentLog(undefined);
-    }
-
-    expect(fake.request).toHaveBeenCalledTimes(1);
   });
 });

@@ -358,7 +358,7 @@ export class AgendaRepository {
     const key = `${this.scope(coverage)}:${this.version(coverage)}`;
     const current = this.snapshots.get(key);
     if (current !== undefined) return current;
-    const legacyRead = async (): Promise<AgendaCommittedSnapshot> => ({
+    const writerFallbackRead = async (): Promise<AgendaCommittedSnapshot> => ({
       ...(await this.readSnapshotWith(this.reader, coverage)),
       commitRevision: 0,
       source: 'writer-fallback',
@@ -366,7 +366,7 @@ export class AgendaRepository {
     const promise = (
       this.projectionReader === undefined
         ? this.readScheduler === undefined
-          ? legacyRead()
+          ? writerFallbackRead()
           : this.readScheduler.read(
               async (database) => ({
                 ...(await this.readSnapshotWith(database, coverage)),

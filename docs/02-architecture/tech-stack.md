@@ -487,19 +487,20 @@ useMutation({
 are unit-tested — the optimistic projection must agree with what the server will return,
 or the row will visibly flip back.
 
-**3. Replay-safe mutation execution (amended by ADR-055).** Mutations use registered
-`mutationKey` defaults as TanStack execution recipes. Every creating `POST`, plus the
+**3. Replay-safe mutation execution (web adapter and migration lineage).** Web mutations use
+registered `mutationKey` defaults as TanStack request recipes. Every creating `POST`, plus the
 explicitly replay-protected complete/uncomplete/skip mutations, carries a client-generated
 `Idempotency-Key` (`expo-crypto`'s `randomUUID`), generated once when the action is accepted
 and stored in its variables before `mutationFn` runs. Every retry and process-death replay
-reuses it — this is why the API's idempotency records exist. New iOS writes are **not**
-persisted or replayed as TanStack mutations; the durable log in mechanism 4 owns that job.
-A one-time upgrade bridge imports legacy paused mutations into the account log, verifies that
-log in SQLite, records the query-domain migration receipt and only then retires both legacy
-native sources. If verification fails, the SQLite session may still pull canonical state,
-but native query-cache saving remains disabled and the retained legacy records are not
-executed or retired; the next launch retries the same idempotent import. The native runtime
-never executes those MutationCache records. Web has no durable mutation queue.
+reuses it — this is why the API's idempotency records exist. New native writes are **not**
+persisted or replayed as TanStack mutations; mechanism 5's SQLite transaction/outbox owns
+that job. A one-time upgrade bridge imports legacy paused mutations and the old account log
+into SQLite, verifies receipt-backed read-back, records the query-domain migration receipt,
+and only then retires both legacy native sources. If verification fails, the SQLite session
+may still pull canonical state, but native query-cache saving remains disabled and the
+retained legacy records are not executed or retired; the next launch retries the same
+idempotent import. The native runtime never executes those MutationCache records. Web has no
+durable mutation queue.
 
 Scope guard after ADR-057: native SQLite is a typed materialized application model, not a
 DynamoDB mirror, CRDT or generic local-first replica. Existing-series and completion-relative
@@ -612,6 +613,15 @@ backed migration. Mechanism 5 now owns the same stable identity, barrier, depend
 attention and level-triggered semantics in SQLite; this paragraph remains lineage evidence,
 not a callable native replay path.
 
+The final P2-63 consolidation removes the callable AsyncStorage replay module entirely.
+Platform-neutral `Intent` contracts live in `src/lib/intent.ts`; the old envelope parser and
+restart-safe paused-mutation merge live in the explicitly migration-only
+`src/lib/legacyIntentLog.ts`. That compatibility module has no replay, subscriptions, HTTP,
+TanStack registration, or presentation role. It may be deleted only when the minimum
+supported native build is SQLite-authoritative **and** two stable release cycles have shown
+no remaining legacy migration source. Until that milestone, deleting it could strand an
+accepted pre-cutover write on upgrade.
+
 **Pending is not synced.** A client-minted id is not server acceptance. §5.4's `Pending`
 indicator and offline bar are entity-generic and copy-parameterised (Phase 3's
 `Plan will finish syncing` is a parameter of the same mechanism, not a second system); a
@@ -686,6 +696,8 @@ genuinely differ:
 | File | Why it forks |
 | --- | --- |
 | `src/lib/storage.web.ts` / `storage.ios.ts` | Keychain vs. in-memory + cookie. See `auth.md` §4. |
+| `src/lib/queryClient.ts` / `queryClient.native.ts` | Web Activity/Agenda request/cache adapter vs. native non-domain queries only; SQLite owns the native domain. |
+| Activity/Agenda base hooks / `.native.ts` hooks | Web uses the online-first TanStack/HTTP adapter; native uses typed SQLite repositories, coordinator, sync engine and outbox presentation. |
 | `src/lib/push.web.ts` | No-op stub; web push is out of scope for v1. |
 | `src/components/DateTimePicker.web.tsx` | Native wheel picker vs. `<input type="datetime-local">`. |
 | `src/lib/haptics.web.ts` | No-op. |

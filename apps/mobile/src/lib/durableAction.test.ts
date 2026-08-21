@@ -1,26 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { coordinateDurableAction } from '@/lib/durableAction';
-import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
-import { setActiveIntentLog } from '@/lib/intentReplay';
 
-const USER = 'usr_01J0000000000000000000000A';
 const ENTITY = 'act_01J0000000000000000000000B';
-
-function storage(): IntentLogStorage & { fail: boolean } {
-  const data = new Map<string, string>();
-  const result: IntentLogStorage & { fail: boolean } = {
-    fail: false,
-    getItem: async (key) => data.get(key) ?? null,
-    setItem: async (key, value) => {
-      if (result.fail) throw new Error('disk full');
-      data.set(key, value);
-    },
-    removeItem: async (key) => {
-      data.delete(key);
-    },
-  };
-  return result;
-}
 
 function descriptor(intentId = 'original') {
   return {
@@ -31,43 +12,26 @@ function descriptor(intentId = 'original') {
   };
 }
 
-afterEach(() => setActiveIntentLog(undefined));
-
-describe('durable action coordinator', () => {
-  it('returns refused, sends nothing and rolls back when append fails', async () => {
-    const backing = storage();
-    const log = new IntentLog(USER, backing);
-    await log.hydrate();
-    backing.fail = true;
-    setActiveIntentLog(log);
-    const request = vi.fn(async () => undefined);
-    const rollback = vi.fn();
-
-    const action = await coordinateDurableAction({
-      intent: descriptor(),
-      apply: vi.fn(),
-      revert: vi.fn(),
-      rollback,
-      dispatch: request,
-    });
-
-    expect(action.snapshot().status).toBe('refused');
-    expect((await action.attempt).status).toBe('refused');
-    expect(request).not.toHaveBeenCalled();
-    expect(rollback).toHaveBeenCalledOnce();
-  });
-
-  it('keeps a transient offline completion projected and queued', async () => {
-    const backing = storage();
-    const log = new IntentLog(USER, backing);
-    await log.hydrate();
-    setActiveIntentLog(log);
+describe('online-first web action coordinator', () => {
+  it('projects immediately, then acknowledges a completed request', async () => {
     const apply = vi.fn();
-    const rollback = vi.fn();
-
     const action = await coordinateDurableAction({
       intent: descriptor(),
       apply,
+      revert: vi.fn(),
+      rollback: vi.fn(),
+      dispatch: vi.fn(async () => undefined),
+    });
+
+    expect(apply).toHaveBeenCalledOnce();
+    expect(await action.attempt).toMatchObject({ status: 'acknowledged' });
+  });
+
+  it('rolls back and refuses a transient web request failure', async () => {
+    const rollback = vi.fn();
+    const action = await coordinateDurableAction({
+      intent: descriptor(),
+      apply: vi.fn(),
       revert: vi.fn(),
       rollback,
       dispatch: vi.fn(async () => {
@@ -75,22 +39,15 @@ describe('durable action coordinator', () => {
       }),
     });
 
-    expect((await action.attempt).status).toBe('queued');
-    expect(apply).toHaveBeenCalledOnce();
-    expect(rollback).not.toHaveBeenCalled();
-    expect(log.snapshot().intents[0]).toMatchObject({
-      status: 'queued',
+    expect(await action.attempt).toMatchObject({
+      status: 'refused',
       lastError: 'offline',
     });
+    expect(rollback).toHaveBeenCalledOnce();
   });
 
   it('reports permanent rejection structurally and rolls back', async () => {
-    const backing = storage();
-    const log = new IntentLog(USER, backing);
-    await log.hydrate();
-    setActiveIntentLog(log);
     const rollback = vi.fn();
-
     const action = await coordinateDurableAction({
       intent: descriptor(),
       apply: vi.fn(),
@@ -116,54 +73,23 @@ describe('durable action coordinator', () => {
     expect(rollback).toHaveBeenCalledOnce();
   });
 
-  it('cancels a requeued original on Undo without dispatching an inverse', async () => {
-    const backing = storage();
-    const log = new IntentLog(USER, backing);
-    await log.hydrate();
-    setActiveIntentLog(log);
-    const inverseDispatch = vi.fn(async () => undefined);
+  it('dispatches the inverse after an acknowledged action is undone', async () => {
     const revert = vi.fn();
+    const inverseDispatch = vi.fn(async () => undefined);
     const action = await coordinateDurableAction({
       intent: descriptor(),
       apply: vi.fn(),
       revert,
       rollback: vi.fn(),
-      dispatch: vi.fn(async () => {
-        throw new Error('offline');
-      }),
-      inverse: { intent: descriptor('inverse'), dispatch: inverseDispatch },
-    });
-    expect((await action.attempt).status).toBe('queued');
-
-    const undo = await action.undo();
-
-    expect((await undo.attempt).status).toBe('acknowledged');
-    expect(revert).toHaveBeenCalledOnce();
-    expect(inverseDispatch).not.toHaveBeenCalled();
-    expect(log.snapshot().intents).toHaveLength(0);
-  });
-
-  it('recreates an acknowledged receipt and durably orders the inverse after it', async () => {
-    const backing = storage();
-    const log = new IntentLog(USER, backing);
-    await log.hydrate();
-    setActiveIntentLog(log);
-    const inverseDispatch = vi.fn(async () => undefined);
-    const action = await coordinateDurableAction({
-      intent: descriptor(),
-      apply: vi.fn(),
-      revert: vi.fn(),
-      rollback: vi.fn(),
       dispatch: vi.fn(async () => undefined),
       inverse: { intent: descriptor('inverse'), dispatch: inverseDispatch },
     });
-    expect((await action.attempt).status).toBe('acknowledged');
-    expect(log.snapshot().intents).toHaveLength(0);
+    await action.attempt;
 
-    const undo = await action.undo();
+    const inverse = await action.undo();
 
-    expect((await undo.attempt).status).toBe('acknowledged');
+    expect(revert).toHaveBeenCalledOnce();
+    expect(await inverse.attempt).toMatchObject({ status: 'acknowledged' });
     expect(inverseDispatch).toHaveBeenCalledOnce();
-    expect(log.snapshot().intents).toHaveLength(0);
   });
 });

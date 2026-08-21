@@ -4,7 +4,7 @@ import { systemClock } from '@od/shared/time';
 import type { QuietHours } from '@od/shared/types';
 import { onlineManager } from '@tanstack/react-query';
 import { AppState } from 'react-native';
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 import {
   localNotificationsSupported,
   readScheduledLocalNotifications,

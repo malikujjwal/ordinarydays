@@ -1,6 +1,7 @@
 import type { DehydratedState, QueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
-import { type IntentLog, semanticallyIdenticalIntent } from '@/lib/intentLog';
+import { semanticallyIdenticalIntent } from '@/lib/intent';
+import type { LegacyIntentLog } from '@/lib/legacyIntentLog';
 import {
   dehydratedStateFrom,
   isNativeActivityKey,
@@ -31,7 +32,7 @@ import { field, stringField } from '@/lib/unknown';
  * failure this whole task exists to end.
  */
 export async function importLegacyPausedMutations(
-  log: IntentLog,
+  log: LegacyIntentLog,
   platform = Platform.OS,
   snapshot?: NativeLegacyPersistenceSnapshot,
 ): Promise<number> {
@@ -108,7 +109,7 @@ export async function importLegacyPausedMutations(
  */
 export function retireImportedLegacyPausedMutations(
   client: QueryClient,
-  log: IntentLog,
+  log: LegacyIntentLog,
 ): number {
   const imported = log.pending();
   let retired = 0;
@@ -237,7 +238,7 @@ function mutationSemantic(mutation: DehydratedState['mutations'][number]):
  */
 export async function retireNativeActivityAgendaPersistence(
   client: QueryClient,
-  log: IntentLog,
+  log: LegacyIntentLog,
   platform = Platform.OS,
   snapshot?: NativeLegacyPersistenceSnapshot,
 ): Promise<void> {

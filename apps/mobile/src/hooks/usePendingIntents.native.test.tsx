@@ -1,6 +1,6 @@
 import { renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 import {
   pendingCreateAllowsOpen,
   useAgendaRowIntentState,

@@ -11,11 +11,7 @@ import {
   projectPendingActivityCreate,
   reconcileAgendaProjection,
   reconcileRecurrenceEdit,
-  restorePendingActivityCreates,
-  restoreRecurrenceEditProtection,
 } from '@/lib/agendaCache';
-import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
-import { setActiveIntentLog } from '@/lib/intentReplay';
 
 /**
  * The regression this file exists for.
@@ -33,19 +29,6 @@ import { setActiveIntentLog } from '@/lib/intentReplay';
 
 const TODAY = '2026-08-13';
 const KEY = ['agenda', TODAY, TODAY, 'America/New_York', 'anytime_unscheduled,overdue'];
-
-function memoryIntentStorage(): IntentLogStorage {
-  const values = new Map<string, string>();
-  return {
-    getItem: async (key) => values.get(key) ?? null,
-    setItem: async (key, value) => {
-      values.set(key, value);
-    },
-    removeItem: async (key) => {
-      values.delete(key);
-    },
-  };
-}
 
 const row = (patch: Partial<AgendaItem> = {}): AgendaItem => ({
   activityId: 'act_STANDUP',
@@ -161,56 +144,6 @@ describe('pending create restoration', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('rebuilds a recurring series from the durable log on an offline cold start', () => {
-    const client = new QueryClient();
-    const key = ['agenda', TODAY, '2026-08-14', 'America/New_York', null] as const;
-    client.setQueryData(key, {
-      days: [
-        { date: TODAY, schedule: [], anytime: [], earlier: [] },
-        { date: '2026-08-14', schedule: [], anytime: [], earlier: [] },
-      ],
-      warnings: [],
-    } satisfies AgendaData);
-
-    expect(
-      restorePendingActivityCreates(client, [
-        {
-          mutationKey: ['activity', 'create'],
-          createdAt: Date.parse('2026-08-13T12:00:00.000Z'),
-          variables: {
-            idempotencyKey: 'idem-cold-start',
-            input: {
-              activityId: 'act_01J0000000000000000000000A',
-              objectKind: 'task',
-              type: 'task',
-              title: 'Offline series',
-              schedule: {
-                date: TODAY,
-                time: '18:00',
-                timezone: 'America/New_York',
-              },
-              recurrence: {
-                mode: 'fixed',
-                segments: [{ freq: 'daily', interval: 1, effectiveFrom: TODAY }],
-              },
-            },
-          },
-        },
-      ]),
-    ).toBe(1);
-
-    const agenda = client.getQueryData<AgendaData>(key);
-    const occurrences = agenda?.days.flatMap((day) =>
-      [...day.schedule, ...day.anytime, ...day.earlier].filter(
-        (item) => item.title === 'Offline series',
-      ),
-    );
-    expect(occurrences?.map((item) => item.occurrenceDate)).toEqual([
-      TODAY,
-      '2026-08-14',
-    ]);
   });
 });
 
@@ -759,166 +692,6 @@ describe('activity-scoped recurrence reconciliation', () => {
       .flatMap((day) => [...day.schedule, ...day.anytime, ...day.earlier])
       .find((item) => item.activityId === 'act_STANDUP');
   };
-
-  it('restores offline recurrence protection from the durable intent after restart', () => {
-    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
-    expect(
-      restoreRecurrenceEditProtection(client, [
-        {
-          intentId: 'intent-repeat',
-          entityId: 'act_STANDUP',
-          mutationKey: ['activity', 'patch'],
-          variables: patchVariables,
-          status: 'queued',
-        },
-      ]),
-    ).toBe(1);
-
-    const refreshed = guardAgendaResponse(client, KEY, {
-      days: [{ date: TODAY, schedule: [], anytime: [], earlier: [] }],
-      warnings: [],
-    });
-    expect(refreshed.days[0]?.schedule[0]?.activityId).toBe('act_STANDUP');
-  });
-
-  it('restores conversion protection and its proven version after restart', () => {
-    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
-    expect(
-      restoreRecurrenceEditProtection(client, [
-        {
-          intentId: 'intent-convert',
-          entityId: 'act_STANDUP',
-          mutationKey: ['activity', 'convert-recurrence'],
-          variables: {
-            activityId: 'act_STANDUP',
-            input: { selectedDate: TODAY },
-            idempotencyKey: 'intent-convert',
-          },
-          status: 'acknowledged',
-          reconciliationVersion: version,
-        },
-      ]),
-    ).toBe(1);
-
-    const refreshed = guardAgendaResponse(client, KEY, {
-      days: [{ date: TODAY, schedule: [], anytime: [], earlier: [] }],
-      warnings: [],
-      projectionVersions: [
-        { activityId: 'act_STANDUP', version: '2026-08-14T09:59:59.000Z' },
-      ],
-    });
-    expect(refreshed.days[0]?.schedule[0]?.activityId).toBe('act_STANDUP');
-  });
-
-  it('clears a restored conversion receipt only after targeted version proof', async () => {
-    const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));
-    const log = new IntentLog('usr_TEST', memoryIntentStorage());
-    await log.hydrate();
-    const variables = {
-      activityId: 'act_STANDUP',
-      input: { selectedDate: TODAY },
-      idempotencyKey: 'intent-convert',
-    };
-    await log.append({
-      intentId: variables.idempotencyKey,
-      entityId: variables.activityId,
-      mutationKey: ['activity', 'convert-recurrence'],
-      variables,
-    });
-    await log.acknowledgeForReconciliation(variables.idempotencyKey, version);
-    restoreRecurrenceEditProtection(client, log.snapshot().intents);
-    setActiveIntentLog(log);
-    try {
-      expect(
-        await reconcileRecurrenceEdit(
-          client,
-          variables.activityId,
-          version,
-          async () => ({
-            activityId: variables.activityId,
-            activityVersion: version,
-            rows: [
-              {
-                date: TODAY,
-                item: row({ isRecurring: false }),
-              },
-            ],
-          }),
-        ),
-      ).toBe(true);
-      await vi.waitFor(() => expect(log.snapshot().intents).toHaveLength(0));
-    } finally {
-      setActiveIntentLog(undefined);
-    }
-  });
-
-  it('defers an empty-cache receipt and proves it through the first later window', async () => {
-    const client = new QueryClient();
-    const log = new IntentLog('usr_TEST', memoryIntentStorage());
-    await log.hydrate();
-    const variables = {
-      activityId: 'act_STANDUP',
-      input: { selectedDate: TODAY },
-      idempotencyKey: 'intent-convert-later-window',
-    };
-    await log.append({
-      intentId: variables.idempotencyKey,
-      entityId: variables.activityId,
-      mutationKey: ['activity', 'convert-recurrence'],
-      variables,
-    });
-    await log.acknowledgeForReconciliation(variables.idempotencyKey, version);
-    setActiveIntentLog(log);
-    try {
-      const targeted = vi.fn(async () => ({
-        activityId: variables.activityId,
-        activityVersion: version,
-        rows: [{ date: TODAY, item: row({ isRecurring: false, title: 'Canonical' }) }],
-      }));
-
-      expect(
-        await reconcileRecurrenceEdit(client, variables.activityId, version, targeted),
-      ).toBeUndefined();
-      expect(targeted).not.toHaveBeenCalled();
-      expect(log.snapshot().intents).toEqual([
-        expect.objectContaining({
-          intentId: variables.idempotencyKey,
-          status: 'acknowledged',
-          reconciliationVersion: version,
-        }),
-      ]);
-
-      const result = await loadAgendaWithReconciliation(
-        client,
-        KEY as never,
-        { from: TODAY, to: TODAY, tz: 'America/New_York' },
-        undefined,
-        {
-          ordinary: async () => ({
-            days: [
-              {
-                date: TODAY,
-                schedule: [row({ isRecurring: true, title: 'Stale series' })],
-                anytime: [],
-                earlier: [],
-              },
-            ],
-            warnings: [],
-          }),
-          targeted,
-        },
-      );
-
-      expect(targeted).toHaveBeenCalledOnce();
-      expect(result.days[0]?.schedule[0]).toMatchObject({
-        title: 'Canonical',
-        isRecurring: false,
-      });
-      await vi.waitFor(() => expect(log.snapshot().intents).toHaveLength(0));
-    } finally {
-      setActiveIntentLog(undefined);
-    }
-  });
 
   it('preserves protected rows on failure while accepting unaffected refresh rows', async () => {
     const client = seeded(row({ isRecurring: true, occurrenceDate: TODAY }));

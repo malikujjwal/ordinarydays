@@ -14,7 +14,7 @@ import {
 import { CONFLICT_MESSAGE } from '@/features/activity/model/conflict';
 import { useClock } from '@/hooks/useClock';
 import { newLocalId } from '@/lib/localIds';
-import { patchChangeNames } from '@/lib/mutationDefaults';
+import { patchChangeNames } from '@/lib/patchChangeNames';
 import { activityKey } from '@/lib/queryKeys';
 import { getActiveNativeState, requireActiveNativeState } from '@/lib/sqlite/nativeState';
 import { CanonicalActivityInstallDeferredError } from '@/lib/sqlite/syncEngine';

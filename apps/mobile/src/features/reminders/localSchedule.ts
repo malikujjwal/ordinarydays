@@ -5,7 +5,7 @@ import { systemClock } from '@od/shared/time';
 import { onlineManager } from '@tanstack/react-query';
 import { AppState } from 'react-native';
 import { apiClient } from '@/lib/apiClient';
-import { getActiveIntentLog } from '@/lib/intentReplay';
+import type { Intent } from '@/lib/intent';
 import {
   localNotificationsSupported,
   readScheduledLocalNotifications,
@@ -33,7 +33,8 @@ import { loadProjection, type StoredProjection, saveProjection } from './project
  * - **`refreshReminderProjection`** is the only thing that touches the network. When online it
  *   stores the server's answer and marks the schedule dirty. When offline it does nothing, and
  *   nothing breaks.
- * - **Arming** reads the stored projection plus the live intent log, and never the network.
+ * - **Arming** reads the stored web projection and never the network. Native resolves the
+ *   SQLite-backed platform adapter, including pending local creates.
  *   It runs whenever the schedule is dirty, which is after any reminder-relevant change.
  */
 
@@ -128,8 +129,8 @@ function toSources(
 /**
  * The one network read, and the only thing that fills the store.
  *
- * Offline is not a failure here: there is simply nothing new to learn, and the stored
- * projection plus the intent log already describe what to arm.
+ * Offline is not a failure here: there is simply nothing new to learn, and the stored web
+ * projection remains available for arming. Native resolves its SQLite-backed adapter.
  */
 export async function refreshReminderProjection(
   dependencies: LocalReminderSchedulerDependencies = defaultDependencies,
@@ -166,21 +167,18 @@ export async function refreshReminderProjection(
 /**
  * Builds the armable set from stored data alone — no network, by construction.
  *
- * Reads the intent log through `pending()` only. P2-57's acceptance test is that reminders
- * need no change to that primitive, and this is the call site that proves it.
+ * Web has no durable mutation queue, so only the persisted server projection participates.
+ * Native resolves `localSchedule.native.ts`, which reads committed SQLite rows and outbox
+ * creates instead.
  */
 async function planFromStore(dependencies: LocalReminderSchedulerDependencies): Promise<{
   requests: LocalNotificationRequest[];
   scheduledThrough: ReturnType<typeof planArming>['scheduledThrough'];
 }> {
   const stored = await dependencies.load();
-  const pending = getActiveIntentLog()?.pending() ?? [];
+  const pending: readonly Intent[] = [];
 
-  /**
-   * With no stored projection there is still work to do: an offline first run has pending
-   * creates and has never reached the server. The window falls back to the device's own
-   * today, which is all a purely local projection needs.
-   */
+  /** With no stored web projection, retain a deterministic empty planning window. */
   const timezone = stored?.profile.timezone ?? 'UTC';
   const today = dependencies.clock.todayIn(timezone as TimeZone) as WallDate;
   const window = {
@@ -201,9 +199,8 @@ async function planFromStore(dependencies: LocalReminderSchedulerDependencies): 
  * Installs the scheduler.
  *
  * The two old moments — startup and entering the background — are now two of several reasons
- * to mark dirty rather than the only two times anything happens. Reconnecting and an intent
- * log change are the ones that were missing, and the second is what makes an acknowledged
- * offline create re-arm from the server's copy instead of staying on the local one.
+ * to mark dirty rather than the only two times anything happens. Reconnecting refreshes the
+ * server-backed web projection; native outbox changes are handled by the native adapter.
  */
 export function installLocalReminderScheduler(
   overrides: Partial<LocalReminderSchedulerDependencies> = {},
@@ -256,19 +253,9 @@ export function installLocalReminderScheduler(
   const stopOnline = onlineManager.subscribe((online) => {
     if (online) tick('activity-changed', true);
   });
-  /**
-   * An acknowledged create moves a reminder from the log to the server's copy. Same key, so
-   * nothing is orphaned — but the schedule still has to be recomputed to pick up whatever
-   * else the server says about it.
-   */
-  const stopLog = getActiveIntentLog()?.subscribe(() => {
-    tick('intent-acknowledged', false);
-  });
-
   return () => {
     stopped = true;
     subscription.remove();
     stopOnline();
-    stopLog?.();
   };
 }

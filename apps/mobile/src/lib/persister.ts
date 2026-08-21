@@ -13,11 +13,10 @@ import { field } from '@/lib/unknown';
  * Persistence for the **web query cache** and non-Activity native queries only.
  *
  * Native Activity/Agenda roots are filtered on hydrate/save after P2-63. Queued writes used
- * to live in this envelope, which is why they could vanish: a cache is
- * allowed to be discarded by a buster bump or an age check, and user data is not. They now
- * live in the durable intent log (`intentLog.ts`, `tech-stack.md` §3.4 mechanism 4), which
- * has its own key, its own `schemaVersion` and no age expiry. What remains here is a
- * reconstructable projection of server responses, and it keeps both disposal rules on
+ * to live in this envelope, which is why they could vanish: a cache may be discarded by a
+ * buster bump or age check, while accepted native actions may not. Current native actions
+ * live in the transactional SQLite outbox; web is online-first and has no durable queue.
+ * What remains here is reconstructable query state, and it keeps both disposal rules on
  * purpose.
  *
  * The one-time legacy bridge and the verified native retirement live in
@@ -72,9 +71,9 @@ function persistedState(client: QueryClient, platform = Platform.OS): StoredClie
     buster: CACHE_BUSTER,
     clientState: dehydrate(client, {
       /**
-       * **No mutation is dehydrated here any more.** The intent log is the durability
-       * boundary; TanStack is the execution layer (ADR-055). Writing them to both would give
-       * one action two records that disagree the moment either store is pruned.
+       * **No mutation is dehydrated here.** Native durability belongs only to the SQLite
+       * outbox, while web actions fail visibly if their request cannot complete. Persisting
+       * MutationCache records would reintroduce an unowned second queue.
        */
       shouldDehydrateMutation: () => false,
       shouldDehydrateQuery: (query) =>

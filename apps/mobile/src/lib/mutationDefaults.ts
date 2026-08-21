@@ -30,7 +30,6 @@ import type { AgendaData } from '@od/shared/types';
 import type { QueryClient } from '@tanstack/react-query';
 import { projectPendingActivityCreate } from '@/lib/agendaCache';
 import { apiClient } from '@/lib/apiClient';
-import { getActiveIntentLog } from '@/lib/intentReplay';
 import { activityMutationKeys } from '@/lib/mutationKeys';
 import { activityKey } from '@/lib/queryKeys';
 
@@ -39,76 +38,11 @@ export interface CreateActivityVariables {
   idempotencyKey: string;
 }
 
-interface CreateAcceptance {
-  resolve: () => void;
-  reject: (error: unknown) => void;
-}
-
-const createAcceptances = new Map<string, CreateAcceptance>();
 const AGENDA_QUERY_KEY = ['agenda'] as const;
 
 interface CreateProjectionContext {
   previous: Array<[readonly unknown[], AgendaData | undefined]>;
   seededKey?: readonly unknown[];
-}
-
-export interface ActivityCreateAcceptance {
-  readonly promise: Promise<void>;
-  /** Stops retaining this compose surface if it unmounts before the boundary settles. */
-  readonly dispose: () => void;
-}
-
-/** Only native sessions with an active durable log may acknowledge before the response. */
-export function hasDurableActivityCreateQueue(): boolean {
-  return getActiveIntentLog() !== undefined;
-}
-
-/**
- * Resolves once the create is durable and projected, without waiting for its network result.
- * The compose surface uses this boundary to dismiss immediately online or offline.
- */
-export function waitForActivityCreateAcceptance(
-  idempotencyKey: string,
-): ActivityCreateAcceptance {
-  let acceptance: CreateAcceptance;
-  const promise = new Promise<void>((resolve, reject) => {
-    acceptance = { resolve, reject };
-    createAcceptances.set(idempotencyKey, acceptance);
-  });
-  return {
-    promise,
-    dispose: () => {
-      if (createAcceptances.get(idempotencyKey) !== acceptance) return;
-      createAcceptances.delete(idempotencyKey);
-      // Nobody observes acceptance after its compose surface has gone; settle the waiter so
-      // its suspended save closure can be collected as well.
-      acceptance.resolve();
-    },
-  };
-}
-
-function acceptActivityCreate(idempotencyKey: string): void {
-  const acceptance = createAcceptances.get(idempotencyKey);
-  if (acceptance === undefined) return;
-  try {
-    acceptance.resolve();
-  } finally {
-    if (createAcceptances.get(idempotencyKey) === acceptance) {
-      createAcceptances.delete(idempotencyKey);
-    }
-  }
-}
-
-function refuseActivityCreate(idempotencyKey: string, error: unknown): void {
-  const acceptance = createAcceptances.get(idempotencyKey);
-  if (acceptance === undefined) return;
-  try {
-    acceptance.reject(error);
-  } finally {
-    if (createAcceptances.get(idempotencyKey) === acceptance) {
-      createAcceptances.delete(idempotencyKey);
-    }
-  }
 }
 
 export interface ActivityPostVariables<TInput> {
@@ -253,7 +187,6 @@ export function registerActivityMutationDefaults(
     onMutate: (variables: CreateActivityVariables) => {
       const previous = client.getQueriesData<AgendaData>({ queryKey: AGENDA_QUERY_KEY });
       const projection = projectPendingActivityCreate(client, variables);
-      acceptActivityCreate(variables.idempotencyKey);
       return {
         previous,
         ...(projection.seededKey === undefined
@@ -262,12 +195,11 @@ export function registerActivityMutationDefaults(
       } satisfies CreateProjectionContext;
     },
     onError: (
-      error,
-      variables: CreateActivityVariables,
+      _error,
+      _variables: CreateActivityVariables,
       context: CreateProjectionContext | undefined,
     ) => {
-      refuseActivityCreate(variables.idempotencyKey, error);
-      if (hasDurableActivityCreateQueue() || context === undefined) return;
+      if (context === undefined) return;
       for (const [key, agenda] of context.previous) client.setQueryData(key, agenda);
       if (context.seededKey !== undefined) {
         client.removeQueries({ queryKey: context.seededKey, exact: true });
@@ -324,28 +256,4 @@ export function registerActivityMutationDefaults(
     mutationFn: ({ activityId, reminderId }: ReminderDeleteVariables) =>
       deleteReminderForReplay(httpClient, activityId, reminderId),
   });
-}
-
-const PATCH_LABELS: Record<keyof PatchActivityInput, string> = {
-  title: 'Title',
-  notes: 'Notes',
-  recurrence: 'Repeat',
-  editedFromDate: 'Repeat',
-  location: 'Location',
-  details: 'Details',
-  sourceUrl: 'Link',
-  parentActivityId: 'Prep task',
-  status: 'Status',
-  objectKind: 'Plan type',
-  type: 'Plan type',
-};
-
-export function patchChangeNames(input: PatchActivityInput): string[] {
-  return [
-    ...new Set(
-      (Object.keys(input) as Array<keyof PatchActivityInput>).map(
-        (field) => PATCH_LABELS[field],
-      ),
-    ),
-  ];
 }

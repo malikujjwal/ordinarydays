@@ -168,7 +168,8 @@ export function AgendaRowWithIntentState({
   const theme = useTheme();
   const checked = completionCheckedOverride ?? COMPLETED_STATUSES.has(item.status);
   /**
-   * Derived from the intent log, not from `AgendaItem` (P2-50). No field was added to any
+   * Derived from pending-intent presentation, not from `AgendaItem` (P2-50). Native reads the
+   * account SQLite outbox presentation store; web has no durable pending state. No field was added to any
    * shared schema: the server cannot report that a row it has never seen is pending, and a
    * DTO field would be a second source of truth for something only this device knows.
    */

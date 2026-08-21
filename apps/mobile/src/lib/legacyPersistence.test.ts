@@ -1,6 +1,6 @@
 import { hydrate, QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IntentLog, type IntentLogStorage } from '@/lib/intentLog';
+import { LegacyIntentLog, type LegacyIntentLogStorage } from '@/lib/legacyIntentLog';
 import {
   importLegacyPausedMutations,
   inspectNativeLegacyPersistence,
@@ -12,7 +12,7 @@ import { queryPersister } from '@/lib/persister';
 const USER = 'usr_01J0000000000000000000000A';
 const ACTIVITY = 'act_01J0000000000000000000000C';
 
-function memoryStorage(): IntentLogStorage {
+function memoryStorage(): LegacyIntentLogStorage {
   const data = new Map<string, string>();
   return {
     getItem: async (key) => data.get(key) ?? null,
@@ -52,7 +52,7 @@ describe('legacy persistence migration', () => {
     );
 
     const storage = memoryStorage();
-    const log = new IntentLog(USER, storage);
+    const log = new LegacyIntentLog(USER, storage);
     await log.hydrate();
 
     expect(await importLegacyPausedMutations(log, 'ios')).toBe(1);
@@ -100,9 +100,9 @@ describe('legacy persistence migration', () => {
       ],
       queries: [],
     });
-    const log = new IntentLog(USER, memoryStorage());
+    const log = new LegacyIntentLog(USER, memoryStorage());
     await log.hydrate();
-    await log.append({
+    await log.appendMigrated({
       intentId: 'legacy-key-1',
       mutationKey: ['activity', 'complete'],
       variables: { activityId: ACTIVITY, idempotencyKey: 'legacy-key-1' },
@@ -118,7 +118,7 @@ describe('legacy persistence migration', () => {
 
   it('imports nothing on web, where there is no queue to migrate', async () => {
     const restoreClient = vi.spyOn(queryPersister, 'restoreClient');
-    const log = new IntentLog(USER, memoryStorage());
+    const log = new LegacyIntentLog(USER, memoryStorage());
     await log.hydrate();
 
     expect(await importLegacyPausedMutations(log, 'web')).toBe(0);
@@ -129,7 +129,7 @@ describe('legacy persistence migration', () => {
     vi.spyOn(queryPersister, 'restoreClient').mockRejectedValue(
       new Error('storage unavailable'),
     );
-    const log = new IntentLog(USER, memoryStorage());
+    const log = new LegacyIntentLog(USER, memoryStorage());
     await log.hydrate();
 
     await expect(inspectNativeLegacyPersistence('ios')).rejects.toThrow(
@@ -176,7 +176,7 @@ describe('legacy persistence migration', () => {
     );
     const persist = vi.spyOn(queryPersister, 'persistClient').mockResolvedValue();
     const client = new QueryClient();
-    const log = new IntentLog(USER, memoryStorage());
+    const log = new LegacyIntentLog(USER, memoryStorage());
     await log.hydrate();
 
     expect(await inspectNativeLegacyPersistence('ios')).toEqual({
@@ -189,7 +189,7 @@ describe('legacy persistence migration', () => {
     ).rejects.toThrow('not verified in durable SQLite');
     expect(persist).not.toHaveBeenCalled();
 
-    await log.append({
+    await log.appendMigrated({
       intentId: 'legacy-key-1',
       mutationKey: ['activity', 'complete'],
       variables: { activityId: ACTIVITY, idempotencyKey: 'legacy-key-1' },

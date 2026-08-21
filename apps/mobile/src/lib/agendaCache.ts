@@ -29,7 +29,6 @@ import { applySkip } from '@/features/agenda/model/applySkip';
 import { applySnooze } from '@/features/agenda/model/applySnooze';
 import { resolveAgendaTimezone } from '@/features/agenda/timezone';
 import { apiClient } from '@/lib/apiClient';
-import { getActiveIntentLog } from '@/lib/intentReplay';
 import {
   type ActivityMutationTag,
   activityMutationKeys,
@@ -143,7 +142,6 @@ export function guardAgendaResponse(
     if (satisfied) {
       pending.delete(activityId);
       if (expectation.kind === 'protected' && expectation.version !== undefined) {
-        clearReconciledIntentIfUnprotected(client, activityId, expectation.version);
       }
       continue;
     }
@@ -297,7 +295,6 @@ export async function reconcileRecurrenceEdit(
         );
         const pending = pendingByClient.get(client)?.get(keyId(key));
         if (pending?.get(activityId)?.kind === 'protected') pending.delete(activityId);
-        clearReconciledIntentIfUnprotected(client, activityId, canonical.activityVersion);
         if (pending?.size === 0) pendingByClient.get(client)?.delete(keyId(key));
       } catch {
         complete = false;
@@ -318,11 +315,6 @@ export async function loadAgendaWithReconciliation(
     readonly targeted?: ActivityAgendaLoader;
   } = {},
 ): Promise<AgendaData> {
-  restoreRecurrenceEditProtectionForQuery(
-    client,
-    queryKey,
-    getActiveIntentLog()?.snapshot().intents ?? [],
-  );
   let result = guardAgendaResponse(
     client,
     queryKey,
@@ -342,36 +334,12 @@ export async function loadAgendaWithReconciliation(
       if (canonical.activityVersion < expectation.version) continue;
       result = spliceActivityAgenda(result, canonical, agendaClock(client));
       pending?.delete(activityId);
-      clearReconciledIntentIfUnprotected(client, activityId, canonical.activityVersion);
     } catch {
       // Protected rows remain installed; the next manual refresh retries this exact read.
     }
   }
   if (pending?.size === 0) pendingByClient.get(client)?.delete(keyId(queryKey));
   return result;
-}
-
-function clearReconciledIntentIfUnprotected(
-  client: QueryClient,
-  activityId: string,
-  proofVersion: string,
-): void {
-  const stillProtected = [...(pendingByClient.get(client)?.values() ?? [])].some(
-    (pending) => pending.get(activityId)?.kind === 'protected',
-  );
-  if (stillProtected) return;
-  const log = getActiveIntentLog();
-  if (log === undefined) return;
-  for (const intent of log.snapshotFor(activityId)) {
-    if (
-      intent.status === 'acknowledged' &&
-      intent.reconciliationVersion !== undefined &&
-      intent.reconciliationVersion <= proofVersion &&
-      isRecurrenceEditMutation(intent.mutationKey, intent.variables)
-    ) {
-      void log.acknowledge(intent.intentId);
-    }
-  }
 }
 
 export interface AgendaReconciliationVersion {
@@ -956,108 +924,6 @@ function seedPendingTodayWindow(
 
   client.setQueryData(key, projected);
   return key;
-}
-
-export interface PendingCreateProjectionIntent {
-  readonly mutationKey: readonly string[];
-  readonly variables: unknown;
-  readonly createdAt: number;
-}
-
-export interface RecurrenceEditProjectionIntent {
-  readonly intentId: string;
-  readonly entityId: string;
-  readonly mutationKey: readonly string[];
-  readonly variables: unknown;
-  readonly status: string;
-  readonly reconciliationVersion?: string;
-}
-
-/** Arms a newly-created Agenda window from receipts that predate that query cache entry. */
-function restoreRecurrenceEditProtectionForQuery(
-  client: QueryClient,
-  queryKey: AgendaQueryKey,
-  intents: readonly RecurrenceEditProjectionIntent[],
-): void {
-  let windows = pendingByClient.get(client);
-  if (windows === undefined) {
-    windows = new Map();
-    pendingByClient.set(client, windows);
-  }
-  const id = keyId(queryKey);
-  const pending = windows.get(id) ?? new Map<string, PendingExpectation>();
-  for (const intent of intents) {
-    if (
-      !isRecurrenceEditMutation(intent.mutationKey, intent.variables) ||
-      (intent.status !== 'queued' &&
-        intent.status !== 'in_flight' &&
-        intent.status !== 'acknowledged')
-    ) {
-      continue;
-    }
-    const current = pending.get(intent.entityId);
-    if (current !== undefined && current.kind !== 'protected') continue;
-    const currentVersion = current?.kind === 'protected' ? current.version : undefined;
-    const nextVersion = intent.reconciliationVersion;
-    const version =
-      nextVersion === undefined
-        ? currentVersion
-        : currentVersion === undefined || nextVersion > currentVersion
-          ? nextVersion
-          : currentVersion;
-    pending.set(intent.entityId, {
-      kind: 'protected',
-      ...(version === undefined ? {} : { version }),
-    });
-  }
-  if (pending.size > 0) windows.set(id, pending);
-}
-
-/** Restores per-activity protection from the durable log after a process restart. */
-export function restoreRecurrenceEditProtection(
-  client: QueryClient,
-  intents: readonly RecurrenceEditProjectionIntent[],
-): number {
-  let restored = 0;
-  for (const intent of intents) {
-    if (
-      !isRecurrenceEditMutation(intent.mutationKey, intent.variables) ||
-      (intent.status !== 'queued' &&
-        intent.status !== 'in_flight' &&
-        intent.status !== 'acknowledged')
-    ) {
-      continue;
-    }
-    protectRecurrenceEdit(client, intent.entityId);
-    if (intent.reconciliationVersion !== undefined) {
-      expectProtectedVersion(client, intent.entityId, intent.reconciliationVersion);
-    }
-    restored += 1;
-  }
-  return restored;
-}
-
-/** Rebuilds pending create rows from the durable log after query-cache restoration. */
-export function restorePendingActivityCreates(
-  client: QueryClient,
-  intents: readonly PendingCreateProjectionIntent[],
-): number {
-  let projected = 0;
-  for (const intent of intents) {
-    if (intent.mutationKey[0] !== 'activity' || intent.mutationKey[1] !== 'create') {
-      continue;
-    }
-    if (
-      projectPendingActivityCreate(
-        client,
-        intent.variables as PendingActivityCreateVariables,
-        new Date(intent.createdAt).toISOString(),
-      ).projected
-    ) {
-      projected += 1;
-    }
-  }
-  return projected;
 }
 
 /** Narrows a `MutationKey` to the activity tags this projector is required to be total over. */

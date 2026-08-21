@@ -1,6 +1,6 @@
 import type { Instant, WallDate } from '@od/shared/time';
 import { describe, expect, it, vi } from 'vitest';
-import type { Intent } from '@/lib/intentLog';
+import type { Intent } from '@/lib/intent';
 import { armingVerified, MAX_ARMED_LOCAL_NOTIFICATIONS, planArming } from './arming';
 import { DirtySchedule, type DirtyScheduleDependencies } from './dirtySchedule';
 import {

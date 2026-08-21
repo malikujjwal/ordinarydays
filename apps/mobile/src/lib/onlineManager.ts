@@ -55,8 +55,9 @@ export function shouldWarnBeforeUnload(client: QueryClient): boolean {
 }
 
 /**
- * Uses the platform connectivity source. The durable intent-log session owns iOS replay;
- * TanStack's client keeps its ordinary in-memory behavior on web.
+ * Uses the platform connectivity source. Native connectivity wakes the SQLite sync engine;
+ * TanStack's client keeps its ordinary in-memory behavior on web and for non-domain native
+ * queries.
  */
 export function installOnlineManager(client: QueryClient): () => void {
   onlineManager.setEventListener((setOnline) => {

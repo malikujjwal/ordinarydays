@@ -346,9 +346,10 @@ Undo remains safe across transient failure, response loss, races and process dea
 **Files (historical P2-59 inventory).**
 `apps/mobile/src/lib/{intentLog.ts,intentReplay.ts,intentLogSession.ts,queryClient.ts,
 startUndoable.ts,durableAction.ts}`, their focused tests, the existing activity/agenda undo
-call sites, and ADR-056 plus the Phase 2.6 architecture/product amendments. P2-63 removed
-`intentLogSession.ts` after SQLite became the sole native replay owner; it remains named here
-only to preserve the P2-59 implementation record. Inventory is a minimum. This task must
+call sites, and ADR-056 plus the Phase 2.6 architecture/product amendments. P2-63 removed the
+three former-native runtime modules after SQLite became the sole native replay owner;
+`legacyIntentLog.ts` retains only the parser/import surface needed by supported upgrades.
+The old names remain here solely as the P2-59 implementation record. This task must
 preserve P2-54/P2-55's occurrence targeting and the durable recurring-series reconciliation
 that lands immediately before it.
 
@@ -639,6 +640,37 @@ Stable global, entity and exact-occurrence snapshots let rows subscribe without 
 whole outbox or waking unrelated occurrences. Sync decisions, claims, retries, cancellation,
 ownership checks and every other write-sensitive outbox read stay on the serialized
 writer-backed repository.
+
+**Final architecture consolidation — 2026-08-21.** A source/import audit classified the
+remaining paths as follows:
+
+| Classification | Current source | Authority and reachability |
+| --- | --- | --- |
+| Live native | Activity/Agenda/Compose `.native.ts` hooks; `lib/sqlite/*`; native reminder adapter | Account SQLite is committed domain authority; one serialized writer owns decisions and outbox work, while the WAL reader serves fenced presentation snapshots only. |
+| Live web | Base `.ts` hooks; `queryClient.ts`; `agendaCache.ts`; `mutationDefaults.ts`; `durableAction.ts` | Online-first TanStack/HTTP adapter. It has optimistic cache projection but no durable mutation queue. |
+| Migration-only | `legacyIntentLog.ts`; `legacyPersistence.ts`; `sqlite/legacyMigration.ts`; the unfiltered legacy evidence path in `persister.ts` | Reads/normalizes owner-scoped pre-cutover data, imports with SQLite receipts, and retires it only after proof. It has no runtime replay or presentation role. |
+| Test-only | Migration fixtures and pure selector/repository harnesses | Exercise compatibility and contracts without registering another production queue. |
+| Removed as unreachable | `intentReplay.ts`, its registry/backoff/replay state, MutationCache write-ahead/settlement branches, web pending-log reads, and reminder/cache no-op subscriptions | No production caller ever installed the old log or replay target after P2-63; retaining them only made a second authority easier to reintroduce. |
+
+Native now resolves `queryClient.native.ts`, which supports non-domain queries such as the
+profile but does not install Activity mutation defaults or a MutationCache replay seam.
+Platform-neutral intent contracts are separated from `legacyIntentLog.ts`, so SQLite pending
+presentation and reminders no longer depend conceptually on AsyncStorage. The dedicated
+projection reader remains presentation-only; unavailable/failed reads use the explicitly
+named `writerFallbackRead` / `writer-fallback` correctness path on the drained writer.
+
+Automated guards fail if native domain hooks introduce TanStack query/mutation authority or
+direct HTTP, if AsyncStorage enters native domain persistence outside the enumerated legacy /
+preference / reminder-metadata exceptions, if former replay registration returns, if native
+rows bypass the account `OutboxPresentationStore`, or if projection-reader snapshots spread
+into writer-decision modules.
+
+**Compatibility removal milestone.** Keep `legacyIntentLog.ts`, `legacyPersistence.ts`, and
+the startup migration call until (1) the minimum supported native build is a
+SQLite-authoritative release and (2) two subsequent stable release cycles show no remaining
+legacy AsyncStorage intent/query-domain source. Only then may a dedicated cleanup delete the
+bridge and its tests. The milestone is deliberately release/support based rather than a date:
+legacy bytes are retired only after durable SQLite proof, never because code aged out.
 
 Anytime uses its own presentation-only WAL snapshot for saved-task rows plus revision. The
 completion gate treats row absence as the committed completion projection and row presence as
