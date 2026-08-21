@@ -191,4 +191,35 @@ describe('ActivityPushAdapter', () => {
     ).rejects.toThrow('Unsupported native Activity mutation');
     expect(called).not.toHaveBeenCalled();
   });
+
+  it('marks an invalid persisted patch as permanent and actionable', async () => {
+    const called = vi.fn();
+    const adapter = new ActivityPushAdapter(transport(called));
+
+    await expect(
+      adapter.execute(
+        intent('patch', {
+          activityId: ACTIVITY,
+          input: {
+            recurrence: {
+              mode: 'fixed',
+              segments: [
+                { freq: 'daily', effectiveFrom: '2026-08-21', time: '09:00' },
+                { freq: 'daily', effectiveFrom: '2026-08-21', time: '10:30' },
+              ],
+            },
+            editedFromDate: '2026-08-21',
+          },
+          ifMatch: '2026-08-21T00:00:00.000Z',
+        }),
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'validation_failed',
+      message: expect.stringContaining(
+        'This saved change is invalid. Discard it and try again.',
+      ),
+    });
+    expect(called).not.toHaveBeenCalled();
+  });
 });

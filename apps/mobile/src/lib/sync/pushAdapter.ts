@@ -85,6 +85,36 @@ export interface ActivityPushTransport {
   deleteReminder(activityId: string, reminderId: string): Promise<unknown>;
 }
 
+/** A persisted payload that cannot become valid by waiting for connectivity or retrying. */
+class DurableActivityIntentError extends Error {
+  readonly status = 422;
+  readonly code = 'validation_failed';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'DurableActivityIntentError';
+  }
+}
+
+type SafeParseResult<T> =
+  | { readonly success: true; readonly data: T }
+  | {
+      readonly success: false;
+      readonly error: { readonly issues: readonly { readonly message: string }[] };
+    };
+
+function parsePersisted<T>(
+  schema: { readonly safeParse: (value: unknown) => SafeParseResult<T> },
+  value: unknown,
+): T {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  const detail = parsed.error.issues[0]?.message;
+  throw new DurableActivityIntentError(
+    `This saved change is invalid. Discard it and try again.${detail === undefined ? '' : ` ${detail}`}`,
+  );
+}
+
 export const sharedActivityPushTransport: ActivityPushTransport = {
   create: (input, idempotencyKey) => createActivity(apiClient, input, idempotencyKey),
   duplicate: (activityId, idempotencyKey) =>
@@ -114,14 +144,16 @@ export const sharedActivityPushTransport: ActivityPushTransport = {
 
 function variables(intent: OutboxIntent): object {
   if (typeof intent.variables !== 'object' || intent.variables === null) {
-    throw new Error('Durable Activity intent variables are malformed.');
+    throw new DurableActivityIntentError(
+      'Durable Activity intent variables are malformed.',
+    );
   }
   return intent.variables;
 }
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`Durable Activity intent is missing ${name}.`);
+    throw new DurableActivityIntentError(`Durable Activity intent is missing ${name}.`);
   }
   return value;
 }
@@ -134,7 +166,7 @@ export class ActivityPushAdapter {
 
   async execute(intent: OutboxIntent): Promise<unknown> {
     if (intent.mutationKey[0] !== 'activity') {
-      throw new Error(
+      throw new DurableActivityIntentError(
         `Unsupported native outbox domain: ${intent.mutationKey[0] ?? ''}.`,
       );
     }
@@ -145,13 +177,13 @@ export class ActivityPushAdapter {
       'activityId',
     );
     if (activityId !== intent.entityId) {
-      throw new Error(
+      throw new DurableActivityIntentError(
         'Durable Activity intent entity identity does not match its payload.',
       );
     }
     if (name === 'create') {
       return this.transport.create(
-        createActivityInput.parse(field(value, 'input')),
+        parsePersisted(createActivityInput, field(value, 'input')),
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
       );
     }
@@ -165,7 +197,7 @@ export class ActivityPushAdapter {
     if (name === 'patch') {
       return this.transport.patch(
         activityId,
-        patchActivityInput.parse(field(value, 'input')),
+        parsePersisted(patchActivityInput, field(value, 'input')),
         requiredString(field(value, 'ifMatch'), 'ifMatch'),
       );
     }
@@ -184,35 +216,35 @@ export class ActivityPushAdapter {
     if (name === 'schedule') {
       return this.transport.schedule(
         activityId,
-        scheduleActivityInput.parse(field(value, 'input')),
+        parsePersisted(scheduleActivityInput, field(value, 'input')),
         idempotencyKey,
       );
     }
     if (name === 'complete') {
       return this.transport.complete(
         activityId,
-        completeActivityInput.parse(field(value, 'input')),
+        parsePersisted(completeActivityInput, field(value, 'input')),
         idempotencyKey,
       );
     }
     if (name === 'uncomplete') {
       return this.transport.uncomplete(
         activityId,
-        uncompleteActivityInput.parse(field(value, 'input')),
+        parsePersisted(uncompleteActivityInput, field(value, 'input')),
         idempotencyKey,
       );
     }
     if (name === 'skip') {
       return this.transport.skip(
         activityId,
-        skipActivityInput.parse(field(value, 'input')),
+        parsePersisted(skipActivityInput, field(value, 'input')),
         idempotencyKey,
       );
     }
     if (name === 'snooze') {
       return this.transport.snooze(
         activityId,
-        snoozeActivityInput.parse(field(value, 'input')),
+        parsePersisted(snoozeActivityInput, field(value, 'input')),
         idempotencyKey,
       );
     }
@@ -220,7 +252,7 @@ export class ActivityPushAdapter {
       const input = variablesFrom(field(value, 'input'), 'unsnooze');
       return this.transport.unsnooze(
         activityId,
-        unsnoozeActivityInput.parse({
+        parsePersisted(unsnoozeActivityInput, {
           ...(typeof field(input, 'occurrenceDate') === 'string'
             ? { occurrenceDate: field(input, 'occurrenceDate') }
             : {}),
@@ -231,7 +263,7 @@ export class ActivityPushAdapter {
     if (name === 'reminder-create') {
       return this.transport.createReminder(
         activityId,
-        reminderInput.parse(field(value, 'input')),
+        parsePersisted(reminderInput, field(value, 'input')),
         idempotencyKey,
       );
     }
@@ -241,13 +273,15 @@ export class ActivityPushAdapter {
         requiredString(field(value, 'reminderId'), 'reminderId'),
       );
     }
-    throw new Error(`Unsupported native Activity mutation: ${name ?? ''}.`);
+    throw new DurableActivityIntentError(
+      `Unsupported native Activity mutation: ${name ?? ''}.`,
+    );
   }
 }
 
 function variablesFrom(value: unknown, name: string): object {
   if (typeof value !== 'object' || value === null) {
-    throw new Error(`Durable ${name} input is malformed.`);
+    throw new DurableActivityIntentError(`Durable ${name} input is malformed.`);
   }
   return value;
 }

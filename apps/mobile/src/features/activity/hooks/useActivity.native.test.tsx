@@ -314,6 +314,45 @@ describe('native useActivityDetail', () => {
     mounted.unmount();
   });
 
+  it('shows a clean validation message without enqueueing an invalid recurrence patch', async () => {
+    const patch = vi.fn();
+    nativeState.current = {
+      activities: {
+        subscribe: () => () => undefined,
+        version: () => 0,
+        read: async () => canonical,
+        hasInstalledCapabilities: async () => true,
+        capabilityHydrationState: async () => 'installed',
+      },
+      outbox: { forEntity: async () => [] },
+      sync: { pullActivity: vi.fn(async () => canonical) },
+      coordinator: { patch },
+    };
+
+    const mounted = renderHook(() => useActivityDetail(ACTIVITY), { wrapper });
+    await waitFor(() => expect(mounted.result.current.detail).toBeDefined());
+    await act(async () => {
+      expect(
+        await mounted.result.current.patch({
+          recurrence: {
+            mode: 'fixed',
+            segments: [
+              { freq: 'daily', effectiveFrom: '2026-08-21', time: '09:00' },
+              { freq: 'daily', effectiveFrom: '2026-08-21', time: '10:30' },
+            ],
+          },
+          editedFromDate: '2026-08-21',
+        }),
+      ).toBe(false);
+    });
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(mounted.result.current.editError).toBe(
+      'Recurrence segments must be ordered by effectiveFrom, strictly ascending.',
+    );
+    mounted.unmount();
+  });
+
   it('does not clear an explicit edit error when background hydration later succeeds', async () => {
     let installed = false;
     let release: ((detail: ActivityDetail) => void) | undefined;

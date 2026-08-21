@@ -1,5 +1,9 @@
 import { isRetryable } from '@od/shared/client';
-import type { PatchActivityInput, ScheduleActivityInput } from '@od/shared/schemas';
+import {
+  type PatchActivityInput,
+  patchActivityInput,
+  type ScheduleActivityInput,
+} from '@od/shared/schemas';
 import { type TimeZone, toWallDate, toWallTime } from '@od/shared/time';
 import type { ActivityDetail, ActivityDetailTarget } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
@@ -327,13 +331,19 @@ export function useActivityDetail(
     isSaving: saving,
     patch: (input) => {
       if (detail === undefined) return Promise.resolve(false);
+      const parsed = patchActivityInput.safeParse(input);
+      if (!parsed.success) {
+        const firstIssue = parsed.error.issues[0];
+        setEditError(firstIssue?.message ?? 'This change is not valid.');
+        return Promise.resolve(false);
+      }
       return run(() =>
         state.coordinator.patch(
           activityId,
           randomUUID(),
-          input,
+          parsed.data,
           detail.activity.updatedAt,
-          patchChangeNames(input),
+          patchChangeNames(parsed.data),
         ),
       );
     },

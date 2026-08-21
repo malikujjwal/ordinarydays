@@ -228,6 +228,46 @@ describe('RescheduleSheet', () => {
     expect(onSchedule).not.toHaveBeenCalled();
   });
 
+  it('replaces a segment that already starts today instead of appending a duplicate date', async () => {
+    const activeToday = { ...firstSegment, effectiveFrom: TODAY };
+    const { onPatch } = mount(recurring([activeToday]), { occurrenceDate: TODAY });
+
+    fireEvent.click(screen.getByRole('button', { name: '9:00 AM' }));
+    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '10:30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'All future occurrences' }));
+
+    await waitFor(() => expect(onPatch).toHaveBeenCalledOnce());
+    expect(onPatch).toHaveBeenCalledWith({
+      recurrence: {
+        mode: 'fixed',
+        segments: [{ ...activeToday, time: '10:30' }],
+      },
+    });
+  });
+
+  it('explains why an all-future edit cannot precede a later append-only segment', async () => {
+    const { onPatch } = mount(
+      recurring([
+        firstSegment,
+        { ...firstSegment, effectiveFrom: '2026-08-15', time: '10:00' },
+      ]),
+      { occurrenceDate: TODAY },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '9:00 AM' }));
+    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '10:30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'All future occurrences' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain(
+        'Future schedule changes already start on this date or later.',
+      ),
+    );
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
   it('omits editedFromDate when all-future reschedule opens from series detail', async () => {
     const { onPatch } = mount(recurring());
 

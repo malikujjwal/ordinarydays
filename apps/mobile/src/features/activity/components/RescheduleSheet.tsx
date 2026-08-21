@@ -127,6 +127,7 @@ export function RescheduleSheet({
   const [pickedTime, setPickedTime] = useState<string | null>(initialTime);
   const [clearConfirmation, setClearConfirmation] = useState(false);
   const [seriesLimit, setSeriesLimit] = useState(false);
+  const [seriesOrderError, setSeriesOrderError] = useState<string>();
 
   useEffect(() => {
     if (!open) return;
@@ -136,6 +137,7 @@ export function RescheduleSheet({
     setPickedTime(initialTime);
     setClearConfirmation(false);
     setSeriesLimit(false);
+    setSeriesOrderError(undefined);
   }, [initialDate, initialTime, open]);
 
   const scheduleInput = (date: WallDate, time: string | null): ScheduleActivityInput => ({
@@ -156,15 +158,39 @@ export function RescheduleSheet({
   const commitFuture = async (time: string | null) => {
     const recurrence = activity.recurrence;
     if (recurrence === undefined || active === undefined) return;
+    const anchor = occurrenceDate ?? today;
+    const latest = recurrence.segments.at(-1);
+    if (latest === undefined) return;
+    setSeriesOrderError(undefined);
+
+    /**
+     * A segment that already starts today is still provisional: the API deliberately permits
+     * replacing that active segment as a same-day correction. Appending another segment with
+     * the same date fails the shared schema before any request leaves the device.
+     *
+     * An older occurrence before the latest segment is different. Recurrence history is
+     * append-only, so an all-future edit cannot insert itself before a later change. Keep the
+     * edit in the sheet and explain the available path instead of persisting an intent that can
+     * never pass validation.
+     */
+    const sameDayCorrection = anchor === today && latest.effectiveFrom === anchor;
+    if (!sameDayCorrection && anchor <= latest.effectiveFrom) {
+      setSeriesOrderError(
+        'Future schedule changes already start on this date or later. Choose “This occurrence only” or edit a later occurrence.',
+      );
+      return;
+    }
+    const next = appendedSegment(active, anchor, time);
     const ok = await onPatch({
       recurrence: {
         ...recurrence,
-        segments: [
-          ...recurrence.segments,
-          appendedSegment(active, occurrenceDate ?? today, time),
-        ],
+        segments: sameDayCorrection
+          ? [...recurrence.segments.slice(0, -1), next]
+          : [...recurrence.segments, next],
       },
-      ...(occurrenceDate === undefined ? {} : { editedFromDate: occurrenceDate }),
+      ...(sameDayCorrection || occurrenceDate === undefined
+        ? {}
+        : { editedFromDate: occurrenceDate }),
     });
     if (ok) {
       onClose();
@@ -178,6 +204,7 @@ export function RescheduleSheet({
    * the one place that decides whether the write goes out or the scope question is asked first.
    */
   const requestCommit = (date: WallDate, time: string | null) => {
+    setSeriesOrderError(undefined);
     if (scopedOccurrence && date === initialDate) {
       setPending({ date, time });
       return;
@@ -308,9 +335,9 @@ export function RescheduleSheet({
               Use End series from the activity menu, then create a new series.
             </Text>
           </View>
-        ) : error === undefined ? null : (
+        ) : (seriesOrderError ?? error) === undefined ? null : (
           <Text accessibilityRole="alert" color="danger">
-            {error}
+            {seriesOrderError ?? error}
           </Text>
         )}
       </View>
@@ -346,9 +373,9 @@ export function RescheduleSheet({
                 Use End series from the activity menu, then create a new series.
               </Text>
             </View>
-          ) : error === undefined ? null : (
+          ) : (seriesOrderError ?? error) === undefined ? null : (
             <Text accessibilityRole="alert" color="danger">
-              {error}
+              {seriesOrderError ?? error}
             </Text>
           )}
         </View>

@@ -150,7 +150,7 @@ describe('native pending intent selectors', () => {
     {
       label: 'queued',
       status: 'queued' as const,
-      expected: { inert: true, status: 'queued', message: 'Will update when online' },
+      expected: { inert: true, status: 'queued', message: 'Schedule update pending' },
     },
     {
       label: 'in flight',
