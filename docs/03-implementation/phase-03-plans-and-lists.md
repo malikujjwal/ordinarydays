@@ -54,7 +54,8 @@ Today's Anytime list and is not a backlog with a counter on it.
       `GET /v1/list-templates`, with a stable explicit-selection order and no title matcher.
 - [ ] Template resolution at creation: behaviour, capabilities, slot, icon and empty-state
       copy **copied** onto the list, never re-resolved on read.
-- [ ] `lexoRankBetween` in `packages/shared`, so reordering is a single-item write.
+- [ ] `lexoRankBetween` in `packages/shared`, so reordering changes one logical item and its
+      identity locator rather than renumbering the list.
 - [ ] Lists CRUD, item CRUD, `bulk`, `clear-checked` (no dialog, 10-second bulk undo),
       archive.
 - [ ] `PATCH /v1/lists/:id` capability and behaviour changes, with the additive changes
@@ -173,6 +174,10 @@ What varies between one collection and another is `ListCapabilities` on the row:
 `ListItemDetails` is a discriminated union on `behaviour`, present only for `watch` and
 `meals`, and absent on every `collection` item.
 
+The strict create inputs are part of the same shared schema surface. List creation accepts
+optional `listId: ulidId('lst')`; single-item creation and each bulk member accept optional
+`itemId: ulidId('itm')`. They accept no owner, timestamps, rank or other authority fields.
+
 > **Decision:** the three behaviours are the complete set for v1. Before adding a fourth,
 > apply the test in ADR-031: the application must render items differently, carry a typed
 > field no other behaviour has, or take part in a flow that exists nowhere else. A new label,
@@ -279,7 +284,9 @@ string strictly between `a` and `b` in lexicographic order, with `undefined` mea
 bound". Base-62 over `0-9A-Za-z`, appending a character when the gap between neighbours is
 exhausted rather than renumbering.
 
-The whole point is that reordering is **one item write**, never a renumber of the list.
+The whole point is that reordering changes **one logical item**, never renumbers the list.
+P3-04's stable-id locator moves in the same transaction; that bookkeeping row is not a
+second ListItem or a fan-out write.
 
 **The `(rank, itemId)` tie-break.** `lexoRankBetween` does not guarantee uniqueness across
 concurrent callers, and it is not supposed to. Two members inserting at the same position at
@@ -289,8 +296,8 @@ is expected, not exceptional
 ([`../02-architecture/data-model.md#shared-lists`](../02-architecture/data-model.md#shared-lists)).
 
 The resolution is a total order, not a lock: sort by `(rank, itemId)`. `itemId` is a ULID, so
-the tie-break is creation order, it is identical on every device, and it needs no
-coordination. Export the comparator from this module —
+the tie-break is deterministic and identical on every device without coordination. It is not
+business chronology: an offline client's ULID carries its device clock. Export the comparator from this module —
 `compareListItems(a, b)` — so there is one implementation that the repository, the projection
 and the client all use. A comparator on `rank` alone leaves the order to the engine's sort
 stability and is the bug this rule exists to prevent.
@@ -340,6 +347,7 @@ right way round before writing a line:
 | `LIST#<l>` / `META` | The whole `List`: title, behaviour, capabilities, slot, counts, `archived`, `updatedAt` | Creation, and every list-level edit — **one write, whoever made it** |
 | `USER#<u>` / `LIST#<l>` | `ListIndex`: `role` and `addedAt`, and nothing else | Creation for the owner; membership changes in Phase 6 |
 | `LIST#<l>` / `ITEM#<rank>#<itemId>` | The item | Item writes |
+| `LIST#<l>` / `ITEMID#<itemId>` | Stable identity locator containing the current `rank` | Item create, reorder and delete; never serialised |
 | `LIST#<l>` / `MEMBER#<personId>` | A non-owner `ListMember`; the owner never has one | Phase 6 |
 
 > **Decision:** the index entry carries no title, no icon and no counts. This is
@@ -376,18 +384,22 @@ data. See P3-03.
 **Edge cases.**
 
 - An item's sort key contains its rank, so a reorder is a delete-and-put, not an update. Do
-  both in one transaction so an interrupted reorder cannot lose the item.
+  both and update `ITEMID#<itemId>.rank` in one transaction so an interrupted reorder cannot
+  lose the item or leave its exact-id read pointing at the old key.
 - Every list-scoped repository method takes the caller's `userId` and asserts a `USER#<u>` /
   `LIST#<l>` pointer exists before touching the `LIST#` partition. A `LIST#<l>` partition is
   not scoped by user, so the pointer **is** the access check. Phase 6 turns that check into
   the role-aware middleware (P6-32); this phase writes it once, in the repository, so the
   shape is already right.
-- Deleting a list deletes the `META` row, every item, and every pointer. In this phase there
-  is exactly one pointer.
+- Deleting a list deletes the `META` row, every item, item locator, and pointer, then leaves
+  `LIST#<listId>` / `TOMBSTONE` for the Phase 2.6 automatic-replay window. Deleting an item
+  removes its locator and leaves `ITEM_TOMBSTONE#<itemId>` in the List partition for the same
+  window. In this phase there is exactly one list pointer.
 
 **Tests.** Integration on DynamoDB Local: create a list, add ten items, reorder the last to
 the front, assert one query returns them in the new order and `itemCount` is still 10; a
-reorder interrupted between delete and put is impossible (assert the transaction is used);
+reorder interrupted between delete, put and locator update is impossible (assert the
+transaction is used); an exact item read follows the locator after that reorder;
 renaming a list writes **exactly one item**, asserted by a repository spy; the Lists tab
 issues exactly one `Query` and one `BatchGetItem` for 40 lists, asserted by a spy; a
 `LIST#<l>` read by a user with no pointer returns `not_found`, not the list.
@@ -400,7 +412,7 @@ issues exactly one `Query` and one `BatchGetItem` for 40 lists, asserted by a sp
 `services/api/src/services/listCreationService.ts`.
 
 **Approach.** `POST /v1/lists` takes the strict body
-`{ title, templateKey, sourceActivityId? }` per
+`{ listId?, title, templateKey, sourceActivityId? }` per
 [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists).
 Resolution order, in one function with no branches per template:
 
@@ -428,6 +440,17 @@ pointer, but potentially many item-link rows; the delete is
 written to iterate the pointer set rather than to assume a single owner, because Phase 6 adds
 members and a delete that assumed one would strand the others' pointers.
 
+`listId`, when supplied, is the permanent monotonic `lst_<ULID>` minted by generalising the
+Phase 2.6 native-CSPRNG generator before an offline write enters the SQLite transaction; do
+not add a weaker second random or clock-only generator. The server validates it but derives
+owner and timestamps itself. Creation conditionally writes `META` and condition-checks the list
+tombstone; omission retains server-minted behaviour for online callers. A collision returns
+the same metadata-free error as Activity creation. Recovery reads `GET /v1/lists/:id`: `200`
+adopts the canonical server row, while `404` parks the intent for explicit Retry or Discard.
+Retry mints a fresh list and mutation id and, in one SQLite transaction, remaps the List, its
+dependent local items, and every outbox payload, ordering key, dependency and compensation
+that contains the old `listId`. It never automatically re-mints on collision.
+
 **Edge cases.**
 
 - A `templateKey` that is not in the catalogue is `validation_failed`, not a silent fallback.
@@ -449,7 +472,10 @@ an unknown or missing `templateKey`
 `400`s and writes nothing; an omitted or empty title also `400`s. A list created from a Plan
 stores `sourceActivityId` and `slot: null`; deleting a list clears the
 profile default that pointed at it and clears provenance on every currently linked Activity
-without deleting one.
+without deleting one. Durable-create tests mirror P2-49: response loss beyond the 24-hour
+idempotency receipt reconciles the same `listId`; create → delete → replay does not resurrect;
+malformed and foreign-colliding ids fail without metadata; explicit Retry atomically remaps a
+locally populated list and its whole dependent intent chain.
 
 ---
 
@@ -501,10 +527,22 @@ appear without changing any other file. A contract test asserts no route named
 
 ### P3-08 — List item CRUD and `bulk`
 
-**Approach.** `POST /v1/lists/:id/items` with `{ title, note?, location?, details?,
+**Approach.** `POST /v1/lists/:id/items` with `{ itemId?, title, note?, location?, details?,
 afterItemId? }`. The server converts `afterItemId` to a rank via P3-03. `PATCH` accepts
 `title`, `checked`, `note`, `location`, `details`, `afterItemId`. `POST .../items/bulk` takes
-an array and is what the ingredients flow uses.
+an array of the same create shape, including one optional `itemId` per item, and is what the
+ingredients flow uses. `GET /v1/lists/:id/items/:itemId` is the authoritative exact-id read
+used by durable-create reconciliation; it follows P3-04's locator and returns `404` for a
+missing or tombstoned item.
+
+Native creates mint monotonic `itm_<ULID>` identities before atomically storing the visible
+row and outbox intent. The server conditionally puts both the item and its `ITEMID#` locator
+and condition-checks `ITEM_TOMBSTONE#`; omission preserves server-minted online behaviour.
+Bulk callers persist every item id with the one operation, so replay after the receipt expires
+can reconcile each exact identity without duplicating a partially completed chunk. Collision
+recovery matches P2-49: exact `GET` success adopts server truth; `404` parks; an explicit Retry
+atomically remaps the local item and every dependent outbox reference to a fresh item and
+mutation id. There is no automatic re-mint.
 
 **Edge cases.**
 
@@ -521,15 +559,19 @@ an array and is what the ingredients flow uses.
 - Checked items **stay in place**, struck through and de-emphasised. They do not jump to the
   bottom. Re-sorting under the user's finger is disorienting and makes an accidental
   double-tap destructive.
-- `bulk` is a single transaction when it fits in 100 items and a chunked sequence otherwise;
-  it must be idempotent under the `Idempotency-Key`.
+- `bulk` is a single transaction when it fits within DynamoDB's 100-action limit after its
+  identity locators and receipt are counted, and a resumable chunked sequence otherwise. It
+  must be idempotent both under the `Idempotency-Key` and, after that receipt expires, under
+  the stable per-item ids.
 
 **Tests.** Integration: the 501st item `400`s with the exact message; `checked: true` on a
 list with `checkable: false` `400`s and on the same list after `PATCH`ing `checkable: true`
 succeeds — the same item, the same request, a different capability; `location` on a list
 with `supportsLocation: false` `400`s; `details` with the wrong `behaviour` discriminant
 `400`s; a bulk insert of 30 items produces 30 rows in the sent order; repeating the bulk call
-with the same key produces no duplicates.
+with the same key or replaying its stable item ids after receipt expiry produces no
+duplicates. Response-loss, create → delete → replay, malformed-id, foreign-collision and
+atomic explicit-remap tests are the ListItem versions of P2-49.
 
 ---
 
@@ -568,6 +610,10 @@ item partition, in the same request, with `itemCount` unchanged.
   sideways move.
 - Setting `slot` on a list when another list already holds that slot is allowed. Slots are
   eligibility, not exclusivity; `user.defaultLists` breaks the tie (P3-12).
+- When a PATCH changes or clears a slot and that exact `(slot, listId)` is the profile
+  default, the list service removes only that nested default in the same transaction as the
+  List update. The conditional profile write must not clear a different destination selected
+  concurrently on another device.
 
 **Tests.** One test per row. Specifically: `collection → watch` initialises `details` on
 every existing item with `watchStatus: 'want'` and leaves titles and ranks untouched;
@@ -653,8 +699,17 @@ resolveSlot(slot, lists, defaultLists):
 | Several, no valid default | `ask` | on answer, `defaultLists[slot] = chosen` |
 | None | `none`; no `templateKey`, title, or recommendation | none |
 
-`defaultLists` is patched through `PATCH /v1/me` (`api-contract.md` §2.1). Archived lists are
-not eligible.
+`defaultLists` is patched through `PATCH /v1/me` (`api-contract.md` §2.1) as a **nested
+per-slot patch**, not as replacement of the stored map. An omitted slot is preserved; a
+`listId` sets just that slot; `null` removes just that slot. Stored `User.defaultLists` values
+remain non-nullable because clearing removes the key. Archived lists are not eligible.
+
+The strict PATCH schema is
+`Partial<Record<DefaultSlot, ulidId('lst') | null>>`. The repository applies supplied slots
+with DynamoDB document-path `SET` / `REMOVE`; it never emits `SET defaultLists = :partial`.
+For a legacy profile with no parent map, conditionally create the one-key map, and on a
+concurrent creator retry the nested operation. This preserves sibling slots even when two
+devices set different defaults concurrently.
 
 > **Decision:** a per-operation override is a parameter to that request and is **not**
 > written to the profile. Choosing a different destination once must not silently become
@@ -683,7 +738,9 @@ the default**—a `GET /v1/lists/:id` against the non-default list, then a re-re
 returns the original default; deleting the default list falls back to `ask`. With no candidates
 the result is exactly `{ kind: 'none', slot: 'groceries' }` and contains no template or title.
 A no-destination Watch case returns `none`, then the client presents exactly the three Watch
-styles unselected without `resolveSlot` returning or persisting a `templateKey`.
+styles unselected without `resolveSlot` returning or persisting a `templateKey`. A profile
+integration test starts with all three slots, sets `groceries`, then clears `watch` with
+`null`, proving each request preserves every omitted slot.
 
 ---
 
@@ -823,6 +880,7 @@ does not set `watched` automatically, and no follow-up path creates a second Act
 ### P3-17 — Meal ingredients → a destination list, and the provenance label
 
 **Files.** `packages/shared/src/lists/provenanceLabel.ts`,
+`packages/shared/src/lists/formatIngredientTitle.ts`,
 `services/api/src/services/ingredientsToListService.ts`.
 
 **Approach.** The exact flow in
@@ -835,7 +893,12 @@ request may name a different one for this operation only. The service takes an o
 
 Once the destination is known: one
 `POST /v1/lists/:id/items/bulk` with the selected ingredients; each created item gets
-`title` = `name` with `quantity` in parentheses if present (`Tortillas (8)`),
+`title` from the pure `formatIngredientTitle(name, quantity)` function: preserve the full
+ingredient name and, when a non-empty quantity is present, append it in parentheses
+(`Tortillas (8)`). If that would exceed `MAX_TITLE_LEN`, truncate only the quantity to the
+remaining budget and end it with one ellipsis inside the parentheses. Thus the maximum
+120-character name plus a maximum 120-character quantity still produces a valid,
+deterministic 200-character ListItem title rather than making a valid meal fail bulk insertion.
 `sourceActivityId` = the meal, and `sourceLabel` from the pure function below. Each source
 ingredient gets `details.ingredients[i].addedToListId`, so the button renders `Added` for
 those rows next time.
@@ -864,7 +927,9 @@ writes zero grocery items until the user taps the button. Provenance is **not** 
 back-link.
 
 **Tests.** `provenanceLabel` unit tests for all five rules including the collision case.
-Integration for the duplicate rule in all three states (absent, present-unchecked,
+`formatIngredientTitle` tests no quantity, an exact-boundary quantity and the 120 + 120
+maximum; the last preserves all 120 name characters, has one ellipsis, and is exactly
+`MAX_TITLE_LEN` characters. Integration for the duplicate rule in all three states (absent, present-unchecked,
 present-checked). A test asserting the label is unchanged after the source meal is
 rescheduled and after it is deleted. An integration test asserting that creating a meal with
 four ingredients and never tapping the button leaves the destination list empty. Plus:
@@ -973,57 +1038,73 @@ delete `400`s; the schedule path writes exactly one system entry per date change
 
 **What to build.** The endpoint behind the Plans tab, exactly as specified in
 [`../02-architecture/api-contract.md#22a-plans`](../02-architecture/api-contract.md#22a-plans).
-One request, three stages, and no second call to render the screen.
+One initial request, three stages, and no second call to render the screen. Later Upcoming
+scrolls request another bounded date window from the same endpoint.
 
 | Stage | Query | Order |
 | --- | --- | --- |
 | `needsDate` | `GSI1` `gsi1pk = U#<u>#P`, `ScanIndexForward=false` — access pattern 2b | `lastActivityAt` descending |
-| `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, `gsi1sk >= <today>T00:00`, grouped by date | date ascending |
+| `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, from `upcomingFrom` through `upcomingTo`, plus the first later date as the continuation hint | date ascending |
 | `past` | the same bucket, `gsi1sk < <today>T00:00`, `ScanIndexForward=false`, `?cursor=` | date descending |
+| recurring input for `upcoming` | `GSI1` `gsi1pk = U#<u>#R` — access pattern 3 | expanded only inside the requested Upcoming window |
 
 **Approach.**
 
-1. Three `Query` calls, issued concurrently. `needsDate` and `upcoming` are unpaginated —
-   both are bounded in practice and a paginated Needs-a-date stage would be a backlog with
-   pages. `past` is cursor-paginated per §Pagination of the API contract.
+1. Four logical `Query` streams, started concurrently: `#P`, the bounded future slice of
+   `#S`, the cursor-paged past slice of `#S`, and `#R`. `needsDate` is capped as below. The initial
+   request defaults `upcomingFrom` to today and `upcomingTo` to 61 days later; explicit
+   windows may contain at most `MAX_AGENDA_DAYS` (62) inclusive calendar dates. The response
+   returns `{ from, through, nextFrom }`, where `nextFrom` is the earliest one-off or recurring
+   date after `through`, or `null` when neither source has one. It may jump an empty gap but
+   never skips a row. Scrolling requests the next 62-day window from that date. `past` remains
+   cursor-paginated per §Pagination of the API contract. The future `#S` stream stops after
+   the first key beyond `through`; recurrence math supplies the corresponding next date for
+   each bounded `#R` row, so calculating `nextFrom` never scans an empty calendar gap.
 2. `upcoming` **expands recurring series** through the same `expandAgenda` path the agenda
    uses (P2-08), so a weekly dinner contributes one row per date. Do not reimplement
-   expansion here; call the shared service with a window and hand it the `#R` bucket.
+   expansion here: pass the `#R` rows and exact requested window to the shared service, merge
+   them with `#S`, and propagate its recurrence warnings.
 3. Items in `upcoming` and `past` are ordinary `AgendaItem` projections (P2-10). Items in
-   `needsDate` are an `AgendaItem` **plus** `rsvpSummary`.
-4. `rsvpSummary` is `{ interested, maybe, pass, pending }` — four counts, computed from the
-   `PART#` rows in the activity's partition. The names are the **undated** vocabulary, which
-   is what the row renders. No new stored enum value: `interested` counts participants whose
-   stored `rsvp` is `going`, and `pass` counts `declined`. See
+   `needsDate` are an `AgendaItem` **plus** `rsvpSummary` and `suggestionCount`.
+4. Each `rsvpSummary` group is `{ count: number, names: string[] }`; `names` contains at most
+   the first two display names while `count` is the full group size. The four keys are
+   `interested`, `maybe`, `pass`, and `pending`. The names are the **undated** vocabulary,
+   which is what the row renders. No new stored enum value: `interested` maps stored `going`,
+   and `pass` maps `declined`. See
    [`../02-architecture/data-model.md#71-rsvp-consent-does-not-survive-a-date-change`](../02-architecture/data-model.md#71-rsvp-consent-does-not-survive-a-date-change).
-5. In this phase there are no participants, so `rsvpSummary` is `{ interested: 0, maybe: 0,
-   pass: 0, pending: 0 }` on every row and the client renders `Just you`. The field ships
-   now, populated by the Phase 6 participant work, so the client is written once.
+5. In this phase there are no participants or date suggestions. Every group is therefore
+   `{ count: 0, names: [] }`, `suggestionCount` is `0`, and the client renders `Just you`.
+   The stable fields ship now and are populated by the Phase 6 work, so the client is written
+   once.
 
 **Edge cases.**
 
-- **A batched read, not a read per row.** Computing `rsvpSummary` with one `Query` per
-  needs-a-date activity is an N+1 that grows with the stage. Read the `participantCount`
-  from `ACT#/META`, which the index entry already carries, and issue one `BatchGetItem` for
-  the partitions that have a non-zero count. Activities with no participants cost no read.
+- Phase 3 performs no participant or suggestion read: both collections are structurally
+  absent until Phase 6, so it constructs the zero projection above. P6-40 owns the bounded
+  server projection for real names and counts; do not introduce a Phase 3 Query per row.
 - **`needsDate` is capped at 200 rows** with no cursor. Beyond that the response carries a
-  warning, exactly as the agenda does for series. A user with more than 200 undecided plans
-  has a different problem and it is not one pagination fixes.
+  `needs_date_limit_exceeded` warning, exactly as the agenda does for series. A user with more
+  than 200 undecided plans has a different problem and it is not one pagination fixes.
 - `cancelled` and `completed` activities never appear in `needsDate`.
 - The endpoint never returns `#N`. An undated `objectKind: 'task'` is Today's business, not Plans'. This
   is the mirror of the agenda's rule about `#P` and is asserted the same way — by not
   querying the bucket.
-- No count, no total and no unread marker is returned for any stage. There is nothing for a
-  client to badge, which is the cheapest way to enforce
+- No stage-level count, total, unread marker or badge field is returned. Nested RSVP-group
+  `count` values and the row-level `suggestionCount` are content, not backlog totals, and must
+  never be bound to tab or heading chrome. There is nothing for a client to badge, enforcing
   [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §1.3.2.
 
 **Tests.** Integration: three seeded activities in `#P` returned newest-`lastActivityAt`
 first; touching the oldest one's `lastActivityAt` moves it to the head on the next call;
 a `#N` activity appears in no stage; a recurring series contributes one row per date in
-`upcoming`; `past` paginates and the cursor is opaque and user-scoped; the response schema
-contains no field named `count`, `total`, `unread` or `badge` — asserted by a key walk over
-the Zod shape. Plus a repository spy asserting the `rsvpSummary` computation issues at most
-one `BatchGetItem`, regardless of how many rows the stage holds.
+`upcoming` inside the first 62-day window; requesting its returned `nextFrom` produces the
+next non-overlapping window; a 63-day request is `validation_failed`; `past` paginates and
+the cursor is opaque and user-scoped. A schema test permits `rsvpSummary.*.count` and
+`suggestionCount` but proves the response has no stage-level `count`, `total`, `unread` or
+`badge`. A repository spy proves Phase 3 starts only the four bucket/range streams above,
+pages them according to their documented caps, and performs no participant read, while
+`series_limit_exceeded` propagates from the shared expansion path. A far-future one-off after
+an empty gap becomes `nextFrom`, and the next window includes it.
 
 ---
 
@@ -1150,6 +1231,9 @@ these contract points are not:
   API, and forwarding the bearer token to a storage URL is a leak.
 - Item mutations carry the `Idempotency-Key` (`bulk` especially); reorder sends
   `afterItemId` and no function anywhere accepts a `rank` parameter (P3-03's rule).
+- Create functions expose the optional stable `listId` / per-item `itemId`, and the client
+  includes an exact-item GET for collision reconciliation. No wrapper drops or regenerates
+  an id while retrying the same durable action.
 - List responses type `viewerLink` as the caller's link. There is no field for other
   viewers' links to filter client-side, because the server never serialises them.
 
@@ -1179,8 +1263,9 @@ header `⋯` holding `Show archived`
   [`../01-product/interaction-contract.md#3-gesture-table`](../01-product/interaction-contract.md#3-gesture-table)
   §3.2: `Archive` · `Delete` on an owned list, keyed off the pointer's `role` so the
   member variant (`Leave`) is one branch in Phase 6, not a rewrite.
-- **Ordering is the server's pointer order** — list id, which is creation order — with no
-  client re-sort (decision recorded here — raise in PR if wrong). §3.2 offers a long-press
+- **Ordering is the server's stable pointer order** — lexicographic list id, with no claim
+  that client-minted ids represent chronology — and no client re-sort (decision recorded
+  here — raise in PR if wrong). §3.2 offers a long-press
   `Reorder lists`, but `ListIndex` carries `role` and `addedAt` only
   ([`../02-architecture/data-model.md#33-list-partition`](../02-architecture/data-model.md#33-list-partition))
   and acceptance criterion 27 forbids adding attributes to the pointer, so there is
@@ -1227,8 +1312,9 @@ empty-state guidance remain the frozen values copied from the chosen style.
 
 - No style is auto-applied or pre-selected. Title entry is unavailable until one is chosen.
 - P3-07's projection of the shared `LIST_TEMPLATES` module is bundled with the mobile client,
-  so the sheet works on first launch offline; the confirmed create queues as an offline
-  mutation like any other write. `GET /v1/list-templates` exposes that same module to other
+  so the sheet works on first launch offline; the confirmed create mints one monotonic
+  `lst_` identity, then atomically stores the visible row and queued create. Transport retry
+  reuses both that id and the mutation id. `GET /v1/list-templates` exposes that same module to other
   clients and contract tests, not a second catalogue or a required mobile startup fetch.
 - Creating from a plan's `Add list` sheet (P3-38) enters the same full fixed-order catalogue
   with **none selected**. Plan kind, title and participants do not group, rank, hide or select
@@ -1253,7 +1339,9 @@ only after the user chooses a list does the same item form open.
 The global route never uses `defaultLists`, most-recently-used, list behaviour, title words or
 template metadata to choose the destination. `defaultLists` belongs only to named flows
 such as `Add ingredients to:`. Both routes send the same `POST /v1/lists/:id/items` request,
-with the path's `:id` equal to the list visibly named on the final button.
+with the path's `:id` equal to the list visibly named on the final button. Native confirmation
+mints one monotonic `itm_` identity, then atomically stores the visible item and queued create;
+retry reuses both stable ids.
 
 Camera / Photos / Link are available only after that destination exists. Their Phase 1 stubs
 receive `{ objectKind: 'listItem', listId }`; Phase 8 may fill compatible item fields but may
@@ -1478,7 +1566,8 @@ the List continues to render its own stored fields rather than adopting another 
 - Destructive changes get a confirmation dialog and **no undo**, per the product's undo rule.
   Additive ones get undo and no dialog.
 - Clearing a slot that is the profile default also clears `defaultLists` for that slot, and
-  the sheet says so.
+  the sheet says so. The one List PATCH performs the server-side conditional nested removal;
+  the client does not issue a second profile request that could partially succeed.
 - The sheet is a settings surface, not a wizard: every control is independent and applies on
   its own.
 
@@ -1575,14 +1664,15 @@ NEEDS A DATE
 
 | Element | Rule |
 | --- | --- |
-| Leading marker | The type's non-interactive diamond. **Never a checkbox**, on any type — including `task`, which is the one row in the product where a task has no checkbox, because there is no day on which to do it. |
+| Leading marker | The Plan type's non-interactive diamond. **Never a checkbox**, for any of the four `PlanType` values. Tasks cannot enter this stage. |
 | Trailing label | The type label, de-emphasised. **No date chip**; there is no date. |
 | Second line | The RSVP summary, always rendered, never empty. |
 | Tap | Opens plan detail. Nothing on the row mutates anything (U1). |
 
-`model/rsvpSummary.ts` is a pure function from the response's `rsvpSummary` counts and the
-participant display names to the summary string, unit-tested independently of React, over the
-five cases in §1.3.1: `Just you`; two people named; `Alice and 2 others interested`; `Nobody
+`model/rsvpSummary.ts` is a pure function from the response's grouped `rsvpSummary` — each
+group's full `count` plus its first two `names` — to the summary string, unit-tested
+independently of React, over the five cases in §1.3.1: `Just you`; two people named; `Alice and
+2 others interested`; `Nobody
 has replied`; and the mixed case joined by ` · ` in the order interested, maybe, pass, no
 reply. The words are the **undated** vocabulary and the switch that produces them belongs to
 Phase 6 (P6-40); in this phase there are no participants, so every row renders `Just you`.
@@ -1594,22 +1684,29 @@ avoid.
 
 **Edge cases.**
 
-- **No badge, no count, anywhere.** Not on the tab, not in the `Needs a date` heading, not
-  as a `(3)` after it. The heading is two words. §1.3.2 lists five rules a reviewer checks
-  and every one of them is a test here.
-- `Past` paginates on scroll with the response's cursor; `needsDate` and `upcoming` do not
-  paginate at all.
+- **No backlog badge or stage count.** Not on the tab, not in the `Needs a date` heading, not
+  as a `(3)` after it. The heading is two words. RSVP prose and a future row's
+  `2 dates suggested` are content, never stage chrome. §1.3.2 lists five rules a reviewer
+  checks and every one of them is a test here.
+- `Past` paginates on scroll with the response's cursor. `needsDate` does not paginate.
+  `Upcoming` loads one bounded 62-day date window initially and requests the next window from
+  `upcomingWindow.nextFrom` only when the user reaches its end. A zero-row window with a
+  non-null `nextFrom` retains that end sentinel, so the far-future row remains reachable; a
+  null value renders the ordinary final empty line and issues no further request.
 - Nothing on this screen ages, archives, greys out or re-sorts for being old.
 - Pull-to-refresh refetches all three stages in the one request.
 
 **Tests.** Render tests for all three empty states and the all-three-empty state from
-§1.3.3; a test that a needs-a-date `task` row has no checkbox and no date chip; unit tests
+§1.3.3; one needs-a-date fixture for each of the four Plan types, each with no checkbox or
+date chip, and a contract fixture proving an undated task is absent; unit tests
 over `rsvpSummary` for the five cases; a test asserting the rendered order equals the
 response order for a deliberately unsorted fixture. Tapping either Plans `Add` empty-state
 action opens the global **Task / Plan / List item** chooser with all three unselected; it does
 not open a Plan form. A **grep test over
 `src/features/plans/`** asserting the directory contains no badge component and no numeric
 count bound to a stage length — the same shape of test P2-28 uses for unresolved items.
+An Upcoming test begins with an empty 62-day window whose `nextFrom` jumps to a plan six
+months out, reaches the sentinel, and renders that plan after exactly one further window load.
 
 ---
 
@@ -1983,14 +2080,18 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
     not an Activity — when tapped, verified by a table item count.
 13. Creating a meal with four ingredients writes zero list items. Tapping `Add 3 selected`
     and confirming the destination writes exactly three, into the list the user confirmed,
-    each with `sourceActivityId` and a `sourceLabel` of `Sunday dinner`.
+    each with `sourceActivityId` and a `sourceLabel` of `Sunday dinner`. A valid maximum-length
+    ingredient name and quantity succeeds with a deterministic `MAX_TITLE_LEN` title that
+    preserves the full name and truncates only the quantity with an ellipsis.
 14. Adding the same ingredient again while the existing row is unchecked extends its label to
     `Sunday dinner · Thursday lunch` and creates no second row; doing it while the row is
     checked creates a second row.
 15. Rescheduling the source meal does not change any existing item's label; deleting the meal
     leaves the items and their labels intact.
-16. Reordering a 200-item list writes exactly one item, verified by a CloudWatch metric or a
-    repository spy asserting a single `TransactWriteItems` with two entries.
+16. Reordering a 200-item list changes exactly one logical ListItem, verified by a repository
+    spy asserting one `TransactWriteItems` with exactly three domain actions: delete the old
+    ranked row, put the new ranked row, and update its identity locator. No other ListItem row
+    is written.
 17. Adding a 501st item to a list returns `400` with the message `List is full.`
 18. `checked: true` is rejected with `400` on a list whose `capabilities.checkable` is false
     and accepted on the same list after that capability is turned on. No endpoint, service or
@@ -2023,14 +2124,15 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
 29. Two items stored with an identical `lexoRank` and different `itemId`s render in the same
     order on two independently seeded clients, and `compareListItems` returns the same result
     for both input orderings. No comparator in the codebase sorts list items on `rank` alone.
-30. `GET /v1/plans` returns three stages in one request. `needsDate` is the `#P` bucket
+30. `GET /v1/plans` returns three stages in one initial request. `needsDate` is the `#P` bucket
     ordered by `lastActivityAt` descending; touching the oldest plan's `lastActivityAt` moves
-    it to the head. An undated `objectKind: 'task'` appears in no stage.
+    it to the head. Upcoming merges `#S` with `#R` expansion inside a 62-day window and
+    supplies the next window boundary. An undated `objectKind: 'task'` appears in no stage.
 31. The Plans tab renders all three stage headings when every stage is empty, renders no
-    badge and no count anywhere, and renders `needsDate` in the server's order without
+    backlog badge or stage count, and renders `needsDate` in the server's order without
     re-sorting.
-32. A needs-a-date `task` row has no checkbox and no date chip. Tapping any needs-a-date row
-    opens plan detail and writes nothing.
+32. Needs-a-date rows for `custom`, `meal`, `watch`, and `event` have no checkbox or date
+    chip. Tapping any needs-a-date row opens plan detail and writes nothing.
 33. Global `+` → `List item` requires a visible list choice before fields or capture; its
     final button is `Add to {list name}`. List detail's `+ Add an item` fixes that list, and
     neither route consults a default or recent destination.
@@ -2047,7 +2149,7 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
 | Push notifications for prep-task completion or plan updates | Phase 5 |
 | Capture from an image — the upload path is Phase 3, the *extraction* is Phase 8 | Phase 8 |
 | List **sharing**: `ListMember` rows, the members endpoints, the share sheet, the leave flow, the two roles in the authorisation middleware | Phase 6. This phase writes the partition layout that makes it a small change — the canonical list at `LIST#`, pointers at `USER#` — and creates exactly one pointer. |
-| RSVP summaries with real numbers on the needs-a-date row. The field ships here and is zero on every row. | Phase 6 |
+| RSVP summaries with real people or date suggestions on the needs-a-date row. The grouped fields ship here with zero counts, empty names and `suggestionCount: 0`. | Phase 6 |
 | Sub-lists, tags, labels | Not in v1 at all |
 | **User-authored** list templates — the catalogue ships with the app | Not in v1 at all |
 | A fourth list behaviour. Templates are unbounded and free to add; behaviours are not | Needs a product decision (ADR-031) |
@@ -2069,11 +2171,11 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
 | Provenance is implemented as a viewer link | Checking off `Chicken` marks the meal as cooked, or deleting the meal deletes the groceries | §6.5 is a separate test group; `sourceActivityId` records origin while `LNK#` is caller-scoped Plan navigation, with deliberately different behaviour. |
 | The provenance label is recomputed on read | Labels change after a meal is rescheduled and become lies after it is deleted | Computed once at creation and stored; acceptance criterion 15. |
 | Ingredients are added to a list automatically | The user's shopping list fills with things they did not ask for, or lands somewhere they did not choose | Acceptance criterion 13 asserts zero writes before the tap and that the destination is confirmed. This is the "suggest, never auto-create" rule and it has a test. |
-| Reordering renumbers the list | A 400-item list write on every drag | `lexoRankBetween` plus acceptance criterion 16's single-write assertion. |
+| Reordering renumbers the list | A 400-item list write on every drag | `lexoRankBetween` plus acceptance criterion 16's one-logical-item assertion. |
 | **The list is stored in the owner's partition** with a mirror at `LIST#`, which is the obvious layout and the wrong one | It works perfectly for one user. Phase 6 then needs a migration, and every rename becomes one write per member | The canonical row is `LIST#<l>` / `META` from the first line of P3-04, the pointer carries `role` and `addedAt` only, and acceptance criteria 27 and 28 assert both. ADR-041 and ADR-042 record why. |
 | A denormalised `title` or `itemCount` is added to the `USER#` pointer "to save a `BatchGetItem`" | Renaming a shared list becomes one write per member, and a grocery list two people are ticking generates fan-out writes per tick | Acceptance criterion 27 compares the pointer's attributes to a literal list and fails on any addition. The one saved call is a `BatchGetItem` over at most 100 keys. |
 | A list-item comparator sorts on `rank` alone | Two devices show two orders for the same data, and only when two people inserted at the same spot — so it is discovered by a user, not a test | One exported `compareListItems`, the `(rank, itemId)` pair, acceptance criterion 29 and the concurrency test in P3-03. |
-| The Needs-a-date stage grows a count, a badge or an age sort | Plans becomes the backlog the stage was designed not to be | The endpoint returns no count to badge (P3-20), the client re-sorts nothing (P3-35), and both a schema key walk and a directory grep test enforce it. |
+| The Needs-a-date stage grows a stage count, a badge or an age sort | Plans becomes the backlog the stage was designed not to be | The endpoint returns no stage total to badge (P3-20), the client re-sorts nothing (P3-35), and both a schema-shape test and a directory grep test enforce it. |
 | Completion mutates watch progress without confirmation | A session is marked done and the source list advances even when the user meant to keep its position | Completion returns a suggestion only; acceptance criterion 11 proves dismissal is a zero-write path. |
 | A template is resolved at read time instead of copied at creation | A shipped change to the catalogue silently alters a list the user is standing in a shop reading | Acceptance criterion 3 mutates a template and asserts an existing list is unaffected. The catalogue module is importable only by creation services, the templates route, and creation-choice projections—never a stored-List read path or renderer. |
 | The three behaviours grow back into eight kinds under another name | A `templateKey` comparison appears in a renderer, service or creation-target map | Plan kind is never derived from a list; the item renderer is one component (P3-28) with a CI grep asserting it holds no template key. The test for a fourth behaviour is in ADR-031. |

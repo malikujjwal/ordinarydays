@@ -149,7 +149,7 @@ Rate limits: 10 req/min per IP on all three, and additionally 60/hour per IP on
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/v1/me` | Profile, preferences, timezone, currency, onboarding state |
-| `PATCH` | `/v1/me` | `displayName`, `timezone`, `currency`, `weekStartsOn`, `defaultReminderOffset` (integer `[-10080, 0]`, including `0` for At the time; `null` clears to Off), `defaultLists` (a `slot → listId` map — see [`data-model.md`](data-model.md#default-slots)) |
+| `PATCH` | `/v1/me` | `displayName`, `timezone`, `currency`, `weekStartsOn`, `defaultReminderOffset` (integer `[-10080, 0]`, including `0` for At the time; `null` clears to Off), `defaultLists` (a nested per-slot patch: each supplied value is `listId | null`; omission preserves that slot and `null` removes only that key — see [`data-model.md`](data-model.md#default-slots)) |
 | `POST` | `/v1/me/devices` | Register an Expo push token. Body: `{ expoPushToken, platform, deviceName }` — `deviceName` optional; a simulator reports none. Returns `201` with the stored `Device` **including the server-minted `deviceId`**, which is the only way the client learns the id it must later delete. The body carries no id: rotation is delete-then-create, not an upsert (P5-16), so a `deviceId` in the request is `400`. Creating, so an `Idempotency-Key` is required. `platform` is `ios` in v1 ([`data-model.md`](data-model.md#40a-device) §4.0a) |
 | `PUT` | `/v1/me/devices/:deviceId/reminder-ack` | Phase 5 (P5-16 second amendment). Body: `{ reminderStateVersion, scheduledThrough }` — the device's claim, made only after **verified** local arming, that it has scheduled every reminder up to `scheduledThrough` at reminder-state version `reminderStateVersion`. Absolute desired state, idempotent, so no `Idempotency-Key`. The reminder Lambda reads it to suppress visible pushes for locally-armed reminders. `404` when the device row is gone — the client re-registers before re-acking |
 | `DELETE` | `/v1/me/devices/:deviceId` | Unregister one device, so push stops immediately. Called on sign-out **before** tokens are cleared, and on token rotation ([`auth.md`](auth.md) §3.4 step 2). Returns `200` with `{ deviceId }`. `404` when this user has no such device — whether the id was never theirs or the row is already gone; a retried sign-out `DELETE` lands there, and for that caller `404` means "already gone" |
@@ -313,7 +313,7 @@ Agenda warnings are successful-response diagnostics, not error codes:
 ### 2.2a Plans
 
 ```
-GET /v1/plans
+GET /v1/plans?upcomingFrom=YYYY-MM-DD&upcomingTo=YYYY-MM-DD&cursor=...
 ```
 
 Powers the Plans tab, which has three stages:
@@ -321,9 +321,15 @@ Powers the Plans tab, which has three stages:
 ```json
 {
   "data": {
-    "needsDate": [ { "…": "AgendaItem + rsvpSummary, most recently discussed first" } ],
+    "needsDate": [ { "…": "AgendaItem + rsvpSummary + suggestionCount, most recently discussed first" } ],
     "upcoming":  [ { "date": "2026-08-15", "items": [ ] } ],
-    "past":      [ { "…": "newest first, paginated" } ]
+    "past":      [ { "…": "newest first, paginated" } ],
+    "upcomingWindow": {
+      "from": "2026-08-15",
+      "through": "2026-10-15",
+      "nextFrom": "2026-10-16"
+    },
+    "warnings": []
   }
 }
 ```
@@ -331,8 +337,26 @@ Powers the Plans tab, which has three stages:
 | Stage | Source | Order |
 | --- | --- | --- |
 | `needsDate` | `GSI1` `gsi1pk = U#<u>#P` | `lastActivityAt` descending — the plan being discussed floats up, not the oldest |
-| `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, from today forward | date ascending |
+| `upcoming` | `GSI1` `gsi1pk = U#<u>#S` inside the requested window, merged with expansion of `U#<u>#R` | date ascending |
 | `past` | same bucket, before today | date descending, `?cursor=` |
+
+The initial request may omit `upcomingFrom` and `upcomingTo`; they default to today through
+61 days later, an inclusive 62-day window. If either is supplied, both are required and the
+inclusive window may not exceed `MAX_AGENDA_DAYS` (62); a wider or reversed range is
+`validation_failed`. `upcomingWindow.nextFrom` is `WallDate | null`: the earliest scheduled
+or recurring date after `through`, so it may jump an empty gap without skipping a row; it is
+`null` only when neither source has a later item. An Upcoming scroll requests a new 62-day
+window beginning there. Each request starts four concurrent Query streams — `#P`, future
+`#S`, past `#S`, and `#R` — and pages each according to its cap. The future `#S` stream stops
+after the first key beyond `through`, while recurrence math finds each bounded series' first
+later occurrence; no empty date gap is scanned to calculate `nextFrom`. The shared agenda
+expansion path expands recurring rows only inside the exact response window. Its
+successful-response warnings, including `series_limit_exceeded` and duplicate-occurrence
+diagnostics, are returned in `warnings`. No request assumes an unbounded future response.
+
+`warnings` is `Array<AgendaWarning | 'needs_date_limit_exceeded'>`. The additional value
+means the response contains the first 200 Needs-a-date rows; it is a diagnostic, never a
+badge input.
 
 `needsDate` items carry an `rsvpSummary` so the row can render
 `Alice interested · Ben hasn't replied` without a second call. Counts alone are not enough
@@ -340,7 +364,7 @@ for that string, so each group carries the first two display names as well:
 
 ```ts
 interface RsvpSummary {
-  interested: { count: number; names: string[] };   // names: up to 2, then "+3 more"
+  interested: { count: number; names: string[] };   // names: first 2; count supplies remainder
   maybe:      { count: number; names: string[] };
   pass:       { count: number; names: string[] };
   pending:    { count: number; names: string[] };
@@ -356,8 +380,10 @@ needs-a-date rows. They map to the stored values in
 [`data-model.md` §7.1](data-model.md#71-rsvp-consent-does-not-survive-a-date-change) and
 introduce no new enum member.
 
-**Needs a date never nudges.** No badge, no count on the tab, no reminder. It is a place to
-look, not a backlog to clear — the same reason Today is not allowed to become a guilt list.
+**Needs a date never nudges.** No badge, no stage count on the tab, no reminder. Nested RSVP
+group counts and `suggestionCount` describe one row; they are never stage totals or badge
+inputs. It is a place to look, not a backlog to clear — the same reason Today is not allowed
+to become a guilt list.
 
 Also:
 
@@ -612,21 +638,40 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/v1/lists?cursor=` | Pages active List pointers 50 at a time, then BatchGets that page's current `META` rows. The 100 cap applies to Lists the caller owns, not memberships received from other owners. |
-| `POST` | `/v1/lists` | `{ title, templateKey, sourceActivityId? }`. `title` and `templateKey` are required; `templateKey` must be the template/style the user selected. The server copies behaviour, capabilities, icon, empty-state copy and slot from that exact catalogue entry; it never matches the title or substitutes another template. When `sourceActivityId` is present and names an owned Plan, the copied `slot` is forced to `null` so a per-Plan list cannot silently become a standing destination. Create rejects client-supplied `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy`; only explicit later settings may change their supported subset. |
+| `POST` | `/v1/lists` | `{ listId?, title, templateKey, sourceActivityId? }`. `title` and `templateKey` are required; `templateKey` must be the template/style the user selected. Optional `listId` is the permanent client-minted `lst_<ULID>` for durable offline creation. The server copies behaviour, capabilities, icon, empty-state copy and slot from that exact catalogue entry; it never matches the title or substitutes another template. When `sourceActivityId` is present and names an owned Plan, the copied `slot` is forced to `null` so a per-Plan list cannot silently become a standing destination. Create rejects client-supplied `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy`; only explicit later settings may change their supported subset. |
 | `GET` | `/v1/lists/:id?includeItems=true` | Includes only the caller's `viewerLink` for each item. Links belonging to other members are removed before serialisation. |
 | `PATCH` | `/v1/lists/:id` | `{ title?, capabilities?, slot?, behaviour? }`. See the change rules below. |
-| `DELETE` | `/v1/lists/:id` | Owner only. The cascade removes every member pointer, `LLINK#` relationship and per-viewer `LNK#`; it does not delete owner-scoped People records. |
+| `DELETE` | `/v1/lists/:id` | Owner only. Writes the replay-window tombstone before the chunked cascade removes every item locator, member pointer, `LLINK#` relationship and per-viewer `LNK#`; it does not delete owner-scoped People records. |
 | `GET` | `/v1/lists/:id/items?cursor=` | |
-| `POST` | `/v1/lists/:id/items` | `{ title, note?, location?, details?, afterItemId? }` — `afterItemId` drives the lexo rank. |
-| `POST` | `/v1/lists/:id/items/bulk` | `{ items: [...] }` — used by the ingredients-to-list flow. |
+| `GET` | `/v1/lists/:id/items/:itemId` | Authoritative exact-id read for durable-create reconciliation. Resolves the current rank through the item identity locator; a missing or tombstoned item is `404`. |
+| `POST` | `/v1/lists/:id/items` | `{ itemId?, title, note?, location?, details?, afterItemId? }` — `afterItemId` drives the lexo rank; optional `itemId` is the permanent client-minted `itm_<ULID>`. |
+| `POST` | `/v1/lists/:id/items/bulk` | `{ items: [{ itemId?, ... }] }` — used by the ingredients-to-list flow; every offline item carries its own stable id. |
 | `PATCH` | `/v1/lists/:id/items/:itemId` | `{ title?, checked?, note?, location?, details?, afterItemId? }` |
-| `DELETE` | `/v1/lists/:id/items/:itemId` | |
+| `DELETE` | `/v1/lists/:id/items/:itemId` | Removes the ranked row and identity locator and leaves the replay-window item tombstone. |
 | `POST` | `/v1/lists/:id/items/:itemId/schedule` | **The optional bridge to Activities.** Body = `ScheduleListItemInput` below. Creates an explicit Plan and the permitted per-viewer link pointers; the ListItem itself is not replaced or given a global Activity id. A Watch Plan's explicitly enabled second-object action may create the item first and then call this endpoint with the reviewed Plan fields; the endpoint still requires type and audience and infers neither from the item. |
 | `POST` | `/v1/lists/:id/clear-checked` | Only when `capabilities.checkable`. |
 | `GET` | `/v1/list-templates` | The exact shared template catalogue. Static and cacheable for 24 h. The mobile creation chooser bundles a projection of the same shared module so first-launch offline does not depend on this request; no client owns a second map of labels or defaults. |
 | `GET` | `/v1/lists/:id/members` | The first response row is the owner, synthesised from `List.ownerId`, the owner's `ListIndex` pointer and profile; there is no owner `MEMBER#` row. The owner then receives every non-owner active and invited row. A member receives the synthesised owner and active non-owner roster only; pending identities and addresses are removed server-side. |
 | `POST` | `/v1/lists/:id/members` | `{ personId }` or `{ displayName, email }`. Owner only and always an explicit confirmation. A registered add is active immediately and creates/reuses reciprocal owner-scoped People records plus active `LLINK#` rows on both sides. If the email belongs to no account, it creates an invited member and owner-side invited `LLINK#`, sends email, and writes no recipient pointer. Invited members count toward `memberCount` and the cap of 20 people total, including the owner, but not `sharedListCount`. |
 | `DELETE` | `/v1/lists/:id/members/:personId` | Owner removes any non-owner; a member may remove **themselves** (leave). Deletes the member's index entry and both active `LLINK#` rows, or the owner's invited link for a pending member. Authored items and both People records stay. |
+
+**Durable List and ListItem creation — Phase 3 extension of ADR-055.** Native clients mint
+monotonic `lst_` and `itm_` ids before committing the visible SQLite row and outbox intent.
+The server validates a supplied id but still derives ownership, timestamps, ranks and copied
+template fields. Omission retains server-minted behaviour for online callers. List creation
+conditionally puts `META` while condition-checking `LIST#/TOMBSTONE`; item creation
+conditionally puts its `ITEMID#<itemId>` identity locator and condition-checks
+`ITEM_TOMBSTONE#<itemId>`. Deletes leave tombstones through
+`MAX_AUTOMATIC_INTENT_AGE_DAYS`, exactly as Activity deletion does.
+
+A metadata-free collision is reconciled by the authenticated exact read: `200` means the
+earlier response was lost and the server representation wins wholesale; `404` is ambiguous
+and parks the intent for explicit Retry or Discard. Retry mints a fresh entity id and mutation
+id and atomically remaps the local row plus every dependent outbox payload, ordering key,
+dependency and compensation. Remapping a List includes its dependent local ListItems. There
+is no automatic re-mint. For bulk creates, every item retains its own id across resumable
+chunks, so replay after the 24-hour idempotency receipt expires reconciles committed items and
+cannot duplicate a partially completed batch.
 
 `ScheduleListItemInput` is deliberately not `CreateActivityInput` with fields removed by
 convention. It is a separate schema so neither audience nor type can be inferred:
@@ -687,6 +732,11 @@ runs; a stale pointer is omitted and queued for cleanup rather than producing a 
 | `behaviour` `collection` → `watch` or `meals` | Applies immediately, initialising `details` on every item with the default status. |
 | `behaviour` `watch` or `meals` → anything | **Destructive.** Requires `?confirmDataLoss=true`; without it returns `409 conflict` with a body naming the fields and the exact number of items affected, so the client can render "…will remove season, episode and watch status from 7 items." |
 | `slot` | Free. Changing it does not move any items. |
+
+Changing or clearing a slot also removes `user.defaultLists[oldSlot]` when, and only when,
+that exact slot still points to this List. The conditional nested removal is in the same
+transaction as the List update; a concurrent choice of a different default survives. The
+client does not compose this invariant from a second `PATCH /v1/me`.
 
 `templateKey` is immutable after creation. It records provenance and analytics only; the
 stored List carries its copied icon and empty-state copy, so no read path resolves the key.

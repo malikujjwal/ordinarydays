@@ -161,12 +161,22 @@ exactly as `IDX#` works for activities. An invited person has no pointer and no 
 | List | `LIST#<listId>` | `META` | `List` |
 | Non-owner member | `LIST#<listId>` | `MEMBER#<personId>` | `ListMember` |
 | List item | `LIST#<listId>` | `ITEM#<lexoRank>#<itemId>` | `ListItem` |
+| List item identity locator | `LIST#<listId>` | `ITEMID#<itemId>` | Current `rank`; the stable conditional-create and exact-read key, never serialised |
 | Per-viewer Activity pointer | `LIST#<listId>` | `LNK#<viewerUserId>#<itemId>` | `ListItemActivityLink` |
+| List deletion tombstone | `LIST#<listId>` | `TOMBSTONE` | Owner, deletion time and replay-window TTL; `GET` remains `404` |
+| List-item deletion tombstone | `LIST#<listId>` | `ITEM_TOMBSTONE#<itemId>` | Deletion time and replay-window TTL; blocks delayed recreation of that item id |
 
 `lexoRank` is a fractional-index string (see `04-conventions/coding-standards.md`) so
-reordering is a single-item write, never a renumber of the whole list. Items sort by
+reordering changes one logical item, never renumbers the whole list. The transaction
+delete-and-puts the ranked row and updates the locator's `rank`. Items sort by
 **`(rank, itemId)`** — the tie-break is not optional, because two members inserting at the
 same position concurrently will produce identical ranks.
+
+The locator is what makes a client-minted item id stable while rank remains server-owned and
+mutable. Create conditionally puts `ITEMID#<itemId>` and the ranked item together; exact read
+gets the locator, then its current ranked key; reorder moves the ranked row and locator in one
+transaction; delete removes both and writes the tombstone. A full-list projection ignores
+identity and tombstone rows.
 
 > **The list index entry is a near-pure pointer.** It carries `role` and `addedAt` and
 > nothing else — no title, no counts. The Lists tab is one `Query` for the pointers plus one
@@ -365,8 +375,10 @@ interface User {
   migration; declaring it optional now is a line.
 - `PATCH /v1/me` accepts a strict subset — `displayName`, `timezone`, `currency`,
   `weekStartsOn`, `defaultReminderOffset`, `defaultLists` — and rejects anything else by
-  name rather than ignoring it. `email`, `cognitoSub` and `onboardingState` belong to the
-  auth flow, not to the user.
+  name rather than ignoring it. `defaultLists` is a nested per-slot patch whose input values
+  are `string | null`: omission preserves a slot, a string sets it and `null` removes that
+  key. The stored map remains `Partial<Record<DefaultSlot, string>>`; it never stores null.
+  `email`, `cognitoSub` and `onboardingState` belong to the auth flow, not to the user.
 
 ### 4.0a Device
 
@@ -980,8 +992,13 @@ target.
 
 ```ts
 // on User — declared with the rest of the profile in §4.0
-defaultLists: Partial<Record<DefaultSlot, string>>;   // slot → listId
+defaultLists?: Partial<Record<DefaultSlot, string>>;  // slot → listId
 ```
+
+The stored map contains only resolved ids. `PATCH /v1/me` accepts
+`defaultLists?: Partial<Record<DefaultSlot, string | null>>` as a nested patch: omitted slots
+survive, a string replaces one slot, and `null` removes one slot rather than replacing the
+whole map.
 
 Resolution rule for any "add to X" flow:
 
@@ -1254,6 +1271,7 @@ before writing the code.
 | 8 | Items in a list | `Query` `pk = LIST#<l>`, `sk begins_with ITEM#`, sorted by `(rank, itemId)` |
 | 8b | Full list detail (list + members + items + caller-visible Activity state) | `Query` `pk = LIST#<l>`; projection keeps only `LNK#<callerUserId>#` rows, then one `BatchGetItem` for those Activity ids **after** Activity authorisation. Never serialise another viewer's link. |
 | 8c | Remove every Activity pointer for one list member | `Query` `pk = LIST#<l>`, `sk begins_with LNK#<viewerUserId>#`, then batch delete. Used on leave/removal. |
+| 8d | Exact ListItem by stable id | After the exact `USER#<u>` / `LIST#<l>` access check, `GetItem` `LIST#<l>` / `ITEMID#<itemId>`, then `GetItem` the locator's current `ITEM#<rank>#<itemId>` key. Missing locator, item or tombstoned list is `404`. |
 | 9 | All people for a user | `Query` `pk = USER#<u>`, `sk begins_with PERSON#`, plus a paged `LLINK#` Query grouped by Person to compute active `sharedListCount`; do not assume the owned-list creation cap bounds memberships from other owners. The four-key People sort still ignores list membership. |
 | 9a | Lists shared or pending with one Person | `Query` `pk = USER#<u>`, `sk begins_with LLINK#<personId>#`; retain only `status = 'active'` and re-check exact `USER#/LIST#` access for the Person view, but retain both statuses for signup, delete guards and lifecycle work |
 | 10 | Activities shared with one person, newest first | `Query` `pk = USER#<u>`, `sk begins_with PLINK#<p>#`, `ScanIndexForward=false`, retaining only `scope = 'shared_activity'` for the product history |
@@ -1382,6 +1400,10 @@ status/body.
 | Operation | Items written |
 | --- | --- |
 | Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and `ACT#<parent>/SUB#<child>` when `parentActivityId` is set (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two) |
+| Create list | Conditional `LIST#/META`, owner `USER#/LIST#` pointer and list-tombstone absence check; the POST receipt joins the same transaction |
+| Create list item | Conditional `LIST#/ITEM#<rank>#<itemId>`, conditional `LIST#/ITEMID#<itemId>` locator and item-tombstone absence check, plus List counters; bulk repeats this unit in receipt-aware bounded chunks |
+| Reorder list item | Delete old ranked row, put new ranked row and update `ITEMID#<itemId>.rank` in one transaction; no other ListItem changes |
+| Delete list item | Delete ranked row and locator, write `ITEM_TOMBSTONE#<itemId>` through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, update List counters, remove current viewer links and clear linked Activity provenance without deleting an Activity |
 | Schedule / reschedule | One main transaction writes `ACT#/META` plus `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change), plus `ACT#<parent>/SUB#<child>` when a prep task's derived status changes. An occurrence-only cross-day move instead writes its nominal `OCC#` override plus destination `MOVE#` marker and never META. RSVP reset follows §7.1: it may join through 45 participants; above that the main transaction writes `rsvpResetPending`, receipt and `CLEANUP#` work, then bounded idempotent phases rewrite participants and clear the marker. Unscheduling's main transaction similarly persists receipt + reminder-delete cleanup before bounded deletion. A timed → date-only change normalises sub-day reminder offsets, using persisted cleanup when the fan-out cannot fit. None of those reminder rows is falsely claimed to be atomic with META/index state. |
 | Add participant (app user) | `ACT#/PART#`, `USER#<invitee>/IDX#`, `USER#<owner>/PLINK#`, `USER#<invitee>/PLINK#`, counter update on `ACT#/META` |
 | Add participant (guest) | `ACT#/PART#`, `USER#<owner>/PERSON#`, `USER#<owner>/PLINK#`, `INVITE#<token>/META` |
@@ -1389,7 +1411,7 @@ status/body.
 | Invite list member (no account) | `LIST#/MEMBER#`, owner `USER#/PERSON#`, owner invited `USER#/LLINK#`, `GUESTEMAIL#` Person locator, and `LIST#/META` member counter — at most 5 items and no recipient pointer |
 | Activate invited list member | Update `LIST#/MEMBER#`, write invitee `USER#/LIST#`, create/reuse reciprocal `USER#/PERSON#`, change owner `LLINK#` to active and write invitee active `LLINK#` |
 | Remove or leave shared list | Delete `LIST#/MEMBER#`, invitee `USER#/LIST#` when active, owner `LLINK#`, invitee reciprocal `LLINK#` when active, and decrement `LIST#/META`; then asynchronously remove that viewer's `LNK#` rows. The Person-level `GUESTEMAIL#` locator remains until link, email removal or Person deletion. |
-| Delete shared list | Tombstone, then cascade `META`, members, items, every member pointer, every owner/member `LLINK#` and every `LNK#`; owner-scoped `PERSON#` rows survive |
+| Delete shared list | Write `LIST#/TOMBSTONE` through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, then cascade `META`, members, items and locators, every member pointer, every owner/member `LLINK#` and every `LNK#`; owner-scoped `PERSON#` rows survive and the tombstone is removed only by TTL or account purge |
 | Schedule a list item | `ACT#/META`, owner/selected-participant `USER#/IDX#` and `ACT#/PART#` rows, plus `LIST#/LNK#<viewer>#<item>` for the caller and selected registered participants who are active list members. The `LIST#/ITEM#` row is unchanged. |
 | Add expense | `ACT#/EXP#`, `ACT#/META` (total), `EXPENSE#<expenseId>/META` locator, any missing `USER#/PERSON#` rows for pairs in the payer + split set who do not yet hold each other as People — the same `personId` mirrored into each affected registered user's partition, `displayName` copied, `linkedUserId` carried when set, no email or phone copied; a guest's mirrored side waits for account linking — and required directional `PLINK#` rows marked `shared_activity` or retained for finance, then **async** balance recalc via stream for both sides of each pair ([`../01-product/expenses.md`](../01-product/expenses.md) §5.1). Edit updates the affected relationship set, creating Person rows for newly paired participants the same way; delete removes the locator and any `finance_only` link no remaining Expense needs. |
 | Mark obligations settled | Update each covered `ACT#/EXP#` (`settledPersonIds`, `settlementIdByPersonId`, derived `settled`) + write one `USER#/SETTLE#` audit row and one `SETTLEMENT#<settlementId>/META` locator. Server derives amount/currency/direction and exact per-Expense coverage before the transaction; balance recompute reads Expenses only. |
@@ -1449,7 +1471,8 @@ storing it would force a data migration every time somebody picks a date.
 
 - Prefixed ULIDs: `act_`, `usr_`, `lst_`, `itm_`, `psn_`, `exp_`, `stl_`, `dev_`, `att_`,
   `upd_`, `rem_` (Reminder, §4.3), `sct_` (Shortcut, §3.2 — Phase 9). Generated with `ulid` —
-  sortable by creation time, no coordination needed. `rem_` and `sct_` were added in P1-06,
+  time-prefix sortable with no coordination needed, but not a business-chronology source when
+  client-minted. `rem_` and `sct_` were added in P1-06,
   which needed a prefix for the two shapes that referenced ids this list had never named.
 - `usr_` is the one exception to the ULID rule in practice: see §4.0: the local development
   identity is the constant `usr_local_dev`, so the shared validator checks the prefix and the
@@ -1457,11 +1480,12 @@ storing it would force a data migration every time somebody picks a date.
 - Invite tokens are **not** ULIDs (they'd leak creation order and be guessable). Use
   `crypto.randomBytes(16)` base62-encoded.
 - Never expose raw DynamoDB `pk`/`sk` over the API. The API speaks in IDs.
-- **`act_` and `rem_` may be client-minted (Phase 2.6, ADR-055).** *"No coordination
+- **`act_`, `rem_`, `lst_`, and `itm_` may be client-minted (Phases 2.6–3, ADR-055).** *"No coordination
   needed"* above is why: a device offline can generate the real, permanent id rather than a
   placeholder it later reconciles. The server validates the prefix and ULID encoding,
   refuses an id that already exists (conditional write, transactionally checked against the
-  deletion tombstone in §4's lookup table), and derives ownership from the authenticated
+  corresponding deletion tombstone; ranked ListItems use §3.3's stable identity locator as
+  the conditional-create key), and derives ownership from the authenticated
   principal — **an id is an identifier, never a credential and never a claim.** Authority
   fields (`ownerId`, `createdAt`) stay server-set and are not accepted on input.
 - **The collision response is honestly an existence signal.** Success versus failure reveals
