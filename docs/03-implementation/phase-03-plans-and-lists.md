@@ -57,13 +57,15 @@ Today's Anytime list and is not a backlog with a counter on it.
 - [ ] `lexoRankBetween` in `packages/shared`, so reordering changes one logical item and its
       identity locator rather than renumbering the list.
 - [ ] Lists CRUD, item CRUD, `bulk`, `clear-checked` (no dialog, 10-second bulk undo),
-      archive.
+      `uncheck-all` (10-second bulk undo), archive, and the tombstone-aware restore path used
+      by item-delete undo.
 - [ ] `PATCH /v1/lists/:id` capability and behaviour changes, with the additive changes
       applying immediately and the destructive ones gated behind `?confirmDataLoss=true`.
 - [ ] `User.defaultLists` and the four-step slot resolution shared by every "add to X" flow.
 - [ ] `POST /v1/lists/:id/items/:itemId/schedule` — the optional bridge to Activities — with
-      required `creationTarget` and `audience`, no type or audience inference, a one-time title
-      copy, and per-viewer `LNK#` pointers rather than one global item state.
+      a required client-minted `activityId`, required `creationTarget` and `audience`, no type
+      or audience inference, a one-time title copy, and per-viewer `LNK#` pointers rather than
+      one global item state.
 - [ ] Link titles independent after creation; list edits cannot rename a private Plan.
 - [ ] Watch progress: `mediaKind`, `watchStatus`, season, episode; grouped item rendering;
       an explicit, undoable progress update that may apply `want` → `watching`; and the
@@ -101,7 +103,7 @@ Today's Anytime list and is not a backlog with a counter on it.
 | P3-07 | Explicit template/style selection contract | shared | P3-02 | yes | S |
 | P3-08 | List item CRUD and `bulk` | api | P3-04, P3-03 | no | L |
 | P3-09 | Capability and behaviour changes on `PATCH /v1/lists/:id` | api | P3-05, P3-08 | no | L |
-| P3-10 | `clear-checked`, `uncheck-all`, archive | api | P3-08 | yes | S |
+| P3-10 | `clear-checked`, `uncheck-all`, tombstone-aware Undo, archive | api | P3-08, P3-13 | no | L |
 | P3-11 | ~~Move an item between lists~~ — cut 2026-08-07, not in v1 | api | — | — | — |
 | P3-12 | `User.defaultLists` and slot resolution | shared/api | P3-05 | no | M |
 | P3-13 | The bridge to Activities: explicitly plan a list item | api | P3-08, P1-10 | no | L |
@@ -115,15 +117,15 @@ Today's Anytime list and is not a backlog with a counter on it.
 | P3-21 | `POST /v1/attachments/upload-url` | api | P0-21, P1-03 | yes | M |
 | P3-22 | Confirm, link, delete an attachment; `primaryAttachmentId` | api | P3-21 | no | M |
 | P3-23 | Media distribution cache tuning and lifecycle verification | infra | P3-21 | yes | S |
-| P3-24 | Shared API client: lists, templates, items, attachments, updates | shared | P3-05, P3-06, P3-21 | no | M |
+| P3-24 | Shared API client: lists, templates, items, attachments, updates | shared | P3-05, P3-06, P3-10, P3-13, P3-21 | no | M |
 | P3-25 | Lists index screen | mobile | P3-24, P1-22 | no | M |
 | P3-26 | The template-first list creation sheet | mobile | P3-25, P3-07 | no | M |
 | P3-27 | List detail screen and the inline add row | mobile | P3-25 | no | L |
 | P3-28 | The capability-driven item renderer | mobile | P3-27 | no | M |
-| P3-29 | List item sheet | mobile | P3-28 | no | M |
+| P3-29 | List item sheet | mobile | P3-28, P3-10 | no | M |
 | P3-30 | Drag to reorder | mobile | P3-27, P3-03 | no | M |
 | P3-31 | Watch behaviour: grouped items and progress UI | mobile | P3-28, P3-16 | no | M |
-| P3-32 | List settings: title, capabilities, slot and behaviour | mobile | P3-27, P3-09 | no | M |
+| P3-32 | Inline List title edit; settings for capabilities, slot and behaviour | mobile | P3-27, P3-09 | no | M |
 | P3-33 | The `Plan this item` kind-and-audience sheet | mobile | P3-29, P3-13 | no | L |
 | P3-34 | Caller-scoped Plan state line on a list item | mobile | P3-33 | no | M |
 | P3-35 | The Plans tab: three stages | mobile | P3-20, P3-24, P2-32 | no | L |
@@ -348,6 +350,8 @@ right way round before writing a line:
 | `USER#<u>` / `LIST#<l>` | `ListIndex`: `role` and `addedAt`, and nothing else | Creation for the owner; membership changes in Phase 6 |
 | `LIST#<l>` / `ITEM#<rank>#<itemId>` | The item | Item writes |
 | `LIST#<l>` / `ITEMID#<itemId>` | Stable identity locator containing the current `rank` | Item create, reorder and delete; never serialised |
+| `LIST#<l>` / `ITEM_TOMBSTONE#<itemId>` | Replay guard plus the exact deletion snapshot needed by an authorised Undo | Item delete and `clear-checked`; never serialised |
+| `LIST#<l>` / `UNDO#<operationId>` | Operation kind, affected item ids, token hash and hard Undo expiry | Single delete, `clear-checked` and `uncheck-all`; never serialised |
 | `LIST#<l>` / `MEMBER#<personId>` | A non-owner `ListMember`; the owner never has one | Phase 6 |
 
 > **Decision:** the index entry carries no title, no icon and no counts. This is
@@ -394,7 +398,10 @@ data. See P3-03.
 - Deleting a list deletes the `META` row, every item, item locator, and pointer, then leaves
   `LIST#<listId>` / `TOMBSTONE` for the Phase 2.6 automatic-replay window. Deleting an item
   removes its locator and leaves `ITEM_TOMBSTONE#<itemId>` in the List partition for the same
-  window. In this phase there is exactly one list pointer.
+  window. A normal create always condition-checks that tombstone. Only P3-10's restore service
+  may reclaim the same id, and only when its opaque token resolves to the matching unexpired
+  `UNDO#` operation; it removes the tombstone as it restores the item and locator. In this
+  phase there is exactly one list index pointer.
 
 **Tests.** Integration on DynamoDB Local: create a list, add ten items, reorder the last to
 the front, assert one query returns them in the new order and `itemCount` is still 10; a
@@ -402,7 +409,9 @@ reorder interrupted between delete, put and locator update is impossible (assert
 transaction is used); an exact item read follows the locator after that reorder;
 renaming a list writes **exactly one item**, asserted by a repository spy; the Lists tab
 issues exactly one `Query` and one `BatchGetItem` for 40 lists, asserted by a spy; a
-`LIST#<l>` read by a user with no pointer returns `not_found`, not the list.
+`LIST#<l>` read by a user with no pointer returns `not_found`, not the list. A normal create
+cannot reuse a tombstoned item id, while a matching unexpired Undo can restore that exact id;
+an expired, mismatched or already-used token cannot.
 
 ---
 
@@ -420,8 +429,9 @@ Resolution order, in one function with no branches per template:
    unknown keys are `validation_failed`; the server never substitutes `simple-list`.
 2. **Copy** the template's `behaviour`, `capabilities`, `slot`, `icon`, and `emptyStateCopy`
    onto the new list.
-3. If `sourceActivityId` is present, verify it names an owned Plan and force the copied
-   `slot` to `null`. A list made for one Plan must not silently become a standing destination.
+3. If `sourceActivityId` is present, verify it names an owned Plan, force the copied `slot` to
+   `null`, and write `ACT#<sourceActivityId>` / `SOURCE_LIST#<listId>` as an id-only reverse
+   projection. A list made for one Plan must not silently become a standing destination.
 4. Store `templateKey` as provenance and analytics only, and never read it to render. Create
    rejects client-supplied `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy`;
    users change only the supported settings later in List settings.
@@ -430,13 +440,18 @@ Step 2 is a copy. The stored list is the whole truth about what it can do, and n
 consults the catalogue. That is the point of ADR-032 and it is one line away from being
 implemented wrongly.
 
-Creation writes two items in one transaction: `LIST#<l>` / `META` — the canonical list — and
-`USER#<owner>` / `LIST#<l>` — the owner's pointer, with `role: 'owner'`. `GET /v1/lists` is
-access pattern 7: one `Query` for the pointers, one `BatchGetItem` for the `META` rows
-(P3-04). `DELETE` removes the `META` row, every item and **every** pointer in chunked
-transactions, deletes every `LNK#` row, and clears `listItemId` / `listId` on Activities
-named by those links — it never deletes an Activity. In this phase there is one member
-pointer, but potentially many item-link rows; the delete is
+Creation writes the canonical `LIST#<l>` / `META` and the owner's `USER#<owner>` /
+`LIST#<l>` pointer in one transaction. When `sourceActivityId` is present, that same
+transaction also writes the id-only `ACT#<a>` / `SOURCE_LIST#<l>` projection. The projection
+is not a second domain link and carries no title or counts: `List.sourceActivityId` remains
+the source of truth, while Plan detail uses the pointer ids for one bounded `BatchGetItem` of
+current List META rows. Renaming therefore remains one write.
+
+`GET /v1/lists` is access pattern 7: one `Query` for the pointers, one `BatchGetItem` for the
+`META` rows (P3-04). `DELETE` removes the `META` row, its `SOURCE_LIST#` projection when
+present, every item and **every** pointer in chunked transactions, deletes every `LNK#` row,
+and clears `listItemId` / `listId` on Activities named by those links — it never deletes an
+Activity. In this phase there is one member pointer, but potentially many item-link rows; the delete is
 written to iterate the pointer set rather than to assume a single owner, because Phase 6 adds
 members and a delete that assumed one would strand the others' pointers.
 
@@ -470,7 +485,8 @@ stored value unchanged; create bodies containing
 client-supplied `behaviour`, `capabilities`, `slot`, `icon` or `emptyStateCopy` are rejected;
 an unknown or missing `templateKey`
 `400`s and writes nothing; an omitted or empty title also `400`s. A list created from a Plan
-stores `sourceActivityId` and `slot: null`; deleting a list clears the
+stores `sourceActivityId` and `slot: null` and writes its `SOURCE_LIST#` projection; deleting
+that list removes the projection. Deleting a list also clears the
 profile default that pointed at it and clears provenance on every currently linked Activity
 without deleting one. Durable-create tests mirror P2-49: response loss beyond the 24-hour
 idempotency receipt reconciles the same `listId`; create → delete → replay does not resurrect;
@@ -543,6 +559,12 @@ can reconcile each exact identity without duplicating a partially completed chun
 recovery matches P2-49: exact `GET` success adopts server truth; `404` parks; an explicit Retry
 atomically remaps the local item and every dependent outbox reference to a fresh item and
 mutation id. There is no automatic re-mint.
+
+That condition is absolute for ordinary single and bulk creates. Undo does not call either
+create route: P3-10's restore service validates an opaque, unexpired operation token, requires
+each tombstone to name that operation, and conditionally recreates the same item id, ranked
+row and locator while deleting the tombstone. This narrow compensation cannot be used to
+resurrect a replayed or arbitrarily chosen id.
 
 **Edge cases.**
 
@@ -624,12 +646,13 @@ restores the original `checked` values; a `PATCH` carrying `templateKey` `400`s.
 
 ---
 
-### P3-10 — `clear-checked`, `uncheck-all`, archive
+### P3-10 — `clear-checked`, `uncheck-all`, tombstone-aware Undo, archive
 
 **Files.** `services/api/src/handlers/clearChecked.ts`, `unCheckAll.ts`, `archiveList.ts`,
+`services/api/src/services/listUndoService.ts`,
 `apps/mobile/src/features/lists/components/ListHeaderMenu.tsx`.
 
-**Approach.** Three small endpoints from
+**Approach.** The bulk operations, archive endpoint and dedicated compensation endpoint from
 [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists)
 §2.7. `clear-checked` and `uncheck-all` are offered only when `capabilities.checkable`;
 `archive` sets `archived: true` and writes nothing else.
@@ -650,28 +673,44 @@ times. The 10-second window is the standard bulk undo from §4 of the same docum
 uses an existing mechanism rather than inventing a softer one. Recorded in
 [`../00-open-decisions.md`](../00-open-decisions.md) item 33.
 
-`uncheck-all` is not destructive at all — it sets a boolean back — so it gets neither a dialog
-nor a toast.
+`uncheck-all` is not destructive, so it gets no dialog. It still gets the canonical
+**10-second bulk undo toast**. The server snapshots exactly the ids changed from checked to
+unchecked and returns an opaque Undo token; compensation sets those still-existing ids back
+to checked and ignores an item independently deleted during the window.
 
 **Edge cases.**
 
-- Undo re-creates the items with their **previous ranks**, not appended at the end. A
-  restored shopping list in a different order is a failed undo.
+- Single-item delete and `Clear checked` return an opaque token for `POST /v1/lists/:id/undo`.
+  The token resolves to a server-side `UNDO#` record and is accepted only until its 6-second
+  or 10-second deadline respectively. The restore path is the sole exception to the normal
+  item-create tombstone check.
+- Delete Undo re-creates the items with their original ids and **previous ranks**, not appended
+  at the end. It also restores the deleted current `LNK#` rows and corresponding Activity
+  provenance from the deletion snapshots. A restored shopping list in a different order or
+  with dead state lines is a failed undo. If a linked Activity was independently deleted,
+  restore the item but omit that now-invalid link.
 - The network call fires immediately, not at the end of the window (the P2-24 rule). Undo is
   a compensating call. Closing the app mid-window leaves the deletion committed, which is the
   correct outcome.
 - On a **shared** list, undo restores the items for everybody, because the delete removed
   them for everybody. A second member who added an item during the 10 seconds is unaffected —
-  the undo names the deleted ids, it does not restore a snapshot.
+  the Undo operation names only the deleted ids and their per-item snapshots; it never replaces
+  the List with a whole-list snapshot.
 - `Clear checked` on a list with zero checked items is absent from the menu rather than
   present and disabled.
+- Undo is idempotent under its own `Idempotency-Key`. An expired, mismatched or already-used
+  token cannot reclaim an item id; it returns the typed expired/no-longer-applicable result
+  and writes nothing.
 
 **Tests.** Integration: seven checked and three unchecked items → seven deleted, three
 untouched, `itemCount` and `uncheckedCount` both correct afterwards; undo within the window
-restores seven items with byte-identical `rank` values; the endpoint on a
+restores the same seven ids with byte-identical `rank` values, locators, live links and
+Activity provenance; normal create with one of those tombstoned ids fails before Undo and
+succeeds neither after token expiry nor with a mismatched token. `Uncheck all` shows its
+10-second toast and Undo rechecks exactly the affected surviving ids. The endpoint on a
 `checkable: false` list returns `400`. Client: a test asserting **no confirmation dialog is
 rendered** on tap — written as an assertion on the absence of the dialog component, so
-re-adding one fails — and that the toast appears with a 10-second window.
+re-adding one fails — and that each bulk operation's toast appears with a 10-second window.
 
 ---
 
@@ -758,6 +797,7 @@ never reach it, and nothing in the list model treats an item that does not as un
 
 ```ts
 {
+  activityId: 'act_<ULID>',
   creationTarget: { objectKind: 'plan', type: PlanType },
   audience: { mode: 'just_me' },
   title?, notes?, schedule?, recurrence?, reminders?, location?, details?, attachmentIds?,
@@ -765,6 +805,8 @@ never reach it, and nothing in the list model treats an item that does not as un
 }
 ```
 
+`activityId` is required and is the permanent monotonic id minted with the Phase 2.6 native
+generator before the bridge intent—or P3-42's combined item-plus-bridge chain—enters SQLite.
 `PlanType = Exclude<ActivityType, 'task'>`. `creationTarget` is required and `type` must be
 the Plan kind the user selected:
 `General → custom`, `Meal → meal`, `Watch → watch`, or `Event → event`. The server never
@@ -775,8 +817,8 @@ the shared schema but returns `validation_failed` with `Sharing is coming soon.`
 
 One `TransactWriteItems` writes:
 
-1. `ACT#<newId>/META` — a Plan Activity with `listItemId` and `listId` provenance,
-2. `USER#<caller>/IDX#<newId>` — the caller's index entry in the correct GSI1 bucket,
+1. `ACT#<activityId>/META` — a Plan Activity with `listItemId` and `listId` provenance,
+2. `USER#<caller>/IDX#<activityId>` — the caller's index entry in the correct GSI1 bucket,
 3. `LIST#<listId>/LNK#<callerUserId>#<itemId>` — the caller's current
    `ListItemActivityLink`.
 
@@ -792,17 +834,25 @@ request. They are never grounds for choosing the kind.
 - An existing pointer for this caller is not a global conflict. A confirmed new action
   replaces that caller's current pointer only. Idempotency prevents a retry of the same action
   from creating a second Plan.
+- The Activity put is conditional on `ACT#<activityId>` absence. After the 24-hour receipt
+  expires, an existing Activity with the same owner, `listId` and `listItemId` is the earlier
+  successful action: return it and do **not** rewrite the current `LNK#`, which may now point
+  to a newer confirmed action. Any other collision follows the metadata-free durable-create
+  conflict path. A genuinely new scheduling action always mints a new `activityId`.
 - The response is `{ activity, item, viewerLink }`; `viewerLink` belongs to the caller and no
   other viewer's pointer may be serialised.
 
 **Tests.** Integration: `Zahav` with explicit `creationTarget.type: 'event'` and
 `audience.mode: 'just_me'` produces exactly one new Activity, one index entry and one caller
-link while leaving the item byte-identical. Missing `creationTarget`, missing audience, a
-Plan target with no type, and `details.kind` that differs from the selected type each return
-`400` and write nothing. Run the same title with each explicit Plan kind and assert the stored
-type follows the request every time, even when it contradicts `behaviour` or the template.
+link while leaving the item byte-identical. Missing `activityId`, missing `creationTarget`,
+missing audience, a Plan target with no type, and `details.kind` that differs from the selected
+type each return `400` and write nothing. Run the same title with each explicit Plan kind and
+assert the stored type follows the request every time, even when it contradicts `behaviour` or
+the template.
 Changing either list field has no effect on the target. A repeated idempotency key creates one
-Plan; a fresh confirmed action replaces only this caller's pointer.
+Plan; replaying the same `activityId` after receipt expiry still creates one; a fresh confirmed
+action uses a fresh id and replaces only this caller's pointer. Replaying the older id after
+that replacement does not roll the pointer back.
 
 ---
 
@@ -836,7 +886,9 @@ the product", so it gets its own task and its own test file.
 
 | Event | Effect on the caller-visible link |
 | --- | --- |
-| Plan completed / un-completed / skipped / rescheduled / unscheduled | Keep the `LNK#` pointer while the Plan exists. The state line is derived from that Activity for this viewer only. **Never** check, uncheck, delete or rewrite the ListItem. |
+| Plan completed / un-completed / rescheduled | Keep the `LNK#` pointer. Derive the caller-only state line from the Activity. **Never** check, uncheck, delete or rewrite the ListItem. |
+| Plan unscheduled | Keep the `LNK#` pointer but remove the state line until the Plan is scheduled again. The item remains byte-identical. |
+| Non-occurrence Plan skipped / `didnt_happen` | Remove the state line and clear the matching viewer pointers. The Plan and item both survive independently. An occurrence-only skip writes `OCC#` and does not clear the recurring series pointer. |
 | Plan deleted | Delete only `LNK#` rows that still point to it. **The item survives.** |
 | ListItem deleted | Delete its current `LNK#` rows and clear `Activity.listItemId` / `.listId` on those Plans. **Every Plan survives.** |
 | Viewer schedules again | Replace only `LNK#<viewerUserId>#<itemId>`; the older Plan remains an ordinary Plan and v1 exposes no link history. |
@@ -845,7 +897,10 @@ the product", so it gets its own task and its own test file.
 Neither side ever cascade-deletes the other.
 
 **Tests.** One test per row, all in
-`services/api/src/services/__tests__/listLinkLifecycle.test.ts`. Plus a test that deletes an
+`services/api/src/services/__tests__/listLinkLifecycle.test.ts`. The lifecycle test separates
+skip from unschedule: skip clears the pointer, unschedule retains it but renders no state line,
+and a later reschedule makes that same pointer visible again. A recurring occurrence skip
+leaves its series pointer byte-identical. Plus a test that deletes an
 Activity and asserts the item is byte-identical. Completing a Plan linked from a checkable
 list leaves `checked` byte-identical. A projection seeded with links for two viewers returns
 only the caller's link and never attempts to load the other viewer's Activity.
@@ -854,11 +909,15 @@ only the caller's link and never attempts to load the other viewer's Activity.
 
 ### P3-16 — Watch progress and status transitions
 
-**Approach.** Completing a watch session with `outcome: 'watched'` does exactly two things:
+**Approach.** Watch completion goes through the existing recurrence-aware completion service;
+it does not write Activity META directly:
 
-1. Writes `status: 'completed'`, `completedAt`, `outcome` on the Activity.
-2. Returns a follow-up **suggestion** to update a compatible watch item, when one is visible
+1. A non-recurring watch writes `status: 'completed'`, `completedAt`, `outcome` on the
+   Activity and may return a follow-up **suggestion** to update a compatible watch item visible
    to the caller.
+2. A recurring watch occurrence requires `occurrenceDate`, writes only that occurrence's
+   `OCC#` completion, leaves the series META byte-identical and returns no follow-up. An
+   unscoped recurring completion is rejected.
 
 The suggestion creates and updates nothing. Confirming it issues an ordinary explicit item
 `PATCH` that advances `season`/`episode` and may set `want → watching`; dismissal leaves the
@@ -871,9 +930,12 @@ the linked item's list has since been changed away from `behaviour: 'watch'`, it
 are gone: skip the progress write and return no follow-up rather than resurrecting the
 fields.
 
-**Tests.** Integration: completing S2 E5 leaves the item at S2 E4 and returns the suggestion;
-dismissing writes nothing; confirming advances it to S2 E5 and `watching`. Completing a movie
-does not set `watched` automatically, and no follow-up path creates a second Activity.
+**Tests.** Integration: completing non-recurring S2 E5 leaves the item at S2 E4 and returns the
+suggestion; dismissing writes nothing; confirming advances it to S2 E5 and `watching`.
+Completing a movie does not set `watched` automatically, and no follow-up path creates a
+second Activity. A recurring occurrence writes only `OCC#<occurrenceDate>`, leaves series META
+byte-identical and returns no suggestion; the same request without `occurrenceDate` is
+rejected.
 
 ---
 
@@ -1221,7 +1283,9 @@ these contract points are not:
   **typed value** carrying the server's field list and affected-item count, so P3-32 can
   render it verbatim instead of re-deriving a count from a paginated cache.
 - `scheduleListItem` sends `ScheduleListItemInput` exactly. No convenience overload defaults
-  `creationTarget` or `audience`; an omitted field fails at the schema, loudly.
+  `activityId`, `creationTarget` or `audience`; an omitted field fails at the schema, loudly.
+- `undoListOperation` sends only the opaque token returned by the destructive/bulk mutation.
+  It never reconstructs deleted rows client-side or routes restoration through item create.
 - `getListTemplates()` sends `If-None-Match` and honours the 24-hour cache headers. The
   mobile creation sheet does not call it — it uses P3-07's bundled projection — so nothing
   in this file is a startup dependency.
@@ -1304,9 +1368,10 @@ the exact final action is `Create list`.
 The typed title never changes, replaces or recommends a template. There is no no-selection
 fallback to `simple-list`; choosing `Blank` is an explicit tap like every other style.
 The style preview renders the selected record's exact `summary`; it does not generate a
-description from capabilities or claim a Plan kind will be selected. Title, behaviour,
-capabilities and slot can be changed later in list settings (P3-32). `templateKey`, icon and
-empty-state guidance remain the frozen values copied from the chosen style.
+description from capabilities or claim a Plan kind will be selected. The title can be renamed
+later only through the inline List header editor; behaviour, capabilities and slot can be
+changed in list settings (P3-32). `templateKey`, icon and empty-state guidance remain the
+frozen values copied from the chosen style.
 
 **Edge cases.**
 
@@ -1370,7 +1435,7 @@ comparison against a template key, the model has been misunderstood.
 
 | Input | Effect on the row |
 | --- | --- |
-| `capabilities.checkable` | Renders the checkbox and the struck-through checked state |
+| `behaviour: 'collection'` and `capabilities.checkable` | Renders the checkbox and the struck-through checked state |
 | `capabilities.supportsLocation` and `item.location` | Renders the location subtitle and the maps tap target |
 | `behaviour: 'watch'` | Renders `S2 E4` and the status chip instead of a checkbox |
 | `behaviour: 'meals'` | Renders the ingredient count |
@@ -1382,15 +1447,18 @@ comparison against a template key, the model has been misunderstood.
 - A row must render correctly for a list whose capabilities were changed a second ago —
   including a `watch` item whose `details` are still being back-filled by P3-09. Treat
   missing `details` as the default state rather than throwing.
-- The subtitle slots are mutually exclusive by priority: state line, then source label, then
-  location. Two subtitles on one row is a layout bug and a comprehension one.
+- Item metadata and caller state occupy independent slots. Render every applicable provenance
+  label and location line without hiding either, then render the caller-scoped state line as
+  its own tap target (P3-34). A linked item may therefore legitimately use more than one line.
 - `checked` is retained on items of a list whose `checkable` is false. The renderer hides it;
   it does not clear it.
 
 **Tests.** Render tests over a matrix of behaviour × capability combinations, asserting the
-checkbox appears exactly when `checkable` is true. A test that the same item renders with and
-without a checkbox purely as a function of the list row it is given. A lint-level assertion —
-or a grep test in CI — that the file contains no template key string.
+checkbox appears exactly when `behaviour === 'collection' && checkable`; `watch` and `meals`
+never render one even when the stored capability is true. A test that provenance, location and
+a caller state line all remain visible together, with the state line retaining its separate tap
+target. A lint-level assertion — or a grep test in CI — that the file contains no template key
+string.
 
 ---
 
@@ -1420,7 +1488,8 @@ exactly as P3-28's renderer is — no template-key comparison, same CI grep:
 Each field edit commits one optimistic `PATCH /v1/lists/:id/items/:itemId`. Item writes
 carry no `If-Match` and last write wins per field (§5.11.5). `Plan this item` opens P3-33
 and is one action among several, never the primary one (§5.1). `Delete` deletes with **no
-confirmation** and a 6-second undo restoring the previous rank
+confirmation** and returns P3-10's opaque token for a 6-second undo that restores the same
+item id, previous rank, live viewer links and Activity provenance
 ([`../01-product/interaction-contract.md#4-undo-policy`](../01-product/interaction-contract.md#4-undo-policy)).
 Focus lands on the first control, is trapped, and returns to the row on close
 (interaction contract §7.3).
@@ -1464,9 +1533,10 @@ or sends a rank; the server converts via P3-03.
   changes are explicit controls in the item sheet (decision recorded here — raise in PR if
   wrong).
 - Checked items reorder like any other and stay where they are put (§5.6).
-- Offline on native: one transaction appends the intent and materializes the row's new
-  position with its `Pending` dot; web refuses the write while offline. The stable
-  `Idempotency-Key` remains the server replay identity (interaction contract §5.4).
+- Reorder is available while online on native and web. If the connection is unavailable at
+  drop, the row returns to its original position and the app shows
+  `Reordering needs a connection.` No reorder intent enters the outbox and no `Pending` state
+  is materialized. An online request still carries its stable `Idempotency-Key`.
 
 **Edge cases.**
 
@@ -1477,9 +1547,10 @@ or sends a rank; the server converts via P3-03.
 - Reduce Motion: the drag still tracks the finger — direct manipulation, not decorative
   motion (§6.5). No haptic on drop; haptics are completion and swipe-commit only.
 
-**Tests.** A spy asserts the request carries `afterItemId` and no `rank`, and that one
-drag enqueues exactly one mutation; a fixture with duplicate ranks renders in
-`compareListItems` order both times it is shuffled; render test that the drag cannot cross
+**Tests.** A spy asserts an online request carries `afterItemId` and no `rank`, and that one
+online drag issues exactly one mutation. An offline drop springs the row back, shows the exact
+connection message, and issues and enqueues nothing. A fixture with duplicate ranks renders
+in `compareListItems` order both times it is shuffled; render test that the drag cannot cross
 a watch group heading; a no-op drop issues no request.
 
 ---
@@ -1528,23 +1599,26 @@ absent; unit test that the progress-update mutation applies `want → watching` 
 
 ---
 
-### P3-32 — List settings: title, capabilities, slot and behaviour
+### P3-32 — Inline List title edit; settings for capabilities, slot and behaviour
 
-**Files.** `apps/mobile/src/features/lists/ListSettingsSheet.tsx`.
+**Files.** `apps/mobile/src/features/lists/ListHeader.tsx`,
+`apps/mobile/src/features/lists/ListSettingsSheet.tsx`.
 
-**What to build.** The client half of P3-09. Reached from the list's `⋯` menu: rename,
-toggle `checkable` and `supportsLocation`, set or clear the default-destination `slot`, and
-change behaviour. There is no setting for what Plan kind an item creates; `Plan this item`
-always asks explicitly.
+**What to build.** Rename is inline on the List header title: activating the title swaps it for
+a focused text field, and save/cancel returns focus to the title. It is not duplicated in the
+`⋯` settings sheet. The sheet is the client half of P3-09: toggle `checkable` and
+`supportsLocation`, set or clear the default-destination `slot`, and change behaviour. There
+is no setting for what Plan kind an item creates; `Plan this item` always asks explicitly.
 
 **Approach.** Which changes are additive and which are destructive, and the required shape
 of a destructive confirmation, are fixed by
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md#1a-product-wide-invariants)
-§1a.1. Additive toggles apply optimistically with a 6-second undo toast. Behaviour changes
-go through a confirmation in that shape:
+§1a.1. Additive toggles and behaviour upgrades apply immediately with a 6-second undo toast
+and no dialog. Only destructive behaviour changes go through a confirmation in that shape:
 
-- Upgrading (`collection → watch` or `meals`) states what is gained — "Items will gain a
-  watch status, season and episode" — and applies on confirm.
+- Upgrading (`collection → watch` or `meals`) previews what is gained — for example,
+  "Items will gain a watch status, season and episode" — applies optimistically on selection,
+  and offers Undo instead of confirmation.
 - Downgrading (`watch` or `meals` → anything) sends the `PATCH` **without**
   `confirmDataLoss`, receives the `409`, and renders the server's field list and item count
   verbatim: "This will remove season, episode and watch status from 7 items. This cannot be
@@ -1571,10 +1645,12 @@ the List continues to render its own stored fields rather than adopting another 
 - The sheet is a settings surface, not a wizard: every control is independent and applies on
   its own.
 
-**Tests.** Playwright: turning off `checkable` hides the checkboxes and turning it back on
-restores the previous checked state; a `watch → collection` change shows the exact server
-count in the dialog, and cancelling it leaves every item's `details` intact; confirming it
-succeeds; the undo toast on an additive toggle reverts the change.
+**Tests.** Playwright: activating the header title renames inline and the settings sheet has no
+Rename row; turning off `checkable` hides the checkboxes and turning it back on restores the
+previous checked state; a `collection → watch` change applies with no dialog and its undo
+toast restores the collection behaviour; a `watch → collection` change shows the exact
+server count in the dialog, and cancelling it leaves every item's `details` intact; confirming
+it succeeds; the undo toast on an additive toggle reverts the change.
 
 ---
 
@@ -1625,14 +1701,15 @@ Rules that are easy to get wrong:
 - A caller-linked item is distinguished by the state line **alone**. No colour change, no
   strike-through, no move.
 - An item on a checkable list is still checkable once scheduled. Checking one does not
-  complete the Activity, and completing the Activity does not check it — except where the
-  list's own `checkable` capability makes the tick meaningful (P3-15).
+  complete the Activity, and completing the Activity never checks it. The tick changes only
+  through an explicit List action (P3-15).
 
 **Tests.** Render test asserting two separate accessibility elements with the labels from
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §6.2.
 Playwright asserting each tap target navigates to the correct screen. A projection test seeds
 two viewers with different pointers and proves each response and render contains only that
-viewer's Plan; a third member sees the ordinary item with no state line.
+viewer's Plan; a third member sees the ordinary item with no state line. Completing the Plan
+from both a checked and unchecked source fixture leaves the ListItem byte-identical.
 
 ---
 
@@ -1693,16 +1770,19 @@ avoid.
   `upcomingWindow.nextFrom` only when the user reaches its end. A zero-row window with a
   non-null `nextFrom` retains that end sentinel, so the far-future row remains reachable; a
   null value renders the ordinary final empty line and issues no further request.
-- Nothing on this screen ages, archives, greys out or re-sorts for being old.
+- A Needs-a-date row never ages into an archive, greys out or re-sorts merely because it has
+  remained undated. Past rows retain the canonical de-emphasised row treatment; stage
+  membership and ordering remain the server's.
 - Pull-to-refresh refetches all three stages in the one request.
 
 **Tests.** Render tests for all three empty states and the all-three-empty state from
 §1.3.3; one needs-a-date fixture for each of the four Plan types, each with no checkbox or
 date chip, and a contract fixture proving an undated task is absent; unit tests
 over `rsvpSummary` for the five cases; a test asserting the rendered order equals the
-response order for a deliberately unsorted fixture. Tapping either Plans `Add` empty-state
-action opens the global **Task / Plan / List item** chooser with all three unselected; it does
-not open a Plan form. A **grep test over
+response order for a deliberately unsorted fixture; a Past fixture is de-emphasised while a
+Needs-a-date fixture is not. Tapping either Plans `Add` empty-state action opens the global
+**Task / Plan / List item** chooser with all three unselected; it does not open a Plan form. A
+**grep test over
 `src/features/plans/`** asserting the directory contains no badge component and no numeric
 count bound to a stage length — the same shape of test P2-28 uses for unresolved items.
 An Upcoming test begins with an empty 62-day window whose `nextFrom` jumps to a plan six
@@ -1712,8 +1792,10 @@ months out, reaches the sentinel, and renders that plan after exactly one furthe
 
 ### P3-36 — Plan detail screen: full anatomy
 
-**Approach.** One screen, one `GET /v1/activities/:id`, one DynamoDB `Query`. The ten
-sections in
+**Approach.** One screen and one `GET /v1/activities/:id`. The service performs one strongly
+consistent DynamoDB `Query` of `ACT#<activityId>`; when that partition contains
+`SOURCE_LIST#` ids, it follows with one bounded `BatchGetItem` for the current `LIST#<listId>`
+/ `META` rows. The ten sections in
 [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §2.1, in fixed order,
 with the visibility rules in §2.2.
 
@@ -1722,8 +1804,10 @@ affordance rather than disappearing**, so the plan's capabilities stay discovera
 exceptions are the hero image (hidden with no `primaryAttachmentId`), Expenses (hidden below
 2 participants and 0 expenses — Phase 7) and Updates (hidden when private with no entries).
 
-Sections that belong to later phases render their affordance in a disabled state with copy
-naming what is coming: People and Updates-from-others in Phase 6, Expenses in Phase 7.
+Unimplemented capability discovery follows the canonical pre-build rule. People may render as
+a non-interactive row ending in `Coming later`, with no chevron, disabled action, expansion or
+tap behaviour. Expenses and Updates remain absent until their own product conditions and
+implementation phases make them available; they do not render disabled controls.
 
 The when/where block is **one tap target** opening the reschedule sheet, with the address row
 as a separate target opening the platform maps app. It is never inline-editable.
@@ -1734,16 +1818,20 @@ of its own. On a shared plan the copy is `Your reminders` rather than `Reminders
 plan has one schedule and many reminder sets and the screen should not imply otherwise. There
 is no affordance anywhere for seeing, setting or removing somebody else's.
 
-A plan with **no date** renders the same ten sections. The when/where block reads
-`Needs a date` and opens the same sheet. Nothing about the screen treats an undated plan as a
+A plan with **no date** renders the same applicable section set. The when/where block reads
+`Not scheduled`, exposes the owner `Schedule` action, and opens the same sheet. Nothing about
+the screen treats an undated plan as a
 lesser or unfinished object: a plan is an Activity with commitment or coordination, and a date
 changes its scheduling state, not its identity
 ([`../02-architecture/data-model.md`](../02-architecture/data-model.md) §1). The date-suggestion
 section that fills this gap for participants arrives in Phase 6 (P6-51).
 
 **Tests.** Render tests for each visibility rule. A network assertion that opening the screen
-issues exactly one request. A render test over an undated plan asserting the same section set
-as a dated one, with `Needs a date` in the when/where block and no copy calling it incomplete.
+issues exactly one request and that a fixture with two `SOURCE_LIST#` rows performs one
+Activity `Query` plus one two-key `BatchGetItem`, not one read per List. A render test over an
+undated plan asserts the same applicable section set as a dated one, with `Not scheduled` and
+`Schedule` in the when/where block and no copy calling it incomplete. A pre-build render test
+asserts People is non-interactive `Coming later` while Expenses and Updates are absent.
 A test that the reminders row renders exactly the reminders in the response and that the
 component contains no `userId` comparison.
 
@@ -1777,16 +1865,20 @@ creates one `List` with `sourceActivityId` set.
 **Hard rule: no list is created without that confirmation.** Creating a trip plan does not
 silently produce three lists.
 
-**Edge cases.** `List.sourceActivityId` is the **only** link. Deleting the plan does not
-delete its lists — it clears the back-link and the lists keep their items. Completing a plan
-does not archive its lists. A list of things you own is not owned by the trip. A list created
-this way forces `slot: null` regardless of the selected template, so one Plan's list never
-becomes a standing destination without a later explicit settings change.
+**Edge cases.** `List.sourceActivityId` is the **only domain link**. Its id-only
+`ACT#<activityId>` / `SOURCE_LIST#<listId>` row is a reverse access projection, not a second
+source of truth. Detaching or deleting the List clears `sourceActivityId` and removes that row
+in the same transaction. Deleting the plan enumerates those rows, clears the matching
+back-links in bounded idempotent chunks, and leaves every List and item intact; completing a
+plan does not archive its lists. A list of things you own is not owned by the trip. A list
+created this way forces `slot: null` regardless of the selected template, so one Plan's list
+never becomes a standing destination without a later explicit settings change.
 
 **Tests.** Integration: creating an `event` writes zero lists; `Add list` initially shows the
 same full unselected catalogue as general `New list`; explicitly choosing and confirming `Packing`
-writes exactly one with `sourceActivityId` set, `behaviour: 'collection'` and `slot: null`;
-deleting the plan leaves the list with its items and `sourceActivityId` cleared. A test runs
+writes exactly one with `sourceActivityId` set, `behaviour: 'collection'`, `slot: null` and one
+matching `SOURCE_LIST#` projection; deleting the plan leaves the list with its items and
+`sourceActivityId` cleared and removes the projection. A test runs
 every Plan type through the entry point and asserts catalogue order and selection are identical.
 
 ---
@@ -1950,9 +2042,11 @@ That filter comes from the user's explicit Watch-destination control; title and 
 are not inputs. `Create list` writes only the List and returns here. Only the later named
 `Save plan and add <title> to <list>` action creates the item, then submits the reviewed Plan
 through P3-13's `/schedule` bridge, which creates the Plan and caller's viewer-local `LNK#`
-pointer. The queued combined operation stores a stable bridge idempotency key distinct from
-the item-create key, so retrying the bridge cannot create a duplicate Plan. If the item write
-succeeds while scheduling is offline, the item remains a valid saved ListItem and the queued
+pointer. Before the combined operation enters SQLite it mints and persists one permanent
+`activityId` in the bridge payload, alongside a stable bridge idempotency key distinct from
+the item-create key. The conditional Activity identity, not an unbounded receipt lifetime,
+makes replay unable to create a duplicate Plan. If the item write succeeds while scheduling
+is offline, the item remains a valid saved ListItem and the queued
 bridge visibly shows `Plan will finish syncing`; the UI does not claim the Plan exists until
 that request succeeds. `Plan will finish syncing` is **not a new mechanism**: it is the
 copy-parameterised pending indicator from the Phase 2.6 outbox
@@ -1980,8 +2074,9 @@ test: every ingredient starts unchecked.
 Watch tests cover one destination, several with and without a saved default, and none. The
 none case begins with all three compatible styles unselected; choosing a style never writes
 the item, and the final action names both objects and the destination before any of its writes.
-A forced offline gap after item creation shows `Plan will finish syncing`; replaying the stable
-bridge key creates exactly one Plan and one caller pointer, then clears that state.
+A forced offline gap after item creation shows `Plan will finish syncing`; replaying the same
+bridge key and `activityId`, including after simulated receipt expiry, creates exactly one Plan
+and one caller pointer, then clears that state.
 
 ---
 
@@ -2050,10 +2145,10 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
    running process, then re-read the List: every stored value is unchanged. `templateKey`
    is provenance only, and no stored-List read path imports the catalogue.
 4. `PATCH`ing a `collection` to `behaviour: 'watch'` initialises `details` with
-   `watchStatus: 'want'` on every existing item and preserves titles and ranks. `PATCH`ing a
-   `watch` list back to `collection` **without** `?confirmDataLoss=true` returns `409`,
-   writes nothing, and names both the fields lost and the exact number of items affected;
-   with the flag it succeeds.
+   `watchStatus: 'want'` on every existing item and preserves titles and ranks; the client
+   applies that upgrade immediately with Undo and no confirmation. `PATCH`ing a `watch` list
+   back to `collection` **without** `?confirmDataLoss=true` returns `409`, writes nothing, and
+   names both the fields lost and the exact number of items affected; with the flag it succeeds.
 5. Slot resolution behaves correctly in all four cases: one eligible list is used silently
    but still shown; several with a default use the default; several with none ask once and
    store the answer; none offers creation and writes nothing until confirmed. **Opening a
@@ -2063,19 +2158,24 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
    with no selection, and enables `Create list` only after a style tap and a non-empty visible
    title. No `/v1/lists/suggest-template` route or title matcher exists.
 7. `Plan this item` for `Zahav` requires an explicit Plan kind and `Just me`. Confirming an
-   Event creates exactly one Activity and one caller `LNK#` row while leaving exactly one
-   byte-identical ListItem; missing kind or audience writes nothing.
+    Event creates exactly one Activity and one caller `LNK#` row while leaving exactly one
+    byte-identical ListItem; missing activity id, kind or audience writes nothing. Replaying
+    the persisted `activityId` after the 24-hour receipt expires creates no duplicate and does
+    not roll a pointer for a newer confirmed action back to the older Plan.
 8. The item stays in place. Only a response carrying the caller's `viewerLink` renders a
    state line, with no colour change, strike-through or reorder; tapping the title opens item
-   detail and tapping the state line opens an Activity the caller may read.
+   detail and tapping the state line opens an Activity the caller may read. That state line
+   does not suppress the item's provenance or location metadata.
 9. The item title seeds the Plan title once. Editing either title or note afterwards leaves
    the other object byte-identical.
 10. Deleting the Activity deletes only matching `LNK#` pointers and leaves the item intact.
     Deleting the item clears every current pointer and each linked Activity's provenance;
-    every Activity survives.
+    every Activity survives. Skipping clears the matching pointer, while unscheduling retains
+    it without a state line; rescheduling makes that same link visible again.
 11. Completing a watch session at S2 E5 leaves the watch item at S2 E4 and returns an explicit
     progress-update suggestion. Dismissal writes nothing; confirming advances it to S2 E5 and
-    may set `want → watching`.
+    may set `want → watching`. Completing a recurring watch occurrence writes only its
+    `OCC#` row, leaves series META unchanged and returns no follow-up.
 12. The `Create a Plan for S2 E6?` follow-up creates nothing when dismissed and opens `Plan this item` —
     not an Activity — when tapped, verified by a table item count.
 13. Creating a meal with four ingredients writes zero list items. Tapping `Add 3 selected`
@@ -2091,21 +2191,28 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
 16. Reordering a 200-item list changes exactly one logical ListItem, verified by a repository
     spy asserting one `TransactWriteItems` with exactly three domain actions: delete the old
     ranked row, put the new ranked row, and update its identity locator. No other ListItem row
-    is written.
+    is written. Reordering remains available online; an offline drop springs back with
+    `Reordering needs a connection.` and writes and enqueues nothing.
 17. Adding a 501st item to a list returns `400` with the message `List is full.`
 18. `checked: true` is rejected with `400` on a list whose `capabilities.checkable` is false
     and accepted on the same list after that capability is turned on. No endpoint, service or
-    component contains a list of "checkable kinds".
+    component contains a list of "checkable kinds". The row renderer additionally requires
+    `behaviour: 'collection'`; `watch` and `meals` render no checkbox even if the stored flag
+    is true.
 19. `Clear checked (7)` deletes seven items with **no confirmation dialog**, shows a
     10-second undo toast, and is undoable for that window; undo restores all seven with their
-    previous ranks and in their previous order. After the window the deletion is permanent.
+    original ids, previous ranks, live links and Activity provenance. Normal create cannot
+    bypass their tombstones. `Uncheck all` also shows a 10-second Undo; compensation rechecks
+    exactly the affected items that still exist. After either window the operation is
+    permanent.
 20. A prep task created inside a plan appears on Today on its own date with the plan's title
     as its subtitle, and deleting the plan leaves it as an ordinary task with its schedule
     intact.
 21. Creating a prep task on a prep task returns `400`.
 22. Creating an `event` writes zero lists; confirming `Packing` in the suggestion
-    sheet writes exactly one, with `behaviour: 'collection'` and `slot: null`; deleting the
-    plan leaves the list and its items with `sourceActivityId` cleared.
+    sheet writes exactly one, with `behaviour: 'collection'`, `slot: null` and an id-only
+    `SOURCE_LIST#` projection; deleting the plan removes that projection and leaves the list
+    and its items with `sourceActivityId` cleared.
 23. A presigned upload URL rejects a different `Content-Type` than declared, rejects a body
     over the declared length, and is unusable after five minutes.
 24. An uploaded image round-trips through the local store: the presigned `PUT` succeeds, the
@@ -2119,8 +2226,9 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
 27. The canonical list is `LIST#<l>` / `META` and the `USER#<u>` / `LIST#<l>` row carries
     `role` and `addedAt` and nothing else — asserted by reading both items after creation and
     comparing the pointer's attribute set to a checked-in literal list.
-28. Renaming a list writes **exactly one item**, verified by a repository spy. The Lists tab
-    with 40 lists issues exactly one `Query` and one `BatchGetItem`.
+28. Renaming a list inline on its header writes **exactly one item**, verified by a repository
+    spy; the settings sheet exposes no Rename action. The Lists tab with 40 lists issues
+    exactly one `Query` and one `BatchGetItem`.
 29. Two items stored with an identical `lexoRank` and different `itemId`s render in the same
     order on two independently seeded clients, and `compareListItems` returns the same result
     for both input orderings. No comparator in the codebase sorts list items on `rank` alone.
@@ -2130,7 +2238,8 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
     supplies the next window boundary. An undated `objectKind: 'task'` appears in no stage.
 31. The Plans tab renders all three stage headings when every stage is empty, renders no
     backlog badge or stage count, and renders `needsDate` in the server's order without
-    re-sorting.
+    re-sorting. Past rows are de-emphasised; Needs-a-date rows are not de-emphasised merely
+    because they have remained undated.
 32. Needs-a-date rows for `custom`, `meal`, `watch`, and `event` have no checkbox or date
     chip. Tapping any needs-a-date row opens plan detail and writes nothing.
 33. Global `+` → `List item` requires a visible list choice before fields or capture; its
@@ -2138,12 +2247,16 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
     neither route consults a default or recent destination.
 34. Plan detail's `+ Add a prep task` fixes `type: 'task'` and the current
     `parentActivityId`, ends with `Save task`, and never classifies the entered title.
+35. An undated Plan detail reads `Not scheduled` with `Schedule`. Before Phase 6, People is a
+    non-interactive `Coming later` discovery row with no chevron, disabled action or tap;
+    Expenses and Updates are absent. Related Lists load through the Activity partition's
+    `SOURCE_LIST#` ids plus one bounded `BatchGetItem`.
 
 ## Out of scope for this phase
 
 | Do not build | Owned by |
 | --- | --- |
-| Participants, the participant picker beyond a disabled control, RSVP, invitations, the public invite page | Phase 6 |
+| Participants, the participant picker beyond a non-interactive `Coming later` discovery row, RSVP, invitations, the public invite page | Phase 6 |
 | Expenses, the plan's EXPENSES section beyond its hidden state | Phase 7 |
 | The People layer, person views, balances | Phase 7 |
 | Push notifications for prep-task completion or plan updates | Phase 5 |
@@ -2165,8 +2278,10 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
 
 | Risk | Signal | Mitigation |
 | --- | --- | --- |
-| The bridge duplicates instead of linking | `Zahav` appears twice and the two copies drift | Acceptance criterion 7 counts table items before and after. The canonical doc calls this the most commonly mis-implemented rule in the product; it gets its own test file (P3-15). |
-| A cascade delete removes the other side | A user deletes a plan and loses their packing list, or deletes a watch item and loses the session | Every row of the §6.3 table is a test. Both directions clear pointers and never delete. |
+| The bridge duplicates instead of linking | `Zahav` appears twice and the two copies drift | Persist one client-minted `activityId` with the bridge intent; criterion 7 replays it after receipt expiry and after a newer action. The id prevents duplication and the replay must not roll the current pointer back. |
+| A cascade delete removes the other side | A user deletes a plan and loses their packing list, or deletes a watch item and loses the session | Every row of the §6.3 table is a test. Plan deletion enumerates `SOURCE_LIST#` ids and clears only matching back-links; item/Plan lifecycle clears pointers and never deletes the other object. |
+| Delete Undo is routed through ordinary create | Every Undo fails on `ITEM_TOMBSTONE#`, or weakening the tombstone lets a delayed create resurrect deleted data | Only the opaque, unexpired `UNDO#` operation may restore the same ids and delete matching tombstones. Criteria 19 tests normal-create rejection, exact restoration, expiry and token mismatch. |
+| Related Lists are discovered with a scan or one read per List | Plan detail slows with table size, or Plan deletion leaves stale `sourceActivityId` values | List creation transactionally writes id-only `SOURCE_LIST#` projections. Access pattern 4 uses one Activity Query plus one bounded BatchGet; Plan deletion uses the same ids. |
 | Prep tasks are cascade-deleted with their parent by pattern-matching the `PART#`/`EXP#` cascade | Real to-dos vanish when a trip is cancelled | P3-18's explicit test, and a comment at the cascade site naming the exception. |
 | Provenance is implemented as a viewer link | Checking off `Chicken` marks the meal as cooked, or deleting the meal deletes the groceries | §6.5 is a separate test group; `sourceActivityId` records origin while `LNK#` is caller-scoped Plan navigation, with deliberately different behaviour. |
 | The provenance label is recomputed on read | Labels change after a meal is rescheduled and become lies after it is deleted | Computed once at creation and stored; acceptance criterion 15. |
@@ -2176,7 +2291,7 @@ Playwright on web for all five; Maestro on iOS for the first and the fifth.
 | A denormalised `title` or `itemCount` is added to the `USER#` pointer "to save a `BatchGetItem`" | Renaming a shared list becomes one write per member, and a grocery list two people are ticking generates fan-out writes per tick | Acceptance criterion 27 compares the pointer's attributes to a literal list and fails on any addition. The one saved call is a `BatchGetItem` over at most 100 keys. |
 | A list-item comparator sorts on `rank` alone | Two devices show two orders for the same data, and only when two people inserted at the same spot — so it is discovered by a user, not a test | One exported `compareListItems`, the `(rank, itemId)` pair, acceptance criterion 29 and the concurrency test in P3-03. |
 | The Needs-a-date stage grows a stage count, a badge or an age sort | Plans becomes the backlog the stage was designed not to be | The endpoint returns no stage total to badge (P3-20), the client re-sorts nothing (P3-35), and both a schema-shape test and a directory grep test enforce it. |
-| Completion mutates watch progress without confirmation | A session is marked done and the source list advances even when the user meant to keep its position | Completion returns a suggestion only; acceptance criterion 11 proves dismissal is a zero-write path. |
+| Completion mutates watch progress or recurring series META | A session advances its source list without consent, or one occurrence completes every future occurrence | Non-recurring completion returns a suggestion only; recurring completion requires `occurrenceDate`, writes `OCC#` only and returns none. Acceptance criterion 11 covers both. |
 | A template is resolved at read time instead of copied at creation | A shipped change to the catalogue silently alters a list the user is standing in a shop reading | Acceptance criterion 3 mutates a template and asserts an existing list is unaffected. The catalogue module is importable only by creation services, the templates route, and creation-choice projections—never a stored-List read path or renderer. |
 | The three behaviours grow back into eight kinds under another name | A `templateKey` comparison appears in a renderer, service or creation-target map | Plan kind is never derived from a list; the item renderer is one component (P3-28) with a CI grep asserting it holds no template key. The test for a fourth behaviour is in ADR-031. |
 | A destructive behaviour change ships without the confirmation | A user turns a watch list into a checklist and loses season, episode and status on every item with no warning | Acceptance criterion 4: the unconfirmed call `409`s and writes nothing, and the dialog renders the server's own field list and item count (P3-32). |
