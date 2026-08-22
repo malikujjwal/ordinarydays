@@ -55,7 +55,7 @@ export async function getActivityAgenda(
 ): Promise<ActivityAgendaData> {
   assertSupportedTimezone(query.tz);
   const partition = await getActivityPartitionStrong(activityId);
-  const activity = await assertActivityReadAccessFromPartition(userId, partition);
+  const { activity } = await assertActivityReadAccessFromPartition(userId, partition);
   const include = new Set(parseAgendaInclude(query.include));
   const assembly = await assembleAgenda(
     {

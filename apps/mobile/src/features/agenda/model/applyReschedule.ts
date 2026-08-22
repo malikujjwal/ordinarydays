@@ -12,6 +12,8 @@ export interface RescheduleProjectionVariables
   date: string | null;
   time?: string;
   endTime?: string;
+  /** Durable Activity fallback when the paged Anytime item was never in retained Agenda rows. */
+  fallbackItem?: AgendaItem;
 }
 
 /** Projects the sole schedule write path for one-offs and recurring occurrences. */
@@ -20,15 +22,15 @@ export function applyReschedule(
   variables: RescheduleProjectionVariables,
 ): AgendaData {
   const found = findAgendaItem(agenda, variables);
-  if (found === undefined) return agenda;
-  const destinationDate = variables.date ?? agenda.days[0]?.date;
-  if (destinationDate === undefined) return agenda;
+  const source = found?.item ?? variables.fallbackItem;
+  if (source === undefined) return agenda;
+  const destinationDate = variables.date ?? variables.today;
 
   const next: AgendaItem = {
-    ...found.item,
+    ...source,
     status:
-      found.item.status === 'completed' || found.item.status === 'skipped'
-        ? found.item.status
+      source.status === 'completed' || source.status === 'skipped'
+        ? source.status
         : variables.date === null
           ? 'saved'
           : 'scheduled',
@@ -38,7 +40,9 @@ export function applyReschedule(
   };
   if (variables.time === undefined) delete next.time;
   if (variables.endTime === undefined) delete next.endTime;
-  if (variables.date === null) delete next.overdueFromDate;
+  // The old date is no longer overdue once the schedule itself has been replaced. Keeping this
+  // marker makes Plans correctly treat the moved row as a Today-only copy and hide it.
+  delete next.overdueFromDate;
 
   /**
    * **A reschedule ends the snooze, so the glyph and the arrow go with it.**
@@ -58,5 +62,12 @@ export function applyReschedule(
         next.time !== undefined &&
         (next.endTime ?? next.time) <= variables.currentMinute));
 
-  return replaceAgendaItem(agenda, variables, next, destinationDate, variables);
+  return replaceAgendaItem(
+    agenda,
+    variables,
+    next,
+    destinationDate,
+    variables,
+    variables.fallbackItem !== undefined || variables.date === null,
+  );
 }

@@ -164,6 +164,39 @@ it('renders one card per recurring occurrence across a seven-day response', asyn
   expect(screen.getAllByText('Daily walk')).toHaveLength(7);
 });
 
+it('keeps dated Earlier and completed rows while excluding Today-only copies', async () => {
+  const scheduledAllDay = row(1, { title: 'All-day museum', status: 'scheduled' });
+  const savedTask = row(2, { title: 'Undated saved task', status: 'saved' });
+  const overdueTask = row(3, {
+    title: 'Rolled-forward overdue task',
+    status: 'scheduled',
+    overdueFromDate: '2026-08-05',
+  });
+  const earlierPlan = row(4, { title: 'Earlier meeting', time: '09:00' });
+  const completedPlan = row(5, {
+    title: 'Completed scheduled row',
+    status: 'completed',
+    time: '10:00',
+  });
+  stubFetch(
+    response([
+      {
+        date: '2026-08-06',
+        schedule: [completedPlan],
+        anytime: [scheduledAllDay, savedTask, overdueTask],
+        earlier: [earlierPlan],
+      },
+    ]),
+  );
+  mount();
+
+  await screen.findByText('All-day museum');
+  expect(screen.getByText('Earlier meeting')).toBeDefined();
+  expect(screen.getByText('Completed scheduled row')).toBeDefined();
+  expect(screen.queryByText('Undated saved task')).toBeNull();
+  expect(screen.queryByText('Rolled-forward overdue task')).toBeNull();
+});
+
 it("disables a future recurring task's checkbox until its occurrence date", async () => {
   stubFetch(
     response([

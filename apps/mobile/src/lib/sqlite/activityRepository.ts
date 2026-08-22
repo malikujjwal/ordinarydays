@@ -339,7 +339,13 @@ export class ActivityRepository {
     const localState = existing === undefined ? undefined : text(existing, 'local_state');
     if (existingVersion !== undefined && existingVersion > detail.activity.updatedAt)
       return false;
-    if (localState !== undefined && localState !== 'canonical') return false;
+    if (
+      localState !== undefined &&
+      localState !== 'canonical' &&
+      guards.protectedActivityIds.has(detail.activity.activityId)
+    ) {
+      return false;
+    }
     return this.installCanonicalDetail(transaction, detail, {
       preserveLocalReminders: true,
       guards,
@@ -358,6 +364,7 @@ export class ActivityRepository {
     transaction: TransactionContext,
     activity: Activity,
     enrichment?: ActivityDetail,
+    options: { readonly preserveLocalReminders?: boolean } = {},
   ): Promise<boolean> {
     const current = await this.readWithin(transaction.database, activity.activityId);
     const usableEnrichment =
@@ -384,7 +391,7 @@ export class ActivityRepository {
         : { occurrence: usableEnrichment.occurrence }),
     };
     return this.installCanonicalDetail(transaction, detail, {
-      preserveLocalReminders: false,
+      preserveLocalReminders: options.preserveLocalReminders ?? false,
     });
   }
 
@@ -476,6 +483,23 @@ export class ActivityRepository {
     if (existing !== undefined && text(existing, 'local_state') !== 'canonical') {
       return false;
     }
+    await this.restoreCanonicalAbsenceAfterRejection(transaction, activityId);
+    return true;
+  }
+
+  /**
+   * Installs a strong Activity-detail 404 while retiring a rejected-write recovery receipt.
+   *
+   * The ordinary deletion path above must respect unresolved outbox guards. Recovery already
+   * fenced the exact receipt inside the serialized writer, so this variant deliberately removes
+   * every projection regardless of its local state. The caller clears that receipt in the same
+   * transaction; exposing this as a repository operation keeps the all-or-nothing delete set in
+   * one place.
+   */
+  async restoreCanonicalAbsenceAfterRejection(
+    transaction: TransactionContext,
+    activityId: string,
+  ): Promise<void> {
     await transaction.database.run(
       'DELETE FROM activity_reminders WHERE activity_id = ?;',
       [activityId],
@@ -487,14 +511,35 @@ export class ActivityRepository {
     await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
       activityId,
     ]);
+    await transaction.database.run(
+      'DELETE FROM agenda_projection_fences WHERE activity_id = ?;',
+      [activityId],
+    );
+    await transaction.database.run('DELETE FROM anytime_rows WHERE activity_id = ?;', [
+      activityId,
+    ]);
     await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
       activityId,
     ]);
     await this.recordTombstone(transaction.database, activityId, systemClock.now());
     transaction.changed(this.scope(activityId));
     transaction.changed('agenda');
+    transaction.changed('anytime');
     transaction.changed('reminders');
-    return true;
+  }
+
+  /** Removes only the durable occurrence projection proven absent by a strong detail 404. */
+  async restoreCanonicalOccurrenceAbsenceAfterRejection(
+    transaction: TransactionContext,
+    activityId: string,
+    nominalDate: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      `DELETE FROM activity_occurrences
+       WHERE activity_id = ? AND nominal_date = ?;`,
+      [activityId, nominalDate],
+    );
+    transaction.changed(this.scope(activityId));
   }
 
   /**
@@ -568,7 +613,7 @@ export class ActivityRepository {
     transaction: TransactionContext,
     activityId: string,
     input: ScheduleActivityInput,
-  ): Promise<Activity> {
+  ): Promise<ActivityDetail> {
     const detail = await this.readWithin(transaction.database, activityId);
     if (detail === undefined) throw new Error('No activity loaded to schedule.');
     const { occurrenceDate: _occurrenceDate, ...schedule } = input;
@@ -579,7 +624,67 @@ export class ActivityRepository {
       status: input.date === null ? 'saved' : 'scheduled',
     }) as Activity;
     await this.putLocal(transaction, next, detail.reminders);
-    return next;
+    return { ...detail, activity: next };
+  }
+
+  /** Moves the complete local Activity projection after an ambiguous-create Retry. */
+  async remapPendingCreateIdentity(
+    transaction: TransactionContext,
+    previousActivityId: string,
+    freshActivityId: string,
+  ): Promise<void> {
+    const occupied = await transaction.database.first(
+      `SELECT activity_id FROM activities WHERE activity_id = ?
+       UNION ALL SELECT activity_id FROM activity_occurrences WHERE activity_id = ?
+       UNION ALL SELECT activity_id FROM activity_reminders WHERE activity_id = ?
+       UNION ALL SELECT activity_id FROM anytime_rows WHERE activity_id = ?
+       UNION ALL SELECT activity_id FROM activity_tombstones WHERE activity_id = ?
+       LIMIT 1;`,
+      [
+        freshActivityId,
+        freshActivityId,
+        freshActivityId,
+        freshActivityId,
+        freshActivityId,
+      ],
+    );
+    if (occupied !== undefined) {
+      throw new Error('The fresh Activity identity is already in use.');
+    }
+    await transaction.database.run(
+      'UPDATE activities SET parent_activity_id = ? WHERE parent_activity_id = ?;',
+      [freshActivityId, previousActivityId],
+    );
+    const moved = await transaction.database.run(
+      `UPDATE activities SET activity_id = ?, local_state = 'queued'
+       WHERE activity_id = ?;`,
+      [freshActivityId, previousActivityId],
+    );
+    if (moved.changes !== 1) {
+      throw new Error('The collided local Activity projection is missing.');
+    }
+    await transaction.database.run(
+      `UPDATE activity_occurrences SET activity_id = ?, local_state = 'queued'
+       WHERE activity_id = ?;`,
+      [freshActivityId, previousActivityId],
+    );
+    await transaction.database.run(
+      `UPDATE activity_reminders SET activity_id = ?, local_state = 'queued'
+       WHERE activity_id = ?;`,
+      [freshActivityId, previousActivityId],
+    );
+    await transaction.database.run(
+      'UPDATE anytime_rows SET activity_id = ? WHERE activity_id = ?;',
+      [freshActivityId, previousActivityId],
+    );
+    await transaction.database.run(
+      'UPDATE reminder_tombstones SET activity_id = ? WHERE activity_id = ?;',
+      [freshActivityId, previousActivityId],
+    );
+    transaction.changed(this.scope(previousActivityId));
+    transaction.changed(this.scope(freshActivityId));
+    transaction.changed('reminders');
+    transaction.changed('anytime');
   }
 
   async setLocalState(

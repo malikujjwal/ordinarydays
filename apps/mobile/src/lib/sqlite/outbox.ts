@@ -10,6 +10,7 @@ export type OutboxAttention =
       readonly status?: number;
       readonly code?: string;
       readonly details?: unknown;
+      readonly recoveryRequired?: true;
     }
   | {
       readonly kind: 'parked';
@@ -34,6 +35,7 @@ export interface OutboxIntent {
   readonly attention?: OutboxAttention;
   readonly lastError?: string;
   readonly reconciliationVersion?: string;
+  readonly recoveryRequired?: true;
   readonly dependsOnIntentId?: string;
   readonly compensationForIntentId?: string;
 }
@@ -134,6 +136,28 @@ function freshVariables(value: unknown, freshIntentId: string): unknown {
     ...(hasIntentId ? { intentId: freshIntentId } : {}),
     ...(hasIdempotencyKey ? { idempotencyKey: freshIntentId } : {}),
   };
+}
+
+function remapActivityVariables(
+  value: unknown,
+  previousActivityId: string,
+  freshActivityId: string,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((child) =>
+      remapActivityVariables(child, previousActivityId, freshActivityId),
+    );
+  }
+  const object = record(value);
+  if (object === undefined) return value;
+  return Object.fromEntries(
+    Object.entries(object).map(([key, child]) => [
+      key,
+      (key === 'activityId' || key === 'parentActivityId') && child === previousActivityId
+        ? freshActivityId
+        : remapActivityVariables(child, previousActivityId, freshActivityId),
+    ]),
+  );
 }
 
 /** Snapshot of unresolved local removals/creates used inside canonical install transactions. */
@@ -244,6 +268,7 @@ function intentFromRow(row: SqliteRow): OutboxIntent {
     throw new OutboxInvariantError(intentId ?? 'malformed');
   }
   const attentionKind = stringValue(row, 'attention_kind');
+  const attentionReason = stringValue(row, 'attention_reason');
   const attentionStatus = numberValue(row, 'attention_status');
   const attentionCode = stringValue(row, 'attention_code');
   const attentionDetails = stringValue(row, 'attention_details_json');
@@ -256,11 +281,14 @@ function intentFromRow(row: SqliteRow): OutboxIntent {
           ...(attentionDetails === undefined
             ? {}
             : { details: parseJson(attentionDetails) }),
+          ...(attentionReason === 'authoritative_recovery_required'
+            ? { recoveryRequired: true as const }
+            : {}),
         }
       : attentionKind === 'parked'
         ? {
             kind: 'parked',
-            reason: (stringValue(row, 'attention_reason') ?? 'legacy_unknown') as Extract<
+            reason: (attentionReason ?? 'legacy_unknown') as Extract<
               OutboxAttention,
               { kind: 'parked' }
             >['reason'],
@@ -283,6 +311,9 @@ function intentFromRow(row: SqliteRow): OutboxIntent {
     ...(attention === undefined ? {} : { attention }),
     ...(lastError === undefined ? {} : { lastError }),
     ...(reconciliationVersion === undefined ? {} : { reconciliationVersion }),
+    ...(attention?.kind === 'rejected' && attention.recoveryRequired === true
+      ? { recoveryRequired: true as const }
+      : {}),
     ...(dependsOnIntentId === undefined ? {} : { dependsOnIntentId }),
     ...(compensationForIntentId === undefined ? {} : { compensationForIntentId }),
   };
@@ -524,6 +555,56 @@ export class OutboxRepository {
     }
   }
 
+  /**
+   * Carries a server-authored Activity version to the next queued PATCH in this FIFO domain.
+   *
+   * Reminder writes do not author Activity versions and may be skipped. Any intervening write
+   * that does return a newer Activity acknowledgement calls this again before the PATCH becomes
+   * claimable, so the durable precondition monotonically follows server order. The payload and
+   * semantic identity move together; the local canonical Activity version is never advanced.
+   */
+  async rebaseNextQueuedPatch(
+    database: SqliteExecutor,
+    orderingKey: string,
+    seq: number,
+    serverVersion: string,
+  ): Promise<boolean> {
+    const row = await database.first(
+      `SELECT * FROM outbox_intents
+       WHERE ordering_key = ? AND seq > ? AND status = 'queued'
+         AND json_extract(mutation_key_json, '$[0]') = 'activity'
+         AND json_extract(mutation_key_json, '$[1]') = 'patch'
+       ORDER BY seq LIMIT 1;`,
+      [orderingKey, seq],
+    );
+    if (row === undefined) return false;
+    const successor = intentFromRow(row);
+    const variables = record(successor.variables);
+    if (variables === undefined || typeof variables.ifMatch !== 'string') {
+      throw new OutboxInvariantError(successor.intentId);
+    }
+    const rebasedVariables = { ...variables, ifMatch: serverVersion };
+    const semanticKey = outboxSemanticKey({
+      intentId: successor.intentId,
+      mutationKey: successor.mutationKey,
+      variables: rebasedVariables,
+      entityId: successor.entityId,
+      orderingKey: successor.orderingKey,
+      ...(successor.dependsOnIntentId === undefined
+        ? {}
+        : { dependsOnIntentId: successor.dependsOnIntentId }),
+      ...(successor.compensationForIntentId === undefined
+        ? {}
+        : { compensationForIntentId: successor.compensationForIntentId }),
+    });
+    const result = await database.run(
+      `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?
+       WHERE intent_id = ? AND status = 'queued';`,
+      [JSON.stringify(rebasedVariables), semanticKey, successor.intentId],
+    );
+    return result.changes === 1;
+  }
+
   async requeue(
     database: SqliteExecutor,
     intentId: string,
@@ -548,7 +629,11 @@ export class OutboxRepository {
        WHERE intent_id = ?;`,
       [
         attention.kind,
-        attention.kind === 'parked' ? attention.reason : null,
+        attention.kind === 'parked'
+          ? attention.reason
+          : attention.recoveryRequired === true
+            ? 'authoritative_recovery_required'
+            : null,
         attention.kind === 'rejected' ? (attention.status ?? null) : null,
         attention.kind === 'rejected' ? (attention.code ?? null) : null,
         attention.kind === 'rejected' && attention.details !== undefined
@@ -558,6 +643,20 @@ export class OutboxRepository {
         intentId,
       ],
     );
+  }
+
+  async completeAuthoritativeRecovery(
+    database: SqliteExecutor,
+    intentId: string,
+  ): Promise<boolean> {
+    const result = await database.run(
+      `UPDATE outbox_intents SET attention_reason = NULL
+       WHERE intent_id = ? AND status = 'needs_attention'
+         AND attention_kind = 'rejected'
+         AND attention_reason = 'authoritative_recovery_required';`,
+      [intentId],
+    );
+    return result.changes > 0;
   }
 
   async pendingReconciliations(
@@ -674,6 +773,118 @@ export class OutboxRepository {
        WHERE intent_id = ? AND status = 'needs_attention';`,
       [freshIntentId, JSON.stringify(variables), semanticKey, now, intentId],
     );
+    await database.run(
+      `UPDATE outbox_meta SET clock_witness = MAX(clock_witness, ?)
+       WHERE singleton = 1;`,
+      [now],
+    );
+    return this.get(database, freshIntentId);
+  }
+
+  /**
+   * Re-identifies one ambiguous local create and its same-entity chain atomically.
+   *
+   * Sequence numbers and non-root retry identities stay fixed, so FIFO and the contents of
+   * later writes do not change. Every identity-bearing payload moves with entity/order keys,
+   * dependency references and semantic keys; the rejected create alone receives the fresh
+   * mutation identity promised by Retry.
+   */
+  async retryAmbiguousCreate(
+    database: SqliteExecutor,
+    intentId: string,
+    freshIntentId: string,
+    freshActivityId: string,
+    now = Date.now(),
+  ): Promise<OutboxIntent | undefined> {
+    const current = await this.get(database, intentId);
+    if (current?.status !== 'needs_attention') return current;
+    if (
+      current.mutationKey[0] !== 'activity' ||
+      current.mutationKey[1] !== 'create' ||
+      current.attention?.kind !== 'parked' ||
+      current.attention.reason !== 'ambiguous_collision'
+    ) {
+      throw new OutboxInvariantError(intentId);
+    }
+    if (
+      freshActivityId === current.entityId ||
+      (await this.get(database, freshIntentId)) !== undefined ||
+      (await database.first(
+        'SELECT intent_id FROM outbox_intents WHERE entity_id = ? LIMIT 1;',
+        [freshActivityId],
+      )) !== undefined
+    ) {
+      throw new OutboxInvariantError(freshIntentId);
+    }
+
+    const previousActivityId = current.entityId;
+    const previousOrderingKey = current.orderingKey;
+    const rows = (
+      await database.all(
+        `SELECT * FROM outbox_intents
+         WHERE entity_id = ? OR depends_on_intent_id = ?
+           OR compensation_for_intent_id = ?
+         ORDER BY seq;`,
+        [previousActivityId, intentId, intentId],
+      )
+    ).map(intentFromRow);
+
+    for (const candidate of rows) {
+      const root = candidate.intentId === intentId;
+      const nextIntentId = root ? freshIntentId : candidate.intentId;
+      const retryVariables = root
+        ? freshVariables(candidate.variables, freshIntentId)
+        : candidate.variables;
+      const variables = remapActivityVariables(
+        retryVariables,
+        previousActivityId,
+        freshActivityId,
+      );
+      const entityId =
+        candidate.entityId === previousActivityId ? freshActivityId : candidate.entityId;
+      const orderingKey =
+        candidate.orderingKey === previousOrderingKey
+          ? `activity:${freshActivityId}`
+          : candidate.orderingKey;
+      const dependsOnIntentId =
+        candidate.dependsOnIntentId === intentId
+          ? freshIntentId
+          : candidate.dependsOnIntentId;
+      const compensationForIntentId =
+        candidate.compensationForIntentId === intentId
+          ? freshIntentId
+          : candidate.compensationForIntentId;
+      const semanticKey = outboxSemanticKey({
+        intentId: nextIntentId,
+        mutationKey: candidate.mutationKey,
+        variables,
+        entityId,
+        orderingKey,
+        ...(dependsOnIntentId === undefined ? {} : { dependsOnIntentId }),
+        ...(compensationForIntentId === undefined ? {} : { compensationForIntentId }),
+      });
+      await database.run(
+        `UPDATE outbox_intents SET intent_id = ?, variables_json = ?, entity_id = ?,
+           ordering_key = ?, depends_on_intent_id = ?, compensation_for_intent_id = ?,
+           semantic_key = ?${
+             root
+               ? ", status = 'queued', created_at = ?, attempts = 0, last_error = NULL, attention_kind = NULL, attention_reason = NULL, attention_status = NULL, attention_code = NULL, attention_details_json = NULL, reconciliation_version = NULL"
+               : ''
+}
+         WHERE intent_id = ?;`,
+        [
+          nextIntentId,
+          JSON.stringify(variables),
+          entityId,
+          orderingKey,
+          dependsOnIntentId ?? null,
+          compensationForIntentId ?? null,
+          semanticKey,
+          ...(root ? [now] : []),
+          candidate.intentId,
+        ],
+      );
+    }
     await database.run(
       `UPDATE outbox_meta SET clock_witness = MAX(clock_witness, ?)
        WHERE singleton = 1;`,

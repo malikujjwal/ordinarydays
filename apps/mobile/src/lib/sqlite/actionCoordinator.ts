@@ -43,6 +43,7 @@ export class NativeActivityActionCoordinator {
     private readonly service: ActivityTransactionService,
     private readonly outbox: OutboxRepository,
     private readonly sync: NativeSyncEngine,
+    private readonly activityIdFactory?: () => string,
   ) {}
 
   create(
@@ -305,6 +306,33 @@ export class NativeActivityActionCoordinator {
             transaction.changed('anytime');
             return current;
           }
+          if (
+            current?.status === 'needs_attention' &&
+            current.mutationKey[0] === 'activity' &&
+            current.mutationKey[1] === 'create' &&
+            current.attention?.kind === 'parked' &&
+            current.attention.reason === 'ambiguous_collision'
+          ) {
+            const freshActivityId =
+              this.activityIdFactory?.() ??
+              (await import('@/lib/activityIds')).nextActivityId();
+            await this.service.remapPendingCreateIdentity(
+              transaction,
+              current.entityId,
+              freshActivityId,
+            );
+            const retried = await this.outbox.retryAmbiguousCreate(
+              transaction.database,
+              intentId,
+              freshIntentId,
+              freshActivityId,
+            );
+            if (retried === undefined || retried.status !== 'queued') {
+              throw new Error('This create is no longer waiting for collision recovery.');
+            }
+            transaction.changed('outbox');
+            return retried;
+          }
           const retried = await this.outbox.retryAttention(
             transaction.database,
             intentId,
@@ -333,6 +361,12 @@ export class NativeActivityActionCoordinator {
   }
 
   async discardBlocked(intentId: string, clock: ProjectionClock): Promise<boolean> {
+    const recovery = await this.transactions.run((transaction) =>
+      this.outbox.get(transaction.database, intentId),
+    );
+    if (recovery?.recoveryRequired === true) {
+      await this.sync.recoverRejectedIntent(intentId);
+    }
     const discarded = await this.transactions.run(async (transaction) => {
       const intent = await this.outbox.get(transaction.database, intentId);
       if (
@@ -357,6 +391,8 @@ export class NativeActivityActionCoordinator {
         return true;
       }
       if (intent?.status !== 'needs_attention') return false;
+      /* Never bless an unverified rejected projection by deleting its only recovery receipt. */
+      if (intent.recoveryRequired === true) return false;
       if (!(await this.outbox.discardAttention(transaction.database, intentId))) {
         return false;
       }

@@ -108,13 +108,15 @@ historical, superseded and uncounted, but its no-flicker/restart/refresh invaria
 acceptance bar. P2-61…P2-63 replace that materializer with per-account SQLite, typed
 repositories, transactional outbox + visible-row commits, one serialized sync engine and
 verified legacy retirement. Native Activity/Agenda stop treating TanStack/AsyncStorage as
-domain authority; web keeps its online-first TanStack adapter. Phase 3 begins only after
-P2-63. **8 live tasks** (P2-58 parked and P2-60 historical, both uncounted).
+domain authority; web keeps its online-first TanStack adapter. Phase 3 begins after P2-63's
+architecture and automated convergence checks. **8 live tasks** (P2-58 parked and P2-60
+historical, both uncounted).
 
 P2-63's native runtime and automated convergence coverage were implemented on 2026-08-19.
-The Phase 3 gate remains closed until the Phase 2.6 iOS real-device transition matrix and
-Maestro acceptance run are recorded on a supported macOS/device environment; task counts and
-AWU do not change for that verification state.
+The Phase 2.6 iOS real-device transition matrix and all Phase 2/2.5 Maestro flows are explicitly
+deferred to the Phase 3 macOS build. Their recorded simulator/device run remains mandatory at
+that native acceptance milestone, but it does not block Phase 3 development and is not claimed
+as passed by the Windows implementation run; task counts and AWU do not change.
 
 ### 1.4 Phase 3 — Plans and lists
 
@@ -325,7 +327,9 @@ Four edges deserve explanation because they are not obvious.
   operations cannot target a whole recurring series accidentally. Phase 2.6 sits between
   because Phase 3's Lists/ListItems must consume typed SQLite repositories and the
   transactional outbox rather than extend the superseded TanStack/AsyncStorage materializer.
-  P2-63 is the explicit gate.
+  P2-63's architecture and automated convergence checks are the explicit development gate;
+  its device matrix is carried into the Phase 3 macOS build without being waived or called
+  passed.
 - **Phase 4 depends on Phase 0 by interface, not by artefact.** Phase 0 writes eight stacks
   and deploys none of them. Phase 4's first task after bootstrap is to make `ApiStack`
   deployable without a custom domain, because `cdk synth` being green has never been

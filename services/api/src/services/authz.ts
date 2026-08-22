@@ -3,6 +3,7 @@ import { AppError } from '../lib/errors.js';
 import {
   activityFromPartition,
   getActivityMeta,
+  getActivityPartitionStrong,
   listParticipants,
 } from '../repositories/activityRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
@@ -144,20 +145,31 @@ export async function assertActivityAccess(
 export async function assertActivityReadAccessFromPartition(
   userId: string,
   partition: readonly StoredItem[],
-): Promise<Activity> {
+): Promise<ActivityAccess> {
   const activity = activityFromPartition(partition);
   if (activity === undefined) throw new AppError('not_found', NOT_FOUND);
-  if (activity.ownerId === userId) return activity;
+  if (activity.ownerId === userId) {
+    return { activity, isOwner: true, viaParent: false };
+  }
   if (
     partition.some(
       (row) => row.sk?.toString().startsWith('PART#') && belongsTo(row, userId),
     )
   ) {
-    return activity;
+    return { activity, isOwner: false, viaParent: false };
   }
   if (activity.parentActivityId !== undefined) {
-    await assertActivityAccess(userId, activity.parentActivityId, 'read');
-    return activity;
+    const parentPartition = await getActivityPartitionStrong(activity.parentActivityId);
+    const parent = activityFromPartition(parentPartition);
+    if (
+      parent !== undefined &&
+      (parent.ownerId === userId ||
+        parentPartition.some(
+          (row) => row.sk?.toString().startsWith('PART#') && belongsTo(row, userId),
+        ))
+    ) {
+      return { activity, isOwner: false, viaParent: true };
+    }
   }
   throw new AppError('not_found', NOT_FOUND);
 }

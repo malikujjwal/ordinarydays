@@ -86,7 +86,14 @@ export function partitionAgenda(
   showSkipped = false,
 ): TodaySections {
   const visible = items
-    .map((item, sourceIndex) => ({ item, sourceIndex }))
+    .map((item, sourceIndex) => {
+      if (item.time === undefined) return { item, sourceIndex };
+      const isPast = (item.endTime ?? item.time) < currentMinute;
+      return {
+        item: item.isPast === isPast ? item : { ...item, isPast },
+        sourceIndex,
+      };
+    })
     .filter(
       ({ item }) =>
         item.status !== 'cancelled' && (showSkipped || !SKIPPED.has(item.status)),

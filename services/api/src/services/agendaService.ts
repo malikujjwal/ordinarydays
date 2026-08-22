@@ -253,8 +253,8 @@ export async function assembleAgenda(
       ? listBucketToExhaustion(input.userId, 'N', { ascending: false }, dependencies)
       : Promise.resolve([]),
     input.includeOverdue === true
-      ? rollForwardOverdue(input.userId, today, input.timezone, dependencies)
-      : Promise.resolve([]),
+      ? overdueProjection(input.userId, today, input.timezone, dependencies)
+      : Promise.resolve(emptyOverdueProjection()),
   ]);
 
   if (seriesPage.nextCursor !== undefined) warnings.push('series_limit_exceeded');
@@ -262,7 +262,12 @@ export async function assembleAgenda(
   const scheduledIndex = indexByActivity(scheduledRows, dependencies, 'scheduled');
   const seriesIndex = indexByActivity(seriesPage.items, dependencies, 'series');
   const anytimeIndex = indexByActivity(anytimeRows, dependencies, 'anytime');
-  const presentationIndex = new Map([...scheduledIndex, ...seriesIndex, ...anytimeIndex]);
+  const presentationIndex = new Map([
+    ...scheduledIndex,
+    ...seriesIndex,
+    ...anytimeIndex,
+    ...overdue.index,
+  ]);
   const [scheduled, series, anytime] = await Promise.all([
     hydrateSelected(scheduledIndex, dependencies, 'scheduled'),
     hydrateSelected(seriesIndex, dependencies, 'series'),
@@ -322,7 +327,7 @@ export async function assembleAgenda(
       (candidate) =>
         candidate.viewerDate >= input.from && candidate.viewerDate <= input.to,
     );
-  const deduped = dedupe([...converted, ...overdue], warnings);
+  const deduped = dedupe([...converted, ...overdue.candidates], warnings);
   const contexts = await hydrateActionContexts(input.userId, deduped, dependencies);
   const reminders =
     input.includeReminders === true
@@ -347,8 +352,8 @@ export async function assembleAgenda(
   });
 
   const projectionVersions = observedProjectionVersions(
-    [scheduledIndex, seriesIndex, anytimeIndex],
-    [...scheduled, ...series, ...anytime],
+    [scheduledIndex, seriesIndex, anytimeIndex, overdue.index],
+    [...scheduled, ...series, ...anytime, ...overdue.activities],
   );
 
   return { days: partitionDays(input, complete), warnings, projectionVersions };
@@ -382,6 +387,26 @@ export async function rollForwardOverdue(
   timezone: string,
   dependencies: AgendaDependencies = DEFAULT_DEPENDENCIES,
 ): Promise<UnhydratedAgendaCandidate[]> {
+  return (await overdueProjection(userId, today, timezone, dependencies)).candidates;
+}
+
+interface OverdueProjection {
+  readonly candidates: UnhydratedAgendaCandidate[];
+  readonly index: ReadonlyMap<string, StoredItem>;
+  readonly activities: Activity[];
+}
+
+function emptyOverdueProjection(): OverdueProjection {
+  return { candidates: [], index: new Map(), activities: [] };
+}
+
+/** Retains the exact GSI rows so their versions can prove an overdue projection caught up. */
+async function overdueProjection(
+  userId: string,
+  today: string,
+  timezone: string,
+  dependencies: AgendaDependencies,
+): Promise<OverdueProjection> {
   const from = addWallDays(today, -OVERDUE_WINDOW_DAYS);
   const to = addWallDays(today, -1);
   const index = indexByActivity(
@@ -391,7 +416,7 @@ export async function rollForwardOverdue(
   );
   const hydrated = await hydrateSelected(index, dependencies, 'overdue');
 
-  return hydrated.flatMap((activity) => {
+  const candidates = hydrated.flatMap((activity) => {
     const completedToday =
       activity.status === 'completed' &&
       activity.completedAt !== undefined &&
@@ -419,6 +444,7 @@ export async function rollForwardOverdue(
       },
     ];
   });
+  return { candidates, index, activities: hydrated };
 }
 
 interface RawCandidate {

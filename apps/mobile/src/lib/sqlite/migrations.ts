@@ -338,6 +338,35 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
       );
     },
   },
+  {
+    version: 9,
+    name: 'agenda-projection-version-fence',
+    apply: (database) =>
+      database.exec(`
+        ALTER TABLE agenda_rows ADD COLUMN projection_fence_version TEXT;
+        CREATE INDEX agenda_rows_projection_fence
+          ON agenda_rows (activity_id, projection_fence_version)
+          WHERE projection_fence_version IS NOT NULL;
+      `),
+  },
+  {
+    version: 10,
+    name: 'durable-activity-projection-fences',
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE agenda_projection_fences (
+          activity_id TEXT PRIMARY KEY NOT NULL,
+          expected_version TEXT NOT NULL
+        );
+        INSERT INTO agenda_projection_fences (activity_id, expected_version)
+          SELECT activity_id, MAX(projection_fence_version)
+          FROM agenda_rows
+          WHERE projection_fence_version IS NOT NULL
+          GROUP BY activity_id;
+        DROP INDEX agenda_rows_projection_fence;
+        ALTER TABLE agenda_rows DROP COLUMN projection_fence_version;
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

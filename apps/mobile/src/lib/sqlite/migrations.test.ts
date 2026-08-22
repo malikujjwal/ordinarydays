@@ -236,7 +236,7 @@ describe('versioned SQLite migrations', () => {
 
   it('repairs only provable local-create and legacy missing-capability versions', async () => {
     if (database === undefined) throw new Error('Test database was not opened.');
-    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, -1));
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 7));
     const insert = async (
       activityId: string,
       localState: string,
@@ -287,5 +287,39 @@ describe('versioned SQLite migrations', () => {
       { activity_id: 'act_legacy_missing_capabilities', canonical_version: null },
       { activity_id: 'act_local_create', canonical_version: null },
     ]);
+  });
+
+  it('moves per-row Agenda projection fences into durable Activity-level state', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 9));
+    await database.run(
+      `INSERT INTO agenda_rows (
+        row_id, viewer_date, section, sort_order, is_up_next, activity_id,
+        type, title, status, is_recurring, is_snoozed, has_checkbox,
+        capabilities_json, participant_avatars_json, participant_count, is_past,
+        local_state, projection_fence_version
+      ) VALUES (
+        'legacy-row', '2026-08-20', 'anytime', 0, 0, 'act_legacy',
+        'task', 'Legacy row', 'scheduled', 0, 0, 1,
+        '{}', '[]', 0, 0, 'canonical', '2026-08-20T12:00:00.000Z'
+      );`,
+    );
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        `SELECT activity_id, expected_version FROM agenda_projection_fences
+         WHERE activity_id = 'act_legacy';`,
+      ),
+    ).toEqual({
+      activity_id: 'act_legacy',
+      expected_version: '2026-08-20T12:00:00.000Z',
+    });
+    expect(
+      (await database.all('PRAGMA table_info(agenda_rows);')).some(
+        (column) => column.name === 'projection_fence_version',
+      ),
+    ).toBe(false);
   });
 });

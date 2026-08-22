@@ -1,6 +1,6 @@
 import type { Activity } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assertActivityAccess } from './authz.js';
+import { assertActivityAccess, assertActivityReadAccessFromPartition } from './authz.js';
 
 /**
  * `assertActivityAccess` (P1-10 rule 2), with the repository mocked.
@@ -11,7 +11,11 @@ import { assertActivityAccess } from './authz.js';
  * is what stops the checks being bolted onto eleven shipped call sites in Phase 6.
  */
 vi.mock('../repositories/activityRepository.js', () => ({
+  activityFromPartition: vi.fn((partition: Array<Record<string, unknown>>) =>
+    partition.find((row) => row.sk === 'META'),
+  ),
   getActivityMeta: vi.fn(),
+  getActivityPartitionStrong: vi.fn(),
   listParticipants: vi.fn(() => Promise.resolve([])),
 }));
 
@@ -64,8 +68,57 @@ const participantRow = (userId: string) => ({
 
 beforeEach(() => {
   vi.mocked(repository.getActivityMeta).mockReset();
+  vi.mocked(repository.getActivityPartitionStrong).mockReset();
   vi.mocked(repository.listParticipants).mockReset();
   vi.mocked(repository.listParticipants).mockResolvedValue([]);
+});
+
+describe('an authoritative partition read', () => {
+  const stored = (value: Activity) => ({
+    ...value,
+    pk: `ACT#${value.activityId}`,
+    sk: 'META',
+  });
+
+  it('uses a strong parent partition for inherited prep-task access', async () => {
+    vi.mocked(repository.getActivityPartitionStrong).mockResolvedValue([
+      stored(activity()),
+      {
+        ...participantRow(PARTICIPANT),
+        pk: `ACT#${PLAN}`,
+        sk: 'PART#psn_parent_participant',
+      },
+    ]);
+
+    const access = await assertActivityReadAccessFromPartition(PARTICIPANT, [
+      stored(prep()),
+    ]);
+
+    expect(access).toMatchObject({
+      activity: { activityId: PREP },
+      isOwner: false,
+      viaParent: true,
+    });
+    expect(repository.getActivityPartitionStrong).toHaveBeenCalledWith(PLAN);
+    expect(repository.getActivityMeta).not.toHaveBeenCalled();
+  });
+
+  it('does not inherit access through a second parent hop', async () => {
+    vi.mocked(repository.getActivityPartitionStrong).mockResolvedValue([
+      stored(activity({ ownerId: STRANGER, parentActivityId: PREP })),
+      {
+        ...participantRow(PARTICIPANT),
+        userId: STRANGER,
+        pk: `ACT#${PLAN}`,
+        sk: 'PART#psn_grandparent_participant',
+      },
+    ]);
+
+    await expect(
+      assertActivityReadAccessFromPartition(PARTICIPANT, [stored(prep())]),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect(repository.getActivityPartitionStrong).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('the owner', () => {

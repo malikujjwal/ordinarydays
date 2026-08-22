@@ -209,6 +209,12 @@ export class ActivityPushAdapter {
         requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
       );
     }
+    if (name === 'reminder-delete') {
+      return this.transport.deleteReminder(
+        activityId,
+        requiredString(field(value, 'reminderId'), 'reminderId'),
+      );
+    }
     const idempotencyKey = requiredString(
       field(value, 'idempotencyKey'),
       'idempotencyKey',
@@ -265,12 +271,6 @@ export class ActivityPushAdapter {
         activityId,
         parsePersisted(reminderInput, field(value, 'input')),
         idempotencyKey,
-      );
-    }
-    if (name === 'reminder-delete') {
-      return this.transport.deleteReminder(
-        activityId,
-        requiredString(field(value, 'reminderId'), 'reminderId'),
       );
     }
     throw new DurableActivityIntentError(

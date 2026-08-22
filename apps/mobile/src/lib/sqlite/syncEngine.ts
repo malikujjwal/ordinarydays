@@ -7,7 +7,7 @@ import {
   scheduleActivityResult,
   timeZone,
 } from '@od/shared/schemas';
-import { systemClock } from '@od/shared/time';
+import { systemClock, toWallTime } from '@od/shared/time';
 import type {
   Activity,
   ActivityDetail,
@@ -37,6 +37,7 @@ import {
 import { ActivityPushAdapter, type ActivityPushTransport } from '@/lib/sync/pushAdapter';
 import {
   RecurrenceReconciler,
+  sharedTargetedAgendaTransport,
   type TargetedAgendaTransport,
 } from '@/lib/sync/reconciliation';
 import { field } from '@/lib/unknown';
@@ -54,6 +55,7 @@ export interface NativeSyncEngine {
   pullActivity(target: ActivityDetailTarget): Promise<ActivityDetail>;
   pullAgenda(request: AgendaQuery): Promise<AgendaData>;
   pullReminderCoverage(): Promise<void>;
+  recoverRejectedIntent(intentId: string): Promise<boolean>;
   pullAnytime?(): Promise<readonly ActivityListItem[]>;
   stop(): void;
 }
@@ -88,7 +90,7 @@ function agendaRowCount(data: AgendaData): number {
   );
 }
 
-function rejectedAttention(error: unknown) {
+function rejectedAttention(error: unknown, recoveryRequired: boolean) {
   const status = field(error, 'status');
   const code = field(error, 'code');
   const details = field(error, 'details');
@@ -97,6 +99,7 @@ function rejectedAttention(error: unknown) {
     ...(typeof status === 'number' ? { status } : {}),
     ...(typeof code === 'string' ? { code } : {}),
     ...(details === undefined ? {} : { details }),
+    ...(recoveryRequired ? { recoveryRequired: true as const } : {}),
   };
 }
 
@@ -204,6 +207,7 @@ export class CanonicalActivityInstallDeferredError extends Error {
 export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private running: Promise<Error | undefined> | undefined;
   private requested = false;
+  private resetOrderingBlocks = false;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private retryIndex = 0;
   private stopped = false;
@@ -225,7 +229,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     private readonly agenda: AgendaRepository,
     pushTransport?: ActivityPushTransport,
     private readonly pull: ActivityPullAdapter = sharedActivityPullAdapter,
-    targetedTransport?: TargetedAgendaTransport,
+    private readonly targeted: TargetedAgendaTransport = sharedTargetedAgendaTransport,
     private readonly anytime?: AnytimeRepository,
   ) {
     this.push = new ActivityPushAdapter(pushTransport);
@@ -234,7 +238,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       outbox,
       activities,
       agenda,
-      targetedTransport,
+      this.targeted,
       (operation) => this.serialNetwork(operation),
     );
   }
@@ -248,7 +252,17 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       this.retryIndex = 0;
     }
     if (this.running !== undefined) {
-      if (reason === 'accepted-action' || !this.pulling) this.requested = true;
+      /*
+       * An external wake is a new opportunity to retry ordering domains that failed earlier in
+       * this drain. Keep that distinct from the internal MAX_INTENTS_PER_PASS continuation,
+       * which must retain its blocked keys to avoid a hot loop.
+       *
+       * This signal is also load-bearing while a pull is running: reconnect may clear the only
+       * retry timer, so dropping the wake here would leave durable queued writes asleep until
+       * the next foreground or user action.
+       */
+      this.resetOrderingBlocks = true;
+      this.requested = true;
       return;
     }
     this.cycleError = undefined;
@@ -303,6 +317,185 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         throw new PendingActivityDeletionError(target.activityId);
       return installed;
     });
+  }
+
+  /**
+   * Restores one rejected write from the exact durable target before Discard may retire it.
+   * Activity detail and every retained Agenda coverage are fetched first, then installed with
+   * the receipt transition in one writer transaction. A version mismatch or partial read leaves
+   * recoveryRequired intact so neither restart nor another pull can bless stale local data.
+   */
+  async recoverRejectedIntent(intentId: string): Promise<boolean> {
+    const intent = await this.transactions.run((transaction) =>
+      this.outbox.get(transaction.database, intentId),
+    );
+    if (intent?.status !== 'needs_attention' || intent.recoveryRequired !== true) {
+      return false;
+    }
+    const occurrenceDate = occurrenceDateFromIntent(intent);
+    const target: ActivityDetailTarget =
+      occurrenceDate === undefined
+        ? { kind: 'activity', activityId: intent.entityId }
+        : { kind: 'occurrence', activityId: intent.entityId, date: occurrenceDate };
+    try {
+      let detail: ActivityDetail | undefined;
+      let activityMissing = false;
+      let occurrenceMissing = false;
+      try {
+        detail = await this.serialNetwork(() => this.pull.activity(target));
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 404) throw error;
+        if (occurrenceDate === undefined) {
+          activityMissing = true;
+        } else {
+          try {
+            detail = await this.serialNetwork(() =>
+              this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
+            );
+            occurrenceMissing = true;
+          } catch (parentError) {
+            if (!(parentError instanceof ApiError) || parentError.status !== 404) {
+              throw parentError;
+            }
+            activityMissing = true;
+          }
+        }
+      }
+
+      if (activityMissing) {
+        return this.transactions.run(async (transaction) => {
+          const current = await this.outbox.get(transaction.database, intentId);
+          if (
+            current?.status !== 'needs_attention' ||
+            current.recoveryRequired !== true ||
+            current.entityId !== intent.entityId ||
+            occurrenceDateFromIntent(current) !== occurrenceDate
+          ) {
+            return false;
+          }
+          await this.activities.restoreCanonicalAbsenceAfterRejection(
+            transaction,
+            intent.entityId,
+          );
+          if (
+            !(await this.outbox.completeAuthoritativeRecovery(
+              transaction.database,
+              intentId,
+            ))
+          ) {
+            throw new Error(
+              'The authoritative recovery receipt changed during installation.',
+            );
+          }
+          transaction.changed('outbox');
+          return true;
+        });
+      }
+
+      if (detail === undefined) return false;
+      if (
+        detail.activity.activityId !== intent.entityId ||
+        (occurrenceDate !== undefined &&
+          !occurrenceMissing &&
+          detail.occurrence?.nominalDate !== occurrenceDate)
+      ) {
+        return false;
+      }
+      const coverages = latestNativeAgendaCoverage(await this.agenda.coverage());
+      const coverageKeys = new Set(
+        coverages.map((coverage) => agendaQueryKey(agendaQueryForCoverage(coverage))),
+      );
+      const responses: Array<{
+        readonly request: AgendaQuery;
+        readonly data: Awaited<ReturnType<TargetedAgendaTransport['load']>>;
+      }> = [];
+      for (const coverage of coverages) {
+        const request = agendaQueryForCoverage(coverage);
+        const data = await this.serialNetwork(() =>
+          this.targeted.load(intent.entityId, request),
+        );
+        if (
+          data.activityId !== intent.entityId ||
+          data.activityVersion !== detail.activity.updatedAt
+        ) {
+          return false;
+        }
+        responses.push({ request, data });
+      }
+      const now = systemClock.now();
+      return this.transactions.run(async (transaction) => {
+        const current = await this.outbox.get(transaction.database, intentId);
+        if (
+          current?.status !== 'needs_attention' ||
+          current.recoveryRequired !== true ||
+          current.entityId !== intent.entityId ||
+          occurrenceDateFromIntent(current) !== occurrenceDate
+        ) {
+          return false;
+        }
+        const currentCoverageKeys = new Set(
+          latestNativeAgendaCoverage(
+            await this.agenda.coverage(transaction.database),
+          ).map((coverage) => agendaQueryKey(agendaQueryForCoverage(coverage))),
+        );
+        if (
+          currentCoverageKeys.size !== coverageKeys.size ||
+          [...currentCoverageKeys].some((key) => !coverageKeys.has(key))
+        ) {
+          return false;
+        }
+        if (
+          !(await this.activities.restoreCanonicalAfterRejection(transaction, detail))
+        ) {
+          return false;
+        }
+        if (occurrenceMissing && occurrenceDate !== undefined) {
+          await this.activities.restoreCanonicalOccurrenceAbsenceAfterRejection(
+            transaction,
+            intent.entityId,
+            occurrenceDate,
+          );
+          await this.agenda.removeCanonicalOccurrenceAfterRejection(
+            transaction,
+            intent.entityId,
+            occurrenceDate,
+          );
+        }
+        for (const response of responses) {
+          const zone = timeZone.parse(response.request.tz);
+          await this.agenda.replaceCanonicalActivityRows(
+            transaction,
+            response.request,
+            response.data,
+            {
+              today: systemClock.todayIn(zone),
+              currentMinute: toWallTime(now, zone),
+            },
+          );
+        }
+        await this.anytime?.acceptCanonicalActivity(transaction, detail.activity);
+        if (
+          !(await this.outbox.completeAuthoritativeRecovery(
+            transaction.database,
+            intentId,
+          ))
+        ) {
+          throw new Error(
+            'The authoritative recovery receipt changed during installation.',
+          );
+        }
+        transaction.changed('outbox');
+        return true;
+      });
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('native_rejected_intent_recovery_failed', {
+          intentId,
+          message: message(error),
+        });
+      }
+      return false;
+    }
   }
 
   async pullReminderCoverage(): Promise<void> {
@@ -377,14 +570,21 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   stop(): void {
     this.stopped = true;
     this.requested = false;
+    this.resetOrderingBlocks = false;
     if (this.retryTimer !== undefined) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
   }
 
   private async drain(): Promise<void> {
+    /* A transient failure blocks its ordering domain for this cycle, including cap continuations. */
+    const blockedOrderingKeys = new Set<string>();
     do {
       this.requested = false;
-      const blockedOrderingKeys = new Set<string>();
+      if (this.resetOrderingBlocks) {
+        blockedOrderingKeys.clear();
+        this.resetOrderingBlocks = false;
+      }
+      let claimedCount = 0;
       for (let count = 0; count < MAX_INTENTS_PER_PASS; count += 1) {
         const claimed = await this.transactions.run(async (transaction) => {
           const intent = await this.outbox.claimNext(
@@ -397,9 +597,17 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           return intent;
         });
         if (claimed === undefined) break;
+        claimedCount += 1;
         const outcome = await this.execute(claimed);
         if (outcome === 'blocked') blockedOrderingKeys.add(claimed.orderingKey);
       }
+      /*
+       * Consuming the bound is a level signal: more work may already be durable. Continue with
+       * another bounded pass without waiting for a lifecycle edge. If the cap landed exactly on
+       * the tail, the next claim returns empty once and exits; blocked keys remain excluded, so
+       * this cannot spin on transient/backoff work.
+       */
+      if (claimedCount === MAX_INTENTS_PER_PASS) this.requested = true;
       const reconciliation = await this.reconciler.reconcilePending();
       if (reconciliation.failed > 0) {
         this.cycleError ??= new Error("Couldn't refresh schedule · Retry");
@@ -460,17 +668,25 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
       phase = 'settlement';
       await this.transactions.run(async (transaction) => {
-        const later = await transaction.database.first(
-          `SELECT intent_id FROM outbox_intents
-           WHERE ordering_key = ? AND seq > ?
-             AND status IN ('queued', 'in_flight', 'needs_attention')
-           LIMIT 1;`,
-          [intent.orderingKey, intent.seq],
+        const later = await this.outbox.laterInOrdering(
+          transaction.database,
+          intent.orderingKey,
+          intent.seq,
         );
+        const hasLater = later.length > 0;
         const recurrenceMutation = changesRecurrenceTopology(intent);
         const activity = pushedActivity;
+        if (recurrenceMutation && activity === undefined) {
+          throw new Error('Recurrence acknowledgement omitted its Activity.');
+        }
+        const laterOnlyTouchesReminders = later.every(
+          (candidate) =>
+            candidate.mutationKey[1] === 'reminder-create' ||
+            candidate.mutationKey[1] === 'reminder-delete',
+        );
+        const canInstallThroughLaterIntents = !hasLater || laterOnlyTouchesReminders;
         let canonicalOccurrence: CanonicalOccurrenceResponse | undefined;
-        if (later === undefined) {
+        if (canInstallThroughLaterIntents) {
           try {
             canonicalOccurrence = canonicalOccurrenceResponse(intent, response);
           } catch (contractError) {
@@ -489,7 +705,11 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         }
         const installable =
           activity?.activityId === intent.entityId ? activity : undefined;
-        if (canonicalOccurrence !== undefined && later === undefined) {
+        const agendaTopologyMutation =
+          recurrenceMutation ||
+          intent.mutationKey[1] === 'create' ||
+          intent.mutationKey[1] === 'schedule';
+        if (canonicalOccurrence !== undefined && canInstallThroughLaterIntents) {
           const projection = await this.activities.acceptCanonicalOccurrence(
             transaction,
             canonicalOccurrence.activity,
@@ -503,7 +723,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             projection,
           );
         } else if (
-          later === undefined &&
+          canInstallThroughLaterIntents &&
           installable !== undefined &&
           !recurrenceMutation
         ) {
@@ -511,14 +731,19 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             transaction,
             installable,
             createdDetail,
+            { preserveLocalReminders: hasLater },
           );
           await this.agenda.acceptCanonicalActivitySummary(transaction, installable);
         }
-        if (recurrenceMutation && later === undefined) {
-          if (activity === undefined) {
-            throw new Error('Recurrence acknowledgement omitted its Activity.');
-          }
-          await this.activities.installAcknowledgedActivity(transaction, activity);
+        if (recurrenceMutation && activity !== undefined && laterOnlyTouchesReminders) {
+          await this.activities.installAcknowledgedActivity(
+            transaction,
+            activity,
+            undefined,
+            {
+              preserveLocalReminders: hasLater,
+            },
+          );
           await this.activities.setLocalState(transaction, intent.entityId, 'updating');
           await this.agenda.markActivityRows(transaction, intent.entityId, 'updating');
         }
@@ -556,17 +781,32 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             [reminderId, intent.entityId, systemClock.now()],
           );
         }
-        if (later === undefined && this.anytime !== undefined) {
+        if (canInstallThroughLaterIntents && this.anytime !== undefined) {
           if (intent.mutationKey[1] === 'delete') {
             await this.anytime.removeCanonical(transaction, intent.entityId);
           } else if (installable !== undefined) {
             await this.anytime.acceptCanonicalActivity(transaction, installable);
           }
         }
+        if (installable !== undefined) {
+          await this.outbox.rebaseNextQueuedPatch(
+            transaction.database,
+            intent.orderingKey,
+            intent.seq,
+            installable.updatedAt,
+          );
+          if (agendaTopologyMutation) {
+            await this.agenda.recordProjectionFence(
+              transaction,
+              intent.entityId,
+              installable.updatedAt,
+            );
+          }
+        }
         await this.outbox.acknowledge(
           transaction.database,
           intent.intentId,
-          recurrenceMutation && later === undefined ? activity?.updatedAt : undefined,
+          recurrenceMutation ? activity?.updatedAt : undefined,
         );
         transaction.changed('outbox');
       });
@@ -632,12 +872,32 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         ? { kind: 'activity', activityId: intent.entityId }
         : { kind: 'occurrence', activityId: intent.entityId, date: occurrenceDate };
     let canonical: ActivityDetail | undefined;
-    let missing = false;
+    let activityMissing = false;
+    let occurrenceMissing = false;
     try {
       canonical = await this.serialNetwork(() => this.pull.activity(target));
     } catch (rollbackError) {
-      missing = field(rollbackError, 'status') === 404;
-      if (!missing && __DEV__) {
+      if (rollbackError instanceof ApiError && rollbackError.status === 404) {
+        if (occurrenceDate === undefined) {
+          activityMissing = true;
+        } else {
+          try {
+            canonical = await this.serialNetwork(() =>
+              this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
+            );
+            occurrenceMissing = true;
+          } catch (parentError) {
+            if (parentError instanceof ApiError && parentError.status === 404) {
+              activityMissing = true;
+            } else if (__DEV__) {
+              console.warn('native_rejection_parent_rollback_read_failed', {
+                intentId: intent.intentId,
+                message: message(parentError),
+              });
+            }
+          }
+        }
+      } else if (__DEV__) {
         console.warn('native_rejection_rollback_read_failed', {
           intentId: intent.intentId,
           message: message(rollbackError),
@@ -669,11 +929,14 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
     }
 
+    const recoveryRequired =
+      (canonical === undefined && !activityMissing) ||
+      (occurrenceMissing && canonicalAgendas === undefined);
     await this.transactions.run(async (transaction) => {
       await this.outbox.needsAttention(
         transaction.database,
         intent.intentId,
-        rejectedAttention(failure),
+        rejectedAttention(failure, recoveryRequired),
         failure.message,
       );
       for (const later of await this.outbox.laterInOrdering(
@@ -694,14 +957,16 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           canonical,
         );
         if (restored) {
-          await transaction.database.run(
-            "UPDATE activity_occurrences SET local_state = 'canonical' WHERE activity_id = ?;",
-            [intent.entityId],
-          );
-          await transaction.database.run(
-            "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ?;",
-            [intent.entityId],
-          );
+          if (!occurrenceMissing) {
+            await transaction.database.run(
+              "UPDATE activity_occurrences SET local_state = 'canonical' WHERE activity_id = ?;",
+              [intent.entityId],
+            );
+            await transaction.database.run(
+              "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ?;",
+              [intent.entityId],
+            );
+          }
           await this.anytime?.acceptCanonicalActivity(transaction, canonical.activity);
         }
         if (canonicalAgendas !== undefined && canonicalAgendas.length > 0) {
@@ -719,6 +984,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
             canonical.occurrence,
           );
         } else if (
+          !occurrenceMissing &&
           intent.mutationKey[1] !== 'duplicate' &&
           intent.mutationKey[1] !== 'convert-recurrence' &&
           intent.mutationKey[1] !== 'reminder-create' &&
@@ -731,25 +997,23 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           );
           transaction.changed('agenda');
         }
-      } else if (missing) {
-        await this.anytime?.removeCanonical(transaction, intent.entityId);
-        await transaction.database.run(
-          'DELETE FROM activity_reminders WHERE activity_id = ?;',
-          [intent.entityId],
-        );
-        await transaction.database.run(
-          'DELETE FROM activity_occurrences WHERE activity_id = ?;',
-          [intent.entityId],
-        );
-        await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
+        if (occurrenceMissing && occurrenceDate !== undefined) {
+          await this.activities.restoreCanonicalOccurrenceAbsenceAfterRejection(
+            transaction,
+            intent.entityId,
+            occurrenceDate,
+          );
+          await this.agenda.removeCanonicalOccurrenceAfterRejection(
+            transaction,
+            intent.entityId,
+            occurrenceDate,
+          );
+        }
+      } else if (activityMissing) {
+        await this.activities.restoreCanonicalAbsenceAfterRejection(
+          transaction,
           intent.entityId,
-        ]);
-        await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
-          intent.entityId,
-        ]);
-        transaction.changed(this.activities.scope(intent.entityId));
-        transaction.changed('agenda');
-        transaction.changed('reminders');
+        );
       } else {
         await this.activities.setLocalState(
           transaction,

@@ -2036,6 +2036,11 @@ Completing it from either place updates both.
 Recomputed on a one-minute ticker and on app foreground, without a refetch. Relative time
 copy: `in 20 minutes`, `in 2 hours`, `now` below 60 seconds.
 
+**Correctness amendment — 2026-08-21.** The same ticker-owned repartition refreshes the
+timed row's `isPast` presentation bit when it crosses the boundary. Otherwise the row moves
+into EARLIER TODAY while retaining the server snapshot's earlier `false`, which suppresses
+the canonical resolution prompt—most visibly `Done?` on a recurring Plan occurrence.
+
 **Edge cases.** The ticker must not run while the app is backgrounded — schedule it from an
 `AppState` listener, not a bare `setInterval`, or iOS wakes the JS thread pointlessly. If
 every timed item today is past, UP NEXT is not rendered, and there is no "you're done"
@@ -2261,6 +2266,12 @@ Back returns to Today. Three-tabs-only governs tabs, not pushed screens.
 at 80%; request is exactly `filter=saved`; rows preserve server order; row gestures,
 accessibility actions and undo use the shared implementations; no search, filter or group
 controls render.
+
+**Native projection correction — 2026-08-21.** Giving a paged Anytime task a future date
+removes it from the saved-task index and atomically materializes its dated Agenda row even
+when that task and destination day were absent from the retained Agenda window. Plans →
+Upcoming can therefore show the accepted move immediately offline; the later canonical
+response and coverage pull reconcile the same row rather than being its first source.
 
 ---
 
@@ -2540,7 +2551,10 @@ copy, including the collapse of several consecutive empty dates into one line; p
 empty dates before the first and after the last dated entry do not render. Tapping a gap
 line opens the schedule date picker pre-set to its first day, with the schedule transport
 call count unchanged. A scroll test crossing a month boundary proves that the current month
-header is sticky and that the next month replaces it.
+header is sticky and that the next month replaces it. Because native materialization retains
+Today's wider bucket superset, a dated row moved into `earlier` when its time passes and a
+completed dated row both remain in Plans; only undated `saved` rows, overdue roll-forward
+copies and duplicate Activity/occurrence identities are filtered at the Plans boundary.
 
 ---
 
@@ -2924,9 +2938,11 @@ and a pass-on-retry is still flagged); Maestro runs in `mobile.yml` on
 
 > **Founder-approved P2-37 native-execution deferral — 2026-08-12.** P2-37 may merge after
 > its four Maestro flows, deterministic fixtures, cleanup, simulator workflow and static
-> validation are complete even though this Windows checkout cannot execute iOS. Before the
-> first TestFlight submission, run all four flows successfully on both an iOS simulator and
-> a physical iPhone and attach the run output and screenshots to the release checklist. The
+> validation are complete even though this Windows checkout cannot execute iOS. Amended
+> 2026-08-21: this unpassed hardware work does not block Phase 3 development; run these four
+> flows plus the Phase 2.5 recurrence catalogue with the Phase 3 macOS build on both an iOS
+> simulator and a physical iPhone, and attach the run output and screenshots to that native
+> acceptance record. The
 > simulator-only offline flow uses `e2e/mobile-network-proxy.mjs`, because Maestro's airplane
 > commands do not change iOS simulator connectivity; the physical-device run must use real
 > airplane mode and must not substitute the proxy. This is a verification deferral only:

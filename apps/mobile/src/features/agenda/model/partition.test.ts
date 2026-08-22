@@ -112,6 +112,27 @@ describe('partitionAgenda', () => {
     expect(titles(result.earlier)).toEqual(['Untimed skip', 'Future skip']);
   });
 
+  it('refreshes isPast when a recurring occurrence crosses into Earlier today', () => {
+    const result = partitionAgenda(
+      [
+        item('act_recurring_plan', 'Recurring plan', {
+          type: 'custom',
+          occurrenceDate: '2026-08-06',
+          isRecurring: true,
+          hasCheckbox: false,
+          time: '15:00',
+          isPast: false,
+        }),
+      ],
+      '15:10',
+    );
+
+    expect(result.earlier[0]).toMatchObject({
+      activityId: 'act_recurring_plan',
+      isPast: true,
+    });
+  });
+
   it('flattens the server arrays without duplicating up next', () => {
     const day = workedExampleDayResponse().days[0];
     if (day === undefined) throw new Error('The worked example fixture is incomplete.');

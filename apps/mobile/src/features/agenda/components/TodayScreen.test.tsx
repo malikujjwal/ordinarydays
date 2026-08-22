@@ -176,6 +176,38 @@ describe('TodayScreen', () => {
     expect(String(transport.mock.calls[0]?.[0])).not.toContain('reminders');
   });
 
+  it('shows Done? when a recurring plan crosses into Earlier today locally', async () => {
+    stubFetch(
+      response([
+        row(1, {
+          title: 'Recurring plan',
+          type: 'custom',
+          occurrenceDate: '2026-08-06',
+          isRecurring: true,
+          hasCheckbox: false,
+          time: '15:00',
+          isPast: false,
+        }),
+      ]),
+    );
+    mount(
+      <TodayScreen
+        onAdd={() => {}}
+        onAddTask={() => {}}
+        onOpenAnytime={() => {}}
+        onOpenAgendaItem={() => {}}
+      />,
+    );
+
+    await openEarlier();
+
+    expect(
+      screen.getByRole('button', {
+        name: 'Done? Choose an outcome for Recurring plan',
+      }),
+    ).toBeDefined();
+  });
+
   it('uses the server UP NEXT row for the initial paint', async () => {
     const serverUpNext = row(1, {
       title: 'Server snapshot',

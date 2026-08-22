@@ -42,7 +42,10 @@ const itemIdentity = (item: AgendaItem): string =>
   `${item.activityId}:${item.occurrenceDate ?? ''}`;
 
 function itemsForDay(day: AgendaDay): AgendaItem[] {
-  return [...day.schedule, ...day.anytime, ...day.earlier].sort(
+  const dated = [...day.schedule, ...day.anytime, ...day.earlier].filter(
+    (item) => item.status !== 'saved' && item.overdueFromDate === undefined,
+  );
+  return [...new Map(dated.map((item) => [itemIdentity(item), item])).values()].sort(
     (left, right) =>
       (left.time ?? '').localeCompare(right.time ?? '') ||
       itemIdentity(left).localeCompare(itemIdentity(right)),
@@ -52,8 +55,11 @@ function itemsForDay(day: AgendaDay): AgendaItem[] {
 /**
  * Builds Plans → Upcoming from the server's complete date window.
  *
- * Empty dates become one line only when they are bounded by populated dates. The grouping
- * deliberately reads no Activity shape: an undated Plan never reaches AgendaData at all.
+ * Empty dates become one line only when they are bounded by populated dates. Native Agenda
+ * deliberately materializes Today's wider visible superset, so Plans filters that shared
+ * projection here. Every genuinely dated row remains visible even after Agenda moves it to
+ * Earlier or resolves it; only undated Saved items and rolled-forward overdue copies are
+ * Today-only. Duplicate identities collapse after the three buckets are merged.
  */
 export function buildUpcomingSections(agenda: AgendaData): UpcomingMonthSection[] {
   const occupied = agenda.days

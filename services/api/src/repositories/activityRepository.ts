@@ -415,7 +415,7 @@ export async function getActivityPartition(activityId: string): Promise<StoredIt
   return queryAll<StoredItem>(activityPartition(activityId));
 }
 
-/** Strong canonical partition read used only by activity-scoped agenda reconciliation. */
+/** Strong canonical partition read used by authoritative detail and Agenda reconciliation. */
 export async function getActivityPartitionStrong(
   activityId: string,
 ): Promise<StoredItem[]> {

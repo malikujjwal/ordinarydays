@@ -549,3 +549,27 @@ describe('a completed activity cannot be made to repeat', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('recurrence removal requires an explicit occurrence target', () => {
+  it('rejects PATCH recurrence null for an existing series', async () => {
+    const daily = {
+      mode: 'fixed' as const,
+      segments: [{ freq: 'daily' as const, effectiveFrom: '2026-08-11' }],
+    };
+    seed(
+      meta({
+        status: 'scheduled',
+        schedule: { date: '2026-08-11', timezone: 'UTC' },
+        recurrence: daily,
+      }),
+    );
+
+    const res = await patch(createApp(), { recurrence: null });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error.details?.[0]).toMatchObject({ path: 'recurrence' });
+    expect(body.error.message).toContain('selected occurrence');
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+});

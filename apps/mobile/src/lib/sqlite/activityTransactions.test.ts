@@ -9,6 +9,7 @@ import { NativeActivityActionCoordinator } from './actionCoordinator';
 import { ActivityRepository } from './activityRepository';
 import { ActivityTransactionService } from './activityTransactions';
 import { AgendaRepository } from './agendaRepository';
+import { AnytimeRepository } from './anytimeRepository';
 import type { SqliteDatabase } from './database';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { setActiveNativeState } from './nativeState';
@@ -23,6 +24,7 @@ const ACTIVITY = 'act_01J0000000000000000000000A';
 const OTHER = 'act_01J0000000000000000000000B';
 const THIRD = 'act_01J0000000000000000000000C';
 const REMINDER = 'rem_01J0000000000000000000000A';
+const OTHER_REMINDER = 'rem_01J0000000000000000000000B';
 const clock = { today: '2026-08-19', currentMinute: '08:00' };
 
 function createInput(activityId = ACTIVITY): CreateActivityInput {
@@ -78,6 +80,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       },
       pullAgenda: async () => ({ days: [], warnings: [] }),
       pullReminderCoverage: async () => undefined,
+      recoverRejectedIntent: async () => false,
       stop: () => undefined,
     };
     coordinator = new NativeActivityActionCoordinator(
@@ -105,6 +108,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       },
       pullAgenda: async () => ({ days: [], warnings: [] }),
       pullReminderCoverage: async () => undefined,
+      recoverRejectedIntent: async () => false,
       stop: () => undefined,
     };
     setActiveNativeState({
@@ -212,6 +216,188 @@ describe('Activity/Agenda transactional SQLite slice', () => {
       ),
     ).resolves.toEqual([
       { viewer_date: '2026-08-19', section: 'anytime', status: 'saved' },
+    ]);
+  });
+
+  it('shows a prior-day create in Today Anytime and keeps it visible after moving tomorrow', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    const {
+      recurrence: _recurrence,
+      reminders: _reminders,
+      ...oneOff
+    } = createInput(OTHER);
+    const priorDay = {
+      ...oneOff,
+      schedule: { date: '2026-08-18', timezone: 'America/New_York' },
+    };
+
+    const created = await coordinator.create(
+      { input: priorDay, idempotencyKey: 'prior-day-create' },
+      clock,
+    );
+
+    expect(created.kind).toBe('accepted');
+    expect(
+      await database.all(
+        `SELECT viewer_date, section, status, overdue_from_date, local_state
+         FROM agenda_rows WHERE activity_id = ?;`,
+        [OTHER],
+      ),
+    ).toEqual([
+      {
+        viewer_date: clock.today,
+        section: 'anytime',
+        status: 'scheduled',
+        overdue_from_date: '2026-08-18',
+        local_state: 'queued',
+      },
+    ]);
+
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run(
+        "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
+        [OTHER],
+      );
+      await transaction.database.run(
+        "UPDATE agenda_rows SET local_state = 'canonical' WHERE activity_id = ?;",
+        [OTHER],
+      );
+      transaction.changed('outbox');
+    });
+
+    const scheduled = await coordinator.schedule(
+      OTHER,
+      'prior-day-move-tomorrow',
+      { date: '2026-08-20', timezone: 'America/New_York' },
+      clock,
+    );
+
+    expect(scheduled.kind).toBe('accepted');
+    expect(
+      await database.all(
+        `SELECT viewer_date, section, status, overdue_from_date, local_state
+         FROM agenda_rows WHERE activity_id = ?;`,
+        [OTHER],
+      ),
+    ).toEqual([
+      {
+        viewer_date: '2026-08-20',
+        section: 'anytime',
+        status: 'scheduled',
+        overdue_from_date: null,
+        local_state: 'queued',
+      },
+    ]);
+  });
+
+  it('moves a paged Anytime task to a future Plans day even without an Agenda source row', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    const {
+      schedule: _schedule,
+      recurrence: _recurrence,
+      reminders: _reminders,
+      ...undated
+    } = createInput(OTHER);
+    await coordinator.create(
+      { input: undated, idempotencyKey: 'paged-anytime-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run(
+        "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
+        [OTHER],
+      );
+      await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
+        OTHER,
+      ]);
+      await transaction.database.run(
+        `INSERT INTO anytime_rows (
+          activity_id, type, title, status, time, end_time, is_recurring,
+          participant_count, location_label, subtitle
+        ) VALUES (?, 'task', ?, 'saved', NULL, NULL, 0, 0, NULL, NULL);`,
+        [OTHER, undated.title],
+      );
+      transaction.changed('outbox');
+      transaction.changed('agenda');
+      transaction.changed('anytime');
+    });
+    const anytime = new AnytimeRepository(database, subscriptions);
+    expect((await anytime.read()).map(({ activityId }) => activityId)).toEqual([OTHER]);
+
+    const result = await coordinator.schedule(
+      OTHER,
+      'paged-anytime-future-date',
+      { date: '2026-09-15', timezone: 'America/New_York' },
+      clock,
+    );
+
+    expect(result.kind).toBe('accepted');
+    expect(await anytime.read()).toEqual([]);
+    expect(
+      await database.all(
+        `SELECT viewer_date, section, status, local_state FROM agenda_rows
+         WHERE activity_id = ?;`,
+        [OTHER],
+      ),
+    ).toEqual([
+      {
+        viewer_date: '2026-09-15',
+        section: 'anytime',
+        status: 'scheduled',
+        local_state: 'queued',
+      },
+    ]);
+  });
+
+  it('moves a dated task back to Today Anytime when older coverage is retained', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    const {
+      recurrence: _recurrence,
+      reminders: _reminders,
+      ...oneOff
+    } = createInput(OTHER);
+    await coordinator.create(
+      { input: oneOff, idempotencyKey: 'dated-before-clear-create' },
+      clock,
+    );
+    await transactions.run(async (transaction) => {
+      await transaction.database.run('DELETE FROM outbox_intents;');
+      await transaction.database.run(
+        "UPDATE activities SET local_state = 'canonical' WHERE activity_id = ?;",
+        [OTHER],
+      );
+      await transaction.database.run(
+        `INSERT INTO agenda_coverage
+          (from_date, to_date, timezone, include_key, refreshed_at, warnings_json)
+         VALUES (?, ?, ?, '', ?, '[]');`,
+        ['2026-08-01', '2026-08-02', 'America/New_York', '2026-08-19T00:00:00Z'],
+      );
+      transaction.changed('outbox');
+    });
+
+    const result = await coordinator.schedule(
+      OTHER,
+      'dated-back-to-anytime',
+      { date: null, timezone: 'America/New_York' },
+      clock,
+    );
+
+    expect(result.kind).toBe('accepted');
+    expect(
+      await database.all(
+        `SELECT viewer_date, section, status, local_state FROM agenda_rows
+         WHERE activity_id = ?;`,
+        [OTHER],
+      ),
+    ).toEqual([
+      {
+        viewer_date: clock.today,
+        section: 'anytime',
+        status: 'saved',
+        local_state: 'queued',
+      },
     ]);
   });
 
@@ -1390,6 +1576,259 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     expect(
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity.title,
     ).toBe('Retry this title');
+  });
+
+  it('retries an ambiguous create with one fresh Activity identity across dependent state', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await transactions.run(async (transaction) => {
+      await service.create(
+        transaction,
+        OWNER,
+        { input: createInput(), idempotencyKey: 'collision-create' },
+        clock,
+      );
+      await service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'collision-later-patch',
+        input: { title: 'Latest local intent wins' },
+        ifMatch: 'v1',
+      });
+      await service.complete(
+        transaction,
+        {
+          activityId: ACTIVITY,
+          idempotencyKey: 'collision-dependent-complete',
+          input: { occurrenceDate: '2026-08-19' },
+        },
+        true,
+        'scheduled',
+        clock,
+        { originalIntentId: 'collision-create' },
+      );
+      await service.addReminder(transaction, OWNER, {
+        activityId: ACTIVITY,
+        idempotencyKey: 'collision-later-reminder',
+        input: { reminderId: OTHER_REMINDER, offsetMinutes: -30 },
+      });
+      await transaction.database.run(
+        `INSERT INTO anytime_rows
+          (activity_id, type, title, status, time, end_time, is_recurring,
+           participant_count, location_label, subtitle)
+         VALUES (?, 'task', 'Latest local intent wins', 'scheduled', '09:00', NULL,
+           1, 0, NULL, NULL);`,
+        [ACTIVITY],
+      );
+      await outbox.needsAttention(
+        transaction.database,
+        'collision-create',
+        { kind: 'parked', reason: 'ambiguous_collision' },
+        'This never synced.',
+      );
+      await activities.setLocalState(transaction, ACTIVITY, 'needs_attention');
+      await agenda.markActivityRows(transaction, ACTIVITY, 'needs_attention');
+    });
+    coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      sync,
+      () => OTHER,
+    );
+
+    const retried = await coordinator.retryBlocked(
+      'collision-create',
+      'fresh-collision-create',
+      clock,
+    );
+
+    expect(retried).toMatchObject({
+      kind: 'accepted',
+      intent: {
+        intentId: 'fresh-collision-create',
+        entityId: OTHER,
+        orderingKey: `activity:${OTHER}`,
+        status: 'queued',
+        variables: {
+          idempotencyKey: 'fresh-collision-create',
+          input: { activityId: OTHER },
+        },
+      },
+    });
+    expect(
+      await activities.read({ kind: 'activity', activityId: ACTIVITY }),
+    ).toBeUndefined();
+    expect(await activities.read({ kind: 'activity', activityId: OTHER })).toMatchObject({
+      activity: {
+        activityId: OTHER,
+        title: 'Latest local intent wins',
+      },
+      reminders: expect.arrayContaining([
+        expect.objectContaining({ reminderId: REMINDER, activityId: OTHER }),
+        expect.objectContaining({ reminderId: OTHER_REMINDER, activityId: OTHER }),
+      ]),
+    });
+    expect(
+      await database.all(
+        `SELECT intent_id, entity_id, ordering_key, depends_on_intent_id,
+                compensation_for_intent_id
+         FROM outbox_intents ORDER BY seq;`,
+      ),
+    ).toEqual([
+      {
+        intent_id: 'fresh-collision-create',
+        entity_id: OTHER,
+        ordering_key: `activity:${OTHER}`,
+        depends_on_intent_id: null,
+        compensation_for_intent_id: null,
+      },
+      {
+        intent_id: 'collision-later-patch',
+        entity_id: OTHER,
+        ordering_key: `activity:${OTHER}`,
+        depends_on_intent_id: null,
+        compensation_for_intent_id: null,
+      },
+      {
+        intent_id: 'collision-dependent-complete',
+        entity_id: OTHER,
+        ordering_key: `activity:${OTHER}`,
+        depends_on_intent_id: 'fresh-collision-create',
+        compensation_for_intent_id: 'fresh-collision-create',
+      },
+      {
+        intent_id: 'collision-later-reminder',
+        entity_id: OTHER,
+        ordering_key: `activity:${OTHER}`,
+        depends_on_intent_id: null,
+        compensation_for_intent_id: null,
+      },
+    ]);
+    expect(
+      await database.first(
+        `SELECT COUNT(*) AS count FROM (
+           SELECT activity_id FROM activities WHERE activity_id = ?
+           UNION ALL SELECT activity_id FROM activity_occurrences WHERE activity_id = ?
+           UNION ALL SELECT activity_id FROM activity_reminders WHERE activity_id = ?
+           UNION ALL SELECT activity_id FROM agenda_rows WHERE activity_id = ?
+           UNION ALL SELECT activity_id FROM anytime_rows WHERE activity_id = ?
+         );`,
+        [ACTIVITY, ACTIVITY, ACTIVITY, ACTIVITY, ACTIVITY],
+      ),
+    ).toEqual({ count: 0 });
+    expect(
+      await database.first(
+        `SELECT COUNT(*) AS count FROM outbox_intents
+         WHERE variables_json LIKE ? OR semantic_key LIKE ?;`,
+        [`%${ACTIVITY}%`, `%${ACTIVITY}%`],
+      ),
+    ).toEqual({ count: 0 });
+    expect(
+      await database.all(
+        `SELECT activity_id, local_state, row_id FROM agenda_rows
+         WHERE activity_id = ? ORDER BY viewer_date;`,
+        [OTHER],
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          activity_id: OTHER,
+          local_state: 'queued',
+        }),
+      ]),
+    );
+    expect(
+      await database.first(
+        'SELECT activity_id FROM anytime_rows WHERE activity_id = ?;',
+        [OTHER],
+      ),
+    ).toEqual({ activity_id: OTHER });
+    const replayOrder: string[] = [];
+    await transactions.run(async (transaction) => {
+      for (;;) {
+        const claimed = await outbox.claimNext(transaction.database);
+        if (claimed === undefined) break;
+        replayOrder.push(claimed.intentId);
+        await outbox.acknowledge(transaction.database, claimed.intentId);
+      }
+    });
+    expect(replayOrder).toEqual([
+      'fresh-collision-create',
+      'collision-later-patch',
+      'collision-dependent-complete',
+      'collision-later-reminder',
+    ]);
+    expect(await outbox.all()).toEqual([]);
+    expect(request).toHaveBeenCalledWith('accepted-action');
+  });
+
+  it('rolls back every projection remap when the fresh collision identity is occupied', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await transactions.run(async (transaction) => {
+      await service.create(
+        transaction,
+        OWNER,
+        { input: createInput(), idempotencyKey: 'atomic-collision-create' },
+        clock,
+      );
+      await outbox.needsAttention(
+        transaction.database,
+        'atomic-collision-create',
+        { kind: 'parked', reason: 'ambiguous_collision' },
+        'This never synced.',
+      );
+      await activities.setLocalState(transaction, ACTIVITY, 'needs_attention');
+      await agenda.markActivityRows(transaction, ACTIVITY, 'needs_attention');
+      await outbox.append(transaction.database, {
+        intentId: 'occupied-fresh-identity',
+        mutationKey: ['activity', 'patch'],
+        variables: { activityId: OTHER, input: { title: 'Unrelated' }, ifMatch: 'v1' },
+        entityId: OTHER,
+      });
+    });
+    coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      sync,
+      () => OTHER,
+    );
+
+    const result = await coordinator.retryBlocked(
+      'atomic-collision-create',
+      'fresh-atomic-collision-create',
+      clock,
+    );
+
+    expect(result).toMatchObject({ kind: 'refused' });
+    expect(
+      await activities.read({ kind: 'activity', activityId: ACTIVITY }),
+    ).toMatchObject({ activity: { activityId: ACTIVITY } });
+    expect(
+      await activities.read({ kind: 'activity', activityId: OTHER }),
+    ).toBeUndefined();
+    expect(
+      await database.all(
+        `SELECT DISTINCT activity_id, local_state FROM agenda_rows
+         WHERE activity_id IN (?, ?) ORDER BY activity_id;`,
+        [ACTIVITY, OTHER],
+      ),
+    ).toEqual([{ activity_id: ACTIVITY, local_state: 'needs_attention' }]);
+    expect(await outbox.all()).toMatchObject([
+      {
+        intentId: 'atomic-collision-create',
+        entityId: ACTIVITY,
+        status: 'needs_attention',
+        attention: { kind: 'parked', reason: 'ambiguous_collision' },
+      },
+      {
+        intentId: 'occupied-fresh-identity',
+        entityId: OTHER,
+        status: 'queued',
+      },
+    ]);
+    expect(request).not.toHaveBeenCalledWith('accepted-action');
   });
 
   it('retries or discards a failed queued recurrence edit without trapping its rows', async () => {

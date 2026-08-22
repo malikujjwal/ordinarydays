@@ -28,6 +28,41 @@ const window = (dates: Array<[string, AgendaItem[]]>): AgendaData => ({
 });
 
 describe('buildUpcomingSections', () => {
+  it('keeps every dated row while filtering Today-only materialization copies', () => {
+    const scheduled = row('act_01J0000000000000000000000A', '2026-08-19');
+    const allDayScheduled = row('act_01J0000000000000000000000B');
+    const saved = { ...row('act_01J0000000000000000000000C'), status: 'saved' as const };
+    const overdue = {
+      ...row('act_01J0000000000000000000000D'),
+      overdueFromDate: '2026-08-18',
+    };
+    const earlier = row('act_01J0000000000000000000000E');
+    const completed = {
+      ...row('act_01J0000000000000000000000F'),
+      status: 'completed' as const,
+    };
+    const result = buildUpcomingSections({
+      days: [
+        {
+          date: '2026-08-19',
+          schedule: [scheduled, scheduled, completed],
+          anytime: [allDayScheduled, saved, overdue],
+          earlier: [earlier],
+        },
+      ],
+      warnings: [],
+    });
+
+    const group = result[0]?.data[0];
+    expect(group).toMatchObject({ kind: 'date', date: '2026-08-19' });
+    expect(group?.kind === 'date' ? group.items : []).toEqual([
+      scheduled,
+      allDayScheduled,
+      earlier,
+      completed,
+    ]);
+  });
+
   it('keeps one occurrence of a recurring series on every populated date', () => {
     const result = buildUpcomingSections(
       window([

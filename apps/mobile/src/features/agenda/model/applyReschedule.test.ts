@@ -6,6 +6,7 @@ import {
 import type { AgendaData, AgendaDay, AgendaItem } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
 import { applyReschedule } from './applyReschedule';
+import { buildUpcomingSections } from './plansWindow';
 
 const moved: AgendaItem = {
   activityId: 'act_MOVE',
@@ -125,6 +126,58 @@ describe('applyReschedule', () => {
     ).toBe(cached);
   });
 
+  it('materializes a paged Anytime fallback on a future day outside retained Agenda', () => {
+    const result = applyReschedule(
+      { days: [todayDay], warnings: [] },
+      {
+        activityId: saved.activityId,
+        date: '2026-09-15',
+        fallbackItem: saved,
+        ...clock,
+      },
+    );
+
+    expect(result.days.map(({ date }) => date)).toEqual(['2026-08-11', '2026-09-15']);
+    expect(result.days[1]?.anytime).toContainEqual(
+      expect.objectContaining({
+        activityId: saved.activityId,
+        status: 'scheduled',
+      }),
+    );
+  });
+
+  it('clears an overdue marker when moving the task to tomorrow so Plans renders it', () => {
+    const agenda: AgendaData = {
+      days: [
+        { ...todayDay, anytime: [overdue] },
+        {
+          date: tomorrowDay.date,
+          schedule: [],
+          anytime: tomorrowDay.anytime,
+          earlier: tomorrowDay.earlier,
+        },
+      ],
+      warnings: [],
+    };
+
+    const result = applyReschedule(agenda, {
+      activityId: overdue.activityId,
+      date: tomorrowDay.date,
+      ...clock,
+    });
+    const movedToTomorrow = result.days[1]?.anytime.find(
+      ({ activityId }) => activityId === overdue.activityId,
+    );
+
+    expect(movedToTomorrow).toBeDefined();
+    expect(movedToTomorrow).not.toHaveProperty('overdueFromDate');
+    expect(
+      buildUpcomingSections(result).flatMap((section) =>
+        section.data.flatMap((item) => (item.kind === 'date' ? item.items : [])),
+      ),
+    ).toContainEqual(expect.objectContaining({ activityId: overdue.activityId }));
+  });
+
   it('clears date, time, end time, and overdue state into sorted Anytime', () => {
     const source = {
       ...moved,
@@ -170,6 +223,34 @@ describe('applyReschedule', () => {
       status: 'saved',
       isPast: false,
     });
+  });
+
+  it('pins a cleared schedule to today instead of the oldest retained day', () => {
+    const oldDay: AgendaDay = {
+      date: '2026-08-01',
+      upNext: moved,
+      schedule: [moved],
+      anytime: [],
+      earlier: [],
+    };
+
+    const result = applyReschedule(
+      { days: [oldDay], warnings: [] },
+      {
+        activityId: moved.activityId,
+        date: null,
+        ...clock,
+      },
+    );
+
+    expect(result.days.map(({ date }) => date)).toEqual(['2026-08-01', clock.today]);
+    expect(result.days[0]?.schedule).toEqual([]);
+    expect(result.days[1]?.anytime).toContainEqual(
+      expect.objectContaining({
+        activityId: moved.activityId,
+        status: 'saved',
+      }),
+    );
   });
 
   it('marks a same-day move past once its end time has elapsed', () => {

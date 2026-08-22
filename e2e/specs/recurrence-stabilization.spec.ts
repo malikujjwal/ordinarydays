@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { agendaRow, openEarlierToday } from '../support/agenda';
+import { agendaRow } from '../support/agenda';
 import { createDailyTask, deleteActivities, wallDate } from '../support/api';
 
 test('keeps occurrence actions scoped while a daily series becomes a one-off', async ({
@@ -9,6 +9,7 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
 }) => {
   const now = new Date();
   const today = wallDate(now);
+  const browserNow = new Date(`${today}T16:00:00.000Z`);
   const tomorrowInstant = new Date(`${today}T12:00:00.000Z`);
   tomorrowInstant.setUTCDate(tomorrowInstant.getUTCDate() + 1);
   const tomorrow = tomorrowInstant.toISOString().slice(0, 10);
@@ -16,15 +17,9 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
   const series = await createDailyTask(request, { title, date: today, time: '18:00' });
 
   try {
-    await page.clock.setFixedTime(now);
+    await page.clock.setFixedTime(browserNow);
     await page.goto('/');
     await expect(page.locator('[data-testid="today-agenda"]')).toBeVisible();
-    /**
-     * The series is at 18:00, so whether its row sits in SCHEDULE or in EARLIER TODAY depends on
-     * the wall clock when the suite runs — and EARLIER TODAY is collapsed by default (P2-44).
-     * Opening it makes the spec time-of-day independent instead of passing only before 6 PM.
-     */
-    await openEarlierToday(page);
     const todayRow = agendaRow(page, series.activityId).filter({ hasText: title });
     await expect(
       todayRow.locator('[data-testid="agenda-badge-recurrence"]'),
@@ -67,30 +62,33 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
 
     await page.clock.setFixedTime(new Date(`${tomorrow}T16:00:00.000Z`));
     await page.goto('/');
-    await openEarlierToday(page);
     const tomorrowRow = agendaRow(page, series.activityId).filter({ hasText: title });
     await expect(tomorrowRow.getByRole('checkbox')).not.toBeChecked();
     await expect(tomorrowRow.getByRole('checkbox')).toBeEnabled();
 
     await tomorrowRow.locator('[data-testid="agenda-row-time"]').click();
     await expect(page.locator('[data-testid="reschedule-sheet"]')).toBeVisible();
-    await page.getByRole('button', { name: 'This occurrence only' }).click();
     await page
       .locator('[data-testid="reschedule-time-picker"]')
       .getByRole('button', { name: '6:00 PM' })
       .click();
     await page.locator('input[aria-label="Time"]').fill('19:30');
+    await page
+      .locator('[data-testid="reschedule-time-picker"]')
+      .getByRole('button', { name: 'Done' })
+      .click();
+    const occurrenceScope = page.getByRole('button', {
+      name: 'This occurrence only',
+    });
+    await expect(occurrenceScope).toBeVisible();
     const scheduleResponse = page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&
         new URL(response.url()).pathname ===
           `/v1/activities/${series.activityId}/schedule`,
     );
-    await page
-      .locator('[data-testid="reschedule-time-picker"]')
-      .getByRole('button', { name: 'Done' })
-      .click();
-    await scheduleResponse;
+    await occurrenceScope.click();
+    expect((await scheduleResponse).ok()).toBe(true);
     await expect(tomorrowRow.locator('[data-testid="agenda-row-time"]')).toContainText(
       '7:30 PM',
     );
@@ -136,11 +134,12 @@ test('keeps occurrence actions scoped while a daily series becomes a one-off', a
 test('ends a series inclusively and No end restarts it', async ({ page, request }) => {
   const now = new Date();
   const today = wallDate(now);
+  const browserNow = new Date(`${today}T16:00:00.000Z`);
   const title = `P2-55 end restart ${randomUUID()}`;
   const series = await createDailyTask(request, { title, date: today, time: '20:00' });
 
   try {
-    await page.clock.setFixedTime(now);
+    await page.clock.setFixedTime(browserNow);
     await page.goto('/');
     const row = agendaRow(page, series.activityId).filter({ hasText: title });
     await row.locator('[data-testid="agenda-row-body"]').click();

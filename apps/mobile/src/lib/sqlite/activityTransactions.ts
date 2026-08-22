@@ -11,6 +11,7 @@ import {
 import { systemClock } from '@od/shared/time';
 import type {
   Activity,
+  ActivityDetail,
   ActivityOutcome,
   AgendaData,
   AgendaItem,
@@ -390,6 +391,7 @@ export class ActivityTransactionService {
     await transaction.database.run('DELETE FROM agenda_rows WHERE activity_id = ?;', [
       variables.activityId,
     ]);
+    await this.agenda.clearProjectionFence(transaction, variables.activityId);
     await transaction.database.run('DELETE FROM activities WHERE activity_id = ?;', [
       variables.activityId,
     ]);
@@ -488,8 +490,9 @@ export class ActivityTransactionService {
     );
     if (appended.kind === 'existing' && !projectExisting) return appended;
     const occurrenceDate = variables.input.occurrenceDate;
+    let scheduledDetail: ActivityDetail | undefined;
     if (occurrenceDate === undefined) {
-      await this.activities.scheduleLocal(
+      scheduledDetail = await this.activities.scheduleLocal(
         transaction,
         variables.activityId,
         variables.input,
@@ -514,6 +517,47 @@ export class ActivityTransactionService {
       transaction.changed(this.activities.scope(variables.activityId));
     }
     const current = await this.agenda.readMaterializedWindow(transaction.database);
+    const activity = scheduledDetail?.activity;
+    const noteExcerpt = activity?.notes?.split(/\r?\n/, 1)[0]?.slice(0, 200);
+    const fallbackItem: AgendaItem | undefined =
+      activity === undefined || activity.recurrence !== undefined
+        ? undefined
+        : {
+            activityId: activity.activityId,
+            type: activity.type,
+            title: activity.title,
+            status: activity.status,
+            ...(activity.schedule?.time === undefined
+              ? {}
+              : { time: activity.schedule.time }),
+            ...(activity.schedule?.endTime === undefined
+              ? {}
+              : { endTime: activity.schedule.endTime }),
+            isRecurring: false,
+            isSnoozed: false,
+            hasCheckbox: activity.type === 'task',
+            capabilities: scheduledDetail?.capabilities ?? {
+              complete: false,
+              skip: false,
+              snooze: false,
+            },
+            participantAvatars: [],
+            participantCount: activity.participantCount,
+            ...(activity.location?.label === undefined
+              ? {}
+              : { locationLabel: activity.location.label }),
+            ...(noteExcerpt === undefined || noteExcerpt === '' ? {} : { noteExcerpt }),
+            ...(activity.parentActivityId === undefined
+              ? {}
+              : { parentActivityId: activity.parentActivityId }),
+            isPast:
+              activity.schedule !== undefined &&
+              (activity.schedule.date < clock.today ||
+                (activity.schedule.date === clock.today &&
+                  activity.schedule.time !== undefined &&
+                  (activity.schedule.endTime ?? activity.schedule.time) <=
+                    clock.currentMinute)),
+          };
     const projected = applyReschedule(current, {
       activityId: variables.activityId,
       ...(occurrenceDate === undefined ? {} : { occurrenceDate }),
@@ -522,6 +566,7 @@ export class ActivityTransactionService {
       ...(variables.input.endTime === undefined
         ? {}
         : { endTime: variables.input.endTime }),
+      ...(fallbackItem === undefined ? {} : { fallbackItem }),
       ...clock,
     });
     await this.agenda.replaceLocalActivityRows(
@@ -790,6 +835,24 @@ export class ActivityTransactionService {
     transaction.changed('reminders');
     transaction.changed('outbox');
     return appended;
+  }
+
+  /** Remaps persisted local projections; the coordinator remaps the outbox in the same write. */
+  async remapPendingCreateIdentity(
+    transaction: TransactionContext,
+    previousActivityId: string,
+    freshActivityId: string,
+  ): Promise<void> {
+    await this.activities.remapPendingCreateIdentity(
+      transaction,
+      previousActivityId,
+      freshActivityId,
+    );
+    await this.agenda.remapPendingCreateIdentity(
+      transaction,
+      previousActivityId,
+      freshActivityId,
+    );
   }
 
   async removeReminder(

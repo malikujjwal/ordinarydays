@@ -16,7 +16,7 @@ export interface TargetedAgendaTransport {
   load(activityId: string, request: AgendaQuery): Promise<ActivityAgendaData>;
 }
 
-const sharedTargetedAgendaTransport: TargetedAgendaTransport = {
+export const sharedTargetedAgendaTransport: TargetedAgendaTransport = {
   load: (activityId, request) => getActivityAgenda(apiClient, activityId, request),
 };
 
@@ -24,6 +24,8 @@ export interface ReconciliationResult {
   readonly reconciled: number;
   readonly failed: number;
 }
+
+type ReconciliationOutcome = 'reconciled' | 'deferred' | 'failed';
 
 function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -46,15 +48,33 @@ export class RecurrenceReconciler {
     let reconciled = 0;
     let failed = 0;
     for (const intent of await this.outbox.pendingReconciliations()) {
-      if (await this.reconcile(intent)) reconciled += 1;
-      else failed += 1;
+      const outcome = await this.reconcile(intent);
+      if (outcome === 'reconciled') reconciled += 1;
+      else if (outcome === 'failed') failed += 1;
     }
     return { reconciled, failed };
   }
 
-  private async reconcile(intent: OutboxIntent): Promise<boolean> {
+  private async reconcile(intent: OutboxIntent): Promise<ReconciliationOutcome> {
     const expectedVersion = intent.reconciliationVersion;
-    if (expectedVersion === undefined) return true;
+    if (expectedVersion === undefined) return 'reconciled';
+    const ready = await this.transactions.run(async (transaction) => {
+      const current = await this.outbox.get(transaction.database, intent.intentId);
+      if (
+        current?.status !== 'acknowledged' ||
+        current.reconciliationVersion !== expectedVersion
+      ) {
+        return 'stale' as const;
+      }
+      const later = await this.outbox.laterInOrdering(
+        transaction.database,
+        intent.orderingKey,
+        intent.seq,
+      );
+      return later.length === 0 ? ('ready' as const) : ('deferred' as const);
+    });
+    if (ready === 'stale') return 'reconciled';
+    if (ready === 'deferred') return 'deferred';
     const coverages = latestNativeAgendaCoverage(await this.agenda.coverage());
     try {
       const responses: Array<{
@@ -83,15 +103,14 @@ export class RecurrenceReconciler {
           current?.status !== 'acknowledged' ||
           current.reconciliationVersion !== expectedVersion
         ) {
-          return false;
+          return 'stale' as const;
         }
-        const later = await transaction.database.first(
-          `SELECT 1 AS found FROM outbox_intents
-           WHERE ordering_key = ? AND seq > ?
-             AND status IN ('queued', 'in_flight', 'needs_attention') LIMIT 1;`,
-          [intent.orderingKey, intent.seq],
+        const later = await this.outbox.laterInOrdering(
+          transaction.database,
+          intent.orderingKey,
+          intent.seq,
         );
-        if (later !== undefined) return false;
+        if (later.length > 0) return 'deferred' as const;
         for (const response of responses) {
           await this.agenda.replaceCanonicalActivityRows(
             transaction,
@@ -116,12 +135,17 @@ export class RecurrenceReconciler {
             ],
           );
         }
+        await this.agenda.recordProjectionFence(
+          transaction,
+          intent.entityId,
+          expectedVersion,
+        );
         await this.activities.setLocalState(transaction, intent.entityId, 'canonical');
         await this.outbox.completeReconciliation(transaction.database, intent.intentId);
         transaction.changed('outbox');
-        return true;
+        return 'installed' as const;
       });
-      return installed;
+      return installed === 'deferred' ? 'deferred' : 'reconciled';
     } catch (error) {
       const message = failureMessage(error);
       await this.transactions.run(async (transaction) => {
@@ -143,7 +167,7 @@ export class RecurrenceReconciler {
         transaction.changed('outbox');
         transaction.changed('agenda');
       });
-      return false;
+      return 'failed';
     }
   }
 }

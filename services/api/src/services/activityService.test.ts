@@ -1409,6 +1409,29 @@ describe('patchActivity', () => {
     ).rejects.toMatchObject({ code: 'validation_failed' });
   });
 
+  it('rejects unscoped recurrence removal in favor of targeted conversion', async () => {
+    seed(recurring());
+
+    await expect(
+      patchActivity(USER, PLAN, { recurrence: null }, VERSION, LATER),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: expect.stringContaining('selected occurrence'),
+    });
+
+    expect(repository.patchActivity).not.toHaveBeenCalled();
+  });
+
+  it('rejects recurrence null as a PATCH no-op on a non-recurring activity', async () => {
+    seed();
+
+    await expect(
+      patchActivity(USER, PLAN, { recurrence: null }, VERSION, LATER),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+
+    expect(repository.patchActivity).not.toHaveBeenCalled();
+  });
+
   it('rejects the append that would create a 21st segment with explaining copy', async () => {
     const segments = Array.from({ length: 20 }, (_, index) => ({
       freq: 'daily' as const,

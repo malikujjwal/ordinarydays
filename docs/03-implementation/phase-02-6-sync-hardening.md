@@ -2,8 +2,8 @@
 
 ## Goal
 
-Phase 2.6 makes the offline promise the product already wrote true. It is a blocking gate
-between the recurrence gate (Phase 2.5) and Phase 3: Phase 3's list-item and Plan-bridge
+Phase 2.6 makes the offline promise the product already wrote true. Its architecture and
+automated-convergence work is the gate between Phase 2.5 and Phase 3: Phase 3's list-item and Plan-bridge
 tasks already specify queued offline creates and a visible `Plan will finish syncing` state
 (`phase-03-plans-and-lists.md` P3-13), and building those against today's persistence layer
 would build them on writes that can silently disappear.
@@ -225,6 +225,12 @@ schema change lands first per `git-workflow.md` §6.3.
 - **Collision recovery** per founder decision 3: `GET` own id; `200` acknowledges on
   identity + ownership, server fields win; `404` surfaces
   `This never synced — retry or discard?` — no automatic re-mint.
+- **Collision Retry invariant (amended 2026-08-21).** An explicit Retry after that `404`
+  mints both a fresh mutation identity and a fresh `act_` identity. One serialized SQLite
+  transaction remaps the local Activity, occurrence, Agenda, reminder and Anytime projections
+  together with every same-entity outbox payload, entity/order key, dependency, compensation
+  and semantic key. Sequence numbers and later intent contents do not change. The old and new
+  Activity identities therefore cannot coexist, and a crash cannot leave a mixed chain.
 - **Honest oracle note.** A generic collision error still reveals existence through
   success-versus-failure. IDs are not a security boundary (80 random bits, authorization is
   tenancy); the response carries no owner or entity metadata, and `data-model.md` §8
@@ -524,12 +530,16 @@ DynamoDB mirror, ORM, CRDT, web queue or local expansion of an existing server-k
 
 > **Implementation status — 2026-08-19:** implemented for the native Activity/Agenda slice.
 > Automated repository, outbox, convergence, reminder and web-regression verification is
-> required in the implementation commit. The Phase 3 gate remains closed until the documented
-> iOS transition matrix and Maestro run are completed on a supported macOS/device environment.
-> On the 2026-08-19 Windows implementation host, `pnpm verify` and the complete mobile suite
-> pass. Playwright passes 7/8 specs; the first recurrence-stabilization spec times out twice at
-> its existing reschedule-scope interaction. Maestro is not installed and iOS device/simulator
-> execution is unavailable, so neither result is represented as passed.
+> required in the implementation commit. That automated/architecture gate does not wait for
+> hardware unavailable to this checkout: Phase 3 development may proceed. The documented iOS
+> transition matrix and every Phase 2/2.5 Maestro flow remain required and must be run with the
+> Phase 3 macOS build on a supported simulator/device environment before the next native
+> acceptance milestone; they are not represented as passed here.
+> On the 2026-08-21 Windows hardening host, the complete mobile and API unit suites, API
+> integration suite, architecture/static guards, and the focused recurrence-stabilization
+> Playwright spec pass. Maestro is not installed and iOS device/simulator execution is
+> unavailable, so neither the Phase 2 flow matrix nor native-device acceptance is represented
+> as passed.
 
 **Promise.** The Activity/Agenda slice converges through existing server contracts, safely
 retires legacy native persistence only after verified import, and makes refresh a non-
@@ -595,7 +605,21 @@ replacement, including zero rows, and clears Retry state only in that commit.
 strong Activity/Agenda server snapshot before exposing structured recovery; later writes in
 the same ordering domain park behind that rejection instead of having their projection
 silently overwritten. The app exposes explicit Retry (fresh mutation identity, same queue
-position, local reprojection) and Discard (including the complete dependent chain). Pending
+position, local reprojection) and Discard (including the complete dependent chain). Discard
+of a failed occurrence rollback reconstructs the occurrence target from the durable intent
+and retires its receipt only after version-matched Activity and activity-scoped Agenda truth
+commit together. A strong recovery `404` is authoritative rather than a permanent Discard
+trap: Activity absence atomically removes Activity, occurrence, reminder, Agenda and Anytime
+projections and records the tombstone; occurrence absence re-reads and restores the surviving
+parent, removes only the exact occurrence, and strongly replaces retained Agenda coverage.
+The same Activity-versus-occurrence distinction applies when the strong `404` is available
+during initial rejection rollback, so an absent occurrence can never delete its parent. The
+recovery flag clears only in that writer transaction, with restart-and-Discard coverage for
+both absence shapes. Server-authored Activity versions install through a remaining
+reminder-only queue tail while preserving its unresolved local reminder projections, and
+propagate to the next queued PATCH across intervening reminder writes and retried creates;
+payload and semantic identity rebase in the same writer transaction without speculatively
+changing `canonical_version`. Pending
 creates remain inert through `needs_attention`, while their locally armed reminders and
 recovery state are stated truthfully. Occurrence pulls and older acknowledgements cannot
 overwrite a later local occurrence or recurrence edit.
@@ -604,6 +628,25 @@ Native Anytime now owns a complete saved-task index in the account SQLite databa
 accepted local changes immediately, and refreshes collection pages through the serialized
 network owner without using TanStack as a native domain store. Duplicate uses an ordinary
 client-minted Activity create, so its exact closed copy set is visible and durable offline.
+Creating a one-off task dated within the previous 30 days immediately materializes the same
+Today Anytime overdue copy as the server, including while offline. Rescheduling that copy
+always removes its old `overdueFromDate`, so Plans treats the new date as an ordinary dated row
+instead of filtering it as a Today-only projection.
+Scheduling a paged saved task also materializes its dated row even when neither the source nor
+destination day was already retained in Agenda, so the row leaves Anytime and is immediately
+available to Plans offline instead of disappearing between projections. Clearing a dated task
+back to Anytime likewise pins its materialized saved row to Today rather than the oldest retained
+coverage day. Migration 9 introduced
+the first per-row Agenda projection fence; migration 10 upgrades it into one independent,
+Activity-level fence row and backfills any in-flight version before removing the per-row column.
+Create/schedule/recurrence topology acknowledgements therefore remain protected even when the
+authoritative projection contains zero Agenda rows or a targeted replacement removes every old
+row. An immediately stale GSI read may neither erase a destination nor resurrect an older row;
+the fence clears only when the Agenda response's `projectionVersions` proves the index reached
+the acknowledged server-authored Activity version. Overdue index rows participate in that proof
+alongside scheduled, recurring and undated rows, preventing an overdue create fence from becoming
+permanent. This closes the online transition too,
+including restart between acknowledgement and index convergence.
 Legacy retirement consumes the exact bounded persistence snapshot that hydration already
 read, preserves queue age/attempt/attention/clock evidence, and defers retirement on read,
 timeout, or inventory failure. Agenda materialization uses indexed membership for Up Next,
@@ -785,5 +828,8 @@ conflict policy only when shared offline edits require them.
 19. Legacy import is transactional, receipt-backed and idempotent; it preserves verified
     base plus every distinct intent/status/dependency, never treats a P2-60 overlay as base,
     and retires AsyncStorage data only after read-back verification.
-20. Phase 3 does not begin until native Activity/Agenda domain reads and persistence no
-    longer depend on TanStack/AsyncStorage and P2-63's real-device gate passes.
+20. Phase 3 begins only after native Activity/Agenda domain reads and persistence no longer
+    depend on TanStack/AsyncStorage and the automated P2-63 convergence gate passes. The iOS
+    transition matrix and Phase 2/2.5 Maestro flows are deferred to, and must be recorded with,
+    the Phase 3 macOS build; that device execution does not block Phase 3 development and is
+    not claimed complete by the Windows run.

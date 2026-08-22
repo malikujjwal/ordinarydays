@@ -129,14 +129,27 @@ export function replaceAgendaItem(
   next: AgendaItem | undefined,
   destinationDate: string,
   clock: AgendaProjectionClock,
+  materializeMissingDestination = false,
 ): AgendaData {
+  const destinationExists = agenda.days.some((day) => day.date === destinationDate);
+  const days = agenda.days.map((day) => {
+    const items = uniqueItems(day).filter((item) => !sameTarget(item, target));
+    if (next !== undefined && day.date === destinationDate) items.unshift(next);
+    return projectDay(day, items, clock);
+  });
+  if (next !== undefined && !destinationExists && materializeMissingDestination) {
+    days.push(
+      projectDay(
+        { date: destinationDate, schedule: [], anytime: [], earlier: [] },
+        [next],
+        clock,
+      ),
+    );
+    days.sort((left, right) => left.date.localeCompare(right.date));
+  }
   return {
     ...agenda,
-    days: agenda.days.map((day) => {
-      const items = uniqueItems(day).filter((item) => !sameTarget(item, target));
-      if (next !== undefined && day.date === destinationDate) items.unshift(next);
-      return projectDay(day, items, clock);
-    }),
+    days,
   };
 }
 

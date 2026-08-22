@@ -66,16 +66,23 @@ const reminderOf = (userId: keyof typeof REMINDER_OF, offsetMinutes: number) => 
   schemaVersion: 1,
 });
 
-/**
- * Seeds both reads the request makes: `assertActivityAccess`'s `GetItem` on the canonical row,
- * and the partition `Query` the projection runs.
- */
+/** Seeds the one strong partition snapshot used for both authorisation and projection. */
 const seed = (partition: Record<string, unknown>[]) => {
-  ddbMock
-    .on(GetCommand)
-    .resolves({ Item: partition.find((row) => row.sk === 'META') as never });
   ddbMock.on(QueryCommand).resolves({ Items: partition as never });
 };
+
+const participantOf = (userId: string) => ({
+  pk: `ACT#${ACT}`,
+  sk: 'PART#psn_01J8XKQ2M4N5P6R7S8T9V0W1XP',
+  entity: 'Participant',
+  activityId: ACT,
+  personId: 'psn_01J8XKQ2M4N5P6R7S8T9V0W1XP',
+  userId,
+  displayName: 'Participant',
+  rsvp: 'going',
+  role: 'participant',
+  isGuest: false,
+});
 
 beforeEach(async () => {
   ddbMock.reset();
@@ -178,14 +185,16 @@ describe('reading an activity you own', () => {
     expect(activityDetail.safeParse(body.data).success).toBe(true);
   });
 
-  /** One `GetItem` for the access check and one `Query` for the partition — two, budget three. */
-  it('costs two round trips', async () => {
+  it('authorises and projects from one strongly consistent partition Query', async () => {
     seed([meta()]);
 
     await get(createApp());
 
-    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(1);
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
     expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1);
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ConsistentRead).toBe(
+      true,
+    );
   });
 });
 
@@ -345,9 +354,7 @@ describe('reminders are the caller’s own', () => {
 
   /** Symmetric: the owner does not get special sight of anybody else's either. */
   it('is symmetric — the other user reading the same partition sees only theirs', async () => {
-    seed(shared());
-    // The other user owns this one, so the access check admits them.
-    ddbMock.on(GetCommand).resolves({ Item: meta({ ownerId: OTHER }) as never });
+    seed([meta({ ownerId: OTHER }), reminderOf(DEV, -15), reminderOf(OTHER, -90)]);
 
     const raw = await (await get(asUser(OTHER))).text();
     const body = JSON.parse(raw);
@@ -355,6 +362,21 @@ describe('reminders are the caller’s own', () => {
     expect(body.data.reminders).toHaveLength(1);
     expect(body.data.reminders[0].userId).toBe(OTHER);
     expect(raw).not.toContain(REMINDER_OF[DEV]);
+  });
+
+  it('admits a direct participant but does not grant plan completion capabilities', async () => {
+    seed([meta(), participantOf(OTHER), reminderOf(OTHER, -90)]);
+
+    const body = await (await get(asUser(OTHER))).json();
+
+    expect(body.data.reminders).toEqual([
+      expect.objectContaining({ userId: OTHER, offsetMinutes: -90 }),
+    ]);
+    expect(body.data.capabilities).toEqual({
+      complete: false,
+      skip: false,
+      snooze: false,
+    });
   });
 });
 
@@ -394,7 +416,7 @@ describe('a caller with no relationship', () => {
   });
 
   it('gets the identical answer for an activity that does not exist', async () => {
-    ddbMock.on(GetCommand).resolves({});
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
 
     const res = await get(createApp());
     const body = await res.json();
@@ -403,33 +425,21 @@ describe('a caller with no relationship', () => {
     expect(body.error.message).toBe('Activity not found.');
   });
 
-  /**
-   * The stranger path *does* query the activity partition once — `assertActivityAccess` reads
-   * the participant rows before deciding, by their own sort-key prefix. What must never
-   * happen is the **unfiltered** partition read the projection runs, because that is the one
-   * that loads other users' reminders. Distinguished by the prefix condition rather than by
-   * the count, which would pass for the wrong reason.
-   */
-  it('never runs the unfiltered partition read when the check refuses', async () => {
+  it('refuses from the same single strong snapshot without a preliminary META read', async () => {
     seed([meta(), reminderOf(DEV, -15)]);
 
     await get(asUser('usr_stranger'));
 
-    const unfiltered = ddbMock
-      .commandCalls(QueryCommand)
-      .map((call) => call.args[0].input)
-      .filter(
-        (input) =>
-          String(input.ExpressionAttributeValues?.[':pk']).startsWith('ACT#') &&
-          input.ExpressionAttributeValues?.[':skPrefix'] === undefined,
-      );
-
-    expect(unfiltered).toHaveLength(0);
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(1);
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ConsistentRead).toBe(
+      true,
+    );
   });
 
   /** A malformed id resolves to nothing and answers 404, rather than a second status. */
   it('404s a malformed id rather than 400ing it', async () => {
-    ddbMock.on(GetCommand).resolves({});
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
 
     const res = await get(createApp(), 'not-an-id');
 

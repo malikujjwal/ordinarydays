@@ -158,6 +158,40 @@ describe('agenda projection versions', () => {
     expect(emitted(result)).toHaveLength(1);
     expect(result.projectionVersions).toEqual([]);
   });
+
+  it.each([
+    ['matching', '2026-08-06T14:00:00.000Z', true],
+    ['stale', '2026-08-06T13:59:00.000Z', false],
+  ] as const)(
+    '%s overdue index version controls projection proof',
+    async (_, version, proven) => {
+      const overdue = activity({
+        schedule: { date: '2026-08-05', timezone: 'UTC' },
+        updatedAt: '2026-08-06T14:00:00.000Z',
+      });
+      const setup = fixture({
+        activities: [overdue],
+        overdue: [index(overdue, { updatedAt: version })],
+      });
+
+      const result = await assembleAgenda(
+        {
+          userId: 'usr_alice',
+          from: '2026-08-06',
+          to: '2026-08-06',
+          timezone: 'UTC',
+          now: '2026-08-06T12:00:00.000Z',
+          includeOverdue: true,
+        },
+        setup.dependencies,
+      );
+
+      expect(result.days[0]?.anytime[0]?.overdueFromDate).toBe('2026-08-05');
+      expect(result.projectionVersions).toEqual(
+        proven ? [{ activityId: overdue.activityId, version: overdue.updatedAt }] : [],
+      );
+    },
+  );
 });
 
 describe('hydration and bucket boundaries', () => {

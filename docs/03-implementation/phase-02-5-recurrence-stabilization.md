@@ -19,6 +19,12 @@ No remaining Phase 2 feature work and no Phase 3 implementation work begins unti
 through P2-55 are complete. Documentation and review may continue; code that consumes
 completion, recurrence or agenda state waits.
 
+> **Native-execution scheduling amendment — 2026-08-21.** The code, contract and automated
+> parts of this gate still stand. The iOS recurrence matrix and Maestro flows have not run on
+> this Windows host and are not claimed as passed; they are carried into the Phase 3 macOS
+> build, where every Phase 2/2.5 flow must be executed on the supported simulator/device
+> environment. That hardware run does not block Phase 3 development.
+
 ## Founder decisions — 2026-08-14
 
 These decisions supersede the short-lived 2026-08-13 interpretation that made Repeat →

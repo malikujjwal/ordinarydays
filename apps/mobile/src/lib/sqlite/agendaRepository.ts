@@ -452,8 +452,8 @@ export class AgendaRepository {
       : this.readScheduler.read(read);
   }
 
-  async coverage(): Promise<readonly AgendaCoverage[]> {
-    const rows = await this.reader.all(
+  async coverage(reader: SqliteReader = this.reader): Promise<readonly AgendaCoverage[]> {
+    const rows = await reader.all(
       'SELECT from_date, to_date, timezone, include_key FROM agenda_coverage ORDER BY from_date, to_date;',
     );
     return rows.map((row) => {
@@ -486,6 +486,7 @@ export class AgendaRepository {
     const guards = await readCanonicalOutboxGuards(transaction.database);
     const coveredActivityIds = new Set<string>();
     const previousVersions = new Map<string, string>();
+    const projectionFences = new Map<string, string>();
     for (const row of await transaction.database.all(
       `SELECT activity_id, canonical_version FROM agenda_rows
        WHERE viewer_date BETWEEN ? AND ?;`,
@@ -498,6 +499,15 @@ export class AgendaRepository {
       const previous = previousVersions.get(activityId);
       if (version !== undefined && (previous === undefined || version > previous)) {
         previousVersions.set(activityId, version);
+      }
+    }
+    for (const row of await transaction.database.all(
+      'SELECT activity_id, expected_version FROM agenda_projection_fences;',
+    )) {
+      const activityId = text(row, 'activity_id');
+      const expectedVersion = text(row, 'expected_version');
+      if (activityId !== undefined && expectedVersion !== undefined) {
+        projectionFences.set(activityId, expectedVersion);
       }
     }
     const versions = new Map(
@@ -514,9 +524,23 @@ export class AgendaRepository {
         staleActivityIds.add(activityId);
       }
     }
+    const activeProjectionFenceIds = new Set<string>();
+    for (const [activityId, expectedVersion] of projectionFences) {
+      const observedVersion = versions.get(activityId);
+      if (observedVersion === undefined || observedVersion < expectedVersion) {
+        activeProjectionFenceIds.add(activityId);
+        continue;
+      }
+      await transaction.database.run(
+        `DELETE FROM agenda_projection_fences
+         WHERE activity_id = ? AND expected_version <= ?;`,
+        [activityId, observedVersion],
+      );
+    }
     const preservedActivityIds = new Set([
       ...guards.protectedActivityIds,
       ...staleActivityIds,
+      ...activeProjectionFenceIds,
     ]);
     if (__DEV__) {
       console.info('native_agenda_install_guards', {
@@ -530,6 +554,7 @@ export class AgendaRepository {
         existingActivities: coveredActivityIds.size,
         protectedActivities: guards.protectedActivityIds.size,
         staleActivities: staleActivityIds.size,
+        projectionFences: activeProjectionFenceIds.size,
         deletedActivities: guards.deletedActivityIds.size,
         reconcilingActivities: guards.reconcilingActivityIds.size,
       });
@@ -540,7 +565,7 @@ export class AgendaRepository {
       await transaction.database.run(
         `DELETE FROM agenda_rows
          WHERE activity_id = ? AND viewer_date BETWEEN ? AND ?
-           AND local_state = 'canonical';`,
+           AND local_state IN ('canonical', 'needs_attention');`,
         [activityId, request.from, request.to],
       );
     }
@@ -660,6 +685,39 @@ export class AgendaRepository {
     if (request.include?.split(',').includes('reminders') === true) {
       transaction.changed('reminders');
     }
+  }
+
+  /**
+   * Protects an acknowledged local projection until the eventually-consistent Agenda index
+   * explicitly reports the same server-authored Activity version. A missing or older index row
+   * cannot erase the writer-committed destination in the meantime.
+   */
+  async recordProjectionFence(
+    transaction: TransactionContext,
+    activityId: string,
+    expectedVersion: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      `INSERT INTO agenda_projection_fences (activity_id, expected_version)
+       VALUES (?, ?)
+       ON CONFLICT(activity_id) DO UPDATE SET
+         expected_version = CASE
+           WHEN agenda_projection_fences.expected_version < excluded.expected_version
+             THEN excluded.expected_version
+           ELSE agenda_projection_fences.expected_version
+         END;`,
+      [activityId, expectedVersion],
+    );
+  }
+
+  async clearProjectionFence(
+    transaction: TransactionContext,
+    activityId: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      'DELETE FROM agenda_projection_fences WHERE activity_id = ?;',
+      [activityId],
+    );
   }
 
   async replaceLocalActivityRows(
@@ -803,6 +861,24 @@ export class AgendaRepository {
     transaction.changed('agenda');
   }
 
+  /**
+   * Removes an exact occurrence identity before authoritative activity-scoped rows are rebuilt.
+   * This reaches stale rows outside the currently retained coverage as well; each retained
+   * coverage is then strongly replaced by the recovery coordinator in the same transaction.
+   */
+  async removeCanonicalOccurrenceAfterRejection(
+    transaction: TransactionContext,
+    activityId: string,
+    occurrenceDate: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      `DELETE FROM agenda_rows
+       WHERE activity_id = ? AND occurrence_date = ?;`,
+      [activityId, occurrenceDate],
+    );
+    transaction.changed('agenda');
+  }
+
   async markActivityRows(
     transaction: TransactionContext,
     activityId: string,
@@ -811,6 +887,47 @@ export class AgendaRepository {
     await transaction.database.run(
       'UPDATE agenda_rows SET local_state = ? WHERE activity_id = ?;',
       [state, activityId],
+    );
+    transaction.changed('agenda');
+  }
+
+  /** Moves materialized rows without rebuilding or narrowing the shared Agenda superset. */
+  async remapPendingCreateIdentity(
+    transaction: TransactionContext,
+    previousActivityId: string,
+    freshActivityId: string,
+  ): Promise<void> {
+    const occupied = await transaction.database.first(
+      'SELECT row_id FROM agenda_rows WHERE activity_id = ? LIMIT 1;',
+      [freshActivityId],
+    );
+    if (occupied !== undefined) {
+      throw new Error('The fresh Activity identity already has Agenda rows.');
+    }
+    const rows = await transaction.database.all(
+      `SELECT row_id, viewer_date, occurrence_date FROM agenda_rows
+       WHERE activity_id = ? ORDER BY viewer_date, occurrence_date;`,
+      [previousActivityId],
+    );
+    for (const row of rows) {
+      const previousRowId = text(row, 'row_id');
+      const date = text(row, 'viewer_date');
+      if (previousRowId === undefined || date === undefined) {
+        throw new Error('The collided Agenda projection is malformed.');
+      }
+      await transaction.database.run(
+        `UPDATE agenda_rows SET row_id = ?, activity_id = ?, local_state = 'queued'
+         WHERE row_id = ?;`,
+        [
+          rowIdFromParts(date, freshActivityId, text(row, 'occurrence_date')),
+          freshActivityId,
+          previousRowId,
+        ],
+      );
+    }
+    await transaction.database.run(
+      'UPDATE agenda_rows SET parent_activity_id = ? WHERE parent_activity_id = ?;',
+      [freshActivityId, previousActivityId],
     );
     transaction.changed('agenda');
   }

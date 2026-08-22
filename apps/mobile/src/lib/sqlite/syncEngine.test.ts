@@ -10,6 +10,7 @@ import { createNodeSqliteFactory } from '../../../test/node-sqlite';
 import type { ActivityPullAdapter } from '../sync/pullAdapter';
 import type { ActivityPushTransport } from '../sync/pushAdapter';
 import type { TargetedAgendaTransport } from '../sync/reconciliation';
+import { NativeActivityActionCoordinator } from './actionCoordinator';
 import { ActivityRepository } from './activityRepository';
 import { ActivityTransactionService } from './activityTransactions';
 import { AgendaRepository } from './agendaRepository';
@@ -29,6 +30,7 @@ const OWNER = 'usr_01J0000000000000000000000A';
 const ACTIVITY = 'act_01J0000000000000000000000A';
 const OTHER = 'act_01J0000000000000000000000B';
 const THIRD = 'act_01J0000000000000000000000C';
+const REMINDER = 'rem_01J0000000000000000000000A';
 const clock = { today: '2026-08-19', currentMinute: '08:00' };
 
 describe('serialized native convergence guard', () => {
@@ -360,6 +362,190 @@ describe('serialized native convergence guard', () => {
     expect(first.map((item) => item.title)).toEqual(['First page', 'Second page']);
   });
 
+  it('keeps a task scheduled from Anytime visible when the first Plans GSI read is stale', async () => {
+    if (database === undefined) throw new Error('missing stale Plans pull database');
+    const before = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (before === undefined) throw new Error('missing stale Plans pull Activity');
+    const tomorrow = '2026-08-20';
+    await transactions.run((transaction) =>
+      service.schedule(
+        transaction,
+        {
+          activityId: ACTIVITY,
+          idempotencyKey: 'schedule-anytime-tomorrow',
+          input: { date: tomorrow, timezone: 'UTC' },
+        },
+        clock,
+      ),
+    );
+    const projected = await agenda.read({
+      from: tomorrow,
+      to: tomorrow,
+      timezone: 'UTC',
+    });
+    const projectedItem = projected.days[0]?.anytime[0];
+    if (projectedItem === undefined) throw new Error('missing local tomorrow projection');
+    const canonicalActivity: Activity = {
+      ...before.activity,
+      status: 'scheduled',
+      schedule: { date: tomorrow, timezone: 'UTC' },
+      updatedAt: '2026-08-20T00:00:00.000Z',
+      lastActivityAt: '2026-08-20T00:00:00.000Z',
+    };
+    let gsiCaughtUp = false;
+    const agendaRead = vi.fn<ActivityPullAdapter['agenda']>(async (request) => {
+      const containsTomorrow = request.from <= tomorrow && request.to >= tomorrow;
+      return {
+        days: [request.from, request.to]
+          .filter((date, index, dates) => dates.indexOf(date) === index)
+          .map((date) => ({
+            date,
+            schedule: [],
+            anytime:
+              gsiCaughtUp && containsTomorrow && date === tomorrow ? [projectedItem] : [],
+            earlier: [],
+          })),
+        warnings: [],
+        projectionVersions:
+          gsiCaughtUp && containsTomorrow
+            ? [{ activityId: ACTIVITY, version: canonicalActivity.updatedAt }]
+            : [],
+      };
+    });
+    const sync = syncEngine({
+      push: {
+        ...pushTransport(),
+        schedule: async () => ({ activity: canonicalActivity }),
+      },
+      pull: {
+        ...pullAdapter(),
+        agenda: agendaRead,
+      },
+    });
+
+    await sync.pullAgenda({ from: '2026-08-19', to: tomorrow, tz: 'UTC' });
+
+    expect(
+      await database.all(
+        `SELECT viewer_date, section, status, local_state, canonical_version
+         FROM agenda_rows WHERE activity_id = ?;`,
+        [ACTIVITY],
+      ),
+    ).toEqual([
+      {
+        viewer_date: tomorrow,
+        section: 'anytime',
+        status: 'scheduled',
+        local_state: 'canonical',
+        canonical_version: canonicalActivity.updatedAt,
+      },
+    ]);
+    expect(
+      await database.first(
+        `SELECT expected_version FROM agenda_projection_fences WHERE activity_id = ?;`,
+        [ACTIVITY],
+      ),
+    ).toEqual({ expected_version: canonicalActivity.updatedAt });
+
+    gsiCaughtUp = true;
+    await sync.pullAgenda({ from: '2026-08-19', to: tomorrow, tz: 'UTC' });
+    sync.stop();
+
+    expect(agendaRead).toHaveBeenCalled();
+    expect(
+      await database.first(
+        `SELECT expected_version FROM agenda_projection_fences WHERE activity_id = ?;`,
+        [ACTIVITY],
+      ),
+    ).toBeUndefined();
+  });
+
+  it('keeps a zero-row projection fence across targeted replacement and repository restart', async () => {
+    if (database === undefined) throw new Error('missing zero-row fence database');
+    const request = { from: '2026-08-19', to: '2026-08-19', tz: 'UTC' } as const;
+    const before = await agenda.read({
+      from: request.from,
+      to: request.to,
+      timezone: request.tz,
+    });
+    const staleItem = before.days[0]?.anytime.find(
+      (item) => item.activityId === ACTIVITY,
+    );
+    if (staleItem === undefined) throw new Error('missing zero-row stale fixture');
+    const expectedVersion = '2026-08-19T12:00:00.000Z';
+
+    await transactions.run(async (transaction) => {
+      await agenda.recordProjectionFence(transaction, ACTIVITY, expectedVersion);
+      await agenda.replaceCanonicalActivityRows(
+        transaction,
+        request,
+        { activityId: ACTIVITY, activityVersion: expectedVersion, rows: [] },
+        clock,
+      );
+    });
+
+    expect(
+      await database.first('SELECT row_id FROM agenda_rows WHERE activity_id = ?;', [
+        ACTIVITY,
+      ]),
+    ).toBeUndefined();
+    expect(
+      await database.first(
+        'SELECT expected_version FROM agenda_projection_fences WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual({ expected_version: expectedVersion });
+
+    const restartedAgenda = new AgendaRepository(database, new RepositorySubscriptions());
+    await transactions.run((transaction) =>
+      restartedAgenda.installCanonical(transaction, request, {
+        days: [
+          {
+            date: request.from,
+            schedule: [],
+            anytime: [staleItem],
+            earlier: [],
+          },
+        ],
+        warnings: [],
+        projectionVersions: [],
+      }),
+    );
+
+    expect(
+      await database.first('SELECT row_id FROM agenda_rows WHERE activity_id = ?;', [
+        ACTIVITY,
+      ]),
+    ).toBeUndefined();
+
+    await transactions.run((transaction) =>
+      restartedAgenda.installCanonical(transaction, request, {
+        days: [
+          {
+            date: request.from,
+            schedule: [],
+            anytime: [staleItem],
+            earlier: [],
+          },
+        ],
+        warnings: [],
+        projectionVersions: [{ activityId: ACTIVITY, version: expectedVersion }],
+      }),
+    );
+
+    expect(
+      await database.first('SELECT row_id FROM agenda_rows WHERE activity_id = ?;', [
+        ACTIVITY,
+      ]),
+    ).toBeDefined();
+    expect(
+      await database.first(
+        'SELECT expected_version FROM agenda_projection_fences WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toBeUndefined();
+  });
+
   it('recovers an abandoned claim on restart without changing identity or attempts', async () => {
     let originalSequence = 0;
     let abandonedBeforeRestart: Awaited<ReturnType<OutboxRepository['get']>>;
@@ -431,6 +617,33 @@ describe('serialized native convergence guard', () => {
     sync.stop();
 
     expect(dispatched).toEqual(['abandoned', 'same-key-later', 'unrelated']);
+    expect(await outbox.all()).toEqual([]);
+  });
+
+  it('continues bounded passes after the cap until every claimable intent settles', async () => {
+    const deleteReminder = vi.fn(async () => ({ reminderId: 'removed' }));
+    await transactions.run(async (transaction) => {
+      for (let index = 0; index < 25; index += 1) {
+        const intentId = `delete-reminder-${index}`;
+        await outbox.append(transaction.database, {
+          intentId,
+          mutationKey: ['activity', 'reminder-delete'],
+          variables: {
+            activityId: ACTIVITY,
+            reminderId: `rem_01J00000000000000000000${String(index).padStart(2, '0')}`,
+            intentId,
+          },
+          entityId: ACTIVITY,
+        });
+      }
+      transaction.changed('outbox');
+    });
+    const sync = syncEngine({ push: { ...pushTransport(), deleteReminder } });
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(deleteReminder).toHaveBeenCalledTimes(25);
     expect(await outbox.all()).toEqual([]);
   });
 
@@ -969,6 +1182,11 @@ describe('serialized native convergence guard', () => {
     ).toBe(activity.updatedAt);
     expect(await outbox.all()).toEqual([
       expect.objectContaining({
+        intentId: 'first-recurrence-edit',
+        status: 'acknowledged',
+        reconciliationVersion: '2026-08-19T12:00:00.000Z',
+      }),
+      expect.objectContaining({
         intentId: 'second-recurrence-edit',
         status: 'in_flight',
       }),
@@ -980,6 +1198,205 @@ describe('serialized native convergence guard', () => {
     });
     await running;
     sync.stop();
+  });
+
+  it.each(['create', 'delete'] as const)(
+    'reconciles a recurrence acknowledgement after a later reminder %s',
+    async (reminderMutation) => {
+      const activity = await seedRecurring();
+      const before = await agenda.read({
+        from: '2026-08-19',
+        to: '2026-08-19',
+        timezone: 'UTC',
+      });
+      const rows = before.days.flatMap((day) =>
+        [...day.schedule, ...day.anytime, ...day.earlier]
+          .filter((item) => item.activityId === ACTIVITY)
+          .map((item) => ({ date: day.date, item })),
+      );
+      const recurrence = {
+        mode: 'fixed' as const,
+        segments: [
+          {
+            freq: 'weekly' as const,
+            interval: 1,
+            byWeekday: [3 as const],
+            effectiveFrom: '2026-08-19',
+            time: '09:00',
+          },
+        ],
+      };
+      await transactions.run(async (transaction) => {
+        if (reminderMutation === 'delete') {
+          await transaction.database.run(
+            `INSERT INTO activity_reminders
+              (reminder_id, activity_id, owner_user_id, offset_minutes, channel, local_state)
+             VALUES (?, ?, ?, 15, 'push', 'canonical');`,
+            [REMINDER, ACTIVITY, OWNER],
+          );
+        }
+        await service.patch(transaction, {
+          activityId: ACTIVITY,
+          intentId: `recurrence-before-reminder-${reminderMutation}`,
+          input: { recurrence },
+          ifMatch: activity.updatedAt,
+        });
+        if (reminderMutation === 'create') {
+          await service.addReminder(transaction, OWNER, {
+            activityId: ACTIVITY,
+            idempotencyKey: 'later-reminder-create',
+            input: { reminderId: REMINDER, offsetMinutes: -15 },
+          });
+        } else {
+          await service.removeReminder(transaction, {
+            activityId: ACTIVITY,
+            reminderId: REMINDER,
+            intentId: 'later-reminder-delete',
+          });
+        }
+      });
+      const acknowledged: Activity = {
+        ...activity,
+        recurrence,
+        updatedAt: '2026-08-19T12:00:00.000Z',
+      };
+      const targeted = vi.fn(async () => ({
+        activityId: ACTIVITY,
+        activityVersion: acknowledged.updatedAt,
+        rows,
+      }));
+      const sync = syncEngine({
+        push: {
+          ...pushTransport(),
+          patch: async () => acknowledged,
+          createReminder: async () => ({ reminderId: REMINDER }),
+          deleteReminder: async () => ({ reminderId: REMINDER }),
+        },
+        targeted: { load: targeted },
+      });
+
+      await sync.syncNow();
+      sync.stop();
+
+      expect(targeted).toHaveBeenCalledTimes(1);
+      expect(await outbox.all()).toEqual([]);
+      expect(
+        await database?.first(
+          'SELECT recurrence_json, local_state, canonical_version FROM activities WHERE activity_id = ?;',
+          [ACTIVITY],
+        ),
+      ).toMatchObject({
+        recurrence_json: JSON.stringify(recurrence),
+        local_state: 'canonical',
+        canonical_version: acknowledged.updatedAt,
+      });
+      expect(
+        await database?.first(
+          'SELECT local_state FROM agenda_rows WHERE activity_id = ? LIMIT 1;',
+          [ACTIVITY],
+        ),
+      ).toMatchObject({ local_state: 'canonical' });
+      if (reminderMutation === 'create') {
+        expect(
+          await database?.first(
+            'SELECT local_state FROM activity_reminders WHERE reminder_id = ?;',
+            [REMINDER],
+          ),
+        ).toMatchObject({ local_state: 'canonical' });
+      } else {
+        expect(
+          await database?.first(
+            'SELECT reminder_id FROM reminder_tombstones WHERE reminder_id = ?;',
+            [REMINDER],
+          ),
+        ).toMatchObject({ reminder_id: REMINDER });
+      }
+    },
+  );
+
+  it('installs an ordinary PATCH version through a reminder-only queue tail', async () => {
+    const current = await seedRecurring();
+    await transactions.run(async (transaction) => {
+      await service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'patch-before-reminder-tail',
+        input: { title: 'Acknowledged before reminder' },
+        ifMatch: current.updatedAt,
+      });
+      await service.addReminder(transaction, OWNER, {
+        activityId: ACTIVITY,
+        idempotencyKey: 'tail-reminder-create',
+        input: { reminderId: REMINDER, offsetMinutes: -15 },
+      });
+    });
+    let server = current;
+    const observedIfMatch: string[] = [];
+    const versions = ['2026-08-19T12:00:00.000Z', '2026-08-19T13:00:00.000Z'] as const;
+    const patch = vi.fn<ActivityPushTransport['patch']>(
+      async (_activityId, input, ifMatch) => {
+        observedIfMatch.push(ifMatch);
+        if (ifMatch !== server.updatedAt) {
+          throw new ApiError('conflict', 'stale PATCH precondition', 409, 'req_tail_cas');
+        }
+        const updatedAt = versions[observedIfMatch.length - 1];
+        if (updatedAt === undefined) throw new Error('missing reminder-tail version');
+        server = { ...server, ...input, updatedAt } as Activity;
+        return server;
+      },
+    );
+    const sync = syncEngine({
+      push: {
+        ...pushTransport(),
+        patch,
+        createReminder: async () => ({ reminderId: REMINDER }),
+      },
+    });
+
+    await sync.syncNow();
+
+    const installed = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (installed === undefined) throw new Error('missing reminder-tail installation');
+    expect(installed.activity).toMatchObject({
+      title: 'Acknowledged before reminder',
+      updatedAt: versions[0],
+    });
+    expect(
+      await database?.first(
+        `SELECT local_state, canonical_version FROM activities WHERE activity_id = ?;`,
+        [ACTIVITY],
+      ),
+    ).toEqual({ local_state: 'canonical', canonical_version: versions[0] });
+    expect(
+      await database?.first(
+        `SELECT local_state FROM activity_reminders WHERE reminder_id = ?;`,
+        [REMINDER],
+      ),
+    ).toEqual({ local_state: 'canonical' });
+
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'patch-after-reminder-tail',
+        input: { notes: 'Uses the acknowledged version' },
+        ifMatch: installed.activity.updatedAt,
+      }),
+    );
+    await sync.syncNow();
+    sync.stop();
+
+    expect(observedIfMatch).toEqual([current.updatedAt, versions[0]]);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await database?.first(
+        `SELECT notes, local_state, canonical_version
+         FROM activities WHERE activity_id = ?;`,
+        [ACTIVITY],
+      ),
+    ).toEqual({
+      notes: 'Uses the acknowledged version',
+      local_state: 'canonical',
+      canonical_version: versions[1],
+    });
   });
 
   it('does not let an older response arriving after a newer local commit regress SQLite', async () => {
@@ -1030,6 +1447,238 @@ describe('serialized native convergence guard', () => {
       (await activities.read({ kind: 'activity', activityId: ACTIVITY }))?.activity.title,
     ).toBe('Newer local edit');
     expect(await outbox.all()).toEqual([]);
+  });
+
+  it('rebases consecutive offline PATCH preconditions through the authoritative server chain', async () => {
+    const current = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (current === undefined) throw new Error('missing PATCH chain fixture');
+    const initialVersion = current.activity.updatedAt;
+    const inputs = [
+      { title: 'First server edit' },
+      { notes: 'Second server edit' },
+      { title: 'Final server edit' },
+    ] as const;
+    await transactions.run(async (transaction) => {
+      for (const [index, input] of inputs.entries()) {
+        await service.patch(transaction, {
+          activityId: ACTIVITY,
+          intentId: `offline-patch-${index + 1}`,
+          input,
+          ifMatch: initialVersion,
+        });
+      }
+    });
+    let server = current.activity;
+    const observed: Array<{ readonly input: unknown; readonly ifMatch: string }> = [];
+    const versions = [
+      '2026-08-19T01:00:00.000Z',
+      '2026-08-19T02:00:00.000Z',
+      '2026-08-19T03:00:00.000Z',
+    ];
+    const patch = vi.fn(
+      async (_activityId: string, input: (typeof inputs)[number], ifMatch: string) => {
+        observed.push({ input, ifMatch });
+        if (ifMatch !== server.updatedAt) {
+          throw new ApiError(
+            'conflict',
+            'stale PATCH precondition',
+            409,
+            'req_patch_cas',
+          );
+        }
+        const updatedAt = versions[observed.length - 1];
+        if (updatedAt === undefined) throw new Error('missing PATCH chain version');
+        server = { ...server, ...input, updatedAt } as Activity;
+        return server;
+      },
+    );
+    const sync = syncEngine({ push: { ...pushTransport(), patch } });
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(observed).toEqual([
+      { input: inputs[0], ifMatch: initialVersion },
+      { input: inputs[1], ifMatch: versions[0] },
+      { input: inputs[2], ifMatch: versions[1] },
+    ]);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await database?.first(
+        'SELECT title, notes, local_state, canonical_version FROM activities WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toMatchObject({
+      title: 'Final server edit',
+      notes: 'Second server edit',
+      local_state: 'canonical',
+      canonical_version: versions[2],
+    });
+  });
+
+  it('carries an authoritative PATCH version across an intervening reminder write', async () => {
+    const current = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (current === undefined) throw new Error('missing reminder CAS fixture');
+    const initialVersion = current.activity.updatedAt;
+    await transactions.run(async (transaction) => {
+      await service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'patch-before-reminder',
+        input: { title: 'First CAS edit' },
+        ifMatch: initialVersion,
+      });
+      await service.addReminder(transaction, OWNER, {
+        activityId: ACTIVITY,
+        idempotencyKey: 'cas-reminder',
+        input: { reminderId: REMINDER, offsetMinutes: -30 },
+      });
+      await service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'patch-after-reminder',
+        input: { notes: 'Second CAS edit' },
+        ifMatch: initialVersion,
+      });
+    });
+    let server = current.activity;
+    const observed: string[] = [];
+    const versions = ['2026-08-19T01:00:00.000Z', '2026-08-19T02:00:00.000Z'];
+    const patch = vi.fn<ActivityPushTransport['patch']>(
+      async (_activityId, input, ifMatch) => {
+        observed.push(ifMatch);
+        if (ifMatch !== server.updatedAt) {
+          throw new ApiError('conflict', 'stale PATCH precondition', 409, 'req_gap_cas');
+        }
+        const updatedAt = versions[observed.length - 1];
+        if (updatedAt === undefined) throw new Error('missing reminder CAS version');
+        server = { ...server, ...input, updatedAt } as Activity;
+        return server;
+      },
+    );
+    const sync = syncEngine({
+      push: {
+        ...pushTransport(),
+        patch,
+        createReminder: async () => ({ reminderId: REMINDER }),
+      },
+    });
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(observed).toEqual([initialVersion, versions[0]]);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await database?.first(
+        'SELECT title, notes, canonical_version, local_state FROM activities WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toMatchObject({
+      title: 'First CAS edit',
+      notes: 'Second CAS edit',
+      canonical_version: versions[1],
+      local_state: 'canonical',
+    });
+  });
+
+  it('rebases a dependent PATCH from the authoritative retried-create version', async () => {
+    await transactions.run(async (transaction) => {
+      await service.create(
+        transaction,
+        OWNER,
+        {
+          input: {
+            activityId: OTHER,
+            objectKind: 'plan',
+            type: 'custom',
+            title: 'Collided create',
+            schedule: { date: '2026-08-19', time: '10:00', timezone: 'UTC' },
+          },
+          idempotencyKey: 'collision-create',
+        },
+        clock,
+        '2026-08-19T00:30:00.000Z',
+      );
+      await service.patch(transaction, {
+        activityId: OTHER,
+        intentId: 'collision-dependent-patch',
+        input: { title: 'Dependent edit reached server' },
+        ifMatch: 'obsolete-before-create-ack',
+      });
+      await outbox.needsAttention(
+        transaction.database,
+        'collision-create',
+        { kind: 'parked', reason: 'ambiguous_collision' },
+        'The create identity collided.',
+      );
+      await activities.setLocalState(transaction, OTHER, 'needs_attention');
+      await agenda.markActivityRows(transaction, OTHER, 'needs_attention');
+    });
+    let server: Activity | undefined;
+    const createVersion = '2026-08-19T01:00:00.000Z';
+    const patchVersion = '2026-08-19T02:00:00.000Z';
+    const observed: Array<{ readonly activityId: string; readonly ifMatch: string }> = [];
+    const create = vi.fn<ActivityPushTransport['create']>(async (input) => {
+      const activityId = input.activityId;
+      if (activityId === undefined)
+        throw new Error('retried create omitted its identity');
+      const local = await activities.read({ kind: 'activity', activityId });
+      if (local === undefined) throw new Error('missing remapped create projection');
+      server = { ...local.activity, updatedAt: createVersion };
+      return server;
+    });
+    const patch = vi.fn<ActivityPushTransport['patch']>(
+      async (activityId, input, ifMatch) => {
+        observed.push({ activityId, ifMatch });
+        if (server === undefined || ifMatch !== server.updatedAt) {
+          throw new ApiError(
+            'conflict',
+            'retried create PATCH used stale precondition',
+            409,
+            'req_collision_cas',
+          );
+        }
+        server = { ...server, ...input, updatedAt: patchVersion } as Activity;
+        return server;
+      },
+    );
+    const pullActivity = vi.fn<ActivityPullAdapter['activity']>(async () => {
+      if (server === undefined) throw new Error('retried create is not on the server');
+      return {
+        activity: server,
+        reminders: [],
+        capabilities: { complete: true, skip: true, snooze: true },
+      };
+    });
+    const sync = syncEngine({
+      push: { ...pushTransport(), create, patch },
+      pull: { ...pullAdapter(), activity: pullActivity },
+    });
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      sync,
+      () => THIRD,
+    );
+
+    const retried = await coordinator.retryBlocked(
+      'collision-create',
+      'fresh-collision-create',
+      clock,
+    );
+    expect(retried).toMatchObject({ kind: 'accepted', intent: { entityId: THIRD } });
+    await sync.syncNow();
+    sync.stop();
+
+    expect(observed).toEqual([{ activityId: THIRD, ifMatch: createVersion }]);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      (await activities.read({ kind: 'activity', activityId: THIRD }))?.activity,
+    ).toMatchObject({
+      title: 'Dependent edit reached server',
+      updatedAt: patchVersion,
+    });
   });
 
   it('retains committed rows and requeues the same intent after a transient HTTP failure', async () => {
@@ -1200,6 +1849,660 @@ describe('serialized native convergence guard', () => {
     ).toContainEqual(
       expect.objectContaining({ activityId: ACTIVITY, title: 'Canonical seed' }),
     );
+  });
+
+  it('keeps failed rollback recovery durable across restart until Discard verifies canonical truth', async () => {
+    const canonical = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    const canonicalAgenda = await agenda.read({
+      from: '2026-08-19',
+      to: '2026-08-19',
+      timezone: 'UTC',
+    });
+    if (canonical === undefined || database === undefined) {
+      throw new Error('missing failed rollback fixture');
+    }
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'failed-rollback-edit',
+        input: { title: 'Rejected local title' },
+        ifMatch: 'v1',
+      }),
+    );
+    const rejectingSync = syncEngine({
+      push: {
+        ...pushTransport(),
+        patch: async () => {
+          throw new ApiError(
+            'validation_failed',
+            'Rejected local title',
+            422,
+            'req_failed_rollback',
+          );
+        },
+      },
+      pull: {
+        ...pullAdapter(),
+        activity: async () => {
+          throw new NetworkError('Rollback detail is offline.', undefined);
+        },
+      },
+    });
+
+    await expect(rejectingSync.syncNow()).rejects.toThrow('Rejected local title');
+    rejectingSync.stop();
+
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'failed-rollback-edit',
+      status: 'needs_attention',
+      recoveryRequired: true,
+      attention: { kind: 'rejected', status: 422, recoveryRequired: true },
+    });
+    expect(
+      await database.first(
+        'SELECT title, local_state FROM activities WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual({ title: 'Rejected local title', local_state: 'needs_attention' });
+
+    /* The recovery receipt, and its refusal to discard unverified data, survive restart. */
+    await database.close();
+    database = await createNodeSqliteFactory(directory).open('sync.sqlite');
+    const restartedSubscriptions = new RepositorySubscriptions();
+    transactions = new SerializedTransactionRunner(database, restartedSubscriptions);
+    activities = new ActivityRepository(database, restartedSubscriptions);
+    agenda = new AgendaRepository(database, restartedSubscriptions);
+    anytime = new AnytimeRepository(database, restartedSubscriptions);
+    outbox = new OutboxRepository(database);
+    service = new ActivityTransactionService(outbox, activities, agenda);
+
+    const offlineRecovery = syncEngine({
+      pull: {
+        ...pullAdapter(),
+        activity: async () => {
+          throw new NetworkError('Still offline.', undefined);
+        },
+      },
+    });
+    const offlineCoordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      offlineRecovery,
+    );
+    await expect(
+      offlineCoordinator.discardBlocked('failed-rollback-edit', clock),
+    ).resolves.toBe(false);
+    offlineRecovery.stop();
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'failed-rollback-edit',
+      status: 'needs_attention',
+      recoveryRequired: true,
+    });
+
+    const recoveredPull: ActivityPullAdapter = {
+      ...pullAdapter(),
+      activity: async () => canonical,
+      agenda: async () => canonicalAgenda,
+    };
+    const recoverySync = syncEngine({
+      pull: recoveredPull,
+      targeted: {
+        load: async () => ({
+          activityId: ACTIVITY,
+          activityVersion: canonical.activity.updatedAt,
+          rows: canonicalAgenda.days.flatMap((day) =>
+            [...day.schedule, ...day.anytime, ...day.earlier]
+              .filter((item) => item.activityId === ACTIVITY)
+              .map((item) => ({ date: day.date, item })),
+          ),
+        }),
+      },
+    });
+    const recoveryCoordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      recoverySync,
+    );
+    await expect(
+      recoveryCoordinator.discardBlocked('failed-rollback-edit', clock),
+    ).resolves.toBe(true);
+    await recoverySync.syncNow();
+    recoverySync.stop();
+
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await database.first(
+        'SELECT title, local_state FROM activities WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual({ title: 'Canonical seed', local_state: 'canonical' });
+    expect(
+      await database.all(
+        'SELECT title, local_state FROM agenda_rows WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual([{ title: 'Canonical seed', local_state: 'canonical' }]);
+  });
+
+  it('recovers the exact rejected occurrence and its Agenda rows before Discard', async () => {
+    await seedRecurring();
+    const target = {
+      kind: 'occurrence' as const,
+      activityId: ACTIVITY,
+      date: '2026-08-19',
+    };
+    const canonical = await activities.read(target);
+    const canonicalAgenda = await agenda.read({
+      from: '2026-08-19',
+      to: '2026-08-19',
+      timezone: 'UTC',
+      include: 'anytime_unscheduled,overdue',
+    });
+    if (canonical === undefined) throw new Error('missing occurrence recovery fixture');
+    await transactions.run((transaction) =>
+      service.complete(
+        transaction,
+        {
+          activityId: ACTIVITY,
+          idempotencyKey: 'rejected-occurrence-complete',
+          input: { occurrenceDate: target.date },
+        },
+        true,
+        'scheduled',
+        clock,
+      ),
+    );
+    const rejectingSync = syncEngine({
+      push: {
+        ...pushTransport(),
+        complete: async () => {
+          throw new ApiError(
+            'validation_failed',
+            'Occurrence completion rejected',
+            422,
+            'req_occurrence_rejection',
+          );
+        },
+      },
+      pull: {
+        ...pullAdapter(),
+        activity: async () => {
+          throw new NetworkError('Occurrence rollback is offline.', undefined);
+        },
+      },
+    });
+
+    await expect(rejectingSync.syncNow()).rejects.toThrow(
+      'Occurrence completion rejected',
+    );
+    rejectingSync.stop();
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'rejected-occurrence-complete',
+      recoveryRequired: true,
+    });
+    expect(
+      await database?.first(
+        `SELECT status, local_state FROM activity_occurrences
+         WHERE activity_id = ? AND nominal_date = ?;`,
+        [ACTIVITY, target.date],
+      ),
+    ).toMatchObject({ status: 'completed_occurrence' });
+
+    const mismatchedSync = syncEngine({
+      pull: { ...pullAdapter(), activity: async () => canonical },
+      targeted: {
+        load: async () => ({
+          activityId: ACTIVITY,
+          activityVersion: '2026-08-19T23:59:00.000Z',
+          rows: [],
+        }),
+      },
+    });
+    const mismatchedCoordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      mismatchedSync,
+    );
+    await expect(
+      mismatchedCoordinator.discardBlocked('rejected-occurrence-complete', clock),
+    ).resolves.toBe(false);
+    mismatchedSync.stop();
+    expect((await outbox.all())[0]).toMatchObject({
+      intentId: 'rejected-occurrence-complete',
+      recoveryRequired: true,
+    });
+
+    const detailRead = vi.fn<ActivityPullAdapter['activity']>(async () => canonical);
+    const targetedRead = vi.fn(async () => ({
+      activityId: ACTIVITY,
+      activityVersion: canonical.activity.updatedAt,
+      rows: canonicalAgenda.days.flatMap((day) =>
+        [...day.schedule, ...day.anytime, ...day.earlier]
+          .filter((item) => item.activityId === ACTIVITY)
+          .map((item) => ({ date: day.date, item })),
+      ),
+    }));
+    const recoverySync = syncEngine({
+      pull: { ...pullAdapter(), activity: detailRead },
+      targeted: { load: targetedRead },
+    });
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      recoverySync,
+    );
+
+    await expect(
+      coordinator.discardBlocked('rejected-occurrence-complete', clock),
+    ).resolves.toBe(true);
+    await recoverySync.syncNow();
+    recoverySync.stop();
+
+    expect(detailRead).toHaveBeenCalledWith(target);
+    expect(targetedRead).toHaveBeenCalledTimes(1);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await database?.first(
+        `SELECT status, local_state FROM activity_occurrences
+         WHERE activity_id = ? AND nominal_date = ?;`,
+        [ACTIVITY, target.date],
+      ),
+    ).toEqual({ status: 'scheduled', local_state: 'canonical' });
+    expect(
+      await database?.all(
+        `SELECT status, local_state FROM agenda_rows
+         WHERE activity_id = ? AND occurrence_date = ?;`,
+        [ACTIVITY, target.date],
+      ),
+    ).toEqual([{ status: 'scheduled', local_state: 'canonical' }]);
+  });
+
+  it('treats an occurrence rollback 404 as exact absence without deleting its parent', async () => {
+    await seedRecurring();
+    const parent = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (parent === undefined) throw new Error('missing occurrence rollback 404 fixture');
+    const canonicalParent: typeof parent = {
+      ...parent,
+      activity: {
+        ...parent.activity,
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            {
+              freq: 'weekly',
+              interval: 1,
+              byWeekday: [4],
+              effectiveFrom: '2026-08-20',
+            },
+          ],
+        },
+        updatedAt: '2026-08-20T00:00:00.000Z',
+      },
+    };
+    const previousAgenda = await agenda.read({
+      from: '2026-08-19',
+      to: '2026-08-19',
+      timezone: 'UTC',
+    });
+    const canonicalAgenda = {
+      ...previousAgenda,
+      days: previousAgenda.days.map((day) => {
+        const { upNext: _upNext, ...rest } = day;
+        return {
+          ...rest,
+          schedule: day.schedule.filter((item) => item.activityId !== ACTIVITY),
+          anytime: day.anytime.filter((item) => item.activityId !== ACTIVITY),
+          earlier: day.earlier.filter((item) => item.activityId !== ACTIVITY),
+        };
+      }),
+    };
+    await transactions.run((transaction) =>
+      service.complete(
+        transaction,
+        {
+          activityId: ACTIVITY,
+          idempotencyKey: 'immediate-occurrence-404',
+          input: { occurrenceDate: '2026-08-19' },
+        },
+        true,
+        'scheduled',
+        clock,
+      ),
+    );
+    const detailRead = vi.fn<ActivityPullAdapter['activity']>(async (target) => {
+      if (target.kind === 'occurrence') {
+        throw new ApiError('not_found', 'Occurrence is gone', 404, 'req_occurrence_gone');
+      }
+      return canonicalParent;
+    });
+    const rejectingSync = syncEngine({
+      push: {
+        ...pushTransport(),
+        complete: async () => {
+          throw new ApiError(
+            'validation_failed',
+            'Occurrence completion rejected',
+            422,
+            'req_occurrence_rejected',
+          );
+        },
+      },
+      pull: {
+        ...pullAdapter(),
+        activity: detailRead,
+        agenda: async () => canonicalAgenda,
+      },
+    });
+
+    await expect(rejectingSync.syncNow()).rejects.toThrow(
+      'Occurrence completion rejected',
+    );
+    rejectingSync.stop();
+
+    expect(detailRead).toHaveBeenNthCalledWith(1, {
+      kind: 'occurrence',
+      activityId: ACTIVITY,
+      date: '2026-08-19',
+    });
+    expect(detailRead).toHaveBeenNthCalledWith(2, {
+      kind: 'activity',
+      activityId: ACTIVITY,
+    });
+    const rejected = (await outbox.all())[0];
+    expect(rejected).toMatchObject({
+      intentId: 'immediate-occurrence-404',
+      status: 'needs_attention',
+    });
+    expect(rejected).not.toHaveProperty('recoveryRequired');
+    expect(
+      await database?.first(
+        'SELECT local_state, canonical_version FROM activities WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual({
+      local_state: 'canonical',
+      canonical_version: canonicalParent.activity.updatedAt,
+    });
+    expect(
+      await database?.first(
+        `SELECT nominal_date FROM activity_occurrences
+         WHERE activity_id = ? AND nominal_date = ?;`,
+        [ACTIVITY, '2026-08-19'],
+      ),
+    ).toBeUndefined();
+    expect(
+      await database?.first(
+        `SELECT occurrence_date FROM agenda_rows
+         WHERE activity_id = ? AND occurrence_date = ?;`,
+        [ACTIVITY, '2026-08-19'],
+      ),
+    ).toBeUndefined();
+    expect(
+      await database?.first(
+        'SELECT activity_id FROM activity_tombstones WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toBeUndefined();
+  });
+
+  it('survives restart and Discard treats an Activity 404 as authoritative absence', async () => {
+    if (database === undefined) throw new Error('missing Activity 404 recovery database');
+    const canonical = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (canonical === undefined) throw new Error('missing Activity 404 recovery fixture');
+    await transactions.run(async (transaction) => {
+      await anytime.acceptCanonicalActivity(transaction, canonical.activity);
+      await transaction.database.run(
+        `INSERT INTO activity_reminders (
+          reminder_id, activity_id, owner_user_id, offset_minutes, channel, local_state
+        ) VALUES (?, ?, ?, -10, 'push', 'canonical');`,
+        [REMINDER, ACTIVITY, OWNER],
+      );
+      await transaction.database.run(
+        `INSERT INTO activity_occurrences (
+          activity_id, nominal_date, viewer_date, status, is_snoozed, local_state
+        ) VALUES (?, '2026-08-19', '2026-08-19', 'scheduled', 0, 'canonical');`,
+        [ACTIVITY],
+      );
+      transaction.changed('anytime');
+      transaction.changed('reminders');
+    });
+    await transactions.run((transaction) =>
+      service.patch(transaction, {
+        activityId: ACTIVITY,
+        intentId: 'activity-404-recovery',
+        input: { title: 'Rejected before remote deletion' },
+        ifMatch: 'v1',
+      }),
+    );
+    const rejectingSync = syncEngine({
+      push: {
+        ...pushTransport(),
+        patch: async () => {
+          throw new ApiError(
+            'validation_failed',
+            'Rejected before remote deletion',
+            422,
+            'req_activity_404_rejection',
+          );
+        },
+      },
+      pull: {
+        ...pullAdapter(),
+        activity: async () => {
+          throw new NetworkError('Rollback detail is offline.', undefined);
+        },
+      },
+    });
+    await expect(rejectingSync.syncNow()).rejects.toThrow(
+      'Rejected before remote deletion',
+    );
+    rejectingSync.stop();
+
+    await database.close();
+    database = await createNodeSqliteFactory(directory).open('sync.sqlite');
+    const restartedSubscriptions = new RepositorySubscriptions();
+    transactions = new SerializedTransactionRunner(database, restartedSubscriptions);
+    activities = new ActivityRepository(database, restartedSubscriptions);
+    agenda = new AgendaRepository(database, restartedSubscriptions);
+    anytime = new AnytimeRepository(database, restartedSubscriptions);
+    outbox = new OutboxRepository(database);
+    service = new ActivityTransactionService(outbox, activities, agenda);
+
+    const detailRead = vi.fn<ActivityPullAdapter['activity']>(async () => {
+      throw new ApiError('not_found', 'Activity is gone', 404, 'req_activity_gone');
+    });
+    const recoverySync = syncEngine({
+      pull: { ...pullAdapter(), activity: detailRead },
+    });
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      recoverySync,
+    );
+
+    await expect(
+      coordinator.discardBlocked('activity-404-recovery', clock),
+    ).resolves.toBe(true);
+    await recoverySync.syncNow();
+    recoverySync.stop();
+
+    expect(detailRead).toHaveBeenCalledWith({
+      kind: 'activity',
+      activityId: ACTIVITY,
+    });
+    expect(await outbox.all()).toEqual([]);
+    for (const table of [
+      'activities',
+      'activity_occurrences',
+      'activity_reminders',
+      'agenda_rows',
+      'anytime_rows',
+    ]) {
+      expect(
+        await database.first(
+          `SELECT activity_id FROM ${table} WHERE activity_id = ? LIMIT 1;`,
+          [ACTIVITY],
+        ),
+      ).toBeUndefined();
+    }
+    expect(
+      await database.first(
+        'SELECT activity_id FROM activity_tombstones WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual({ activity_id: ACTIVITY });
+  });
+
+  it('survives restart and Discard removes an authoritatively absent occurrence only', async () => {
+    if (database === undefined)
+      throw new Error('missing occurrence 404 recovery database');
+    await seedRecurring();
+    const parent = await activities.read({ kind: 'activity', activityId: ACTIVITY });
+    if (parent === undefined) throw new Error('missing occurrence 404 parent fixture');
+    await transactions.run((transaction) =>
+      service.complete(
+        transaction,
+        {
+          activityId: ACTIVITY,
+          idempotencyKey: 'occurrence-404-recovery',
+          input: { occurrenceDate: '2026-08-19' },
+        },
+        true,
+        'scheduled',
+        clock,
+      ),
+    );
+    const rejectingSync = syncEngine({
+      push: {
+        ...pushTransport(),
+        complete: async () => {
+          throw new ApiError(
+            'validation_failed',
+            'Occurrence rejected before recurrence changed',
+            422,
+            'req_occurrence_404_rejection',
+          );
+        },
+      },
+      pull: {
+        ...pullAdapter(),
+        activity: async () => {
+          throw new NetworkError('Occurrence rollback is offline.', undefined);
+        },
+      },
+    });
+    await expect(rejectingSync.syncNow()).rejects.toThrow(
+      'Occurrence rejected before recurrence changed',
+    );
+    rejectingSync.stop();
+
+    await database.close();
+    database = await createNodeSqliteFactory(directory).open('sync.sqlite');
+    const restartedSubscriptions = new RepositorySubscriptions();
+    transactions = new SerializedTransactionRunner(database, restartedSubscriptions);
+    activities = new ActivityRepository(database, restartedSubscriptions);
+    agenda = new AgendaRepository(database, restartedSubscriptions);
+    anytime = new AnytimeRepository(database, restartedSubscriptions);
+    outbox = new OutboxRepository(database);
+    service = new ActivityTransactionService(outbox, activities, agenda);
+
+    const canonicalParent: typeof parent = {
+      ...parent,
+      activity: {
+        ...parent.activity,
+        recurrence: {
+          mode: 'fixed',
+          segments: [
+            {
+              freq: 'weekly',
+              interval: 1,
+              byWeekday: [4],
+              effectiveFrom: '2026-08-19',
+            },
+          ],
+        },
+        updatedAt: '2026-08-20T00:00:00.000Z',
+      },
+    };
+    const detailRead = vi.fn<ActivityPullAdapter['activity']>(async (target) => {
+      if (target.kind === 'occurrence') {
+        throw new ApiError('not_found', 'Occurrence is gone', 404, 'req_occurrence_gone');
+      }
+      return canonicalParent;
+    });
+    const targetedRead = vi.fn(async () => ({
+      activityId: ACTIVITY,
+      activityVersion: canonicalParent.activity.updatedAt,
+      rows: [],
+    }));
+    const recoverySync = syncEngine({
+      pull: { ...pullAdapter(), activity: detailRead },
+      targeted: { load: targetedRead },
+    });
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      recoverySync,
+    );
+
+    await expect(
+      coordinator.discardBlocked('occurrence-404-recovery', clock),
+    ).resolves.toBe(true);
+    await recoverySync.syncNow();
+    recoverySync.stop();
+
+    expect(detailRead).toHaveBeenNthCalledWith(1, {
+      kind: 'occurrence',
+      activityId: ACTIVITY,
+      date: '2026-08-19',
+    });
+    expect(detailRead).toHaveBeenNthCalledWith(2, {
+      kind: 'activity',
+      activityId: ACTIVITY,
+    });
+    expect(targetedRead).toHaveBeenCalledTimes(1);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await database.first(
+        'SELECT local_state, canonical_version FROM activities WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toEqual({
+      local_state: 'canonical',
+      canonical_version: canonicalParent.activity.updatedAt,
+    });
+    expect(
+      await database.first(
+        `SELECT nominal_date FROM activity_occurrences
+         WHERE activity_id = ? AND nominal_date = ?;`,
+        [ACTIVITY, '2026-08-19'],
+      ),
+    ).toBeUndefined();
+    expect(
+      await database.first(
+        `SELECT occurrence_date FROM agenda_rows
+         WHERE activity_id = ? AND occurrence_date = ?;`,
+        [ACTIVITY, '2026-08-19'],
+      ),
+    ).toBeUndefined();
+    expect(
+      await database.first(
+        'SELECT activity_id FROM activity_tombstones WHERE activity_id = ?;',
+        [ACTIVITY],
+      ),
+    ).toBeUndefined();
   });
 
   it('parks later same-activity work when its predecessor is rejected', async () => {
@@ -1672,6 +2975,111 @@ describe('serialized native convergence guard', () => {
         [OTHER],
       ),
     ).toEqual([{ local_state: 'canonical' }]);
+  });
+
+  it('retries earlier offline creates when connectivity returns during a multi-create drain', async () => {
+    await transactions.run(async (transaction) => {
+      await service.create(
+        transaction,
+        OWNER,
+        {
+          input: {
+            activityId: OTHER,
+            objectKind: 'plan',
+            type: 'custom',
+            title: 'First offline plan',
+            schedule: { date: '2026-08-19', time: '10:00', timezone: 'UTC' },
+          },
+          idempotencyKey: 'offline-create-first',
+        },
+        clock,
+        '2026-08-19T01:00:00.000Z',
+      );
+      await service.create(
+        transaction,
+        OWNER,
+        {
+          input: {
+            activityId: THIRD,
+            objectKind: 'plan',
+            type: 'custom',
+            title: 'Second offline plan',
+            schedule: { date: '2026-08-19', time: '11:00', timezone: 'UTC' },
+          },
+          idempotencyKey: 'offline-create-second',
+        },
+        clock,
+        '2026-08-19T01:01:00.000Z',
+      );
+    });
+    const first = await activities.read({ kind: 'activity', activityId: OTHER });
+    const second = await activities.read({ kind: 'activity', activityId: THIRD });
+    if (first === undefined || second === undefined) {
+      throw new Error('missing multi-create fixtures');
+    }
+    const canonical = new Map([
+      [OTHER, { ...first.activity, updatedAt: '2026-08-19T02:00:00.000Z' }],
+      [THIRD, { ...second.activity, updatedAt: '2026-08-19T02:01:00.000Z' }],
+    ]);
+    let firstAttempts = 0;
+    let announceSecondStarted: (() => void) | undefined;
+    let releaseSecond: (() => void) | undefined;
+    const secondStarted = new Promise<void>((resolve) => {
+      announceSecondStarted = resolve;
+    });
+    const secondMayFinish = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const dispatched: string[] = [];
+    const create = vi.fn<ActivityPushTransport['create']>(async (input) => {
+      const activityId = input.activityId;
+      if (activityId === undefined) throw new Error('missing create identity');
+      dispatched.push(activityId);
+      if (activityId === OTHER && firstAttempts++ === 0) {
+        throw new NetworkError('The first create is still offline.', undefined);
+      }
+      if (activityId === THIRD) {
+        announceSecondStarted?.();
+        await secondMayFinish;
+      }
+      const result = canonical.get(activityId);
+      if (result === undefined) throw new Error('missing canonical create fixture');
+      return result;
+    });
+    const pullActivity = vi.fn(async (target: { readonly activityId: string }) => {
+      const activity = canonical.get(target.activityId);
+      if (activity === undefined) throw new Error('missing canonical detail fixture');
+      return {
+        activity,
+        reminders: [],
+        capabilities: { complete: true, skip: true, snooze: true },
+        completedOccurrenceCount: 0,
+      };
+    });
+    const sync = syncEngine({
+      push: { ...pushTransport(), create },
+      pull: { ...pullAdapter(), activity: pullActivity },
+    });
+
+    const running = sync.syncNow();
+    await secondStarted;
+    sync.request('connectivity');
+    releaseSecond?.();
+    await expect(running).rejects.toThrow('The first create is still offline.');
+    sync.stop();
+
+    expect(dispatched).toEqual([OTHER, THIRD, OTHER]);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await database?.all(
+        `SELECT activity_id, local_state FROM activities
+         WHERE activity_id IN (?, ?) ORDER BY activity_id;`,
+        [OTHER, THIRD],
+      ),
+    ).toEqual([
+      { activity_id: OTHER, local_state: 'canonical' },
+      { activity_id: THIRD, local_state: 'canonical' },
+    ]);
   });
 
   it('still settles a successful create when detail enrichment is unavailable', async () => {

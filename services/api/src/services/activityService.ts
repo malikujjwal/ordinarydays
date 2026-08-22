@@ -42,6 +42,7 @@ import {
   deleteActivity as deleteActivityRows,
   getActivityMeta,
   getActivityPartition,
+  getActivityPartitionStrong,
   listByBucket as listBucket,
   listParticipants,
   newActivityId,
@@ -50,7 +51,11 @@ import {
   patchActivity as putPatch,
 } from '../repositories/activityRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
-import { assertActivityAccess, assertPatchableFields } from './authz.js';
+import {
+  assertActivityAccess,
+  assertActivityReadAccessFromPartition,
+  assertPatchableFields,
+} from './authz.js';
 
 /**
  * The activity rules that must not live in a handler or a repository (P1-10).
@@ -203,6 +208,8 @@ const RECURRENCE_APPEND_ONLY =
   'Recurrence history is append-only. Existing segments cannot be changed or removed.';
 const EDIT_DATE_NEEDS_APPEND = 'editedFromDate requires a recurrence segment append.';
 const TERMINAL_CANNOT_RECUR = 'Reverse the completion before making this repeat.';
+const RECURRENCE_REMOVAL_NEEDS_TARGET =
+  'Does not repeat requires a selected occurrence through the recurrence conversion action.';
 
 function recurrenceFailure(message: string, path = 'recurrence'): never {
   throw new AppError('validation_failed', message, [{ path, message }]);
@@ -552,7 +559,7 @@ function recurrenceForPatch(
     if (patch.editedFromDate !== undefined) {
       recurrenceFailure(EDIT_DATE_NEEDS_APPEND, 'editedFromDate');
     }
-    return null;
+    recurrenceFailure(RECURRENCE_REMOVAL_NEEDS_TARGET);
   }
   if (schedule === undefined) recurrenceFailure(RECURRENCE_NEEDS_DATE);
 
@@ -1243,16 +1250,13 @@ async function releaseChildren(childIds: readonly string[], now: string): Promis
 /**
  * One activity and the caller's own reminders, behind `GET /v1/activities/:id` (P1-12).
  *
- * ## Two reads, deliberately
+ * ## One strong snapshot
  *
- * `assertActivityAccess` does its own `GetItem` and the partition `Query` that follows
- * returns the canonical row again. One read could serve both — the `Query` already carries
- * the row the owner check needs and the participant rows the fallback needs — but taking it
- * would mean a **second implementation of the authorisation rules**, in the one place where
- * the projection is most tempting to hand-roll. P1-10 rule 2 says the check is called at the
- * top of every activity-scoped service method, and one extra `GetItem` is the price of that
- * being literally true. Two round trips, against a budget of three
- * (`definition-of-done.md` §6).
+ * Native treats this endpoint's `404` as authoritative absence, so the target Activity META,
+ * participant proof and projection must come from one strongly consistent base-table
+ * partition Query. The shared authorisation helper consumes that already-read partition; it
+ * does not duplicate the rules or rediscover META through an eventually consistent read.
+ * Parent-inherited access may strongly read the parent partition separately.
  *
  * `read`, so a participant may see a plan they are on and a participant of a parent may see
  * its prep task. A caller with no relationship gets `not_found`, never `403`.
@@ -1261,10 +1265,11 @@ export async function getActivityDetail(
   userId: string,
   target: ActivityDetailTarget,
 ): Promise<ActivityDetail> {
-  const access = await assertActivityAccess(userId, target.activityId, 'read');
+  const partition = await getActivityPartitionStrong(target.activityId);
+  const access = await assertActivityReadAccessFromPartition(userId, partition);
 
   const mayAct = access.isOwner || access.viaParent;
-  return projectDetail(await getActivityPartition(target.activityId), userId, target, {
+  return projectDetail(partition, userId, target, {
     complete: mayAct,
     skip: mayAct,
     snooze: mayAct,

@@ -1,4 +1,5 @@
-import { describeRecurrence, expandRecurrence } from '@od/shared/recurrence';
+import { OVERDUE_WINDOW_DAYS } from '@od/shared/constants';
+import { addWallDays, describeRecurrence, expandRecurrence } from '@od/shared/recurrence';
 import type { CreateActivityInput } from '@od/shared/schemas';
 import type { Activity, AgendaData, AgendaItem } from '@od/shared/types';
 import { pendingActivityFromInput } from '@/lib/pendingActivity';
@@ -59,21 +60,40 @@ export function applyCreate(
     return applyRecurringCreate(agenda, variables);
   }
 
-  // An undated Task belongs to the ANYTIME bucket of the query window's first day. Native's
+  const overdueFromDate =
+    activity.type === 'task' &&
+    activity.recurrence === undefined &&
+    date !== undefined &&
+    date >= addWallDays(variables.today, -OVERDUE_WINDOW_DAYS) &&
+    date < variables.today
+      ? date
+      : undefined;
+
+  // An undated Task and a one-off overdue Task belong to Today's ANYTIME bucket. Native's
   // aggregate materialization supplies the current viewer day explicitly because its retained
-  // coverage can start in the past. A dated create belongs to its own date in either adapter.
+  // coverage can start in the past. Other dated creates belong to their own date.
   const destinationDate =
-    date ?? variables.undatedDestinationDate ?? agenda.days[0]?.date;
+    overdueFromDate === undefined
+      ? (date ?? variables.undatedDestinationDate ?? agenda.days[0]?.date)
+      : variables.today;
   if (destinationDate === undefined) return agenda;
-  if (!agenda.days.some((day) => day.date === destinationDate)) return agenda;
+  const mayMaterializeDestination = variables.undatedDestinationDate === destinationDate;
+  if (
+    !agenda.days.some((day) => day.date === destinationDate) &&
+    !mayMaterializeDestination
+  ) {
+    return agenda;
+  }
 
   const target = { activityId: activity.activityId };
   if (findAgendaItem(agenda, target) !== undefined && variables.reconcile !== true) {
     return agenda;
   }
 
-  const time = activity.schedule?.time;
-  const endTime = activity.schedule?.endTime;
+  // Canonical overdue projection deliberately drops the old clock time: the row is a Today
+  // Anytime copy and keeps the original date only as its overdue label.
+  const time = overdueFromDate === undefined ? activity.schedule?.time : undefined;
+  const endTime = overdueFromDate === undefined ? activity.schedule?.endTime : undefined;
   const next: AgendaItem = {
     activityId: activity.activityId,
     type: activity.type,
@@ -107,7 +127,9 @@ export function applyCreate(
     ...(activity.parentActivityId === undefined
       ? {}
       : { parentActivityId: activity.parentActivityId }),
+    ...(overdueFromDate === undefined ? {} : { overdueFromDate }),
     isPast:
+      overdueFromDate === undefined &&
       date !== undefined &&
       (date < variables.today ||
         (date === variables.today &&
@@ -115,7 +137,14 @@ export function applyCreate(
           (endTime ?? time) <= variables.currentMinute)),
   };
 
-  return replaceAgendaItem(agenda, target, next, destinationDate, variables);
+  return replaceAgendaItem(
+    agenda,
+    target,
+    next,
+    destinationDate,
+    variables,
+    mayMaterializeDestination,
+  );
 }
 
 /**

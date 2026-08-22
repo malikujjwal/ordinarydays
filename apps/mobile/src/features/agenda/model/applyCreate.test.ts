@@ -77,6 +77,35 @@ describe('applyCreate', () => {
     expect(titles(next, '2026-08-11', 'schedule')).toEqual(['Already here']);
   });
 
+  it('rolls a newly created prior-day task into Today Anytime immediately', () => {
+    const next = applyCreate(cached, {
+      activity: activity({
+        schedule: { date: '2026-08-10', timezone: 'America/New_York' },
+      }),
+      ...clock,
+    });
+
+    expect(next.days[0]?.anytime).toContainEqual(
+      expect.objectContaining({
+        activityId: 'act_NEW',
+        status: 'scheduled',
+        overdueFromDate: '2026-08-10',
+        isPast: false,
+      }),
+    );
+  });
+
+  it('does not roll a newly created task beyond the 30-day overdue window', () => {
+    const next = applyCreate(cached, {
+      activity: activity({
+        schedule: { date: '2026-07-11', timezone: 'America/New_York' },
+      }),
+      ...clock,
+    });
+
+    expect(next).toBe(cached);
+  });
+
   /** The reconciling refetch may still land; it must not produce a second row. */
   it('is idempotent when the window already holds the activity', () => {
     const created = activity({
