@@ -189,17 +189,23 @@ module.exports = {
         'the module may be imported only by the creation service (P3-05), the ' +
         '`GET /v1/list-templates` route (P3-06) and the creation-choice projection beside it ' +
         '(P3-07). Repositories, renderers, `apps/mobile`, `packages/ui` and every other path ' +
-        'are forbidden. Verified to fire on a deliberate violation from ' +
-        '`services/api/src/repositories/` and from `apps/mobile/src/` before the rule landed.',
+        'are forbidden — including other helpers under `lists/`, so a stored-List utility ' +
+        'cannot grow a catalogue lookup. The target is the raw module only, not the `lists/` ' +
+        'directory: `apps/mobile` must still reach `templateChoices.ts` through the barrel. ' +
+        'The barrel re-exports `LIST_TEMPLATES`, which a graph rule cannot distinguish from ' +
+        'the projection, so `check-forbidden.mjs` `list-templates-are-creation-data` bans ' +
+        'the identifier itself outside the same allow-list. Both verified to fire on ' +
+        'deliberate violations from `services/api/src/repositories/` and `apps/mobile/src/`.',
       severity: 'error',
       from: {
         pathNot: [
-          '^packages/shared/src/lists/',
+          '^packages/shared/src/lists/(index|templateChoices)\\.ts$',
+          '^packages/shared/src/lists/__tests__/',
           '^services/api/src/services/listCreationService\\.ts$',
           '^services/api/src/routes/listTemplates\\.ts$',
         ],
       },
-      to: { path: '^packages/shared/(src|dist)/lists/' },
+      to: { path: '^packages/shared/src/lists/templates\\.ts$' },
     },
 
     {
