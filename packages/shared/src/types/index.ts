@@ -43,6 +43,17 @@ export type {
 } from './agenda.js';
 export { assertNever } from './assert.js';
 export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
+export type {
+  List,
+  ListBehaviour,
+  ListCapabilities,
+  ListIndex,
+  ListItem,
+  ListItemActivityLink,
+  ListItemDetails,
+  ListMember,
+  ListTemplate,
+} from './list.js';
 export type { Occurrence, OccurrenceStatus } from './occurrence.js';
 export type {
   MonthNumber,

@@ -31,6 +31,12 @@ describe('exports map', () => {
     expect(schemas.isoDate).toBeDefined();
     expect(schemas.agendaItem).toBeDefined();
     expect(schemas.reminderInputForSchedule).toBeDefined();
+    expect(schemas.list).toBeDefined();
+    expect(schemas.listItem).toBeDefined();
+    expect(schemas.createListInput).toBeDefined();
+    expect(schemas.createListItemInput).toBeDefined();
+    expect(schemas.bulkCreateListItemsInput).toBeDefined();
+    expect(schemas.checkDetailsMatchBehaviour).toBeDefined();
     expect(table.TABLE.partitionKey).toBe('pk');
     expect(time.fixedClock).toBeDefined();
     expect(time.toWallTime).toBeDefined();

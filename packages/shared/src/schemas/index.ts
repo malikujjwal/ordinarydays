@@ -14,6 +14,7 @@ export * from './device.js';
 export * from './envelope.js';
 export * from './error.js';
 export * from './health.js';
+export * from './list.js';
 export * from './occurrence.js';
 export * from './recurrence.js';
 export * from './reminder.js';
