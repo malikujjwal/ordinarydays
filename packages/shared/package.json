@@ -64,6 +64,11 @@
       "react-native": "./src/lists/index.ts",
       "default": "./dist/lists/index.js"
     },
+    "./rank": {
+      "types": "./dist/rank/index.d.ts",
+      "react-native": "./src/rank/index.ts",
+      "default": "./dist/rank/index.js"
+    },
     "./test-fixtures": {
       "types": "./dist/test-fixtures/index.d.ts",
       "react-native": "./src/test-fixtures/index.ts",
