@@ -958,73 +958,127 @@ List reordering must be a single-item write, never a renumber of the list
 (`data-model.md` §3.3). The rank is a string; a new item's rank is a string that sorts
 strictly between its neighbours.
 
-> **Decision: a ~30-line implementation in `packages/shared/src/rank/lexoRank.ts`, no
+> **Decision: a small pure implementation in `packages/shared/src/rank/lexoRank.ts`, no
 > library.** The candidates (`lexorank`, `fractional-indexing`) are each a dependency, a
 > supply-chain surface, and an API to learn, for an algorithm that is one function. Ours is
 > pure, has no dependencies, and is covered by property-based tests (`testing.md` §7).
 
 **Algorithm.** Ranks are strings over base62 in ASCII collation order —
 `0-9` < `A-Z` < `a-z` — which is also DynamoDB's byte order for the `sk`, so the sort the
-database performs and the sort the code performs are the same sort. To find a rank between
-`a` and `b`, walk both strings one character at a time. At the first position where the two
-characters are more than one apart, emit their midpoint and stop. Otherwise copy `a`'s
-character and descend a place. A missing `a` pads with the lowest digit; a missing `b` pads
-with one past the highest.
+database performs and the sort the code performs are the same sort. Two strategies, chosen by
+whether the gap is bounded on both sides:
+
+- **Two neighbours — midpoint subdivision.** Walk both strings one character at a time. At
+  the first position where the two characters are more than one apart, emit their midpoint
+  and stop. Where they are adjacent, copy `prev`'s character and descend a place; if that
+  branch cannot fit inside the cap, take `next`'s character alone instead, which is itself a
+  rank whenever `next` continues past it.
+- **An open end — step by one.** Appending increments `prev`'s last character (`V` → `W`);
+  once it is `z`, a `1` is appended (`z` → `z1`). Prepending decrements `next`'s last
+  character (`V` → `U`); once it is `1`, that character becomes `0` and a `z` is appended
+  (`1` → `0z`). At the cap, where nothing can be appended, the step carries (or borrows) into
+  the nearest earlier position that can still move — `A` + `z` × 63 is followed by `B`. No
+  neighbours at all gives the midpoint `V`, leaving equal room on both sides.
+
+Bisecting an open end would spend a character every ~6 appends and put a list built one
+item at a time into repair at item ~385 — inside the 500-item cap. Stepping spends a
+character every ~61, so sequential head or tail creation never reaches repair.
+
+**Overflow means "nothing fits", not "the first strategy ran out of room."** Every rank
+between two bounds either takes a character strictly between theirs, copies `prev`'s and
+exceeds its remainder, or takes `next`'s character; the search tries each, so
+`LexoRankOverflowError` is thrown only when no valid rank of at most `MAX_LEXO_RANK_LENGTH`
+characters exists.
 
 ```ts
 // packages/shared/src/rank/lexoRank.ts
 const ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const RADIX = ALPHABET.length;   // 62
+const BASE62 = /^[0-9A-Za-z]*$/;
 
 export type LexoRank = Brand<string, 'LexoRank'>;
 
 /**
  * Returns a rank strictly between `prev` and `next`.
- * `null` means "no neighbour on that side" — pass (null, null) for the first item,
- * (last, null) to append, (null, first) to prepend.
+ * A missing bound — `null`, `undefined` or omitted — means "no neighbour on that side":
+ * lexoRankBetween() for the first item, lexoRankBetween(last) to append,
+ * lexoRankBetween(null, first) to prepend.
  *
  * The emitted final character always has an index >= 1, so no rank ever ends in '0'.
- * That invariant is what makes padding a short `prev` with '0' safe.
+ * That invariant is what makes padding a short `prev` with '0' safe — and why a supplied
+ * bound ending in '0' is rejected: `lexoRankBetween('V', 'V0')` would have no answer.
  */
-export function lexoRankBetween(prev: string | null, next: string | null): LexoRank {
-  const a = prev ?? '';
-  const b = next ?? '';
-  if (a !== '' && b !== '' && a >= b) {
-    throw new Error(`lexoRankBetween: prev must sort before next (${a} >= ${b})`);
+export function lexoRankBetween(prev?: string | null, next?: string | null): LexoRank {
+  const lower = prev ?? null;
+  const upper = next ?? null;
+  // Validated up front. The walk stops at the first position with room, so a lazy check
+  // inside it never sees a bad character past that point.
+  if (lower !== null) assertWellFormed(lower);   // non-empty, base62, no terminal '0'
+  if (upper !== null) assertWellFormed(upper);
+  if (lower !== null && upper !== null && lower >= upper) {
+    throw new LexoRankError(`lexoRankBetween: prev must sort before next (${lower} >= ${upper})`);
   }
-
-  let out = '';
-  for (let i = 0; ; i++) {
-    const ca = i < a.length ? ALPHABET.indexOf(a[i]!) : 0;
-    const cb = i < b.length ? ALPHABET.indexOf(b[i]!) : RADIX;
-    if (ca < 0 || cb < 0) throw new Error('lexoRankBetween: rank has an invalid character');
-
-    if (cb - ca > 1) return (out + ALPHABET[ca + ((cb - ca) >> 1)]!) as LexoRank;
-    out += ALPHABET[ca]!;                       // adjacent or equal: descend a place
-  }
+  const out =
+    lower !== null && upper === null ? stepAfter(lower)       // 'V' → 'W', 'z' → 'z1', carry at the cap
+    : lower === null && upper !== null ? stepBefore(upper)    // 'V' → 'U', '1' → '0z', borrow at the cap
+    : between(lower ?? '', upper, MAX_LEXO_RANK_LENGTH);
+  if (out === null) throw new LexoRankOverflowError(/* … */);  // a distinct class: the repair signal
+  return out as LexoRank;
 }
 
-export const FIRST_RANK = lexoRankBetween(null, null);   // 'V'
+/** Shortest rank above `lower` and below `upper` (null = unbounded) within `budget`, or null. */
+function between(lower: string, upper: string | null, budget: number): string | null {
+  if (budget === 0) return null;
+  const la = lower === '' ? 0 : ALPHABET.indexOf(lower.charAt(0));
+  const hb = upper === null ? RADIX : ALPHABET.indexOf(upper.charAt(0));
+  const restA = lower.slice(1);
+  const restB = upper === null ? null : upper.slice(1);
+  if (hb - la > 1) return ALPHABET.charAt(la + ((hb - la) >> 1));
+  if (hb === la) {                                             // equal: copy, both bounds still bind
+    const tail = between(restA, restB, budget - 1);
+    return tail === null ? null : ALPHABET.charAt(la) + tail;
+  }
+  const descend = between(restA, null, budget - 1);            // adjacent: copy prev's, descend
+  if (descend !== null) return ALPHABET.charAt(la) + descend;
+  return restB === null || restB === '' ? null : ALPHABET.charAt(hb);   // or next's alone
+}
+
+export const FIRST_RANK = lexoRankBetween();   // 'V'
 ```
+
+Two error classes, because the caller's branch must not depend on parsing a message:
+`LexoRankError` is a programming error (bounds not strictly ordered, a malformed rank) and is
+never a rank; `LexoRankOverflowError` means no rank of at most `MAX_LEXO_RANK_LENGTH`
+(64, in `constants.ts`) characters fits between the bounds and is the signal for the
+repository to run the bounded list repair, re-read the neighbours and retry. The module itself
+never repairs.
 
 Properties, asserted as tests:
 
 | Property | Assertion |
 | --- | --- |
-| Betweenness | `prev < result < next` for every valid pair |
+| Betweenness | `prev < result < next` for every valid pair, and no result ends in `0` |
 | Idempotent ordering | Inserting between the same pair repeatedly always yields a strictly-between value |
-| Bounded growth | 1,000 sequential inserts at the same position keep the rank under 64 chars |
-| Ends | `lexoRankBetween(null, null)` is stable; append and prepend both work |
+| Bounded growth, open ends | At least 500 sequential appends and 500 sequential prepends stay under 64 chars (measured: 9 chars at 500; the cap is reached at 3,874) |
+| Bounded growth, one gap | 200 sequential inserts into the same bounded gap stay under 64 chars (measured: 42) |
+| Ends | `lexoRankBetween(null, null)` is stable; append and prepend both work and roll over at `z` / `1` |
 | Order-preserving | A shuffled sequence of inserts, sorted by rank, matches the intended order |
+| Typed overflow | Pathological repeated insertion into one bounded gap throws `LexoRankOverflowError`, not `LexoRankError` |
+| Complete | A 64-character bound with prefix room still yields a short rank (`A` + `z` × 63 → `B`); overflow only when nothing of at most 64 characters exists |
 
 Operational notes:
 
-- Ranks grow by roughly one character per 31 inserts at the same position. A list item's
-  `sk` is `ITEM#<rank>#<itemId>` and DynamoDB's sort key limit is 1,024 bytes, so this is not
-  a practical constraint. If a rank ever exceeds **64** characters, the same bounded
-  per-list repair protocol used for duplicate/equal-neighbour ranks rebalances that list;
-  this is a runtime recovery path, not a maintenance-script-only contract. No rebalance has
-  been needed in any list under 10,000 items.
+- **Growth has two regimes, and they are not the same number.** An open end costs about one
+  character per 61 inserts, so a list built by appending (the common case) is 9 characters
+  at 500 items and cannot reach the cap inside the 500-item limit. A bounded gap is bisected
+  and costs about one character per 6 inserts, so repeatedly inserting into *one* gap — for
+  example, always dropping a new item directly after the same neighbour — reaches the
+  64-character cap after roughly 315 inserts. That is inside the 500-item cap: repair is
+  exceptional, but it is not mathematically unreachable, which is why the overflow is a
+  typed error and the repair protocol is a runtime recovery path rather than a
+  maintenance-script-only contract. A list item's `sk` is `ITEM#<rank>#<itemId>` and
+  DynamoDB's sort-key limit is 1,024 bytes, so the cap is about the repair protocol, not
+  storage.
 - Rank allocation is server-owned. The client sends `afterItemId`, never a rank. It may move
   the row optimistically in its local array while awaiting the authoritative response.
 - Single create and reorder read the neighbours plus `List.rankVersion`, then conditionally

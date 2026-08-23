@@ -7,6 +7,7 @@ import * as constants from '@od/shared/constants';
 import * as errors from '@od/shared/errors';
 import * as lists from '@od/shared/lists';
 import * as notifications from '@od/shared/notifications';
+import * as rank from '@od/shared/rank';
 import * as recurrence from '@od/shared/recurrence';
 import * as schemas from '@od/shared/schemas';
 import * as table from '@od/shared/table';
@@ -73,6 +74,10 @@ describe('exports map', () => {
     expect(testFixtures.workedExampleDayResponse).toBeDefined();
     expect(types.assertNever).toBeDefined();
     expect(lists.LIST_TEMPLATES).toHaveLength(17);
+    expect(rank.lexoRankBetween).toBeDefined();
+    expect(rank.compareListItems).toBeDefined();
+    expect(rank.FIRST_RANK).toBe('V');
+    expect(constants.MAX_LEXO_RANK_LENGTH).toBe(64);
   });
 
   it('does not re-export the API client from the root barrel', async () => {

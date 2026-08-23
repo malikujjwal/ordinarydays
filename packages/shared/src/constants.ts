@@ -93,3 +93,13 @@ export const MAX_RECURRENCE_SEGMENTS = 20;
  * a scheduling poll.
  */
 export const MAX_DATE_SUGGESTIONS = 5;
+
+/**
+ * Longest `lexoRank` the generator will emit (`coding-standards.md` §9). An open end steps by
+ * one (~61 inserts per character), so sequential appends never reach this inside the 500-item
+ * cap; a bounded gap is bisected (~6 per character), so pathological repeated insertion into
+ * one gap can — the typed overflow then triggers the bounded list repair (P3-04/P3-08),
+ * never a corrupt order. The `ITEM#<rank>#<itemId>` sort key stays far under DynamoDB's
+ * 1,024 bytes.
+ */
+export const MAX_LEXO_RANK_LENGTH = 64;

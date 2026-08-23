@@ -286,10 +286,15 @@ empty-state copy, re-read the list, and assert the stored behaviour, capabilitie
 
 **Files.** `packages/shared/src/rank/lexoRank.ts`.
 
-**Approach.** A fractional-index string generator: `lexoRankBetween(a?, b?)` returns a
-string strictly between `a` and `b` in lexicographic order, with `undefined` meaning "no
-bound". Base-62 over `0-9A-Za-z`, appending a character when the gap between neighbours is
-exhausted rather than renumbering.
+**Approach.** A fractional-index string generator:
+`lexoRankBetween(prev?: string | null, next?: string | null)` returns a string strictly
+between `prev` and `next` in lexicographic order; a missing bound — `null`, `undefined` or an
+omitted argument — means "no neighbour on that side", so `lexoRankBetween()`,
+`lexoRankBetween(last)` and `lexoRankBetween(null, first)` are all valid calls. Base-62 over `0-9A-Za-z`, appending a character when the gap
+between neighbours is exhausted rather than renumbering. Two bounded neighbours are bisected;
+an open end steps by one, so a list built by sequential appends or prepends never reaches
+repair inside the 500-item cap. The algorithm, the two error classes and the growth
+guarantees are canonical in [`../04-conventions/coding-standards.md`](../04-conventions/coding-standards.md) §9.
 
 The whole point is that reordering changes **one logical item**, never renumbers the list.
 P3-04's stable-id locator moves in the same transaction; that bookkeeping row is not a
@@ -332,16 +337,24 @@ stability and is the bug this rule exists to prevent.
   one. Thus neither mixed rows nor a cursor spanning rewritten sort keys can omit or duplicate
   an item. This is exceptional repair, not the normal drag path's permission to renumber a
   list.
-- Repeated insertion at the same position grows the string. Cap the length at 64 characters
-  and, on overflow, invoke the same resumable `repairListRanks` path. A 500-item cap makes
-  this unreachable in practice; implement the guard anyway so the failure is a repair
-  rather than a corrupt order.
+- Repeated insertion into one bounded gap grows the string by about a character per six
+  inserts. Cap the length at 64 characters (`MAX_LEXO_RANK_LENGTH`) and, on the typed
+  `LexoRankOverflowError`, invoke the same resumable `repairListRanks` path. Overflow is
+  raised only when no rank of at most 64 characters exists between the bounds — a 64-character
+  neighbour with prefix room still yields a short rank. Pathological
+  repeated insertion into a single bounded gap reaches the cap after roughly 315 inserts,
+  which is inside the 500-item cap: repair is exceptional, not mathematically unreachable.
+  Sequential head or tail creation steps by one and stays far under the cap (nine characters
+  at 500 items), so ordinary list building never triggers repair.
 - Ranks are opaque to the client. The client sends `afterItemId`; the server computes the
   rank. Never let the client send a rank.
 
 **Tests.** Property test: 10,000 random insertions at random positions leave the list in the
-intended order at every step. Unit: insert at head, at tail, between two adjacent ranks 200
-times in the same gap and assert order holds and length stays under the cap.
+intended order at every step. Unit: at least 500 sequential appends and 500 sequential
+prepends stay under the cap; insert between two adjacent ranks 200 times in the same gap and
+assert order holds and length stays under the cap; a pathological bounded gap throws the
+typed overflow; an empty string, a non-base62 character and a supplied rank ending in `0` are
+rejected as bounds.
 
 Plus the concurrency test, which is the one that matters for Phase 6 and is written here:
 two callers reading the same neighbours race, exactly one `rankVersion` condition succeeds,

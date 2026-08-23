@@ -55,6 +55,14 @@ export default defineConfig({
           functions: 100,
           lines: 100,
         },
+        // `definition-of-done.md` §4's rationale applies verbatim: a rank that sorts wrong is
+        // discovered by a user, on two devices showing two orders (P3-03).
+        'src/rank/**': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
       },
     },
   },
