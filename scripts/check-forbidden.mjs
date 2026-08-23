@@ -107,6 +107,31 @@ const RULES = {
   },
 
   /**
+   * The identifier half of the catalogue boundary (phase-03 P3-02, ADR-032). The
+   * dependency-cruiser rule of the same name limits who may import
+   * `packages/shared/src/lists/templates.ts` directly — but the `@od/shared/lists` barrel
+   * legitimately re-exports `LIST_TEMPLATES` beside P3-07's `templateChoices`, and a module
+   * graph cannot tell which named export a consumer took. So the raw symbol itself is
+   * allowed in exactly the same places: the `lists/` module and its tests, the creation
+   * service and the `GET /v1/list-templates` route (each with its own test), and the
+   * package's export-map test. A renderer, repository or stored-List read path that names
+   * it has reached for `LIST_TEMPLATES[list.templateKey]`, which is the bug this exists to
+   * stop.
+   */
+  'list-templates-are-creation-data': {
+    description:
+      'LIST_TEMPLATES is named only by the catalogue, the creation service and the templates route',
+    doc: 'data-model.md §4.6 "Templates" and phase-03 P3-02 — a list renders from its own copied fields, never from the catalogue',
+    roots: ['services/api/src', 'apps', 'packages'],
+    extensions: ['.ts', '.tsx'],
+    pattern: /\bLIST_TEMPLATES\b/,
+    excludePath:
+      /(packages[\\/]shared[\\/]src[\\/](lists[\\/]|index\.test\.ts$)|services[\\/]api[\\/]src[\\/](services[\\/]listCreationService|routes[\\/]listTemplates)(\.test)?\.ts$)/,
+    // Prose may cite the rule; only code that touches the array is a violation.
+    codeOnly: true,
+  },
+
+  /**
    * Covers the two client rules dependency-cruiser cannot see, because it cannot parse
    * `.tsx` at all under TypeScript 7 (see the note in `.dependency-cruiser.cjs`). Textual
    * matching is weaker than a resolved module graph — it sees the specifier, not where it

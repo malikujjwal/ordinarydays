@@ -59,6 +59,11 @@
       "react-native": "./src/activity/index.ts",
       "default": "./dist/activity/index.js"
     },
+    "./lists": {
+      "types": "./dist/lists/index.d.ts",
+      "react-native": "./src/lists/index.ts",
+      "default": "./dist/lists/index.js"
+    },
     "./test-fixtures": {
       "types": "./dist/test-fixtures/index.d.ts",
       "react-native": "./src/test-fixtures/index.ts",
