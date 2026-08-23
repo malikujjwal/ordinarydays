@@ -140,6 +140,18 @@ export const childPointerPrefix = (activityId: string) => ({
   skPrefix: 'SUB#',
 });
 
+/** An id-only reverse projection from a source Plan to one List (pattern 4). */
+export const sourceList = (activityId: string, listId: string) => ({
+  pk: activityPk(activityId),
+  sk: `SOURCE_LIST#${listId}`,
+});
+
+/** Every List explicitly created from one Plan. */
+export const sourceListPrefix = (activityId: string) => ({
+  pk: activityPk(activityId),
+  skPrefix: 'SOURCE_LIST#',
+});
+
 /**
  * **A reminder belongs to one user, and the key says so.**
  *
@@ -316,6 +328,12 @@ export const listMember = (listId: string, personId: string) => ({
   sk: `MEMBER#${personId}`,
 });
 
+/** Every non-owner member row on one List (pattern 7b). */
+export const listMemberPrefix = (listId: string) => ({
+  pk: listPk(listId),
+  skPrefix: 'MEMBER#',
+});
+
 /**
  * Phase 3. Sorted by `(rank, itemId)` — the tie-break is not optional, because two members
  * inserting at the same position concurrently produce identical ranks.
@@ -328,6 +346,12 @@ export const listItem = (listId: string, rank: string, itemId: string) => ({
 export const listItemPrefix = (listId: string) => ({
   pk: listPk(listId),
   skPrefix: 'ITEM#',
+});
+
+/** The stable-id locator for one ranked ListItem (pattern 8d). */
+export const listItemLocator = (listId: string, itemId: string) => ({
+  pk: listPk(listId),
+  sk: `ITEMID#${itemId}`,
 });
 
 /**
@@ -348,6 +372,36 @@ export const listItemActivityLink = (
 export const listItemActivityLinkPrefix = (listId: string, viewerUserId: string) => ({
   pk: listPk(listId),
   skPrefix: `LNK#${viewerUserId}#`,
+});
+
+/** The deletion guard and exact Undo snapshot for one ListItem. */
+export const listItemTombstone = (listId: string, itemId: string) => ({
+  pk: listPk(listId),
+  sk: `ITEM_TOMBSTONE#${itemId}`,
+});
+
+/** One retained List Undo operation. */
+export const listUndo = (listId: string, operationId: string) => ({
+  pk: listPk(listId),
+  sk: `UNDO#${operationId}`,
+});
+
+/** Exceptional rank-repair work for one operation. */
+export const listRankRepair = (listId: string, operationId: string) => ({
+  pk: listPk(listId),
+  sk: `RANK_REPAIR#${operationId}`,
+});
+
+/** Resumable behaviour-migration work for one operation. */
+export const listBehaviourMigration = (listId: string, operationId: string) => ({
+  pk: listPk(listId),
+  sk: `BEHAVIOUR_MIGRATION#${operationId}`,
+});
+
+/** The replay-window guard left after a List is deleted. */
+export const listTombstone = (listId: string) => ({
+  pk: listPk(listId),
+  sk: 'TOMBSTONE',
 });
 
 // ── §3.4 Lookup partitions ──────────────────────────────────────────────────────────────
