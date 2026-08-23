@@ -5,6 +5,7 @@ import * as activity from '@od/shared/activity';
 import * as client from '@od/shared/client';
 import * as constants from '@od/shared/constants';
 import * as errors from '@od/shared/errors';
+import * as lists from '@od/shared/lists';
 import * as notifications from '@od/shared/notifications';
 import * as recurrence from '@od/shared/recurrence';
 import * as schemas from '@od/shared/schemas';
@@ -71,12 +72,23 @@ describe('exports map', () => {
     expect(activity.changeActivityKind).toBeDefined();
     expect(testFixtures.workedExampleDayResponse).toBeDefined();
     expect(types.assertNever).toBeDefined();
+    expect(lists.LIST_TEMPLATES).toHaveLength(17);
   });
 
   it('does not re-export the API client from the root barrel', async () => {
     const root = await import('@od/shared');
     expect(root).not.toHaveProperty('nullTokenProvider');
     expect(root).not.toHaveProperty('localTokenProvider');
+  });
+
+  /**
+   * The catalogue is creation-time data behind an import boundary (P3-02). Reachable only
+   * as `@od/shared/lists`; a root re-export would make the dependency-cruiser rule bypassable
+   * by anything that imports the root barrel.
+   */
+  it('does not re-export the list template catalogue from the root barrel', async () => {
+    const root = await import('@od/shared');
+    expect(root).not.toHaveProperty('LIST_TEMPLATES');
   });
 });
 

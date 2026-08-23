@@ -180,6 +180,29 @@ module.exports = {
     },
 
     {
+      name: 'list-templates-are-creation-data',
+      comment:
+        '`LIST_TEMPLATES` is a seed consumed at creation time and copied onto the List ' +
+        '(ADR-032, `data-model.md` §4.6 "Templates"). A list renders from its own row, never ' +
+        'from `LIST_TEMPLATES[list.templateKey]` — otherwise a shipped catalogue change ' +
+        'silently alters a list somebody is standing in a shop reading (phase-03 P3-02). So ' +
+        'the module may be imported only by the creation service (P3-05), the ' +
+        '`GET /v1/list-templates` route (P3-06) and the creation-choice projection beside it ' +
+        '(P3-07). Repositories, renderers, `apps/mobile`, `packages/ui` and every other path ' +
+        'are forbidden. Verified to fire on a deliberate violation from ' +
+        '`services/api/src/repositories/` and from `apps/mobile/src/` before the rule landed.',
+      severity: 'error',
+      from: {
+        pathNot: [
+          '^packages/shared/src/lists/',
+          '^services/api/src/services/listCreationService\\.ts$',
+          '^services/api/src/routes/listTemplates\\.ts$',
+        ],
+      },
+      to: { path: '^packages/shared/(src|dist)/lists/' },
+    },
+
+    {
       name: 'no-orphans',
       comment:
         'A module nothing imports. `warn`, not `error`, and it stays that way: config ' +
@@ -206,8 +229,10 @@ module.exports = {
           '^(infra/bin|packages/shared/scripts|services/api/scripts)/',
           '^services/api/src/(index|local)\\.ts$',
           '^infra/lib/functions/',
-          // Package barrels. `@od/ui`'s is empty until P1-22 and `@od/shared`'s is reached
-          // through the `exports` map, which dependency-cruiser does not follow.
+          // Package barrels. `@od/ui`'s is empty until P1-22; `@od/shared`'s root barrel is
+          // reached only by consumers importing the bare package name, which the cruise
+          // may or may not contain (subpath imports resolve straight to their own barrels
+          // since P3-02 — see `conditionNames` below).
           '^packages/(shared|ui)/src/index\\.ts$',
           // Test fixtures exist to be read by a test, and tests are excluded below.
           '/(fixtures|__fixtures__)/',
@@ -262,10 +287,21 @@ module.exports = {
      *
      * `conditionNames` includes `require` alongside `import` because Hono publishes both,
      * and omitting it makes half its subpaths unresolvable.
+     *
+     * **`react-native` comes first, and that is load-bearing for every cross-package rule.**
+     * `@od/shared`'s `exports` map points `default` at `dist/` and `react-native` at `src/`.
+     * Until P3-02 the resolver took `default`, so every `@od/shared/<subpath>` edge landed on
+     * `packages/shared/dist/…` — which `exclude` below removes from the graph. The edge
+     * vanished: `ui-is-a-leaf`, `shared-is-a-leaf` and the new
+     * `list-templates-are-creation-data` had nothing to match, and a deliberate violation
+     * from `apps/mobile/src/` passed without a murmur (the same silent-green failure the
+     * parser note above describes). Resolving through `react-native` lands those edges on
+     * `src/`, where the rules can see them; the cruise went from 1127 to 1414 dependencies
+     * with no new violation, which is the ~290 edges that had been invisible.
      */
     enhancedResolveOptions: {
       exportsFields: ['exports'],
-      conditionNames: ['import', 'require', 'node', 'default'],
+      conditionNames: ['react-native', 'import', 'require', 'node', 'default'],
       mainFields: ['module', 'main', 'types'],
       extensions: ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.json'],
     },
