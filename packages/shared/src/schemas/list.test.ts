@@ -26,6 +26,7 @@ import {
   listItem,
   listItemActivityLink,
   listItemDetails,
+  listItemDetailsInput,
   listMember,
   listTemplate,
 } from './list.js';
@@ -405,6 +406,55 @@ describe('createListItemInput', () => {
     expect(createListItemInput.safeParse({ title: 'Eggs', [field]: value }).success).toBe(
       false,
     );
+  });
+
+  it('rejects the server-owned addedToListId on an ingredient — single and bulk', () => {
+    const details = {
+      behaviour: 'meals',
+      ingredients: [{ ingredientId: ING, name: 'Chicken', addedToListId: LST }],
+    };
+    const single = createListItemInput.safeParse({ title: 'Tacos', details });
+    expect(single.success).toBe(false);
+    expect(single.error?.issues[0]).toMatchObject({
+      code: 'unrecognized_keys',
+      keys: ['addedToListId'],
+      path: ['details', 'ingredients', 0],
+    });
+    expect(
+      bulkCreateListItemsInput.safeParse({ items: [{ title: 'Tacos', details }] })
+        .success,
+    ).toBe(false);
+    // The same ingredient without the field is the ordinary, accepted shape.
+    expect(
+      createListItemInput.safeParse({
+        title: 'Tacos',
+        details: {
+          behaviour: 'meals',
+          ingredients: [{ ingredientId: ING, name: 'Chicken' }],
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      'watch details carrying ingredients',
+      { behaviour: 'watch', watchStatus: 'want', ingredients: [] },
+    ],
+    ['meals details carrying watchStatus', { behaviour: 'meals', watchStatus: 'want' }],
+    ['meals details carrying season', { behaviour: 'meals', season: 2 }],
+    [
+      'an unknown ingredient field',
+      {
+        behaviour: 'meals',
+        ingredients: [{ ingredientId: ING, name: 'x', checked: true }],
+      },
+    ],
+  ])('rejects rather than strips %s', (_label, details) => {
+    expect(createListItemInput.safeParse({ title: 'x', details }).success).toBe(false);
+    expect(listItemDetailsInput.safeParse(details).success).toBe(false);
+    // The stored union is strict too: nothing nested carries key attributes.
+    expect(listItemDetails.safeParse(details).success).toBe(false);
   });
 
   it('rejects an unknown behaviour string', () => {

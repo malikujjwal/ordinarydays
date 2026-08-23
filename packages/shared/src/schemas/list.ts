@@ -113,31 +113,51 @@ export const listMember = z.object({
  * Typed fields per behaviour, discriminated on `behaviour` (`data-model.md` §4.6).
  *
  * Arms for `watch` and `meals` only: a `collection` item has no `details`, so any `details`
- * on one is a mismatch by construction. Each arm names only its own fields, so a body
- * carrying `season` on a meal fails rather than being silently dropped.
+ * on one is a mismatch by construction. **Every arm is strict**, stored and input alike: a
+ * nested object carries no `pk`/`sk`, so there is nothing legitimate to strip, and a watch
+ * body carrying `ingredients` — or a meals body carrying `watchStatus` — must fail rather
+ * than be silently emptied of the fields it was actually trying to send.
  */
-export const listItemDetails = z.discriminatedUnion('behaviour', [
-  z.object({
-    behaviour: z.literal('watch'),
-    mediaKind: z.enum(['movie', 'show']).optional(),
-    watchStatus: z.enum(['want', 'watching', 'watched']),
-    season: z.number().int().min(0).max(1000).optional(),
-    episode: z.number().int().min(0).max(10000).optional(),
-  }),
-  z.object({
+const watchDetails = z.strictObject({
+  behaviour: z.literal('watch'),
+  mediaKind: z.enum(['movie', 'show']).optional(),
+  watchStatus: z.enum(['want', 'watching', 'watched']),
+  season: z.number().int().min(0).max(1000).optional(),
+  episode: z.number().int().min(0).max(10000).optional(),
+});
+
+/** What a client may say about an ingredient. `addedToListId` is deliberately not here. */
+const ingredientInputShape = {
+  ingredientId: ulidId('ing'),
+  name: freeText.min(1),
+  quantity: freeText.optional(),
+} as const;
+
+function mealsDetails<T extends z.ZodRawShape>(ingredient: T) {
+  return z.strictObject({
     behaviour: z.literal('meals'),
-    ingredients: z
-      .array(
-        z.object({
-          ingredientId: ulidId('ing'),
-          name: freeText.min(1),
-          quantity: freeText.optional(),
-          addedToListId: ulidId('lst').optional(),
-        }),
-      )
-      .max(MAX_INGREDIENTS)
-      .optional(),
+    ingredients: z.array(z.strictObject(ingredient)).max(MAX_INGREDIENTS).optional(),
+  });
+}
+
+export const listItemDetails = z.discriminatedUnion('behaviour', [
+  watchDetails,
+  mealsDetails({
+    ...ingredientInputShape,
+    /** Server-owned "Added" state, written only by the add-to-list action (P3-17). */
+    addedToListId: ulidId('lst').optional(),
   }),
+]);
+
+/**
+ * The `details` a create may carry. Identical to the stored union except that the meals
+ * arm's ingredients **omit and reject `addedToListId`**: it records that the authorised
+ * `POST /v1/activities/:id/ingredients/add-to-list` action ran, and a client that could set
+ * it on an ordinary create would be fabricating that for any well-formed `lst_` id.
+ */
+export const listItemDetailsInput = z.discriminatedUnion('behaviour', [
+  watchDetails,
+  mealsDetails(ingredientInputShape),
 ]);
 
 /** A place on a `collection` item. No `mapUrl`, unlike `activityLocation` — §4.6 has none. */
@@ -246,7 +266,7 @@ const createListItemFields = {
   title,
   note: z.string().max(MAX_NOTES_LEN).optional(),
   location: listItemLocation.optional(),
-  details: listItemDetails.optional(),
+  details: listItemDetailsInput.optional(),
   /** Drives the lexo rank. Absent means the end of the list. */
   afterItemId: ulidId('itm').optional(),
 } as const;

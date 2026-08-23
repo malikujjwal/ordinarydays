@@ -35,6 +35,7 @@ describe('exports map', () => {
     expect(schemas.listItem).toBeDefined();
     expect(schemas.createListInput).toBeDefined();
     expect(schemas.createListItemInput).toBeDefined();
+    expect(schemas.listItemDetailsInput).toBeDefined();
     expect(schemas.bulkCreateListItemsInput).toBeDefined();
     expect(schemas.checkDetailsMatchBehaviour).toBeDefined();
     expect(table.TABLE.partitionKey).toBe('pk');
