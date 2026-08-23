@@ -451,11 +451,13 @@ data. See P3-03.
   legacy equal-rank run
   triggers an explicit bounded repair before the requested move; normal drag never rewrites
   unrelated ListItems.
-- Every list-scoped repository method takes the caller's `userId` and asserts a `USER#<u>` /
-  `LIST#<l>` pointer exists before touching the `LIST#` partition. A `LIST#<l>` partition is
-  not scoped by user, so the pointer **is** the access check. Phase 6 turns that check into
-  the role-aware middleware (P6-32); this phase writes it once, in the repository, so the
-  shape is already right.
+- Every list-scoped repository method takes the caller's `userId`, preserving the
+  tenant-scoped call shape, and the service calls the single role-aware
+  `assertListAccess(userId, listId, level)` helper before touching the `LIST#` partition.
+  That helper performs one exact `USER#<u>` / `LIST#<l>` pointer read through the repository;
+  a `LIST#<l>` partition is not scoped by user, so the pointer **is** the access check. This
+  follows `security-privacy.md` §1 row 4a and keeps repositories responsible for storage
+  while services decide authorisation, rather than enforcing the same policy twice.
 - Deleting a list deletes the `META` row and every item, locator, pointer, Undo, rank-repair
   and behaviour-migration row, then leaves
   `LIST#<listId>` / `TOMBSTONE` for the Phase 2.6 automatic-replay window. Deleting an item

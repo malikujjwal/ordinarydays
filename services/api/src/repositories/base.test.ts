@@ -284,6 +284,16 @@ describe('get, put, update and delete', () => {
     expect(await getItem(userProfile(ALICE))).toBeUndefined();
   });
 
+  it('requests strong consistency only when the caller asks for it', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'x', sk: 'y', schemaVersion: 1 } });
+
+    await getItem(userProfile(ALICE), { consistentRead: true });
+
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0]?.input).toMatchObject({
+      ConsistentRead: true,
+    });
+  });
+
   it('puts without a condition by default', async () => {
     ddbMock.on(PutCommand).resolves({});
     await putItem({ ...userProfile(ALICE), schemaVersion: 1 });

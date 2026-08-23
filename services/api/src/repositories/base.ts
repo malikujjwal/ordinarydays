@@ -68,11 +68,23 @@ export interface QueryOptions {
   readonly consistentRead?: boolean;
 }
 
+export interface GetOptions {
+  /** Fence reads use strong consistency on the base table. */
+  readonly consistentRead?: boolean;
+}
+
 /** `GetItem`, upgraded on read. `undefined` when the item is not there. */
 export async function getItem<T extends StoredItem>(
   key: PageKey,
+  options: GetOptions = {},
 ): Promise<T | undefined> {
-  const { Item } = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: key }));
+  const { Item } = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: key,
+      ...(options.consistentRead === true ? { ConsistentRead: true } : {}),
+    }),
+  );
   return Item === undefined ? undefined : upgradeOnRead(Item as T);
 }
 

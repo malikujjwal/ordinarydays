@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import { ZodError } from 'zod';
 import type { AppEnv } from '../app-env.js';
 import { AppError, INTERNAL_ERROR_MESSAGE, statusFor } from '../lib/errors.js';
+import { ListReadFenceError } from '../repositories/listRepository.js';
 
 /**
  * Chain entry 3, registered as `app.onError` so it catches throws from every later
@@ -59,6 +60,15 @@ function classify(err: Error): {
 
   if (err instanceof RecurrenceValidationError) {
     return { code: err.code, message: err.message };
+  }
+
+  if (err instanceof ListReadFenceError) {
+    return {
+      code: 'internal',
+      message: INTERNAL_ERROR_MESSAGE,
+      retryAfterSeconds: 1,
+      status: 503,
+    };
   }
 
   if (THROUGHPUT_ERRORS.has(err.name)) {
