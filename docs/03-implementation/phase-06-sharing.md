@@ -2084,7 +2084,7 @@ assertListAccess(userId, listId, level): Promise<{ role: ListRole; list: List }>
 | `GET /v1/lists/:id`, `/items`, `/members` | `member` |
 | All item writes: `POST`/`PATCH`/`DELETE .../items*`, `clear-checked`, item `schedule` | `member` |
 | `PATCH /v1/lists/:id` with `title` only | `member` |
-| `PATCH /v1/lists/:id` with `capabilities`, `behaviour` or `slot` | `owner` |
+| `PATCH /v1/lists/:id` with `capabilities` or `slot`; `POST /v1/lists/:id/behaviour` | `owner` |
 | `POST /v1/lists/:id/members`, `DELETE /v1/lists/:id/members/:other` | `owner` |
 | `DELETE /v1/lists/:id/members/:self` | `member` — the leave path |
 | `DELETE /v1/lists/:id` | `owner` |

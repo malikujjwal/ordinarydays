@@ -78,8 +78,9 @@ Error codes are a closed enum in `packages/shared/src/errors.ts`:
 > but missing from this sentence.
 
 Any endpoint may return `503 internal` with `Retry-After` when storage pressure remains after
-bounded retries. The response still uses the standard safe error envelope and never exposes
-the underlying table, key or provider message.
+bounded retries or when a bounded repair/migration drain has not yet cleared a read/write gate.
+The response still uses the standard safe error envelope and never exposes the underlying
+table, key or provider message.
 
 ### Pagination
 
@@ -337,20 +338,28 @@ Powers the Plans tab, which has three stages:
 | Stage | Source | Order |
 | --- | --- | --- |
 | `needsDate` | `GSI1` `gsi1pk = U#<u>#P` | `lastActivityAt` descending — the plan being discussed floats up, not the oldest |
-| `upcoming` | `GSI1` `gsi1pk = U#<u>#S` inside the requested window, merged with expansion of `U#<u>#R` | date ascending |
-| `past` | same bucket, before today | date descending, `?cursor=` |
+| `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, queried with the access-pattern-1 two-day overlap, timezone-converted and filtered to the exact requested viewer window, merged with expansion of `U#<u>#R` | viewer-local date ascending |
+| `past` | the same dated-Activity bucket with a two-day overlap above the viewer-local today boundary, timezone-converted and filtered to dates before today | viewer-local date descending, `?cursor=` |
 
 The initial request may omit `upcomingFrom` and `upcomingTo`; they default to today through
 61 days later, an inclusive 62-day window. If either is supplied, both are required and the
 inclusive window may not exceed `MAX_AGENDA_DAYS` (62); a wider or reversed range is
 `validation_failed`. `upcomingWindow.nextFrom` is `WallDate | null`: the earliest scheduled
-or recurring date after `through`, so it may jump an empty gap without skipping a row; it is
-`null` only when neither source has a later item. An Upcoming scroll requests a new 62-day
+or recurring Activity date after `through`, so it may jump an empty gap without skipping a
+row; it is `null` only when neither source has a later item. An Upcoming scroll requests a new 62-day
 window beginning there. Each request starts four concurrent Query streams — `#P`, future
-`#S`, past `#S`, and `#R` — and pages each according to its cap. The future `#S` stream stops
-after the first key beyond `through`, while recurrence math finds each bounded series' first
-later occurrence; no empty date gap is scanned to calculate `nextFrom`. The shared agenda
-expansion path expands recurring rows only inside the exact response window. Its
+`#S`, past `#S`, and `#R` — and pages each according to its cap. Both `#S` reads obey access
+pattern 1 by widening stored-key bounds two calendar days. Scheduled and recurring Tasks
+share `#S` and `#R` with Plans and remain in those streams: hydrate every candidate and pass
+every bounded recurring row to the shared expansion path. Convert effective
+timed rows from their projected stored `timezone` into the request timezone, then filter to
+the exact viewer-local stage/window. The future stream continues until it has a converted
+one-off candidate after `through` or is exhausted; `nextFrom` uses that converted date, never
+the raw key date. The Past cursor remains a raw DynamoDB continuation key, but the server
+refills across boundary candidates removed by viewer-local filtering. Recurrence math finds
+each bounded series' first later occurrence, so no empty date gap is scanned to calculate
+`nextFrom`. The shared agenda expansion path expands recurring rows only inside the exact
+response window. Its
 successful-response warnings, including `series_limit_exceeded` and duplicate-occurrence
 diagnostics, are returned in `warnings`. No request assumes an unbounded future response.
 
@@ -371,9 +380,14 @@ interface RsvpSummary {
 }
 ```
 
-`needsDate` items also carry `suggestionCount: number`, which drives the row's third line
+`needsDate` items also carry authoritative/projection `lastActivityAt` for monotonic client
+reconciliation and `suggestionCount: number`, which drives the row's third line
 (`2 dates suggested`). The suggestions themselves are not inlined — the row shows a count,
 the detail screen shows the list.
+
+After a mutation returns a newer authoritative `lastActivityAt`, the client must not replace
+it with an older value from an immediate eventually consistent GSI1 refetch. It merges the
+field monotonically and lets a later converged response confirm the same ordering.
 
 The group keys are the **undated** labels because this field only ever appears on
 needs-a-date rows. They map to the stored values in
@@ -423,7 +437,7 @@ Also:
 | Method | Path | Notes |
 | --- | --- | --- |
 | `POST` | `/v1/activities` | Create a **Task or Plan chosen by the client**. Body = `CreateActivityInput`; both `objectKind` and `type` are required. When `recurrence` is present it contains **exactly one** segment; more is `validation_failed`. Stored recurrence still supports 1–20 segments, which grow only through the all-future PATCH path. Requires `Idempotency-Key`. |
-| `GET` | `/v1/activities/:id` | Full detail: activity + optional authoritative `occurrence` projection + caller-specific `capabilities` + participants + expenses + updates + attachments + children + related Lists + **the caller's own reminders** + date suggestions. The target partition is one strongly consistent base-table Query used for both authorisation and projection, so its `404` is authoritative for native convergence; `SOURCE_LIST#` ids are hydrated with one bounded `BatchGetItem` for current List META rows, never one read per List. Parent-inherited access may strongly read the parent partition separately. `?occurrenceDate=YYYY-MM-DD` explicitly targets one nominal recurring occurrence and returns its effective date, time, end time, status and snooze state after the stored override; without it the read is activity/series-only and never guesses an occurrence from agenda cache. A date the recurrence does not emit is `400 validation_failed`. Response shape is `ActivityDetail` (`packages/shared/src/types/activityDetail.ts`), an object of named collections so each one is **added** as its phase lands rather than changing the envelope. Phase 2 adds `completedOccurrenceCount`, the real count of stored completed Occurrence rows used by recurrence-removal and whole-series-delete confirmations. `capabilities` uses the same server-authored `{ complete, skip, snooze }` verdict as `AgendaItem`, including prep-task inheritance, so detail never re-derives ownership. It is derived from the access check and partition already read, so detail remains within the three-round-trip budget; the reminder rows are filtered to the caller in the projection before responding. Stored `listId` / `listItemId` are included only when the caller also passes `assertListAccess`; a Plan participant outside the list receives no reverse link. |
+| `GET` | `/v1/activities/:id` | Full detail: activity + optional authoritative `occurrence` projection + caller-specific `capabilities` + first bounded page of participants, expenses, updates, attachments, children and related Lists + **the caller's own reminders** + date suggestions. A strongly consistent `GetItem ACT#<id>/META` establishes authoritative `404` and owner authority; bounded strongly consistent sort-key-prefix Queries then assemble the named sections. Updates are newest-first with `Limit: 50` and a cursor. Prep children are capped by `MAX_PREP_TASKS_PER_PLAN = 50`, so one `SUB#` Query with `Limit: 50` is their complete collection and supplies exact done/open counts; creating a 51st child is `validation_failed`. Every other collection observes its documented cap/page limit. The service never `queryAll`s the user-growing Activity partition. `SOURCE_LIST#` ids are hydrated with one bounded `BatchGetItem` for current List META rows, never one read per List. Parent-inherited access may strongly read the parent META separately. `?occurrenceDate=YYYY-MM-DD` explicitly targets one nominal recurring occurrence and returns its effective date, time, end time, status and snooze state after the stored override; without it the read is activity/series-only and never guesses an occurrence from agenda cache. A date the recurrence does not emit is `400 validation_failed`. Response shape is `ActivityDetail` (`packages/shared/src/types/activityDetail.ts`), an object of named paged collections so each one is **added** as its phase lands rather than changing the envelope. Phase 2 adds `completedOccurrenceCount`, the real count of stored completed Occurrence rows used by recurrence-removal and whole-series-delete confirmations. `capabilities` uses the same server-authored `{ complete, skip, snooze }` verdict as `AgendaItem`, including prep-task inheritance, so detail never re-derives ownership. Detail remains within the three-round-trip budget by running bounded independent reads concurrently; reminder reads use only the caller prefix. Stored `listId` / `listItemId` are included only when the caller also passes `assertListAccess`; a Plan participant outside the list receives no reverse link. |
 | `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. **Does not accept `schedule` or unschedule fields**; `POST .../schedule` is the single scheduling write path. A recurrence edit may additionally carry `editedFromDate?: WallDate`. When supplied, it must be a date emitted by the current stored active rule and becomes the server-written `effectiveFrom` of the one appended segment; when absent, the server uses today in the Activity's timezone. Any `effectiveFrom` values inside client-supplied segments are ignored. One founder-approved exception allows a changed last segment with the same length when that active segment starts today: the server replaces it only if the transaction proves `OCC#<today>` does not exist; otherwise history remains append-only and the request is `validation_failed`. **`recurrence: null` is always `validation_failed` on PATCH**: removing a series requires the explicit occurrence target and surviving effective schedule of `POST .../recurrence/convert`; a non-recurring no-op is not a second removal contract. **Adding a recurrence to a `completed` or `skipped` activity is rejected** with `validation_failed` on `status` (added 2026-08-13, ADR-053). A recurring activity never holds a terminal series status: `POST .../complete` and `.../skip` refuse to set one, and this is the other way in — completing a one-off and then making it repeat left `status: 'completed'` on a row that had become a series, which `agendaService` then rendered onto every un-overridden occurrence. `cancelled` is exempt; a cancelled series is legitimate and its occurrences inherit it. The guard is on the transition, not on later edits of an existing series. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
 | `POST` | `/v1/activities/:id/recurrence/convert` | Atomic **Does not repeat** conversion. Body = `{ occurrenceDate }`, naming one nominal occurrence emitted by the current series. Requires `Idempotency-Key`. The server resolves that occurrence through its active segment and stored override, condition-checks the META and occurrence version/absence it read, copies the effective date/time/end time to the Activity schedule while retaining its timezone, removes `recurrence`, and rewrites every required ActivityIndex row in the same transaction. Stored Occurrence history is untouched. |
 | `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7, clears `sourceActivityId` on Lists named by `SOURCE_LIST#` without deleting them, and deletes every child Expense locator with its row. The cascade deletes children and external pointers first and `ACT#/META` **last**, so an interrupted retry can still authorise; after META is gone, a replayed `404` is success for the client. **The settlement guard and the Expense-locator half of the cascade arrive in Phase 7 (P7-08), not Phase 1 (P1-14)** — see the note below. |
@@ -435,6 +449,14 @@ Also:
 | `POST` | `/v1/activities/:id/unsnooze` | `{ occurrenceDate? }`. Requires `Idempotency-Key`. Compensating Undo operation: without `occurrenceDate`, deletes one-off META snooze fields; with it, deletes only the snoozed source override and its destination-marker reference and cannot erase completion, skip or reschedule. Idempotent. |
 | `POST` | `/v1/activities/:id/duplicate` | |
 | `GET` | `/v1/activities/:id/ics` | Single-event `.ics`. Authenticated variant of the public one. |
+
+Whenever a prep task gains, edits or removes recurrence, the same transaction rewrites its
+parent `SUB#` projection's `isRecurring`. Completion follow-ups use that stored discriminator
+to exclude recurring children; they never infer or invent an `occurrenceDate`.
+
+For a non-owner detail read, META alone is not authority: the service strongly reads the exact
+`USER#<caller>/IDX#<activityId>` access grant, or the documented parent grant, before
+projecting sections. It never scans participants to discover whether the caller is allowed.
 
 For occurrence-scoped schedule/snooze writes, `overrideDate` and the Activity-local date of an
 ISO `snoozedUntil` must be within 60 calendar days of `occurrenceDate`; farther moves return
@@ -615,20 +637,29 @@ deleted once the activity is scheduled. Guests cannot suggest; they read and RSV
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/v1/activities/:id/updates?cursor=` | Newest first. |
-| `POST` | `/v1/activities/:id/updates` | `{ body }`. System entries ("Alice is going", "Time changed to 8 PM") are written server-side with `kind: 'system'`. |
+| `GET` | `/v1/activities/:id/updates?cursor=` | Newest first, 50 per page. The first page and cursor are embedded in Activity detail. |
+| `POST` | `/v1/activities/:id/updates` | `{ body }` → `{ update, lastActivityAt }`. System entries ("Alice is going", "Time changed to 8 PM") are written server-side with `kind: 'system'`. The returned timestamp is authoritative while the GSI projection converges. |
 | `DELETE` | `/v1/activities/:id/updates/:updateId` | Author only, and only on `kind: 'user'` entries — a system entry is the record of what happened and is undeletable. Anything else → `404`. Matches phase-03 P3-19. |
 
 ### 2.6 Attachments
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `POST` | `/v1/attachments/upload-url` | `{ contentType, byteSize }` → `{ attachmentId, uploadUrl, key }`. Presigned S3 `PUT`, 5-minute expiry, 10 MB cap, image MIME types only. |
-| `POST` | `/v1/activities/:id/attachments` | Confirm the upload and link it. |
+| `POST` | `/v1/attachments/upload-url` | `{ contentType, byteSize }` → `{ attachmentId, uploadUrl, key }`. Creates the caller's durable pending-upload record, then returns a presigned S3 `PUT`, 5-minute expiry, 10 MB cap, image MIME types only. |
+| `POST` | `/v1/activities/:id/attachments` | Confirm the upload and link it. Confirmation marks the pending record before permanent copy and is resumable/repairable at every cross-store crash point. |
 | `DELETE` | `/v1/activities/:id/attachments/:attachmentId` | |
 
 `Set as cover` is `PATCH /v1/activities/:id { primaryAttachmentId }`; the server validates
 the id against the activity's own `ATT#` rows before accepting it (phase-03 P3-22).
+
+Confirmation is a cross-store state machine. Before copying to the permanent key, the server
+records the target Activity and marks the caller's pending-upload record `confirming`; after a verified copy it
+transactionally creates the `ATT#` row and consumes that record, then deletes the temporary
+object. Retry resumes the recorded state. Before another upload URL is issued and on later
+attachment/detail access, one caller-scoped bounded drain completes or deletes expired
+pending confirmations before deleting their rows. The set is capped at 20, so no scan,
+DynamoDB Stream or scheduled worker is required. A crash after copy therefore cannot create
+an undiscoverable permanent orphan.
 
 Images are served through CloudFront with a signed-URL or a per-object random key path
 (`u/<userId>/<ulid>.<ext>`). Never make the bucket public.
@@ -639,19 +670,21 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 | --- | --- | --- |
 | `GET` | `/v1/lists?cursor=` | Pages active List pointers 50 at a time, then BatchGets that page's current `META` rows. The 100 cap applies to Lists the caller owns, not memberships received from other owners. |
 | `POST` | `/v1/lists` | `{ listId?, title, templateKey, sourceActivityId? }`. `title` and `templateKey` are required; `templateKey` must be the template/style the user selected. Optional `listId` is the permanent client-minted `lst_<ULID>` for durable offline creation. The server copies behaviour, capabilities, icon, empty-state copy and slot from that exact catalogue entry; it never matches the title or substitutes another template. When `sourceActivityId` is present and names an owned Plan, the copied `slot` is forced to `null` and the same transaction writes an id-only `ACT#<sourceActivityId>/SOURCE_LIST#<listId>` reverse projection. Create rejects client-supplied `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy`; only explicit later settings may change their supported subset. |
-| `GET` | `/v1/lists/:id?includeItems=true` | Includes only the caller's `viewerLink` for each item. Links belonging to other members are removed before serialisation. |
-| `PATCH` | `/v1/lists/:id` | `{ title?, capabilities?, slot?, behaviour? }`. See the change rules below. |
-| `DELETE` | `/v1/lists/:id` | Owner only. Writes the replay-window tombstone and removes the List's `SOURCE_LIST#` reverse projection when present before the chunked cascade removes every item locator, member pointer, `LLINK#` relationship and per-viewer `LNK#`; it does not delete owner-scoped People records. |
-| `GET` | `/v1/lists/:id/items?cursor=` | |
-| `GET` | `/v1/lists/:id/items/:itemId` | Authoritative exact-id read for durable-create reconciliation. Resolves the current rank through the item identity locator; a missing or tombstoned item is `404`. |
+| `GET` | `/v1/lists/:id?includeItems=true` | Returns META plus the first 50 items and an opaque item cursor bound to the META `rankVersion`. The service strongly reads META, uses `ConsistentRead: true` for the item Query, then strongly rereads META; both reads must have the same version with neither `rankRepairId` nor `behaviourMigrationId`. A marker or changed fence returns `503 internal` with `Retry-After: 1` and no item rows after attempting the bounded drain. Includes only the caller's `viewerLink` for each returned item. Links belonging to other members are removed before serialisation. It never returns the whole List partition. |
+| `PATCH` | `/v1/lists/:id` | `{ title?, capabilities?, slot?, archived? }`. See the change rules below. Additive changes return the server-recorded settings Undo token. `behaviour` is rejected here; it uses the dedicated replay-protected action below. |
+| `POST` | `/v1/lists/:id/behaviour` | `{ behaviour }`. Requires `If-Match` and `Idempotency-Key`; every direction uses the gated resumable migration below. A destructive transition also requires `?confirmDataLoss=true`; omitting it returns the typed `409 conflict` preview without starting a migration. Confirmation is a new logical action with a newly minted key. |
+| `DELETE` | `/v1/lists/:id` | Owner only. Writes the replay-window tombstone and removes the List's `SOURCE_LIST#` reverse projection when present before the chunked cascade removes every partition row (items, locators, members, links, Undo, repair and behaviour-migration work) plus every member pointer and `LLINK#` relationship; it does not delete owner-scoped People records. |
+| `GET` | `/v1/lists/:id/items?cursor=` | Pages 50 strongly consistent `ITEM#` rows at a time, with the caller's readable link projection for that page only. Strong META reads before and after the Query must match the cursor/each other and contain neither repair nor behaviour-migration marker. A failed fence returns `503 internal` with `Retry-After: 1`; the client retains its committed projection and restarts from page one. No response can span a reorder, repair or behaviour migration. |
+| `GET` | `/v1/lists/:id/items/:itemId` | Authoritative exact-id read for durable-create reconciliation. Strong META reads before and after the strongly consistent locator/item reads must keep the same `rankVersion` with no repair/behaviour-migration gate, and locator/item revisions must match; a failed fence returns `503 internal` with `Retry-After: 1`, while a missing or tombstoned item is `404`. |
 | `POST` | `/v1/lists/:id/items` | `{ itemId?, title, note?, location?, details?, afterItemId? }` — `afterItemId` drives the lexo rank; optional `itemId` is the permanent client-minted `itm_<ULID>`. |
-| `POST` | `/v1/lists/:id/items/bulk` | `{ items: [{ itemId?, ... }] }` — used by the ingredients-to-list flow; every offline item carries its own stable id. |
-| `PATCH` | `/v1/lists/:id/items/:itemId` | `{ title?, checked?, note?, location?, details?, afterItemId? }` |
+| `POST` | `/v1/lists/:id/items/bulk` | `{ items: [{ itemId?, title, note?, location?, details?, afterItemId? }] }`. Ordinary item creation only; provenance and source-ingredient fields are rejected. Every offline item carries its own stable id. |
+| `PATCH` | `/v1/lists/:id/items/:itemId` | `{ title?, checked?, note?, location?, details?, afterItemId? }`. No client `If-Match`; the service conditionally advances the ranked row and locator's shared internal `itemRevision`. A conflict re-resolves the locator and reapplies only supplied fields, preserving per-field last-write-wins while preventing a stale reorder image from replacing another edit. |
 | `DELETE` | `/v1/lists/:id/items/:itemId` | Removes the ranked row and identity locator, leaves the replay-window item tombstone, and returns an opaque token for the 6-second Undo window. |
 | `POST` | `/v1/lists/:id/items/:itemId/schedule` | **The optional bridge to Activities.** Body = `ScheduleListItemInput` below. Creates an explicit Plan and the permitted per-viewer link pointers; the ListItem itself is not replaced or given a global Activity id. A Watch Plan's explicitly enabled second-object action may create the item first and then call this endpoint with the reviewed Plan fields; the endpoint still requires type and audience and infers neither from the item. |
-| `POST` | `/v1/lists/:id/clear-checked` | Only when `capabilities.checkable`. Deletes immediately and returns an opaque token for the 10-second bulk Undo window. |
-| `POST` | `/v1/lists/:id/uncheck-all` | Only when `capabilities.checkable`. Sets every currently checked item to unchecked and returns an opaque token for the 10-second bulk Undo window. |
-| `POST` | `/v1/lists/:id/undo` | `{ undoToken }`. Applies the server-recorded compensation for one unexpired single-delete, `clear-checked`, or `uncheck-all` operation. It is the only route allowed to reclaim an item id protected by `ITEM_TOMBSTONE#`; ordinary item create remains blocked. |
+| `POST` | `/v1/activities/:id/ingredients/add-to-list` | `{ listId, ingredients: [{ ingredientId, itemId? }] }`. Owner-only meal action. Every stored meal ingredient has a stable client-minted `ing_<ULID>` retained across edits/reorders. The server resolves the selected current ids and explicit writable collection destination, derives item titles/provenance, writes/deduplicates them, and records each source ingredient's `addedToListId` idempotently. A missing/replaced id rejects the whole action; array position is never source identity. |
+| `POST` | `/v1/lists/:id/clear-checked` | Only when `behaviour === 'collection' && capabilities.checkable`. Deletes immediately and returns an opaque token for the 10-second bulk Undo window. |
+| `POST` | `/v1/lists/:id/uncheck-all` | Only when `behaviour === 'collection' && capabilities.checkable`. Sets every currently checked item to unchecked and returns an opaque token for the 10-second bulk Undo window. |
+| `POST` | `/v1/lists/:id/undo` | `{ undoToken }`. Applies the server-recorded compensation for one retained, unused single-delete, `clear-checked`, `uncheck-all`, archive, or additive settings operation. It is the only route allowed to reclaim an item id protected by `ITEM_TOMBSTONE#`; settings compensation applies only while its recorded preconditions remain true. |
 | `GET` | `/v1/list-templates` | The exact shared template catalogue. Static and cacheable for 24 h. The mobile creation chooser bundles a projection of the same shared module so first-launch offline does not depend on this request; no client owns a second map of labels or defaults. |
 | `GET` | `/v1/lists/:id/members` | The first response row is the owner, synthesised from `List.ownerId`, the owner's `ListIndex` pointer and profile; there is no owner `MEMBER#` row. The owner then receives every non-owner active and invited row. A member receives the synthesised owner and active non-owner roster only; pending identities and addresses are removed server-side. |
 | `POST` | `/v1/lists/:id/members` | `{ personId }` or `{ displayName, email }`. Owner only and always an explicit confirmation. A registered add is active immediately and creates/reuses reciprocal owner-scoped People records plus active `LLINK#` rows on both sides. If the email belongs to no account, it creates an invited member and owner-side invited `LLINK#`, sends email, and writes no recipient pointer. Invited members count toward `memberCount` and the cap of 20 people total, including the owner, but not `sharedListCount`. |
@@ -661,23 +694,38 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 monotonic `lst_` and `itm_` ids before committing the visible SQLite row and outbox intent.
 The server validates a supplied id but still derives ownership, timestamps, ranks and copied
 template fields. Omission retains server-minted behaviour for online callers. List creation
-conditionally puts `META` while condition-checking `LIST#/TOMBSTONE`; item creation
+conditionally puts `META` while condition-checking `LIST#/TOMBSTONE`; item creation and
+reorder allocate server-owned ranks under a conditional `META.rankVersion` advance (bulk
+allocates one sequence under one advance), re-reading neighbours and retrying on conflict;
+item creation
 conditionally puts its `ITEMID#<itemId>` identity locator and condition-checks
 `ITEM_TOMBSTONE#<itemId>`. Deletes leave tombstones through
 `MAX_AUTOMATIC_INTENT_AGE_DAYS`, exactly as Activity deletion does. Each reversible delete
 also stores the exact item, rank, current viewer links and linked Activity provenance under a
-server-side Undo operation. `POST /v1/lists/:id/undo` validates the opaque token and hard
-expiry, requires every reclaimed tombstone to name that operation, and conditionally restores
-the same item ids while deleting those tombstones. Expired, mismatched and reused tokens write
-nothing. `uncheck-all` stores only the ids it changed and compensation rechecks the surviving
-members of that set.
+server-side Undo operation. `POST /v1/lists/:id/undo` validates the opaque token's retained and
+unused operation state, requires every reclaimed tombstone to name that operation, and
+conditionally restores the same item ids while deleting those tombstones. Retention-expired,
+mismatched and reused tokens write nothing. `uncheck-all` stores only the ids it changed and
+compensation rechecks the surviving members of that set. Additive list settings mutations
+store their inverse and preconditions under the same operation model. A behaviour-upgrade
+inverse names the prior behaviour and only the default item fields it created; if those
+fields or affected settings have since changed, compensation returns
+`no_longer_applicable` and writes nothing. This dedicated inverse may undo an upgrade without
+`confirmDataLoss`; an ordinary behaviour downgrade may not. A slot inverse includes the
+exact profile-default entry removed by the forward mutation and restores it only if no newer
+default occupies that slot.
 
-The three initiating mutations return
-`{ affectedCount, undoToken, undoExpiresAt }` (`affectedCount: 1` for single delete). The token
-is opaque and its server-side record owns the compensation; clients must not send deleted row
-contents back as authority. Undo requires its own `Idempotency-Key`, is replay-safe, and returns
-`{ affectedCount }`. The server checks `undoExpiresAt` even if DynamoDB TTL has not removed the
-record yet.
+Reversible item/bulk mutations return
+`{ affectedCount, undoToken, undoExpiresAt }` (`affectedCount: 1` for single delete), while
+additive settings mutations return `{ list, undoToken, undoExpiresAt }`.
+`undoExpiresAt` is the client presentation deadline: the UI must stop offering a new Undo at
+that instant. The opaque server-side record owns the compensation; clients must not send
+deleted row contents back as authority. Once the user accepts Undo while it is offered, the
+inverse requires its own `Idempotency-Key`, is replay-safe, and may arrive after
+`undoExpiresAt`. The single-use token remains server-valid through
+`MAX_AUTOMATIC_INTENT_AGE_DAYS`, matching the durable outbox and tombstone retention, so an
+accepted offline inverse cannot expire in transit. The route returns `{ affectedCount }`;
+mismatched, consumed, or retention-expired tokens write nothing.
 
 A metadata-free collision is reconciled by the authenticated exact read: `200` means the
 earlier response was lost and the server representation wins wholesale; `404` is ambiguous
@@ -702,7 +750,7 @@ interface ScheduleListItemInput {
   notes?: string;
   schedule?: { date, time?, endTime?, timezone };
   recurrence?: Recurrence & { segments: [RecurrenceSegment] }; // this path also creates
-  reminders?: { offsetMinutes: number }[]; // caller only
+  reminders?: { reminderId: string; offsetMinutes: number }[]; // caller only; id required here
   location?: { label, address?, lat?, lng?, mapUrl? };
   details?: ActivityDetails;            // must match creationTarget.type
   attachmentIds?: string[];
@@ -718,12 +766,24 @@ without rewriting a current `LNK#` that may now point to a newer action. Any oth
 uses the metadata-free durable-create conflict. Every genuinely new scheduling action mints a
 new id.
 
+This offline-capable create path also requires a permanent client-minted `reminderId` for each
+reminder and persists those ids in SQLite with the intent. Its single transaction extends the
+ordinary durable Activity-create write set: Activity tombstone check, META, owner index, one
+caller `REM#` row per reminder, idempotency receipt and every row required by other accepted
+create fields, plus the caller's list `LNK#`. The three core Activity/index/link rows are a
+minimum, not a complete write inventory; accepted reminders are never silently dropped.
+
 The schedule sheet labels the two audience choices **Just me** and **Choose people**. It
 does not preselect every list member. `just_me` creates a private Plan owned by the caller.
 `selected_people` creates a Plan with exactly the people supplied; list membership grants no
 Plan access by itself, and a selected participant need not be a member of the source list.
 The server never reads `List.behaviour`, `templateKey`, or `capabilities` to choose the
 Activity type.
+
+The global Plan → Watch form has no separate audience step. In Phase 3 its explicitly enabled
+second-object action supplies `{ mode: 'just_me' }`; in Phase 6 it maps the reviewed People
+field to `selected_people`. This is caller construction, not a bridge default: the endpoint
+still rejects a missing audience and never derives one from the item, list, or title.
 
 The response is `{ activity, item, viewerLink }`, where `viewerLink` is the caller's
 `ListItemActivityLink`. For a private Plan, only the caller gets a link pointer. For a shared
@@ -745,8 +805,10 @@ list pointer. Consequently:
 The list-detail projection filters `LNK#` rows to the authenticated user **before** it looks
 up linked Activities and before it serialises the response. The Activity access check still
 runs; a stale pointer is omitted and queued for cleanup rather than producing a dead link.
+The link may remain present when its Activity is unscheduled, but a state line is displayable
+only when the hydrated Activity has `schedule.date`.
 
-**Change rules on `PATCH /v1/lists/:id`** — the product-wide additive/destructive rule
+**List settings and behaviour change rules** — the product-wide additive/destructive rule
 (`../01-product/interaction-contract.md`):
 
 | Change | Behaviour |
@@ -756,6 +818,27 @@ runs; a stale pointer is omitted and queued for cleanup rather than producing a 
 | `behaviour` `collection` → `watch` or `meals` | Applies immediately, initialising `details` on every item with the default status. |
 | `behaviour` `watch` or `meals` → anything | **Destructive.** Requires `?confirmDataLoss=true`; without it returns `409 conflict` with a body naming the fields and the exact number of items affected, so the client can render "…will remove season, episode and watch status from 7 items." |
 | `slot` | Free. Changing it does not move any items. |
+
+Every additive row, including `archived: false → true`, returns a retained settings Undo
+operation as described above. Checkbox mutations and checkbox-derived bulk operations are
+valid only when `behaviour === 'collection' && capabilities.checkable`; changing behaviour
+retains the stored flag and item checks but removes their operational meaning until the list
+is a qualifying collection again. Location mutations use the parallel
+`behaviour === 'collection' && capabilities.supportsLocation` gate; stored locations are
+retained while hidden.
+
+Capabilities, slot and archive use `PATCH /v1/lists/:id`; behaviour rows use the dedicated
+replay-protected `POST /v1/lists/:id/behaviour`. Every behaviour change—upgrade, confirmed
+destructive change, and behaviour Undo—uses one resumable migration. The first transaction
+leaves public `List.behaviour` unchanged, creates
+`BEHAVIOUR_MIGRATION#<operationId>` and sets `META.behaviourMigrationId`. While present, every
+item read or list/item mutation attempts a bounded drain and otherwise returns `503 internal`
+with `Retry-After: 1` and no rows or writes. Private worker chunks transform the stable
+at-most-500 item snapshot against the recorded target shape while conditionally advancing each row and
+locator's matching `itemRevision`. The final transaction alone changes
+`List.behaviour`, clears the marker, advances `rankVersion` to invalidate old item cursors,
+records the Undo/receipt and removes the work row. Public schema validation therefore never
+observes `details.behaviour !== List.behaviour`, including after a crash or retry.
 
 Changing or clearing a slot also removes `user.defaultLists[oldSlot]` when, and only when,
 that exact slot still points to this List. The conditional nested removal is in the same

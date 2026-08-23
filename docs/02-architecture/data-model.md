@@ -100,22 +100,25 @@ bounded `BatchGetItem`, never a scan or one read per List.
 > **Reminders are per user, not per activity.** A shared plan has **one schedule and many
 > reminder sets**. If Ujjwal wants "leave in 15 minutes", that is his reminder; Alice must
 > not receive it because he created the plan. Keying on `userId` inside the activity
-> partition means one `Query` still serves both the detail screen (filtered to the caller)
-> and the reminder scheduler (all of them), and it is symmetric with `PART#` and `EXP#`.
+> partition means one bounded `REM#` prefix Query serves the scheduler, while detail reads
+> only the caller's `REM#<userId>#` prefix; it is symmetric with `PART#` and `EXP#`.
 >
 > When someone joins a shared plan, their own explicitly set `User.defaultReminderOffset`
 > creates their own `REM#` row. `0` means At the time; absent/null means Off and creates no
 > row. Nobody inherits anybody else's.
 
-`CLEANUP#` rows are internal durability records for successful multi-phase mutations. A full
-detail Query ignores them during projection; they are never included in `ActivityDetail` or
+`CLEANUP#` rows are internal durability records for successful multi-phase mutations. Detail
+assembly never selects that prefix; they are never included in `ActivityDetail` or
 any agenda response.
 
 `SUB#` items are thin pointers written when an activity is given a `parentActivityId` —
-a prep task under a plan. They carry `childActivityId`, `title`, `status` and `rank` so the
-plan-detail screen renders its prep tasks from the same single `Query` as everything else,
-without a second lookup. The child Activity remains the source of truth; the pointer is
-updated in the same transaction as the child's title or status.
+a prep task under a plan. They carry `childActivityId`, `title`, `status`, `rank` and
+`isRecurring` so the
+plan-detail screen renders its prep tasks from one bounded `SUB#` prefix Query inside the
+same HTTP response, without a child lookup. The child Activity remains the source of truth; the pointer is
+updated in the same transaction as the child's title, status or recurrence. The recurrence bit
+lets the completion follow-up count and act only on incomplete one-off children; it never
+guesses an occurrence for a recurring prep task.
 
 ### 3.2 User partition
 
@@ -130,6 +133,7 @@ updated in the same transaction as the child's title or status.
 | Cached balance | `USER#<userId>` | `BAL#<personId>#<currency>` | `Balance` |
 | Settlement | `USER#<userId>` | `SETTLE#<personId>#<isoTs>#<settlementId>` | `Settlement` |
 | Push device | `USER#<userId>` | `DEVICE#<deviceId>` | `Device` |
+| Pending attachment upload | `USER#<userId>` | `UPLOAD#<attachmentId>` | `PendingUpload` — internal cross-store confirmation state |
 | Custom-activity shortcut | `USER#<userId>` | `SHORTCUT#<shortcutId>` | `Shortcut` (Phase 9) |
 
 `Balance` is keyed by `(personId, currency)` because expenses are never converted between
@@ -164,28 +168,47 @@ exactly as `IDX#` works for activities. An invited person has no pointer and no 
 | List | `LIST#<listId>` | `META` | `List` |
 | Non-owner member | `LIST#<listId>` | `MEMBER#<personId>` | `ListMember` |
 | List item | `LIST#<listId>` | `ITEM#<lexoRank>#<itemId>` | `ListItem` |
-| List item identity locator | `LIST#<listId>` | `ITEMID#<itemId>` | Current `rank`; the stable conditional-create and exact-read key, never serialised |
+| List item identity locator | `LIST#<listId>` | `ITEMID#<itemId>` | Current `rank` and matching storage-only `itemRevision`; the stable conditional-create, mutation-fence and exact-read key, never serialised |
 | Per-viewer Activity pointer | `LIST#<listId>` | `LNK#<viewerUserId>#<itemId>` | `ListItemActivityLink` |
 | List deletion tombstone | `LIST#<listId>` | `TOMBSTONE` | Owner, deletion time and replay-window TTL; `GET` remains `404` |
 | List-item deletion tombstone | `LIST#<listId>` | `ITEM_TOMBSTONE#<itemId>` | Deletion time, replay-window TTL, Undo operation id and the exact deletion snapshot; blocks ordinary recreation of that item id |
-| List Undo operation | `LIST#<listId>` | `UNDO#<operationId>` | Operation kind, affected item ids, token hash and hard Undo expiry; internal and never serialised |
+| List Undo operation | `LIST#<listId>` | `UNDO#<operationId>` | Operation kind, affected item ids or settings inverse/preconditions, token hash, UI offer deadline, replay-retention TTL and consumed state; internal and never serialised |
+| List rank repair | `LIST#<listId>` | `RANK_REPAIR#<operationId>` | Stable `(rank,itemId)` snapshot progress/cursor for exceptional equal-rank or length repair; while referenced by META it gates every item-page read, and is internal and never serialised |
+| List behaviour migration | `LIST#<listId>` | `BEHAVIOUR_MIGRATION#<operationId>` | From/to behaviours, stable item id/rank/revision snapshot and progress cursor; while referenced by META it gates every item read and mutation, and is internal and never serialised |
 
 `lexoRank` is a fractional-index string (see `04-conventions/coding-standards.md`) so
 reordering changes one logical item, never renumbers the whole list. The transaction
-delete-and-puts the ranked row and updates the locator's `rank`. Items sort by
-**`(rank, itemId)`** — the tie-break is not optional, because two members inserting at the
-same position concurrently will produce identical ranks.
+delete-and-puts the ranked row, updates the locator's `rank`, and conditionally advances
+`List.rankVersion`. Single create uses the same condition; bulk allocates its ordered
+sequence under one version advance. On conflict the server re-reads neighbours and retries,
+so new writes do not intentionally publish duplicate ranks. Items still sort by
+**`(rank, itemId)`** as a defensive total order for Undo-restored, legacy or seeded
+duplicates within one committed generation.
+
+Exceptional repair never turns that defensive comparator into a mixed-generation read.
+Pattern 8 strongly reads META, rejects `rankRepairId` or `behaviourMigrationId`, performs its
+item Query with `ConsistentRead: true`, then strongly reads META again before serialisation.
+The two reads must carry the same `rankVersion` and no marker; otherwise the whole page is a
+`503 internal` response with `Retry-After: 1` and no items. Every item cursor encodes that
+fenced version. The final repair or behaviour-migration transaction clears its marker and
+advances the version,
+so a pre-operation cursor receives the same `503` and restarts at page one instead of resuming through
+changed rows. A reorder that races between either META read is detected by the same post-fence.
 
 The locator is what makes a client-minted item id stable while rank remains server-owned and
-mutable. Create conditionally puts `ITEMID#<itemId>` and the ranked item together; exact read
-gets the locator, then its current ranked key; reorder moves the ranked row and locator in one
-transaction; delete removes both and writes the tombstone. Ordinary creates always
+mutable. Create conditionally puts `ITEMID#<itemId>` and the ranked item together with matching
+`itemRevision` values; exact read gets the locator, then its current ranked key. Every field
+mutation conditionally advances both revisions while updating only supplied fields. Reorder
+condition-checks the old row/revision, moves a freshly read row and the locator to the next
+revision, and advances `rankVersion` in one transaction. A race with a field edit makes one
+operation re-resolve/retry rather than allowing a stale full-row put to erase that edit. Delete
+removes both and writes the tombstone. Ordinary creates always
 condition-check tombstone absence. The authenticated Undo service is the sole exception: an
-opaque unexpired token must resolve to the matching `UNDO#` operation and every tombstone must
-name it before the same item id, ranked row and locator can be restored and the tombstone
-removed. Delete snapshots include the current viewer links and corresponding Activity
+opaque retained, unused token must resolve to the matching `UNDO#` operation and every
+tombstone must name it before the same item id, ranked row and locator can be restored and the
+tombstone removed. Delete snapshots include the current viewer links and corresponding Activity
 provenance so compensation is an inverse rather than a fresh item create. A full-list
-projection ignores identity, Undo and tombstone rows.
+projection ignores identity, Undo, tombstone, repair and behaviour-migration rows.
 
 > **The list index entry is a near-pure pointer.** It carries `role` and `addedAt` and
 > nothing else — no title, no counts. The Lists tab is one `Query` for the pointers plus one
@@ -751,6 +774,44 @@ phase is idempotent; already-deleted or already-normalised rows are success. Del
 item only when every phase is complete. A cleanup row is post-success work, not an `in-flight`
 idempotency reservation, and never changes the response status/body already stored.
 
+### 4.3c Attachment and pending upload
+
+```ts
+interface PendingUpload {             // USER#<userId> / UPLOAD#<attachmentId>; internal
+  attachmentId: string;
+  userId: string;
+  tmpKey: string;
+  finalKey: string;
+  contentType: 'image/jpeg' | 'image/png' | 'image/heic' | 'image/webp';
+  byteSize: number;
+  state: 'awaiting_upload' | 'confirming';
+  activityId?: string;                 // set when confirmation starts
+  createdAt: string;
+  cleanupAfter: string;                // one day; serviced before later upload/detail work
+}
+
+interface Attachment {               // ACT#<activityId> / ATT#<attachmentId>
+  attachmentId: string;
+  activityId: string;
+  key: string;                        // permanent object key, never a URL
+  contentType: PendingUpload['contentType'];
+  byteSize: number;
+  createdAt: string;
+  schemaVersion: number;
+}
+```
+
+The upload-url mutation writes `PendingUpload` before returning a presigned URL. Confirm
+records the target Activity and marks it `confirming` before permanent copy, verifies the
+copy, then transactionally writes `Attachment` and deletes the pending row. A retry resumes
+that recorded state. Before issuing another upload URL, and when opening/confirming the
+caller's attachments, the service performs one bounded `UPLOAD#` Query (maximum 20 unresolved
+records): expired `awaiting_upload` rows delete their temporary object and row; a
+`confirming` row completes its verified Activity link or, if that Activity no longer exists,
+deletes both keys before its row. No DynamoDB Stream or scheduled worker is required in this
+phase. A crash after copy is therefore durably tracked, while a crash after linking can leave
+at most a temporary object for the S3 lifecycle rule.
+
 ### 4.4 Type-specific details
 
 ```ts
@@ -758,7 +819,7 @@ type ActivityDetails =
   | { kind: 'task'; }
   | { kind: 'meal';
       mealSlot?: 'breakfast' | 'lunch' | 'dinner' | 'snack';
-      ingredients?: { name: string; quantity?: string; addedToListId?: string }[];
+      ingredients?: { ingredientId: string; name: string; quantity?: string; addedToListId?: string }[];
       recipeUrl?: string; }
   | { kind: 'watch';
       mediaTitle: string;
@@ -945,6 +1006,9 @@ interface List {
   itemCount: number;
   uncheckedCount: number;
   memberCount: number;             // owner + non-owner MEMBER# rows; 1 when private
+  rankVersion: number;             // serialises server rank allocation; never client-authored
+  rankRepairId?: string;           // blocks rank mutations and item-page reads until repair completes; never serialised
+  behaviourMigrationId?: string;   // blocks item reads/mutations until behaviour migration commits; never serialised
   archived: boolean;
   updatedAt: string;               // backs If-Match on list-level edits
 }
@@ -974,9 +1038,10 @@ interface ListItem {
   itemId: string;
   listId: string;
   rank: string;                    // lexo rank
+  itemRevision: number;            // storage-only mutation fence mirrored by ITEMID; never client-authored
   title: string;
   note?: string;
-  checked: boolean;                // meaningful only when capabilities.checkable
+  checked: boolean;                // meaningful only for collection + capabilities.checkable
   location?: { label: string; address?: string; lat?: number; lng?: number };
   sourceActivityId?: string;       // "Chicken — Sunday dinner"
   sourceLabel?: string;            // frozen at creation; never recomputed
@@ -990,7 +1055,7 @@ type ListItemDetails =
       season?: number;
       episode?: number; }
   | { behaviour: 'meals';
-      ingredients?: { name: string; quantity?: string; addedToListId?: string }[]; };
+      ingredients?: { ingredientId: string; name: string; quantity?: string; addedToListId?: string }[]; };
 
 interface ListItemActivityLink {   // LIST#<listId> / LNK#<viewerUserId>#<itemId>
   listId: string;
@@ -1116,12 +1181,14 @@ at the same time, often offline, often in different shops. Three rules, all requ
 | Situation | Rule |
 | --- | --- |
 | Two members check the same item | Not a conflict. `checked` is set, not toggled, so the operation is idempotent and commutative and survives the offline queue without merge logic. Never write `SET checked = NOT checked`. |
-| Two members insert at the same position | Identical `lexoRank` is expected, not exceptional. Sort by `(rank, itemId)` so the order is stable and identical on every device. |
+| Two members insert at the same position | Rank allocation is serialised by conditional `List.rankVersion`; one caller retries with fresh neighbours and receives a distinct rank. Sort by `(rank, itemId)` defensively so Undo-restored, legacy or seeded duplicates within one committed generation still render identically. Strong pre/post META fences and a repair marker gate item reads, so mixed generations never render. |
+| One member reorders while another edits a field | The ranked row and locator share `itemRevision`. Reorder conditionally moves the freshly read revision; a field PATCH conditionally advances the same revision while updating only supplied fields. The loser re-resolves and reapplies its operation, so rank movement cannot overwrite a concurrent title, note, check or typed-detail edit. |
 | Two members add the same title | Two rows. **Never auto-merge.** Silently swallowing someone's entry is worse than a visible duplicate they can delete. |
 
 Item writes carry **no `If-Match`**. Optimistic concurrency on every checkbox in a grocery
 list would produce constant spurious `409`s for no benefit; last write wins on a field is
-the correct behaviour here. List-*level* edits — title, capabilities, behaviour — do use
+the correct behaviour here. The internal `itemRevision` is a retry fence, not a client-visible
+conflict: the service retries the supplied field assignment against the current row. List-*level* edits — title, capabilities, behaviour — do use
 `If-Match`, because those are the changes worth protecting.
 
 ### 4.7 Person and Participant
@@ -1283,19 +1350,20 @@ before writing the code.
 | 2 | Anytime items (undated solo tasks) | `Query GSI1` `gsi1pk = U#<u>#N` |
 | 2b | Needs a date — Plans, most recently discussed first | `Query GSI1` `gsi1pk = U#<u>#P`, `ScanIndexForward=false` |
 | 3 | Active recurring series for a user | `Query GSI1` `gsi1pk = U#<u>#R` |
-| 4 | Full plan detail (activity + participants + expenses + updates + attachments + reminders + suggestions + related Lists) | Strongly consistent base-table `Query` `pk = ACT#<a>`. The same partition snapshot supplies target META, participant authorisation and every `SOURCE_LIST#` id, so a `404` is authoritative for native convergence. Filter `REM#` to the caller's `userId`; when source-list pointers exist, hydrate their current `LIST#<l>` / `META` rows with one bounded `BatchGetItem`, never one read per List. Parent-inherited access may strongly read the parent partition separately. |
-| 4b | Every reminder on an activity, for scheduling | Same query; the scheduler keeps all `REM#` rows and fans out per user |
+| 4 | Full plan detail (activity + first page of each section) | Strongly consistent `GetItem ACT#<a>/META` first, so `404` and owner authority are canonical; a non-owner also requires the exact strongly consistent `USER#<caller>/IDX#<a>` access grant (or documented parent grant). Drain pattern 6b before projecting attachments. Then bounded strongly consistent prefix Queries assemble the one HTTP response: newest-first `UPD#` with `Limit: 50` and cursor; caller-only `REM#`; and `PART#`, `ATT#`, `SUGG#`, `SUB#`, expenses and `SOURCE_LIST#` under their documented caps/page limits. Hydrate the bounded source-list ids with one `BatchGetItem`, never one read per List. Never `queryAll` the user-growing Activity partition. Parent-inherited access may strongly read the parent META and caller grant separately. |
+| 4b | Every reminder on an activity, for scheduling | Strongly consistent `Query pk = ACT#<a>`, `sk begins_with REM#`; bounded by the reminder cap, retaining every user's rows for fan-out |
 | 4c | Outstanding durable cleanup for an Activity | `Query` `pk = ACT#<a>`, `sk begins_with CLEANUP#` before a new mutation; idempotent replay instead follows the receipt's exact cleanup reference. Internal only, never serialised. |
 | 4d | Canonical agenda projection for one Activity after a recurrence PATCH | Strongly consistent base-table `Query pk = ACT#<a>` to read `META`, `OCC#`, `MOVE#`, caller reminders and participant proof without GSI discovery; expand server-side for the requested cached window and return both the canonical rows (including an authoritative empty array) and the META `updatedAt` used. Parent-inherited authorisation may read the parent separately, but target projection never comes from a GSI. |
 | 5 | Occurrence overrides and moved-in markers for a series window | Exact-key `BatchGetItem`: `OCC#<nominalDate>` for emitted nominal dates and `MOVE#<destinationDate>` for every calendar date in the timezone-widened request window. A bounded second `BatchGetItem` hydrates the source `OCC#<movedFrom>` rows named by returned markers. Never use one Query per series. |
 | 5a | Completed occurrence count for whole-series delete confirmation | `Query pk = ACT#<a>`, `sk begins_with OCC#`, repository-owned `status = completed` filter, `Select: COUNT`, paged to exhaustion. The consumer is the `Delete whole series` confirmation copy; no denormalised counter is stored. |
 | 6 | User profile | `GetItem` `USER#<u>` / `PROFILE` |
+| 6b | Unresolved attachment confirmations for a user | Bounded `Query pk = USER#<u>`, `sk begins_with UPLOAD#`, maximum 20. Drain expired/resumable rows before issuing another upload URL and on attachment/detail access. Internal only. |
 | 7 | Lists for a user | Paged `Query` `pk = USER#<u>`, `sk begins_with LIST#` (50 pointers per API page), then one `BatchGetItem` for that page's `LIST#<l>` / `META` rows. The 100 cap is on owned-list creation, not incoming memberships. |
 | 7b | Members of a list | `GetItem` `LIST#<l>` / `META`, get the owner's `USER#<ownerId>` / `LIST#<l>` pointer and profile, then `Query` `pk = LIST#<l>`, `sk begins_with MEMBER#`. Prepend the synthesised owner DTO; the query itself returns non-owners only. |
-| 8 | Items in a list | `Query` `pk = LIST#<l>`, `sk begins_with ITEM#`, sorted by `(rank, itemId)` |
-| 8b | Full list detail (list + members + items + caller-visible Activity state) | `Query` `pk = LIST#<l>`; projection keeps only `LNK#<callerUserId>#` rows, then one `BatchGetItem` for those Activity ids **after** Activity authorisation. Never serialise another viewer's link. |
+| 8 | Items in a list | Strongly read exact META first, reject either repair/migration marker and validate the cursor version; then page `Query pk = LIST#<l>, sk begins_with ITEM#`, `Limit: 50`, `ConsistentRead: true`, sorted by `(rank, itemId)`. Strongly reread META before serialisation and require the same `rankVersion` with no marker. A failed pre/post fence drains bounded work when applicable, then returns `503 internal` with `Retry-After: 1` and no item rows; the client restarts at page one. The opaque cursor binds the fenced version. |
+| 8b | List detail (META + first item page + caller-visible Activity state) | Pattern 8's fenced first page plus META. For only those item ids, bounded `BatchGetItem` reads `LNK#<callerUserId>#<itemId>` keys, followed by bounded Activity hydration **after** Activity authorisation. Members use 7b and later items use 8. Never query the whole List partition, expose a mixed rank/behaviour generation, or serialise another viewer's link. An unscheduled Activity may remain linked but is not state-line eligible. |
 | 8c | Remove every Activity pointer for one list member | `Query` `pk = LIST#<l>`, `sk begins_with LNK#<viewerUserId>#`, then batch delete. Used on leave/removal. |
-| 8d | Exact ListItem by stable id | After the exact `USER#<u>` / `LIST#<l>` access check, `GetItem` `LIST#<l>` / `ITEMID#<itemId>`, then `GetItem` the locator's current `ITEM#<rank>#<itemId>` key. Missing locator, item or tombstoned list is `404`. |
+| 8d | Exact ListItem by stable id | After the exact `USER#<u>` / `LIST#<l>` access check, use pattern 8's strong META pre/post fence around strongly consistent reads of `ITEMID#<itemId>` and its current `ITEM#<rank>#<itemId>` key; require matching locator/item revisions. A changed version, marker or revision mismatch returns `503 internal` with `Retry-After: 1`; missing locator/item or a tombstoned list is `404`. |
 | 9 | All people for a user | `Query` `pk = USER#<u>`, `sk begins_with PERSON#`, plus a paged `LLINK#` Query grouped by Person to compute active `sharedListCount`; do not assume the owned-list creation cap bounds memberships from other owners. The four-key People sort still ignores list membership. |
 | 9a | Lists shared or pending with one Person | `Query` `pk = USER#<u>`, `sk begins_with LLINK#<personId>#`; retain only `status = 'active'` and re-check exact `USER#/LIST#` access for the Person view, but retain both statuses for signup, delete guards and lifecycle work |
 | 10 | Activities shared with one person, newest first | `Query` `pk = USER#<u>`, `sk begins_with PLINK#<p>#`, `ScanIndexForward=false`, retaining only `scope = 'shared_activity'` for the product history |
@@ -1308,7 +1376,7 @@ before writing the code.
 | 14 | Find user by email | `GetItem` `EMAIL#<e>` / `USER` |
 | 14b | Find every guest record for a verified email (account linking) | `Query` `pk = GUESTEMAIL#<e>` |
 | 15 | Push devices for a user | `Query` `pk = USER#<u>`, `sk begins_with DEVICE#` |
-| 16 | Child / prep tasks of a plan | `Query GSI1` filtered by `parentActivityId`, **or** `Query pk = ACT#<parent>, sk begins_with SUB#`. Use the latter. |
+| 16 | Child / prep tasks of a plan | `Query pk = ACT#<parent>, sk begins_with SUB#`, `Limit: MAX_PREP_TASKS_PER_PLAN` (50). Creation rejects a 51st child, so this bounded page is the complete collection and may compute exact done/open counts. Never use the GSI alternative or `queryAll`. |
 
 No `Scan` anywhere in application code. A `Scan` in a PR is an automatic rejection outside
 of one-off migration scripts under `infra/scripts/`.
@@ -1423,13 +1491,18 @@ status/body.
 
 | Operation | Items written |
 | --- | --- |
-| Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and `ACT#<parent>/SUB#<child>` when `parentActivityId` is set (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two) |
+| Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and `ACT#<parent>/SUB#<child>` with `isRecurring` when `parentActivityId` is set (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two) |
 | Create list | Conditional `LIST#/META`, owner `USER#/LIST#` pointer and list-tombstone absence check, plus `ACT#<sourceActivityId>/SOURCE_LIST#<listId>` when sourced from a Plan; the POST receipt joins the same transaction |
-| Create list item | Conditional `LIST#/ITEM#<rank>#<itemId>`, conditional `LIST#/ITEMID#<itemId>` locator and item-tombstone absence check, plus List counters; bulk repeats this unit in receipt-aware bounded chunks |
-| Reorder list item | Delete old ranked row, put new ranked row and update `ITEMID#<itemId>.rank` in one transaction; no other ListItem changes |
-| Delete list item / clear checked | Delete ranked rows and locators, write `ITEM_TOMBSTONE#<itemId>` snapshots through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, write an expiring `UNDO#<operationId>`, update List counters, remove current viewer links and clear linked Activity provenance without deleting an Activity; bounded receipt-aware chunks preserve one logical Undo operation |
-| Uncheck all | Change only currently checked items to unchecked and write one expiring `UNDO#<operationId>` containing exactly those item ids; bounded receipt-aware chunks preserve one logical operation |
-| Undo List operation | Resolve an unexpired opaque token to `UNDO#<operationId>`; for delete, conditionally recreate the same ranked rows and locators, restore still-live viewer links and Activity provenance, delete matching item tombstones and update counters; for `uncheck-all`, recheck only affected ids that still exist. Expired, mismatched or reused tokens write nothing. |
+| Create list item | Read neighbours and `rankVersion`; conditionally write `LIST#/ITEM#<rank>#<itemId>` and `LIST#/ITEMID#<itemId>` locator with the same initial `itemRevision`, condition-check item-tombstone and both migration/repair gates absent, and advance META counters and `rankVersion`. On version conflict re-read and retry. Bulk allocates an ordered sequence under one version advance per receipt-aware chunk. |
+| Patch list item fields | Resolve the locator/ranked row, update only supplied fields while conditionally advancing the row and locator's matching `itemRevision`, and require both migration/repair gates absent. A condition conflict is retried internally against current truth; no client `If-Match` and no unrelated field replacement. |
+| Reorder list item | Delete the old ranked row only at the revision read, put that freshly read row at the new rank with the next revision, conditionally move the locator from the same rank/revision, and conditionally advance `META.rankVersion` with both gates absent. On any conflict re-read the row/neighbours and retry. No other ListItem changes during normal reorder. |
+| Repair list ranks | Conditionally install `META.rankRepairId` plus a `RANK_REPAIR#<operationId>` snapshot, then rewrite only bounded chunks while the marker gates item reads/mutations. Every item page uses strong pre/post META fences around a strongly consistent Query. The final transaction clears the marker and advances `rankVersion`, invalidating pre-repair cursors. |
+| Change List behaviour | Replay-protected `POST /v1/lists/:id/behaviour`, under `If-Match` and its idempotency receipt, leaves public behaviour unchanged while conditionally installing `META.behaviourMigrationId` plus `BEHAVIOUR_MIGRATION#<operationId>`. Snapshot the stable at-most-500 item ids/ranks/revisions and transform bounded chunks, conditionally advancing each ranked row and locator revision, while all public item reads/mutations are gated. The final transaction changes behaviour, clears the marker, advances `rankVersion`, records Undo and deletes the work row. Confirmed downgrade and Undo use the same path. |
+| Delete list item / clear checked | Delete ranked rows and locators, write `ITEM_TOMBSTONE#<itemId>` snapshots through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, write a single-use `UNDO#<operationId>` with the same replay retention, update List counters, remove current viewer links and clear linked Activity provenance without deleting an Activity; bounded receipt-aware chunks preserve one logical Undo operation |
+| Uncheck all | Change only currently checked items to unchecked and write one single-use, replay-retained `UNDO#<operationId>` containing exactly those item ids; bounded receipt-aware chunks preserve one logical operation |
+| Undo List operation | Resolve a retained, unused opaque token to `UNDO#<operationId>`; `undoExpiresAt` governs only whether the client may offer a new Undo, not whether an already accepted durable inverse may replay. For delete, conditionally recreate the same ranked rows and locators, advance `rankVersion`, restore still-live viewer links and Activity provenance, delete matching item tombstones and update counters; for `uncheck-all`, recheck only affected ids that still exist; for an additive settings/archive change, apply its recorded inverse only while the exact preconditions still hold. Behaviour-upgrade compensation removes only defaults that operation created and bypasses the ordinary destructive-downgrade confirmation. Retention-expired, mismatched, edited or reused operations write nothing. |
+| Request attachment upload | Drain the caller's bounded pending set, then put `USER#<u>/UPLOAD#<attachmentId>` with declared temporary/final keys, type, size, `awaiting_upload` state and one-day `cleanupAfter` before returning the presigned URL. Reject more than 20 unresolved rows. |
+| Confirm attachment | Record the target Activity and mark the pending upload `confirming`, copy and verify the final object, then transactionally put `ACT#<a>/ATT#<attachmentId>` and delete the pending row; retry or the caller's next bounded drain resumes. Expired cleanup deletes both object keys before deleting a row. |
 | Schedule / reschedule | One main transaction writes `ACT#/META` plus `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change), plus `ACT#<parent>/SUB#<child>` when a prep task's derived status changes. An occurrence-only cross-day move instead writes its nominal `OCC#` override plus destination `MOVE#` marker and never META. RSVP reset follows §7.1: it may join through 45 participants; above that the main transaction writes `rsvpResetPending`, receipt and `CLEANUP#` work, then bounded idempotent phases rewrite participants and clear the marker. Unscheduling's main transaction similarly persists receipt + reminder-delete cleanup before bounded deletion. A timed → date-only change normalises sub-day reminder offsets, using persisted cleanup when the fan-out cannot fit. None of those reminder rows is falsely claimed to be atomic with META/index state. |
 | Add participant (app user) | `ACT#/PART#`, `USER#<invitee>/IDX#`, `USER#<owner>/PLINK#`, `USER#<invitee>/PLINK#`, counter update on `ACT#/META` |
 | Add participant (guest) | `ACT#/PART#`, `USER#<owner>/PERSON#`, `USER#<owner>/PLINK#`, `INVITE#<token>/META` |
@@ -1437,15 +1510,15 @@ status/body.
 | Invite list member (no account) | `LIST#/MEMBER#`, owner `USER#/PERSON#`, owner invited `USER#/LLINK#`, `GUESTEMAIL#` Person locator, and `LIST#/META` member counter — at most 5 items and no recipient pointer |
 | Activate invited list member | Update `LIST#/MEMBER#`, write invitee `USER#/LIST#`, create/reuse reciprocal `USER#/PERSON#`, change owner `LLINK#` to active and write invitee active `LLINK#` |
 | Remove or leave shared list | Delete `LIST#/MEMBER#`, invitee `USER#/LIST#` when active, owner `LLINK#`, invitee reciprocal `LLINK#` when active, and decrement `LIST#/META`; then asynchronously remove that viewer's `LNK#` rows. The Person-level `GUESTEMAIL#` locator remains until link, email removal or Person deletion. |
-| Delete shared list | Write `LIST#/TOMBSTONE` through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, remove its `ACT#/SOURCE_LIST#` projection when present, then cascade `META`, members, items and locators, every member pointer, every owner/member `LLINK#` and every `LNK#`; owner-scoped `PERSON#` rows survive and the tombstone is removed only by TTL or account purge |
-| Schedule a list item | Conditionally create the required client-minted `ACT#<activityId>/META`, owner/selected-participant `USER#/IDX#` and `ACT#/PART#` rows, plus `LIST#/LNK#<viewer>#<item>` for the caller and selected registered participants who are active list members. The `LIST#/ITEM#` row is unchanged. Replay after receipt expiry adopts a matching existing Activity and never rolls a newer current pointer back. |
+| Delete shared list | Write `LIST#/TOMBSTONE` through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, remove its `ACT#/SOURCE_LIST#` projection when present, then cascade every List-partition row (`META`, members, items, locators, links, Undo, repair and behaviour-migration work), every member pointer and every owner/member `LLINK#`; owner-scoped `PERSON#` rows survive and the tombstone is removed only by TTL or account purge |
+| Schedule a list item | Extend the durable Activity-create transaction: condition-check its tombstone; conditionally create the required client-minted `ACT#<activityId>/META`, owner/selected-participant `USER#/IDX#` and `ACT#/PART#` rows, one caller `ACT#/REM#<caller>#<reminderId>` per supplied stable reminder id, the receipt and rows required by other accepted create fields; plus `LIST#/LNK#<viewer>#<item>` for the caller and selected registered participants who are active list members. The `LIST#/ITEM#` row is unchanged. Replay after receipt expiry adopts a matching existing Activity and never rolls a newer current pointer back. |
 | Add expense | `ACT#/EXP#`, `ACT#/META` (total), `EXPENSE#<expenseId>/META` locator, any missing `USER#/PERSON#` rows for pairs in the payer + split set who do not yet hold each other as People — the same `personId` mirrored into each affected registered user's partition, `displayName` copied, `linkedUserId` carried when set, no email or phone copied; a guest's mirrored side waits for account linking — and required directional `PLINK#` rows marked `shared_activity` or retained for finance, then **async** balance recalc via stream for both sides of each pair ([`../01-product/expenses.md`](../01-product/expenses.md) §5.1). Edit updates the affected relationship set, creating Person rows for newly paired participants the same way; delete removes the locator and any `finance_only` link no remaining Expense needs. |
 | Mark obligations settled | Update each covered `ACT#/EXP#` (`settledPersonIds`, `settlementIdByPersonId`, derived `settled`) + write one `USER#/SETTLE#` audit row and one `SETTLEMENT#<settlementId>/META` locator. Server derives amount/currency/direction and exact per-Expense coverage before the transaction; balance recompute reads Expenses only. |
 | Undo settlement | Resolve and delete the `USER#/SETTLE#` row and its `SETTLEMENT#` locator + conditionally remove only each recorded debtor/Settlement pair from the covered `ACT#/EXP#` items, recompute their roll-ups, then recompute balances from Expenses |
 | Purge account | **Shared-plan financial records survive the purge — retain and anonymise, never unwind (decision 2026-08-07).** Expenses and Settlement audit rows, with their locators, on shared plans that still have surviving participants are retained for those participants, with the deleted user's display name replaced by `Deleted user` wherever those rows render it. Balances involving the deleted account become read-only history: no further settlement, no recompute against a partition that no longer exists. Owned **shared** plans are cancelled, with notification to the participants, before any removal, and their partitions are retained for the survivors. Checkpoint and run exact whole-Settlement Undo only for financial rows nothing retains — Settlements whose covered Expenses sit on plans with no surviving participant. Then cascade owned private Activities and owned Lists (all pointers/`LLINK#`/`LNK#`) and remove the user from other-owned Lists (`MEMBER#`, both links, pointer, counter, viewer links) while retaining other users' `PERSON#` rows. Only after cross-partition cleanup may the user partition be deleted; see `auth.md` §8. |
-| Patch a prep task's title | Child `ACT#/META`, every required index row, and parent `ACT#/SUB#<child>` in one transaction. P2-13 repairs the Phase 1 omission that updated the child title without rewriting this denormalised pointer. |
+| Patch a prep task's title or recurrence | Child `ACT#/META`, every required index row, and parent `ACT#/SUB#<child>` in one transaction. The pointer mirrors title/status plus `isRecurring`, so follow-up eligibility does not inspect or guess a child occurrence. P2-13 repairs the Phase 1 omission that updated the child title without rewriting this denormalised pointer. |
 | Correct a recurrence segment that starts today | `ACT#/META` plus every required `USER#/IDX#` row, with a condition in the same transaction that `ACT#/OCC#<today>` does not exist. No occurrence is written; any existing occurrence makes the correction fail without changing the series. |
-| Convert a selected series occurrence to **Does not repeat** | Resolve the explicitly targeted nominal occurrence from `ACT#/META` plus `ACT#/OCC#<date>`; condition-check the versions/absence read; then rewrite `ACT#/META` and every required `USER#/IDX#` row in one transaction. META keeps the selected effective schedule and timezone and drops `recurrence`; `OCC#` history is neither deleted nor invented. |
+| Convert a selected series occurrence to **Does not repeat** | Resolve the explicitly targeted nominal occurrence from `ACT#/META` plus `ACT#/OCC#<date>`; condition-check the versions/absence read; then rewrite `ACT#/META`, every required `USER#/IDX#` row and, for a prep task, parent `ACT#/SUB#<child>.isRecurring = false` in one transaction. META keeps the selected effective schedule and timezone and drops `recurrence`; `OCC#` history is neither deleted nor invented. |
 | **End series** / set **No end** | Rewrite `ACT#/META.recurrence` plus every required recurring `USER#/IDX#` projection in one optimistic transaction. End series sets an explicit inclusive `endDate`; No end clears `endDate` and `count`. Neither operation writes an `OCC#` row. |
 | Complete / uncomplete / skip a non-occurrence | `ACT#/META` plus every owner/participant `USER#/IDX#` status and, for a prep task, parent `ACT#/SUB#<child>` in one transaction, following the Phase 1 PATCH transaction pattern. Skip / `didnt_happen` also deletes matching `LIST#/LNK#` viewer pointers; complete and uncomplete retain them. |
 | Complete / skip an occurrence | `ACT#/OCC#<date>` only (put or delete as appropriate). Never the series. |
@@ -1495,7 +1568,7 @@ storing it would force a data migration every time somebody picks a date.
 
 ## 8. IDs
 
-- Prefixed ULIDs: `act_`, `usr_`, `lst_`, `itm_`, `psn_`, `exp_`, `stl_`, `dev_`, `att_`,
+- Prefixed ULIDs: `act_`, `usr_`, `lst_`, `itm_`, `ing_`, `psn_`, `exp_`, `stl_`, `dev_`, `att_`,
   `upd_`, `rem_` (Reminder, §4.3), `sct_` (Shortcut, §3.2 — Phase 9). Generated with `ulid` —
   time-prefix sortable with no coordination needed, but not a business-chronology source when
   client-minted. `rem_` and `sct_` were added in P1-06,
@@ -1514,6 +1587,10 @@ storing it would force a data migration every time somebody picks a date.
   the conditional-create key), and derives ownership from the authenticated
   principal — **an id is an identifier, never a credential and never a claim.** Authority
   fields (`ownerId`, `createdAt`) stay server-set and are not accepted on input.
+- **`ing_` is a client-minted embedded-row identity, not an entity id.** A meal form mints it
+  before accepting a new ingredient row and retains it through edits and reordering. It has
+  no independent endpoint or tombstone; its job is to let an offline action identify the
+  same source row after the array moves. Removing/replacing the row makes that id stale.
 - **The collision response is honestly an existence signal.** Success versus failure reveals
   whether an id exists no matter how generic the error copy is. That residual is accepted
   and bounded: 80 random bits are not enumerable, authorization is tenancy rather than id

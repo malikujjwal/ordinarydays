@@ -75,7 +75,7 @@ in its label and skips only that already-answered choice.
 | Today | Global `+`, bottom-right, above the tab bar. Opens **Task / Plan / List item**. After a choice, today may pre-fill `schedule.date`; it never pre-selects the choice. The ANYTIME section also has contextual `+ Add a task`. |
 | Plans | Global `+`. Opens the same three choices. After Task or Plan is chosen, a date currently in view may pre-fill `schedule.date`. |
 | Lists (list detail) | Contextual `+ Add an item` at the bottom fixes **List item** and the current list as its destination. The global `+` still opens all three choices. |
-| Plan detail | Contextual `+ Add a prep task` fixes **Task** and pre-fills `parentActivityId`. |
+| Plan detail | Contextual `+ Add prep task` fixes **Task** and pre-fills `parentActivityId`. |
 | Web | The global `+`, plus the global keyboard shortcut `N` (§7.2), both opening the same chooser. |
 | iOS share sheet | Holds the shared URL or image locally, then asks **Task / Plan / List item**. Plan also asks its kind; List item asks its destination. Only then does capture inspect the payload (Phase 9, P9-11). |
 
@@ -143,7 +143,7 @@ selected. Back returns to the chooser without writing. Closing a non-empty form 
 
 ### 2.3 Contextual entry and capture modes
 
-`+ Add a task`, `+ Add an item`, and `+ Add a prep task` are explicit choices expressed by
+`+ Add a task`, `+ Add an item`, and `+ Add prep task` are explicit choices expressed by
 their entry-point labels. They open the corresponding form directly. The current list or
 parent plan is also explicit in the surrounding screen, so no destination is inferred.
 
@@ -370,8 +370,8 @@ Columns: **Field** (label as shown), **Control**, **Req.**, **Validation**, **De
 | Reminder | Select | No | Requires a date | `Off` | `reminders[]` on input → your own `REM#` item |
 | Repeat | Select → recurrence sheet | No | Requires a date | `Does not repeat` | `recurrence` |
 | People | Participant picker | No | ≤ 50 | Empty | `participants[]` |
-| Ingredients | Repeating rows: name + optional quantity, each with a checkbox | No | Name 1–120; max 60 rows | Empty | `details.ingredients[]` (`name`, `quantity`) |
-| Add selected ingredients to… | Toggle + destination dropdown, shown only when ≥ 1 ingredient row exists. The destination is named in the label (`Add selected ingredients to Groceries`) | No | Any list the user picks; the dropdown offers lists holding the `groceries` slot first, then the rest | Off. The destination resolves through the **`groceries` slot** by the four-step rule in [`plans-and-lists.md`](plans-and-lists.md) §5.8 — never "the first groceries list", never the most recently used one. With no eligible list the row reads `Choose or create a list`; New list opens the unselected style catalogue and returns here after the separate `Create list` action | After an existing or newly created destination is visibly confirmed, `POST /v1/lists/:id/items/bulk`; sets `details.ingredients[].addedToListId` |
+| Ingredients | Repeating rows: name + optional quantity, each with a checkbox | No | Name 1–120; max 60 rows | Empty | `details.ingredients[]` (`ingredientId`, `name`, `quantity`). The client-minted `ing_` id is retained across edits/reorder and is not displayed |
+| Add selected ingredients to… | Toggle + destination dropdown, shown only when ≥ 1 ingredient row exists. The destination is named in the label (`Add selected ingredients to Groceries`) | No | Any list the user picks; the dropdown offers lists holding the `groceries` slot first, then the rest | Off. The destination resolves through the **`groceries` slot** by the four-step rule in [`plans-and-lists.md`](plans-and-lists.md) §5.8 — never "the first groceries list", never the most recently used one. With no eligible list the row reads `Choose or create a list`; New list opens the unselected style catalogue and returns here after the separate `Create list` action | After an existing or newly created destination is visibly confirmed, `POST /v1/activities/:id/ingredients/add-to-list` with required `listId` and selected stable source `ingredientId`s; the server derives provenance and sets the matching `details.ingredients[].addedToListId` fields |
 | Recipe link | Single-line URL | No | Valid absolute `http(s)` URL | Empty | `details.recipeUrl` |
 | Notes | Multi-line text | No | 0–4000 | Empty | `notes` |
 
@@ -403,6 +403,12 @@ the flow and §5.8 for how the destination is chosen.
 Watch Plan never creates a ListItem just because it has no date. If the user turns on the
 second-object control, the final button reads, for example,
 `Save plan and add Severance to Movies to watch`.
+
+The global Plan → Watch route has no separate audience sheet: its reviewed People field is
+the audience control. In Phase 3, before participant selection ships, the combined action
+explicitly sends `{ mode: 'just_me' }`; Phase 6 maps the reviewed People selection to
+`selected_people`. That value is supplied by the caller and is never inferred by the bridge
+from the item, list, or title.
 
 ### 4.4 Event
 
@@ -547,13 +553,13 @@ owns the general statement.
 | `watch` (show, with season/episode) | `{list name} · currently S2 E4 — Update to S2 E5?` | Sets that named item's `details.season` / `details.episode` to the session's values, and `want` → `watching`. Then offers `Create a Plan for S2 E6?` as a second, separate step. |
 | `watch` (movie) | `Update {list name} item to Watched?` | Sets that named item's `watchStatus` to `watched`. |
 | `meal` with ingredients | `Add ingredients to a list?` | Opens the ingredient picker; writes only what the user selects, to the destination resolved and visibly named by [`plans-and-lists.md`](plans-and-lists.md) §5.8. |
-| Any Plan kind explicitly created from a list item, where completing it is evidence about that item | `Mark {item title} visited in {list name}?` | On tap, sets that named item's `checked` when the list is `checkable` ([`plans-and-lists.md`](plans-and-lists.md) §5.10). Completion alone leaves the item unchanged. |
+| `event` explicitly created through `Plan this item` from a `collection` list with both `checkable` and `supportsLocation` | `Mark {item title} visited in {list name}?` | On tap, sets that named item's `checked` ([`plans-and-lists.md`](plans-and-lists.md) §5.10). Completion alone leaves the item unchanged. |
 | Any Plan with ≥ 1 participant and ≥ 1 expense | `Review expenses?` | Navigates to the plan's expense section. No write. |
 | Any Plan with ≥ 2 participants and 0 expenses | `Add an expense?` | Opens the add-expense sheet. No write until saved. |
-| Any Plan with ≥ 1 incomplete prep task | `2 prep tasks are still open — keep them?` with `Keep` · `Complete all` · `Delete` — the count is the real number of open prep children | Completing the plan itself leaves the prep tasks untouched, consistent with the parent-deletion rule ([`today-and-tasks.md`](today-and-tasks.md#55-related-plan) §5.5). `Keep` — and dismissing — writes nothing. `Complete all` completes each open prep child. `Delete` deletes them. Every option is an explicit tap. |
+| Any Plan with ≥ 1 incomplete non-recurring prep task | `2 one-off prep tasks are still open — keep them?` with `Keep` · `Complete all` · `Delete` — the count is the real number of eligible children | Completing the plan itself leaves every prep task untouched, consistent with the parent-deletion rule ([`today-and-tasks.md`](today-and-tasks.md#55-related-plan) §5.5). `Keep` — and dismissing — writes nothing. `Complete all` completes each named incomplete non-recurring child; `Delete` deletes that same set. Recurring prep tasks are kept and excluded because acting on one requires an explicit occurrence target. Every option is an explicit tap. |
 | Recurring occurrence | Nothing. The next occurrence already exists by definition. | — |
 
-When the prep-task row and another row both apply, the prep-task question is the one
+When the eligible prep-task row and another row both apply, the prep-task question is the one
 follow-up shown: it is the only one about live to-dos left behind.
 
 No follow-up ever writes without the tap, and completion itself writes nothing outside the
@@ -794,7 +800,7 @@ The user-facing contract:
 | --- | --- |
 | Inline add on Today | The Anytime section has a persistent `+ Add a task` row at its foot. The labelled action fixes `{ objectKind: 'task', type: 'task' }` before any words are accepted, opens the Task form directly with today's date and no time, and finishes with `Save task`. It never opens the global chooser or infers Task versus Plan from the title. |
 | Inline add on a list | The list detail's `+ Add an item` row creates a `ListItem` in that list, never an Activity. Return commits with the accessible action `Add to <list name>` and re-focuses. |
-| Inline add of a prep task | The plan's `+ Add a prep task` row creates a `task` with `parentActivityId` set. |
+| Inline add of a prep task | The plan's `+ Add prep task` row creates a `task` with `parentActivityId` set. |
 | Global `+` from Today | Opens **Task / Plan / List item**. After the user chooses Task or Plan, the form may pre-fill `schedule.date` = today. |
 | Global `+` from Plans on a date | Opens the same chooser. After Task or Plan is chosen, the form may pre-fill the date in view. |
 | Remembered choices | Object and Plan-kind choices always appear in the fixed documented order, unselected. Last-used values never reorder, pre-select, or bypass them. |

@@ -483,6 +483,7 @@ They are not a sub-entity and have no reduced capability.
 | Checkbox | Yes, everywhere — it is a `task` |
 | Storage / retrieval | Access pattern 16 in [`../02-architecture/data-model.md#5-access-patterns`](../02-architecture/data-model.md#5-access-patterns) — queried from the parent's partition, not by a GSI filter |
 | Counter | `activity.childCount` on the parent, maintained on write |
+| Cap | 50 prep tasks per Plan. The 51st create is rejected, making the complete set and its done/open counts one bounded `SUB#` Query |
 | On parent deletion | `parentActivityId` is cleared; the task survives ([`today-and-tasks.md`](today-and-tasks.md#55-related-plan)) |
 | Shared plans | Prep tasks on a shared plan are visible to **any participant of the plan**, who may complete, uncomplete and edit them whoever created them. Their completion writes to the updates feed. A prep task is an item on a shared checklist, so ticking `Book hotel` says nothing about whether the trip happened; completing the **plan** stays with the owner ([`activities.md`](activities.md#51-states) §5.1). The rule is one line in the authorisation middleware — a participant of the parent may act on a child — in [`../02-architecture/api-contract.md#3-authorisation-rules`](../02-architecture/api-contract.md#3-authorisation-rules) §3. |
 
@@ -492,16 +493,21 @@ prep tasks). A `POST` that would create a third level returns `validation_failed
 > **Decision:** the nesting cap is 2. Arbitrary nesting turns the product into an outliner,
 > which is on the non-goals list in [`overview.md`](overview.md#6-non-goals).
 
-> **Decision (2026-08-07):** there is no cap on prep-task count — the PREP section renders
-> all of a plan's children, and the nesting cap of 2 remains the only structural limit.
+> **Decision — amended 2026-08-23:** a Plan has at most 50 prep tasks; the 51st create is
+> rejected. This supersedes the 2026-08-07 no-cap ruling. The bound keeps the PREP section's
+> complete set and exact done/open counts within one bounded `SUB#` Query; the nesting cap of 2
+> remains the independent structural limit.
 
 **Completing the plan leaves open prep tasks untouched.** They keep their dates, stay on
-their own Todays, and remain in the PREP section. One dismissible follow-up is offered in
-the confirmation slot, per
+their own Todays, and remain in the PREP section. When at least one incomplete prep task is
+non-recurring, one dismissible follow-up is offered in the confirmation slot, per
 [`interaction-contract.md`](interaction-contract.md#1a-product-wide-invariants) §1a.2:
-`2 prep tasks are still open — keep them?` with **Keep**, **Complete all**, and **Delete**.
-Keeping, or dismissing the follow-up, changes nothing; the other two write only when
-tapped, as their own actions with their own undo.
+`2 one-off prep tasks are still open — keep them?` with **Keep**, **Complete all**, and
+**Delete**. The count and both bulk actions include only incomplete non-recurring children.
+Recurring prep tasks remain untouched because completion requires an explicit occurrence
+target; if they are the only open children, no prep follow-up is offered. Keeping, or
+dismissing the follow-up, changes nothing; the other two write only when tapped, as their own
+actions with their own undo.
 
 > **Decision (2026-08-07) — prep tasks on a shared plan surface on the creator's Today
 > only.** The plan is the shared surface. Any participant may still complete, uncomplete
@@ -794,6 +800,17 @@ of the change rules in
 | `behaviour` `collection` → `watch` or `meals` | `Turn this into a watchlist` / `…into a meals list` | upgrade | Immediate, no confirmation. Every item gains `details` with the default status (`want` for `watch`, empty ingredients for `meals`). Nothing is lost. |
 | `behaviour` `watch` or `meals` → `collection` | `Turn this into a plain list` | downgrade | **Destructive.** Confirmation first, naming the fields and the exact item count. |
 
+Checkbox and location controls are visible only while the list is a `collection`. Changing
+to `watch` or `meals` retains the capability flags and hidden item values, but they drive no
+count, control or bulk operation until the list is a collection again.
+
+Every additive settings change applies with a 6-second Undo backed by the server's retained
+operation token. In particular, undoing `collection → watch|meals` uses the dedicated Undo
+compensation, not an ordinary destructive downgrade request. It restores the prior behaviour
+and removes only unchanged default fields that upgrade created; if those fields were edited,
+Undo is no longer applicable and current data is left intact. Slot Undo similarly restores a
+profile default removed by the forward change only when the user has not chosen a newer one.
+
 `Show checkboxes` is described to the user as a display setting, because that is what it is.
 It is never presented as changing the list's type, and the sheet contains no "type" control
 of any kind.
@@ -837,13 +854,13 @@ Two more rules:
 | Operation | Rule |
 | --- | --- |
 | **Add item** | Persistent `+ Add an item` row at the foot. Return activates `Add to <list name>` and re-focuses so several items can be typed in sequence. Each commit is one `POST /v1/lists/:id/items`. |
-| **Check / uncheck** | Only when `capabilities.checkable`. Tapping the checkbox toggles `checked` optimistically; tapping the row body opens item detail. |
+| **Check / uncheck** | Only when `behaviour === 'collection' && capabilities.checkable`. Tapping the checkbox toggles `checked` optimistically; tapping the row body opens item detail. |
 | **Checked item placement** | Checked items stay in place and render struck-through and de-emphasised. They do **not** jump to the bottom. Re-sorting under the user's finger is disorienting and makes accidental double-taps destructive. |
 | **Reorder** | Long-press and drag, on every behaviour. Writes one `PATCH /v1/lists/:id/items/:itemId` with `afterItemId`, which the server converts to a `lexoRank`. Never renumbers the list. |
-| **Clear checked** | Header overflow → `Clear checked (7)`. One `POST /v1/lists/:id/clear-checked`. Deletes the checked items. **No confirmation dialog**: it is a reversible bulk action, so it applies immediately with the 10-second bulk undo toast, which names the count — `7 items cleared` with `Undo` ([`interaction-contract.md`](interaction-contract.md#4-undo-policy) §4). After the window it is permanent. Offered only when `capabilities.checkable`. |
-| **Uncheck all** | Header overflow → `Uncheck all`. Offered whenever `capabilities.checkable`. |
+| **Clear checked** | Header overflow → `Clear checked (7)`. One `POST /v1/lists/:id/clear-checked`. Deletes the checked items. **No confirmation dialog**: it is a reversible bulk action, so it applies immediately with the 10-second bulk undo toast, which names the count — `7 items cleared` with `Undo` ([`interaction-contract.md`](interaction-contract.md#4-undo-policy) §4). After the window it is permanent. Offered only when `behaviour === 'collection' && capabilities.checkable`. |
+| **Uncheck all** | Header overflow → `Uncheck all`. Offered only when `behaviour === 'collection' && capabilities.checkable`. |
 | **Share** | Header `Share`, on every list. Opens the member sheet (§5.11.1). Owner only for adding and removing; a member sees the sheet read-only apart from `Leave list`. |
-| **Archive** | Header overflow → `Archive list`. Sets `archived: true`. Archived lists leave the Lists index, keep their items, and are reachable through `Lists → ⋯ → Show archived`. Owner only on a shared list — archiving is a change to the object, not to your view of it. Restoring is one tap. |
+| **Archive** | Header overflow → `Archive list`. Sends `PATCH /v1/lists/:id { archived: true }` and offers settings Undo. Archived lists leave the Lists index, keep their items, and are reachable through `Lists → ⋯ → Show archived`. Owner only on a shared list — archiving is a change to the object, not to your view of it. Restoring is one tap. |
 | **Delete** | Header overflow → `Delete list`, confirmed. **Owner only.** Deletes items and their per-viewer `LNK#` projections. Every Plan created through `Plan this item` survives; the confirmation says how many of the owner's linked Plans survive, plus the number of other members who lose the list (§1a.1). |
 | **Rename** | Inline on the header title. Available to members as well as the owner — it changes nothing but the title (§5.5). |
 | **Item detail** | Tapping an item row opens a sheet: title, note, the fields this list's capabilities and behaviour allow (§5.7), `Plan this item`, `Delete`. |
@@ -853,7 +870,7 @@ Two more rules:
 (Moving an item between lists is not in v1 — copy the text into the other list and delete
 the original.)
 
-> **Decision:** `Uncheck all` is offered on every checkable list, not on a hand-picked pair
+> **Decision:** `Uncheck all` is offered on every checkable `collection`, not on a hand-picked pair
 > of templates. The old rule named `packing` and `groceries`, which only made sense while
 > those were kinds. Reuse across trips and shops is a property of having checkboxes.
 
@@ -956,8 +973,9 @@ is a **suggestion the user confirms** — this is the product-wide rule in
 
 Two worked cases.
 
-**Zahav.** `Restaurants to try` is checkable, so a checked item means *visited*. The user
-chooses `Plan this item` → **Event** → **Just me**, schedules Zahav for Saturday, and
+**Zahav.** `Restaurants to try` is a location-supporting collection and the user has enabled
+its checkboxes, so a checked item means *visited*. The user chooses `Plan this item` →
+**Event** → **Just me**, schedules Zahav for Saturday, and
 completes it with `Attended`. The item's state line becomes
 `Done Saturday`. It is **not** checked. One follow-up appears in the confirmation slot:
 
@@ -982,9 +1000,10 @@ When it is not, say nothing.
 > **Decision — the implementable form of "evidence".** The
 > `Mark {item title} visited in {list name}?` follow-up is
 > offered only when the linked Activity has the explicitly chosen kind `event` **and** it was
-> created through the bridge from a checkable list in the `places` slot. A manually linked
-> Event, an Event bridged from any other slot, and an Event from a non-checkable places list
-> are not evidence. Every other Plan kind stays silent.
+> created through the bridge from a `collection` list whose current capabilities include both
+> `checkable` and `supportsLocation`. A manually linked Event, an Event bridged from another
+> behaviour, and an Event from a list missing either capability are not evidence. Every other
+> Plan kind stays silent. Slot and template metadata are not inputs to this rule.
 
 `watch` is the precedent, not the exception. Completing a session *offers* to move the
 item's progress on, and then, separately, *offers* to schedule the next episode. Neither
@@ -1151,9 +1170,8 @@ wrong.
 
 The ingredients-to-list flow (§7.3), `Clear checked` and `Uncheck all` (§5.6) all work
 unchanged on a shared list, and all of them are visible to every member immediately. `Clear
-checked` deletes items other people added; its confirmation names the count, as it already
-does, and that is sufficient — a bulk delete that named the author of every row would be a
-worse dialog, not a safer one.
+checked` deletes items other people added; its menu label and Undo toast name the count, as
+they already do. It still has no confirmation dialog.
 
 ---
 
@@ -1170,9 +1188,9 @@ The user-facing action is `Plan this item`, never a generic `Schedule`. Its flow
    recommended, or moved first. The list's title, template, behaviour, and item text do not
    choose a kind. General is available only as an explicit tap.
 
-The `places` template family records `event` as its default bridge kind. That default is
-schema metadata for the bridge and the visited-evidence rule; it does not bypass, preselect,
-or recommend a row in the explicit chooser above.
+No template records a default bridge kind. `Event` exists here only after the user's explicit
+tap; the later visited-evidence rule reads the stored list behaviour and capabilities, never
+template metadata or a destination slot.
 2. On **every list, private or shared**, a required audience step follows the kind choice,
    asking exactly **Just me** or **Choose people**, with neither pre-selected. `Just me`
    makes the new Plan private and linked to the item. `Choose people` opens an empty People
@@ -1206,9 +1224,9 @@ One endpoint does this atomically:
 
 A shared ListItem never gains a global Activity-link field, and an Activity never claims
 the item for every member. Different members may make different Plans from the same shared
-item. Each sees only the state line resolved through their own `LNK#<viewer>#<itemId>`
-projection, unless they were explicitly added to the same Plan and are also allowed to see
-the source list.
+item. Each sees a state line only when their own `LNK#<viewer>#<itemId>` projection resolves
+to a readable scheduled Activity, unless they were explicitly added to the same Plan and are
+also allowed to see the source list.
 
 The item title and compatible fields are copied into the draft once, before `Save plan`.
 After creation the ListItem and Plan are independent objects: editing either title or note
@@ -1218,8 +1236,10 @@ everyone.
 
 ### 6.2 What the item looks like after scheduling
 
-The item stays in its list, in place, byte-identical. A state line is joined into the
-current viewer's response from their `LNK#` pointer. It is not moved, checked, or hidden.
+The item stays in its list, in place, byte-identical. When the current viewer's `LNK#`
+pointer hydrates to a readable Activity with `schedule.date`, a state line is joined into
+their response. An unscheduled pointer remains stored but renders no line. The item is not
+moved, checked, or hidden.
 
 ```
 Restaurants to try
@@ -1238,13 +1258,14 @@ Rules:
 
 - The state line shows the current viewer's linked Activity date and time in the same relative format used
   elsewhere: weekday name within 7 days, otherwise `d MMM`.
+- Link presence is not enough: an unscheduled Activity renders no line until it is rescheduled.
 - Tapping the state line opens the **Activity**, not the item detail. Tapping the title
   opens the item detail. Both targets are ≥ 44 pt.
 - For another list member with no pointer, the same item has no Plan state line. There is no
   global "someone planned this" badge and no participant leakage.
 - A planned item is visually distinguished by the state line alone. No colour change, no
   strike-through, no move.
-- An item on a `checkable` list is still checkable after scheduling. Checking it does not
+- An item on a checkable `collection` is still checkable after scheduling. Checking it does not
   complete the Activity, and completing the Activity does not check it (§5.10, §6.3).
 
 ### 6.3 What happens on completion, un-completion and deletion
@@ -1341,14 +1362,17 @@ The flow, exactly:
    chooses a style and taps `Create list`, then returns here with the new destination named.
    Which list was opened most recently is never consulted.
 3. Tapping the separate `Add <n> to <list name>` action issues one
-   `POST /v1/lists/:id/items/bulk` with the selected ingredients. Creating the destination
+   `POST /v1/activities/:id/ingredients/add-to-list` with the explicit `listId` and selected
+   stable source `ingredientId`s. The server resolves those ids against the current meal,
+   then derives titles and provenance from the matched rows; the
+   ordinary List bulk route cannot accept them. Creating the destination
    never also adds the ingredients.
 4. Each created `ListItem` gets:
    - `title` = ingredient `name`, with `quantity` appended in parentheses if present
      (`Tortillas (8)`),
    - `sourceActivityId` = the meal's `activityId`,
    - `sourceLabel` = the provenance label (§7.5).
-5. Each source ingredient gets `details.ingredients[i].addedToListId` set, so the button
+5. Each source ingredient, identified by its stable `ingredientId`, gets `addedToListId` set, so the button
    can render `Added` for those rows and offer only the remaining ones next time.
 6. Duplicate handling: if an item with the same case-insensitive, trimmed title already
    exists **unchecked** on the target list, no second row is created; the existing row's
@@ -1555,7 +1579,7 @@ These are lifecycle (ii) in §9.1 and §9.2, lifecycle (iii) in §9.3, and lifec
 | 1 | Global `+` → **Plan** → **Meal** → `Chicken tacos`, Sunday, slot Dinner (time auto-fills 19:00) | Nothing yet — the form is local, and Meal was explicit |
 | 2 | Ingredients: `Chicken`, `Tortillas` qty `8`, `Tomatoes`, `Sour cream` (unchecks Sour cream — already has it) | Local |
 | 3 | `Add selected ingredients to:` — the destination row already reads `Groceries`, the user's only list holding the `groceries` slot, so nothing was asked (§5.8) | Local |
-| 4 | `Save plan and add 3 items to Groceries` | `POST /v1/activities` → `act_12` with `objectKind: 'plan'`, `type: 'meal'`, and `details.ingredients` = all four rows. Then `POST /v1/lists/lst_g/items/bulk` with the three checked rows. |
+| 4 | `Save plan and add 3 items to Groceries` | `POST /v1/activities` → `act_12` with `objectKind: 'plan'`, `type: 'meal'`, and `details.ingredients` = all four rows, each carrying its stable client-minted `ingredientId`. Then `POST /v1/activities/act_12/ingredients/add-to-list` with `listId: 'lst_g'` and the three checked source `ingredientId`s. |
 | 5 | Groceries list now reads | `Chicken — Sunday dinner` · `Tortillas (8) — Sunday dinner` · `Tomatoes — Sunday dinner` · `Milk` (added manually last week, no label) |
 | 6 | Meal detail | Chicken / Tortillas / Tomatoes render `Added`; Sour cream renders with `Add to Groceries`. |
 | 7 | Saturday: user shops, checks all three | `PATCH` on each item, `checked: true`. **The meal is untouched** — provenance is not linkage (§6.5). |

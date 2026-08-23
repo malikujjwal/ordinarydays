@@ -11,7 +11,7 @@ import { ADD_LABEL } from '@/features/shell/model/tabs';
  * here" variant. The one thing this control is allowed to do is open the chooser, and the
  * absence of any other prop is what guarantees a tab cannot quietly hand it a preselected
  * form — which is exactly what P1-23's edge case warns about. Contextual adds
- * (`+ Add a task`, `+ Add an item`, `+ Add a prep task`) are *different* controls with their
+ * (`+ Add a task`, `+ Add an item`, `+ Add prep task`) are *different* controls with their
  * own labels, not this one configured.
  */
 export interface AddButtonProps {

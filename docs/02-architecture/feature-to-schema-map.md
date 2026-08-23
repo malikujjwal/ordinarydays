@@ -646,7 +646,7 @@ The same three concurrency rules cover the rest ([`data-model.md`](data-model.md
 | Both members | Result | Why |
 | --- | --- | --- |
 | Check the same item | One row, `checked: true` | Set, not toggled |
-| Insert at the same position | Two rows with the **same** `lexoRank`, ordered by `(rank, itemId)` | The rank function is pure and neither caller knows about the other, so identical ranks are expected. `itemId` is a ULID, so the tie-break is total, needs no coordination, and is identical on every device. |
+| Insert at the same position | Two rows with distinct server ranks; `(rank, itemId)` remains the defensive read order | Both race on `List.rankVersion`; one conditional write wins and the other re-reads neighbours before retrying. The `itemId` tie-break keeps Undo-restored, legacy or seeded duplicate ranks deterministic within one committed generation; a repair marker gates item reads until the next generation commits. |
 | Add the same title | Two rows | Never auto-merged. Silently swallowing somebody's entry is worse than a visible duplicate they can delete. |
 
 **Sam leaves.** Five access/relationship items change in the membership transaction, and no

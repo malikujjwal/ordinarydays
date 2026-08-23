@@ -1021,12 +1021,36 @@ Operational notes:
 
 - Ranks grow by roughly one character per 31 inserts at the same position. A list item's
   `sk` is `ITEM#<rank>#<itemId>` and DynamoDB's sort key limit is 1,024 bytes, so this is not
-  a practical constraint. If a rank ever exceeds **64** characters, a maintenance script
-  under `infra/scripts/migrations/` rebalances that one list. No rebalance has been needed
-  in any list under 10,000 items.
-- Reordering writes **one** item: the moved item's `ListItem` row with a new rank.
-- The client computes the new rank optimistically with the same function, so a drag-and-drop
-  does not wait for the server.
+  a practical constraint. If a rank ever exceeds **64** characters, the same bounded
+  per-list repair protocol used for duplicate/equal-neighbour ranks rebalances that list;
+  this is a runtime recovery path, not a maintenance-script-only contract. No rebalance has
+  been needed in any list under 10,000 items.
+- Rank allocation is server-owned. The client sends `afterItemId`, never a rank. It may move
+  the row optimistically in its local array while awaiting the authoritative response.
+- Single create and reorder read the neighbours plus `List.rankVersion`, then conditionally
+  advance that version in the same transaction as the ranked-row/locator mutation. Bulk
+  allocates its ordered sequence under one version advance. A conflict re-reads neighbours
+  and retries, so concurrent callers do not publish the same rank from a stale gap.
+- Reordering changes **one logical ListItem**: conditionally delete its old ranked row at the
+  storage-only `itemRevision` read, put the freshly read row at its new rank with the next
+  revision, conditionally move the locator from the same rank/revision, and advance META
+  `rankVersion`. Field PATCHes update only supplied fields while conditionally advancing the
+  same row/locator revision. A race retries against current truth, so a stale reorder image
+  cannot replace a concurrent edit. No client `If-Match` is exposed and no other ListItem is
+  rewritten during a normal drag.
+- All readers sort by `(rank, itemId)`, not rank alone. This is defensive for Undo-restored,
+  legacy or seeded duplicate ranks within one committed generation; it is not the allocation
+  strategy. If equal-rank neighbours prevent a valid between-rank calculation, run the
+  bounded list repair, re-read, and retry rather than calling `lexoRankBetween(a, a)`.
+- `rankRepairId` and `behaviourMigrationId` are read gates, not sort hints. Every list-item
+  page strongly reads META, rejects either marker, runs its item Query with
+  `ConsistentRead: true`, then strongly rereads META before serialisation. Both reads must have
+  the same `rankVersion` and no marker; otherwise the service drains bounded work when
+  applicable and returns `503 internal` with `Retry-After: 1` and no item rows. Cursors bind
+  that fenced version; final repair/migration transactions clear their marker and advance the version, so
+  an old cursor restarts at page one. A reader never exposes a page containing mixed rank or
+  behaviour generations, including when an operation begins between the first META read and
+  the Query.
 
 ---
 

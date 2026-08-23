@@ -281,7 +281,7 @@ Assume the user's timezone is `America/New_York` and "now" is **Wednesday 5 Augu
 | Plan → Meal | `Chicken tacos for dinner Sunday` | title `Chicken tacos`; slot Dinner; date `2026-08-09`; slot-derived time `19:00`, flagged | Final action is `Save plan`; no ListItem is created. |
 | Plan → Event | `Zahav Saturday 7pm with Ben and Priya` | title and location label `Zahav`; date `2026-08-08`; time `19:00` | Ben and Priya are not resolved or added; People is explicit. |
 | List item → Restaurants to try | `Zahav Saturday 7pm with Ben and Priya` | ListItem title `Zahav` and compatible place fields | No Plan, date, or participants. Final action is `Add to Restaurants to try`. |
-| Contextual `+ Add a prep task` | `Book flights for the New York trip` | title `Book flights for the New York trip` | `parentActivityId` comes only from the explicit plan context, never title matching. |
+| Contextual `+ Add prep task` | `Book flights for the New York trip` | title `Book flights for the New York trip` | `parentActivityId` comes only from the explicit plan context, never title matching. |
 
 ### 5.2 Resolution conventions
 

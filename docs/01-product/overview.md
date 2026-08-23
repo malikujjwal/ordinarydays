@@ -166,7 +166,7 @@ violates one of these is rejected regardless of how good the feature is.
 
 The global `+` opens exactly three choices: **Task**, **Plan**, and **List item**. A
 contextual action fixes that same choice in its label — `+ Add a task`, `+ Add an item`, or
-`+ Add a prep task`. Plan then requires an explicit **General**, **Meal**, **Watch**,
+`+ Add prep task`. Plan then requires an explicit **General**, **Meal**, **Watch**,
 **Event** choice. Nothing is pre-selected, including General.
 
 General `New list` likewise requires an explicit style choice from the full catalogue before

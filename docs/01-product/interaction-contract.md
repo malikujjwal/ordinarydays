@@ -14,7 +14,7 @@ Six rules. Everything in §3 is a consequence of them.
 | # | Rule | Consequence |
 | --- | --- | --- |
 | U1 | **Tap the body of a row → open its detail.** | A row tap never mutates. Not a toggle, not a completion, not a reschedule. See [`overview.md`](overview.md#43-tap-a-row-opens-detail-never-mutates). |
-| U2 | **Tap a checkbox → complete.** | Only `task` rows and checkable list items have one. The checkbox is a separate accessibility element with its own 44×44 hit target. |
+| U2 | **Tap a checkbox → complete.** | Only `task` rows and checkable `collection` list items have one. The checkbox is a separate accessibility element with its own 44×44 hit target. |
 | U3 | **Swipe → contextual actions.** | Right reveals the row's single positive action; left reveals up to three secondary actions. Full-swipe commits only the *first* action on that side, and never a destructive one. |
 | U4 | **Tap a date or time → reschedule.** | Anywhere it is rendered: the row's time column, the plan detail's when/where block, a list item's state line. It opens the reschedule sheet; it never edits in place. |
 | U5 | **Share → add people.** | One affordance and one sheet on every Plan and List. Tasks have no Share control and no direct participant roster; a prep Task is accessible only through its explicit parent Plan. On a Plan, Share also copies an invite link; a List has no link ([`sharing-and-people.md`](sharing-and-people.md#4a3-inviting-someone-who-does-not-have-an-account)). |
@@ -126,11 +126,11 @@ This is one rule, not six special cases. Everywhere it already applies:
 
 | Trigger | What the app must not do | What it offers instead |
 | --- | --- | --- |
-| Completing an activity created from a list item | Check, uncheck, move, hide or delete the item | `Mark {item title} visited in {list name}?`, and only when completion is evidence about the item ([`plans-and-lists.md`](plans-and-lists.md) §5.10) |
+| Completing an `event` created through `Plan this item` from a `collection` list with both `checkable` and `supportsLocation` | Check, uncheck, move, hide or delete the item | `Mark {item title} visited in {list name}?`; completion itself leaves the item unchanged ([`plans-and-lists.md`](plans-and-lists.md) §5.10) |
 | Completing a watch session | Write season or episode onto the named source-list item, or move it from `want` to `watching` | `{list name} · currently S2 E4 — Update to S2 E5?` |
 | Progress having just been updated | Create the next episode's session | `Create a Plan for S2 E6?`, which opens an unselected Plan-kind chooser; only after Watch is explicitly chosen may compatible fields pre-fill, and nothing is created until `Save plan` |
 | Completing a meal | Add its ingredients to a user-chosen list | `Add ingredients to a list?`, which opens the ingredient picker and then visibly names the destination before any write |
-| Completing a plan with open prep tasks | Complete, delete, reschedule or otherwise touch the prep tasks | `2 prep tasks are still open — keep them?` — Keep / Complete all / Delete. Keeping or dismissing changes nothing; the other two write only when tapped ([`plans-and-lists.md`](plans-and-lists.md) §3) |
+| Completing a plan with open prep tasks | Complete, delete, reschedule or otherwise touch the prep tasks | When at least one is incomplete and non-recurring: `2 one-off prep tasks are still open — keep them?` — Keep / Complete all / Delete. Keeping or dismissing changes nothing; the other two write only when tapped and affect only that named non-recurring set. Recurring prep tasks are kept because no occurrence was selected ([`plans-and-lists.md`](plans-and-lists.md) §3) |
 | Creating or opening a plan | Create a packing, shopping or grocery list for it | The `Add list` affordance in the LISTS section |
 | Completing one occurrence of a recurring series | Alter the recurrence rule, or mutate the series row | Nothing. The next occurrence already exists by definition |
 | Capture extracting compatible fields from a photo, link or text | Persist, route, classify, share, attach anything, or set a reminder on its own | A reviewable draft inside the already selected form, committed only by its named write button; Reminder remains a separate visible control or an explicitly saved default |
@@ -153,7 +153,7 @@ Rules for the follow-up itself:
 
 The global `+` always opens **Task / Plan / List item** in that fixed order, with nothing
 selected. A contextual control fixes intent only by naming it: `+ Add a task`,
-`+ Add an item`, or `+ Add a prep task`. Plan then requires **General / Meal / Watch /
+`+ Add an item`, or `+ Add prep task`. Plan then requires **General / Meal / Watch /
 Event**, also fixed and unselected; General is an explicit choice, never a hidden
 fallback. List item requires an explicit destination unless the current list already names
 it.
@@ -353,10 +353,11 @@ there is one is §1a.1.
 | Delete somebody else's suggestion, as the owner | **Yes**, naming whose it is | No | — | Removing something another person wrote is confirmed, never undone quietly |
 | Clear checked (bulk) | No | Yes | **10 s** | Re-create the deleted items with their previous ranks |
 | Uncheck all (bulk) | No | Yes | **10 s** | `PATCH` back |
-| Archive a list | No | Yes | 6 s | `PATCH archived: false` |
-| Toggle a list capability (`Show checkboxes`, `Add a place to items`) | No | Yes | 6 s | `PATCH` back. Additive both ways (§1a.1) |
-| Upgrade a list's behaviour to `watch` or `meals` | No | Yes | 6 s | `PATCH` back — the added fields are still at their defaults |
-| Downgrade a list's behaviour to `collection` | **Yes**, naming the fields and the item count (§1a.1) | No | — | `?confirmDataLoss=true` |
+| Archive a list | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token returned by `PATCH { archived: true }` |
+| Toggle a list capability (`Show checkboxes`, `Add a place to items`) | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Additive both ways (§1a.1) |
+| Change a list's default-destination slot | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Restore a removed profile default only when no newer choice occupies that slot |
+| Upgrade a list's behaviour to `watch` or `meals` | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the upgrade-operation token. The compensation restores the previous behaviour and removes only unchanged defaults created by that operation; an intervening edit makes it no longer applicable |
+| Downgrade a list's behaviour to `collection` | **Yes**, naming the fields and the item count (§1a.1) | No | — | Repeat `POST /v1/lists/:id/behaviour` with `?confirmDataLoss=true` |
 | Accept a follow-up suggestion (§1a.2) | No | Yes | 6 s | `PATCH` back. Independent of the action that offered it |
 | Remove a participant | **Yes** | No | — | Revokes their token; re-adding sends a new invitation |
 | Delete an activity | **Yes** | No | — | Cascades per [`../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items`](../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items) |
@@ -392,6 +393,10 @@ there is one is §1a.1.
   reverts and the toast becomes an error toast with `Retry` only when durable append was
   refused or the server permanently rejected the action. Undo after dispatch is itself a
   durable dependent action, so closing the app cannot lose it.
+- An API `undoExpiresAt` is the deadline for **offering a new Undo in the UI**, not a server
+  replay deadline. If the user accepts while the toast is visible, the inverse is durable and
+  remains replayable through `MAX_AUTOMATIC_INTENT_AGE_DAYS`; crossing the presentation
+  deadline while queued or in flight never discards it.
 - Toasts announce themselves to screen readers with `accessibilityLiveRegion="polite"` and
   their `Undo` button is focusable.
 
