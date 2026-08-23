@@ -92,7 +92,7 @@ describe('list access', () => {
         userId: OWNER,
         role: 'owner',
         addedAt: '2026-08-09T00:00:00.000Z',
-      });
+      } as never);
 
       await expect(assertListAccess(OWNER, 'lst_1', level)).resolves.toMatchObject({
         isOwner: true,
@@ -106,7 +106,7 @@ describe('list access', () => {
       userId: PARTICIPANT,
       role: 'member',
       addedAt: '2026-08-09T00:00:00.000Z',
-    });
+    } as never);
 
     await expect(assertListAccess(PARTICIPANT, 'lst_1', level)).resolves.toMatchObject({
       isOwner: false,
@@ -119,7 +119,7 @@ describe('list access', () => {
       userId: PARTICIPANT,
       role: 'member',
       addedAt: '2026-08-09T00:00:00.000Z',
-    });
+    } as never);
 
     await expect(assertListAccess(PARTICIPANT, 'lst_1', 'owner')).rejects.toMatchObject({
       code: 'forbidden',

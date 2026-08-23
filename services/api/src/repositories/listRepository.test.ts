@@ -116,6 +116,8 @@ const receipt: IdempotencyReceipt = {
   createdAt: NOW,
 };
 
+let access: NonNullable<Awaited<ReturnType<typeof repository.getListPointer>>>;
+
 function mockResolvedItem(value: ListItem = item(), meta: List = list()): void {
   vi.mocked(base.getItem).mockImplementation(async (key) => {
     if (key.sk === keys.listMeta(LIST_ID).sk) return listRow(meta);
@@ -129,7 +131,13 @@ function mockResolvedItem(value: ListItem = item(), meta: List = list()): void {
   });
 }
 
-beforeEach(() => {
+function mockLiveList(meta: List = list()): void {
+  vi.mocked(base.getItem).mockImplementation(async (key) =>
+    key.sk === keys.listMeta(LIST_ID).sk ? listRow(meta) : undefined,
+  );
+}
+
+beforeEach(async () => {
   vi.mocked(base.batchGetItems).mockReset();
   vi.mocked(base.deleteAll).mockReset();
   vi.mocked(base.getItem).mockReset();
@@ -143,6 +151,11 @@ beforeEach(() => {
   vi.mocked(base.batchGetItems).mockResolvedValue([]);
   vi.mocked(base.queryAll).mockResolvedValue([]);
   vi.mocked(base.deleteAll).mockResolvedValue(undefined);
+  vi.mocked(base.getItem).mockResolvedValueOnce(indexRow());
+  const issued = await repository.getListPointer(ALICE, LIST_ID);
+  if (issued === undefined) throw new Error('Access-grant fixture was not issued.');
+  access = issued;
+  vi.mocked(base.getItem).mockReset();
 });
 
 describe('identity and list storage', () => {
@@ -186,13 +199,47 @@ describe('identity and list storage', () => {
     await expect(repository.getListPointer(ALICE, LIST_ID)).resolves.toMatchObject({
       role: 'owner',
     });
-    await expect(repository.getListMeta(ALICE, LIST_ID)).resolves.toMatchObject({
+    await expect(repository.getListMeta(ALICE, LIST_ID, access)).resolves.toMatchObject({
       title: 'Errands',
     });
     await expect(repository.getListPointer(ALICE, LIST_ID)).resolves.toBeUndefined();
     expect(
       vi.mocked(base.getItem).mock.calls.every(([, options]) => options?.consistentRead),
     ).toBe(true);
+  });
+
+  it('rejects a caller/list mismatch before any canonical read or mutation', async () => {
+    const ben = 'usr_list_unit_ben';
+
+    await expect(repository.getListMeta(ben, LIST_ID, access)).rejects.toBeInstanceOf(
+      repository.ListNotFoundError,
+    );
+    await expect(
+      repository.patchListMeta(ben, LIST_ID, access, { title: 'Stolen' }, NOW, LATER),
+    ).rejects.toBeInstanceOf(repository.ListNotFoundError);
+    await expect(
+      repository.deleteList(ben, LIST_ID, access, {
+        now: LATER,
+        expectedUpdatedAt: NOW,
+      }),
+    ).rejects.toBeInstanceOf(repository.ListNotFoundError);
+
+    expect(base.getItem).not.toHaveBeenCalled();
+    expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+
+  it('rejects a structurally forged pointer result', async () => {
+    const forged = {
+      listId: LIST_ID,
+      userId: ALICE,
+      role: 'owner',
+      addedAt: NOW,
+    } as never;
+
+    await expect(repository.getListMeta(ALICE, LIST_ID, forged)).rejects.toBeInstanceOf(
+      repository.ListNotFoundError,
+    );
+    expect(base.getItem).not.toHaveBeenCalled();
   });
 
   it('hydrates a pointer page in pointer order and carries its cursor', async () => {
@@ -231,8 +278,8 @@ describe('identity and list storage', () => {
   });
 
   it('patches every supplied META field under the ETag and both gates', async () => {
-    vi.mocked(base.updateItem).mockResolvedValue(
-      listRow({
+    mockLiveList(
+      list({
         title: 'New',
         capabilities: { checkable: false, supportsLocation: true },
         slot: 'groceries',
@@ -243,6 +290,7 @@ describe('identity and list storage', () => {
     const updated = await repository.patchListMeta(
       ALICE,
       LIST_ID,
+      access,
       {
         title: 'New',
         capabilities: { checkable: false, supportsLocation: true },
@@ -253,10 +301,12 @@ describe('identity and list storage', () => {
       LATER,
     );
 
-    expect(updated.updatedAt).toBe(LATER);
-    expect(vi.mocked(base.updateItem).mock.calls[0]?.[1]).toMatchObject({
-      condition: expect.stringContaining('#updatedAt = :expectedUpdatedAt'),
-      expression: expect.stringContaining('#archived = :archived'),
+    expect(updated?.updatedAt).toBe(LATER);
+    const [writes] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    expect(writes?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
+    expect(writes?.[1]?.Update).toMatchObject({
+      ConditionExpression: expect.stringContaining('#updatedAt = :expectedUpdatedAt'),
+      UpdateExpression: expect.stringContaining('#archived = :archived'),
     });
   });
 });
@@ -265,13 +315,13 @@ describe('fenced reads', () => {
   it('returns a strongly read item page, ids and version-bound cursor', async () => {
     const rawNext = encodeCursor(keys.listItem(LIST_ID, 'V', ITEM_A));
     if (rawNext === undefined) throw new Error('Item fixture did not mint a cursor.');
-    vi.mocked(base.getItem).mockResolvedValue(listRow({ rankVersion: 4 }));
+    mockLiveList(list({ rankVersion: 4 }));
     vi.mocked(base.query).mockResolvedValue({
       items: [itemRow()],
       nextCursor: rawNext,
     });
 
-    const page = await repository.listItems(ALICE, LIST_ID);
+    const page = await repository.listItems(ALICE, LIST_ID, access);
 
     expect(page?.items).toEqual([item()]);
     expect(page?.itemIds).toEqual([ITEM_A]);
@@ -286,21 +336,22 @@ describe('fenced reads', () => {
 
   it('returns absence before querying and rejects either opening gate', async () => {
     vi.mocked(base.getItem).mockResolvedValueOnce(undefined);
-    await expect(repository.listItems(ALICE, LIST_ID)).resolves.toBeUndefined();
+    await expect(repository.listItems(ALICE, LIST_ID, access)).resolves.toBeUndefined();
     expect(base.query).not.toHaveBeenCalled();
 
     vi.mocked(base.getItem).mockResolvedValueOnce(listRow({ rankRepairId: 'repair' }));
-    await expect(repository.listItems(ALICE, LIST_ID)).rejects.toBeInstanceOf(
+    await expect(repository.listItems(ALICE, LIST_ID, access)).rejects.toBeInstanceOf(
       repository.ListReadFenceError,
     );
   });
 
   it('rejects a stale cursor and a changed or gated closing fence', async () => {
-    vi.mocked(base.getItem).mockResolvedValue(listRow({ rankVersion: 2 }));
+    mockLiveList(list({ rankVersion: 2 }));
     await expect(
       repository.listItems(
         ALICE,
         LIST_ID,
+        access,
         encodeFencedCursor(keys.listItem(LIST_ID, 'V', ITEM_A), 1),
       ),
     ).rejects.toBeInstanceOf(repository.ListReadFenceError);
@@ -308,18 +359,22 @@ describe('fenced reads', () => {
     vi.mocked(base.getItem)
       .mockReset()
       .mockResolvedValueOnce(listRow({ rankVersion: 2 }))
-      .mockResolvedValueOnce(listRow({ rankVersion: 3 }));
-    await expect(repository.listItems(ALICE, LIST_ID)).rejects.toBeInstanceOf(
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(listRow({ rankVersion: 3 }))
+      .mockResolvedValueOnce(undefined);
+    await expect(repository.listItems(ALICE, LIST_ID, access)).rejects.toBeInstanceOf(
       repository.ListReadFenceError,
     );
 
     vi.mocked(base.getItem)
       .mockReset()
       .mockResolvedValueOnce(listRow({ rankVersion: 2 }))
+      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(
         listRow({ rankVersion: 2, behaviourMigrationId: 'migration' }),
-      );
-    await expect(repository.listItems(ALICE, LIST_ID)).rejects.toBeInstanceOf(
+      )
+      .mockResolvedValueOnce(undefined);
+    await expect(repository.listItems(ALICE, LIST_ID, access)).rejects.toBeInstanceOf(
       repository.ListReadFenceError,
     );
   });
@@ -340,33 +395,38 @@ describe('fenced reads', () => {
         ...link(ITEM_B),
       },
     ]);
+    mockLiveList();
 
     await expect(
-      repository.batchGetViewerLinks(ALICE, LIST_ID, [ITEM_A, ITEM_B, ITEM_A]),
+      repository.batchGetViewerLinks(ALICE, LIST_ID, access, [ITEM_A, ITEM_B, ITEM_A]),
     ).resolves.toEqual([link(ITEM_B)]);
   });
 
   it('follows a locator for an exact read and detects revision disagreement', async () => {
     mockResolvedItem();
-    await expect(repository.getListItem(ALICE, LIST_ID, ITEM_A)).resolves.toEqual(item());
+    await expect(repository.getListItem(ALICE, LIST_ID, access, ITEM_A)).resolves.toEqual(
+      item(),
+    );
 
     vi.mocked(base.getItem).mockReset();
     vi.mocked(base.getItem)
       .mockResolvedValueOnce(listRow())
+      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(locatorRow(item({ itemRevision: 1 })))
       .mockResolvedValueOnce(itemRow());
-    await expect(repository.getListItem(ALICE, LIST_ID, ITEM_A)).rejects.toBeInstanceOf(
-      repository.ListReadFenceError,
-    );
+    await expect(
+      repository.getListItem(ALICE, LIST_ID, access, ITEM_A),
+    ).rejects.toBeInstanceOf(repository.ListReadFenceError);
   });
 });
 
 describe('rank allocation and item mutations', () => {
   it('creates one item and an ordered bulk chunk under one META advance', async () => {
-    vi.mocked(base.getItem).mockResolvedValue(listRow());
+    mockLiveList();
     const one = await repository.createListItem(
       ALICE,
       LIST_ID,
+      access,
       { itemId: ITEM_A, title: 'One', checked: false },
       { now: NOW },
     );
@@ -375,6 +435,7 @@ describe('rank allocation and item mutations', () => {
     const bulk = await repository.createListItems(
       ALICE,
       LIST_ID,
+      access,
       [
         { itemId: ITEM_A, title: 'One', checked: false },
         { itemId: ITEM_B, title: 'Two', checked: true },
@@ -383,25 +444,27 @@ describe('rank allocation and item mutations', () => {
     );
     expect(bulk.map((value) => value.rank)).toEqual(['V', 'W']);
     const [items] = vi.mocked(tx.transactWrite).mock.calls.at(-1) ?? [];
-    expect(items).toHaveLength(8);
-    expect(items?.[6]?.Update?.ExpressionAttributeValues).toMatchObject({
+    expect(items).toHaveLength(9);
+    expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
+    expect(items?.[7]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':count': 2,
       ':unchecked': 1,
     });
     await expect(
-      repository.createListItems(ALICE, LIST_ID, [], { now: NOW }),
+      repository.createListItems(ALICE, LIST_ID, access, [], { now: NOW }),
     ).resolves.toEqual([]);
   });
 
   it('maps stable-id collision and retries a rankVersion conflict', async () => {
-    vi.mocked(base.getItem).mockResolvedValue(listRow());
+    mockLiveList();
     vi.mocked(tx.transactWrite).mockImplementationOnce(async (_items, options) => {
-      throw options.onConditionFailed?.(0);
+      throw options.onConditionFailed?.(1);
     });
     await expect(
       repository.createListItem(
         ALICE,
         LIST_ID,
+        access,
         { itemId: ITEM_A, title: 'Collision', checked: false },
         { now: NOW },
       ),
@@ -410,12 +473,13 @@ describe('rank allocation and item mutations', () => {
     vi.mocked(tx.transactWrite)
       .mockReset()
       .mockImplementationOnce(async (_items, options) => {
-        throw options.onConditionFailed?.(3);
+        throw options.onConditionFailed?.(4);
       })
       .mockResolvedValueOnce(undefined);
     await repository.createListItem(
       ALICE,
       LIST_ID,
+      access,
       { itemId: ITEM_B, title: 'Retry', checked: false },
       { now: NOW },
     );
@@ -423,7 +487,7 @@ describe('rank allocation and item mutations', () => {
   });
 
   it('returns repair-required for equal bounds and exhausted rank space', async () => {
-    vi.mocked(base.getItem).mockResolvedValue(listRow());
+    mockLiveList();
     const equalA = item({ itemId: ITEM_A, rank: 'V' });
     const equalB = item({ itemId: ITEM_B, rank: 'V' });
     vi.mocked(base.query).mockResolvedValue({
@@ -433,6 +497,7 @@ describe('rank allocation and item mutations', () => {
       repository.createListItem(
         ALICE,
         LIST_ID,
+        access,
         { itemId: repository.newItemId(), title: 'Equal', checked: false },
         { now: NOW, afterItemId: null },
       ),
@@ -444,6 +509,7 @@ describe('rank allocation and item mutations', () => {
       repository.createListItem(
         ALICE,
         LIST_ID,
+        access,
         { itemId: repository.newItemId(), title: 'Overflow', checked: false },
         { now: NOW },
       ),
@@ -457,7 +523,7 @@ describe('rank allocation and item mutations', () => {
       items: [itemRow(item({ itemId: ITEM_B, rank: 'V' }))],
     });
 
-    const moved = await repository.reorderListItem(ALICE, LIST_ID, ITEM_A, {
+    const moved = await repository.reorderListItem(ALICE, LIST_ID, access, ITEM_A, {
       now: LATER,
       afterItemId: null,
       idempotencyReceipt: receipt,
@@ -465,8 +531,9 @@ describe('rank allocation and item mutations', () => {
 
     expect(moved).toMatchObject({ rank: 'U', itemRevision: 1, note: 'Keep me' });
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items).toHaveLength(5);
-    expect(items?.slice(0, 4).map((entry) => Object.keys(entry)[0])).toEqual([
+    expect(items).toHaveLength(6);
+    expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
+    expect(items?.slice(1, 5).map((entry) => Object.keys(entry)[0])).toEqual([
       'Delete',
       'Put',
       'Update',
@@ -478,7 +545,7 @@ describe('rank allocation and item mutations', () => {
     mockResolvedItem();
     vi.mocked(base.query).mockResolvedValue({ items: [itemRow()] });
     await expect(
-      repository.reorderListItem(ALICE, LIST_ID, ITEM_A, {
+      repository.reorderListItem(ALICE, LIST_ID, access, ITEM_A, {
         now: LATER,
         afterItemId: null,
       }),
@@ -496,6 +563,7 @@ describe('rank allocation and item mutations', () => {
     const patched = await repository.patchListItemFields(
       ALICE,
       LIST_ID,
+      access,
       ITEM_A,
       { title: 'Oat milk', checked: true, note: null, location: null, details: null },
       LATER,
@@ -508,22 +576,30 @@ describe('rank allocation and item mutations', () => {
       itemRevision: 1,
     });
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items?.[0]?.Update?.UpdateExpression).toContain('REMOVE');
-    expect(items?.[2]?.Update?.ExpressionAttributeValues).toEqual({ ':delta': -1 });
+    expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
+    expect(items?.[1]?.Update?.UpdateExpression).toContain('REMOVE');
+    expect(items?.[3]?.Update?.ExpressionAttributeValues).toEqual({ ':delta': -1 });
   });
 
   it('uses a gate condition-check when a field patch does not change checked', async () => {
     mockResolvedItem();
-    await repository.patchListItemFields(ALICE, LIST_ID, ITEM_A, { note: 'Keep' }, LATER);
+    await repository.patchListItemFields(
+      ALICE,
+      LIST_ID,
+      access,
+      ITEM_A,
+      { note: 'Keep' },
+      LATER,
+    );
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items?.[2]?.ConditionCheck).toBeDefined();
+    expect(items?.[3]?.ConditionCheck).toBeDefined();
   });
 });
 
 describe('delete, restore and cascade', () => {
   it('deletes an item with its snapshot, Undo record, counters and receipt', async () => {
     mockResolvedItem();
-    const removed = await repository.deleteListItem(ALICE, LIST_ID, ITEM_A, {
+    const removed = await repository.deleteListItem(ALICE, LIST_ID, access, ITEM_A, {
       operationId: 'op_delete',
       tokenHash: 'hash',
       undoExpiresAt: LATER,
@@ -533,17 +609,18 @@ describe('delete, restore and cascade', () => {
 
     expect(removed).toEqual(item());
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items).toHaveLength(6);
-    expect(items?.[2]?.Put?.Item).toMatchObject({
+    expect(items).toHaveLength(7);
+    expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
+    expect(items?.[3]?.Put?.Item).toMatchObject({
       operationId: 'op_delete',
       snapshot: item(),
     });
-    expect(items?.[3]?.Put?.Item).toMatchObject({
+    expect(items?.[4]?.Put?.Item).toMatchObject({
       kind: 'delete_item',
       affectedItemIds: [ITEM_A],
       consumed: false,
     });
-    expect(items?.[4]?.Update?.ExpressionAttributeValues).toMatchObject({
+    expect(items?.[5]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':minusOne': -1,
       ':uncheckedDelta': -1,
     });
@@ -552,7 +629,7 @@ describe('delete, restore and cascade', () => {
   it('rejects invalid deletion time before sending a transaction', async () => {
     mockResolvedItem();
     await expect(
-      repository.deleteListItem(ALICE, LIST_ID, ITEM_A, {
+      repository.deleteListItem(ALICE, LIST_ID, access, ITEM_A, {
         operationId: 'op_delete',
         tokenHash: 'hash',
         undoExpiresAt: LATER,
@@ -581,22 +658,23 @@ describe('delete, restore and cascade', () => {
     });
 
     await expect(
-      repository.restoreListItem(ALICE, LIST_ID, ITEM_A, {
+      repository.restoreListItem(ALICE, LIST_ID, access, ITEM_A, {
         operationId: 'op_other',
         now: LATER,
       }),
     ).rejects.toBeInstanceOf(repository.ListUndoNotApplicableError);
 
-    const restored = await repository.restoreListItem(ALICE, LIST_ID, ITEM_A, {
+    const restored = await repository.restoreListItem(ALICE, LIST_ID, access, ITEM_A, {
       operationId: 'op_delete',
       now: LATER,
       idempotencyReceipt: receipt,
     });
     expect(restored).toEqual(snapshot);
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items).toHaveLength(6);
-    expect(items?.[2]?.Delete?.ConditionExpression).toContain('#operationId');
-    expect(items?.[4]?.Update?.ExpressionAttributeValues).toMatchObject({
+    expect(items).toHaveLength(7);
+    expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
+    expect(items?.[3]?.Delete?.ConditionExpression).toContain('#operationId');
+    expect(items?.[5]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':expectedVersion': 3,
       ':nextVersion': 4,
     });
@@ -607,7 +685,7 @@ describe('delete, restore and cascade', () => {
       .mockResolvedValueOnce(listRow())
       .mockResolvedValueOnce(undefined);
     await expect(
-      repository.restoreListItem(ALICE, LIST_ID, ITEM_A, {
+      repository.restoreListItem(ALICE, LIST_ID, access, ITEM_A, {
         operationId: 'op_delete',
         now: LATER,
       }),
@@ -617,6 +695,7 @@ describe('delete, restore and cascade', () => {
     vi.mocked(base.getItem)
       .mockReset()
       .mockResolvedValueOnce(listRow())
+      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce({
         ...keys.listItemTombstone(LIST_ID, ITEM_A),
         listId: LIST_ID,
@@ -626,10 +705,10 @@ describe('delete, restore and cascade', () => {
         schemaVersion: 1,
       });
     vi.mocked(tx.transactWrite).mockImplementationOnce(async (_items, options) => {
-      throw options.onConditionFailed?.(0);
+      throw options.onConditionFailed?.(1);
     });
     await expect(
-      repository.restoreListItem(ALICE, LIST_ID, ITEM_A, {
+      repository.restoreListItem(ALICE, LIST_ID, access, ITEM_A, {
         operationId: 'op_delete',
         now: LATER,
       }),
@@ -644,7 +723,7 @@ describe('delete, restore and cascade', () => {
       { ...keys.listTombstone(LIST_ID), schemaVersion: 1 },
     ]);
 
-    await repository.deleteList(ALICE, LIST_ID, {
+    await repository.deleteList(ALICE, LIST_ID, access, {
       now: LATER,
       expectedUpdatedAt: NOW,
       sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA',

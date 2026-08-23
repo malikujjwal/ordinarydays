@@ -1,4 +1,4 @@
-import type { Activity, ListIndex } from '@od/shared/types';
+import type { Activity } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import {
   activityFromPartition,
@@ -6,7 +6,7 @@ import {
   getActivityPartitionStrong,
   listParticipants,
 } from '../repositories/activityRepository.js';
-import { getListPointer } from '../repositories/listRepository.js';
+import { getListPointer, type ListAccessGrant } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 
 /**
@@ -56,7 +56,7 @@ export interface ActivityAccess {
 
 /** What a successful pointer-based List check resolved. */
 export interface ListAccess {
-  readonly index: ListIndex;
+  readonly index: ListAccessGrant;
   readonly isOwner: boolean;
 }
 

@@ -26,6 +26,8 @@ let base: Base;
 let keys: Keys;
 let ddbModule: Ddb;
 let authz: Authz;
+type ListAccessGrant = NonNullable<Awaited<ReturnType<Repository['getListPointer']>>>;
+const accessByListId = new Map<string, ListAccessGrant>();
 
 const ALICE = 'usr_int_lists_alice';
 const BEN = 'usr_int_lists_ben';
@@ -42,6 +44,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  accessByListId.clear();
 });
 
 const aList = (overrides: Partial<List> = {}): List => ({
@@ -75,7 +78,16 @@ const anItem = (title: string, overrides: Partial<NewItem> = {}): NewItem => ({
 async function createSubject(overrides: Partial<List> = {}): Promise<List> {
   const list = aList(overrides);
   await repository.createList(ALICE, list, { now: NOW });
+  const access = await repository.getListPointer(ALICE, list.listId);
+  if (access === undefined) throw new Error('Created list has no owner access grant.');
+  accessByListId.set(list.listId, access);
   return list;
+}
+
+function accessFor(list: List): ListAccessGrant {
+  const access = accessByListId.get(list.listId);
+  if (access === undefined) throw new Error('List fixture has no access grant.');
+  return access;
 }
 
 function sameKey(
@@ -148,15 +160,22 @@ describe('canonical list storage and list index', () => {
     const renamed = await repository.patchListMeta(
       ALICE,
       list.listId,
+      accessFor(list),
       { title: 'Weekend errands' },
       NOW,
       LATER,
     );
 
-    expect(renamed.title).toBe('Weekend errands');
-    expect(
-      send.mock.calls.filter(([command]) => command instanceof UpdateCommand),
-    ).toHaveLength(1);
+    expect(renamed?.title).toBe('Weekend errands');
+    const writes = send.mock.calls.filter(
+      ([command]) => command instanceof TransactWriteCommand,
+    );
+    expect(writes).toHaveLength(1);
+    const rename = writes[0]?.[0];
+    if (!(rename instanceof TransactWriteCommand)) {
+      throw new Error('Missing rename transaction.');
+    }
+    expect(rename.input.TransactItems?.filter((item) => item.Update)).toHaveLength(1);
     await expect(
       authz.assertListAccess(ALICE, list.listId, 'owner'),
     ).resolves.toMatchObject({
@@ -166,6 +185,15 @@ describe('canonical list storage and list index', () => {
     await expect(authz.assertListAccess(BEN, list.listId, 'read')).rejects.toMatchObject({
       code: 'not_found',
     });
+    await expect(
+      repository.getListMeta(BEN, list.listId, accessFor(list)),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    await expect(
+      repository.deleteList(BEN, list.listId, accessFor(list), {
+        now: LATER,
+        expectedUpdatedAt: LATER,
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
   });
 });
 
@@ -173,18 +201,27 @@ describe('ranked items', () => {
   it('adds ten, reorders last-to-front in four actions, and follows the moved locator', async () => {
     const list = await createSubject();
     const inputs = Array.from({ length: 10 }, (_, index) => anItem(`Item ${index}`));
-    const created = await repository.createListItems(ALICE, list.listId, inputs, {
-      now: NOW,
-    });
+    const created = await repository.createListItems(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      inputs,
+      { now: NOW },
+    );
     const last = created.at(-1);
     if (last === undefined) throw new Error('Ten-item fixture produced no last item.');
-    expect((await repository.getListMeta(ALICE, list.listId))?.rankVersion).toBe(1);
+    expect(
+      (await repository.getListMeta(ALICE, list.listId, accessFor(list)))?.rankVersion,
+    ).toBe(1);
 
     const send = vi.spyOn(ddbModule.ddb, 'send');
-    const moved = await repository.reorderListItem(ALICE, list.listId, last.itemId, {
-      now: LATER,
-      afterItemId: null,
-    });
+    const moved = await repository.reorderListItem(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      last.itemId,
+      { now: LATER, afterItemId: null },
+    );
 
     const writes = send.mock.calls.filter(
       ([command]) => command instanceof TransactWriteCommand,
@@ -194,15 +231,12 @@ describe('ranked items', () => {
     expect(transaction).toBeInstanceOf(TransactWriteCommand);
     if (!(transaction instanceof TransactWriteCommand))
       throw new Error('Missing reorder transaction.');
-    expect(transaction.input.TransactItems).toHaveLength(4);
-    expect(transaction.input.TransactItems?.map((item) => Object.keys(item)[0])).toEqual([
-      'Delete',
-      'Put',
-      'Update',
-      'Update',
-    ]);
+    expect(transaction.input.TransactItems).toHaveLength(5);
+    expect(
+      transaction.input.TransactItems?.slice(1).map((item) => Object.keys(item)[0]),
+    ).toEqual(['Delete', 'Put', 'Update', 'Update']);
 
-    const page = await repository.listItems(ALICE, list.listId);
+    const page = await repository.listItems(ALICE, list.listId, accessFor(list));
     expect(page?.items.map((item) => item.itemId)).toEqual([
       last.itemId,
       ...created.slice(0, 9).map((item) => item.itemId),
@@ -211,7 +245,7 @@ describe('ranked items', () => {
     expect(page?.list.itemCount).toBe(10);
     expect(page?.list.rankVersion).toBe(2);
     await expect(
-      repository.getListItem(ALICE, list.listId, moved.itemId),
+      repository.getListItem(ALICE, list.listId, accessFor(list), moved.itemId),
     ).resolves.toEqual(moved);
   });
 
@@ -220,6 +254,7 @@ describe('ranked items', () => {
     const anchors = await repository.createListItems(
       ALICE,
       list.listId,
+      accessFor(list),
       [anItem('Before'), anItem('After')],
       { now: NOW },
     );
@@ -251,14 +286,26 @@ describe('ranked items', () => {
     });
 
     const inserted = await Promise.all([
-      repository.createListItem(ALICE, list.listId, anItem('First racer'), {
-        now: LATER,
-        afterItemId: lower.itemId,
-      }),
-      repository.createListItem(ALICE, list.listId, anItem('Second racer'), {
-        now: LATER,
-        afterItemId: lower.itemId,
-      }),
+      repository.createListItem(
+        ALICE,
+        list.listId,
+        accessFor(list),
+        anItem('First racer'),
+        {
+          now: LATER,
+          afterItemId: lower.itemId,
+        },
+      ),
+      repository.createListItem(
+        ALICE,
+        list.listId,
+        accessFor(list),
+        anItem('Second racer'),
+        {
+          now: LATER,
+          afterItemId: lower.itemId,
+        },
+      ),
     ]);
 
     expect(new Set(inserted.map((item) => item.rank))).toHaveLength(2);
@@ -268,7 +315,9 @@ describe('ranked items', () => {
     expect(
       send.mock.calls.filter(([command]) => command instanceof TransactWriteCommand),
     ).toHaveLength(3);
-    expect((await repository.getListMeta(ALICE, list.listId))?.rankVersion).toBe(3);
+    expect(
+      (await repository.getListMeta(ALICE, list.listId, accessFor(list)))?.rankVersion,
+    ).toBe(3);
   });
 
   it('retries a field-patch/reorder race without losing either change', async () => {
@@ -276,6 +325,7 @@ describe('ranked items', () => {
     const items = await repository.createListItems(
       ALICE,
       list.listId,
+      accessFor(list),
       [anItem('First'), anItem('Second'), anItem('Move me')],
       { now: NOW },
     );
@@ -286,25 +336,33 @@ describe('ranked items', () => {
       repository.patchListItemFields(
         ALICE,
         list.listId,
+        accessFor(list),
         target.itemId,
         { title: 'Edited while moving', checked: true },
         LATER,
       ),
-      repository.reorderListItem(ALICE, list.listId, target.itemId, {
+      repository.reorderListItem(ALICE, list.listId, accessFor(list), target.itemId, {
         now: LATER,
         afterItemId: null,
       }),
     ]);
 
-    const stored = await repository.getListItem(ALICE, list.listId, target.itemId);
+    const stored = await repository.getListItem(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      target.itemId,
+    );
     expect(stored).toMatchObject({
       title: 'Edited while moving',
       checked: true,
     });
-    expect((await repository.listItems(ALICE, list.listId))?.items[0]?.itemId).toBe(
-      target.itemId,
-    );
-    expect((await repository.getListMeta(ALICE, list.listId))?.uncheckedCount).toBe(2);
+    expect(
+      (await repository.listItems(ALICE, list.listId, accessFor(list)))?.items[0]?.itemId,
+    ).toBe(target.itemId);
+    expect(
+      (await repository.getListMeta(ALICE, list.listId, accessFor(list)))?.uncheckedCount,
+    ).toBe(2);
   });
 
   it('returns the repair trigger for an equal-rank neighbour without allocating', async () => {
@@ -312,6 +370,7 @@ describe('ranked items', () => {
     const created = await repository.createListItems(
       ALICE,
       list.listId,
+      accessFor(list),
       [anItem('First'), anItem('Duplicate rank')],
       { now: NOW },
     );
@@ -337,10 +396,16 @@ describe('ranked items', () => {
     });
 
     await expect(
-      repository.createListItem(ALICE, list.listId, anItem('Must wait for repair'), {
-        now: LATER,
-        afterItemId: first.itemId,
-      }),
+      repository.createListItem(
+        ALICE,
+        list.listId,
+        accessFor(list),
+        anItem('Must wait for repair'),
+        {
+          now: LATER,
+          afterItemId: first.itemId,
+        },
+      ),
     ).rejects.toBeInstanceOf(repository.ListRankRepairRequiredError);
   });
 
@@ -349,6 +414,7 @@ describe('ranked items', () => {
     const originalSend = ddbModule.ddb.send.bind(ddbModule.ddb);
     const send = vi.spyOn(ddbModule.ddb, 'send');
     const reasons: CancellationReason[] = [
+      { Code: 'None' },
       { Code: 'None' },
       { Code: 'None' },
       { Code: 'None' },
@@ -366,14 +432,22 @@ describe('ranked items', () => {
     );
 
     await expect(
-      repository.createListItem(ALICE, list.listId, anItem('Never commits'), {
-        now: LATER,
-      }),
+      repository.createListItem(
+        ALICE,
+        list.listId,
+        accessFor(list),
+        anItem('Never commits'),
+        {
+          now: LATER,
+        },
+      ),
     ).rejects.toBeInstanceOf(repository.ListMutationRetryExhaustedError);
     expect(
       send.mock.calls.filter(([command]) => command instanceof TransactWriteCommand),
     ).toHaveLength(5);
-    expect((await repository.getListMeta(ALICE, list.listId))?.itemCount).toBe(0);
+    expect(
+      (await repository.getListMeta(ALICE, list.listId, accessFor(list)))?.itemCount,
+    ).toBe(0);
   });
 
   it("batch-gets only the caller's viewer links in requested item order", async () => {
@@ -381,6 +455,7 @@ describe('ranked items', () => {
     const items = await repository.createListItems(
       ALICE,
       list.listId,
+      accessFor(list),
       [anItem('One'), anItem('Two')],
       { now: NOW },
     );
@@ -422,6 +497,7 @@ describe('ranked items', () => {
     const links = await repository.batchGetViewerLinks(
       ALICE,
       list.listId,
+      accessFor(list),
       [...items].reverse().map((item) => item.itemId),
     );
 
@@ -450,11 +526,15 @@ describe('item tombstones and list cascade', () => {
   it('blocks ordinary id reuse and restores only the matching retained operation', async () => {
     const list = await createSubject();
     const input = anItem('Remember me');
-    const created = await repository.createListItem(ALICE, list.listId, input, {
-      now: NOW,
-    });
+    const created = await repository.createListItem(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      input,
+      { now: NOW },
+    );
     const operationId = repository.newListOperationId();
-    await repository.deleteListItem(ALICE, list.listId, created.itemId, {
+    await repository.deleteListItem(ALICE, list.listId, accessFor(list), created.itemId, {
       operationId,
       tokenHash: 'sha256:test-token',
       undoExpiresAt: LATER,
@@ -462,10 +542,12 @@ describe('item tombstones and list cascade', () => {
     });
 
     await expect(
-      repository.createListItem(ALICE, list.listId, input, { now: LATER }),
+      repository.createListItem(ALICE, list.listId, accessFor(list), input, {
+        now: LATER,
+      }),
     ).rejects.toBeInstanceOf(repository.ListItemIdUnavailableError);
     await expect(
-      repository.restoreListItem(ALICE, list.listId, created.itemId, {
+      repository.restoreListItem(ALICE, list.listId, accessFor(list), created.itemId, {
         operationId: repository.newListOperationId(),
         now: LATER,
       }),
@@ -474,6 +556,7 @@ describe('item tombstones and list cascade', () => {
     const restored = await repository.restoreListItem(
       ALICE,
       list.listId,
+      accessFor(list),
       created.itemId,
       {
         operationId,
@@ -482,10 +565,10 @@ describe('item tombstones and list cascade', () => {
     );
     expect(restored).toEqual(created);
     await expect(
-      repository.getListItem(ALICE, list.listId, created.itemId),
+      repository.getListItem(ALICE, list.listId, accessFor(list), created.itemId),
     ).resolves.toEqual(created);
     await expect(
-      repository.restoreListItem(ALICE, list.listId, created.itemId, {
+      repository.restoreListItem(ALICE, list.listId, accessFor(list), created.itemId, {
         operationId,
         now: LATER,
       }),
@@ -498,20 +581,23 @@ describe('item tombstones and list cascade', () => {
     const item = await repository.createListItem(
       ALICE,
       list.listId,
+      accessFor(list),
       anItem('Temporary'),
       {
         now: NOW,
       },
     );
 
-    await repository.deleteList(ALICE, list.listId, {
+    await repository.deleteList(ALICE, list.listId, accessFor(list), {
       now: LATER,
       expectedUpdatedAt: NOW,
       sourceActivityId,
     });
 
     await expect(repository.getListPointer(ALICE, list.listId)).resolves.toBeUndefined();
-    await expect(repository.getListMeta(ALICE, list.listId)).resolves.toBeUndefined();
+    await expect(
+      repository.getListMeta(ALICE, list.listId, accessFor(list)),
+    ).resolves.toBeUndefined();
     await expect(
       base.getItem(keys.listItemLocator(list.listId, item.itemId)),
     ).resolves.toBeUndefined();
@@ -525,6 +611,62 @@ describe('item tombstones and list cascade', () => {
     await expect(
       repository.createList(ALICE, list, { now: LATER }),
     ).rejects.toBeInstanceOf(repository.ListIdUnavailableError);
+  });
+
+  it('hides a tombstoned cascade and rejects an item created after its child snapshot', async () => {
+    const list = await createSubject();
+    const original = await repository.createListItem(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      anItem('Captured child'),
+      { now: NOW },
+    );
+    const raced = anItem('Must not become an orphan');
+    const originalSend = ddbModule.ddb.send.bind(ddbModule.ddb);
+    const send = vi.spyOn(ddbModule.ddb, 'send');
+    let releaseCascade: (() => void) | undefined;
+    let markSnapshotCaptured: (() => void) | undefined;
+    const cascadeReleased = new Promise<void>((resolve) => {
+      releaseCascade = resolve;
+    });
+    const snapshotCaptured = new Promise<void>((resolve) => {
+      markSnapshotCaptured = resolve;
+    });
+    let heldSnapshot = false;
+    send.mockImplementation(async (command) => {
+      const result = await originalSend(command as never);
+      if (command instanceof QueryCommand && !heldSnapshot) {
+        heldSnapshot = true;
+        markSnapshotCaptured?.();
+        await cascadeReleased;
+      }
+      return result as never;
+    });
+
+    const deleting = repository.deleteList(ALICE, list.listId, accessFor(list), {
+      now: LATER,
+      expectedUpdatedAt: NOW,
+    });
+    await snapshotCaptured;
+
+    await expect(
+      repository.listItems(ALICE, list.listId, accessFor(list)),
+    ).resolves.toBeUndefined();
+    await expect(
+      repository.createListItem(ALICE, list.listId, accessFor(list), raced, {
+        now: LATER,
+      }),
+    ).rejects.toBeInstanceOf(repository.ListNotFoundError);
+
+    releaseCascade?.();
+    await deleting;
+    await expect(
+      base.getItem(keys.listItemLocator(list.listId, original.itemId)),
+    ).resolves.toBeUndefined();
+    await expect(
+      base.getItem(keys.listItemLocator(list.listId, raced.itemId)),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -540,6 +682,7 @@ describe('strong item-page fence', () => {
       await repository.createListItem(
         ALICE,
         list.listId,
+        accessFor(list),
         anItem('Visible only after a clean fence'),
         {
           now: NOW,
@@ -567,40 +710,87 @@ describe('strong item-page fence', () => {
         return result as never;
       });
 
-      await expect(repository.listItems(ALICE, list.listId)).rejects.toBeInstanceOf(
-        repository.ListReadFenceError,
-      );
+      await expect(
+        repository.listItems(ALICE, list.listId, accessFor(list)),
+      ).rejects.toBeInstanceOf(repository.ListReadFenceError);
       expect(
         send.mock.calls.filter(([command]) => command instanceof QueryCommand),
       ).toHaveLength(1);
     },
   );
 
+  it('returns no rows when deletion starts between the item query and post-read', async () => {
+    const list = await createSubject();
+    await repository.createListItem(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      anItem('Must not cross deletion'),
+      { now: NOW },
+    );
+    const originalSend = ddbModule.ddb.send.bind(ddbModule.ddb);
+    const send = vi.spyOn(ddbModule.ddb, 'send');
+    let installed = false;
+    send.mockImplementation(async (command) => {
+      const result = await originalSend(command as never);
+      if (command instanceof QueryCommand && !installed) {
+        installed = true;
+        await base.putItem({
+          ...keys.listTombstone(list.listId),
+          entity: 'ListTombstone',
+          listId: list.listId,
+          ownerId: ALICE,
+          deletedAt: LATER,
+          ttl: 2_000_000_000,
+          createdAt: LATER,
+          updatedAt: LATER,
+          schemaVersion: 1,
+        });
+      }
+      return result as never;
+    });
+
+    await expect(
+      repository.listItems(ALICE, list.listId, accessFor(list)),
+    ).resolves.toBeUndefined();
+    expect(installed).toBe(true);
+  });
+
   it('rejects a cursor bound to an earlier rankVersion before querying item rows', async () => {
     const list = await createSubject();
     const firstChunk = Array.from({ length: 30 }, (_, index) => anItem(`Item ${index}`));
-    const first = await repository.createListItems(ALICE, list.listId, firstChunk, {
-      now: NOW,
-    });
+    const first = await repository.createListItems(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      firstChunk,
+      { now: NOW },
+    );
     const firstChunkLast = first.at(-1);
     if (firstChunkLast === undefined) throw new Error('First page fixture was empty.');
     const secondChunk = Array.from({ length: 21 }, (_, index) =>
       anItem(`Item ${index + 30}`),
     );
-    await repository.createListItems(ALICE, list.listId, secondChunk, {
+    await repository.createListItems(ALICE, list.listId, accessFor(list), secondChunk, {
       now: NOW,
       afterItemId: firstChunkLast.itemId,
     });
-    const firstPage = await repository.listItems(ALICE, list.listId);
+    const firstPage = await repository.listItems(ALICE, list.listId, accessFor(list));
     expect(firstPage?.items).toHaveLength(50);
     expect(firstPage?.nextCursor).toBeDefined();
-    await repository.createListItem(ALICE, list.listId, anItem('Version changer'), {
-      now: LATER,
-    });
+    await repository.createListItem(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      anItem('Version changer'),
+      {
+        now: LATER,
+      },
+    );
 
     const send = vi.spyOn(ddbModule.ddb, 'send');
     await expect(
-      repository.listItems(ALICE, list.listId, firstPage?.nextCursor),
+      repository.listItems(ALICE, list.listId, accessFor(list), firstPage?.nextCursor),
     ).rejects.toBeInstanceOf(repository.ListReadFenceError);
     expect(
       send.mock.calls.filter(([command]) => command instanceof QueryCommand),

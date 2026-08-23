@@ -452,17 +452,22 @@ data. See P3-03.
   triggers an explicit bounded repair before the requested move; normal drag never rewrites
   unrelated ListItems.
 - Every list-scoped repository method takes the caller's `userId`, preserving the
-  tenant-scoped call shape, and the service calls the single role-aware
-  `assertListAccess(userId, listId, level)` helper before touching the `LIST#` partition.
-  That helper performs one exact `USER#<u>` / `LIST#<l>` pointer read through the repository;
-  a `LIST#<l>` partition is not scoped by user, so the pointer **is** the access check. This
-  follows `security-privacy.md` §1 row 4a and keeps repositories responsible for storage
-  while services decide authorisation, rather than enforcing the same policy twice.
+  tenant-scoped call shape, and requires the repository-issued, opaque result of the exact
+  caller-pointer read before touching the `LIST#` partition. The service calls the single
+  role-aware `assertListAccess(userId, listId, level)` helper, which obtains and returns that
+  grant from one exact `USER#<u>` / `LIST#<l>` read; a missing pointer is `not_found`, while
+  the pointer's role is the service's member-versus-owner decision. This follows
+  `security-privacy.md` §1 row 4a: repositories enforce possession of the storage grant so
+  their public methods cannot bypass the pointer, while role policy is decided only once in
+  the service.
 - Deleting a list deletes the `META` row and every item, locator, pointer, Undo, rank-repair
   and behaviour-migration row, then leaves
   `LIST#<listId>` / `TOMBSTONE` for the Phase 2.6 automatic-replay window. Deleting an item
   removes its locator and leaves `ITEM_TOMBSTONE#<itemId>` in the List partition for the same
-  window. A normal create always condition-checks that tombstone. Only P3-10's restore service
+  window. The list tombstone is also the cascade's deletion gate: item reads check it in both
+  halves of their strong fence, and every list-partition mutation condition-checks its absence,
+  so a concurrent write cannot escape the cascade snapshot. A normal create always
+  condition-checks the item tombstone. Only P3-10's restore service
   may reclaim the same id, and only when its opaque token resolves to the matching retained,
   unused `UNDO#` operation; it removes the tombstone as it restores the item and locator. In this
   phase there is exactly one list index pointer.

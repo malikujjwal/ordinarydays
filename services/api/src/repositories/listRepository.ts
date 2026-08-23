@@ -20,6 +20,7 @@ import type {
 } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
+import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import {
   batchGetItems,
@@ -29,7 +30,6 @@ import {
   query,
   queryAll,
   queryCount,
-  updateItem,
 } from './base.js';
 import {
   decodeCursor,
@@ -65,9 +65,9 @@ import { TransactionBuilder, transactWrite } from './tx.js';
  * inside a mutation. The exported generators sit beside those writes for callers that need
  * server-minted identities, matching `activityRepository.ts`.
  *
- * Every list-scoped method keeps `userId` first. The repository uses it only where the key is
- * user-scoped (pointer access, list enumeration and the current Phase-3 delete); policy is
- * enforced once in `services/authz.ts`, not repeated here.
+ * Every list-scoped method keeps `userId` first and requires the opaque result of the exact
+ * caller-pointer read. Role policy is still enforced once in `services/authz.ts`; the grant
+ * only prevents a caller from bypassing that pointer read before reaching canonical storage.
  */
 
 const nextListUlid = monotonicFactory();
@@ -109,6 +109,15 @@ const GATE_NAMES = {
 const GATES_ABSENT =
   'attribute_not_exists(#rankRepairId) AND attribute_not_exists(#behaviourMigrationId)';
 
+function listDeletionGate(listId: string) {
+  return {
+    ConditionCheck: {
+      Key: listTombstone(listId),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    },
+  };
+}
+
 const locatorSchema = z.object({
   listId: z.string(),
   itemId: z.string(),
@@ -126,6 +135,31 @@ const itemTombstoneSchema = z.object({
 type Locator = z.infer<typeof locatorSchema>;
 type ItemTombstone = z.infer<typeof itemTombstoneSchema>;
 
+const LIST_ACCESS_GRANT = Symbol('ListAccessGrant');
+const issuedListAccessGrants = new WeakSet<ListAccessGrant>();
+
+/** Opaque proof that the exact caller/list pointer existed when access was checked. */
+export interface ListAccessGrant extends ListIndex {
+  readonly [LIST_ACCESS_GRANT]: true;
+}
+
+class RepositoryListAccessGrant implements ListAccessGrant {
+  readonly [LIST_ACCESS_GRANT] = true;
+  readonly listId: string;
+  readonly userId: ListIndex['userId'];
+  readonly role: ListIndex['role'];
+  readonly addedAt: string;
+
+  constructor(index: ListIndex) {
+    this.listId = index.listId;
+    this.userId = index.userId;
+    this.role = index.role;
+    this.addedAt = index.addedAt;
+    issuedListAccessGrants.add(this);
+    Object.freeze(this);
+  }
+}
+
 /** A client-minted list id collided with a live row or retained tombstone. */
 export class ListIdUnavailableError extends Error {
   constructor() {
@@ -139,6 +173,14 @@ export class ListItemIdUnavailableError extends Error {
   constructor() {
     super('That id is not available.');
     this.name = 'ListItemIdUnavailableError';
+  }
+}
+
+/** A list is absent, inaccessible to this caller, or already being deleted. */
+export class ListNotFoundError extends AppError {
+  constructor() {
+    super('not_found', 'List not found.');
+    this.name = 'ListNotFoundError';
   }
 }
 
@@ -220,14 +262,37 @@ function parseListItemActivityLink(value: unknown): ListItemActivityLink {
   return listItemActivityLinkSchema.parse(value) as ListItemActivityLink;
 }
 
+function assertListAccessGrant(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+): void {
+  if (
+    !issuedListAccessGrants.has(access) ||
+    access.userId !== userId ||
+    access.listId !== listId
+  ) {
+    throw new ListNotFoundError();
+  }
+}
+
+async function getLiveListMetaStrong(listId: string): Promise<List | undefined> {
+  const row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
+  if (row === undefined) return undefined;
+  const deleting = await getItem<StoredItem>(listTombstone(listId), {
+    consistentRead: true,
+  });
+  return deleting === undefined ? parseList(row) : undefined;
+}
+
 function assertFenceOpen(list: List): void {
   if (list.rankRepairId !== undefined || list.behaviourMigrationId !== undefined) {
     throw new ListReadFenceError();
   }
 }
 
-function assertSameFence(before: List, after: List | undefined): void {
-  if (after === undefined || after.rankVersion !== before.rankVersion) {
+function assertSameFence(before: List, after: List): void {
+  if (after.rankVersion !== before.rankVersion) {
     throw new ListReadFenceError();
   }
   assertFenceOpen(after);
@@ -317,20 +382,23 @@ export async function createList(
 export async function getListPointer(
   userId: string,
   listId: string,
-): Promise<ListIndex | undefined> {
+): Promise<ListAccessGrant | undefined> {
   const row = await getItem<StoredItem>(listPointer(userId, listId), {
     consistentRead: true,
   });
-  return row === undefined ? undefined : parseListIndex(row);
+  return row === undefined
+    ? undefined
+    : new RepositoryListAccessGrant(parseListIndex(row));
 }
 
 /** Canonical META read for list-level services. Fence readers use the same strong form. */
 export async function getListMeta(
-  _userId: string,
+  userId: string,
   listId: string,
+  access: ListAccessGrant,
 ): Promise<List | undefined> {
-  const row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
-  return row === undefined ? undefined : parseList(row);
+  assertListAccessGrant(userId, listId, access);
+  return getLiveListMetaStrong(listId);
 }
 
 export interface UserListEntry {
@@ -355,19 +423,29 @@ export async function listListsForUser(
   );
   const pointers = pointerPage.items.map(parseListIndex);
   const rows = await batchGetItems<StoredItem>(
-    pointers.map((pointer) => listMeta(pointer.listId)),
+    pointers.flatMap((pointer) => [
+      listMeta(pointer.listId),
+      listTombstone(pointer.listId),
+    ]),
   );
   const lists = new Map(
-    rows.map((row) => {
-      const list = parseList(row);
-      return [list.listId, list] as const;
-    }),
+    rows
+      .filter((row) => row.entity === ENTITY.list)
+      .map((row) => {
+        const list = parseList(row);
+        return [list.listId, list] as const;
+      }),
+  );
+  const deleting = new Set(
+    rows
+      .filter((row) => row.entity === ENTITY.tombstone)
+      .map((row) => String(row.listId)),
   );
 
   return {
     items: pointers.flatMap((index) => {
       const list = lists.get(index.listId);
-      return list === undefined ? [] : [{ list, index }];
+      return list === undefined || deleting.has(index.listId) ? [] : [{ list, index }];
     }),
     ...(pointerPage.nextCursor === undefined
       ? {}
@@ -399,9 +477,11 @@ export interface ListItemPage {
 export async function listItems(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   cursor?: string,
 ): Promise<ListItemPage | undefined> {
-  const before = await getListMeta(userId, listId);
+  assertListAccessGrant(userId, listId, access);
+  const before = await getLiveListMetaStrong(listId);
   if (before === undefined) return undefined;
   assertFenceOpen(before);
 
@@ -425,7 +505,8 @@ export async function listItems(
   );
   const items = page.items.map(parseListItem).sort(compareListItems);
 
-  const after = await getListMeta(userId, listId);
+  const after = await getLiveListMetaStrong(listId);
+  if (after === undefined) return undefined;
   assertSameFence(before, after);
 
   const lastEvaluatedKey = decodeCursor(page.nextCursor, TABLE_KEY);
@@ -442,8 +523,13 @@ export async function listItems(
 export async function batchGetViewerLinks(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   itemIds: readonly string[],
 ): Promise<ListItemActivityLink[]> {
+  assertListAccessGrant(userId, listId, access);
+  const before = await getLiveListMetaStrong(listId);
+  if (before === undefined) throw new ListNotFoundError();
+  assertFenceOpen(before);
   const uniqueIds = [...new Set(itemIds)];
   const rows = await batchGetItems<StoredItem>(
     uniqueIds.map((itemId) => listItemActivityLink(listId, userId, itemId)),
@@ -454,10 +540,14 @@ export async function batchGetViewerLinks(
       return [link.itemId, link] as const;
     }),
   );
-  return uniqueIds.flatMap((itemId) => {
+  const links = uniqueIds.flatMap((itemId) => {
     const link = byItemId.get(itemId);
     return link === undefined ? [] : [link];
   });
+  const after = await getLiveListMetaStrong(listId);
+  if (after === undefined) throw new ListNotFoundError();
+  assertSameFence(before, after);
+  return links;
 }
 
 interface ResolvedItem {
@@ -494,14 +584,17 @@ async function resolveItemStrong(
 export async function getListItem(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   itemId: string,
 ): Promise<ListItem | undefined> {
-  const before = await getListMeta(userId, listId);
+  assertListAccessGrant(userId, listId, access);
+  const before = await getLiveListMetaStrong(listId);
   if (before === undefined) return undefined;
   assertFenceOpen(before);
 
   const resolved = await resolveItemStrong(listId, itemId);
-  const after = await getListMeta(userId, listId);
+  const after = await getLiveListMetaStrong(listId);
+  if (after === undefined) return undefined;
   assertSameFence(before, after);
   return resolved?.item;
 }
@@ -515,12 +608,14 @@ export interface ListMetaPatch {
 
 /** One conditional META Update; renaming therefore writes exactly one item. */
 export async function patchListMeta(
-  _userId: string,
+  userId: string,
   listId: string,
+  access: ListAccessGrant,
   patch: ListMetaPatch,
   expectedUpdatedAt: string,
   updatedAt: string,
-): Promise<List> {
+): Promise<List | undefined> {
+  assertListAccessGrant(userId, listId, access);
   const names: Record<string, string> = {
     '#updatedAt': 'updatedAt',
     ...GATE_NAMES,
@@ -538,14 +633,30 @@ export async function patchListMeta(
     sets.push(`#${field} = :${field}`);
   }
 
-  const row = await updateItem<StoredItem>(listMeta(listId), {
-    expression: `SET ${sets.join(', ')}`,
-    names,
-    values,
-    condition: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
-  });
-  if (row === undefined) throw new Error('List META update returned no item.');
-  return parseList(row);
+  await transactWrite(
+    [
+      {
+        ConditionCheck: {
+          Key: listTombstone(listId),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+      {
+        Update: {
+          Key: listMeta(listId),
+          UpdateExpression: `SET ${sets.join(', ')}`,
+          ExpressionAttributeNames: names,
+          ExpressionAttributeValues: values,
+          ConditionExpression: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
+        },
+      },
+    ],
+    {
+      operation: 'patchListMeta',
+      onConditionFailed: (index) => (index === 0 ? new ListNotFoundError() : undefined),
+    },
+  );
+  return getLiveListMetaStrong(listId);
 }
 
 export type NewListItem = Omit<ListItem, 'listId' | 'rank' | 'itemRevision'>;
@@ -565,10 +676,12 @@ interface MutationState {
 async function readMutationState(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   itemId?: string,
 ): Promise<MutationState> {
-  const list = await getListMeta(userId, listId);
-  if (list === undefined) throw new ListItemNotFoundError();
+  assertListAccessGrant(userId, listId, access);
+  const list = await getLiveListMetaStrong(listId);
+  if (list === undefined) throw new ListNotFoundError();
   assertFenceOpen(list);
   if (itemId === undefined) return { list };
   const resolved = await resolveItemStrong(listId, itemId);
@@ -719,10 +832,11 @@ function storedLocator(item: ListItem, now: string): StoredItem {
 export async function createListItem(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   item: NewListItem,
   options: CreateListItemsOptions,
 ): Promise<ListItem> {
-  const created = await createListItems(userId, listId, [item], options);
+  const created = await createListItems(userId, listId, access, [item], options);
   const first = created[0];
   if (first === undefined) throw new Error('Single list-item create produced no item.');
   return first;
@@ -732,13 +846,15 @@ export async function createListItem(
 export async function createListItems(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   items: readonly NewListItem[],
   options: CreateListItemsOptions,
 ): Promise<ListItem[]> {
+  assertListAccessGrant(userId, listId, access);
   if (items.length === 0) return [];
 
   return retryMutation(async () => {
-    const state = await readMutationState(userId, listId);
+    const state = await readMutationState(userId, listId, access);
     const neighbours = await readNeighbours(listId, options.afterItemId);
     const ranks = allocateRanks(neighbours, items.length);
     const created = items.map(
@@ -753,7 +869,8 @@ export async function createListItems(
     const builder = new TransactionBuilder(
       'createListItems',
       options.idempotencyReceipt === undefined ? 0 : 1,
-    );
+    ).add(listDeletionGate(listId));
+    const deletionGateIndex = 0;
     for (const item of created) {
       builder.add(
         {
@@ -807,6 +924,7 @@ export async function createListItems(
     await transactWrite(builder.build(), {
       operation: 'createListItems',
       onConditionFailed: (index) => {
+        if (index === deletionGateIndex) return new ListNotFoundError();
         if (index < metaIndex) return new ListItemIdUnavailableError();
         if (index === metaIndex) return new RetryableListMutationConflictError();
         return options.idempotencyReceipt !== undefined && index === receiptIndex
@@ -829,11 +947,12 @@ export interface ReorderListItemOptions {
 export async function reorderListItem(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   itemId: string,
   options: ReorderListItemOptions,
 ): Promise<ListItem> {
   return retryMutation(async () => {
-    const state = await readMutationState(userId, listId, itemId);
+    const state = await readMutationState(userId, listId, access, itemId);
     const current = state.resolved;
     if (current === undefined) throw new ListItemNotFoundError();
     const neighbours = await readNeighbours(listId, options.afterItemId, itemId);
@@ -853,6 +972,7 @@ export async function reorderListItem(
       'reorderListItem',
       options.idempotencyReceipt === undefined ? 0 : 1,
     ).add(
+      listDeletionGate(listId),
       {
         Delete: {
           Key: listItemKey(listId, current.item.rank, itemId),
@@ -912,10 +1032,12 @@ export async function reorderListItem(
     }
     await transactWrite(builder.build(), {
       operation: 'reorderListItem',
-      onConditionFailed: (index) =>
-        options.idempotencyReceipt !== undefined && index === receiptIndex
+      onConditionFailed: (index) => {
+        if (index === 0) return new ListNotFoundError();
+        return options.idempotencyReceipt !== undefined && index === receiptIndex
           ? new IdempotencyRaceError()
-          : new RetryableListMutationConflictError(),
+          : new RetryableListMutationConflictError();
+      },
     });
     return next;
   });
@@ -946,12 +1068,13 @@ function applyItemPatch(item: ListItem, patch: ListItemFieldPatch): ListItem {
 export async function patchListItemFields(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   itemId: string,
   patch: ListItemFieldPatch,
   now: string,
 ): Promise<ListItem> {
   return retryMutation(async () => {
-    const state = await readMutationState(userId, listId, itemId);
+    const state = await readMutationState(userId, listId, access, itemId);
     const current = state.resolved;
     if (current === undefined) throw new ListItemNotFoundError();
     const next = applyItemPatch(current.item, patch);
@@ -979,6 +1102,7 @@ export async function patchListItemFields(
     }
 
     const builder = new TransactionBuilder('patchListItemFields').add(
+      listDeletionGate(listId),
       {
         Update: {
           Key: listItemKey(listId, current.item.rank, itemId),
@@ -1037,7 +1161,8 @@ export async function patchListItemFields(
 
     await transactWrite(builder.build(), {
       operation: 'patchListItemFields',
-      onConditionFailed: () => new RetryableListMutationConflictError(),
+      onConditionFailed: (index) =>
+        index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
     });
     return next;
   });
@@ -1055,11 +1180,12 @@ export interface DeleteListItemOptions {
 export async function deleteListItem(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   itemId: string,
   options: DeleteListItemOptions,
 ): Promise<ListItem> {
   return retryMutation(async () => {
-    const state = await readMutationState(userId, listId, itemId);
+    const state = await readMutationState(userId, listId, access, itemId);
     const current = state.resolved;
     if (current === undefined) throw new ListItemNotFoundError();
     const ttl = ttlFor(options.now);
@@ -1067,6 +1193,7 @@ export async function deleteListItem(
       'deleteListItem',
       options.idempotencyReceipt === undefined ? 0 : 1,
     ).add(
+      listDeletionGate(listId),
       {
         Delete: {
           Key: listItemKey(listId, current.item.rank, itemId),
@@ -1144,10 +1271,12 @@ export async function deleteListItem(
     }
     await transactWrite(builder.build(), {
       operation: 'deleteListItem',
-      onConditionFailed: (index) =>
-        options.idempotencyReceipt !== undefined && index === receiptIndex
+      onConditionFailed: (index) => {
+        if (index === 0) return new ListNotFoundError();
+        return options.idempotencyReceipt !== undefined && index === receiptIndex
           ? new IdempotencyRaceError()
-          : new RetryableListMutationConflictError(),
+          : new RetryableListMutationConflictError();
+      },
     });
     return current.item;
   });
@@ -1163,11 +1292,12 @@ export interface RestoreListItemOptions {
 export async function restoreListItem(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   itemId: string,
   options: RestoreListItemOptions,
 ): Promise<ListItem> {
   return retryMutation(async () => {
-    const state = await readMutationState(userId, listId);
+    const state = await readMutationState(userId, listId, access);
     const tombstoneRow = await getItem<StoredItem>(listItemTombstone(listId, itemId), {
       consistentRead: true,
     });
@@ -1181,6 +1311,7 @@ export async function restoreListItem(
       'restoreListItem',
       options.idempotencyReceipt === undefined ? 0 : 1,
     ).add(
+      listDeletionGate(listId),
       {
         Put: {
           Item: storedListItem(item, options.now),
@@ -1249,7 +1380,8 @@ export async function restoreListItem(
     await transactWrite(builder.build(), {
       operation: 'restoreListItem',
       onConditionFailed: (index) => {
-        if (index === 4) return new RetryableListMutationConflictError();
+        if (index === 0) return new ListNotFoundError();
+        if (index === 5) return new RetryableListMutationConflictError();
         if (options.idempotencyReceipt !== undefined && index === receiptIndex) {
           return new IdempotencyRaceError();
         }
@@ -1273,8 +1405,10 @@ export interface DeleteListOptions {
 export async function deleteList(
   userId: string,
   listId: string,
+  access: ListAccessGrant,
   options: DeleteListOptions,
 ): Promise<void> {
+  assertListAccessGrant(userId, listId, access);
   const initial = new TransactionBuilder('beginDeleteList').add(
     {
       ConditionCheck: {
@@ -1298,6 +1432,9 @@ export async function deleteList(
           deletedAt: options.now,
           ttl: ttlFor(options.now),
         }),
+        ConditionExpression: 'attribute_not_exists(pk) OR #ownerId = :ownerId',
+        ExpressionAttributeNames: { '#ownerId': 'ownerId' },
+        ExpressionAttributeValues: { ':ownerId': userId },
       },
     },
     ...(options.sourceActivityId === undefined
