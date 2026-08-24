@@ -451,19 +451,30 @@ data. See P3-03.
   legacy equal-rank run
   triggers an explicit bounded repair before the requested move; normal drag never rewrites
   unrelated ListItems.
-- Every list-scoped repository method takes the caller's `userId` and asserts a `USER#<u>` /
-  `LIST#<l>` pointer exists before touching the `LIST#` partition. A `LIST#<l>` partition is
-  not scoped by user, so the pointer **is** the access check. Phase 6 turns that check into
-  the role-aware middleware (P6-32); this phase writes it once, in the repository, so the
-  shape is already right.
+- Every list-scoped repository method takes the caller's `userId`, preserving the
+  tenant-scoped call shape, and requires the repository-issued, opaque result of the exact
+  caller-pointer read before touching the `LIST#` partition. The service calls the single
+  role-aware `assertListAccess(userId, listId, level)` helper, which obtains and returns that
+  grant from one exact `USER#<u>` / `LIST#<l>` read; a missing pointer is `not_found`, while
+  the pointer's role is the service's member-versus-owner decision. This follows
+  `security-privacy.md` §1 row 4a: repositories enforce possession of the storage grant so
+  their public methods cannot bypass the pointer, while role policy is decided only once in
+  the service.
 - Deleting a list deletes the `META` row and every item, locator, pointer, Undo, rank-repair
   and behaviour-migration row, then leaves
   `LIST#<listId>` / `TOMBSTONE` for the Phase 2.6 automatic-replay window. Deleting an item
   removes its locator and leaves `ITEM_TOMBSTONE#<itemId>` in the List partition for the same
-  window. A normal create always condition-checks that tombstone. Only P3-10's restore service
+  window. The list tombstone is also the cascade's deletion gate: item reads check it in both
+  halves of their strong fence, and every list-partition mutation condition-checks its absence,
+  so a concurrent write cannot escape the cascade snapshot. A normal create always
+  condition-checks the item tombstone. Only P3-10's restore service
   may reclaim the same id, and only when its opaque token resolves to the matching retained,
-  unused `UNDO#` operation; it removes the tombstone as it restores the item and locator. In this
-  phase there is exactly one list index pointer.
+  unused `UNDO#` operation; it removes the tombstone as it restores the item and locator. The
+  retained item snapshot also includes the bounded owner/active-member `LNK#` rows and matching
+  Activity `listId` / `listItemId` back-pointers. Delete clears those relationships in the item
+  transaction, and restore recreates only relationships whose viewer still has list access and
+  whose Activity still exists and has not been repointed. In this phase there is exactly one
+  list index pointer.
 
 **Tests.** Integration on DynamoDB Local: create a list, add ten items, reorder the last to
 the front, assert the paged item query returns them in the new order and `itemCount` is still 10; a
@@ -475,7 +486,9 @@ renaming a list writes **exactly one item**, asserted by a repository spy; the L
 issues exactly one `Query` and one `BatchGetItem` for 40 lists, asserted by a spy; a
 `LIST#<l>` read by a user with no pointer returns `not_found`, not the list. A normal create
 cannot reuse a tombstoned item id, while a matching retained Undo can restore that exact id;
-a retention-expired, mismatched or already-used token cannot.
+a retention-expired, mismatched or already-used token cannot. Item delete snapshots and clears
+current viewer links and matching Activity provenance; restore omits a relationship when its
+Activity was independently deleted.
 
 ---
 

@@ -28,6 +28,12 @@ const MAX_CURSOR_LENGTH = 2048;
 /** A DynamoDB key: string attributes only, which is every key in this table. */
 export type PageKey = Record<string, string>;
 
+/** A list-item page position bound to the META rank generation that minted it. */
+export interface FencedCursor {
+  readonly lastEvaluatedKey: PageKey;
+  readonly rankVersion: number;
+}
+
 const toBase64Url = (value: string) =>
   Buffer.from(value, 'utf8')
     .toString('base64')
@@ -50,6 +56,15 @@ export function encodeCursor(lastEvaluatedKey: PageKey | undefined): string | un
   return toBase64Url(JSON.stringify(lastEvaluatedKey));
 }
 
+/** Encodes a list-item cursor together with the rank fence that issued it. */
+export function encodeFencedCursor(
+  lastEvaluatedKey: PageKey | undefined,
+  rankVersion: number,
+): string | undefined {
+  if (lastEvaluatedKey === undefined) return undefined;
+  return toBase64Url(JSON.stringify({ lastEvaluatedKey, rankVersion }));
+}
+
 /**
  * Decodes a client-supplied cursor, or `undefined` when none was supplied.
  *
@@ -61,18 +76,64 @@ export function decodeCursor(
   raw: string | undefined,
   expectedAttributes: readonly string[],
 ): PageKey | undefined {
+  const parsed = parseCursor(raw);
+  return parsed === undefined ? undefined : validatePageKey(parsed, expectedAttributes);
+}
+
+/** Decodes and validates a rank-version-bound list-item cursor. */
+export function decodeFencedCursor(
+  raw: string | undefined,
+  expectedAttributes: readonly string[],
+): FencedCursor | undefined {
+  const parsed = parseCursor(raw);
+  if (parsed === undefined) return undefined;
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw malformed();
+  }
+
+  const entries = Object.entries(parsed);
+  const actual = entries.map(([key]) => key).sort();
+  if (
+    actual.length !== 2 ||
+    actual[0] !== 'lastEvaluatedKey' ||
+    actual[1] !== 'rankVersion'
+  ) {
+    throw malformed();
+  }
+
+  const rankVersion = Reflect.get(parsed, 'rankVersion');
+  const lastEvaluatedKey = Reflect.get(parsed, 'lastEvaluatedKey');
+  if (
+    typeof rankVersion !== 'number' ||
+    !Number.isSafeInteger(rankVersion) ||
+    rankVersion < 0
+  ) {
+    throw malformed();
+  }
+
+  return {
+    lastEvaluatedKey: validatePageKey(lastEvaluatedKey, expectedAttributes),
+    rankVersion,
+  };
+}
+
+function parseCursor(raw: string | undefined): unknown | undefined {
   if (raw === undefined || raw === '') return undefined;
 
   // Bounded before decoding, so a hostile value cannot force an expensive parse.
   if (raw.length > MAX_CURSOR_LENGTH) throw malformed();
 
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(fromBase64Url(raw));
+    return JSON.parse(fromBase64Url(raw));
   } catch {
     throw malformed();
   }
+}
 
+function validatePageKey(
+  parsed: unknown,
+  expectedAttributes: readonly string[],
+): PageKey {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw malformed();
   }

@@ -1,6 +1,10 @@
 import type { Activity } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { assertActivityAccess, assertActivityReadAccessFromPartition } from './authz.js';
+import {
+  assertActivityAccess,
+  assertActivityReadAccessFromPartition,
+  assertListAccess,
+} from './authz.js';
 
 /**
  * `assertActivityAccess` (P1-10 rule 2), with the repository mocked.
@@ -19,7 +23,12 @@ vi.mock('../repositories/activityRepository.js', () => ({
   listParticipants: vi.fn(() => Promise.resolve([])),
 }));
 
+vi.mock('../repositories/listRepository.js', () => ({
+  getListPointer: vi.fn(),
+}));
+
 const repository = await import('../repositories/activityRepository.js');
+const listRepository = await import('../repositories/listRepository.js');
 
 const OWNER = 'usr_owner';
 const PARTICIPANT = 'usr_participant';
@@ -71,6 +80,61 @@ beforeEach(() => {
   vi.mocked(repository.getActivityPartitionStrong).mockReset();
   vi.mocked(repository.listParticipants).mockReset();
   vi.mocked(repository.listParticipants).mockResolvedValue([]);
+  vi.mocked(listRepository.getListPointer).mockReset();
+});
+
+describe('list access', () => {
+  it.each(['read', 'write', 'owner'] as const)(
+    'grants an owner %s access',
+    async (level) => {
+      vi.mocked(listRepository.getListPointer).mockResolvedValue({
+        listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+        userId: OWNER,
+        role: 'owner',
+        addedAt: '2026-08-09T00:00:00.000Z',
+      } as never);
+
+      await expect(assertListAccess(OWNER, 'lst_1', level)).resolves.toMatchObject({
+        isOwner: true,
+      });
+    },
+  );
+
+  it.each(['read', 'write'] as const)('grants a member %s access', async (level) => {
+    vi.mocked(listRepository.getListPointer).mockResolvedValue({
+      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+      userId: PARTICIPANT,
+      role: 'member',
+      addedAt: '2026-08-09T00:00:00.000Z',
+    } as never);
+
+    await expect(assertListAccess(PARTICIPANT, 'lst_1', level)).resolves.toMatchObject({
+      isOwner: false,
+    });
+  });
+
+  it('returns forbidden when a known member requests owner access', async () => {
+    vi.mocked(listRepository.getListPointer).mockResolvedValue({
+      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+      userId: PARTICIPANT,
+      role: 'member',
+      addedAt: '2026-08-09T00:00:00.000Z',
+    } as never);
+
+    await expect(assertListAccess(PARTICIPANT, 'lst_1', 'owner')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+  });
+
+  it('returns not_found for an absent pointer without reading List META', async () => {
+    vi.mocked(listRepository.getListPointer).mockResolvedValue(undefined);
+
+    await expect(assertListAccess(STRANGER, 'lst_1', 'read')).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'List not found.',
+    });
+    expect(listRepository.getListPointer).toHaveBeenCalledWith(STRANGER, 'lst_1');
+  });
 });
 
 describe('an authoritative partition read', () => {

@@ -6,6 +6,7 @@ import {
   getActivityPartitionStrong,
   listParticipants,
 } from '../repositories/activityRepository.js';
+import { getListPointer, type ListAccessGrant } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 
 /**
@@ -53,13 +54,40 @@ export interface ActivityAccess {
   readonly viaParent: boolean;
 }
 
+/** What a successful pointer-based List check resolved. */
+export interface ListAccess {
+  readonly index: ListAccessGrant;
+  readonly isOwner: boolean;
+}
+
 const NOT_FOUND = 'Activity not found.';
+const LIST_NOT_FOUND = 'List not found.';
 
 /**
  * `403`, and the only place one is produced for an activity. The caller can already see this
  * activity, so naming the limit is not a disclosure — it is the answer to their question.
  */
 const OWNER_ONLY = 'Only the person who created this can change it.';
+const LIST_OWNER_ONLY = 'Only the list owner can make this change.';
+
+/**
+ * The single List access check (`security-privacy.md` row 4a).
+ *
+ * The exact caller/list pointer built by `keys.ts` is the grant. A missing pointer is always 404;
+ * an existing member asking for an owner-only action gets 403 because existence is already
+ * known to them. MEMBER and LLINK rows are never consulted.
+ */
+export async function assertListAccess(
+  userId: string,
+  listId: string,
+  level: AccessLevel,
+): Promise<ListAccess> {
+  const index = await getListPointer(userId, listId);
+  if (index === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+  if (index.role === 'owner') return { index, isOwner: true };
+  if (level === 'owner') throw new AppError('forbidden', LIST_OWNER_ONLY);
+  return { index, isOwner: false };
+}
 
 /**
  * Whether a stored `PART#` row belongs to this user.

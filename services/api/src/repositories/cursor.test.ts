@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../lib/errors.js';
-import { decodeCursor, encodeCursor } from './cursor.js';
+import {
+  decodeCursor,
+  decodeFencedCursor,
+  encodeCursor,
+  encodeFencedCursor,
+} from './cursor.js';
 
 const TABLE_KEY = ['pk', 'sk'] as const;
 const INDEX_KEY = ['pk', 'sk', 'gsi1pk', 'gsi1sk'] as const;
@@ -29,6 +34,20 @@ describe('round trip', () => {
   it('decodes an absent cursor as the first page', () => {
     expect(decodeCursor(undefined, TABLE_KEY)).toBeUndefined();
     expect(decodeCursor('', TABLE_KEY)).toBeUndefined();
+  });
+
+  it('binds a list-item cursor to its rank version', () => {
+    const cursor = encodeFencedCursor(lastKey, 12);
+
+    expect(decodeFencedCursor(cursor, TABLE_KEY)).toEqual({
+      lastEvaluatedKey: lastKey,
+      rankVersion: 12,
+    });
+  });
+
+  it('omits a fenced cursor when there is no next page', () => {
+    expect(encodeFencedCursor(undefined, 12)).toBeUndefined();
+    expect(decodeFencedCursor(undefined, TABLE_KEY)).toBeUndefined();
   });
 
   /** Opaque by contract: base64url, so it survives a query string without escaping. */
@@ -94,6 +113,30 @@ describe('a tampered cursor is rejected, never passed through', () => {
 
   it('rejects a table cursor replayed against a GSI1 query', () => {
     expect(() => decodeCursor(encodeCursor(lastKey), INDEX_KEY)).toThrow(AppError);
+  });
+
+  it.each([
+    ['an ordinary cursor', encodeCursor(lastKey)],
+    [
+      'a negative rank version',
+      Buffer.from(
+        JSON.stringify({ lastEvaluatedKey: lastKey, rankVersion: -1 }),
+      ).toString('base64url'),
+    ],
+    [
+      'an unexpected outer attribute',
+      Buffer.from(
+        JSON.stringify({ lastEvaluatedKey: lastKey, rankVersion: 1, extra: true }),
+      ).toString('base64url'),
+    ],
+    [
+      'a malformed nested key',
+      Buffer.from(
+        JSON.stringify({ lastEvaluatedKey: { pk: lastKey.pk }, rankVersion: 1 }),
+      ).toString('base64url'),
+    ],
+  ])('rejects fenced cursor with %s', (_why, raw) => {
+    expect(() => decodeFencedCursor(raw, TABLE_KEY)).toThrow(AppError);
   });
 
   /**

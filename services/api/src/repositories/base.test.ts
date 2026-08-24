@@ -218,6 +218,18 @@ describe('batchGetItems', () => {
     expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(3);
   });
 
+  it('can request strongly consistent batches', async () => {
+    ddbMock.on(BatchGetCommand).resolves({ Responses: { 'od-main-local': [] } });
+
+    await batchGetItems(keysFor(1), { consistentRead: true });
+
+    expect(
+      ddbMock.commandCalls(BatchGetCommand)[0]?.args[0].input.RequestItems?.[
+        'od-main-local'
+      ]?.ConsistentRead,
+    ).toBe(true);
+  });
+
   it('retries only unprocessed keys', async () => {
     const key = { pk: 'ACT#act_1', sk: 'OCC#0' };
     ddbMock
@@ -282,6 +294,16 @@ describe('get, put, update and delete', () => {
   it('returns undefined rather than an empty object for a missing item', async () => {
     ddbMock.on(GetCommand).resolves({});
     expect(await getItem(userProfile(ALICE))).toBeUndefined();
+  });
+
+  it('requests strong consistency only when the caller asks for it', async () => {
+    ddbMock.on(GetCommand).resolves({ Item: { pk: 'x', sk: 'y', schemaVersion: 1 } });
+
+    await getItem(userProfile(ALICE), { consistentRead: true });
+
+    expect(ddbMock.commandCalls(GetCommand)[0]?.args[0]?.input).toMatchObject({
+      ConsistentRead: true,
+    });
   });
 
   it('puts without a condition by default', async () => {

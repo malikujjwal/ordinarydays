@@ -142,6 +142,28 @@ describe('§3.3 the list partition', () => {
       keys.listItem(LST, '0|hzzzzz', 'itm_1'),
       { pk: `LIST#${LST}`, sk: 'ITEM#0|hzzzzz#itm_1' },
     ],
+    [
+      'listItemLocator',
+      keys.listItemLocator(LST, 'itm_1'),
+      { pk: `LIST#${LST}`, sk: 'ITEMID#itm_1' },
+    ],
+    [
+      'listItemTombstone',
+      keys.listItemTombstone(LST, 'itm_1'),
+      { pk: `LIST#${LST}`, sk: 'ITEM_TOMBSTONE#itm_1' },
+    ],
+    ['listUndo', keys.listUndo(LST, 'op_1'), { pk: `LIST#${LST}`, sk: 'UNDO#op_1' }],
+    [
+      'listRankRepair',
+      keys.listRankRepair(LST, 'op_1'),
+      { pk: `LIST#${LST}`, sk: 'RANK_REPAIR#op_1' },
+    ],
+    [
+      'listBehaviourMigration',
+      keys.listBehaviourMigration(LST, 'op_1'),
+      { pk: `LIST#${LST}`, sk: 'BEHAVIOUR_MIGRATION#op_1' },
+    ],
+    ['listTombstone', keys.listTombstone(LST), { pk: `LIST#${LST}`, sk: 'TOMBSTONE' }],
   ])('%s', (_name, actual, expected) => {
     expect(actual).toEqual(expected);
   });
@@ -309,6 +331,18 @@ describe('sort-key prefixes match the keys they are meant to select', () => {
       keys.listPointerPrefix(USR),
       'LIST#',
       keys.listPointer(USR, LST).sk,
+    ],
+    [
+      'sourceListPrefix',
+      keys.sourceListPrefix(ACT),
+      'SOURCE_LIST#',
+      keys.sourceList(ACT, LST).sk,
+    ],
+    [
+      'listMemberPrefix',
+      keys.listMemberPrefix(LST),
+      'MEMBER#',
+      keys.listMember(LST, PSN).sk,
     ],
     ['personPrefix', keys.personPrefix(USR), 'PERSON#', keys.person(USR, PSN).sk],
     [
