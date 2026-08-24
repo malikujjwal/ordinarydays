@@ -260,9 +260,11 @@ registry.registerPath({
     'effective instants into `tz`, and returns the trimmed caller-specific rows Today and ' +
     'Plans render. The inclusive window is capped at 62 days. `include` accepts the distinct ' +
     'comma-separated tokens `anytime_unscheduled`, `overdue`, and `reminders`; reminder rows ' +
-    'are always scoped to the authenticated caller. Responses carry a strong `ETag` over ' +
-    '`data` only and `Cache-Control: private, max-age=60`; a matching `If-None-Match` returns ' +
-    '`304` with no body.',
+    'are always scoped to the authenticated caller. Responses carry a weak `ETag` — ' +
+    '`W/"…"` — over `data` only and `Cache-Control: private, max-age=60`; a matching ' +
+    '`If-None-Match` returns `304` with no body. The validator is weak because ' +
+    '`meta.requestId` differs on every response, so no tag over `data` can claim the ' +
+    'byte-identity a strong one asserts.',
   tags: ['agenda'],
   request: { query: agendaQuery },
   responses: {
@@ -1012,10 +1014,12 @@ registry.registerPath({
     'the style chooser renders. There is no filtering, no query parameter, no ranking and ' +
     'no title matcher — the user taps one record, and that tap is the only thing that sets ' +
     '`templateKey`. Static, so it performs no database read: `Cache-Control: public, ' +
-    'max-age=86400` and a strong `ETag` over the catalogue itself, which changes when a ' +
-    'shipped record is edited, added or reordered. A matching `If-None-Match` answers ' +
-    '`304`. The mobile creation sheet bundles a projection of this same shared module, so ' +
-    'first-launch offline creation never depends on this request.',
+    'max-age=86400` and a weak `ETag` — `W/"…"` — over the catalogue itself, which changes ' +
+    'when a shipped record is edited, added or reordered. It is weak rather than strong ' +
+    'because `meta.requestId` differs on every response even though the catalogue does ' +
+    'not. A matching `If-None-Match` answers `304`. The mobile creation sheet bundles a ' +
+    'projection of this same shared module, so first-launch offline creation never depends ' +
+    'on this request.',
   tags: ['lists'],
   responses: {
     200: {

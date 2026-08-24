@@ -72,7 +72,7 @@ describe('the catalogue payload', () => {
    */
   it('serves a fixture template appended to the catalogue with no branch anywhere', async () => {
     const { listTemplatesHandler } = await import('../handlers/listTemplates.js');
-    const { entityTag } = await import('../lib/etag.js');
+    const { weakEntityTag } = await import('../lib/etag.js');
     // A key the shipped catalogue does not use, so the fixture cannot collide with a real
     // record and quietly assert nothing.
     const fixture = {
@@ -89,7 +89,7 @@ describe('the catalogue payload', () => {
     const extended = [...LIST_TEMPLATES, fixture];
 
     const app = createApp();
-    app.get('/probe', (c) => listTemplatesHandler(c, extended, entityTag(extended)));
+    app.get('/probe', (c) => listTemplatesHandler(c, extended, weakEntityTag(extended)));
     const body = await (await app.fetch(new Request('http://localhost/probe'))).json();
 
     expect(body.data).toHaveLength(LIST_TEMPLATES.length + 1);
@@ -98,11 +98,34 @@ describe('the catalogue payload', () => {
 });
 
 describe('caching', () => {
-  it('sets a public 24-hour cache policy and a strong ETag', async () => {
+  it('sets a public 24-hour cache policy and a weak ETag', async () => {
     const res = await get(createApp());
 
     expect(res.headers.get('Cache-Control')).toBe('public, max-age=86400');
-    expect(res.headers.get('ETag')).toMatch(/^"[A-Za-z0-9_-]{43}"$/);
+    expect(res.headers.get('ETag')).toMatch(/^W\/"[A-Za-z0-9_-]{43}"$/);
+  });
+
+  /**
+   * **Why the validator must be weak** (P3-06 review). The catalogue never changes between
+   * these two responses, but `meta.requestId` does — so the bodies differ byte for byte
+   * while sharing a tag. A strong validator would assert they are identical, and a cache
+   * could then serve request A's body as request B's response (RFC 9110 §8.8.1).
+   */
+  it('serves byte-different bodies under one tag, which is why it is not strong', async () => {
+    const first = await get(createApp(), { 'X-Request-Id': 'req_first' });
+    const second = await get(createApp(), { 'X-Request-Id': 'req_second' });
+
+    const firstBody = await first.text();
+    const secondBody = await second.text();
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(firstBody).not.toBe(secondBody);
+    expect(JSON.parse(firstBody).meta.requestId).toBe('req_first');
+    expect(JSON.parse(secondBody).meta.requestId).toBe('req_second');
+
+    expect(first.headers.get('ETag')).toBe(second.headers.get('ETag'));
+    expect(first.headers.get('ETag')).toMatch(/^W\//);
   });
 
   it('answers 304 with no body for a matching If-None-Match', async () => {
@@ -126,7 +149,7 @@ describe('caching', () => {
 
   /** A shipped change to the array must invalidate every cached copy. */
   it('produces a different tag for a mutated catalogue', async () => {
-    const { entityTag } = await import('../lib/etag.js');
+    const { weakEntityTag } = await import('../lib/etag.js');
     const current = String((await get(createApp())).headers.get('ETag'));
 
     const reordered = [...LIST_TEMPLATES].reverse();
@@ -134,9 +157,21 @@ describe('caching', () => {
       index === 0 ? { ...entry, chooserLabel: 'Renamed' } : entry,
     );
 
-    expect(entityTag(LIST_TEMPLATES)).toBe(current);
-    expect(entityTag(reordered)).not.toBe(current);
-    expect(entityTag(relabelled)).not.toBe(current);
+    expect(weakEntityTag(LIST_TEMPLATES)).toBe(current);
+    expect(weakEntityTag(reordered)).not.toBe(current);
+    expect(weakEntityTag(relabelled)).not.toBe(current);
+  });
+
+  /**
+   * A client still holding the strong tag issued before this fix must not be forced into a
+   * full refetch — the weak comparison function accepts either form.
+   */
+  it('honours a client echoing either the weak or the strong form', async () => {
+    const weak = String((await get(createApp())).headers.get('ETag'));
+    const strong = weak.replace(/^W\//, '');
+
+    expect((await get(createApp(), { 'If-None-Match': weak })).status).toBe(304);
+    expect((await get(createApp(), { 'If-None-Match': strong })).status).toBe(304);
   });
 });
 

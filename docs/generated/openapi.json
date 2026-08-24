@@ -4626,7 +4626,7 @@
     "/v1/agenda": {
       "get": {
         "summary": "The complete agenda for a caller-local date window",
-        "description": "Hydrates one-off and recurring activities, applies occurrence overrides, converts effective instants into `tz`, and returns the trimmed caller-specific rows Today and Plans render. The inclusive window is capped at 62 days. `include` accepts the distinct comma-separated tokens `anytime_unscheduled`, `overdue`, and `reminders`; reminder rows are always scoped to the authenticated caller. Responses carry a strong `ETag` over `data` only and `Cache-Control: private, max-age=60`; a matching `If-None-Match` returns `304` with no body.",
+        "description": "Hydrates one-off and recurring activities, applies occurrence overrides, converts effective instants into `tz`, and returns the trimmed caller-specific rows Today and Plans render. The inclusive window is capped at 62 days. `include` accepts the distinct comma-separated tokens `anytime_unscheduled`, `overdue`, and `reminders`; reminder rows are always scoped to the authenticated caller. Responses carry a weak `ETag` — `W/\"…\"` — over `data` only and `Cache-Control: private, max-age=60`; a matching `If-None-Match` returns `304` with no body. The validator is weak because `meta.requestId` differs on every response, so no tag over `data` can claim the byte-identity a strong one asserts.",
         "tags": [
           "agenda"
         ],
@@ -6671,7 +6671,7 @@
     "/v1/list-templates": {
       "get": {
         "summary": "The list template catalogue",
-        "description": "The exact shared catalogue, as data: every field of every record, in the fixed order the style chooser renders. There is no filtering, no query parameter, no ranking and no title matcher — the user taps one record, and that tap is the only thing that sets `templateKey`. Static, so it performs no database read: `Cache-Control: public, max-age=86400` and a strong `ETag` over the catalogue itself, which changes when a shipped record is edited, added or reordered. A matching `If-None-Match` answers `304`. The mobile creation sheet bundles a projection of this same shared module, so first-launch offline creation never depends on this request.",
+        "description": "The exact shared catalogue, as data: every field of every record, in the fixed order the style chooser renders. There is no filtering, no query parameter, no ranking and no title matcher — the user taps one record, and that tap is the only thing that sets `templateKey`. Static, so it performs no database read: `Cache-Control: public, max-age=86400` and a weak `ETag` — `W/\"…\"` — over the catalogue itself, which changes when a shipped record is edited, added or reordered. It is weak rather than strong because `meta.requestId` differs on every response even though the catalogue does not. A matching `If-None-Match` answers `304`. The mobile creation sheet bundles a projection of this same shared module, so first-launch offline creation never depends on this request.",
         "tags": [
           "lists"
         ],

@@ -2,7 +2,7 @@ import { LIST_TEMPLATES } from '@od/shared/lists';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { LIST_TEMPLATES_PATH, listTemplatesHandler } from '../handlers/listTemplates.js';
-import { entityTag } from '../lib/etag.js';
+import { weakEntityTag } from '../lib/etag.js';
 
 /**
  * `/v1/list-templates` (`api-contract.md` §2.7, P3-06).
@@ -26,8 +26,12 @@ import { entityTag } from '../lib/etag.js';
  * reuses it, and a release that edits, adds or reorders a record produces a different tag
  * that invalidates every cached copy. Hashing per request would burn CPU to reach the same
  * answer; hard-coding a version string would be a second thing to remember to bump.
+ *
+ * **Weak**, because the envelope's `meta.requestId` differs on every response even though
+ * the catalogue does not — so no tag over this payload can honestly claim byte-identity.
+ * See `lib/etag.ts` for the full reasoning.
  */
-const CATALOGUE_ETAG = entityTag(LIST_TEMPLATES);
+const CATALOGUE_ETAG = weakEntityTag(LIST_TEMPLATES);
 
 export const listTemplates = new Hono<AppEnv>().get(LIST_TEMPLATES_PATH, (c) =>
   listTemplatesHandler(c, LIST_TEMPLATES, CATALOGUE_ETAG),
