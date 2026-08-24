@@ -3947,6 +3947,467 @@
           "listId"
         ]
       },
+      "CreateListItemInput": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "location": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "lat": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              },
+              "lng": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              }
+            },
+            "required": [
+              "label"
+            ]
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "behaviour": {
+                    "type": "string",
+                    "enum": [
+                      "watch"
+                    ]
+                  },
+                  "mediaKind": {
+                    "type": "string",
+                    "enum": [
+                      "movie",
+                      "show"
+                    ]
+                  },
+                  "watchStatus": {
+                    "type": "string",
+                    "enum": [
+                      "want",
+                      "watching",
+                      "watched"
+                    ]
+                  },
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "behaviour",
+                  "watchStatus"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "behaviour": {
+                    "type": "string",
+                    "enum": [
+                      "meals"
+                    ]
+                  },
+                  "ingredients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "ingredientId": {
+                          "type": "string",
+                          "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "quantity": {
+                          "type": "string",
+                          "maxLength": 120
+                        }
+                      },
+                      "required": [
+                        "ingredientId",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 60
+                  }
+                },
+                "required": [
+                  "behaviour"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "afterItemId": {
+            "type": "string",
+            "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "BulkCreateListItemsInput": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "itemId": {
+                  "type": "string",
+                  "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "note": {
+                  "type": "string",
+                  "maxLength": 4000
+                },
+                "location": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "maxLength": 120
+                    },
+                    "address": {
+                      "type": "string",
+                      "maxLength": 300
+                    },
+                    "lat": {
+                      "type": "number",
+                      "minimum": -90,
+                      "maximum": 90
+                    },
+                    "lng": {
+                      "type": "number",
+                      "minimum": -180,
+                      "maximum": 180
+                    }
+                  },
+                  "required": [
+                    "label"
+                  ]
+                },
+                "details": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "behaviour": {
+                          "type": "string",
+                          "enum": [
+                            "watch"
+                          ]
+                        },
+                        "mediaKind": {
+                          "type": "string",
+                          "enum": [
+                            "movie",
+                            "show"
+                          ]
+                        },
+                        "watchStatus": {
+                          "type": "string",
+                          "enum": [
+                            "want",
+                            "watching",
+                            "watched"
+                          ]
+                        },
+                        "season": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 1000
+                        },
+                        "episode": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 10000
+                        }
+                      },
+                      "required": [
+                        "behaviour",
+                        "watchStatus"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "behaviour": {
+                          "type": "string",
+                          "enum": [
+                            "meals"
+                          ]
+                        },
+                        "ingredients": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "ingredientId": {
+                                "type": "string",
+                                "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              },
+                              "quantity": {
+                                "type": "string",
+                                "maxLength": 120
+                              }
+                            },
+                            "required": [
+                              "ingredientId",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 60
+                        }
+                      },
+                      "required": [
+                        "behaviour"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "afterItemId": {
+                  "type": "string",
+                  "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 500
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "PatchListItemInput": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "checked": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 4000
+          },
+          "location": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "lat": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              },
+              "lng": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              }
+            },
+            "required": [
+              "label"
+            ]
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "behaviour": {
+                    "type": "string",
+                    "enum": [
+                      "watch"
+                    ]
+                  },
+                  "mediaKind": {
+                    "type": "string",
+                    "enum": [
+                      "movie",
+                      "show"
+                    ]
+                  },
+                  "watchStatus": {
+                    "type": "string",
+                    "enum": [
+                      "want",
+                      "watching",
+                      "watched"
+                    ]
+                  },
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "behaviour",
+                  "watchStatus"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "behaviour": {
+                    "type": "string",
+                    "enum": [
+                      "meals"
+                    ]
+                  },
+                  "ingredients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "ingredientId": {
+                          "type": "string",
+                          "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "quantity": {
+                          "type": "string",
+                          "maxLength": 120
+                        }
+                      },
+                      "required": [
+                        "ingredientId",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 60
+                  }
+                },
+                "required": [
+                  "behaviour"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "afterItemId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReversibleItemMutation": {
+        "type": "object",
+        "properties": {
+          "affectedCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "undoToken": {
+            "type": "string",
+            "minLength": 1
+          },
+          "undoExpiresAt": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "affectedCount",
+          "undoToken",
+          "undoExpiresAt"
+        ]
+      },
       "ListTemplate": {
         "type": "object",
         "properties": {
@@ -6657,6 +7118,525 @@
           },
           "404": {
             "description": "No such list, none this caller can see — and the answer a repeated delete gets once the first has succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists/{id}/items": {
+      "get": {
+        "summary": "One page of a list’s items",
+        "description": "Pages 50 strongly consistent item rows at a time in `(rank, itemId)` order, each with the **caller’s own** `viewerLink` and nobody else’s. Strong META reads before and after the query must agree on `rankVersion` and find neither a rank-repair nor a behaviour-migration marker; a failed fence returns `503 internal` with `Retry-After: 1` and no rows, and the client restarts at page one. `meta.nextCursor` is bound to the rank generation that issued it, so a cursor minted before a repair is rejected rather than resumed across changed sort keys.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of items, each with the caller’s link when it has one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ListDetailItem"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list, or none this caller has a pointer to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Add one item to a list",
+        "description": "`afterItemId` places the item — the server converts it to a rank and the client never sends one. The body is strict, so `checked`, `rank`, `itemRevision`, `sourceActivityId` and `sourceLabel` are rejected rather than dropped: the first is server-gated and the rest are server-derived. `location` is accepted only on a `collection` whose `supportsLocation` capability is on, and `details` only when the behaviour has that shape and the discriminant matches. Beyond 500 items the answer is `400` with `List is full.` Optional `itemId` is the permanent client-minted `itm_` ULID, condition-checked against the item tombstone. Creating, so an `Idempotency-Key` is required.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateListItemInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ListItemView"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A full list, a field this list’s behaviour or capabilities do not allow, a mismatched `details.behaviour`, a malformed client id, or a missing `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list, or an `afterItemId` that names no item on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A client-minted `itemId` already in use or retained by a deletion tombstone. The message carries no metadata about the id’s fate.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists/{id}/items/bulk": {
+      "post": {
+        "summary": "Add many items in one ordered operation",
+        "description": "Ordinary item creation only: provenance and source-ingredient fields are rejected, because deriving them is the meal action’s alone. The batch is one ordered sequence from one position — the first member may carry `afterItemId`, a later one may not — allocated from a single rank generation and committed as one transaction when it fits, or as a resumable chunked series when it does not. Idempotent under the `Idempotency-Key`, and after that receipt expires under the stable per-item ids, so a replay of a partially committed batch completes it rather than duplicating it.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkCreateListItemsInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The items created by this call, in the order they were sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ListItemView"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A batch that would exceed 500 items, a member carrying a provenance or server-owned field, a position on a member other than the first, or a missing `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list, or none this caller has a pointer to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists/{id}/items/{itemId}": {
+      "get": {
+        "summary": "One item by its stable id",
+        "description": "The authoritative exact read durable creation reconciles a lost response against: `200` adopts the server row, `404` parks the intent for explicit Retry or Discard. It follows the identity locator under the same strong fence as a page, so a missing item and a tombstoned one are deliberately indistinguishable.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "itemId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ListItemView"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list or item, or a tombstoned id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Edit an item, or move it",
+        "description": "**No `If-Match`.** Item writes are per-field last-write-wins — optimistic concurrency on every checkbox in a grocery list would produce constant spurious `409`s — and the internal item revision is a retry fence rather than a client-visible conflict. `note` and `location` accept `null` to clear the field, which is a different intention from omitting it — and clearing is gated exactly as setting is, so a value retained behind a switched-off capability cannot be removed. `afterItemId` requests a reorder (`null` moves the item to the front) and **may arrive alongside ordinary fields**: they land in one transaction, because the reorder already re-puts the whole row at its new key. `checked` and `location` are subject to the same two-part behaviour and capability gates as creation.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "itemId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchListItemInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ListItemView"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field this list’s behaviour or capabilities do not allow, a mismatched `details.behaviour`, an empty patch, or a reorder mixed with a field edit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list or item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete an item, reversibly",
+        "description": "Removes the ranked row and its identity locator, and leaves a replay-window tombstone holding the exact deletion snapshot — the item, its rank, its current viewer links and the matching Activity provenance — under a single-use Undo operation. Answers `{ affectedCount, undoToken, undoExpiresAt }` rather than the deleted row, because a client must not send row contents back as authority. `undoExpiresAt` is the UI’s 6-second offer deadline, not the server’s replay deadline: an Undo the user has already accepted stays valid for the shared retention window, so an offline inverse cannot expire in transit. Restoring is `POST /v1/lists/{id}/undo`.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "itemId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The item is gone, and `data` carries the Undo offer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ReversibleItemMutation"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list or item — and the answer a repeated delete gets.",
             "content": {
               "application/json": {
                 "schema": {

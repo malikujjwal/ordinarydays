@@ -69,6 +69,7 @@ export type {
   Weekday,
 } from './recurrence.js';
 export type { Reminder } from './reminder.js';
+export type { ReversibleItemMutation } from './reversibleItemMutation.js';
 export type { ActivityScope } from './scope.js';
 export {
   activityScope,

@@ -33,13 +33,20 @@ import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
 import {
+  bulkCreateListItemsInput,
   createListInput,
+  createListItemInput,
   deletedList,
   listDetail,
+  listDetailItem,
   listDetailQuery,
+  listItemPageQuery,
+  listItemView,
   listListQuery,
   listTemplate,
   listView,
+  patchListItemInput,
+  reversibleItemMutation,
 } from './schemas/list.js';
 import { snoozeActivityInput, unsnoozeActivityInput } from './schemas/occurrence.js';
 import { deletedReminder, reminder, reminderInput } from './schemas/reminder.js';
@@ -74,11 +81,16 @@ const listPageResponse = envelope(z.array(listView));
 const listDetailResponse = envelope(listDetail);
 const deletedListResponse = envelope(deletedList);
 const listTemplateListResponse = envelope(z.array(listTemplate));
+const listItemResponse = envelope(listItemView);
+const listItemListResponse = envelope(z.array(listItemView));
+const listItemPageResponse = envelope(z.array(listDetailItem));
+const reversibleItemMutationResponse = envelope(reversibleItemMutation);
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
 const reminderId = ulidId('rem');
 const listId = ulidId('lst');
+const itemId = ulidId('itm');
 
 /**
  * The OpenAPI document, generated from the **same Zod schemas both sides import**
@@ -996,6 +1008,208 @@ registry.registerPath({
       description:
         'No such list, none this caller can see — and the answer a repeated delete gets ' +
         'once the first has succeeded.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * `/v1/lists/{id}/items` (P3-08). The registrations that bring `CreateListItemInput`,
+ * `PatchListItemInput`, `ListItemView` and `ReversibleItemMutation` into
+ * `components/schemas`.
+ */
+registry.registerPath({
+  method: 'get',
+  path: '/v1/lists/{id}/items',
+  summary: 'One page of a list’s items',
+  description:
+    'Pages 50 strongly consistent item rows at a time in `(rank, itemId)` order, each with ' +
+    'the **caller’s own** `viewerLink` and nobody else’s. Strong META reads before and ' +
+    'after the query must agree on `rankVersion` and find neither a rank-repair nor a ' +
+    'behaviour-migration marker; a failed fence returns `503 internal` with ' +
+    '`Retry-After: 1` and no rows, and the client restarts at page one. `meta.nextCursor` ' +
+    'is bound to the rank generation that issued it, so a cursor minted before a repair is ' +
+    'rejected rather than resumed across changed sort keys.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+    query: listItemPageQuery,
+  },
+  responses: {
+    200: {
+      description: 'One page of items, each with the caller’s link when it has one.',
+      content: { 'application/json': { schema: listItemPageResponse } },
+    },
+    404: {
+      description: 'No such list, or none this caller has a pointer to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/lists/{id}/items',
+  summary: 'Add one item to a list',
+  description:
+    '`afterItemId` places the item — the server converts it to a rank and the client never ' +
+    'sends one. The body is strict, so `checked`, `rank`, `itemRevision`, `sourceActivityId` ' +
+    'and `sourceLabel` are rejected rather than dropped: the first is server-gated and the ' +
+    'rest are server-derived. `location` is accepted only on a `collection` whose ' +
+    '`supportsLocation` capability is on, and `details` only when the behaviour has that ' +
+    'shape and the discriminant matches. Beyond 500 items the answer is `400` with ' +
+    '`List is full.` Optional `itemId` is the permanent client-minted `itm_` ULID, ' +
+    'condition-checked against the item tombstone. Creating, so an `Idempotency-Key` is ' +
+    'required.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+    body: { content: { 'application/json': { schema: createListItemInput } } },
+  },
+  responses: {
+    201: {
+      description: 'The created item.',
+      content: { 'application/json': { schema: listItemResponse } },
+    },
+    400: {
+      description:
+        'A full list, a field this list’s behaviour or capabilities do not allow, a ' +
+        'mismatched `details.behaviour`, a malformed client id, or a missing ' +
+        '`Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list, or an `afterItemId` that names no item on it.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description:
+        'A client-minted `itemId` already in use or retained by a deletion tombstone. The ' +
+        'message carries no metadata about the id’s fate.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/lists/{id}/items/bulk',
+  summary: 'Add many items in one ordered operation',
+  description:
+    'Ordinary item creation only: provenance and source-ingredient fields are rejected, ' +
+    'because deriving them is the meal action’s alone. The batch is one ordered sequence ' +
+    'from one position — the first member may carry `afterItemId`, a later one may not — ' +
+    'allocated from a single rank generation and committed as one transaction when it ' +
+    'fits, or as a resumable chunked series when it does not. Idempotent under the ' +
+    '`Idempotency-Key`, and after that receipt expires under the stable per-item ids, so a ' +
+    'replay of a partially committed batch completes it rather than duplicating it.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+    body: { content: { 'application/json': { schema: bulkCreateListItemsInput } } },
+  },
+  responses: {
+    201: {
+      description: 'The items created by this call, in the order they were sent.',
+      content: { 'application/json': { schema: listItemListResponse } },
+    },
+    400: {
+      description:
+        'A batch that would exceed 500 items, a member carrying a provenance or ' +
+        'server-owned field, a position on a member other than the first, or a missing ' +
+        '`Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list, or none this caller has a pointer to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/v1/lists/{id}/items/{itemId}',
+  summary: 'One item by its stable id',
+  description:
+    'The authoritative exact read durable creation reconciles a lost response against: ' +
+    '`200` adopts the server row, `404` parks the intent for explicit Retry or Discard. It ' +
+    'follows the identity locator under the same strong fence as a page, so a missing item ' +
+    'and a tombstoned one are deliberately indistinguishable.',
+  tags: ['lists'],
+  request: { params: z.object({ id: listId, itemId }) },
+  responses: {
+    200: {
+      description: 'The item.',
+      content: { 'application/json': { schema: listItemResponse } },
+    },
+    404: {
+      description: 'No such list or item, or a tombstoned id.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'patch',
+  path: '/v1/lists/{id}/items/{itemId}',
+  summary: 'Edit an item, or move it',
+  description:
+    '**No `If-Match`.** Item writes are per-field last-write-wins — optimistic concurrency ' +
+    'on every checkbox in a grocery list would produce constant spurious `409`s — and the ' +
+    'internal item revision is a retry fence rather than a client-visible conflict. ' +
+    '`note` and `location` accept `null` to clear the field, which is a different ' +
+    'intention from omitting it — and clearing is gated exactly as setting is, so a value ' +
+    'retained behind a switched-off capability cannot be removed. `afterItemId` requests a ' +
+    'reorder (`null` moves the item to the front) and **may arrive alongside ordinary ' +
+    'fields**: they land in one transaction, because the reorder already re-puts the whole ' +
+    'row at its new key. `checked` and `location` are subject to the same two-part ' +
+    'behaviour and capability gates as creation.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId, itemId }),
+    body: { content: { 'application/json': { schema: patchListItemInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The updated item.',
+      content: { 'application/json': { schema: listItemResponse } },
+    },
+    400: {
+      description:
+        'A field this list’s behaviour or capabilities do not allow, a mismatched ' +
+        '`details.behaviour`, an empty patch, or a reorder mixed with a field edit.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list or item.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/v1/lists/{id}/items/{itemId}',
+  summary: 'Delete an item, reversibly',
+  description:
+    'Removes the ranked row and its identity locator, and leaves a replay-window tombstone ' +
+    'holding the exact deletion snapshot — the item, its rank, its current viewer links ' +
+    'and the matching Activity provenance — under a single-use Undo operation. Answers ' +
+    '`{ affectedCount, undoToken, undoExpiresAt }` rather than the deleted row, because a ' +
+    'client must not send row contents back as authority. `undoExpiresAt` is the UI’s ' +
+    '6-second offer deadline, not the server’s replay deadline: an Undo the user has ' +
+    'already accepted stays valid for the shared retention window, so an offline inverse ' +
+    'cannot expire in transit. Restoring is `POST /v1/lists/{id}/undo`.',
+  tags: ['lists'],
+  request: { params: z.object({ id: listId, itemId }) },
+  responses: {
+    200: {
+      description: 'The item is gone, and `data` carries the Undo offer.',
+      content: { 'application/json': { schema: reversibleItemMutationResponse } },
+    },
+    404: {
+      description: 'No such list or item — and the answer a repeated delete gets.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

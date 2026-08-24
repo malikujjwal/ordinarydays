@@ -505,7 +505,9 @@ describe('rank allocation and item mutations', () => {
         { itemId: ITEM_A, title: 'One', checked: false },
         { itemId: ITEM_B, title: 'Two', checked: true },
       ],
-      { now: NOW, idempotencyReceipt: receipt },
+      // The receipt is built from the created items, so the stored response carries the
+      // ranks this call allocated rather than a placeholder (P3-08).
+      { now: NOW, receiptFor: () => receipt },
     );
     expect(bulk.map((value) => value.rank)).toEqual(['V', 'W']);
     const [items] = vi.mocked(tx.transactWrite).mock.calls.at(-1) ?? [];
