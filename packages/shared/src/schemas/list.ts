@@ -255,6 +255,93 @@ export const createListInput = z
 export type CreateListInput = z.infer<typeof createListInput>;
 
 /**
+ * `PATCH /v1/lists/:id` (`api-contract.md` §2.7, P3-09).
+ *
+ * **Strict**, and that strictness is the change-rules table on the wire. `behaviour` is not
+ * a field this route accepts — it goes through the replay-protected
+ * `POST /v1/lists/:id/behaviour`, because a behaviour change is a gated, resumable item
+ * migration rather than one conditional `META` write — and `templateKey` is immutable
+ * provenance. A body carrying either is a `400` naming it, exactly as `createListInput`
+ * refuses the fields the catalogue owns, never a save that quietly ignores half of what was
+ * sent.
+ *
+ * `slot` is **nullable**: absent leaves the current slot alone and `null` clears it, which
+ * are different intentions and must stay distinguishable — the same distinction
+ * `defaultReminderOffset` makes on the profile. Clearing or changing a slot also removes the
+ * caller's matching profile default, in the same transaction (P3-12).
+ *
+ * `capabilities` is a **partial** patch of the two flags rather than the whole object, so
+ * one switch in List settings can be flipped without the request restating the other. The
+ * service merges it onto the stored pair and records the whole prior pair as the Undo
+ * inverse.
+ */
+export const listCapabilitiesPatch = z
+  .strictObject({
+    checkable: z.boolean().optional(),
+    supportsLocation: z.boolean().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'Name at least one capability to change',
+  });
+
+export const patchListInput = z
+  .strictObject({
+    title: title.optional(),
+    capabilities: listCapabilitiesPatch.optional(),
+    slot: defaultSlot.nullable().optional(),
+    archived: z.boolean().optional(),
+  })
+  .meta({ id: 'PatchListInput' });
+
+export type PatchListInput = z.infer<typeof patchListInput>;
+
+/**
+ * `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7, P3-09).
+ *
+ * One target behaviour and nothing else. Strict, so a body that also tried to carry
+ * `capabilities` or a `confirmDataLoss` flag is a `400` naming it: the confirmation is a
+ * **query parameter** on a deliberately separate, newly keyed logical action, not a field a
+ * client can set in the same body it would have sent unconfirmed.
+ */
+export const changeListBehaviourInput = z
+  .strictObject({ behaviour: listBehaviour })
+  .meta({ id: 'ChangeListBehaviourInput' });
+
+export type ChangeListBehaviourInput = z.infer<typeof changeListBehaviourInput>;
+
+/** `POST /v1/lists/:id/behaviour` query. Strict, so a misspelled flag is a named `400`. */
+export const changeListBehaviourQuery = z
+  .strictObject({ confirmDataLoss: z.enum(['true', 'false']).optional() })
+  .meta({ id: 'ChangeListBehaviourQuery' });
+
+/**
+ * Where the `409 conflict` preview for an unconfirmed destructive behaviour change puts its
+ * two structured facts.
+ *
+ * The envelope's `details[]` is its only structured slot, so the preview travels there as
+ * `{ path, message }` pairs — the same encoding `PATCH /v1/activities/:id` uses to return
+ * the current `updatedAt` alongside a stale-edit `409` (P1-13). The paths are **exported
+ * rather than described**, so the client that maps them back into a typed shape (P3-24) and
+ * the service that emits them cannot drift:
+ *
+ * ```
+ * { path: 'confirmDataLoss.itemCount', message: '7' }
+ * { path: 'confirmDataLoss.fields.0',  message: 'Watch status' }
+ * { path: 'confirmDataLoss.fields.1',  message: 'Season' }
+ * ```
+ *
+ * `itemCount` is the number of items **actually carrying** the data being removed, never the
+ * list's size (`interaction-contract.md` §1a.1 rule 2), and each `fields.<n>` entry is one
+ * user-facing label in the order the confirmation should read them (rule 4). The client
+ * composes the dialog sentence; the server never sends a pre-joined one, because the copy
+ * around the list's own title belongs to the surface that knows it.
+ */
+export const DATA_LOSS_DETAIL_PATHS = {
+  itemCount: 'confirmDataLoss.itemCount',
+  field: (index: number) => `confirmDataLoss.fields.${String(index)}`,
+} as const;
+
+/**
  * One item of `POST /v1/lists/:id/items`, and one member of `bulk`.
  *
  * Strict, so `checked`, `rank`, `itemRevision`, `sourceActivityId` and `sourceLabel` — all
@@ -428,3 +515,34 @@ export const reversibleItemMutation = z
     undoExpiresAt: z.string().min(1),
   })
   .meta({ id: 'ReversibleItemMutation' });
+
+/**
+ * What a list-settings mutation answers with — `PATCH /v1/lists/:id` and
+ * `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7).
+ *
+ * **A union of two shapes, not one shape with two optional fields.** An Undo offer is a token
+ * *and* the deadline it is offered until; a payload carrying one without the other is an
+ * offer no client can act on, and modelling them as independent optionals is what would let a
+ * server emit half of one and a client believe it. Both arms are strict, so a half payload
+ * matches neither and fails.
+ *
+ * The offer's absence is meaningful rather than incidental: a rename records no inverse
+ * (`interaction-contract.md` §4.1 has no undo row for it), a patch that changes nothing has
+ * nothing to take back, and a behaviour change that **lost** data was confirmed rather than
+ * offered — repeating the call with `?confirmDataLoss=true` is its only path, so a token there
+ * would promise a restore the server cannot make.
+ *
+ * `undoExpiresAt` is the UI offer deadline on the same terms as {@link reversibleItemMutation}:
+ * stop offering at that instant, while an inverse the user already accepted stays valid
+ * until the shared retention window expires.
+ */
+export const listSettingsMutation = z
+  .union([
+    z.strictObject({
+      list: listView,
+      undoToken: z.string().min(1),
+      undoExpiresAt: z.string().min(1),
+    }),
+    z.strictObject({ list: listView }),
+  ])
+  .meta({ id: 'ListSettingsMutation' });

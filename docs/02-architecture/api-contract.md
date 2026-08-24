@@ -671,8 +671,8 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 | `GET` | `/v1/lists?cursor=` | Pages active List pointers 50 at a time, then BatchGets that page's current `META` rows. The 100 cap applies to Lists the caller owns, not memberships received from other owners. |
 | `POST` | `/v1/lists` | `{ listId?, title, templateKey, sourceActivityId? }`. `title` and `templateKey` are required; `templateKey` must be the template/style the user selected. Optional `listId` is the permanent client-minted `lst_<ULID>` for durable offline creation. The server copies behaviour, capabilities, icon, empty-state copy and slot from that exact catalogue entry; it never matches the title or substitutes another template. When `sourceActivityId` is present and names an owned Plan, the copied `slot` is forced to `null` and the same transaction writes an id-only `ACT#<sourceActivityId>/SOURCE_LIST#<listId>` reverse projection. Create rejects client-supplied `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy`; only explicit later settings may change their supported subset. |
 | `GET` | `/v1/lists/:id?includeItems=true` | Returns META plus the first 50 items and an opaque item cursor bound to the META `rankVersion`. The service strongly reads META, uses `ConsistentRead: true` for the item Query, then strongly rereads META; both reads must have the same version with neither `rankRepairId` nor `behaviourMigrationId`. A marker or changed fence returns `503 internal` with `Retry-After: 1` and no item rows after attempting the bounded drain. Includes only the caller's `viewerLink` for each returned item. Links belonging to other members are removed before serialisation. It never returns the whole List partition. |
-| `PATCH` | `/v1/lists/:id` | `{ title?, capabilities?, slot?, archived? }`. See the change rules below. Additive changes return the server-recorded settings Undo token. `behaviour` is rejected here; it uses the dedicated replay-protected action below. |
-| `POST` | `/v1/lists/:id/behaviour` | `{ behaviour }`. Requires `If-Match` and `Idempotency-Key`; every direction uses the gated resumable migration below. A destructive transition also requires `?confirmDataLoss=true`; omitting it returns the typed `409 conflict` preview without starting a migration. Confirmation is a new logical action with a newly minted key. |
+| `PATCH` | `/v1/lists/:id` | `{ title?, capabilities?, slot?, archived? }`, under a required `If-Match` carrying the `updatedAt` the client read; omitting it is `validation_failed`, and a stale one is `409` whose `details[0]` carries the current version. See the change rules below. `capabilities` is a partial patch of the two flags, merged onto the stored pair. `slot` is nullable: absent leaves it alone, `null` clears it. Additive changes return the server-recorded settings Undo token; a rename alone returns none, because renaming a list has no undo row in `../01-product/interaction-contract.md` §4.1. A member may rename; capabilities, slot and archive are owner-only (§3). `behaviour` and `templateKey` are both rejected here — the first uses the dedicated replay-protected action below and the second is immutable — so a body carrying either is `validation_failed` naming it. |
+| `POST` | `/v1/lists/:id/behaviour` | `{ behaviour }`. Owner only. Requires `If-Match` and `Idempotency-Key`; every direction uses the gated resumable migration below, and the operation is identified by that key so a replay resumes its own work instead of starting a second migration. A destructive transition **that would actually lose something** also requires `?confirmDataLoss=true`; omitting it returns the typed `409 conflict` preview without starting a migration or writing a receipt. Confirmation is a new logical action with a newly minted key. Posting the behaviour a list already has is a no-op that answers with current truth. |
 | `DELETE` | `/v1/lists/:id` | Owner only. Writes the replay-window tombstone and removes the List's `SOURCE_LIST#` reverse projection when present before the chunked cascade removes every partition row (items, locators, members, links, Undo, repair and behaviour-migration work) plus every member pointer and `LLINK#` relationship; it does not delete owner-scoped People records. |
 | `GET` | `/v1/lists/:id/items?cursor=` | Pages 50 strongly consistent `ITEM#` rows at a time, with the caller's readable link projection for that page only. Strong META reads before and after the Query must match the cursor/each other and contain neither repair nor behaviour-migration marker. A failed fence returns `503 internal` with `Retry-After: 1`; the client retains its committed projection and restarts from page one. No response can span a reorder, repair or behaviour migration. |
 | `GET` | `/v1/lists/:id/items/:itemId` | Authoritative exact-id read for durable-create reconciliation. Strong META reads before and after the strongly consistent locator/item reads must keep the same `rankVersion` with no repair/behaviour-migration gate, and locator/item revisions must match; a failed fence returns `503 internal` with `Retry-After: 1`, while a missing or tombstoned item is `404`. |
@@ -816,7 +816,7 @@ only when the hydrated Activity has `schedule.date`.
 | `capabilities.checkable` false → true | Applies immediately. Nothing is lost. |
 | `capabilities.checkable` true → false | Applies immediately. `checked` is retained on items, not cleared, so re-enabling restores it. |
 | `behaviour` `collection` → `watch` or `meals` | Applies immediately, initialising `details` on every item with the default status. |
-| `behaviour` `watch` or `meals` → anything | **Destructive.** Requires `?confirmDataLoss=true`; without it returns `409 conflict` with a body naming the fields and the exact number of items affected, so the client can render "…will remove season, episode and watch status from 7 items." |
+| `behaviour` `watch` or `meals` → anything | **Destructive** whenever any item carries the typed data. Requires `?confirmDataLoss=true`; without it returns `409 conflict` with a body naming the fields and the exact number of items affected, so the client can render "…will remove season, episode and watch status from 7 items." |
 | `slot` | Free. Changing it does not move any items. |
 
 Every additive row, including `archived: false → true`, returns a retained settings Undo
@@ -827,9 +827,60 @@ is a qualifying collection again. Location mutations use the parallel
 `behaviour === 'collection' && capabilities.supportsLocation` gate; stored locations are
 retained while hidden.
 
+**A lossless departure is additive in every respect, Undo included.** The same count
+decides both halves of the row: a `watch` or `meals` list nothing is carrying data on leaves
+that behaviour with no confirmation *and* with the standard settings Undo token, because
+§1a.1 defines an additive change as one that loses nothing and §4 gives every additive change
+an undo. Only a departure that actually removes something is confirmed rather than offered,
+and only that one answers without a token.
+
+**The destructive row is conditional, and a count of zero means no confirmation.**
+[`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §1a.1 rule 3
+names a behaviour change as exactly the kind of change that is destructive only *sometimes*,
+and calls a confirmation that can appear with a count of `0` a bug. So an empty watchlist, or
+a meals list nobody has put an ingredient on, leaves its behaviour like any additive settings
+change: the migration still runs — every item must match the new behaviour — but no
+confirmation is required and none is asked for. The count is the §1a.1 rule 2 count: items
+**actually carrying** the data, never the list's size. Amended in P3-09; the product doc
+outranks this one on behaviour, and the two now agree.
+
+**How the `409` preview is encoded.** The error envelope has one structured slot, so the
+preview travels in `details[]` as `{ path, message }` pairs — the encoding
+`PATCH /v1/activities/:id` already uses to return the current `updatedAt` beside a stale-edit
+`409`. The paths are exported from `packages/shared/src/schemas/list.ts` as
+`DATA_LOSS_DETAIL_PATHS`, so the service that emits them and the client that maps them back
+(P3-24) share one definition:
+
+```
+{ path: 'confirmDataLoss.itemCount', message: '7' }
+{ path: 'confirmDataLoss.fields.0',  message: 'Watch status' }
+{ path: 'confirmDataLoss.fields.1',  message: 'Season' }
+```
+
+Each `fields.<n>` is one user-facing label, in the order the confirmation should read them
+(§1a.1 rule 4), and only fields some item actually carries are named. The client composes the
+dialog sentence around its own list title; the server never sends a pre-joined one.
+
+**The count is re-taken under the gate before the change proceeds.** The count that decides
+the confirmation is read before the migration marker goes down, so a concurrent item write
+can change what the operation is about to destroy. The snapshot taken *under* the marker — no
+item can move while it stands — is authoritative: when the two disagree, the untouched
+install is rolled back and the caller receives a fresh `409`. **Known gap:** this binds the
+count to the request that acts on it, not to the `409` the user was shown. A write landing
+between the preview and the confirmed call that follows it is still invisible, and closing
+that needs the client to echo the preview it was shown — see the open question in P3-09's
+pull request.
+
+**The Undo offer is a pair.** `undoToken` and `undoExpiresAt` are present together or absent
+together; the response schema is a union of exactly those two shapes. A token without the
+deadline it is offered until is an offer no client can time.
+
 Capabilities, slot and archive use `PATCH /v1/lists/:id`; behaviour rows use the dedicated
-replay-protected `POST /v1/lists/:id/behaviour`. Every behaviour change—upgrade, confirmed
-destructive change, and behaviour Undo—uses one resumable migration. The first transaction
+replay-protected `POST /v1/lists/:id/behaviour`. Deleting a list is a list mutation like any
+other: it drains standing work first and answers the same retryable `503` when work remains,
+rather than failing the marker condition as an ordinary edit conflict. Every behaviour
+change—upgrade, confirmed destructive change, and behaviour Undo—uses one resumable
+migration. The first transaction
 leaves public `List.behaviour` unchanged, creates
 `BEHAVIOUR_MIGRATION#<operationId>` and sets `META.behaviourMigrationId`. While present, every
 item read or list/item mutation attempts a bounded drain and otherwise returns `503 internal`
@@ -837,7 +888,12 @@ with `Retry-After: 1` and no rows or writes. Private worker chunks transform the
 at-most-500 item snapshot against the recorded target shape while conditionally advancing each row and
 locator's matching `itemRevision`. The final transaction alone changes
 `List.behaviour`, clears the marker, advances `rankVersion` to invalidate old item cursors,
-records the Undo/receipt and removes the work row. Public schema validation therefore never
+records the Undo/receipt and removes the work row. **The receipt it writes is the one stored
+on the work record**, not one built by whoever is finishing: any caller may drain a migration
+to completion, and a reader that finishes somebody else's must still record that operation's
+answer under that operation's key. Otherwise the author's replay finds no receipt and is then
+told its `If-Match` conflicts — by the very write it asked for — with the Undo token gone
+along with the work row. Public schema validation therefore never
 observes `details.behaviour !== List.behaviour`, including after a crash or retry.
 
 Changing or clearing a slot also removes `user.defaultLists[oldSlot]` when, and only when,

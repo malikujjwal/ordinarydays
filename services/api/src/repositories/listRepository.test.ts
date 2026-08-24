@@ -352,7 +352,7 @@ describe('identity and list storage', () => {
         updatedAt: LATER,
       }),
     );
-    const updated = await repository.patchListMeta(
+    await repository.patchListMeta(
       ALICE,
       LIST_ID,
       access,
@@ -366,7 +366,6 @@ describe('identity and list storage', () => {
       LATER,
     );
 
-    expect(updated?.updatedAt).toBe(LATER);
     const [writes] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
     expect(writes?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
     expect(writes?.[1]?.Update).toMatchObject({

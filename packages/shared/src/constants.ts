@@ -53,6 +53,15 @@ export const MAX_OFFLINE_MUTATIONS = 200;
  */
 export const MAX_AUTOMATIC_INTENT_AGE_DAYS = 30;
 
+/**
+ * The UI's offer window for a reversible single action, in seconds
+ * (`interaction-contract.md` §4). Bulk actions get ten; that literal arrives with P3-10.
+ *
+ * It is the **presentation** deadline — the instant the client stops offering Undo — and
+ * never the server's replay deadline, which is `MAX_AUTOMATIC_INTENT_AGE_DAYS`.
+ */
+export const UNDO_OFFER_SECONDS = 6;
+
 /** How far back `include=overdue` rolls incomplete tasks forward. */
 export const OVERDUE_WINDOW_DAYS = 30;
 

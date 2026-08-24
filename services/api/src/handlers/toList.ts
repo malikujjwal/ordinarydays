@@ -36,6 +36,25 @@ export function toList(list: List): Record<string, unknown> {
 }
 
 /**
+ * What a settings mutation answers with (`api-contract.md` §2.7, P3-09).
+ *
+ * The Undo pair travels **together or not at all** — one conditional spread, not two. A token
+ * without the deadline it is offered until is an offer no client can time, and the shared
+ * schema is a union of exactly these two shapes for that reason.
+ */
+export function toListSettings(result: {
+  list: List;
+  undo?: { token: string; expiresAt: string };
+}): Record<string, unknown> {
+  return {
+    list: toList(result.list),
+    ...(result.undo === undefined
+      ? {}
+      : { undoToken: result.undo.token, undoExpiresAt: result.undo.expiresAt }),
+  };
+}
+
+/**
  * The ListItem a response carries. `itemRevision` — the storage-only mutation fence — is
  * deliberately absent; `rank` stays, opaque, because the shared `(rank, itemId)` comparator
  * is also the client's sort order.

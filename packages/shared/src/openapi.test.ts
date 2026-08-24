@@ -41,8 +41,9 @@ describe('the generated document', () => {
     // **P1-12 added the detail path**; **P2-16 added the reminder collection and item paths**;
     // **P3-05 added the two list paths** — the collection (`GET` and `POST` share it)
     // and the templated id (`GET` and `DELETE`); **P3-06 added the template catalogue**;
-    // and **P3-08 added the three item paths** — the collection, its `bulk` action, and the
-    // templated item id carrying `GET`, `PATCH` and `DELETE`.
+    // **P3-08 added the three item paths** — the collection, its `bulk` action, and the
+    // templated item id carrying `GET`, `PATCH` and `DELETE`; and **P3-09 added the
+    // behaviour action**, while giving the templated list id its settings `PATCH`.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
@@ -63,6 +64,7 @@ describe('the generated document', () => {
       '/v1/activities/{id}/reminders/{reminderId}',
       '/v1/lists',
       '/v1/lists/{id}',
+      '/v1/lists/{id}/behaviour',
       '/v1/lists/{id}/items',
       '/v1/lists/{id}/items/bulk',
       '/v1/lists/{id}/items/{itemId}',
@@ -108,6 +110,7 @@ describe('the generated document', () => {
       'CaptureExtractInput',
       'CaptureLinkInput',
       'CaptureParseInput',
+      'ChangeListBehaviourInput',
       'CompleteActivityInput',
       'ConvertRecurrenceInput',
       'CreateActivityInput',
@@ -123,10 +126,12 @@ describe('the generated document', () => {
       'ListDetail',
       'ListDetailItem',
       'ListItemView',
+      'ListSettingsMutation',
       'ListTemplate',
       'ListView',
       'Occurrence',
       'PatchActivityInput',
+      'PatchListInput',
       'PatchListItemInput',
       'PatchUserInput',
       'Recurrence',

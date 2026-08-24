@@ -6,10 +6,12 @@ import {
   deleteList,
   getListMeta,
   getListMetaForDeletion,
+  ListReadFenceError,
   listItems,
   listListsForUser,
 } from '../repositories/listRepository.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
+import { drainListWork, withListWorkDrain } from './listMutationService.js';
 
 /**
  * The read and delete halves of Lists CRUD (`phase-03` §P3-05); creation is
@@ -46,8 +48,13 @@ export interface ListDetailProjection {
  * rows are then batch-read for exactly those item ids, and each surviving link is kept only
  * after ordinary Activity authorisation (`assertActivityAccess`, `read`). A stale pointer —
  * its Activity deleted or no longer readable — is omitted rather than serialised as a dead
- * link (`api-contract.md` §2.7); the cleanup queue is P3-15's. A repair or migration fence
- * failure propagates out of the repository as the retryable `503`.
+ * link (`api-contract.md` §2.7); the cleanup queue is P3-15's.
+ *
+ * A repair or migration marker is **drained once** before the fence failure is allowed to
+ * become the retryable `503`, which is what §2.7 requires of every item read: a client that
+ * arrives while somebody else's bounded work is outstanding finishes it and gets its page,
+ * rather than bouncing until whoever started the work comes back. A `rankVersion` that moved
+ * between the two META reads is not drainable and falls straight through to the `503`.
  */
 export async function getListDetail(
   userId: string,
@@ -62,8 +69,11 @@ export async function getListDetail(
     return { list };
   }
 
-  const page = await listItems(userId, listId, access.index);
-  if (page === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+  const page = await withListWorkDrain(userId, listId, access.index, async () => {
+    const fenced = await listItems(userId, listId, access.index);
+    if (fenced === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+    return fenced;
+  });
 
   const links = await batchGetViewerLinks(userId, listId, access.index, page.itemIds);
   const readable = new Map<string, ListItemActivityLink>();
@@ -100,6 +110,12 @@ export async function getListDetail(
  * a concurrent selection would wrongly skip the cleanup — and a slot holding any other
  * value, including a newer choice from another device, fails only that item and survives
  * (P3-12's read-side guard remains the belt to these braces).
+ *
+ * A rank repair or behaviour migration holds the same gate every list-partition write
+ * condition-checks, so deleting through one would fail that condition and surface as a bare
+ * `409` — "somebody edited this" for a list that is merely mid-migration. A delete is a list
+ * mutation like any other (`api-contract.md` §2.7), so it drains what it can first and answers
+ * the retryable `503` when work remains, then re-reads the row it is about to remove.
  */
 export async function removeList(
   userId: string,
@@ -107,6 +123,9 @@ export async function removeList(
   now: string,
 ): Promise<string> {
   const access = await assertListAccess(userId, listId, 'owner');
+  if (!(await drainListWork(userId, listId, access.index, now))) {
+    throw new ListReadFenceError();
+  }
   const list = await getListMetaForDeletion(userId, listId, access.index);
   if (list === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
 

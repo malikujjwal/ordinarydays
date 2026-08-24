@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { MAX_LIST_ITEMS } from '@od/shared';
+import { MAX_LIST_ITEMS, UNDO_OFFER_SECONDS } from '@od/shared';
 import {
   type BulkCreateListItemsInput,
   bulkCreateListItemsInputFor,
@@ -32,6 +32,7 @@ import {
   ListMutationRetryExhaustedError,
   ListNotFoundError,
   ListRankRepairRequiredError,
+  ListReadFenceError,
   listItems as listItemsPage,
   type NewListItem,
   newItemId,
@@ -42,7 +43,8 @@ import {
 } from '../repositories/listRepository.js';
 import { ID_UNAVAILABLE } from './activityService.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
-import { repairListRanks, withRepairDrain } from './listRankRepairService.js';
+import { drainListWork, withListWorkDrain } from './listMutationService.js';
+import { repairListRanks } from './listRankRepairService.js';
 
 /**
  * ListItem CRUD and its rules (`phase-03` §P3-08, `api-contract.md` §2.7).
@@ -68,9 +70,6 @@ const FULL = 'List is full.';
 const ITEM_NOT_FOUND = 'List item not found.';
 const LIST_NOT_FOUND = 'List not found.';
 const BUSY = 'This list is busy. Try again.';
-
-/** The UI's offer window for a single item delete (`interaction-contract.md` §4). */
-const UNDO_OFFER_SECONDS = 6;
 
 /**
  * Items per bulk transaction.
@@ -113,14 +112,33 @@ async function mapped<T>(action: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * The list every item mutation is about, with any standing work drained first.
+ *
+ * `api-contract.md` §2.7 requires every item mutation to attempt a bounded drain and
+ * otherwise answer the retryable `503`, and doing it here rather than per endpoint means one
+ * place enforces it for create, bulk, patch and delete. It happens **before** the write is
+ * attempted, so a drained-and-retried mutation cannot have half-applied: the repository's
+ * gate conditions are still the enforcement, and this only saves the client a round trip when
+ * the work was already finishable.
+ */
 async function loadList(
   userId: string,
   listId: string,
   access: ListAccessGrant,
+  now: string,
 ): Promise<List> {
   const list = await getListMeta(userId, listId, access);
   if (list === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
-  return list;
+  if (list.rankRepairId === undefined && list.behaviourMigrationId === undefined) {
+    return list;
+  }
+  // The same retryable `503` a fenced read gives: the marker is still standing, and
+  // `api-contract.md` §2.7 gives one answer for that whoever asked (P3-09).
+  if (!(await drainListWork(userId, listId, access, now))) throw new ListReadFenceError();
+  const drained = await getListMeta(userId, listId, access);
+  if (drained === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+  return drained;
 }
 
 function refuse(path: string, message: string): never {
@@ -279,7 +297,7 @@ export async function createItem(
   receiptFor?: (item: ListItem) => IdempotencyReceipt,
 ): Promise<ListItem> {
   const access = await assertListAccess(userId, listId, 'write');
-  const list = await loadList(userId, listId, access.index);
+  const list = await loadList(userId, listId, access.index, now);
   assertMatchesBehaviour(createListItemInputFor(list.behaviour), input);
   assertWritableFields(list, input);
   assertCapacity(list, 1);
@@ -334,7 +352,7 @@ export async function createItemsBulk(
   receiptFor?: (items: ListItem[]) => IdempotencyReceipt,
 ): Promise<ListItem[]> {
   const access = await assertListAccess(userId, listId, 'write');
-  const list = await loadList(userId, listId, access.index);
+  const list = await loadList(userId, listId, access.index, now);
   assertMatchesBehaviour(bulkCreateListItemsInputFor(list.behaviour), input);
   for (const member of input.items) assertWritableFields(list, member);
 
@@ -436,7 +454,7 @@ export async function patchItem(
   now: string,
 ): Promise<ListItem> {
   const access = await assertListAccess(userId, listId, 'write');
-  const list = await loadList(userId, listId, access.index);
+  const list = await loadList(userId, listId, access.index, now);
   assertMatchesBehaviour(patchListItemInputFor(list.behaviour), input);
   assertWritableFields(list, input);
 
@@ -523,7 +541,7 @@ export async function removeItem(
   receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
 ): Promise<ReversibleItemMutation> {
   const access = await assertListAccess(userId, listId, 'write');
-  await loadList(userId, listId, access.index);
+  await loadList(userId, listId, access.index, now);
 
   const undoToken = randomBytes(32).toString('base64url');
   const result: ReversibleItemMutation = {
@@ -596,7 +614,7 @@ export async function listItemsFor(
 ): Promise<ListItemsProjection> {
   const access = await assertListAccess(userId, listId, 'read');
 
-  return withRepairDrain(userId, listId, access.index, async () => {
+  return withListWorkDrain(userId, listId, access.index, async () => {
     const page = await listItemsPage(userId, listId, access.index, cursor);
     if (page === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
     return {
@@ -622,7 +640,7 @@ export async function getItemById(
 ): Promise<ListItem> {
   const access = await assertListAccess(userId, listId, 'read');
 
-  return withRepairDrain(userId, listId, access.index, async () => {
+  return withListWorkDrain(userId, listId, access.index, async () => {
     const item = await getListItem(userId, listId, access.index, itemId);
     if (item === undefined) throw itemNotFound();
     return item;

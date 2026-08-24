@@ -34,6 +34,8 @@ import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
 import {
   bulkCreateListItemsInput,
+  changeListBehaviourInput,
+  changeListBehaviourQuery,
   createListInput,
   createListItemInput,
   deletedList,
@@ -43,8 +45,10 @@ import {
   listItemPageQuery,
   listItemView,
   listListQuery,
+  listSettingsMutation,
   listTemplate,
   listView,
+  patchListInput,
   patchListItemInput,
   reversibleItemMutation,
 } from './schemas/list.js';
@@ -85,6 +89,7 @@ const listItemResponse = envelope(listItemView);
 const listItemListResponse = envelope(z.array(listItemView));
 const listItemPageResponse = envelope(z.array(listDetailItem));
 const reversibleItemMutationResponse = envelope(reversibleItemMutation);
+const listSettingsMutationResponse = envelope(listSettingsMutation);
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
@@ -977,6 +982,127 @@ registry.registerPath({
       description:
         'No such list, or none this caller has a pointer to. The two are deliberately ' +
         'indistinguishable.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * `/v1/lists/{id}` settings and `/v1/lists/{id}/behaviour` (P3-09). The registrations that
+ * bring `PatchListInput`, `ChangeListBehaviourInput` and `ListSettingsMutation` into
+ * `components/schemas`.
+ */
+registry.registerPath({
+  method: 'patch',
+  path: '/v1/lists/{id}',
+  summary: 'Change a list’s title, capabilities, default slot or archived state',
+  description:
+    'Requires `If-Match` carrying the `updatedAt` the client read; omitting it is `400`, ' +
+    'not `428`, because the error union is closed. Everything this route changes is ' +
+    '**additive in both directions** and applies immediately with no confirmation: ' +
+    'turning `checkable` off retains every item\u2019s `checked` value and turning ' +
+    '`supportsLocation` off retains every stored location, so re-enabling either ' +
+    'restores exactly what was there. `capabilities` is a partial patch of the two ' +
+    'flags. `slot` is nullable \u2014 `null` clears it \u2014 and changing or clearing ' +
+    'it removes the caller\u2019s `defaultLists[oldSlot]` in the same transaction, but ' +
+    'only while that slot still names this list, so a newer destination chosen on ' +
+    'another device survives. The body is strict: `behaviour` belongs to the ' +
+    'replay-protected action below and `templateKey` is immutable provenance, so ' +
+    'either one is a `400` naming it. A change that actually moves something answers ' +
+    'with a settings Undo token; a rename alone does not, because renaming a list has ' +
+    'no undo offer. A member may rename; only the owner may change capabilities, slot ' +
+    'or archived state.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+    body: { content: { 'application/json': { schema: patchListInput } } },
+  },
+  responses: {
+    200: {
+      description: 'The updated list, with the Undo offer when the change is reversible.',
+      content: { 'application/json': { schema: listSettingsMutationResponse } },
+    },
+    400: {
+      description:
+        'A missing `If-Match`, an empty body, or a field this route does not accept — ' +
+        '`behaviour` and `templateKey` among them.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A member reaching for capabilities, slot or archived state.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list, or none this caller has a pointer to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description:
+        'The `If-Match` version has moved on. `details[0]` carries the current ' +
+        '`updatedAt` so the client can refetch and re-apply rather than guess.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/lists/{id}/behaviour',
+  summary: 'Change a list’s behaviour, through its gated migration',
+  description:
+    'Owner only, and the only route that changes `behaviour`. Requires both `If-Match` ' +
+    'and an `Idempotency-Key`: it starts a bounded, resumable item migration that a ' +
+    'retried request must join rather than duplicate, and the operation is identified ' +
+    'by that key. The first transaction leaves public behaviour, `updatedAt` and every ' +
+    'item unchanged and only installs the migration marker; while it stands, every ' +
+    'item read and mutation attempts a bounded drain and otherwise answers ' +
+    '`503 internal` with `Retry-After: 1`. The final transaction alone flips the ' +
+    'behaviour, advances `rankVersion` \u2014 so item cursors issued before the ' +
+    'migration are rejected rather than resumed \u2014 records the Undo inverse and the ' +
+    'receipt, and clears the marker. `collection` to `watch` gives every item ' +
+    '`watchStatus: "want"` and `collection` to `meals` an empty ingredient list; both ' +
+    'are additive and answer with a 6-second Undo offer. Leaving `watch` or `meals` ' +
+    'for anything else \u2014 `watch` to `meals` included \u2014 is destructive and ' +
+    'needs `?confirmDataLoss=true`; without it the answer is `409` and **nothing is ' +
+    'written**, not even a receipt. A list carrying none of the data being removed ' +
+    'loses nothing, so it needs no confirmation and changes immediately.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+    query: changeListBehaviourQuery,
+    body: { content: { 'application/json': { schema: changeListBehaviourInput } } },
+  },
+  responses: {
+    200: {
+      description:
+        'The migrated list. An upgrade also carries its Undo token; a confirmed downgrade ' +
+        'does not, because its only path back is another confirmed call.',
+      content: { 'application/json': { schema: listSettingsMutationResponse } },
+    },
+    400: {
+      description: 'A missing `If-Match` or `Idempotency-Key`, or an unknown behaviour.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    403: {
+      description: 'A member. Changing behaviour is the owner’s.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list, or none this caller has a pointer to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description:
+        'Either a stale `If-Match`, or the unconfirmed data-loss preview. The preview’s ' +
+        '`details[]` carries `confirmDataLoss.itemCount` — the number of items actually ' +
+        'carrying the data — and one `confirmDataLoss.fields.<n>` entry per user-facing ' +
+        'field label, in the order the confirmation should read them.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    503: {
+      description:
+        'The migration is still running after this request’s bounded drain. Retry after ' +
+        '`Retry-After`; the same key resumes the same operation.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

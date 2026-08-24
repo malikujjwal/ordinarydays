@@ -1,15 +1,22 @@
 import { zValidator } from '@hono/zod-validator';
 import {
   bulkCreateListItemsInput,
+  changeListBehaviourInput,
+  changeListBehaviourQuery,
   createListInput,
   createListItemInput,
   listDetailQuery,
   listItemPageQuery,
   listListQuery,
+  patchListInput,
   patchListItemInput,
 } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
+import {
+  changeListBehaviourHandler,
+  LIST_BEHAVIOUR_PATH,
+} from '../handlers/changeListBehaviour.js';
 import { createListHandler } from '../handlers/createList.js';
 import { DELETE_LIST_PATH, deleteListHandler } from '../handlers/deleteList.js';
 import { GET_LIST_PATH, getListHandler } from '../handlers/getList.js';
@@ -25,17 +32,19 @@ import {
   patchListItemHandler,
 } from '../handlers/listItems.js';
 import { LIST_LISTS_PATH, listListsHandler } from '../handlers/listLists.js';
+import { PATCH_LIST_PATH, patchListHandler } from '../handlers/patchList.js';
 
 /**
  * `/v1/lists` (`api-contract.md` §2.7).
  *
- * Four routes in this task: create with template resolution, the Lists-tab page, list
- * detail with its optional fenced item page, and the owner-only delete (P3-05). Items,
- * bulk, settings, behaviour, undo and the schedule bridge are later tasks and are absent
- * rather than stubbed, so `routeSplit`'s `not_implemented` answers for them.
+ * Create with template resolution, the Lists-tab page, list detail with its optional fenced
+ * item page and the owner-only delete (P3-05); the six item routes (P3-08); and the two
+ * settings routes (P3-09). Undo and the schedule bridge are later tasks and are absent rather
+ * than stubbed, so `routeSplit`'s `not_implemented` answers for them.
  *
- * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise. Only
- * the `POST` creates, so only it takes an `Idempotency-Key`.
+ * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise. Only the
+ * mutating `POST`s take an `Idempotency-Key`, and only the two conditional routes — the
+ * settings `PATCH` and the behaviour `POST` — take an `If-Match`.
  */
 
 /**
@@ -87,6 +96,24 @@ const validateItemPageQuery = zValidator('query', listItemPageQuery, (result) =>
   if (!result.success) throw result.error;
 });
 
+/**
+ * The settings body, strict — which is where the change-rules table is enforced on the wire.
+ * A `PATCH` carrying `templateKey` is immutable provenance and a `PATCH` carrying
+ * `behaviour` belongs on the replay-protected action below; both are a `400` naming the
+ * field rather than a save that quietly drops half of what was sent.
+ */
+const validatePatchList = zValidator('json', patchListInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+const validateBehaviour = zValidator('json', changeListBehaviourInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+const validateBehaviourQuery = zValidator('query', changeListBehaviourQuery, (result) => {
+  if (!result.success) throw result.error;
+});
+
 export const lists = new Hono<AppEnv>()
   .get(LIST_LISTS_PATH, validateListQuery, (c) =>
     listListsHandler(c, c.req.valid('query')),
@@ -99,6 +126,22 @@ export const lists = new Hono<AppEnv>()
     createListHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   .get(GET_LIST_PATH, validateDetailQuery, (c) => getListHandler(c, c.req.valid('query')))
+  .patch(PATCH_LIST_PATH, validatePatchList, (c) =>
+    patchListHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
+  /**
+   * Mounted before the item routes for the same belt-and-braces reason `bulk` is: a literal
+   * segment that a parameter could swallow is worth stating first, even where Hono's router
+   * already prefers the static one.
+   */
+  .post(LIST_BEHAVIOUR_PATH, validateBehaviour, validateBehaviourQuery, (c) =>
+    changeListBehaviourHandler(
+      c,
+      c.req.valid('json'),
+      c.req.valid('query'),
+      new Date().toISOString(),
+    ),
+  )
   .delete(DELETE_LIST_PATH, deleteListHandler)
   /**
    * `bulk` is mounted **before** `/:itemId` so the literal segment cannot be swallowed as an
