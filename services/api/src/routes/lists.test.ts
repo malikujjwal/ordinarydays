@@ -525,14 +525,12 @@ describe('GET /v1/lists/:id', () => {
 describe('DELETE /v1/lists/:id', () => {
   const seedDelete = (rows: Record<string, unknown>[] = []) => {
     seedGets([pointerRow(), listMetaRow(), ...rows]);
-    ddbMock
-      .on(QueryCommand)
-      .resolves({
-        Items: [
-          listMetaRow(),
-          ...rows.filter((r) => String(r.pk).startsWith('LIST#')),
-        ] as never,
-      });
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        listMetaRow(),
+        ...rows.filter((r) => String(r.pk).startsWith('LIST#')),
+      ] as never,
+    });
     ddbMock.on(BatchWriteCommand).resolves({});
   };
 
