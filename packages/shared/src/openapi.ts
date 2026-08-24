@@ -32,6 +32,14 @@ import {
 import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
+import {
+  createListInput,
+  deletedList,
+  listDetail,
+  listDetailQuery,
+  listListQuery,
+  listView,
+} from './schemas/list.js';
 import { snoozeActivityInput, unsnoozeActivityInput } from './schemas/occurrence.js';
 import { deletedReminder, reminder, reminderInput } from './schemas/reminder.js';
 import { scheduleActivityInput, scheduleActivityResult } from './schemas/schedule.js';
@@ -60,9 +68,15 @@ const activityListResponse = envelope(z.array(activityListItem));
 const agendaResponse = envelope(agendaData);
 const activityAgendaResponse = envelope(activityAgendaData);
 
+const listResponse = envelope(listView);
+const listPageResponse = envelope(z.array(listView));
+const listDetailResponse = envelope(listDetail);
+const deletedListResponse = envelope(deletedList);
+
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
 const reminderId = ulidId('rem');
+const listId = ulidId('lst');
 
 /**
  * The OpenAPI document, generated from the **same Zod schemas both sides import**
@@ -845,6 +859,139 @@ registry.registerPath({
     404: {
       description:
         'No such activity, no caller relationship, or no caller-owned reminder.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * `/v1/lists` (P3-05). The registrations that bring `ListView`, `CreateListInput`,
+ * `ListDetail` and `DeletedList` into `components/schemas`.
+ */
+registry.registerPath({
+  method: 'get',
+  path: '/v1/lists',
+  summary: 'The caller’s lists, a page at a time',
+  description:
+    'Pages active List pointers 50 at a time, then batch-reads that page’s current META ' +
+    'rows — one Query and one BatchGetItem per page. `meta.nextCursor` is present only ' +
+    'when there is another page; a client pages until it is absent. The 100 cap applies ' +
+    'to Lists the caller owns, not memberships received from other owners, which is why ' +
+    'the cursor is not optional.',
+  tags: ['lists'],
+  request: { query: listListQuery },
+  responses: {
+    200: {
+      description: 'One page of the caller’s Lists, in pointer order.',
+      content: { 'application/json': { schema: listPageResponse } },
+    },
+    400: {
+      description: 'A malformed cursor, or a parameter outside the strict query schema.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/lists',
+  summary: 'Create a list from an explicitly selected template',
+  description:
+    'Requires the visible `title` and the `templateKey` the user tapped. The server copies ' +
+    'behaviour, capabilities, slot, icon and empty-state copy from that exact catalogue ' +
+    'entry onto the new row — values, never a live reference — and stores `templateKey` as ' +
+    'provenance only. A missing or unknown key is `400`; there is no `simple-list` ' +
+    'fallback and no title matching. The body is strict, so a client-supplied `behaviour`, ' +
+    '`capabilities`, `slot`, `icon` or `emptyStateCopy` is a `400` naming it. ' +
+    '`sourceActivityId` must name an owned Plan and forces the copied slot to `null`, ' +
+    'writing the id-only reverse projection in the same transaction. Optional `listId` is ' +
+    'the permanent client-minted `lst_` ULID for durable offline creation; a collision ' +
+    'answers with the same metadata-free conflict as Activity creation. Creating, so an ' +
+    '`Idempotency-Key` is required. At 100 owned lists, creation is refused.',
+  tags: ['lists'],
+  request: {
+    body: { content: { 'application/json': { schema: createListInput } } },
+  },
+  responses: {
+    201: {
+      description: 'The created list, with every copied field on the row.',
+      content: { 'application/json': { schema: listResponse } },
+    },
+    400: {
+      description:
+        'A missing or unknown template, an empty title, a copied field in the body, a ' +
+        'malformed client id, the owned-list cap, or a missing `Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'A `sourceActivityId` this caller has no relationship to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description:
+        'A client-minted `listId` that is already in use or retained by a deletion ' +
+        'tombstone. The message carries no metadata about the id’s fate.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/v1/lists/{id}',
+  summary: 'One list, with an optional first item page',
+  description:
+    'META alone by default. With `includeItems=true`, adds the strongly fenced first 50 ' +
+    'items in `(rank, itemId)` order, an opaque cursor bound to the META rank version, and ' +
+    'the caller’s own `viewerLink` per item — never another member’s. A repair or ' +
+    'behaviour-migration fence returns `503` with `Retry-After: 1` and no item rows. Also ' +
+    'the authoritative read durable creation reconciles a lost response against: `200` ' +
+    'adopts the server row, `404` parks the intent.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+    query: listDetailQuery,
+  },
+  responses: {
+    200: {
+      description: 'The list, and the fenced first item page when asked for.',
+      content: { 'application/json': { schema: listDetailResponse } },
+    },
+    404: {
+      description:
+        'No such list, or none this caller has a pointer to. The two are deliberately ' +
+        'indistinguishable.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/v1/lists/{id}',
+  summary: 'Delete a list',
+  description:
+    'Owner only — a member gets `403`, anyone else `404`. Writes the replay-window ' +
+    'tombstone, removes the `SOURCE_LIST#` projection when present, clears `listId` and ' +
+    '`listItemId` on Activities named by current viewer links — never deleting an ' +
+    'Activity — then removes every item, link and pointer, and clears the caller’s ' +
+    'profile default for the list’s slot when it still points here. Safe to retry; once ' +
+    'complete, a second call answers `404`. Answers `200` with the envelope, never `204`.',
+  tags: ['lists'],
+  request: { params: z.object({ id: listId }) },
+  responses: {
+    200: {
+      description: 'The list is gone. `data` names the id that was removed.',
+      content: { 'application/json': { schema: deletedListResponse } },
+    },
+    403: {
+      description: 'A member. They can see the list; deleting it is the owner’s.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description:
+        'No such list, none this caller can see — and the answer a repeated delete gets ' +
+        'once the first has succeeded.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

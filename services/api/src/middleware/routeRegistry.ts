@@ -153,6 +153,12 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
   },
 
+  // §2.7 Lists
+  { method: 'GET', pattern: '/v1/lists', auth: 'authenticated' },
+  { method: 'POST', pattern: '/v1/lists', auth: 'authenticated', mutates: true },
+  { method: 'GET', pattern: '/v1/lists/:id', auth: 'authenticated' },
+  { method: 'DELETE', pattern: '/v1/lists/:id', auth: 'authenticated' },
+
   /**
    * §2.11 Capture — stubs until Phase 8. **None of them mutates**: capture returns a draft
    * for the user to confirm and writes nothing, so there is no duplicate for an

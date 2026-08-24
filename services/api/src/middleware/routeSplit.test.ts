@@ -74,7 +74,9 @@ describe('the registry covers the route table', () => {
 
   it('names the file to fix in the message, not just the offending route', () => {
     const app = createApp();
-    app.post('/v1/lists', (c) => c.json({ data: null }));
+    // Any route the build does not mount yet; P3-05 registered `/v1/lists`, so the probe
+    // moved to the Plans endpoint, which P3-20 owns.
+    app.post('/v1/plans', (c) => c.json({ data: null }));
 
     expect(() => assertRegistryMatchesRoutes(app)).toThrowError(
       /services\/api\/src\/middleware\/routeSplit\.ts/,

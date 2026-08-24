@@ -19,6 +19,7 @@ import { activities } from './routes/activities.js';
 import { agenda } from './routes/agenda.js';
 import { capture } from './routes/capture.js';
 import { health } from './routes/health.js';
+import { lists } from './routes/lists.js';
 import { me } from './routes/me.js';
 import { drainScheduleCleanup } from './services/scheduleService.js';
 
@@ -93,6 +94,7 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
   app.route('/v1/me', me);
   app.route('/v1/agenda', agenda);
   app.route('/v1/activities', activities);
+  app.route('/v1/lists', lists);
   app.route('/v1/capture', capture);
   app.route('/v1/health', health);
 
