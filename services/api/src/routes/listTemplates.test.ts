@@ -73,16 +73,18 @@ describe('the catalogue payload', () => {
   it('serves a fixture template appended to the catalogue with no branch anywhere', async () => {
     const { listTemplatesHandler } = await import('../handlers/listTemplates.js');
     const { entityTag } = await import('../lib/etag.js');
+    // A key the shipped catalogue does not use, so the fixture cannot collide with a real
+    // record and quietly assert nothing.
     const fixture = {
-      templateKey: 'books-to-read',
-      chooserLabel: 'Books to read',
-      summary: 'Things to read next',
-      defaultTitle: 'Books to read',
-      icon: 'book',
+      templateKey: 'plants-to-water',
+      chooserLabel: 'Plants to water',
+      summary: 'A watering checklist',
+      defaultTitle: 'Plants to water',
+      icon: 'leaf',
       behaviour: 'collection',
-      capabilities: { checkable: false, supportsLocation: false },
+      capabilities: { checkable: true, supportsLocation: false },
       slot: null,
-      emptyStateCopy: 'Add a book to read.',
+      emptyStateCopy: 'Add a plant to water.',
     } as const;
     const extended = [...LIST_TEMPLATES, fixture];
 
@@ -147,6 +149,34 @@ describe('the route contract', () => {
       pattern: '/v1/list-templates',
       auth: 'authenticated',
     });
+  });
+
+  /**
+   * P3-07's API half: the catalogue is served, and **nothing ranks it**. No route proposes
+   * a style from a title, and an unmounted path answers `501` rather than guessing
+   * (acceptance criterion 6). The repo-wide symbol half is
+   * `scripts/check-forbidden.mjs no-template-suggester`.
+   */
+  it('registers no route that would propose a style', async () => {
+    const { ROUTE_REGISTRY } = await import('../middleware/routeRegistry.js');
+
+    expect(
+      ROUTE_REGISTRY.filter((entry) => /suggest|recommend|match/i.test(entry.pattern)),
+    ).toEqual([]);
+
+    const res = await createApp().fetch(
+      new Request('http://localhost/v1/lists/suggest-template', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': crypto.randomUUID(),
+        },
+        body: JSON.stringify({ title: 'Costco run' }),
+      }),
+    );
+
+    expect(res.status).toBe(501);
+    expect((await res.json()).error.code).toBe('not_implemented');
   });
 
   it('401s when identity resolution fails', async () => {

@@ -132,6 +132,33 @@ const RULES = {
   },
 
   /**
+   * **The user's tap is the only thing that picks a style** (phase-03 §P3-07, ADR-032,
+   * acceptance criterion 6). There is no `suggest-template` route, matcher, match-term
+   * array, fuzzy search, model call, ranking or word-based fallback anywhere in the product,
+   * and the failure this prevents is specific: `Costco run` silently becoming Groceries, or
+   * an ambiguous title quietly landing on the `Blank` style, so the words rather than the
+   * person choose what is being made.
+   *
+   * A repo-wide symbol ban rather than a unit test, because the thing being asserted is an
+   * **absence** and no single package can assert it about the others: a matcher could be
+   * reintroduced in `apps/mobile` and every test in `packages/shared` would still pass.
+   *
+   * The one exempt file is P3-07's contract test, which must name what it proves absent.
+   */
+  'no-template-suggester': {
+    description:
+      'No template suggester: the user taps a style, and no title, model or heuristic picks one',
+    doc: 'phase-03 P3-07 and acceptance criterion 6 — there is no suggest-template route, matcher or fallback anywhere in v1',
+    roots: ['services/api/src', 'apps', 'packages'],
+    extensions: ['.ts', '.tsx'],
+    pattern: /\bsuggest[-_]?[Tt]emplate|\bsuggestedTemplate\b|\btemplateSuggest/,
+    excludePath:
+      /packages[\\/]shared[\\/]src[\\/]lists[\\/]__tests__[\\/]templateChoices\.test\.ts$/,
+    // Prose may name the thing it forbids; only code that implements one is a violation.
+    codeOnly: true,
+  },
+
+  /**
    * Covers the two client rules dependency-cruiser cannot see, because it cannot parse
    * `.tsx` at all under TypeScript 7 (see the note in `.dependency-cruiser.cjs`). Textual
    * matching is weaker than a resolved module graph — it sees the specifier, not where it
