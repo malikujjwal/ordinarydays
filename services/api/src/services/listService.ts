@@ -16,9 +16,10 @@ import { assertActivityAccess, assertListAccess } from './authz.js';
  * The read and delete halves of Lists CRUD (`phase-03` §P3-05); creation is
  * `listCreationService.ts`, and items, settings and undo arrive with P3-08 to P3-10.
  *
- * Every `LIST#` read here goes through `assertListAccess` first: the exact caller pointer is
- * the grant, a stranger gets `404`, and the repository refuses to touch the canonical
- * partition without the grant object that read produced (`security-privacy.md` §1 row 4a).
+ * Every read of a list partition goes through `assertListAccess` first: the exact caller
+ * pointer is the grant, a stranger gets `404`, and the repository refuses to touch the
+ * canonical partition without the grant object that read produced
+ * (`security-privacy.md` §1 row 4a).
  */
 
 const LIST_NOT_FOUND = 'List not found.';
@@ -42,7 +43,7 @@ export interface ListDetailProjection {
  * `GET /v1/lists/:id` — META alone, or pattern 8b's fenced first page with the caller-only
  * link join.
  *
- * With `includeItems`, the repository's fenced read supplies the page; the caller's `LNK#`
+ * With `includeItems`, the repository's fenced read supplies the page; the caller's link
  * rows are then batch-read for exactly those item ids, and each surviving link is kept only
  * after ordinary Activity authorisation (`assertActivityAccess`, `read`). A stale pointer —
  * its Activity deleted or no longer readable — is omitted rather than serialised as a dead
