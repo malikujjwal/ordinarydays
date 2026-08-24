@@ -9,7 +9,6 @@ import {
   listItems,
   listListsForUser,
 } from '../repositories/listRepository.js';
-import { getProfile } from '../repositories/userRepository.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
 
 /**
@@ -95,10 +94,12 @@ export async function getListDetail(
  * mid-cascade resumes it rather than answering `404` while child rows survive; once the
  * final transaction has removed the pointer, a second call is `404` from the access check.
  *
- * When the list holds a `slot` and the caller's profile default for that slot is exactly
- * this list, the repository clears that one nested key in the same transaction as the META
- * removal, conditioned on the value re-asserting — a newer choice made concurrently on
- * another device survives (P3-12's read-side guard remains the belt to this braces).
+ * When the list holds a `slot`, the repository always attempts to clear the caller's
+ * `defaultLists[slot]` in the same transaction as the META removal, conditioned on that
+ * slot naming exactly this list. No profile pre-read decides it — a stale read that missed
+ * a concurrent selection would wrongly skip the cleanup — and a slot holding any other
+ * value, including a newer choice from another device, fails only that item and survives
+ * (P3-12's read-side guard remains the belt to these braces).
  */
 export async function removeList(
   userId: string,
@@ -109,18 +110,13 @@ export async function removeList(
   const list = await getListMetaForDeletion(userId, listId, access.index);
   if (list === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
 
-  const profile = await getProfile(userId);
-  const slot = list.slot;
-  const clearProfileDefault =
-    slot !== null && profile?.defaultLists?.[slot] === listId ? { slot } : undefined;
-
   await deleteList(userId, listId, access.index, {
     now,
     expectedUpdatedAt: list.updatedAt,
     ...(list.sourceActivityId === undefined
       ? {}
       : { sourceActivityId: list.sourceActivityId }),
-    ...(clearProfileDefault === undefined ? {} : { clearProfileDefault }),
+    ...(list.slot === null ? {} : { clearProfileDefault: { slot: list.slot } }),
   });
 
   return listId;

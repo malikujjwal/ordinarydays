@@ -357,6 +357,39 @@ describe('creating a list', () => {
       expect(projection).not.toHaveProperty('itemCount');
     });
 
+    it('re-asserts the source Plan inside the create transaction', async () => {
+      seedGets([activityMetaRow()]);
+
+      await post(createApp(), {
+        title: 'Groceries',
+        templateKey: 'groceries',
+        sourceActivityId: ACT,
+      });
+
+      // The service's pre-read can go stale; the commit-time checks are what stop a
+      // deleted or converted Plan from gaining a fresh projection.
+      const checks = transacted().flatMap((entry) =>
+        entry.ConditionCheck === undefined ? [] : [entry.ConditionCheck],
+      ) as Array<{
+        Key?: Record<string, unknown>;
+        ConditionExpression?: string;
+        ExpressionAttributeValues?: Record<string, unknown>;
+      }>;
+      const metaCheck = checks.find(
+        (check) => check.Key?.pk === `ACT#${ACT}` && check.Key?.sk === 'META',
+      );
+      expect(metaCheck?.ConditionExpression).toContain('attribute_exists(pk)');
+      expect(metaCheck?.ExpressionAttributeValues).toMatchObject({
+        ':sourceOwner': DEV,
+        ':plan': 'plan',
+      });
+      expect(
+        checks.some(
+          (check) => check.Key?.pk === `ACT#${ACT}` && check.Key?.sk === 'TOMBSTONE',
+        ),
+      ).toBe(true);
+    });
+
     it('400s a source that is not a Plan, writing nothing', async () => {
       seedGets([activityMetaRow(DEV, { objectKind: 'task', type: 'task' })]);
 
@@ -597,23 +630,24 @@ describe('DELETE /v1/lists/:id', () => {
     ).toBe(true);
   });
 
-  it('clears the caller’s profile default in the META transaction when it names this list', async () => {
-    seedDelete([
-      {
-        pk: `USER#${DEV}`,
-        sk: 'PROFILE',
-        entity: 'User',
-        userId: DEV,
-        defaultLists: { groceries: LST },
-      },
-    ]);
+  it('always attempts the conditional profile-default clear in the META transaction', async () => {
+    // No profile pre-read decides this: a stale read that missed a concurrent selection
+    // would wrongly skip the cleanup. The condition is what protects any other value.
+    seedDelete();
 
     await del(createApp());
 
-    const profileClear = transacted().find(
-      (entry) => entry.Update?.Key?.sk === 'PROFILE',
-    );
-    expect(profileClear?.Update?.UpdateExpression).toBe('REMOVE #defaultLists.#slot');
+    const profileClear = transacted().find((entry) => entry.Update?.Key?.sk === 'PROFILE')
+      ?.Update as
+      | {
+          UpdateExpression?: string;
+          ConditionExpression?: string;
+          ExpressionAttributeValues?: Record<string, unknown>;
+        }
+      | undefined;
+    expect(profileClear?.UpdateExpression).toBe('REMOVE #defaultLists.#slot');
+    expect(profileClear?.ConditionExpression).toContain('#defaultLists.#slot = :listId');
+    expect(profileClear?.ExpressionAttributeValues).toMatchObject({ ':listId': LST });
     // It rides the same transaction as META's delete.
     const finish = ddbMock
       .commandCalls(TransactWriteCommand)
@@ -631,20 +665,64 @@ describe('DELETE /v1/lists/:id', () => {
     ).toBe(true);
   });
 
-  it('leaves the profile alone when the default names a different list', async () => {
-    seedDelete([
-      {
-        pk: `USER#${DEV}`,
-        sk: 'PROFILE',
-        entity: 'User',
-        userId: DEV,
-        defaultLists: { groceries: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X9' },
-      },
-    ]);
+  it('attempts no profile item when the list holds no slot', async () => {
+    seedGets([pointerRow(), listMetaRow({ slot: null })]);
+    ddbMock.on(QueryCommand).resolves({ Items: [listMetaRow({ slot: null })] as never });
+    ddbMock.on(BatchWriteCommand).resolves({});
 
     await del(createApp());
 
     expect(transacted().some((entry) => entry.Update?.Key?.sk === 'PROFILE')).toBe(false);
+  });
+
+  it('deletes a member’s roster row and their pointer in one atomic transaction', async () => {
+    const memberRow = {
+      pk: `LIST#${LST}`,
+      sk: 'MEMBER#psn_01J8XKQ2M4N5P6R7S8T9V0W1X7',
+      entity: 'ListMember',
+      listId: LST,
+      personId: 'psn_01J8XKQ2M4N5P6R7S8T9V0W1X7',
+      userId: 'usr_int_ben',
+      reciprocalPersonId: 'psn_01J8XKQ2M4N5P6R7S8T9V0W1X8',
+      displayName: 'Ben',
+      role: 'member',
+      status: 'active',
+      invitedBy: DEV,
+      addedAt: '2026-08-23T00:00:00.000Z',
+    };
+    seedDelete([memberRow]);
+
+    await del(createApp());
+
+    // The roster row is the only durable record of where the pointer lives, so the two
+    // must go together — a batch delete of the row alone could strand the pointer.
+    const pairTransaction = ddbMock
+      .commandCalls(TransactWriteCommand)
+      .find((call) =>
+        (call.args[0].input.TransactItems ?? []).some(
+          (item) =>
+            (item as { Delete?: { Key?: { sk?: string } } }).Delete?.Key?.sk ===
+            memberRow.sk,
+        ),
+      );
+    expect(pairTransaction).toBeDefined();
+    expect(
+      (pairTransaction?.args[0].input.TransactItems ?? []).some((item) => {
+        const key = (item as { Delete?: { Key?: { pk?: string; sk?: string } } }).Delete
+          ?.Key;
+        return key?.pk === 'USER#usr_int_ben' && key?.sk === `LIST#${LST}`;
+      }),
+    ).toBe(true);
+    // And the batch path never sees the roster row again.
+    const batched = ddbMock
+      .commandCalls(BatchWriteCommand)
+      .flatMap((call) => Object.values(call.args[0].input.RequestItems ?? {}).flat())
+      .map(
+        (request) =>
+          (request as { DeleteRequest?: { Key?: { sk?: string } } }).DeleteRequest?.Key
+            ?.sk,
+      );
+    expect(batched).not.toContain(memberRow.sk);
   });
 
   it('403s a member — owner only', async () => {

@@ -266,6 +266,53 @@ describe('a list created from a Plan', () => {
     expect(await rawItem(`ACT#${plan.activityId}`, 'META')).toBeDefined();
   });
 
+  it('re-asserts the source Plan at commit time, not only at the service pre-read', async () => {
+    // The service's authorisation read can go stale between the check and the write; the
+    // create transaction's own condition is what closes the deletion/conversion race.
+    const task = await post(app(), '/v1/activities', {
+      objectKind: 'task',
+      type: 'task',
+      title: 'Buy milk',
+    });
+    const taskId = (await task.json()).data.activityId as string;
+
+    const withConvertedSource: List = {
+      listId: repository.newListId(),
+      ownerId: DEV,
+      behaviour: 'collection',
+      templateKey: 'groceries',
+      title: 'Groceries',
+      icon: 'cart',
+      emptyStateCopy: 'Add something to buy.',
+      capabilities: { checkable: true, supportsLocation: false },
+      slot: null,
+      sourceActivityId: taskId,
+      itemCount: 0,
+      uncheckedCount: 0,
+      memberCount: 1,
+      rankVersion: 0,
+      archived: false,
+      updatedAt: NOW,
+    };
+    await expect(
+      repository.createList(DEV, withConvertedSource, { now: NOW }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(await rawItem(`LIST#${withConvertedSource.listId}`, 'META')).toBeUndefined();
+    expect(
+      await rawItem(`ACT#${taskId}`, `SOURCE_LIST#${withConvertedSource.listId}`),
+    ).toBeUndefined();
+
+    const withDeletedSource: List = {
+      ...withConvertedSource,
+      listId: repository.newListId(),
+      sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X9',
+    };
+    await expect(
+      repository.createList(DEV, withDeletedSource, { now: NOW }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(await rawItem(`LIST#${withDeletedSource.listId}`, 'META')).toBeUndefined();
+  });
+
   it('rejects a source that is not an owned Plan', async () => {
     const task = await post(app(), '/v1/activities', {
       objectKind: 'task',
@@ -436,6 +483,94 @@ describe('deleting a list', () => {
     expect(await rawItem(`USER#${DEV}`, `LIST#${created.listId}`)).toBeUndefined();
     expect(await rawItem(`USER#${BEN}`, `LIST#${created.listId}`)).toBeUndefined();
     expect(await rawItem(`LIST#${created.listId}`, 'META')).toBeUndefined();
+  });
+
+  /**
+   * The two states a crash can actually leave behind under the paired cascade, each
+   * reconstructed directly and driven through a retried `DELETE`. The state the review
+   * feared — a roster row gone while its pointer survives — is unreachable by
+   * construction, because the two leave in one transaction.
+   */
+  describe('resuming a crashed cascade', () => {
+    const tombstoneRow = (listId: string) => ({
+      pk: `LIST#${listId}`,
+      sk: 'TOMBSTONE',
+      entity: 'ListTombstone',
+      listId,
+      ownerId: DEV,
+      deletedAt: NOW,
+      ttl: Math.floor(Date.parse(NOW) / 1000) + 30 * 24 * 60 * 60,
+      createdAt: NOW,
+      updatedAt: NOW,
+      schemaVersion: 1,
+    });
+
+    const seedMemberPair = async (listId: string) => {
+      await documents.send(
+        new PutCommand({
+          TableName: TEST_TABLE,
+          Item: {
+            pk: `LIST#${listId}`,
+            sk: 'MEMBER#psn_01J8XKQ2M4N5P6R7S8T9V0W1X7',
+            entity: 'ListMember',
+            listId,
+            personId: 'psn_01J8XKQ2M4N5P6R7S8T9V0W1X7',
+            userId: BEN,
+            reciprocalPersonId: 'psn_01J8XKQ2M4N5P6R7S8T9V0W1X8',
+            displayName: 'Ben',
+            role: 'member',
+            status: 'active',
+            invitedBy: DEV,
+            addedAt: NOW,
+          },
+        }),
+      );
+      await documents.send(
+        new PutCommand({
+          TableName: TEST_TABLE,
+          Item: {
+            pk: `USER#${BEN}`,
+            sk: `LIST#${listId}`,
+            entity: 'ListIndex',
+            listId,
+            userId: BEN,
+            role: 'member',
+            addedAt: NOW,
+          },
+        }),
+      );
+    };
+
+    it('after the tombstone landed but before anything else, stranding no pointer', async () => {
+      const created = await createListVia(app(), {});
+      await seedMemberPair(created.listId);
+      await documents.send(
+        new PutCommand({ TableName: TEST_TABLE, Item: tombstoneRow(created.listId) }),
+      );
+
+      expect((await del(app(), created.listId)).status).toBe(200);
+
+      expect(
+        await rawItem(`LIST#${created.listId}`, 'MEMBER#psn_01J8XKQ2M4N5P6R7S8T9V0W1X7'),
+      ).toBeUndefined();
+      expect(await rawItem(`USER#${BEN}`, `LIST#${created.listId}`)).toBeUndefined();
+      expect(await rawItem(`USER#${DEV}`, `LIST#${created.listId}`)).toBeUndefined();
+      expect(await rawItem(`LIST#${created.listId}`, 'META')).toBeUndefined();
+    });
+
+    it('after the member pairs left but before the final transaction', async () => {
+      const created = await createListVia(app(), {});
+      await documents.send(
+        new PutCommand({ TableName: TEST_TABLE, Item: tombstoneRow(created.listId) }),
+      );
+
+      expect((await del(app(), created.listId)).status).toBe(200);
+
+      expect(await rawItem(`USER#${DEV}`, `LIST#${created.listId}`)).toBeUndefined();
+      expect(await rawItem(`LIST#${created.listId}`, 'META')).toBeUndefined();
+      // Once complete, a further retry is the honest 404.
+      expect((await del(app(), created.listId)).status).toBe(404);
+    });
   });
 });
 

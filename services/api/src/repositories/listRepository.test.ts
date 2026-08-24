@@ -216,19 +216,33 @@ describe('identity and list storage', () => {
     expect(repository.newListOperationId()).toMatch(/^op_[0-9A-HJKMNP-TV-Z]{26}$/);
   });
 
-  it('creates META, tombstone check, pointer, source projection and receipt', async () => {
-    await repository.createList(
-      ALICE,
-      list({ sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA' }),
-      { now: NOW, idempotencyReceipt: receipt },
-    );
+  it('creates META, tombstone check, pointer, source projection, guards and receipt', async () => {
+    const sourceActivityId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA';
+    await repository.createList(ALICE, list({ sourceActivityId }), {
+      now: NOW,
+      idempotencyReceipt: receipt,
+    });
 
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items).toHaveLength(5);
+    expect(items).toHaveLength(7);
     expect(items?.[0]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
     expect(items?.[1]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
     expect(items?.[2]?.Put?.Item).toMatchObject({ role: 'owner', addedAt: NOW });
     expect(items?.[3]?.Put?.Item).toMatchObject({ listId: LIST_ID });
+    // P3-05: the transaction re-asserts the source Plan at commit time — still the
+    // caller's, still a Plan, and not mid-deletion — so the service's pre-read going
+    // stale cannot leave a projection under a deleted or converted Activity.
+    expect(items?.[4]?.ConditionCheck?.Key).toEqual(keys.activityMeta(sourceActivityId));
+    expect(items?.[4]?.ConditionCheck?.ExpressionAttributeValues).toMatchObject({
+      ':sourceOwner': ALICE,
+      ':plan': 'plan',
+    });
+    expect(items?.[5]?.ConditionCheck?.Key).toEqual(
+      keys.activityTombstone(sourceActivityId),
+    );
+    expect(items?.[5]?.ConditionCheck?.ConditionExpression).toBe(
+      'attribute_not_exists(pk)',
+    );
   });
 
   it('maps both canonical collision indexes to one list-id error', async () => {
