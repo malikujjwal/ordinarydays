@@ -103,3 +103,10 @@ export const MAX_DATE_SUGGESTIONS = 5;
  * 1,024 bytes.
  */
 export const MAX_LEXO_RANK_LENGTH = 64;
+
+/**
+ * Lists one user may **own** (`api-contract.md` §2.7, `phase-03` §P3-05). Creation counts
+ * only owner pointers against it; incoming shared-list memberships do not consume the quota
+ * and are served by pagination, which is why the Lists-tab cursor is not optional.
+ */
+export const MAX_OWNED_LISTS = 100;

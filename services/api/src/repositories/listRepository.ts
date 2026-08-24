@@ -14,6 +14,7 @@ import {
 } from '@od/shared/schemas';
 import type {
   Activity,
+  DefaultSlot,
   List,
   ListCapabilities,
   ListIndex,
@@ -26,6 +27,7 @@ import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
 import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
+import { clearListProvenance } from './activityRepository.js';
 import {
   batchGetItems,
   deleteAll,
@@ -45,11 +47,13 @@ import {
 import { receiptItem } from './idempotencyRepository.js';
 import {
   activityMeta,
+  activityTombstone,
   listItemActivityLink,
   listItem as listItemKey,
   listItemLocator,
   listItemPrefix,
   listItemTombstone,
+  listMember as listMemberKey,
   listMemberPrefix,
   listMeta,
   listPartition,
@@ -61,6 +65,7 @@ import {
 } from './keys.js';
 import type { StoredItem } from './migrate.js';
 import { TransactionBuilder, transactWrite } from './tx.js';
+import { removeDefaultListTransactItem } from './userRepository.js';
 
 /**
  * The storage half of Lists and ListItems (`data-model.md` patterns 7, 8, 8b and 8d).
@@ -99,6 +104,8 @@ const ENTITY = {
   locator: 'ListItemLocator',
   itemTombstone: 'ListItemTombstone',
   link: 'ListItemActivityLink',
+  /** Written first in Phase 6; the delete cascade already iterates it (§P3-05). */
+  member: 'ListMember',
   undo: 'ListUndo',
   tombstone: 'ListTombstone',
   sourceList: 'SourceList',
@@ -335,7 +342,16 @@ export interface CreateListOptions {
   readonly idempotencyReceipt?: IdempotencyReceipt;
 }
 
-/** Creates canonical META, owner pointer, optional source projection and receipt atomically. */
+/**
+ * Creates canonical META, owner pointer, optional source projection and receipt atomically.
+ *
+ * When the list carries a `sourceActivityId`, the same transaction **re-asserts** at commit
+ * time what the service verified before it: the source Activity still exists, still belongs
+ * to the caller, is still a Plan, and is not mid-deletion. Without those checks a Plan
+ * deleted or converted between the service's read and this write would leave a fresh
+ * projection under a gone or wrong-kind Activity partition; a failed check cancels the
+ * whole create as the ordinary safe `conflict`.
+ */
 export async function createList(
   userId: string,
   list: List,
@@ -380,6 +396,24 @@ export async function createList(
               }),
             },
           },
+          {
+            ConditionCheck: {
+              Key: activityMeta(list.sourceActivityId),
+              ConditionExpression:
+                'attribute_exists(pk) AND #ownerId = :sourceOwner AND #objectKind = :plan',
+              ExpressionAttributeNames: {
+                '#ownerId': 'ownerId',
+                '#objectKind': 'objectKind',
+              },
+              ExpressionAttributeValues: { ':sourceOwner': userId, ':plan': 'plan' },
+            },
+          },
+          {
+            ConditionCheck: {
+              Key: activityTombstone(list.sourceActivityId),
+              ConditionExpression: 'attribute_not_exists(pk)',
+            },
+          },
         ]),
   ] as const;
 
@@ -396,6 +430,7 @@ export async function createList(
     operation: 'createList',
     onConditionFailed: (index) => {
       if (index === 0 || index === 1) return new ListIdUnavailableError();
+      // A failed source-Plan re-assertion falls through to the default safe conflict.
       return options.idempotencyReceipt !== undefined && index === receiptIndex
         ? new IdempotencyRaceError()
         : undefined;
@@ -424,6 +459,22 @@ export async function getListMeta(
 ): Promise<List | undefined> {
   assertListAccessGrant(userId, listId, access);
   return getLiveListMetaStrong(listId);
+}
+
+/**
+ * The delete path's META read: strong and deliberately **not** tombstone-filtered, so a
+ * retried `DELETE` can resume a cascade whose tombstone is already down while META and the
+ * pointer still exist. Every other reader goes through {@link getListMeta}, which hides a
+ * deleting list; only the owner-only delete service may see one mid-cascade.
+ */
+export async function getListMetaForDeletion(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+): Promise<List | undefined> {
+  assertListAccessGrant(userId, listId, access);
+  const row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
+  return row === undefined ? undefined : parseList(row);
 }
 
 export interface UserListEntry {
@@ -478,13 +529,22 @@ export async function listListsForUser(
   };
 }
 
-/** The owner-only count P3-05 uses for the 100-owned-list creation cap. */
+/**
+ * The owner-only count P3-05 uses for the 100-owned-list creation cap.
+ *
+ * Strongly consistent, so a sequential create-then-create cannot slip past the cap on a
+ * stale replica. Two genuinely **concurrent** creates can still both observe 99 — closing
+ * that needs a per-user counter advanced in the create transaction, which is a new access
+ * pattern awaiting a `data-model.md` row; §P3-05 prescribes the pointer count, so the gap
+ * is raised in the PR rather than silently redesigned.
+ */
 export async function countOwnedLists(userId: string): Promise<number> {
   const prefix = listPointerPrefix(userId);
   return queryCount(
     { pk: prefix.pk },
     {
       skPrefix: prefix.skPrefix,
+      consistentRead: true,
       filterEquals: { attribute: 'role', value: 'owner' },
       keyAttributes: TABLE_KEY,
     },
@@ -1659,11 +1719,32 @@ export interface DeleteListOptions {
   readonly now: string;
   readonly expectedUpdatedAt: string;
   readonly sourceActivityId?: string;
+  /**
+   * Clears `defaultLists[slot]` on the **caller's** profile in the same transaction as the
+   * META removal, conditioned on that slot still naming this list (P3-05, P3-12). The caller
+   * supplies it whenever the list holds a slot — no profile pre-read decides it, because a
+   * pre-read that missed a concurrent selection would wrongly skip the cleanup. A slot that
+   * is absent or names another list fails only this item, and the transaction retries
+   * without it, so the other value always survives.
+   */
+  readonly clearProfileDefault?: { readonly slot: DefaultSlot };
+}
+
+/** The profile-default item's condition failed: a newer destination choice survives. */
+class StaleProfileDefaultError extends Error {
+  constructor() {
+    super('The profile default changed while the list was being deleted.');
+    this.name = 'StaleProfileDefaultError';
+  }
 }
 
 /**
- * Bounded cascade: install the tombstone/remove source projection first, delete child rows,
- * then remove the current Phase-3 owner pointer and META together at the authority seam.
+ * Bounded cascade: install the tombstone/remove source projection first, delete each
+ * member's roster row **atomically with** their external pointer, clear linked Activities'
+ * provenance, delete the remaining child rows, then remove the owner pointer and META —
+ * plus the caller's now-dangling profile default, when asked — at the authority seam.
+ * Every stage is idempotent and re-discoverable, so a crashed cascade resumes from the
+ * partition it can still read.
  */
 export async function deleteList(
   userId: string,
@@ -1711,7 +1792,53 @@ export async function deleteList(
   const partition = await queryAll<StoredItem>(listPartition(listId), {
     consistentRead: true,
   });
+
+  /**
+   * Each member's roster row and their external pointer leave **together, atomically**, in
+   * bounded chunks — never the roster row alone. The roster row is the only durable record
+   * of where the pointer lives, so deleting it first and the pointer later would let a
+   * crash strand a pointer no retry could rediscover; once the tombstone expires and the
+   * id is reused, that stale pointer would authorise the former member against the new
+   * list. Phase 3 never writes a member, but the cascade owns the shape Phase 6 inherits
+   * (§P3-05, `data-model.md` §7 "Delete shared list"). An invited member has no pointer,
+   * so their transaction holds the roster row alone.
+   */
+  const members = partition
+    .filter((row) => row.entity === ENTITY.member)
+    .map(parseListMember);
+  const MEMBERS_PER_CHUNK = 24;
+  for (let from = 0; from < members.length; from += MEMBERS_PER_CHUNK) {
+    const builder = new TransactionBuilder('deleteListMembers');
+    for (const member of members.slice(from, from + MEMBERS_PER_CHUNK)) {
+      builder.add({ Delete: { Key: listMemberKey(listId, member.personId) } });
+      if (member.status === 'active' && member.userId !== undefined) {
+        builder.add({ Delete: { Key: listPointer(member.userId, listId) } });
+      }
+    }
+    await transactWrite(builder.build(), { operation: 'deleteListMembers' });
+  }
+
+  /**
+   * Every Activity a current `LNK#` pointer names has its `listId` / `listItemId`
+   * back-pointers cleared — never the Activity deleted (`plans-and-lists.md` §6.3). Each
+   * clear is conditional on the Activity still naming this list, so a repointed or deleted
+   * Activity is skipped, and re-running the cascade after a crash converges.
+   */
+  const linkedActivityIds = [
+    ...new Set(
+      partition
+        .filter((row) => row.entity === ENTITY.link)
+        .map((row) => parseListItemActivityLink(row).activityId),
+    ),
+  ];
+  for (const activityId of linkedActivityIds) {
+    await clearListProvenance(activityId, listId);
+  }
+
+  // Member rows went with their pointers above; everything else but META and the
+  // tombstone is unpaired and batches freely.
   const childKeys = partition
+    .filter((row) => row.entity !== ENTITY.member)
     .map((row) => ({ pk: String(row.pk), sk: String(row.sk) }))
     .filter(
       (key) =>
@@ -1720,25 +1847,44 @@ export async function deleteList(
     );
   await deleteAll(childKeys);
 
-  await transactWrite(
-    new TransactionBuilder('finishDeleteList')
-      .add(
-        { Delete: { Key: listPointer(userId, listId) } },
-        {
-          Delete: {
-            Key: metaKey,
-            ConditionExpression: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
-            ExpressionAttributeNames: {
-              '#updatedAt': 'updatedAt',
-              ...GATE_NAMES,
-            },
-            ExpressionAttributeValues: {
-              ':expectedUpdatedAt': options.expectedUpdatedAt,
-            },
+  let clearDefault = options.clearProfileDefault;
+  for (;;) {
+    const builder = new TransactionBuilder('finishDeleteList').add(
+      { Delete: { Key: listPointer(userId, listId) } },
+      {
+        Delete: {
+          Key: metaKey,
+          ConditionExpression: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
+          ExpressionAttributeNames: {
+            '#updatedAt': 'updatedAt',
+            ...GATE_NAMES,
+          },
+          ExpressionAttributeValues: {
+            ':expectedUpdatedAt': options.expectedUpdatedAt,
           },
         },
-      )
-      .build(),
-    { operation: 'finishDeleteList' },
-  );
+      },
+    );
+    const profileIndex = clearDefault === undefined ? -1 : builder.length;
+    if (clearDefault !== undefined) {
+      builder.add(removeDefaultListTransactItem(userId, clearDefault.slot, listId));
+    }
+
+    try {
+      await transactWrite(builder.build(), {
+        operation: 'finishDeleteList',
+        onConditionFailed: (index) =>
+          index === profileIndex ? new StaleProfileDefaultError() : undefined,
+      });
+      return;
+    } catch (error) {
+      // The slot is absent, or names another list — including a newer choice made on
+      // another device mid-delete. That value survives; the delete retries without the item.
+      if (error instanceof StaleProfileDefaultError && clearDefault !== undefined) {
+        clearDefault = undefined;
+        continue;
+      }
+      throw error;
+    }
+  }
 }

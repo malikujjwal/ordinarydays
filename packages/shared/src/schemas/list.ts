@@ -7,7 +7,7 @@ import {
   MAX_NOTES_LEN,
   MAX_TITLE_LEN,
 } from '../constants.js';
-import { ulidId, userId } from './common.js';
+import { cursor, ulidId, userId } from './common.js';
 import { defaultSlot } from './user.js';
 
 /**
@@ -310,3 +310,60 @@ export function bulkCreateListItemsInputFor(behaviour: z.infer<typeof listBehavi
     });
   });
 }
+
+/**
+ * The List an API response carries (`api-contract.md` §2.7, P3-05).
+ *
+ * The stored shape minus the two storage-only work markers: `rankRepairId` and
+ * `behaviourMigrationId` gate reads while repair or migration runs and are **never
+ * serialised** (`data-model.md` §4.6). `rankVersion` stays — item-page cursors are bound to
+ * it, and the client hands it back opaquely inside them.
+ */
+export const listView = list
+  .omit({ rankRepairId: true, behaviourMigrationId: true })
+  .meta({ id: 'ListView' });
+
+/** The ListItem a response carries: the stored shape minus its storage-only revision fence. */
+export const listItemView = listItem
+  .omit({ itemRevision: true })
+  .meta({ id: 'ListItemView' });
+
+/**
+ * One row of a list detail's item page: the item plus the **caller's own** Activity link,
+ * present only when this viewer has planned the item and may still read that Activity.
+ * Another member's pointer is never response data (ADR-034, `api-contract.md` §3).
+ */
+export const listDetailItem = z
+  .object({
+    item: listItemView,
+    viewerLink: listItemActivityLink.optional(),
+  })
+  .meta({ id: 'ListDetailItem' });
+
+/**
+ * `GET /v1/lists/:id` (`api-contract.md` §2.7): META always; the fenced first item page and
+ * its rank-version-bound cursor only when `includeItems=true` asked for them. Later item
+ * pages go through `GET /v1/lists/:id/items?cursor=` (P3-08).
+ */
+export const listDetail = z
+  .object({
+    list: listView,
+    items: z.array(listDetailItem).optional(),
+    nextCursor: cursor.optional(),
+  })
+  .meta({ id: 'ListDetail' });
+
+/** `DELETE /v1/lists/:id` names what was removed, per §1's DELETE-answers-200 rule. */
+export const deletedList = z
+  .object({ listId: ulidId('lst') })
+  .meta({ id: 'DeletedList' });
+
+/** `GET /v1/lists` query. Strict, so a misspelled parameter is a `400` naming it. */
+export const listListQuery = z
+  .strictObject({ cursor: cursor.optional() })
+  .meta({ id: 'ListListQuery' });
+
+/** `GET /v1/lists/:id` query. `includeItems=true` asks for the fenced first item page. */
+export const listDetailQuery = z
+  .strictObject({ includeItems: z.enum(['true', 'false']).optional() })
+  .meta({ id: 'ListDetailQuery' });

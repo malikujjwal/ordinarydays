@@ -3566,6 +3566,387 @@
           "reminderId"
         ]
       },
+      "ListView": {
+        "type": "object",
+        "properties": {
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "ownerId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 40,
+            "pattern": "^usr_[A-Za-z0-9_-]+$"
+          },
+          "behaviour": {
+            "type": "string",
+            "enum": [
+              "collection",
+              "watch",
+              "meals"
+            ]
+          },
+          "templateKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "emptyStateCopy": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "checkable": {
+                "type": "boolean"
+              },
+              "supportsLocation": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "checkable",
+              "supportsLocation"
+            ]
+          },
+          "slot": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "groceries",
+              "watch",
+              "meals",
+              null
+            ]
+          },
+          "sourceActivityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "itemCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uncheckedCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "memberCount": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "rankVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "listId",
+          "ownerId",
+          "behaviour",
+          "templateKey",
+          "title",
+          "icon",
+          "emptyStateCopy",
+          "capabilities",
+          "slot",
+          "itemCount",
+          "uncheckedCount",
+          "memberCount",
+          "rankVersion",
+          "archived",
+          "updatedAt"
+        ]
+      },
+      "CreateListInput": {
+        "type": "object",
+        "properties": {
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "templateKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "sourceActivityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          }
+        },
+        "required": [
+          "title",
+          "templateKey"
+        ],
+        "additionalProperties": false
+      },
+      "ListDetail": {
+        "type": "object",
+        "properties": {
+          "list": {
+            "$ref": "#/components/schemas/ListView"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListDetailItem"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+          }
+        },
+        "required": [
+          "list"
+        ]
+      },
+      "ListDetailItem": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/ListItemView"
+          },
+          "viewerLink": {
+            "type": "object",
+            "properties": {
+              "listId": {
+                "type": "string",
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "itemId": {
+                "type": "string",
+                "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "viewerUserId": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 40,
+                "pattern": "^usr_[A-Za-z0-9_-]+$"
+              },
+              "activityId": {
+                "type": "string",
+                "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "linkedAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "listId",
+              "itemId",
+              "viewerUserId",
+              "activityId",
+              "linkedAt"
+            ]
+          }
+        },
+        "required": [
+          "item"
+        ]
+      },
+      "ListItemView": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "rank": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "checked": {
+            "type": "boolean"
+          },
+          "location": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "lat": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              },
+              "lng": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              }
+            },
+            "required": [
+              "label"
+            ]
+          },
+          "sourceActivityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "sourceLabel": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "behaviour": {
+                    "type": "string",
+                    "enum": [
+                      "watch"
+                    ]
+                  },
+                  "mediaKind": {
+                    "type": "string",
+                    "enum": [
+                      "movie",
+                      "show"
+                    ]
+                  },
+                  "watchStatus": {
+                    "type": "string",
+                    "enum": [
+                      "want",
+                      "watching",
+                      "watched"
+                    ]
+                  },
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "behaviour",
+                  "watchStatus"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "behaviour": {
+                    "type": "string",
+                    "enum": [
+                      "meals"
+                    ]
+                  },
+                  "ingredients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "ingredientId": {
+                          "type": "string",
+                          "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "quantity": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "addedToListId": {
+                          "type": "string",
+                          "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        }
+                      },
+                      "required": [
+                        "ingredientId",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 60
+                  }
+                },
+                "required": [
+                  "behaviour"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "itemId",
+          "listId",
+          "rank",
+          "title",
+          "checked"
+        ]
+      },
+      "DeletedList": {
+        "type": "object",
+        "properties": {
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          }
+        },
+        "required": [
+          "listId"
+        ]
+      },
       "CaptureParseInput": {
         "type": "object",
         "properties": {
@@ -5878,6 +6259,323 @@
           },
           "404": {
             "description": "No such activity, no caller relationship, or no caller-owned reminder.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists": {
+      "get": {
+        "summary": "The caller’s lists, a page at a time",
+        "description": "Pages active List pointers 50 at a time, then batch-reads that page’s current META rows — one Query and one BatchGetItem per page. `meta.nextCursor` is present only when there is another page; a client pages until it is absent. The 100 cap applies to Lists the caller owns, not memberships received from other owners, which is why the cursor is not optional.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the caller’s Lists, in pointer order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ListView"
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed cursor, or a parameter outside the strict query schema.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a list from an explicitly selected template",
+        "description": "Requires the visible `title` and the `templateKey` the user tapped. The server copies behaviour, capabilities, slot, icon and empty-state copy from that exact catalogue entry onto the new row — values, never a live reference — and stores `templateKey` as provenance only. A missing or unknown key is `400`; there is no `simple-list` fallback and no title matching. The body is strict, so a client-supplied `behaviour`, `capabilities`, `slot`, `icon` or `emptyStateCopy` is a `400` naming it. `sourceActivityId` must name an owned Plan and forces the copied slot to `null`, writing the id-only reverse projection in the same transaction. Optional `listId` is the permanent client-minted `lst_` ULID for durable offline creation; a collision answers with the same metadata-free conflict as Activity creation. Creating, so an `Idempotency-Key` is required. At 100 owned lists, creation is refused.",
+        "tags": [
+          "lists"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateListInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created list, with every copied field on the row.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ListView"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing or unknown template, an empty title, a copied field in the body, a malformed client id, the owned-list cap, or a missing `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A `sourceActivityId` this caller has no relationship to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A client-minted `listId` that is already in use or retained by a deletion tombstone. The message carries no metadata about the id’s fate.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists/{id}": {
+      "get": {
+        "summary": "One list, with an optional first item page",
+        "description": "META alone by default. With `includeItems=true`, adds the strongly fenced first 50 items in `(rank, itemId)` order, an opaque cursor bound to the META rank version, and the caller’s own `viewerLink` per item — never another member’s. A repair or behaviour-migration fence returns `503` with `Retry-After: 1` and no item rows. Also the authoritative read durable creation reconciles a lost response against: `200` adopts the server row, `404` parks the intent.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "includeItems",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list, and the fenced first item page when asked for.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ListDetail"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list, or none this caller has a pointer to. The two are deliberately indistinguishable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a list",
+        "description": "Owner only — a member gets `403`, anyone else `404`. Writes the replay-window tombstone, removes the `SOURCE_LIST#` projection when present, clears `listId` and `listItemId` on Activities named by current viewer links — never deleting an Activity — then removes every item, link and pointer, and clears the caller’s profile default for the list’s slot when it still points here. Safe to retry; once complete, a second call answers `404`. Answers `200` with the envelope, never `204`.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list is gone. `data` names the id that was removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DeletedList"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A member. They can see the list; deleting it is the owner’s.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list, none this caller can see — and the answer a repeated delete gets once the first has succeeded.",
             "content": {
               "application/json": {
                 "schema": {

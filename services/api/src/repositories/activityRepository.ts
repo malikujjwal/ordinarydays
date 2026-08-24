@@ -11,7 +11,15 @@ import {
   IdempotencyRaceError,
   type IdempotencyReceipt,
 } from '../lib/idempotency.js';
-import { batchGetItems, deleteAll, getItem, type Page, query, queryAll } from './base.js';
+import {
+  batchGetItems,
+  deleteAll,
+  getItem,
+  type Page,
+  query,
+  queryAll,
+  updateItem,
+} from './base.js';
 import { cleanupItem, receiptItem } from './idempotencyRepository.js';
 import {
   activityIndex,
@@ -941,4 +949,35 @@ export async function listOverdueTaskCandidates(
 export async function listChildPointers(activityId: string): Promise<StoredItem[]> {
   const prefix = childPointerPrefix(activityId);
   return queryAll<StoredItem>({ pk: prefix.pk }, { skPrefix: prefix.skPrefix });
+}
+
+/**
+ * Removes `listId` and `listItemId` from one Activity when they still name the given List.
+ *
+ * The narrow provenance-cleanup helper the list delete cascade uses (`data-model.md` §7
+ * "Delete shared list", P3-05): it `REMOVE`s exactly the two back-pointer attributes and
+ * deliberately leaves `updatedAt` alone — provenance cleanup is not a user edit, and bumping
+ * the concurrency token would fail an unrelated open `If-Match` sheet on another device.
+ *
+ * The condition re-asserts that the Activity still names this List, so one that is gone or
+ * has since been repointed at a different list is **skipped**, never clobbered. This runs on
+ * a retryable cascade, so finding the pointer stale is expected rather than exceptional.
+ */
+export async function clearListProvenance(
+  activityId: string,
+  listId: string,
+): Promise<void> {
+  try {
+    await updateItem(activityMeta(activityId), {
+      expression: 'REMOVE #listId, #listItemId',
+      names: { '#listId': 'listId', '#listItemId': 'listItemId' },
+      values: { ':listId': listId },
+      condition: 'attribute_exists(pk) AND #listId = :listId',
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
+  }
 }

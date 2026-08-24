@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import { MAX_LIST_ITEMS } from '../constants.js';
+import type { DeletedList } from '../types/deletedList.js';
 import type {
   List,
   ListBehaviour,
@@ -12,6 +13,10 @@ import type {
   ListMember,
   ListTemplate,
 } from '../types/list.js';
+import type { ListDetail } from '../types/listDetail.js';
+import type { ListDetailItem } from '../types/listDetailItem.js';
+import type { ListItemView } from '../types/listItemView.js';
+import type { ListView } from '../types/listView.js';
 import {
   bulkCreateListItemsInput,
   bulkCreateListItemsInputFor,
@@ -19,16 +24,23 @@ import {
   createListInput,
   createListItemInput,
   createListItemInputFor,
+  type deletedList,
   list,
   listBehaviour,
   type listCapabilities,
+  listDetail,
+  type listDetailItem,
+  listDetailQuery,
   listIndex,
   listItem,
   listItemActivityLink,
   listItemDetails,
   listItemDetailsInput,
+  listItemView,
+  listListQuery,
   listMember,
   listTemplate,
+  listView,
 } from './list.js';
 
 /**
@@ -575,5 +587,84 @@ describe('details.behaviour must match the list behaviour', () => {
     expect(mismatch.error?.issues[0]?.message).toBe(
       'details.behaviour must be "collection" to match the list',
     );
+  });
+});
+
+/** The P3-05 response shapes, pinned to their interfaces like everything above. */
+describe('the response projections', () => {
+  it('ListView is assignable both ways', () => {
+    expectTypeOf<z.infer<typeof listView>>().toEqualTypeOf<ListView>();
+  });
+
+  it('ListItemView is assignable both ways', () => {
+    expectTypeOf<z.infer<typeof listItemView>>().toEqualTypeOf<ListItemView>();
+  });
+
+  it('ListDetailItem is assignable both ways', () => {
+    expectTypeOf<z.infer<typeof listDetailItem>>().toEqualTypeOf<ListDetailItem>();
+  });
+
+  it('ListDetail is assignable both ways', () => {
+    expectTypeOf<z.infer<typeof listDetail>>().toEqualTypeOf<ListDetail>();
+  });
+
+  it('DeletedList is assignable both ways', () => {
+    expectTypeOf<z.infer<typeof deletedList>>().toEqualTypeOf<DeletedList>();
+  });
+
+  it('ListView drops the two storage-only work markers and keeps rankVersion', () => {
+    const parsed = listView.parse({
+      ...storedList,
+      rankRepairId: 'op_1',
+      behaviourMigrationId: 'op_2',
+    });
+    expect(parsed).not.toHaveProperty('rankRepairId');
+    expect(parsed).not.toHaveProperty('behaviourMigrationId');
+    expect(parsed.rankVersion).toBe(0);
+  });
+
+  it('ListItemView drops the storage-only revision fence and keeps the rank', () => {
+    const parsed = listItemView.parse(storedItem);
+    expect(parsed).not.toHaveProperty('itemRevision');
+    expect(parsed.rank).toBe('a0');
+  });
+
+  it('ListDetail carries META alone, or the item page with per-item viewer links', () => {
+    const view = listView.parse(storedList);
+    expect(listDetail.safeParse({ list: view }).success).toBe(true);
+    expect(
+      listDetail.safeParse({
+        list: view,
+        items: [
+          { item: listItemView.parse(storedItem) },
+          {
+            item: listItemView.parse({ ...storedItem, itemId: ITM }),
+            viewerLink: {
+              listId: LST,
+              itemId: ITM,
+              viewerUserId: 'usr_local_dev',
+              activityId: ACT,
+              linkedAt: '2026-08-23T00:00:00.000Z',
+            },
+          },
+        ],
+        nextCursor: 'eyJwayI6ImEifQ',
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('the list query schemas', () => {
+  it('listListQuery accepts a cursor and nothing else', () => {
+    expect(listListQuery.safeParse({}).success).toBe(true);
+    expect(listListQuery.safeParse({ cursor: 'eyJwayI6ImEifQ' }).success).toBe(true);
+    expect(listListQuery.safeParse({ limit: '50' }).success).toBe(false);
+  });
+
+  it('listDetailQuery accepts only the includeItems flag', () => {
+    expect(listDetailQuery.safeParse({}).success).toBe(true);
+    expect(listDetailQuery.safeParse({ includeItems: 'true' }).success).toBe(true);
+    expect(listDetailQuery.safeParse({ includeItems: 'yes' }).success).toBe(false);
+    expect(listDetailQuery.safeParse({ cursor: 'x' }).success).toBe(false);
   });
 });

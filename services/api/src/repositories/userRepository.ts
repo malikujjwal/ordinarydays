@@ -1,7 +1,8 @@
-import type { PatchUserInput, User } from '@od/shared/types';
+import type { DefaultSlot, PatchUserInput, User } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { getItem, putItem, updateItem } from './base.js';
 import { userProfile } from './keys.js';
+import type { TransactItem } from './tx.js';
 
 /**
  * The user profile — `USER#<userId>` / `PROFILE` (`data-model.md` §3.2, access pattern 6).
@@ -144,4 +145,30 @@ export async function patchProfile(
   });
 
   return updated as User | undefined;
+}
+
+/**
+ * The conditional transaction item that clears `defaultLists[slot]` when — and only when —
+ * that exact slot still points at the list being removed (phase-03 §P3-05; P3-12's slot
+ * changes reuse it).
+ *
+ * A **nested** `REMOVE`, never a whole-map `SET`, so sibling slots survive whatever else is
+ * happening to them. The condition re-asserts the value the caller read: a newer destination
+ * chosen concurrently on another device fails this item rather than being silently removed,
+ * and the caller retries its transaction without it.
+ */
+export function removeDefaultListTransactItem(
+  userId: string,
+  slot: DefaultSlot,
+  listId: string,
+): TransactItem {
+  return {
+    Update: {
+      Key: userProfile(userId),
+      UpdateExpression: 'REMOVE #defaultLists.#slot',
+      ConditionExpression: 'attribute_exists(pk) AND #defaultLists.#slot = :listId',
+      ExpressionAttributeNames: { '#defaultLists': 'defaultLists', '#slot': slot },
+      ExpressionAttributeValues: { ':listId': listId },
+    },
+  };
 }

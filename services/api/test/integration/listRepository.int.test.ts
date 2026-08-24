@@ -738,6 +738,14 @@ describe('item tombstones and list cascade', () => {
 
   it('leaves the list tombstone after child rows, source projection, pointer and META are gone', async () => {
     const sourceActivityId = 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA';
+    // P3-05's create transaction re-asserts the source Plan at commit time, so the
+    // fixture Plan must genuinely exist rather than being a dangling id.
+    const {
+      listId: _provenanceListId,
+      listItemId: _provenanceItemId,
+      ...sourcePlan
+    } = linkedActivity(sourceActivityId, ALICE, 'ignored', 'ignored');
+    await activityRepository.createActivity(ALICE, sourcePlan as Activity);
     const list = await createSubject({ sourceActivityId });
     const item = await repository.createListItem(
       ALICE,

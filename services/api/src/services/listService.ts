@@ -1,0 +1,123 @@
+import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
+import { AppError } from '../lib/errors.js';
+import type { Page } from '../repositories/base.js';
+import {
+  batchGetViewerLinks,
+  deleteList,
+  getListMeta,
+  getListMetaForDeletion,
+  listItems,
+  listListsForUser,
+} from '../repositories/listRepository.js';
+import { assertActivityAccess, assertListAccess } from './authz.js';
+
+/**
+ * The read and delete halves of Lists CRUD (`phase-03` §P3-05); creation is
+ * `listCreationService.ts`, and items, settings and undo arrive with P3-08 to P3-10.
+ *
+ * Every read of a list partition goes through `assertListAccess` first: the exact caller
+ * pointer is the grant, a stranger gets `404`, and the repository refuses to touch the
+ * canonical partition without the grant object that read produced
+ * (`security-privacy.md` §1 row 4a).
+ */
+
+const LIST_NOT_FOUND = 'List not found.';
+
+/** Pattern 7 behind `GET /v1/lists`: the caller's page of current Lists, pointer-ordered. */
+export async function listLists(userId: string, cursor?: string): Promise<Page<List>> {
+  const page = await listListsForUser(userId, cursor);
+  return {
+    items: page.items.map((entry) => entry.list),
+    ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+  };
+}
+
+export interface ListDetailProjection {
+  readonly list: List;
+  readonly items?: { item: ListItem; viewerLink?: ListItemActivityLink }[];
+  readonly nextCursor?: string;
+}
+
+/**
+ * `GET /v1/lists/:id` — META alone, or pattern 8b's fenced first page with the caller-only
+ * link join.
+ *
+ * With `includeItems`, the repository's fenced read supplies the page; the caller's link
+ * rows are then batch-read for exactly those item ids, and each surviving link is kept only
+ * after ordinary Activity authorisation (`assertActivityAccess`, `read`). A stale pointer —
+ * its Activity deleted or no longer readable — is omitted rather than serialised as a dead
+ * link (`api-contract.md` §2.7); the cleanup queue is P3-15's. A repair or migration fence
+ * failure propagates out of the repository as the retryable `503`.
+ */
+export async function getListDetail(
+  userId: string,
+  listId: string,
+  includeItems: boolean,
+): Promise<ListDetailProjection> {
+  const access = await assertListAccess(userId, listId, 'read');
+
+  if (!includeItems) {
+    const list = await getListMeta(userId, listId, access.index);
+    if (list === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+    return { list };
+  }
+
+  const page = await listItems(userId, listId, access.index);
+  if (page === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+
+  const links = await batchGetViewerLinks(userId, listId, access.index, page.itemIds);
+  const readable = new Map<string, ListItemActivityLink>();
+  for (const link of links) {
+    try {
+      await assertActivityAccess(userId, link.activityId, 'read');
+      readable.set(link.itemId, link);
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'not_found') continue;
+      throw error;
+    }
+  }
+
+  return {
+    list: page.list,
+    items: page.items.map((item) => {
+      const viewerLink = readable.get(item.itemId);
+      return { item, ...(viewerLink === undefined ? {} : { viewerLink }) };
+    }),
+    ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+  };
+}
+
+/**
+ * `DELETE /v1/lists/:id` — owner only, no `If-Match`, safe to retry.
+ *
+ * The META read here deliberately ignores the deletion tombstone, so a retry after a crash
+ * mid-cascade resumes it rather than answering `404` while child rows survive; once the
+ * final transaction has removed the pointer, a second call is `404` from the access check.
+ *
+ * When the list holds a `slot`, the repository always attempts to clear the caller's
+ * `defaultLists[slot]` in the same transaction as the META removal, conditioned on that
+ * slot naming exactly this list. No profile pre-read decides it — a stale read that missed
+ * a concurrent selection would wrongly skip the cleanup — and a slot holding any other
+ * value, including a newer choice from another device, fails only that item and survives
+ * (P3-12's read-side guard remains the belt to these braces).
+ */
+export async function removeList(
+  userId: string,
+  listId: string,
+  now: string,
+): Promise<string> {
+  const access = await assertListAccess(userId, listId, 'owner');
+  const list = await getListMetaForDeletion(userId, listId, access.index);
+  if (list === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+
+  await deleteList(userId, listId, access.index, {
+    now,
+    expectedUpdatedAt: list.updatedAt,
+    ...(list.sourceActivityId === undefined
+      ? {}
+      : { sourceActivityId: list.sourceActivityId }),
+    ...(list.slot === null ? {} : { clearProfileDefault: { slot: list.slot } }),
+  });
+
+  return listId;
+}

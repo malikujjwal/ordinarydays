@@ -42,6 +42,7 @@ export type {
   AgendaWarning,
 } from './agenda.js';
 export { assertNever } from './assert.js';
+export type { DeletedList } from './deletedList.js';
 export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type {
   List,
@@ -54,6 +55,10 @@ export type {
   ListMember,
   ListTemplate,
 } from './list.js';
+export type { ListDetail } from './listDetail.js';
+export type { ListDetailItem } from './listDetailItem.js';
+export type { ListItemView } from './listItemView.js';
+export type { ListView } from './listView.js';
 export type { Occurrence, OccurrenceStatus } from './occurrence.js';
 export type {
   MonthNumber,
