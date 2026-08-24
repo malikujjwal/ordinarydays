@@ -9,7 +9,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { List, ListItem } from '@od/shared/types';
+import type { Activity, List, ListItem } from '@od/shared/types';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
 
@@ -20,12 +20,14 @@ type Base = typeof import('../../src/repositories/base.js');
 type Keys = typeof import('../../src/repositories/keys.js');
 type Ddb = typeof import('../../src/lib/ddb.js');
 type Authz = typeof import('../../src/services/authz.js');
+type ActivityRepository = typeof import('../../src/repositories/activityRepository.js');
 
 let repository: Repository;
 let base: Base;
 let keys: Keys;
 let ddbModule: Ddb;
 let authz: Authz;
+let activityRepository: ActivityRepository;
 type ListAccessGrant = NonNullable<Awaited<ReturnType<Repository['getListPointer']>>>;
 const accessByListId = new Map<string, ListAccessGrant>();
 
@@ -40,6 +42,7 @@ beforeAll(async () => {
   keys = await import('../../src/repositories/keys.js');
   ddbModule = await import('../../src/lib/ddb.js');
   authz = await import('../../src/services/authz.js');
+  activityRepository = await import('../../src/repositories/activityRepository.js');
 });
 
 afterEach(() => {
@@ -73,6 +76,32 @@ const anItem = (title: string, overrides: Partial<NewItem> = {}): NewItem => ({
   title,
   checked: false,
   ...overrides,
+});
+
+const linkedActivity = (
+  activityId: string,
+  ownerId: string,
+  listId: string,
+  itemId: string,
+): Activity => ({
+  activityId,
+  ownerId,
+  objectKind: 'plan',
+  type: 'custom',
+  status: 'saved',
+  title: 'Plan from list item',
+  details: { kind: 'custom' },
+  listId,
+  listItemId: itemId,
+  participantCount: 0,
+  childCount: 0,
+  expenseTotalCents: 0,
+  visibility: 'private',
+  icsSequence: 0,
+  createdAt: NOW,
+  lastActivityAt: NOW,
+  updatedAt: NOW,
+  schemaVersion: 1,
 });
 
 async function createSubject(overrides: Partial<List> = {}): Promise<List> {
@@ -573,6 +602,138 @@ describe('item tombstones and list cascade', () => {
         now: LATER,
       }),
     ).rejects.toBeInstanceOf(repository.ListUndoNotApplicableError);
+  });
+
+  it('restores live links and Activity provenance while omitting a deleted Activity', async () => {
+    const list = await createSubject();
+    const item = await repository.createListItem(
+      ALICE,
+      list.listId,
+      accessFor(list),
+      anItem('Linked item'),
+      { now: NOW },
+    );
+    const aliceActivity = linkedActivity(
+      'act_01J8XKQ2M4N5P6R7S8T9V0W1AA',
+      ALICE,
+      list.listId,
+      item.itemId,
+    );
+    const benActivity = linkedActivity(
+      'act_01J8XKQ2M4N5P6R7S8T9V0W1AB',
+      BEN,
+      list.listId,
+      item.itemId,
+    );
+    await Promise.all([
+      activityRepository.createActivity(ALICE, aliceActivity),
+      activityRepository.createActivity(BEN, benActivity),
+      base.putItem({
+        ...keys.listMember(list.listId, 'psn_01J8XKQ2M4N5P6R7S8T9V0W1AA'),
+        entity: 'ListMember',
+        listId: list.listId,
+        personId: 'psn_01J8XKQ2M4N5P6R7S8T9V0W1AA',
+        userId: BEN,
+        displayName: 'Ben',
+        role: 'member',
+        status: 'active',
+        invitedBy: ALICE,
+        addedAt: NOW,
+        joinedAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+        schemaVersion: 1,
+      }),
+      base.putItem({
+        ...keys.listPointer(BEN, list.listId),
+        entity: 'ListIndex',
+        listId: list.listId,
+        userId: BEN,
+        role: 'member',
+        addedAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+        schemaVersion: 1,
+      }),
+    ]);
+    for (const [viewerUserId, activityId] of [
+      [ALICE, aliceActivity.activityId],
+      [BEN, benActivity.activityId],
+    ] as const) {
+      await base.putItem({
+        ...keys.listItemActivityLink(list.listId, viewerUserId, item.itemId),
+        entity: 'ListItemActivityLink',
+        listId: list.listId,
+        itemId: item.itemId,
+        viewerUserId,
+        activityId,
+        linkedAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+        schemaVersion: 1,
+      });
+    }
+
+    const operationId = repository.newListOperationId();
+    await repository.deleteListItem(ALICE, list.listId, accessFor(list), item.itemId, {
+      operationId,
+      tokenHash: 'sha256:linked-token',
+      undoExpiresAt: LATER,
+      now: LATER,
+    });
+
+    await expect(
+      base.getItem(keys.listItemTombstone(list.listId, item.itemId)),
+    ).resolves.toMatchObject({
+      viewerLinks: [
+        { viewerUserId: ALICE, activityId: aliceActivity.activityId },
+        { viewerUserId: BEN, activityId: benActivity.activityId },
+      ],
+      activityProvenance: [
+        {
+          activityId: aliceActivity.activityId,
+          listId: list.listId,
+          listItemId: item.itemId,
+        },
+        {
+          activityId: benActivity.activityId,
+          listId: list.listId,
+          listItemId: item.itemId,
+        },
+      ],
+    });
+    await expect(
+      base.getItem(keys.listItemActivityLink(list.listId, ALICE, item.itemId)),
+    ).resolves.toBeUndefined();
+    await expect(
+      activityRepository.getActivityMeta(aliceActivity.activityId),
+    ).resolves.not.toHaveProperty('listId');
+    await expect(
+      activityRepository.getActivityMeta(benActivity.activityId),
+    ).resolves.not.toHaveProperty('listItemId');
+
+    await activityRepository.deleteActivity(BEN, benActivity.activityId, { now: LATER });
+    await repository.restoreListItem(ALICE, list.listId, accessFor(list), item.itemId, {
+      operationId,
+      now: LATER,
+    });
+
+    await expect(
+      base.getItem(keys.listItemActivityLink(list.listId, ALICE, item.itemId)),
+    ).resolves.toMatchObject({
+      viewerUserId: ALICE,
+      activityId: aliceActivity.activityId,
+      linkedAt: NOW,
+    });
+    await expect(
+      base.getItem(keys.listItemActivityLink(list.listId, BEN, item.itemId)),
+    ).resolves.toBeUndefined();
+    await expect(
+      activityRepository.getActivityMeta(aliceActivity.activityId),
+    ).resolves.toMatchObject({ listId: list.listId, listItemId: item.itemId });
+    await expect(
+      repository.getListItem(ALICE, list.listId, accessFor(list), item.itemId),
+    ).resolves.toEqual(item);
   });
 
   it('leaves the list tombstone after child rows, source projection, pointer and META are gone', async () => {

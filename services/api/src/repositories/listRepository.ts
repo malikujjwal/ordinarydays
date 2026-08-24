@@ -5,18 +5,22 @@ import {
   lexoRankBetween,
 } from '@od/shared/rank';
 import {
+  activity as activitySchema,
   listIndex as listIndexSchema,
   listItemActivityLink as listItemActivityLinkSchema,
   listItem as listItemSchema,
+  listMember as listMemberSchema,
   list as listSchema,
 } from '@od/shared/schemas';
 import type {
+  Activity,
   List,
   ListCapabilities,
   ListIndex,
   ListItem,
   ListItemActivityLink,
   ListItemDetails,
+  ListMember,
 } from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
@@ -40,11 +44,13 @@ import {
 } from './cursor.js';
 import { receiptItem } from './idempotencyRepository.js';
 import {
+  activityMeta,
   listItemActivityLink,
   listItem as listItemKey,
   listItemLocator,
   listItemPrefix,
   listItemTombstone,
+  listMemberPrefix,
   listMeta,
   listPartition,
   listPointer,
@@ -92,6 +98,7 @@ const ENTITY = {
   item: 'ListItem',
   locator: 'ListItemLocator',
   itemTombstone: 'ListItemTombstone',
+  link: 'ListItemActivityLink',
   undo: 'ListUndo',
   tombstone: 'ListTombstone',
   sourceList: 'SourceList',
@@ -130,6 +137,16 @@ const itemTombstoneSchema = z.object({
   itemId: z.string(),
   operationId: z.string().min(1),
   snapshot: listItemSchema,
+  viewerLinks: z.array(listItemActivityLinkSchema).default([]),
+  activityProvenance: z
+    .array(
+      z.object({
+        activityId: z.string().min(1),
+        listId: z.string().min(1),
+        listItemId: z.string().min(1),
+      }),
+    )
+    .default([]),
 });
 
 type Locator = z.infer<typeof locatorSchema>;
@@ -260,6 +277,14 @@ function parseListItem(value: unknown): ListItem {
 
 function parseListItemActivityLink(value: unknown): ListItemActivityLink {
   return listItemActivityLinkSchema.parse(value) as ListItemActivityLink;
+}
+
+function parseListMember(value: unknown): ListMember {
+  return listMemberSchema.parse(value) as ListMember;
+}
+
+function parseActivity(value: unknown): Activity {
+  return activitySchema.parse(value) as Activity;
 }
 
 function assertListAccessGrant(
@@ -828,6 +853,163 @@ function storedLocator(item: ListItem, now: string): StoredItem {
   });
 }
 
+function storedListItemActivityLink(link: ListItemActivityLink, now: string): StoredItem {
+  return stamp(ENTITY.link, now, now, {
+    ...listItemActivityLink(link.listId, link.viewerUserId, link.itemId),
+    ...link,
+  });
+}
+
+type ActivityProvenance = ItemTombstone['activityProvenance'][number];
+
+interface RelationshipSnapshot {
+  readonly viewerIds: string[];
+  readonly viewerLinks: ListItemActivityLink[];
+  readonly activityProvenance: ActivityProvenance[];
+}
+
+async function activeViewerIds(list: List): Promise<string[]> {
+  const prefix = listMemberPrefix(list.listId);
+  const rows = await queryAll<StoredItem>(
+    { pk: prefix.pk },
+    { skPrefix: prefix.skPrefix, consistentRead: true },
+  );
+  const members = rows.map(parseListMember);
+  return [
+    ...new Set([
+      list.ownerId,
+      ...members.flatMap((member) =>
+        member.status === 'active' && member.userId !== undefined ? [member.userId] : [],
+      ),
+    ]),
+  ];
+}
+
+async function readRelationshipSnapshot(
+  list: List,
+  itemId: string,
+): Promise<RelationshipSnapshot> {
+  const viewerIds = await activeViewerIds(list);
+  const linkRows = await batchGetItems<StoredItem>(
+    viewerIds.map((viewerUserId) =>
+      listItemActivityLink(list.listId, viewerUserId, itemId),
+    ),
+    { consistentRead: true },
+  );
+  const linksByViewer = new Map(
+    linkRows.flatMap((row) => {
+      const link = parseListItemActivityLink(row);
+      return link.listId === list.listId && itemId === link.itemId
+        ? ([[link.viewerUserId, link]] as const)
+        : [];
+    }),
+  );
+  const viewerLinks = viewerIds.flatMap((viewerUserId) => {
+    const link = linksByViewer.get(viewerUserId);
+    return link === undefined ? [] : [link];
+  });
+  const activityRows = await batchGetItems<StoredItem>(
+    [...new Set(viewerLinks.map((link) => link.activityId))].map(activityMeta),
+    { consistentRead: true },
+  );
+  const activities = new Map(
+    activityRows.map((row) => {
+      const activity = parseActivity(row);
+      return [activity.activityId, activity] as const;
+    }),
+  );
+  const activityProvenance = [
+    ...new Set(viewerLinks.map((link) => link.activityId)),
+  ].flatMap((activityId): ActivityProvenance[] => {
+    const activity = activities.get(activityId);
+    return activity !== undefined &&
+      activity.listId === list.listId &&
+      activity.listItemId === itemId
+      ? [
+          {
+            activityId: activity.activityId,
+            listId: activity.listId,
+            listItemId: activity.listItemId,
+          },
+        ]
+      : [];
+  });
+  return { viewerIds, viewerLinks, activityProvenance };
+}
+
+interface RestorableRelationships {
+  readonly linksToPut: ListItemActivityLink[];
+  readonly activityProvenanceToPut: ActivityProvenance[];
+}
+
+async function readRestorableRelationships(
+  list: List,
+  tombstone: ItemTombstone,
+): Promise<RestorableRelationships> {
+  const activeViewers = new Set(await activeViewerIds(list));
+  const snapshotProvenance = new Map(
+    tombstone.activityProvenance.map((provenance) => [provenance.activityId, provenance]),
+  );
+  const candidateLinks = tombstone.viewerLinks.filter(
+    (link) =>
+      link.listId === tombstone.listId &&
+      link.itemId === tombstone.itemId &&
+      activeViewers.has(link.viewerUserId) &&
+      snapshotProvenance.has(link.activityId),
+  );
+  const currentLinkRows = await batchGetItems<StoredItem>(
+    candidateLinks.map((link) =>
+      listItemActivityLink(link.listId, link.viewerUserId, link.itemId),
+    ),
+    { consistentRead: true },
+  );
+  const currentLinks = new Map(
+    currentLinkRows.map((row) => {
+      const link = parseListItemActivityLink(row);
+      return [link.viewerUserId, link] as const;
+    }),
+  );
+  const relationshipLinks = candidateLinks.filter((link) => {
+    const current = currentLinks.get(link.viewerUserId);
+    return current === undefined || current.activityId === link.activityId;
+  });
+  const activityRows = await batchGetItems<StoredItem>(
+    [...new Set(relationshipLinks.map((link) => link.activityId))].map(activityMeta),
+    { consistentRead: true },
+  );
+  const currentActivities = new Map(
+    activityRows.map((row) => {
+      const activity = parseActivity(row);
+      return [activity.activityId, activity] as const;
+    }),
+  );
+  const restorableActivityIds = new Set<string>();
+  const activityProvenanceToPut: ActivityProvenance[] = [];
+  for (const [activityId, provenance] of snapshotProvenance) {
+    const activity = currentActivities.get(activityId);
+    if (activity === undefined) continue;
+    if (
+      activity.listId === provenance.listId &&
+      activity.listItemId === provenance.listItemId
+    ) {
+      restorableActivityIds.add(activityId);
+      continue;
+    }
+    if (activity.listId === undefined && activity.listItemId === undefined) {
+      restorableActivityIds.add(activityId);
+      activityProvenanceToPut.push(provenance);
+    }
+  }
+  return {
+    linksToPut: relationshipLinks.filter(
+      (link) =>
+        currentLinks.get(link.viewerUserId) === undefined &&
+        restorableActivityIds.has(link.activityId),
+    ),
+    activityProvenanceToPut,
+  };
+}
+
 /** Single-create entry point; bulk uses the same chunk transaction below. */
 export async function createListItem(
   userId: string,
@@ -1188,6 +1370,7 @@ export async function deleteListItem(
     const state = await readMutationState(userId, listId, access, itemId);
     const current = state.resolved;
     if (current === undefined) throw new ListItemNotFoundError();
+    const relationships = await readRelationshipSnapshot(state.list, itemId);
     const ttl = ttlFor(options.now);
     const builder = new TransactionBuilder(
       'deleteListItem',
@@ -1218,6 +1401,47 @@ export async function deleteListItem(
           },
         },
       },
+    );
+    for (const link of relationships.viewerLinks) {
+      builder.add({
+        Delete: {
+          Key: listItemActivityLink(listId, link.viewerUserId, itemId),
+          ConditionExpression: '#activityId = :activityId',
+          ExpressionAttributeNames: { '#activityId': 'activityId' },
+          ExpressionAttributeValues: { ':activityId': link.activityId },
+        },
+      });
+    }
+    const linkedViewerIds = new Set(
+      relationships.viewerLinks.map((link) => link.viewerUserId),
+    );
+    for (const viewerUserId of relationships.viewerIds) {
+      if (linkedViewerIds.has(viewerUserId)) continue;
+      builder.add({
+        ConditionCheck: {
+          Key: listItemActivityLink(listId, viewerUserId, itemId),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      });
+    }
+    for (const provenance of relationships.activityProvenance) {
+      builder.add({
+        Update: {
+          Key: activityMeta(provenance.activityId),
+          UpdateExpression: 'REMOVE #listId, #listItemId',
+          ConditionExpression: '#listId = :listId AND #listItemId = :listItemId',
+          ExpressionAttributeNames: {
+            '#listId': 'listId',
+            '#listItemId': 'listItemId',
+          },
+          ExpressionAttributeValues: {
+            ':listId': provenance.listId,
+            ':listItemId': provenance.listItemId,
+          },
+        },
+      });
+    }
+    builder.add(
       {
         Put: {
           Item: stamp(ENTITY.itemTombstone, options.now, options.now, {
@@ -1228,6 +1452,8 @@ export async function deleteListItem(
             deletedAt: options.now,
             ttl,
             snapshot: current.item,
+            viewerLinks: relationships.viewerLinks,
+            activityProvenance: relationships.activityProvenance,
           }),
           ConditionExpression: 'attribute_not_exists(pk)',
         },
@@ -1307,6 +1533,7 @@ export async function restoreListItem(
       throw new ListUndoNotApplicableError();
     }
     const item = parseListItem(tombstone.snapshot);
+    const relationships = await readRestorableRelationships(state.list, tombstone);
     const builder = new TransactionBuilder(
       'restoreListItem',
       options.idempotencyReceipt === undefined ? 0 : 1,
@@ -1324,6 +1551,36 @@ export async function restoreListItem(
           ConditionExpression: 'attribute_not_exists(pk)',
         },
       },
+    );
+    const relationshipStartIndex = builder.length;
+    for (const link of relationships.linksToPut) {
+      builder.add({
+        Put: {
+          Item: storedListItemActivityLink(link, options.now),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      });
+    }
+    for (const provenance of relationships.activityProvenanceToPut) {
+      builder.add({
+        Update: {
+          Key: activityMeta(provenance.activityId),
+          UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
+          ConditionExpression:
+            'attribute_exists(pk) AND attribute_not_exists(#listId) AND attribute_not_exists(#listItemId)',
+          ExpressionAttributeNames: {
+            '#listId': 'listId',
+            '#listItemId': 'listItemId',
+          },
+          ExpressionAttributeValues: {
+            ':listId': provenance.listId,
+            ':listItemId': provenance.listItemId,
+          },
+        },
+      });
+    }
+    const relationshipEndIndex = builder.length;
+    builder.add(
       {
         Delete: {
           Key: listItemTombstone(listId, itemId),
@@ -1373,6 +1630,7 @@ export async function restoreListItem(
         },
       },
     );
+    const metaIndex = builder.length - 1;
     const receiptIndex = builder.length;
     if (options.idempotencyReceipt !== undefined) {
       builder.addReserved(receiptItem(options.idempotencyReceipt));
@@ -1381,7 +1639,12 @@ export async function restoreListItem(
       operation: 'restoreListItem',
       onConditionFailed: (index) => {
         if (index === 0) return new ListNotFoundError();
-        if (index === 5) return new RetryableListMutationConflictError();
+        if (
+          index === metaIndex ||
+          (index >= relationshipStartIndex && index < relationshipEndIndex)
+        ) {
+          return new RetryableListMutationConflictError();
+        }
         if (options.idempotencyReceipt !== undefined && index === receiptIndex) {
           return new IdempotencyRaceError();
         }

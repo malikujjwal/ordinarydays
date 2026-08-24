@@ -1,5 +1,11 @@
 import { MAX_LEXO_RANK_LENGTH } from '@od/shared';
-import type { List, ListIndex, ListItem, ListItemActivityLink } from '@od/shared/types';
+import type {
+  Activity,
+  List,
+  ListIndex,
+  ListItem,
+  ListItemActivityLink,
+} from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import { encodeCursor, encodeFencedCursor } from './cursor.js';
@@ -32,6 +38,7 @@ const ALICE = 'usr_list_unit_alice';
 const LIST_ID = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const ITEM_A = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const ITEM_B = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+const ACTIVITY_ID = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X4';
 const NOW = '2026-08-23T14:00:00.000Z';
 const LATER = '2026-08-23T14:01:00.000Z';
 
@@ -104,6 +111,50 @@ const locatorRow = (value: ListItem = item()) => ({
   itemId: value.itemId,
   rank: value.rank,
   itemRevision: value.itemRevision,
+});
+
+const activity = (overrides: Partial<Activity> = {}): Activity =>
+  ({
+    activityId: ACTIVITY_ID,
+    ownerId: ALICE,
+    objectKind: 'plan',
+    type: 'custom',
+    status: 'saved',
+    title: 'Plan milk',
+    details: { kind: 'custom' },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: NOW,
+    lastActivityAt: NOW,
+    updatedAt: NOW,
+    schemaVersion: 1,
+    ...overrides,
+  }) as Activity;
+
+const activityRow = (value: Activity = activity()) => ({
+  ...keys.activityMeta(value.activityId),
+  entity: 'Activity',
+  ...value,
+});
+
+const viewerLink = (): ListItemActivityLink => ({
+  listId: LIST_ID,
+  itemId: ITEM_A,
+  viewerUserId: ALICE,
+  activityId: ACTIVITY_ID,
+  linkedAt: NOW,
+});
+
+const viewerLinkRow = () => ({
+  ...keys.listItemActivityLink(LIST_ID, ALICE, ITEM_A),
+  entity: 'ListItemActivityLink',
+  createdAt: NOW,
+  updatedAt: NOW,
+  schemaVersion: 1,
+  ...viewerLink(),
 });
 
 const receipt: IdempotencyReceipt = {
@@ -609,21 +660,66 @@ describe('delete, restore and cascade', () => {
 
     expect(removed).toEqual(item());
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items).toHaveLength(7);
+    expect(items).toHaveLength(8);
     expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
-    expect(items?.[3]?.Put?.Item).toMatchObject({
-      operationId: 'op_delete',
-      snapshot: item(),
+    expect(items?.[3]?.ConditionCheck).toMatchObject({
+      Key: keys.listItemActivityLink(LIST_ID, ALICE, ITEM_A),
+      ConditionExpression: 'attribute_not_exists(pk)',
     });
     expect(items?.[4]?.Put?.Item).toMatchObject({
+      operationId: 'op_delete',
+      snapshot: item(),
+      viewerLinks: [],
+      activityProvenance: [],
+    });
+    expect(items?.[5]?.Put?.Item).toMatchObject({
       kind: 'delete_item',
       affectedItemIds: [ITEM_A],
       consumed: false,
     });
-    expect(items?.[5]?.Update?.ExpressionAttributeValues).toMatchObject({
+    expect(items?.[6]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':minusOne': -1,
       ':uncheckedDelta': -1,
     });
+  });
+
+  it('snapshots and clears the current viewer link and matching Activity provenance', async () => {
+    mockResolvedItem();
+    vi.mocked(base.batchGetItems)
+      .mockResolvedValueOnce([viewerLinkRow()])
+      .mockResolvedValueOnce([
+        activityRow(activity({ listId: LIST_ID, listItemId: ITEM_A })),
+      ]);
+
+    await repository.deleteListItem(ALICE, LIST_ID, access, ITEM_A, {
+      operationId: 'op_linked_delete',
+      tokenHash: 'hash',
+      undoExpiresAt: LATER,
+      now: NOW,
+    });
+
+    const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    expect(items).toHaveLength(8);
+    expect(items?.[3]?.Delete).toMatchObject({
+      Key: keys.listItemActivityLink(LIST_ID, ALICE, ITEM_A),
+      ConditionExpression: '#activityId = :activityId',
+    });
+    expect(items?.[4]?.Update).toMatchObject({
+      Key: keys.activityMeta(ACTIVITY_ID),
+      UpdateExpression: 'REMOVE #listId, #listItemId',
+    });
+    expect(items?.[5]?.Put?.Item).toMatchObject({
+      snapshot: item(),
+      viewerLinks: [viewerLink()],
+      activityProvenance: [
+        { activityId: ACTIVITY_ID, listId: LIST_ID, listItemId: ITEM_A },
+      ],
+    });
+    expect(
+      vi
+        .mocked(base.batchGetItems)
+        .mock.calls.every(([, options]) => options?.consistentRead),
+    ).toBe(true);
   });
 
   it('rejects invalid deletion time before sending a transaction', async () => {
@@ -675,6 +771,48 @@ describe('delete, restore and cascade', () => {
     expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
     expect(items?.[3]?.Delete?.ConditionExpression).toContain('#operationId');
     expect(items?.[5]?.Update?.ExpressionAttributeValues).toMatchObject({
+      ':expectedVersion': 3,
+      ':nextVersion': 4,
+    });
+  });
+
+  it('restores a still-live viewer link and its cleared Activity provenance', async () => {
+    const tombstone = {
+      ...keys.listItemTombstone(LIST_ID, ITEM_A),
+      entity: 'ListItemTombstone',
+      schemaVersion: 1,
+      listId: LIST_ID,
+      itemId: ITEM_A,
+      operationId: 'op_linked_delete',
+      snapshot: item(),
+      viewerLinks: [viewerLink()],
+      activityProvenance: [
+        { activityId: ACTIVITY_ID, listId: LIST_ID, listItemId: ITEM_A },
+      ],
+    };
+    vi.mocked(base.getItem).mockImplementation(async (key) => {
+      if (key.sk === keys.listMeta(LIST_ID).sk) return listRow({ rankVersion: 3 });
+      if (key.sk === keys.listItemTombstone(LIST_ID, ITEM_A).sk) return tombstone;
+      return undefined;
+    });
+    vi.mocked(base.batchGetItems)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([activityRow()]);
+
+    await repository.restoreListItem(ALICE, LIST_ID, access, ITEM_A, {
+      operationId: 'op_linked_delete',
+      now: LATER,
+    });
+
+    const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    expect(items).toHaveLength(8);
+    expect(items?.[3]?.Put?.Item).toMatchObject(viewerLink());
+    expect(items?.[4]?.Update).toMatchObject({
+      Key: keys.activityMeta(ACTIVITY_ID),
+      UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
+    });
+    expect(items?.[5]?.Delete?.Key).toEqual(keys.listItemTombstone(LIST_ID, ITEM_A));
+    expect(items?.[7]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':expectedVersion': 3,
       ':nextVersion': 4,
     });

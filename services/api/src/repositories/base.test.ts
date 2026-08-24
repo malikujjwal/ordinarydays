@@ -218,6 +218,18 @@ describe('batchGetItems', () => {
     expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(3);
   });
 
+  it('can request strongly consistent batches', async () => {
+    ddbMock.on(BatchGetCommand).resolves({ Responses: { 'od-main-local': [] } });
+
+    await batchGetItems(keysFor(1), { consistentRead: true });
+
+    expect(
+      ddbMock.commandCalls(BatchGetCommand)[0]?.args[0].input.RequestItems?.[
+        'od-main-local'
+      ]?.ConsistentRead,
+    ).toBe(true);
+  });
+
   it('retries only unprocessed keys', async () => {
     const key = { pk: 'ACT#act_1', sk: 'OCC#0' };
     ddbMock

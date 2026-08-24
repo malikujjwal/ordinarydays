@@ -469,8 +469,12 @@ data. See P3-03.
   so a concurrent write cannot escape the cascade snapshot. A normal create always
   condition-checks the item tombstone. Only P3-10's restore service
   may reclaim the same id, and only when its opaque token resolves to the matching retained,
-  unused `UNDO#` operation; it removes the tombstone as it restores the item and locator. In this
-  phase there is exactly one list index pointer.
+  unused `UNDO#` operation; it removes the tombstone as it restores the item and locator. The
+  retained item snapshot also includes the bounded owner/active-member `LNK#` rows and matching
+  Activity `listId` / `listItemId` back-pointers. Delete clears those relationships in the item
+  transaction, and restore recreates only relationships whose viewer still has list access and
+  whose Activity still exists and has not been repointed. In this phase there is exactly one
+  list index pointer.
 
 **Tests.** Integration on DynamoDB Local: create a list, add ten items, reorder the last to
 the front, assert the paged item query returns them in the new order and `itemCount` is still 10; a
@@ -482,7 +486,9 @@ renaming a list writes **exactly one item**, asserted by a repository spy; the L
 issues exactly one `Query` and one `BatchGetItem` for 40 lists, asserted by a spy; a
 `LIST#<l>` read by a user with no pointer returns `not_found`, not the list. A normal create
 cannot reuse a tombstoned item id, while a matching retained Undo can restore that exact id;
-a retention-expired, mismatched or already-used token cannot.
+a retention-expired, mismatched or already-used token cannot. Item delete snapshots and clears
+current viewer links and matching Activity provenance; restore omits a relationship when its
+Activity was independently deleted.
 
 ---
 

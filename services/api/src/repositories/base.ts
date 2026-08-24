@@ -331,6 +331,7 @@ export function batchGetBackoffMs(attempt: number, random = Math.random): number
  */
 export async function batchGetItems<T extends StoredItem>(
   keys: readonly PageKey[],
+  options: { readonly consistentRead?: boolean } = {},
 ): Promise<T[]> {
   const items: T[] = [];
 
@@ -348,7 +349,14 @@ export async function batchGetItems<T extends StoredItem>(
         );
       }
       const result = await ddb.send(
-        new BatchGetCommand({ RequestItems: { [TABLE_NAME]: { Keys: pending } } }),
+        new BatchGetCommand({
+          RequestItems: {
+            [TABLE_NAME]: {
+              Keys: pending,
+              ...(options.consistentRead === true ? { ConsistentRead: true } : {}),
+            },
+          },
+        }),
       );
       items.push(...upgradeAll((result.Responses?.[TABLE_NAME] ?? []) as T[]));
       pending = (result.UnprocessedKeys?.[TABLE_NAME]?.Keys ?? []) as PageKey[];
