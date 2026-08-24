@@ -386,8 +386,12 @@ export async function createActivity(
  * between "exists" and "was deleted" — `data-model.md` §8 accepts the residual existence
  * signal in success-versus-failure and bounds it, rather than pretending copy can hide it.
  * The client's recovery is documented and does not branch on this text: it reads its own id.
+ *
+ * Exported because durable List creation (P3-05) answers a colliding `lst_` id with the
+ * **same** metadata-free copy — one constant, so the two cannot drift into a difference a
+ * client could probe.
  */
-const ID_UNAVAILABLE = 'That id is already in use. Try again.';
+export const ID_UNAVAILABLE = 'That id is already in use. Try again.';
 
 function idUnavailable(): AppError {
   return new AppError('conflict', ID_UNAVAILABLE);

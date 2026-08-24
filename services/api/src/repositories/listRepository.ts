@@ -14,6 +14,7 @@ import {
 } from '@od/shared/schemas';
 import type {
   Activity,
+  DefaultSlot,
   List,
   ListCapabilities,
   ListIndex,
@@ -26,6 +27,7 @@ import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
 import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
+import { clearListProvenance } from './activityRepository.js';
 import {
   batchGetItems,
   deleteAll,
@@ -61,6 +63,7 @@ import {
 } from './keys.js';
 import type { StoredItem } from './migrate.js';
 import { TransactionBuilder, transactWrite } from './tx.js';
+import { removeDefaultListTransactItem } from './userRepository.js';
 
 /**
  * The storage half of Lists and ListItems (`data-model.md` patterns 7, 8, 8b and 8d).
@@ -99,6 +102,8 @@ const ENTITY = {
   locator: 'ListItemLocator',
   itemTombstone: 'ListItemTombstone',
   link: 'ListItemActivityLink',
+  /** Written first in Phase 6; the delete cascade already iterates it (§P3-05). */
+  member: 'ListMember',
   undo: 'ListUndo',
   tombstone: 'ListTombstone',
   sourceList: 'SourceList',
@@ -424,6 +429,22 @@ export async function getListMeta(
 ): Promise<List | undefined> {
   assertListAccessGrant(userId, listId, access);
   return getLiveListMetaStrong(listId);
+}
+
+/**
+ * The delete path's META read: strong and deliberately **not** tombstone-filtered, so a
+ * retried `DELETE` can resume a cascade whose tombstone is already down while META and the
+ * pointer still exist. Every other reader goes through {@link getListMeta}, which hides a
+ * deleting list; only the owner-only delete service may see one mid-cascade.
+ */
+export async function getListMetaForDeletion(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+): Promise<List | undefined> {
+  assertListAccessGrant(userId, listId, access);
+  const row = await getItem<StoredItem>(listMeta(listId), { consistentRead: true });
+  return row === undefined ? undefined : parseList(row);
 }
 
 export interface UserListEntry {
@@ -1659,11 +1680,27 @@ export interface DeleteListOptions {
   readonly now: string;
   readonly expectedUpdatedAt: string;
   readonly sourceActivityId?: string;
+  /**
+   * Clears `defaultLists[slot]` on the **caller's** profile in the same transaction as the
+   * META removal, conditioned on that slot still naming this list (P3-05, P3-12). The caller
+   * supplies it only after reading the profile and finding the exact value; a newer choice
+   * that lands in between fails only this item, and the transaction retries without it.
+   */
+  readonly clearProfileDefault?: { readonly slot: DefaultSlot };
+}
+
+/** The profile-default item's condition failed: a newer destination choice survives. */
+class StaleProfileDefaultError extends Error {
+  constructor() {
+    super('The profile default changed while the list was being deleted.');
+    this.name = 'StaleProfileDefaultError';
+  }
 }
 
 /**
- * Bounded cascade: install the tombstone/remove source projection first, delete child rows,
- * then remove the current Phase-3 owner pointer and META together at the authority seam.
+ * Bounded cascade: install the tombstone/remove source projection first, clear linked
+ * Activities' provenance, delete child rows, then remove **every** pointer and META — plus
+ * the caller's now-dangling profile default, when asked — together at the authority seam.
  */
 export async function deleteList(
   userId: string,
@@ -1711,6 +1748,37 @@ export async function deleteList(
   const partition = await queryAll<StoredItem>(listPartition(listId), {
     consistentRead: true,
   });
+
+  /**
+   * Member pointers are enumerated **before** the child rows are deleted, because the
+   * `MEMBER#` rows are about to go with them. Phase 3 never writes one, but the delete
+   * iterates the pointer set rather than assuming a single owner — Phase 6 adds members,
+   * and a delete that assumed one would strand the others' pointers (§P3-05).
+   */
+  const memberPointerUserIds = partition
+    .filter((row) => row.entity === ENTITY.member)
+    .map(parseListMember)
+    .flatMap((member) =>
+      member.status === 'active' && member.userId !== undefined ? [member.userId] : [],
+    );
+
+  /**
+   * Every Activity a current `LNK#` pointer names has its `listId` / `listItemId`
+   * back-pointers cleared — never the Activity deleted (`plans-and-lists.md` §6.3). Each
+   * clear is conditional on the Activity still naming this list, so a repointed or deleted
+   * Activity is skipped, and re-running the cascade after a crash converges.
+   */
+  const linkedActivityIds = [
+    ...new Set(
+      partition
+        .filter((row) => row.entity === ENTITY.link)
+        .map((row) => parseListItemActivityLink(row).activityId),
+    ),
+  ];
+  for (const activityId of linkedActivityIds) {
+    await clearListProvenance(activityId, listId);
+  }
+
   const childKeys = partition
     .map((row) => ({ pk: String(row.pk), sk: String(row.sk) }))
     .filter(
@@ -1720,25 +1788,47 @@ export async function deleteList(
     );
   await deleteAll(childKeys);
 
-  await transactWrite(
-    new TransactionBuilder('finishDeleteList')
-      .add(
-        { Delete: { Key: listPointer(userId, listId) } },
-        {
-          Delete: {
-            Key: metaKey,
-            ConditionExpression: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
-            ExpressionAttributeNames: {
-              '#updatedAt': 'updatedAt',
-              ...GATE_NAMES,
-            },
-            ExpressionAttributeValues: {
-              ':expectedUpdatedAt': options.expectedUpdatedAt,
-            },
+  const pointerUserIds = [...new Set([userId, ...memberPointerUserIds])];
+  let clearDefault = options.clearProfileDefault;
+  for (;;) {
+    const builder = new TransactionBuilder('finishDeleteList').add(
+      ...pointerUserIds.map((pointerUserId) => ({
+        Delete: { Key: listPointer(pointerUserId, listId) },
+      })),
+      {
+        Delete: {
+          Key: metaKey,
+          ConditionExpression: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
+          ExpressionAttributeNames: {
+            '#updatedAt': 'updatedAt',
+            ...GATE_NAMES,
+          },
+          ExpressionAttributeValues: {
+            ':expectedUpdatedAt': options.expectedUpdatedAt,
           },
         },
-      )
-      .build(),
-    { operation: 'finishDeleteList' },
-  );
+      },
+    );
+    const profileIndex = clearDefault === undefined ? -1 : builder.length;
+    if (clearDefault !== undefined) {
+      builder.add(removeDefaultListTransactItem(userId, clearDefault.slot, listId));
+    }
+
+    try {
+      await transactWrite(builder.build(), {
+        operation: 'finishDeleteList',
+        onConditionFailed: (index) =>
+          index === profileIndex ? new StaleProfileDefaultError() : undefined,
+      });
+      return;
+    } catch (error) {
+      // A newer default landed on another device between the caller's read and this
+      // transaction. That choice survives; the delete retries once without the item.
+      if (error instanceof StaleProfileDefaultError && clearDefault !== undefined) {
+        clearDefault = undefined;
+        continue;
+      }
+      throw error;
+    }
+  }
 }
