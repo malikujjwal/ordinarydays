@@ -360,16 +360,25 @@ describe('mapping the repository’s untyped signals', () => {
 });
 
 describe('deleting an item', () => {
-  it('mints an opaque token, stores only its hash, and offers Undo for six seconds', async () => {
+  /**
+   * The token **addresses** the operation it belongs to (P3-10): the undo route receives a
+   * token and nothing else, and resolving it any other way would cost either a second index
+   * or a read that grows with a month of the user's activity. The secret half is what
+   * authorises, and only the hash of the whole thing is ever stored.
+   */
+  it('mints a token addressing its operation, stores only its hash, and offers six seconds', async () => {
     const result = await service.removeItem(USER, LIST, ITEM, NOW);
 
     expect(result.affectedCount).toBe(1);
-    expect(result.undoToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(Date.parse(result.undoExpiresAt) - Date.parse(NOW)).toBe(6000);
 
     const options = vi.mocked(repository.deleteListItem).mock.calls[0]?.[4];
+    expect(result.undoToken).toMatch(
+      new RegExp(`^${options?.operationId ?? ''}.[A-Za-z0-9_-]{43}$`),
+    );
     expect(options?.tokenHash).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(options?.tokenHash).not.toBe(result.undoToken);
+    expect(result.undoToken).not.toContain(options?.tokenHash ?? 'unreachable');
   });
 
   it('mints a different token every time', async () => {

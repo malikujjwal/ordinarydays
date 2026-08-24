@@ -209,6 +209,321 @@ beforeEach(async () => {
   vi.mocked(base.getItem).mockReset();
 });
 
+/** Every action of every transaction the call built, in order. */
+const transacted = () =>
+  vi.mocked(tx.transactWrite).mock.calls.flatMap(([items]) => items);
+
+const written = (entity: string) =>
+  transacted().flatMap((entry) =>
+    entry.Put?.Item?.entity === entity ? [entry.Put.Item] : [],
+  );
+
+const SURVIVOR = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1A1';
+const MANUAL = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1A2';
+const OTHER = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1A3';
+const GONE = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1A4';
+
+describe('the bulk checked operations', () => {
+  const checkedItems = (count: number): ListItem[] =>
+    Array.from({ length: count }, (_, index) =>
+      item({
+        itemId: `itm_01J8XKQ2M4N5P6R7S8T9V0W1${String(index).padStart(2, '0')}`,
+        rank: `a${String(index)}`,
+        checked: true,
+        title: `Item ${String(index)}`,
+      }),
+    );
+
+  const seedChecked = (count: number, extra: ListItem[] = []) => {
+    vi.mocked(base.getItem).mockImplementation(async (key) =>
+      key.sk === keys.listMeta(LIST_ID).sk ? listRow({ itemCount: count }) : undefined,
+    );
+    // Discriminated by prefix: the member query the relationship snapshot runs must not be
+    // answered with item rows.
+    const rows = [...checkedItems(count), ...extra].map((value) => itemRow(value));
+    vi.mocked(base.queryAll).mockImplementation(async (_key, options) =>
+      options?.skPrefix === 'ITEM#' ? rows : [],
+    );
+  };
+
+  const bulkOptions = {
+    operationId: 'op_bulk',
+    tokenHash: 'stored-hash',
+    undoExpiresAt: LATER,
+    now: LATER,
+  };
+
+  /**
+   * One `UNDO#` record for the whole run, however many transactions it takes: "bounded
+   * receipt-aware chunks preserve one logical Undo operation". It lands in the **first**
+   * chunk naming every id, so a run that fails half way still leaves one operation that
+   * names the whole set.
+   */
+  it('deletes only the checked rows under one operation naming them all', async () => {
+    seedChecked(3, [item({ itemId: ITEM_B, rank: 'z0', checked: false })]);
+
+    const deleted = await repository.deleteCheckedListItems(ALICE, LIST_ID, access, {
+      ...bulkOptions,
+      receiptFor: () => receipt,
+    });
+
+    expect(deleted).toHaveLength(3);
+    const undos = written('ListUndo');
+    expect(undos).toHaveLength(1);
+    expect(undos[0]).toMatchObject({
+      kind: 'clear_checked',
+      consumed: false,
+      tokenHash: 'stored-hash',
+      affectedItemIds: deleted.map((value) => value.itemId),
+    });
+    const tombstones = written('ListItemTombstone');
+    expect(tombstones).toHaveLength(3);
+    expect(tombstones[0]).toMatchObject({ operationId: 'op_bulk' });
+    // The unchecked row is not touched.
+    expect(
+      transacted().some((entry) => String(entry.Delete?.Key?.sk ?? '').includes(ITEM_B)),
+    ).toBe(false);
+  });
+
+  /** Every deleted row was checked, so none of them was contributing to `uncheckedCount`. */
+  it('moves itemCount and leaves uncheckedCount alone', async () => {
+    seedChecked(2);
+
+    await repository.deleteCheckedListItems(ALICE, LIST_ID, access, bulkOptions);
+
+    const meta = transacted().find(
+      (entry) => entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk,
+    )?.Update;
+    expect(meta?.UpdateExpression).toBe('ADD #itemCount :removed');
+    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':removed': -2 });
+  });
+
+  /**
+   * The menu hides `Clear checked` at zero, but the endpoint still answers — so the operation
+   * is recorded either way and the token it returns resolves like any other.
+   */
+  it('records an empty operation when nothing is checked', async () => {
+    seedChecked(0);
+
+    const deleted = await repository.deleteCheckedListItems(ALICE, LIST_ID, access, {
+      ...bulkOptions,
+      receiptFor: () => receipt,
+    });
+
+    expect(deleted).toEqual([]);
+    expect(written('ListUndo')[0]).toMatchObject({ affectedItemIds: [] });
+    expect(written('ListItemTombstone')).toHaveLength(0);
+  });
+
+  it('unchecks exactly the checked set, advancing both revisions', async () => {
+    seedChecked(2);
+
+    const changed = await repository.uncheckAllListItems(ALICE, LIST_ID, access, {
+      ...bulkOptions,
+      receiptFor: () => receipt,
+    });
+
+    expect(changed).toHaveLength(2);
+    expect(written('ListUndo')[0]).toMatchObject({
+      kind: 'uncheck_all',
+      affectedItemIds: changed.map((value) => value.itemId),
+    });
+    const rowUpdate = transacted().find((entry) =>
+      String(entry.Update?.UpdateExpression ?? '').includes('#checked = :false'),
+    )?.Update;
+    expect(rowUpdate?.ConditionExpression).toContain('#itemRevision = :expected');
+    expect(rowUpdate?.ConditionExpression).toContain('#checked = :true');
+    expect(rowUpdate?.ExpressionAttributeValues).toMatchObject({ ':next': 1 });
+    const meta = transacted().find(
+      (entry) =>
+        entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk &&
+        String(entry.Update.UpdateExpression).includes('uncheckedCount'),
+    )?.Update;
+    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':freed': 2 });
+  });
+
+  it('records an empty uncheck-all when nothing is checked', async () => {
+    seedChecked(0);
+
+    await expect(
+      repository.uncheckAllListItems(ALICE, LIST_ID, access, bulkOptions),
+    ).resolves.toEqual([]);
+    expect(written('ListUndo')[0]).toMatchObject({
+      kind: 'uncheck_all',
+      affectedItemIds: [],
+    });
+  });
+
+  /**
+   * Compensation restores what the operation changed and nothing else: an item somebody
+   * checked by hand during the window is not in the set, and one deleted since is gone.
+   */
+  it('re-checks only the surviving members of the recorded set', async () => {
+    vi.mocked(base.getItem).mockImplementation(async (key) =>
+      key.sk === keys.listMeta(LIST_ID).sk ? listRow() : undefined,
+    );
+    const rows = [
+      itemRow(item({ itemId: SURVIVOR, rank: 'a0', checked: false })),
+      // Already checked again by hand — not this operation's to touch.
+      itemRow(item({ itemId: MANUAL, rank: 'a1', checked: true })),
+      // Never part of the operation.
+      itemRow(item({ itemId: OTHER, rank: 'a2', checked: false })),
+    ];
+    vi.mocked(base.queryAll).mockImplementation(async (_key, options) =>
+      options?.skPrefix === 'ITEM#' ? rows : [],
+    );
+
+    const rechecked = await repository.recheckListItems(
+      ALICE,
+      LIST_ID,
+      access,
+      [SURVIVOR, MANUAL, GONE],
+      { operationId: 'op_bulk', now: LATER, receiptFor: () => receipt },
+    );
+
+    expect(rechecked).toBe(1);
+    const updated = transacted().filter((entry) =>
+      String(entry.Update?.UpdateExpression ?? '').includes('#checked = :true'),
+    );
+    expect(updated).toHaveLength(1);
+    expect(String(updated[0]?.Update?.Key?.sk)).toContain(SURVIVOR);
+    expect(
+      transacted().some((entry) =>
+        String(entry.Update?.UpdateExpression ?? '').includes('#consumed = :true'),
+      ),
+    ).toBe(true);
+  });
+
+  /** An operation whose every affected item has gone is still spent, exactly once. */
+  it('spends the operation when nothing survives to re-check', async () => {
+    vi.mocked(base.getItem).mockImplementation(async (key) =>
+      key.sk === keys.listMeta(LIST_ID).sk ? listRow() : undefined,
+    );
+    vi.mocked(base.queryAll).mockResolvedValue([]);
+
+    await expect(
+      repository.recheckListItems(ALICE, LIST_ID, access, [GONE], {
+        operationId: 'op_bulk',
+        now: LATER,
+      }),
+    ).resolves.toBe(0);
+    const consume = transacted().find((entry) =>
+      String(entry.Update?.UpdateExpression ?? '').includes('#consumed = :true'),
+    )?.Update;
+    expect(consume?.ConditionExpression).toContain('#consumed = :false');
+  });
+});
+
+describe('the settings inverse', () => {
+  const inverseOptions = { operationId: 'op_settings', now: LATER };
+
+  /**
+   * Document paths, one flag at a time. A whole-object write would put the other switch back
+   * where it was, and a whole-object condition would refuse an Undo that is still perfectly
+   * applicable.
+   */
+  it('writes and checks capability flags through document paths', async () => {
+    await repository.applyListSettingsInverse(
+      ALICE,
+      LIST_ID,
+      access,
+      { capabilities: { checkable: true } },
+      { capabilities: { checkable: false } },
+      { ...inverseOptions, receiptFor: () => receipt },
+    );
+
+    const update = transacted().find(
+      (entry) => entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk,
+    )?.Update;
+    expect(update?.UpdateExpression).toContain(
+      '#capabilities.#checkable = :prior_checkable',
+    );
+    expect(update?.ConditionExpression).toContain(
+      '#capabilities.#checkable = :expected_checkable',
+    );
+    expect(update?.ExpressionAttributeValues).toMatchObject({
+      ':prior_checkable': true,
+      ':expected_checkable': false,
+    });
+    // The gate aliases the shared condition names must be declared with the rest.
+    expect(update?.ExpressionAttributeNames).toMatchObject({
+      '#rankRepairId': 'rankRepairId',
+      '#behaviourMigrationId': 'behaviourMigrationId',
+    });
+  });
+
+  /**
+   * A slot inverse restores the exact default the forward change removed, and only while the
+   * slot is still empty — one transaction, so a newer choice makes the **whole** inverse no
+   * longer applicable rather than being overwritten.
+   */
+  it('restores the removed profile default in the same transaction', async () => {
+    await repository.applyListSettingsInverse(
+      ALICE,
+      LIST_ID,
+      access,
+      {
+        slot: 'groceries',
+        removedDefault: { slot: 'groceries', listId: LIST_ID },
+      },
+      { slot: null, defaultSlotAbsent: 'groceries' },
+      inverseOptions,
+    );
+
+    const profile = transacted().find(
+      (entry) => entry.Update?.Key?.pk === keys.userProfile(ALICE).pk,
+    )?.Update;
+    expect(profile?.UpdateExpression).toBe('SET #defaultLists.#slot = :listId');
+    expect(profile?.ConditionExpression).toContain(
+      'attribute_not_exists(#defaultLists.#slot)',
+    );
+    expect(profile?.ExpressionAttributeValues).toMatchObject({ ':listId': LIST_ID });
+  });
+
+  it.each([
+    ['the settings condition', 1],
+    ['the profile default', 2],
+    ['the single-use guard', 3],
+  ])('maps a failed %s to a not-applicable inverse', async (_case, index) => {
+    vi.mocked(tx.transactWrite).mockImplementationOnce(async (_items, options) => {
+      throw options.onConditionFailed?.(index);
+    });
+
+    await expect(
+      repository.applyListSettingsInverse(
+        ALICE,
+        LIST_ID,
+        access,
+        { archived: false, removedDefault: { slot: 'meals', listId: LIST_ID } },
+        { archived: true },
+        inverseOptions,
+      ),
+    ).rejects.toBeInstanceOf(repository.ListUndoNotApplicableError);
+  });
+
+  it('reads one retained operation, and refuses one belonging to another list', async () => {
+    vi.mocked(base.getItem).mockResolvedValueOnce({
+      ...keys.listUndo(LIST_ID, 'op_settings'),
+      entity: 'ListUndo',
+      listId: LIST_ID,
+      operationId: 'op_settings',
+      kind: 'settings',
+      tokenHash: 'hash',
+      undoExpiresAt: LATER,
+      consumed: false,
+      ttl: 1,
+    });
+    await expect(
+      repository.getListUndoOperation(ALICE, LIST_ID, access, 'op_settings'),
+    ).resolves.toMatchObject({ kind: 'settings', consumed: false });
+
+    vi.mocked(base.getItem).mockResolvedValueOnce(undefined);
+    await expect(
+      repository.getListUndoOperation(ALICE, LIST_ID, access, 'op_missing'),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('identity and list storage', () => {
   it('mints schema-shaped monotonic ids outside writes', () => {
     expect(repository.newListId()).toMatch(/^lst_[0-9A-HJKMNP-TV-Z]{26}$/);
@@ -750,23 +1065,27 @@ describe('delete, restore and cascade', () => {
     expect(tx.transactWrite).not.toHaveBeenCalled();
   });
 
+  /**
+   * P3-10 generalised the restore to a set, because one `clear-checked` is one operation
+   * across several transactions. One id is that set with one member, so the write it builds
+   * is unchanged — and the tombstone it reads now arrives through the batched read the
+   * multi-item form needs.
+   */
   it('restores the exact snapshot only for its matching operation', async () => {
     const snapshot = item({ checked: true });
-    vi.mocked(base.getItem).mockImplementation(async (key) => {
-      if (key.sk === keys.listMeta(LIST_ID).sk) return listRow({ rankVersion: 3 });
-      if (key.sk === keys.listItemTombstone(LIST_ID, ITEM_A).sk) {
-        return {
-          ...keys.listItemTombstone(LIST_ID, ITEM_A),
-          entity: 'ListItemTombstone',
-          schemaVersion: 1,
-          listId: LIST_ID,
-          itemId: ITEM_A,
-          operationId: 'op_delete',
-          snapshot,
-        };
-      }
-      return undefined;
-    });
+    const tombstone = {
+      ...keys.listItemTombstone(LIST_ID, ITEM_A),
+      entity: 'ListItemTombstone',
+      schemaVersion: 1,
+      listId: LIST_ID,
+      itemId: ITEM_A,
+      operationId: 'op_delete',
+      snapshot,
+    };
+    vi.mocked(base.getItem).mockImplementation(async (key) =>
+      key.sk === keys.listMeta(LIST_ID).sk ? listRow({ rankVersion: 3 }) : undefined,
+    );
+    vi.mocked(base.batchGetItems).mockResolvedValue([tombstone]);
 
     await expect(
       repository.restoreListItem(ALICE, LIST_ID, access, ITEM_A, {
@@ -775,10 +1094,14 @@ describe('delete, restore and cascade', () => {
       }),
     ).rejects.toBeInstanceOf(repository.ListUndoNotApplicableError);
 
+    vi.mocked(base.batchGetItems)
+      .mockReset()
+      .mockResolvedValueOnce([tombstone])
+      .mockResolvedValue([]);
     const restored = await repository.restoreListItem(ALICE, LIST_ID, access, ITEM_A, {
       operationId: 'op_delete',
       now: LATER,
-      idempotencyReceipt: receipt,
+      receiptFor: () => receipt,
     });
     expect(restored).toEqual(snapshot);
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
@@ -805,12 +1128,12 @@ describe('delete, restore and cascade', () => {
         { activityId: ACTIVITY_ID, listId: LIST_ID, listItemId: ITEM_A },
       ],
     };
-    vi.mocked(base.getItem).mockImplementation(async (key) => {
-      if (key.sk === keys.listMeta(LIST_ID).sk) return listRow({ rankVersion: 3 });
-      if (key.sk === keys.listItemTombstone(LIST_ID, ITEM_A).sk) return tombstone;
-      return undefined;
-    });
+    vi.mocked(base.getItem).mockImplementation(async (key) =>
+      key.sk === keys.listMeta(LIST_ID).sk ? listRow({ rankVersion: 3 }) : undefined,
+    );
     vi.mocked(base.batchGetItems)
+      // The tombstones, then the current link rows, then the linked Activities.
+      .mockResolvedValueOnce([tombstone])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([activityRow()]);
 
@@ -837,26 +1160,34 @@ describe('delete, restore and cascade', () => {
     vi.mocked(base.getItem)
       .mockResolvedValueOnce(listRow())
       .mockResolvedValueOnce(undefined);
+    vi.mocked(base.batchGetItems).mockResolvedValue([]);
     await expect(
       repository.restoreListItem(ALICE, LIST_ID, access, ITEM_A, {
         operationId: 'op_delete',
         now: LATER,
       }),
     ).rejects.toBeInstanceOf(repository.ListUndoNotApplicableError);
+    // Nothing is spent by a restore that found nothing to restore.
+    expect(tx.transactWrite).not.toHaveBeenCalled();
 
     const snapshot = item();
     vi.mocked(base.getItem)
       .mockReset()
       .mockResolvedValueOnce(listRow())
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({
-        ...keys.listItemTombstone(LIST_ID, ITEM_A),
-        listId: LIST_ID,
-        itemId: ITEM_A,
-        operationId: 'op_delete',
-        snapshot,
-        schemaVersion: 1,
-      });
+      .mockResolvedValueOnce(undefined);
+    vi.mocked(base.batchGetItems)
+      .mockReset()
+      .mockResolvedValueOnce([
+        {
+          ...keys.listItemTombstone(LIST_ID, ITEM_A),
+          listId: LIST_ID,
+          itemId: ITEM_A,
+          operationId: 'op_delete',
+          snapshot,
+          schemaVersion: 1,
+        },
+      ])
+      .mockResolvedValue([]);
     vi.mocked(tx.transactWrite).mockImplementationOnce(async (_items, options) => {
       throw options.onConditionFailed?.(1);
     });

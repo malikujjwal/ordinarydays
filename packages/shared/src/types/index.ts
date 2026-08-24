@@ -59,6 +59,7 @@ export type { ListDetail } from './listDetail.js';
 export type { ListDetailItem } from './listDetailItem.js';
 export type { ListItemView } from './listItemView.js';
 export type { ListSettingsMutation } from './listSettingsMutation.js';
+export type { ListUndoResult } from './listUndoResult.js';
 export type { ListView } from './listView.js';
 export type { Occurrence, OccurrenceStatus } from './occurrence.js';
 export type {

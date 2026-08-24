@@ -47,10 +47,12 @@ import {
   listListQuery,
   listSettingsMutation,
   listTemplate,
+  listUndoResult,
   listView,
   patchListInput,
   patchListItemInput,
   reversibleItemMutation,
+  undoListOperationInput,
 } from './schemas/list.js';
 import { snoozeActivityInput, unsnoozeActivityInput } from './schemas/occurrence.js';
 import { deletedReminder, reminder, reminderInput } from './schemas/reminder.js';
@@ -90,6 +92,7 @@ const listItemListResponse = envelope(z.array(listItemView));
 const listItemPageResponse = envelope(z.array(listDetailItem));
 const reversibleItemMutationResponse = envelope(reversibleItemMutation);
 const listSettingsMutationResponse = envelope(listSettingsMutation);
+const listUndoResultResponse = envelope(listUndoResult);
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
@@ -1345,6 +1348,132 @@ registry.registerPath({
  * `/v1/list-templates` (P3-06). The registration that brings `ListTemplate` into
  * `components/schemas`, so a generated client can render the chooser from the spec.
  */
+/**
+ * `/v1/lists/{id}` bulk actions and their compensation (P3-10). The registrations that bring
+ * `UndoListOperationInput` and `ListUndoResult` into `components/schemas`.
+ */
+registry.registerPath({
+  method: 'post',
+  path: '/v1/lists/{id}/clear-checked',
+  summary: 'Delete every checked item, reversibly',
+  description:
+    'The end of a shopping trip. **No confirmation dialog** — the count is in the button the ' +
+    'user tapped, they ticked each of those rows one at a time, and the 10-second undo ' +
+    'window is the safety net. This is the single deliberate exception to the ' +
+    'destructive-change rule, recorded in `00-open-decisions.md` item 33. Each deleted item ' +
+    'leaves a replay-window tombstone holding its exact snapshot — the row, its rank, its ' +
+    'current viewer links and the matching Activity provenance — under **one** single-use ' +
+    'operation, however many transactions the delete needed. ' +
+    'Valid only on a `collection` whose `checkable` capability is on — on any other list, ' +
+    'including one whose stored flag a behaviour change left behind, it is `400`. The ' +
+    'hidden retained checks such a list carries are exactly what these must not reach.' +
+    ' Both answer `{ affectedCount, undoToken, undoExpiresAt }` with a **10-second** ' +
+    'window, and `undoExpiresAt` is the client\u2019s presentation deadline: stop offering a ' +
+    'new Undo at that instant, while an inverse the user already accepted stays valid ' +
+    'through the shared replay retention.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+  },
+  responses: {
+    200: {
+      description: 'How many were deleted, and the token that can put them back.',
+      content: { 'application/json': { schema: reversibleItemMutationResponse } },
+    },
+    400: {
+      description:
+        'Not a collection, or a collection whose checkboxes are off — or a missing ' +
+        '`Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list, or none this caller has a pointer to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/lists/{id}/uncheck-all',
+  summary: 'Uncheck every checked item, reversibly',
+  description:
+    'The start of the next trip. Not destructive, so no dialog is in question — it still ' +
+    'gets the canonical 10-second toast, because every bulk reversible action does. The ' +
+    'operation records **exactly the ids it changed**, so compensation re-checks those and ' +
+    'not whatever happens to be unchecked when it arrives; an item deleted during the ' +
+    'window is simply skipped. ' +
+    'Valid only on a `collection` whose `checkable` capability is on — on any other list, ' +
+    'including one whose stored flag a behaviour change left behind, it is `400`. The ' +
+    'hidden retained checks such a list carries are exactly what these must not reach.' +
+    ' Both answer `{ affectedCount, undoToken, undoExpiresAt }` with a **10-second** ' +
+    'window, and `undoExpiresAt` is the client\u2019s presentation deadline: stop offering a ' +
+    'new Undo at that instant, while an inverse the user already accepted stays valid ' +
+    'through the shared replay retention.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+  },
+  responses: {
+    200: {
+      description: 'How many were unchecked, and the token that re-checks them.',
+      content: { 'application/json': { schema: reversibleItemMutationResponse } },
+    },
+    400: {
+      description:
+        'Not a collection, or a collection whose checkboxes are off — or a missing ' +
+        '`Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list, or none this caller has a pointer to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/lists/{id}/undo',
+  summary: 'Apply one recorded compensation',
+  description:
+    'Takes the opaque token a reversible operation returned and applies the inverse **the ' +
+    'server recorded** — clients never send deleted row contents back as authority. It is ' +
+    'the only route allowed to reclaim an item id protected by a tombstone, and it earns ' +
+    'that by naming the operation: every tombstone it removes must carry the same operation ' +
+    'id, so one delete\u2019s token can never reclaim another\u2019s ids. Restored items come back ' +
+    'with their original ids, their **previous ranks**, their still-live viewer links and ' +
+    'the matching Activity provenance; a link whose Activity was deleted or repointed ' +
+    'meanwhile is omitted rather than restored dead. Requires its own `Idempotency-Key`. ' +
+    '`undoExpiresAt` is **not** consulted here: it governs whether a client may offer a new ' +
+    'Undo, never whether an accepted inverse may run, so an inverse replayed after that ' +
+    'deadline still applies for as long as the shared retention lasts. Answers `200` with a ' +
+    'discriminated outcome — `applied` with its count, `expired` for a token that names ' +
+    'nothing or has passed retention, `no_longer_applicable` for one already used or whose ' +
+    'recorded preconditions have since moved. The last two write nothing, and none of the ' +
+    'three is an error.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId }),
+    body: { content: { 'application/json': { schema: undoListOperationInput } } },
+  },
+  responses: {
+    200: {
+      description: 'What happened to the compensation.',
+      content: { 'application/json': { schema: listUndoResultResponse } },
+    },
+    400: {
+      description:
+        'A body carrying anything but the token, or a missing `Idempotency-Key`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list, or none this caller has a pointer to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
 registry.registerPath({
   method: 'get',
   path: '/v1/list-templates',

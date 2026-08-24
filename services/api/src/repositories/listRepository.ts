@@ -6,6 +6,7 @@ import {
 } from '@od/shared/rank';
 import {
   activity as activitySchema,
+  defaultSlot as defaultSlotSchema,
   listBehaviour as listBehaviourSchema,
   listIndex as listIndexSchema,
   listItemActivityLink as listItemActivityLinkSchema,
@@ -70,8 +71,11 @@ import {
   sourceList,
 } from './keys.js';
 import type { StoredItem } from './migrate.js';
-import { TransactionBuilder, transactWrite } from './tx.js';
-import { removeDefaultListTransactItem } from './userRepository.js';
+import { MAX_TRANSACT_ITEMS, TransactionBuilder, transactWrite } from './tx.js';
+import {
+  removeDefaultListTransactItem,
+  restoreDefaultListTransactItem,
+} from './userRepository.js';
 
 /**
  * The storage half of Lists and ListItems (`data-model.md` patterns 7, 8, 8b and 8d).
@@ -823,6 +827,101 @@ export interface ListSettingsUndo {
   readonly undoExpiresAt: string;
   readonly inverse: ListSettingsInverse;
   readonly preconditions: ListSettingsPreconditions;
+}
+
+const settingsInverseSchema = z.object({
+  behaviour: listBehaviourSchema.optional(),
+  capabilities: z
+    .object({
+      checkable: z.boolean().optional(),
+      supportsLocation: z.boolean().optional(),
+    })
+    .optional(),
+  slot: defaultSlotSchema.nullable().optional(),
+  archived: z.boolean().optional(),
+  removedDefault: z
+    .object({ slot: defaultSlotSchema, listId: z.string().min(1) })
+    .optional(),
+  restoreDetails: listItemDetailsSchema.optional(),
+  affectedItemIds: z.array(z.string().min(1)).optional(),
+});
+
+const settingsPreconditionsSchema = z.object({
+  behaviour: listBehaviourSchema.optional(),
+  capabilities: z
+    .object({
+      checkable: z.boolean().optional(),
+      supportsLocation: z.boolean().optional(),
+    })
+    .optional(),
+  slot: defaultSlotSchema.nullable().optional(),
+  archived: z.boolean().optional(),
+  itemDetails: listItemDetailsSchema.optional(),
+  defaultSlotAbsent: defaultSlotSchema.optional(),
+});
+
+/** Every kind of compensation one retained operation can carry (`data-model.md` §3.3). */
+export type ListUndoKind =
+  | 'delete_item'
+  | 'clear_checked'
+  | 'uncheck_all'
+  | 'settings'
+  | 'behaviour_upgrade';
+
+export interface ListUndoOperation {
+  readonly listId: string;
+  readonly operationId: string;
+  readonly kind: ListUndoKind;
+  readonly tokenHash: string;
+  /** The **UI** offer deadline. Never consulted when deciding whether an inverse may run. */
+  readonly undoExpiresAt: string;
+  readonly affectedItemIds: readonly string[];
+  readonly inverse?: ListSettingsInverse;
+  readonly preconditions?: ListSettingsPreconditions;
+  readonly consumed: boolean;
+  /** Epoch seconds. The **replay** retention, and the only expiry that refuses an inverse. */
+  readonly ttl: number;
+}
+
+const listUndoSchema = z.object({
+  listId: z.string().min(1),
+  operationId: z.string().min(1),
+  kind: z.enum([
+    'delete_item',
+    'clear_checked',
+    'uncheck_all',
+    'settings',
+    'behaviour_upgrade',
+  ]),
+  tokenHash: z.string().min(1),
+  undoExpiresAt: z.string().min(1),
+  affectedItemIds: z.array(z.string().min(1)).default([]),
+  inverse: settingsInverseSchema.optional(),
+  preconditions: settingsPreconditionsSchema.optional(),
+  consumed: z.boolean(),
+  ttl: z.number().int(),
+});
+
+/**
+ * One retained operation, addressed by the id its token carries (P3-10).
+ *
+ * Deliberately **not** filtered by `consumed` or by retention here: the compensation service
+ * has to tell "already used" from "never existed" to answer with the right typed outcome, and
+ * a repository that hid both behind `undefined` would collapse them.
+ */
+export async function getListUndoOperation(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  operationId: string,
+): Promise<ListUndoOperation | undefined> {
+  assertListAccessGrant(userId, listId, access);
+  const row = await getItem<StoredItem>(listUndo(listId, operationId), {
+    consistentRead: true,
+  });
+  if (row === undefined) return undefined;
+  const parsed = listUndoSchema.parse(row);
+  return parsed.listId === listId ? (parsed as ListUndoOperation) : undefined;
 }
 
 function settingsUndoItem(
@@ -2674,6 +2773,93 @@ export async function finishBehaviourMigration(
   });
 }
 
+/** The single-use record every reversible bulk operation leaves behind. */
+function bulkUndoItem(
+  listId: string,
+  options: {
+    readonly operationId: string;
+    readonly kind: ListUndoKind;
+    readonly tokenHash: string;
+    readonly undoExpiresAt: string;
+    readonly affectedItemIds: readonly string[];
+    readonly now: string;
+  },
+): StoredItem {
+  return stamp(ENTITY.undo, options.now, options.now, {
+    ...listUndo(listId, options.operationId),
+    listId,
+    operationId: options.operationId,
+    kind: options.kind,
+    affectedItemIds: [...options.affectedItemIds],
+    tokenHash: options.tokenHash,
+    undoExpiresAt: options.undoExpiresAt,
+    ttl: ttlFor(options.now),
+    consumed: false,
+  });
+}
+
+/** Marks one operation used, and fails if it already was. Single-use, enforced in storage. */
+function consumeUndoAction(listId: string, operationId: string, now: string) {
+  return {
+    Update: {
+      Key: listUndo(listId, operationId),
+      UpdateExpression: 'SET #consumed = :true, #consumedAt = :now, #updatedAt = :now',
+      ConditionExpression: '#operationId = :operationId AND #consumed = :false',
+      ExpressionAttributeNames: {
+        '#operationId': 'operationId',
+        '#consumed': 'consumed',
+        '#consumedAt': 'consumedAt',
+        '#updatedAt': 'updatedAt',
+      },
+      ExpressionAttributeValues: {
+        ':operationId': operationId,
+        ':false': false,
+        ':true': true,
+        ':now': now,
+      },
+    },
+  } as const;
+}
+
+/**
+ * Actions a transaction may hold beyond its per-item work: the deletion gate, the `META`
+ * update, the operation record and the reserved receipt slot.
+ */
+const BULK_TRANSACTION_OVERHEAD = 4;
+
+/**
+ * Splits work into transactions by **cost**, not by a fixed count.
+ *
+ * A deleted item is three actions plus one per active viewer for its link and one per linked
+ * Activity for its provenance, so a fixed chunk size that is right for a private list builds
+ * an over-limit transaction on a shared one. Costing each item and filling to the budget is
+ * the same answer for both, and it fails loudly rather than silently on an item that could
+ * never fit alone.
+ */
+function costedChunks<T>(items: readonly T[], cost: (item: T) => number): T[][] {
+  const budget = MAX_TRANSACT_ITEMS - BULK_TRANSACTION_OVERHEAD;
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let spent = 0;
+  for (const item of items) {
+    const price = cost(item);
+    if (price > budget) {
+      throw new AppError('internal', 'An unexpected error occurred.', [
+        { path: 'listItem', message: 'One list item needs more actions than fit.' },
+      ]);
+    }
+    if (spent + price > budget && current.length > 0) {
+      chunks.push(current);
+      current = [];
+      spent = 0;
+    }
+    current.push(item);
+    spent += price;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
 export interface DeleteListItemOptions {
   readonly operationId: string;
   readonly tokenHash: string;
@@ -2832,112 +3018,645 @@ export async function deleteListItem(
   });
 }
 
-export interface RestoreListItemOptions {
+export interface BulkItemOperationOptions {
   readonly operationId: string;
+  readonly tokenHash: string;
+  readonly undoExpiresAt: string;
   readonly now: string;
-  readonly idempotencyReceipt?: IdempotencyReceipt;
+  /**
+   * Built from the ids this operation really touched, and joined to the **last** chunk.
+   *
+   * `createListItems`'s reason: a receipt built before the work knows what it did would
+   * replay a count that was never true, and one committed with an early chunk would record a
+   * success for an operation that had not finished.
+   */
+  readonly receiptFor?: (itemIds: readonly string[]) => IdempotencyReceipt;
 }
 
-/** The narrow tombstone-aware compensation primitive; ordinary create never calls this. */
-export async function restoreListItem(
+/**
+ * Deletes every checked item as **one logical operation** (§P3-10, `data-model.md` §7).
+ *
+ * Chunked by cost, because it does not fit in one transaction at the item cap — but the
+ * `UNDO#` record naming every id it will delete lands in the **first** chunk, so a run that
+ * fails half way still leaves one operation that names the whole set. Compensation then puts
+ * back whatever was actually taken: a tombstone that is not there is an item this operation
+ * never got to, which is the same thing as one it has already restored.
+ *
+ * `uncheckedCount` is deliberately untouched. Every item this deletes is checked, so none of
+ * them was contributing to it.
+ */
+export async function deleteCheckedListItems(
   userId: string,
   listId: string,
   access: ListAccessGrant,
-  itemId: string,
-  options: RestoreListItemOptions,
-): Promise<ListItem> {
-  return retryMutation(async () => {
-    const state = await readMutationState(userId, listId, access);
-    const tombstoneRow = await getItem<StoredItem>(listItemTombstone(listId, itemId), {
-      consistentRead: true,
-    });
-    if (tombstoneRow === undefined) throw new ListUndoNotApplicableError();
-    const tombstone: ItemTombstone = itemTombstoneSchema.parse(tombstoneRow);
-    if (tombstone.operationId !== options.operationId) {
-      throw new ListUndoNotApplicableError();
-    }
-    const item = parseListItem(tombstone.snapshot);
-    const relationships = await readRestorableRelationships(state.list, tombstone);
+  options: BulkItemOperationOptions,
+): Promise<ListItem[]> {
+  const state = await readMutationState(userId, listId, access);
+  const checked = (await readAllItemsUnfenced(listId)).filter((item) => item.checked);
+  const ttl = ttlFor(options.now);
+
+  const snapshots = await Promise.all(
+    checked.map(async (item) => ({
+      item,
+      relationships: await readRelationshipSnapshot(state.list, item.itemId),
+    })),
+  );
+
+  const chunks = costedChunks(
+    snapshots,
+    // The ranked row, its locator and its tombstone, plus one action per active viewer and
+    // one more per Activity whose provenance points back at this item.
+    (entry) =>
+      3 +
+      entry.relationships.viewerIds.length +
+      entry.relationships.activityProvenance.length,
+  );
+
+  const deleted: ListItem[] = [];
+  for (const [index, chunk] of chunks.entries()) {
+    const isFirst = index === 0;
+    const isLast = index === chunks.length - 1;
     const builder = new TransactionBuilder(
-      'restoreListItem',
-      options.idempotencyReceipt === undefined ? 0 : 1,
-    ).add(
-      listDeletionGate(listId),
-      {
+      'deleteCheckedListItems',
+      isLast && options.receiptFor !== undefined ? 1 : 0,
+    ).add(listDeletionGate(listId));
+
+    for (const { item, relationships } of chunk) {
+      builder.add(
+        {
+          Delete: {
+            Key: listItemKey(listId, item.rank, item.itemId),
+            ConditionExpression: '#itemRevision = :expectedRevision',
+            ExpressionAttributeNames: { '#itemRevision': 'itemRevision' },
+            ExpressionAttributeValues: { ':expectedRevision': item.itemRevision },
+          },
+        },
+        {
+          Delete: {
+            Key: listItemLocator(listId, item.itemId),
+            ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
+            ExpressionAttributeNames: {
+              '#rank': 'rank',
+              '#itemRevision': 'itemRevision',
+            },
+            ExpressionAttributeValues: {
+              ':rank': item.rank,
+              ':expectedRevision': item.itemRevision,
+            },
+          },
+        },
+      );
+      const linkedViewerIds = new Set(
+        relationships.viewerLinks.map((link) => link.viewerUserId),
+      );
+      for (const link of relationships.viewerLinks) {
+        builder.add({
+          Delete: {
+            Key: listItemActivityLink(listId, link.viewerUserId, item.itemId),
+            ConditionExpression: '#activityId = :activityId',
+            ExpressionAttributeNames: { '#activityId': 'activityId' },
+            ExpressionAttributeValues: { ':activityId': link.activityId },
+          },
+        });
+      }
+      for (const viewerUserId of relationships.viewerIds) {
+        if (linkedViewerIds.has(viewerUserId)) continue;
+        builder.add({
+          ConditionCheck: {
+            Key: listItemActivityLink(listId, viewerUserId, item.itemId),
+            ConditionExpression: 'attribute_not_exists(pk)',
+          },
+        });
+      }
+      for (const provenance of relationships.activityProvenance) {
+        builder.add({
+          Update: {
+            Key: activityMeta(provenance.activityId),
+            UpdateExpression: 'REMOVE #listId, #listItemId',
+            ConditionExpression: '#listId = :listId AND #listItemId = :listItemId',
+            ExpressionAttributeNames: {
+              '#listId': 'listId',
+              '#listItemId': 'listItemId',
+            },
+            ExpressionAttributeValues: {
+              ':listId': provenance.listId,
+              ':listItemId': provenance.listItemId,
+            },
+          },
+        });
+      }
+      builder.add({
         Put: {
-          Item: storedListItem(item, options.now),
+          Item: stamp(ENTITY.itemTombstone, options.now, options.now, {
+            ...listItemTombstone(listId, item.itemId),
+            listId,
+            itemId: item.itemId,
+            operationId: options.operationId,
+            deletedAt: options.now,
+            ttl,
+            snapshot: item,
+            viewerLinks: relationships.viewerLinks,
+            activityProvenance: relationships.activityProvenance,
+          }),
           ConditionExpression: 'attribute_not_exists(pk)',
         },
+      });
+    }
+
+    if (isFirst) {
+      builder.add({
+        Put: {
+          Item: bulkUndoItem(listId, {
+            operationId: options.operationId,
+            kind: 'clear_checked',
+            tokenHash: options.tokenHash,
+            undoExpiresAt: options.undoExpiresAt,
+            affectedItemIds: checked.map((item) => item.itemId),
+            now: options.now,
+          }),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      });
+    }
+    builder.add({
+      Update: {
+        Key: listMeta(listId),
+        UpdateExpression: 'ADD #itemCount :removed',
+        ConditionExpression: GATES_ABSENT,
+        ExpressionAttributeNames: { '#itemCount': 'itemCount', ...GATE_NAMES },
+        ExpressionAttributeValues: { ':removed': -chunk.length },
       },
+    });
+    if (isLast && options.receiptFor !== undefined) {
+      builder.addReserved(
+        receiptItem(options.receiptFor(checked.map((item) => item.itemId))),
+      );
+    }
+
+    await transactWrite(builder.build(), {
+      operation: 'deleteCheckedListItems',
+      onConditionFailed: (index) =>
+        index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
+    });
+    deleted.push(...chunk.map((entry) => entry.item));
+  }
+
+  if (chunks.length === 0) {
+    /**
+     * Nothing is checked. The operation is still recorded, so the token this returns resolves
+     * like any other and compensates an empty set — the alternative is a response shape whose
+     * Undo fields are sometimes absent, for a case the menu already hides (§P3-10).
+     */
+    await transactWrite(
+      new TransactionBuilder(
+        'deleteCheckedListItems',
+        options.receiptFor === undefined ? 0 : 1,
+      )
+        .add(listDeletionGate(listId), {
+          Put: {
+            Item: bulkUndoItem(listId, {
+              operationId: options.operationId,
+              kind: 'clear_checked',
+              tokenHash: options.tokenHash,
+              undoExpiresAt: options.undoExpiresAt,
+              affectedItemIds: [],
+              now: options.now,
+            }),
+            ConditionExpression: 'attribute_not_exists(pk)',
+          },
+        })
+        .addReserved(
+          ...(options.receiptFor === undefined
+            ? []
+            : [receiptItem(options.receiptFor([]))]),
+        )
+        .build(),
       {
-        Put: {
-          Item: storedLocator(item, options.now),
-          ConditionExpression: 'attribute_not_exists(pk)',
-        },
+        operation: 'deleteCheckedListItems',
+        onConditionFailed: (index) =>
+          index === 0 ? new ListNotFoundError() : new IdempotencyRaceError(),
       },
     );
-    const relationshipStartIndex = builder.length;
-    for (const link of relationships.linksToPut) {
+  }
+
+  return deleted;
+}
+
+/**
+ * Sets every currently checked item unchecked, and records exactly that set (§P3-10).
+ *
+ * Each row advances the `itemRevision` it shares with its locator, for the reason an ordinary
+ * field patch does: a reorder racing this must retry against refreshed truth rather than
+ * moving a stale full-row image back over it.
+ */
+export async function uncheckAllListItems(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  options: BulkItemOperationOptions,
+): Promise<ListItem[]> {
+  await readMutationState(userId, listId, access);
+  const checked = (await readAllItemsUnfenced(listId)).filter((item) => item.checked);
+  const chunks = costedChunks(checked, () => 2);
+
+  for (const [index, chunk] of chunks.entries()) {
+    const isFirst = index === 0;
+    const isLast = index === chunks.length - 1;
+    const builder = new TransactionBuilder(
+      'uncheckAllListItems',
+      isLast && options.receiptFor !== undefined ? 1 : 0,
+    ).add(listDeletionGate(listId));
+
+    for (const item of chunk) {
+      const nextRevision = item.itemRevision + 1;
+      builder.add(
+        {
+          Update: {
+            Key: listItemKey(listId, item.rank, item.itemId),
+            UpdateExpression:
+              'SET #checked = :false, #itemRevision = :next, #updatedAt = :now',
+            ConditionExpression: '#itemRevision = :expected AND #checked = :true',
+            ExpressionAttributeNames: {
+              '#checked': 'checked',
+              '#itemRevision': 'itemRevision',
+              '#updatedAt': 'updatedAt',
+            },
+            ExpressionAttributeValues: {
+              ':false': false,
+              ':true': true,
+              ':expected': item.itemRevision,
+              ':next': nextRevision,
+              ':now': options.now,
+            },
+          },
+        },
+        {
+          Update: {
+            Key: listItemLocator(listId, item.itemId),
+            UpdateExpression: 'SET #itemRevision = :next',
+            ConditionExpression: '#rank = :rank AND #itemRevision = :expected',
+            ExpressionAttributeNames: {
+              '#rank': 'rank',
+              '#itemRevision': 'itemRevision',
+            },
+            ExpressionAttributeValues: {
+              ':rank': item.rank,
+              ':expected': item.itemRevision,
+              ':next': nextRevision,
+            },
+          },
+        },
+      );
+    }
+
+    if (isFirst) {
       builder.add({
         Put: {
-          Item: storedListItemActivityLink(link, options.now),
+          Item: bulkUndoItem(listId, {
+            operationId: options.operationId,
+            kind: 'uncheck_all',
+            tokenHash: options.tokenHash,
+            undoExpiresAt: options.undoExpiresAt,
+            affectedItemIds: checked.map((item) => item.itemId),
+            now: options.now,
+          }),
           ConditionExpression: 'attribute_not_exists(pk)',
         },
       });
     }
-    for (const provenance of relationships.activityProvenanceToPut) {
+    builder.add({
+      Update: {
+        Key: listMeta(listId),
+        UpdateExpression: 'ADD #uncheckedCount :freed',
+        ConditionExpression: GATES_ABSENT,
+        ExpressionAttributeNames: { '#uncheckedCount': 'uncheckedCount', ...GATE_NAMES },
+        ExpressionAttributeValues: { ':freed': chunk.length },
+      },
+    });
+    if (isLast && options.receiptFor !== undefined) {
+      builder.addReserved(
+        receiptItem(options.receiptFor(checked.map((item) => item.itemId))),
+      );
+    }
+
+    await transactWrite(builder.build(), {
+      operation: 'uncheckAllListItems',
+      onConditionFailed: (index) =>
+        index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
+    });
+  }
+
+  if (chunks.length === 0) {
+    await transactWrite(
+      new TransactionBuilder(
+        'uncheckAllListItems',
+        options.receiptFor === undefined ? 0 : 1,
+      )
+        .add(listDeletionGate(listId), {
+          Put: {
+            Item: bulkUndoItem(listId, {
+              operationId: options.operationId,
+              kind: 'uncheck_all',
+              tokenHash: options.tokenHash,
+              undoExpiresAt: options.undoExpiresAt,
+              affectedItemIds: [],
+              now: options.now,
+            }),
+            ConditionExpression: 'attribute_not_exists(pk)',
+          },
+        })
+        .addReserved(
+          ...(options.receiptFor === undefined
+            ? []
+            : [receiptItem(options.receiptFor([]))]),
+        )
+        .build(),
+      {
+        operation: 'uncheckAllListItems',
+        onConditionFailed: (index) =>
+          index === 0 ? new ListNotFoundError() : new IdempotencyRaceError(),
+      },
+    );
+  }
+
+  return checked;
+}
+
+export interface CompensateOptions {
+  readonly operationId: string;
+  readonly now: string;
+  /**
+   * Built from the count the compensation really applied, and joined to the transaction that
+   * finishes it.
+   *
+   * A callback rather than a prebuilt receipt, for `createListItems`'s reason: `affectedCount`
+   * is decided in here — how many tombstones still stand, how many affected items survive —
+   * and a receipt built before that would replay a number that was never true for the next 24
+   * hours. A stored response has to be the response.
+   */
+  readonly receiptFor?: (affectedCount: number) => IdempotencyReceipt;
+}
+
+/**
+ * Re-checks the members of an `uncheck-all` set that still exist (§P3-10).
+ *
+ * Only that set: an item somebody checked by hand during the window is not in it, and an item
+ * independently deleted is simply gone. Compensation restores what the operation changed and
+ * nothing else, which is what makes it safe on a shared list.
+ */
+export async function recheckListItems(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  itemIds: readonly string[],
+  options: CompensateOptions,
+): Promise<number> {
+  return retryMutation(async () => {
+    await readMutationState(userId, listId, access);
+    const wanted = new Set(itemIds);
+    const surviving = (await readAllItemsUnfenced(listId)).filter(
+      (item) => wanted.has(item.itemId) && !item.checked,
+    );
+    const chunks = costedChunks(surviving, () => 2);
+    const lastIndex = chunks.length - 1;
+
+    for (const [index, chunk] of chunks.entries()) {
+      const isLast = index === lastIndex;
+      const builder = new TransactionBuilder(
+        'recheckListItems',
+        isLast && options.receiptFor !== undefined ? 1 : 0,
+      ).add(listDeletionGate(listId));
+
+      for (const item of chunk) {
+        const nextRevision = item.itemRevision + 1;
+        builder.add(
+          {
+            Update: {
+              Key: listItemKey(listId, item.rank, item.itemId),
+              UpdateExpression:
+                'SET #checked = :true, #itemRevision = :next, #updatedAt = :now',
+              ConditionExpression: '#itemRevision = :expected',
+              ExpressionAttributeNames: {
+                '#checked': 'checked',
+                '#itemRevision': 'itemRevision',
+                '#updatedAt': 'updatedAt',
+              },
+              ExpressionAttributeValues: {
+                ':true': true,
+                ':expected': item.itemRevision,
+                ':next': nextRevision,
+                ':now': options.now,
+              },
+            },
+          },
+          {
+            Update: {
+              Key: listItemLocator(listId, item.itemId),
+              UpdateExpression: 'SET #itemRevision = :next',
+              ConditionExpression: '#rank = :rank AND #itemRevision = :expected',
+              ExpressionAttributeNames: {
+                '#rank': 'rank',
+                '#itemRevision': 'itemRevision',
+              },
+              ExpressionAttributeValues: {
+                ':rank': item.rank,
+                ':expected': item.itemRevision,
+                ':next': nextRevision,
+              },
+            },
+          },
+        );
+      }
       builder.add({
         Update: {
-          Key: activityMeta(provenance.activityId),
-          UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
-          ConditionExpression:
-            'attribute_exists(pk) AND attribute_not_exists(#listId) AND attribute_not_exists(#listItemId)',
+          Key: listMeta(listId),
+          UpdateExpression: 'ADD #uncheckedCount :taken',
+          ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
-            '#listId': 'listId',
-            '#listItemId': 'listItemId',
+            '#uncheckedCount': 'uncheckedCount',
+            ...GATE_NAMES,
           },
-          ExpressionAttributeValues: {
-            ':listId': provenance.listId,
-            ':listItemId': provenance.listItemId,
-          },
+          ExpressionAttributeValues: { ':taken': -chunk.length },
+        },
+      });
+      // The operation is spent by the transaction that finishes it, never before.
+      if (isLast)
+        builder.add(consumeUndoAction(listId, options.operationId, options.now));
+      if (isLast && options.receiptFor !== undefined) {
+        builder.addReserved(receiptItem(options.receiptFor(surviving.length)));
+      }
+
+      await transactWrite(builder.build(), {
+        operation: 'recheckListItems',
+        onConditionFailed: (index) => {
+          if (index === 0) return new ListNotFoundError();
+          return new RetryableListMutationConflictError();
         },
       });
     }
-    const relationshipEndIndex = builder.length;
-    builder.add(
-      {
-        Delete: {
-          Key: listItemTombstone(listId, itemId),
-          ConditionExpression: '#operationId = :operationId',
-          ExpressionAttributeNames: { '#operationId': 'operationId' },
-          ExpressionAttributeValues: { ':operationId': options.operationId },
-        },
-      },
-      {
-        Update: {
-          Key: listUndo(listId, options.operationId),
-          UpdateExpression:
-            'SET #consumed = :true, #consumedAt = :now, #updatedAt = :now',
-          ConditionExpression: '#operationId = :operationId AND #consumed = :false',
-          ExpressionAttributeNames: {
-            '#operationId': 'operationId',
-            '#consumed': 'consumed',
-            '#consumedAt': 'consumedAt',
-            '#updatedAt': 'updatedAt',
+
+    if (chunks.length === 0) await consumeOnly(listId, options);
+    return surviving.length;
+  });
+}
+
+/** Spends an operation whose inverse touched nothing that still exists. */
+async function consumeOnly(listId: string, options: CompensateOptions): Promise<void> {
+  const builder = new TransactionBuilder(
+    'consumeListUndo',
+    options.receiptFor === undefined ? 0 : 1,
+  ).add(
+    listDeletionGate(listId),
+    consumeUndoAction(listId, options.operationId, options.now),
+  );
+  if (options.receiptFor !== undefined) {
+    builder.addReserved(receiptItem(options.receiptFor(0)));
+  }
+  await transactWrite(builder.build(), {
+    operation: 'consumeListUndo',
+    onConditionFailed: (index) =>
+      index === 0 ? new ListNotFoundError() : new ListUndoNotApplicableError(),
+  });
+}
+
+export interface RestoreListItemOptions extends CompensateOptions {}
+
+/**
+ * Puts back every item one delete operation took, byte for byte (§P3-10).
+ *
+ * ## Why this is not an ordinary create
+ *
+ * A create is refused by `ITEM_TOMBSTONE#`, and must be: weakening that check is what would
+ * let a delayed offline create resurrect data the user deleted weeks ago. This is the sole
+ * path past it, and it earns that by naming the operation — every tombstone it removes has to
+ * carry the same `operationId`, so a token for one delete cannot reclaim another's ids.
+ *
+ * Items come back at their **previous ranks**, not appended: "a restored shopping list in a
+ * different order is a failed undo". `rankVersion` still advances, because the ranked rows
+ * changed and any cursor issued across the delete must not be resumed through them.
+ *
+ * Links and provenance are restored only where they are still true —
+ * {@link readRestorableRelationships} drops a link whose Activity was deleted or repointed
+ * meanwhile, so an item comes back with a live state line or with none, never a dead one.
+ *
+ * The operation is spent by the transaction that **finishes** the restore, so a seven-item
+ * clear that needs three chunks is still one single-use compensation. A tombstone that is
+ * missing is skipped rather than fatal: it is an item this operation never deleted, or one a
+ * previous chunk already put back. Being asked to restore something and finding **nothing**
+ * left to restore is the different case, and is not applicable.
+ */
+export async function restoreListItems(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  itemIds: readonly string[],
+  options: RestoreListItemOptions,
+): Promise<ListItem[]> {
+  return retryMutation(async () => {
+    const state = await readMutationState(userId, listId, access);
+    if (itemIds.length === 0) {
+      await consumeOnly(listId, options);
+      return [];
+    }
+
+    const tombstoneRows = await batchGetItems<StoredItem>(
+      itemIds.map((itemId) => listItemTombstone(listId, itemId)),
+      { consistentRead: true },
+    );
+    const tombstones = tombstoneRows
+      .map((row) => itemTombstoneSchema.parse(row))
+      .filter(
+        (tombstone) =>
+          tombstone.listId === listId && tombstone.operationId === options.operationId,
+      );
+    if (tombstones.length === 0) throw new ListUndoNotApplicableError();
+
+    const entries = await Promise.all(
+      tombstones.map(async (tombstone) => ({
+        item: parseListItem(tombstone.snapshot),
+        tombstone,
+        relationships: await readRestorableRelationships(state.list, tombstone),
+      })),
+    );
+    const chunks = costedChunks(
+      entries,
+      (entry) =>
+        3 +
+        entry.relationships.linksToPut.length +
+        entry.relationships.activityProvenanceToPut.length,
+    );
+
+    let version = state.list.rankVersion;
+    const restored: ListItem[] = [];
+    for (const [index, chunk] of chunks.entries()) {
+      const isLast = index === chunks.length - 1;
+      const builder = new TransactionBuilder(
+        'restoreListItems',
+        isLast && options.receiptFor !== undefined ? 1 : 0,
+      ).add(listDeletionGate(listId));
+      const relationshipIndexes: number[] = [];
+
+      for (const { item, relationships } of chunk) {
+        builder.add(
+          {
+            Put: {
+              Item: storedListItem(item, options.now),
+              ConditionExpression: 'attribute_not_exists(pk)',
+            },
           },
-          ExpressionAttributeValues: {
-            ':operationId': options.operationId,
-            ':false': false,
-            ':true': true,
-            ':now': options.now,
+          {
+            Put: {
+              Item: storedLocator(item, options.now),
+              ConditionExpression: 'attribute_not_exists(pk)',
+            },
           },
-        },
-      },
-      {
+        );
+        for (const link of relationships.linksToPut) {
+          relationshipIndexes.push(builder.length);
+          builder.add({
+            Put: {
+              Item: storedListItemActivityLink(link, options.now),
+              ConditionExpression: 'attribute_not_exists(pk)',
+            },
+          });
+        }
+        for (const provenance of relationships.activityProvenanceToPut) {
+          relationshipIndexes.push(builder.length);
+          builder.add({
+            Update: {
+              Key: activityMeta(provenance.activityId),
+              UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
+              ConditionExpression:
+                'attribute_exists(pk) AND attribute_not_exists(#listId) AND attribute_not_exists(#listItemId)',
+              ExpressionAttributeNames: {
+                '#listId': 'listId',
+                '#listItemId': 'listItemId',
+              },
+              ExpressionAttributeValues: {
+                ':listId': provenance.listId,
+                ':listItemId': provenance.listItemId,
+              },
+            },
+          });
+        }
+        builder.add({
+          Delete: {
+            Key: listItemTombstone(listId, item.itemId),
+            ConditionExpression: '#operationId = :operationId',
+            ExpressionAttributeNames: { '#operationId': 'operationId' },
+            ExpressionAttributeValues: { ':operationId': options.operationId },
+          },
+        });
+      }
+
+      if (isLast)
+        builder.add(consumeUndoAction(listId, options.operationId, options.now));
+      const nextVersion = version + 1;
+      builder.add({
         Update: {
           Key: listMeta(listId),
           UpdateExpression:
-            'SET #rankVersion = :nextVersion ADD #itemCount :one, #uncheckedCount :unchecked',
+            'SET #rankVersion = :nextVersion ADD #itemCount :count, #uncheckedCount :unchecked',
           ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
           ExpressionAttributeNames: {
             '#rankVersion': 'rankVersion',
@@ -2946,37 +3665,188 @@ export async function restoreListItem(
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
-            ':expectedVersion': state.list.rankVersion,
-            ':nextVersion': state.list.rankVersion + 1,
-            ':one': 1,
-            ':unchecked': item.checked ? 0 : 1,
+            ':expectedVersion': version,
+            ':nextVersion': nextVersion,
+            ':count': chunk.length,
+            ':unchecked': chunk.filter((entry) => !entry.item.checked).length,
           },
         },
-      },
-    );
-    const metaIndex = builder.length - 1;
-    const receiptIndex = builder.length;
-    if (options.idempotencyReceipt !== undefined) {
-      builder.addReserved(receiptItem(options.idempotencyReceipt));
+      });
+      const metaIndex = builder.length - 1;
+      const receiptIndex = builder.length;
+      if (isLast && options.receiptFor !== undefined) {
+        builder.addReserved(receiptItem(options.receiptFor(tombstones.length)));
+      }
+
+      await transactWrite(builder.build(), {
+        operation: 'restoreListItems',
+        onConditionFailed: (index) => {
+          if (index === 0) return new ListNotFoundError();
+          if (index === metaIndex || relationshipIndexes.includes(index)) {
+            return new RetryableListMutationConflictError();
+          }
+          if (isLast && options.receiptFor !== undefined && index === receiptIndex) {
+            return new IdempotencyRaceError();
+          }
+          return new ListUndoNotApplicableError();
+        },
+      });
+      version = nextVersion;
+      restored.push(...chunk.map((entry) => entry.item));
     }
-    await transactWrite(builder.build(), {
-      operation: 'restoreListItem',
-      onConditionFailed: (index) => {
-        if (index === 0) return new ListNotFoundError();
-        if (
-          index === metaIndex ||
-          (index >= relationshipStartIndex && index < relationshipEndIndex)
-        ) {
-          return new RetryableListMutationConflictError();
-        }
-        if (options.idempotencyReceipt !== undefined && index === receiptIndex) {
-          return new IdempotencyRaceError();
-        }
-        return new ListUndoNotApplicableError();
-      },
-    });
-    return item;
+
+    return restored;
   });
+}
+
+/** The narrow single-item form P3-08's delete undo uses; one id is one chunk. */
+export async function restoreListItem(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  itemId: string,
+  options: RestoreListItemOptions,
+): Promise<ListItem> {
+  const [restored] = await restoreListItems(userId, listId, access, [itemId], options);
+  if (restored === undefined) throw new ListUndoNotApplicableError();
+  return restored;
+}
+
+/**
+ * Applies one settings or archive inverse, or refuses it, in a single transaction (§P3-10).
+ *
+ * ## Why the preconditions are conditions, not a read
+ *
+ * "Applies only while its recorded preconditions remain true" cannot be a check followed by a
+ * write — the gap between them is exactly the window a second device edits in. Every recorded
+ * precondition becomes a condition on the same `META` update that applies the inverse, so the
+ * whole compensation either lands on the state it was recorded against or lands not at all.
+ *
+ * Capabilities are written and checked through **document paths**, one flag at a time. That
+ * is what lets `Show checkboxes` be undone while `Add a place to items` has moved since: a
+ * whole-object write would put the other switch back where it was, and a whole-object
+ * condition would refuse an Undo that is still perfectly applicable.
+ *
+ * A slot inverse also restores the exact profile default the forward change removed, and only
+ * while that slot is still empty — a newer destination chosen since makes the **whole**
+ * inverse no longer applicable, which is what one transaction gives for free.
+ */
+export async function applyListSettingsInverse(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  inverse: ListSettingsInverse,
+  preconditions: ListSettingsPreconditions,
+  options: CompensateOptions,
+): Promise<void> {
+  assertListAccessGrant(userId, listId, access);
+
+  // `GATES_ABSENT` names both work markers, so its aliases have to be declared with the rest.
+  const names: Record<string, string> = { '#updatedAt': 'updatedAt', ...GATE_NAMES };
+  const values: Record<string, unknown> = { ':now': options.now };
+  const sets = ['#updatedAt = :now'];
+  const conditions: string[] = [];
+
+  if (inverse.capabilities !== undefined) {
+    names['#capabilities'] = 'capabilities';
+    for (const [flag, prior] of Object.entries(inverse.capabilities)) {
+      names[`#${flag}`] = flag;
+      values[`:prior_${flag}`] = prior;
+      sets.push(`#capabilities.#${flag} = :prior_${flag}`);
+    }
+  }
+  for (const [flag, expected] of Object.entries(preconditions.capabilities ?? {})) {
+    names['#capabilities'] = 'capabilities';
+    names[`#${flag}`] = flag;
+    values[`:expected_${flag}`] = expected;
+    conditions.push(`#capabilities.#${flag} = :expected_${flag}`);
+  }
+  if ('slot' in inverse) {
+    names['#slot'] = 'slot';
+    values[':priorSlot'] = inverse.slot ?? null;
+    sets.push('#slot = :priorSlot');
+  }
+  if ('slot' in preconditions) {
+    names['#slot'] = 'slot';
+    values[':expectedSlot'] = preconditions.slot ?? null;
+    conditions.push('#slot = :expectedSlot');
+  }
+  if (inverse.archived !== undefined) {
+    names['#archived'] = 'archived';
+    values[':priorArchived'] = inverse.archived;
+    sets.push('#archived = :priorArchived');
+  }
+  if (preconditions.archived !== undefined) {
+    names['#archived'] = 'archived';
+    values[':expectedArchived'] = preconditions.archived;
+    conditions.push('#archived = :expectedArchived');
+  }
+  if (preconditions.behaviour !== undefined) {
+    names['#behaviour'] = 'behaviour';
+    values[':expectedBehaviour'] = preconditions.behaviour;
+    conditions.push('#behaviour = :expectedBehaviour');
+  }
+
+  const builder = new TransactionBuilder(
+    'applyListSettingsInverse',
+    options.receiptFor === undefined ? 0 : 1,
+  ).add(listDeletionGate(listId), {
+    Update: {
+      Key: listMeta(listId),
+      UpdateExpression: `SET ${sets.join(', ')}`,
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+      ConditionExpression: [...conditions, GATES_ABSENT].join(' AND '),
+    },
+  });
+  const metaIndex = builder.length - 1;
+
+  let profileIndex = -1;
+  if (inverse.removedDefault !== undefined) {
+    profileIndex = builder.length;
+    builder.add(
+      restoreDefaultListTransactItem(
+        userId,
+        inverse.removedDefault.slot,
+        inverse.removedDefault.listId,
+      ),
+    );
+  }
+  builder.add(consumeUndoAction(listId, options.operationId, options.now));
+  const consumeIndex = builder.length - 1;
+  if (options.receiptFor !== undefined) {
+    // One list, changed back. The count a settings compensation reports is always one.
+    builder.addReserved(receiptItem(options.receiptFor(1)));
+  }
+
+  await transactWrite(builder.build(), {
+    operation: 'applyListSettingsInverse',
+    onConditionFailed: (index) => {
+      if (index === 0) return new ListNotFoundError();
+      if (index === metaIndex || index === profileIndex || index === consumeIndex) {
+        return new ListUndoNotApplicableError();
+      }
+      return new IdempotencyRaceError();
+    },
+  });
+}
+
+/**
+ * Spends one retained operation without restoring anything.
+ *
+ * The settings and archive inverses apply their own conditional `META` write and then need
+ * the operation marked used in the same transaction; this is the form for a compensation that
+ * legitimately touches no items at all — an empty `clear-checked`, or an `uncheck-all` whose
+ * every affected item has since been deleted.
+ */
+export async function consumeListUndoOperation(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  options: CompensateOptions,
+): Promise<void> {
+  assertListAccessGrant(userId, listId, access);
+  await consumeOnly(listId, options);
 }
 
 export interface DeleteListOptions {

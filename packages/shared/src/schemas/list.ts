@@ -501,6 +501,52 @@ export function patchListItemInputFor(behaviour: z.infer<typeof listBehaviour>) 
 }
 
 /**
+ * `POST /v1/lists/:id/undo` (`api-contract.md` §2.7, P3-10).
+ *
+ * The opaque token and nothing else. Strict, and deliberately so: a client must never send
+ * the deleted rows back as authority, and a body that tried to would be a `400` naming the
+ * field rather than a restore from data the server did not record.
+ */
+export const undoListOperationInput = z
+  .strictObject({ undoToken: z.string().min(1) })
+  .meta({ id: 'UndoListOperationInput' });
+
+export type UndoListOperationInput = z.infer<typeof undoListOperationInput>;
+
+/**
+ * What `POST /v1/lists/:id/undo` answers with — a **discriminated union**, not a count with
+ * exceptions (P3-10; `api-contract.md` §2.7 amended in the same pull request).
+ *
+ * §2.7 said two things that did not fit together: the route "returns `{ affectedCount }`",
+ * and a mismatched, consumed or retention-expired token "returns the typed
+ * expired/no-longer-applicable result and writes nothing". A count cannot express the second,
+ * and a new `ErrorCode` would be wrong for both — none of these is a failed request. The
+ * server was asked to apply a compensation, and it answers with what happened to it:
+ *
+ * - `applied` — the inverse ran; `affectedCount` is what it touched.
+ * - `expired` — the token is past `MAX_AUTOMATIC_INTENT_AGE_DAYS`, or names no operation, or
+ *   its hash does not match. The three are **deliberately indistinguishable**: telling a
+ *   caller that a token is well-formed but expired, rather than simply unknown, tells them
+ *   something about an operation they may not own.
+ * - `no_longer_applicable` — the operation is retained and the token is right, but the world
+ *   has moved: it was already used, or a settings inverse's recorded preconditions no longer
+ *   hold because someone edited what it would restore.
+ *
+ * All three are `200`, because all three are true answers to the question asked. Nothing is
+ * written for the last two.
+ */
+export const listUndoResult = z
+  .discriminatedUnion('outcome', [
+    z.strictObject({
+      outcome: z.literal('applied'),
+      affectedCount: z.number().int().nonnegative(),
+    }),
+    z.strictObject({ outcome: z.literal('expired') }),
+    z.strictObject({ outcome: z.literal('no_longer_applicable') }),
+  ])
+  .meta({ id: 'ListUndoResult' });
+
+/**
  * What a reversible item mutation answers with (`api-contract.md` §2.7).
  *
  * `undoExpiresAt` is the **UI offer deadline**, not the server's replay deadline: the client

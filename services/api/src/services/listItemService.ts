@@ -1,5 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { MAX_LIST_ITEMS, UNDO_OFFER_SECONDS } from '@od/shared';
+import { BULK_UNDO_OFFER_SECONDS, MAX_LIST_ITEMS, UNDO_OFFER_SECONDS } from '@od/shared';
 import {
   type BulkCreateListItemsInput,
   bulkCreateListItemsInputFor,
@@ -17,10 +16,12 @@ import type {
 } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
+import { mintUndoToken } from '../lib/undoToken.js';
 import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
 import {
   batchGetViewerLinks,
   createListItems,
+  deleteCheckedListItems,
   deleteListItem,
   getListItem,
   getListMeta,
@@ -40,6 +41,7 @@ import {
   patchListItemFields,
   reorderListItem,
   resolveExistingItems,
+  uncheckAllListItems,
 } from '../repositories/listRepository.js';
 import { ID_UNAVAILABLE } from './activityService.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
@@ -543,7 +545,13 @@ export async function removeItem(
   const access = await assertListAccess(userId, listId, 'write');
   await loadList(userId, listId, access.index, now);
 
-  const undoToken = randomBytes(32).toString('base64url');
+  const operationId = newListOperationId();
+  /**
+   * The token **addresses** the operation it belongs to (P3-10, `lib/undoToken.ts`): the undo
+   * route receives a token and nothing else, and this table has one index that is not worth
+   * spending on the few operations anybody ever undoes.
+   */
+  const { token: undoToken, tokenHash } = mintUndoToken(operationId);
   const result: ReversibleItemMutation = {
     affectedCount: 1,
     undoToken,
@@ -552,8 +560,8 @@ export async function removeItem(
 
   await mapped(() =>
     deleteListItem(userId, listId, access.index, itemId, {
-      operationId: newListOperationId(),
-      tokenHash: createHash('sha256').update(undoToken).digest('base64url'),
+      operationId,
+      tokenHash,
       undoExpiresAt: result.undoExpiresAt,
       now,
       ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(result) }),
@@ -561,6 +569,129 @@ export async function removeItem(
   );
 
   return result;
+}
+
+const NOT_CHECKABLE =
+  'This list does not have checkboxes, so there is nothing to clear or uncheck.';
+
+/**
+ * The two-part gate, applied to the **operations** as well as to the fields (criterion 18).
+ *
+ * Both halves matter here for the same reason they matter on a checkbox write: a `watch` list
+ * may still carry a stored `checkable: true` that a behaviour change left behind, and its
+ * items may still carry `checked` values that behaviour change retained. Offering to clear
+ * them would delete rows on the strength of a flag whose renderer draws no checkbox — the
+ * hidden retained state is exactly what these endpoints must not reach.
+ */
+function assertBulkCheckedAllowed(list: List): void {
+  if (list.behaviour !== 'collection' || !list.capabilities.checkable) {
+    refuse('checked', NOT_CHECKABLE);
+  }
+}
+
+/** Mints one bulk operation's identity and its 10-second offer (`interaction-contract.md` §4). */
+function bulkOperation(now: string) {
+  const operationId = newListOperationId();
+  const { token, tokenHash } = mintUndoToken(operationId);
+  return {
+    operationId,
+    tokenHash,
+    undoToken: token,
+    undoExpiresAt: new Date(
+      Date.parse(now) + BULK_UNDO_OFFER_SECONDS * 1000,
+    ).toISOString(),
+  };
+}
+
+/**
+ * `POST /v1/lists/:id/clear-checked` — the end of a shopping trip.
+ *
+ * **No confirmation dialog**, by the decision recorded in §P3-10 and `00-open-decisions.md`
+ * item 33: the count is in the button the user tapped, they ticked each of those rows one at
+ * a time, and the 10-second undo window is the safety net. This is the single deliberate
+ * exception to `interaction-contract.md` §1a.1, and it is the reason the response carries a
+ * token rather than the endpoint carrying a precondition.
+ */
+export async function clearCheckedItems(
+  userId: string,
+  listId: string,
+  now: string,
+  receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
+): Promise<ReversibleItemMutation> {
+  const access = await assertListAccess(userId, listId, 'write');
+  const list = await loadList(userId, listId, access.index, now);
+  assertBulkCheckedAllowed(list);
+
+  const operation = bulkOperation(now);
+  const deleted = await mapped(() =>
+    deleteCheckedListItems(userId, listId, access.index, {
+      operationId: operation.operationId,
+      tokenHash: operation.tokenHash,
+      undoExpiresAt: operation.undoExpiresAt,
+      now,
+      ...(receiptFor === undefined
+        ? {}
+        : {
+            receiptFor: (itemIds: readonly string[]) =>
+              receiptFor({
+                affectedCount: itemIds.length,
+                undoToken: operation.undoToken,
+                undoExpiresAt: operation.undoExpiresAt,
+              }),
+          }),
+    }),
+  );
+
+  return {
+    affectedCount: deleted.length,
+    undoToken: operation.undoToken,
+    undoExpiresAt: operation.undoExpiresAt,
+  };
+}
+
+/**
+ * `POST /v1/lists/:id/uncheck-all` — the start of the next trip.
+ *
+ * Not destructive, so no dialog is even in question; it still gets the canonical 10-second
+ * toast, because `interaction-contract.md` §4 gives every bulk reversible action one. The
+ * operation records **exactly the ids it changed**, so compensation re-checks those and not
+ * whatever happens to be unchecked when it arrives.
+ */
+export async function uncheckAllItems(
+  userId: string,
+  listId: string,
+  now: string,
+  receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
+): Promise<ReversibleItemMutation> {
+  const access = await assertListAccess(userId, listId, 'write');
+  const list = await loadList(userId, listId, access.index, now);
+  assertBulkCheckedAllowed(list);
+
+  const operation = bulkOperation(now);
+  const changed = await mapped(() =>
+    uncheckAllListItems(userId, listId, access.index, {
+      operationId: operation.operationId,
+      tokenHash: operation.tokenHash,
+      undoExpiresAt: operation.undoExpiresAt,
+      now,
+      ...(receiptFor === undefined
+        ? {}
+        : {
+            receiptFor: (itemIds: readonly string[]) =>
+              receiptFor({
+                affectedCount: itemIds.length,
+                undoToken: operation.undoToken,
+                undoExpiresAt: operation.undoExpiresAt,
+              }),
+          }),
+    }),
+  );
+
+  return {
+    affectedCount: changed.length,
+    undoToken: operation.undoToken,
+    undoExpiresAt: operation.undoExpiresAt,
+  };
 }
 
 export interface ListItemsProjection {
