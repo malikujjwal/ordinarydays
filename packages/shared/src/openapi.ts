@@ -38,6 +38,7 @@ import {
   listDetail,
   listDetailQuery,
   listListQuery,
+  listTemplate,
   listView,
 } from './schemas/list.js';
 import { snoozeActivityInput, unsnoozeActivityInput } from './schemas/occurrence.js';
@@ -72,6 +73,7 @@ const listResponse = envelope(listView);
 const listPageResponse = envelope(z.array(listView));
 const listDetailResponse = envelope(listDetail);
 const deletedListResponse = envelope(deletedList);
+const listTemplateListResponse = envelope(z.array(listTemplate));
 
 /** The `act_` path parameter. Declared because OpenAPI requires every path template to be. */
 const activityId = ulidId('act');
@@ -258,9 +260,11 @@ registry.registerPath({
     'effective instants into `tz`, and returns the trimmed caller-specific rows Today and ' +
     'Plans render. The inclusive window is capped at 62 days. `include` accepts the distinct ' +
     'comma-separated tokens `anytime_unscheduled`, `overdue`, and `reminders`; reminder rows ' +
-    'are always scoped to the authenticated caller. Responses carry a strong `ETag` over ' +
-    '`data` only and `Cache-Control: private, max-age=60`; a matching `If-None-Match` returns ' +
-    '`304` with no body.',
+    'are always scoped to the authenticated caller. Responses carry a weak `ETag` — ' +
+    '`W/"…"` — over `data` only and `Cache-Control: private, max-age=60`; a matching ' +
+    '`If-None-Match` returns `304` with no body. The validator is weak because ' +
+    '`meta.requestId` differs on every response, so no tag over `data` can claim the ' +
+    'byte-identity a strong one asserts.',
   tags: ['agenda'],
   request: { query: agendaQuery },
   responses: {
@@ -994,6 +998,35 @@ registry.registerPath({
         'once the first has succeeded.',
       content: { 'application/json': { schema: errorResponse } },
     },
+  },
+});
+
+/**
+ * `/v1/list-templates` (P3-06). The registration that brings `ListTemplate` into
+ * `components/schemas`, so a generated client can render the chooser from the spec.
+ */
+registry.registerPath({
+  method: 'get',
+  path: '/v1/list-templates',
+  summary: 'The list template catalogue',
+  description:
+    'The exact shared catalogue, as data: every field of every record, in the fixed order ' +
+    'the style chooser renders. There is no filtering, no query parameter, no ranking and ' +
+    'no title matcher — the user taps one record, and that tap is the only thing that sets ' +
+    '`templateKey`. Static, so it performs no database read: `Cache-Control: public, ' +
+    'max-age=86400` and a weak `ETag` — `W/"…"` — over the catalogue itself, which changes ' +
+    'when a shipped record is edited, added or reordered. It is weak rather than strong ' +
+    'because `meta.requestId` differs on every response even though the catalogue does ' +
+    'not. A matching `If-None-Match` answers `304`. The mobile creation sheet bundles a ' +
+    'projection of this same shared module, so first-launch offline creation never depends ' +
+    'on this request.',
+  tags: ['lists'],
+  responses: {
+    200: {
+      description: 'Every template, in catalogue order.',
+      content: { 'application/json': { schema: listTemplateListResponse } },
+    },
+    304: { description: 'The caller already holds this exact catalogue.' },
   },
 });
 

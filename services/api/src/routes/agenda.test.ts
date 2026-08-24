@@ -164,11 +164,17 @@ describe('GET /v1/agenda', () => {
     expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0);
   });
 
-  it('sets a private 60-second cache policy and a strong ETag', async () => {
+  /**
+   * **Weak, not strong** — corrected in P3-06's review. The tag covers `data` only, but the
+   * body also carries a per-request `meta.requestId`, so two responses sharing a tag are
+   * never byte-identical and a strong validator would claim otherwise (RFC 9110 §8.8.1).
+   * The test below shows exactly that divergence.
+   */
+  it('sets a private 60-second cache policy and a weak ETag', async () => {
     const res = await request(createApp(), query());
 
     expect(res.headers.get('Cache-Control')).toBe('private, max-age=60');
-    expect(res.headers.get('ETag')).toMatch(/^"[A-Za-z0-9_-]{43}"$/);
+    expect(res.headers.get('ETag')).toMatch(/^W\/"[A-Za-z0-9_-]{43}"$/);
   });
 
   it('ETag ignores requestId', async () => {
@@ -190,7 +196,7 @@ describe('GET /v1/agenda', () => {
   });
 
   it.each([
-    ['a weak current validator', (etag: string) => `W/${etag}`],
+    ['the strong form of the current weak validator', (etag: string) => etag.slice(2)],
     ['a validator list containing the current one', (etag: string) => `"stale", ${etag}`],
     ['the wildcard', () => '*'],
   ])('returns 304 for %s', async (_case, header) => {

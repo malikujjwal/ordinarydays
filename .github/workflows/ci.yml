@@ -138,6 +138,17 @@ jobs:
         run: node scripts/check-forbidden.mjs no-dangerous-html
       - name: Client layer rules
         run: node scripts/check-forbidden.mjs client-layer-rules
+      # The three rules added after this job was first written. They ran only in `pnpm
+      # verify`, which no CI job invokes — so each was enforced on a developer's machine and
+      # nowhere else, which is the silent-green split this file exists to avoid. P3-07 adds
+      # the last of them and wires up all three rather than leaving two dead guards beside
+      # the one it needs.
+      - name: No unresolved passed-plan count in the client
+        run: node scripts/check-forbidden.mjs no-passed-plan-count
+      - name: LIST_TEMPLATES stays creation-time data
+        run: node scripts/check-forbidden.mjs list-templates-are-creation-data
+      - name: No template suggester
+        run: node scripts/check-forbidden.mjs no-template-suggester
 
   # DynamoDB Local. Separate from `validate` so that `pnpm test` stays runnable with nothing
   # but Node, and a Docker problem cannot be mistaken for a failing unit test.
