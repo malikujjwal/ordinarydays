@@ -50,6 +50,23 @@ function opaqueTag(value: string): string {
 }
 
 /**
+ * The opaque value an `If-Match` header carries, quoted or bare.
+ *
+ * RFC 9110 writes an entity tag as `"value"` and a well-behaved HTTP client sends it that
+ * way; our own client sends the raw `updatedAt`. Accepting both costs two `replace`s and
+ * removes a class of report — "it works in curl but not in the app" — that would otherwise be
+ * diagnosed from a `409` that looks like a genuine conflict.
+ *
+ * Lifted out of `handlers/patchActivity.ts` in P3-09, which needed the identical rule on two
+ * more routes. Three copies of a comparison that decides whether an edit is stale is three
+ * chances for one of them to normalise differently, and a mismatch there looks exactly like
+ * a real conflict.
+ */
+export function entityTag(header: string): string {
+  return opaqueTag(header).replace(/^"(.*)"$/, '$1');
+}
+
+/**
  * Whether an `If-None-Match` header names the current tag (RFC 9110 §13.1.2).
  *
  * Accepts a comma-separated list and the wildcard `*`, and compares with the **weak**

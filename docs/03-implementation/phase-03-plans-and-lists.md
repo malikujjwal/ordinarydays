@@ -703,6 +703,16 @@ The `409` body must name the fields that would be lost and the **exact count of 
 affected**, so the client can render "…will remove season, episode and watch status from 7
 items." A generic conflict message forces the user to guess what they are agreeing to.
 
+**The destructive row is conditional.**
+[`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §1a.1 rule 3
+names a behaviour change as destructive only *sometimes*, and calls a confirmation that can
+appear with a count of `0` a bug. An empty `watch` list, or a `meals` list carrying no
+ingredients, therefore changes behaviour with no confirmation — the migration still runs,
+because every item must match the new behaviour, but nothing is lost and nothing is asked.
+Recorded in P3-09 alongside the matching amendment to
+[`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §2.7, which stated
+the row unconditionally; the product doc outranks it on behaviour.
+
 **Approach.** `PATCH /v1/lists/:id` handles `title`, capabilities, slot and archive but rejects
 `behaviour`. `POST /v1/lists/:id/behaviour` accepts one target `{ behaviour }`, requires
 `If-Match` and `Idempotency-Key`, and classifies that transition as additive or destructive.

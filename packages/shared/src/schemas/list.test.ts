@@ -16,14 +16,18 @@ import type {
 import type { ListDetail } from '../types/listDetail.js';
 import type { ListDetailItem } from '../types/listDetailItem.js';
 import type { ListItemView } from '../types/listItemView.js';
+import type { ListSettingsMutation } from '../types/listSettingsMutation.js';
 import type { ListView } from '../types/listView.js';
 import {
   bulkCreateListItemsInput,
   bulkCreateListItemsInputFor,
+  changeListBehaviourInput,
+  changeListBehaviourQuery,
   checkDetailsMatchBehaviour,
   createListInput,
   createListItemInput,
   createListItemInputFor,
+  DATA_LOSS_DETAIL_PATHS,
   type deletedList,
   list,
   listBehaviour,
@@ -39,8 +43,10 @@ import {
   listItemView,
   listListQuery,
   listMember,
+  listSettingsMutation,
   listTemplate,
   listView,
+  patchListInput,
 } from './list.js';
 
 /**
@@ -666,5 +672,90 @@ describe('the list query schemas', () => {
     expect(listDetailQuery.safeParse({ includeItems: 'true' }).success).toBe(true);
     expect(listDetailQuery.safeParse({ includeItems: 'yes' }).success).toBe(false);
     expect(listDetailQuery.safeParse({ cursor: 'x' }).success).toBe(false);
+  });
+});
+
+/**
+ * The two settings inputs (P3-09).
+ *
+ * They are the change-rules table expressed on the wire: what a `PATCH` may carry, what only
+ * the replay-protected action may change, and what neither may touch.
+ */
+describe('the list settings inputs', () => {
+  it('accepts every field PATCH owns, and a partial capabilities pair', () => {
+    expect(
+      patchListInput.safeParse({
+        title: 'Favourite restaurants',
+        capabilities: { supportsLocation: true },
+        slot: 'meals',
+        archived: true,
+      }).success,
+    ).toBe(true);
+  });
+
+  /** `null` clears the slot; absent leaves it alone. The two are different intentions. */
+  it('accepts a null slot and an empty patch, and rejects an empty capabilities patch', () => {
+    expect(patchListInput.safeParse({ slot: null }).success).toBe(true);
+    expect(patchListInput.safeParse({}).success).toBe(true);
+    expect(patchListInput.safeParse({ capabilities: {} }).success).toBe(false);
+  });
+
+  /**
+   * `behaviour` is the replay-protected action's, and `templateKey` is immutable provenance.
+   * Strict, so either one is a `400` naming it rather than a save that quietly drops it.
+   */
+  it.each(['behaviour', 'templateKey', 'icon', 'emptyStateCopy', 'itemCount'])(
+    'rejects %s, naming it',
+    (field) => {
+      const result = patchListInput.safeParse({ [field]: 'watch' });
+      expect(result.success).toBe(false);
+      expect(JSON.stringify(result.error?.issues)).toContain(field);
+    },
+  );
+
+  it('takes one behaviour and nothing else', () => {
+    expect(changeListBehaviourInput.safeParse({ behaviour: 'meals' }).success).toBe(true);
+    expect(changeListBehaviourInput.safeParse({ behaviour: 'shopping' }).success).toBe(
+      false,
+    );
+    // The confirmation is a query parameter on a separately keyed action, not a body field.
+    expect(
+      changeListBehaviourInput.safeParse({ behaviour: 'meals', confirmDataLoss: true })
+        .success,
+    ).toBe(false);
+    expect(changeListBehaviourQuery.safeParse({ confirmDataLoss: 'true' }).success).toBe(
+      true,
+    );
+    expect(changeListBehaviourQuery.safeParse({ confirm: 'true' }).success).toBe(false);
+  });
+
+  it('ListSettingsMutation is assignable both ways', () => {
+    expectTypeOf<
+      z.infer<typeof listSettingsMutation>
+    >().toEqualTypeOf<ListSettingsMutation>();
+  });
+
+  /** The token pair is optional: a rename and a confirmed downgrade both answer without it. */
+  it('carries the Undo offer only when there is one', () => {
+    const view = listView.parse(storedList);
+    expect(listSettingsMutation.safeParse({ list: view }).success).toBe(true);
+    expect(
+      listSettingsMutation.safeParse({
+        list: view,
+        undoToken: 'tok',
+        undoExpiresAt: '2026-08-24T09:00:06.000Z',
+      }).success,
+    ).toBe(true);
+  });
+
+  /**
+   * The `409` preview's paths are exported rather than described, so the service that emits
+   * them and the client that maps them back (P3-24) cannot drift. Pinned as literals here
+   * because changing one is a wire change, not a rename.
+   */
+  it('names the data-loss preview paths the client maps', () => {
+    expect(DATA_LOSS_DETAIL_PATHS.itemCount).toBe('confirmDataLoss.itemCount');
+    expect(DATA_LOSS_DETAIL_PATHS.field(0)).toBe('confirmDataLoss.fields.0');
+    expect(DATA_LOSS_DETAIL_PATHS.field(2)).toBe('confirmDataLoss.fields.2');
   });
 });

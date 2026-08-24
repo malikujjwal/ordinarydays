@@ -9,12 +9,22 @@ import {
 
 type SuccessStatus = 200 | 201 | 202 | 204;
 
-/** Precomputes the successful HTTP body before the domain transaction commits. */
+/**
+ * Precomputes the successful HTTP body before the domain transaction commits.
+ *
+ * The operation also receives the validated `Idempotency-Key`. Most callers ignore it — the
+ * receipt is the only thing that needs it — but an operation whose **domain** work is
+ * resumable across requests needs a stable identity to resume under, and the key is the only
+ * value the client is guaranteed to repeat. P3-09's behaviour migration derives its operation
+ * id from it, which is what lets a replay recognise its own half-finished work instead of
+ * starting a second migration.
+ */
 export async function idempotentJson(
   c: Context<AppEnv>,
   status: SuccessStatus,
   operation: (
     receiptFor: (data: unknown, cleanupRef?: CleanupRef) => IdempotencyReceipt,
+    key: string,
   ) => Promise<unknown>,
 ): Promise<Response> {
   const key = c.get('idempotencyKey');
@@ -43,7 +53,7 @@ export async function idempotentJson(
       createdAt: new Date(nowMs).toISOString(),
       ...(cleanupRef === undefined ? {} : { cleanupRef }),
     };
-  });
+  }, key);
 
   if (body === undefined) throw new AppError('internal', 'An unexpected error occurred.');
   return c.newResponse(body, status, {

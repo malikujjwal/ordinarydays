@@ -186,7 +186,7 @@ describe('canonical list storage and list index', () => {
     const list = await createSubject();
     const send = vi.spyOn(ddbModule.ddb, 'send');
 
-    const renamed = await repository.patchListMeta(
+    await repository.patchListMeta(
       ALICE,
       list.listId,
       accessFor(list),
@@ -195,7 +195,9 @@ describe('canonical list storage and list index', () => {
       LATER,
     );
 
-    expect(renamed?.title).toBe('Weekend errands');
+    await expect(
+      repository.getListMeta(ALICE, list.listId, accessFor(list)),
+    ).resolves.toMatchObject({ title: 'Weekend errands', updatedAt: LATER });
     const writes = send.mock.calls.filter(
       ([command]) => command instanceof TransactWriteCommand,
     );

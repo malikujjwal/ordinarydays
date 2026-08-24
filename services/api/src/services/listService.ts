@@ -10,6 +10,7 @@ import {
   listListsForUser,
 } from '../repositories/listRepository.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
+import { withListWorkDrain } from './listMutationService.js';
 
 /**
  * The read and delete halves of Lists CRUD (`phase-03` §P3-05); creation is
@@ -46,8 +47,13 @@ export interface ListDetailProjection {
  * rows are then batch-read for exactly those item ids, and each surviving link is kept only
  * after ordinary Activity authorisation (`assertActivityAccess`, `read`). A stale pointer —
  * its Activity deleted or no longer readable — is omitted rather than serialised as a dead
- * link (`api-contract.md` §2.7); the cleanup queue is P3-15's. A repair or migration fence
- * failure propagates out of the repository as the retryable `503`.
+ * link (`api-contract.md` §2.7); the cleanup queue is P3-15's.
+ *
+ * A repair or migration marker is **drained once** before the fence failure is allowed to
+ * become the retryable `503`, which is what §2.7 requires of every item read: a client that
+ * arrives while somebody else's bounded work is outstanding finishes it and gets its page,
+ * rather than bouncing until whoever started the work comes back. A `rankVersion` that moved
+ * between the two META reads is not drainable and falls straight through to the `503`.
  */
 export async function getListDetail(
   userId: string,
@@ -62,8 +68,11 @@ export async function getListDetail(
     return { list };
   }
 
-  const page = await listItems(userId, listId, access.index);
-  if (page === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+  const page = await withListWorkDrain(userId, listId, access.index, async () => {
+    const fenced = await listItems(userId, listId, access.index);
+    if (fenced === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+    return fenced;
+  });
 
   const links = await batchGetViewerLinks(userId, listId, access.index, page.itemIds);
   const readable = new Map<string, ListItemActivityLink>();

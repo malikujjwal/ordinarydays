@@ -527,8 +527,30 @@ describe('GET /v1/lists/:id', () => {
     expect(body.data.items[0].viewerLink).toBeUndefined();
   });
 
-  it('503s with Retry-After 1 while a repair or migration marker is set', async () => {
-    seedGets([pointerRow(), listMetaRow({ rankRepairId: 'op_1' })]);
+  /**
+   * The read **drains** the standing work before it gives up (P3-09), so the fixture carries
+   * the work record a marker always has — the two are written and cleared in one transaction,
+   * and a marker naming nothing is a different failure with its own answer. The drain runs
+   * here and the page is still refused, which is the point: a fence that survives the drain —
+   * because the marker is still standing, or because `rankVersion` moved under the read — is
+   * the retryable answer, never a page spanning two generations.
+   */
+  it('503s with Retry-After 1 when a work marker fences the item page', async () => {
+    seedGets([
+      pointerRow(),
+      listMetaRow({ rankRepairId: 'op_1' }),
+      {
+        pk: `LIST#${LST}`,
+        sk: 'RANK_REPAIR#op_1',
+        entity: 'ListRankRepair',
+        listId: LST,
+        operationId: 'op_1',
+        state: 'rewriting',
+        entries: [],
+        cursor: 0,
+        rankVersion: 0,
+      },
+    ]);
 
     const res = await get(createApp(), `/v1/lists/${LST}?includeItems=true`);
 

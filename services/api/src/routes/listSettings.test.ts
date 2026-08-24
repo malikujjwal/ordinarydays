@@ -1,0 +1,659 @@
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  QueryCommand,
+  TransactWriteCommand,
+} from '@aws-sdk/lib-dynamodb';
+import { mockClient } from 'aws-sdk-client-mock';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+process.env.STAGE = 'local';
+process.env.AUTH_MODE = 'local';
+process.env.TABLE_NAME = 'od-main-local';
+process.env.MEDIA_BUCKET = 'od-media-local';
+process.env.WEB_ORIGINS = 'http://localhost:8081';
+process.env.LOG_LEVEL = 'fatal';
+
+import type { createApp as CreateApp } from '../app.js';
+
+/**
+ * `PATCH /v1/lists/:id` and `POST /v1/lists/:id/behaviour` (P3-09).
+ *
+ * One test per row of the change-rules table, plus the two things the table does not say and
+ * the endpoints have to: who may make each change, and what an unconfirmed destructive call
+ * costs — which is nothing, because it is refused before anything is written.
+ *
+ * The **migration itself** is proved against DynamoDB Local in
+ * `test/integration/listBehaviourMigration.int.test.ts`: a paused 500-item run, competing
+ * reads and writes, the version fence and the recorded Undo inverse are all about what
+ * storage really does across several transactions, and a command mock would only be able to
+ * assert that this file's own fixture was returned.
+ */
+const ddbMock = mockClient(DynamoDBDocumentClient);
+
+let createApp: typeof CreateApp;
+
+const DEV = 'usr_local_dev';
+const BEN = 'usr_ben';
+const LST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+const ITM = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+const ITM2 = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X4';
+const UPDATED_AT = '2026-08-23T00:00:00.000Z';
+
+const listMetaRow = (overrides: Record<string, unknown> = {}) => ({
+  pk: `LIST#${LST}`,
+  sk: 'META',
+  entity: 'List',
+  listId: LST,
+  ownerId: DEV,
+  behaviour: 'collection',
+  templateKey: 'groceries',
+  title: 'Groceries',
+  icon: 'cart',
+  emptyStateCopy: 'Add something to buy.',
+  capabilities: { checkable: true, supportsLocation: false },
+  slot: 'groceries',
+  itemCount: 2,
+  uncheckedCount: 2,
+  memberCount: 1,
+  rankVersion: 0,
+  archived: false,
+  updatedAt: UPDATED_AT,
+  ...overrides,
+});
+
+const pointerRow = (userId = DEV, role = 'owner') => ({
+  pk: `USER#${userId}`,
+  sk: `LIST#${LST}`,
+  entity: 'ListIndex',
+  listId: LST,
+  userId,
+  role,
+  addedAt: UPDATED_AT,
+});
+
+const itemRow = (itemId: string, rank: string, details?: Record<string, unknown>) => ({
+  pk: `LIST#${LST}`,
+  sk: `ITEM#${rank}#${itemId}`,
+  entity: 'ListItem',
+  itemId,
+  listId: LST,
+  rank,
+  itemRevision: 0,
+  title: 'Severance',
+  checked: false,
+  ...(details === undefined ? {} : { details }),
+});
+
+const seedGets = (rows: Record<string, unknown>[]) => {
+  const byKey = new Map(rows.map((row) => [`${row.pk}|${row.sk}`, row]));
+  ddbMock
+    .on(GetCommand)
+    .callsFake((input) => ({ Item: byKey.get(`${input.Key.pk}|${input.Key.sk}`) }));
+};
+
+/** The item rows a whole-list read returns; every other Query answers empty. */
+const seedItems = (rows: Record<string, unknown>[]) => {
+  ddbMock
+    .on(QueryCommand)
+    .callsFake((input) =>
+      String(input.ExpressionAttributeValues?.[':pk'] ?? '').startsWith('LIST#')
+        ? { Items: rows }
+        : { Items: [] },
+    );
+};
+
+beforeEach(async () => {
+  ddbMock.reset();
+  ddbMock.on(TransactWriteCommand).resolves({});
+  ddbMock.on(QueryCommand).resolves({ Items: [] });
+  vi.resetModules();
+  createApp = (await import('../app.js')).createApp;
+});
+
+const asUser = (userId: string) =>
+  createApp({ identityProvider: { resolve: () => Promise.resolve(userId) } });
+
+const patch = (
+  app: ReturnType<typeof CreateApp>,
+  body: unknown,
+  headers: Record<string, string> = { 'If-Match': UPDATED_AT },
+) =>
+  app.fetch(
+    new Request(`http://localhost/v1/lists/${LST}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    }),
+  );
+
+const postBehaviour = (
+  app: ReturnType<typeof CreateApp>,
+  body: unknown,
+  options: { query?: string; headers?: Record<string, string> } = {},
+) =>
+  app.fetch(
+    new Request(`http://localhost/v1/lists/${LST}/behaviour${options.query ?? ''}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'If-Match': UPDATED_AT,
+        'Idempotency-Key': crypto.randomUUID(),
+        ...options.headers,
+      },
+      body: JSON.stringify(body),
+    }),
+  );
+
+const transacted = () =>
+  ddbMock
+    .commandCalls(TransactWriteCommand)
+    .flatMap((call) => call.args[0].input.TransactItems ?? []) as Array<{
+    Put?: { Item?: Record<string, unknown> };
+    Delete?: { Key?: Record<string, unknown> };
+    Update?: {
+      Key?: Record<string, unknown>;
+      UpdateExpression?: string;
+      ConditionExpression?: string;
+      ExpressionAttributeValues?: Record<string, unknown>;
+    };
+    ConditionCheck?: { Key?: Record<string, unknown> };
+  }>;
+
+const metaUpdate = () =>
+  transacted().find(
+    (entry) =>
+      entry.Update?.Key?.pk === `LIST#${LST}` && entry.Update?.Key?.sk === 'META',
+  )?.Update;
+
+const undoWrite = () =>
+  transacted().find((entry) => entry.Put?.Item?.entity === 'ListUndo')?.Put?.Item;
+
+const profileUpdate = () =>
+  transacted().find((entry) => entry.Update?.Key?.pk === `USER#${DEV}`)?.Update;
+
+describe('PATCH /v1/lists/:id — the additive settings', () => {
+  beforeEach(() => {
+    seedGets([pointerRow(), listMetaRow()]);
+  });
+
+  it('requires If-Match, and its absence is a 400 naming the header', async () => {
+    const res = await patch(createApp(), { title: 'Trader Joe’s' }, {});
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe('validation_failed');
+    expect(body.error.details[0].path).toBe('If-Match');
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
+  it.each([
+    ['bare', UPDATED_AT],
+    ['quoted', `"${UPDATED_AT}"`],
+    ['weak', `W/"${UPDATED_AT}"`],
+  ])('accepts a %s entity tag', async (_form, header) => {
+    const res = await patch(
+      createApp(),
+      { title: 'Trader Joe’s' },
+      { 'If-Match': header },
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  /**
+   * `templateKey` is provenance and immutable, and `behaviour` belongs to the dedicated
+   * replay-protected action. Both are refused by the strict body rather than dropped, so the
+   * user is told what did not happen instead of watching a save appear to succeed.
+   */
+  it.each(['templateKey', 'behaviour'])('400s a PATCH carrying %s', async (field) => {
+    const res = await patch(createApp(), { [field]: 'watch' });
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe('validation_failed');
+    expect(JSON.stringify(body.error.details)).toContain(field);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
+  it('400s an empty body rather than bumping the version for nothing', async () => {
+    const res = await patch(createApp(), {});
+
+    expect(res.status).toBe(400);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
+  /**
+   * Both directions are additive, so both apply immediately and both get the standard Undo.
+   * Nothing about turning checkboxes off touches an item: the `checked` values stay put and
+   * stop meaning anything until the capability comes back (`plans-and-lists.md` §5.5).
+   */
+  it.each([
+    ['false → true', false, true],
+    ['true → false', true, false],
+  ])(
+    'applies checkable %s immediately, with an Undo token and no item writes',
+    async (_direction, stored, checkable) => {
+      seedGets([
+        pointerRow(),
+        listMetaRow({ capabilities: { checkable: stored, supportsLocation: false } }),
+      ]);
+
+      const res = await patch(createApp(), { capabilities: { checkable } });
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.data.list.capabilities).toEqual({
+        checkable,
+        supportsLocation: false,
+      });
+      expect(body.data.undoToken).toEqual(expect.any(String));
+      expect(body.data.undoExpiresAt).toEqual(expect.any(String));
+      expect(
+        transacted().filter((entry) => entry.Put?.Item?.entity === 'ListItem'),
+      ).toHaveLength(0);
+    },
+  );
+
+  it('merges a partial capabilities patch onto the stored pair', async () => {
+    await patch(createApp(), { capabilities: { supportsLocation: true } });
+
+    expect(metaUpdate()?.ExpressionAttributeValues?.[':capabilities']).toEqual({
+      checkable: true,
+      supportsLocation: true,
+    });
+  });
+
+  it('records the prior flags as the inverse, and the new ones as its precondition', async () => {
+    await patch(createApp(), { capabilities: { checkable: false } });
+    const undo = undoWrite();
+
+    expect(undo?.kind).toBe('settings');
+    expect(undo?.inverse).toEqual({
+      capabilities: { checkable: true, supportsLocation: false },
+    });
+    expect(undo?.preconditions).toEqual({
+      capabilities: { checkable: false, supportsLocation: false },
+    });
+    expect(undo?.consumed).toBe(false);
+    // Only the hash is stored: a leaked work row must not be replayable into an Undo.
+    expect(JSON.stringify(undo)).not.toContain('undoToken');
+  });
+
+  it('offers no Undo when the supplied flags are the ones already stored', async () => {
+    const res = await patch(createApp(), { capabilities: { checkable: true } });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.undoToken).toBeUndefined();
+    expect(undoWrite()).toBeUndefined();
+  });
+
+  /**
+   * A rename is a rename. `interaction-contract.md` §4.1 has no undo row for it, so it gets
+   * no token — and a token that also reverted the title alongside a capability would take
+   * back something the user was never offered the chance to keep.
+   */
+  it('renames in one write and offers no Undo', async () => {
+    const res = await patch(createApp(), { title: 'Favourite restaurants' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.undoToken).toBeUndefined();
+    expect(
+      transacted().filter((entry) => entry.Put?.Item?.entity === 'List'),
+    ).toHaveLength(0);
+    expect(metaUpdate()?.ExpressionAttributeValues?.[':title']).toBe(
+      'Favourite restaurants',
+    );
+  });
+
+  it('archives with an Undo that restores archived: false', async () => {
+    const res = await patch(createApp(), { archived: true });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.list.archived).toBe(true);
+    expect(undoWrite()?.inverse).toEqual({ archived: false });
+    expect(undoWrite()?.preconditions).toEqual({ archived: true });
+  });
+
+  /**
+   * §2.7: changing or clearing a slot removes `defaultLists[oldSlot]` in the **same
+   * transaction**, conditioned on that slot still naming this list. The inverse records the
+   * exact entry removed, and that the slot must still be empty for it to go back.
+   */
+  it.each([
+    ['changes', 'meals'],
+    ['clears', null],
+  ])(
+    'removes the matching profile default when a slot %s, in the same transaction',
+    async (_verb, slot) => {
+      await patch(createApp(), { slot });
+      const items = transacted();
+      const profile = profileUpdate();
+
+      expect(profile?.UpdateExpression).toBe('REMOVE #defaultLists.#slot');
+      expect(profile?.ExpressionAttributeValues?.[':listId']).toBe(LST);
+      expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(1);
+      expect(items).toContainEqual(expect.objectContaining({ Update: profile }));
+      expect(undoWrite()?.inverse).toEqual({
+        slot: 'groceries',
+        removedDefault: { slot: 'groceries', listId: LST },
+      });
+      expect(undoWrite()?.preconditions).toEqual({
+        slot,
+        defaultSlotAbsent: 'groceries',
+      });
+    },
+  );
+
+  /**
+   * A newer destination chosen on another device fails only that item. The settings change
+   * still applies, and the inverse must not claim to have removed a default it left standing
+   * — otherwise Undo would put a stale pointer back over the user's newer choice.
+   */
+  it('keeps a concurrently changed default, and drops it from the inverse', async () => {
+    let attempt = 0;
+    ddbMock.on(TransactWriteCommand).callsFake(() => {
+      attempt += 1;
+      if (attempt > 1) return {};
+      throw new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [
+          { Code: 'None' },
+          { Code: 'None' },
+          { Code: 'None' },
+          { Code: 'ConditionalCheckFailed' },
+        ],
+      });
+    });
+
+    const res = await patch(createApp(), { slot: 'meals' });
+
+    expect(res.status).toBe(200);
+    expect(attempt).toBe(2);
+    const undos = transacted().filter((entry) => entry.Put?.Item?.entity === 'ListUndo');
+    // The first attempt tried to take the default with it; the retry left it alone, and its
+    // inverse says so rather than promising to restore a pointer that never moved.
+    expect(undos[0]?.Put?.Item?.inverse).toEqual({
+      slot: 'groceries',
+      removedDefault: { slot: 'groceries', listId: LST },
+    });
+    expect(undos.at(-1)?.Put?.Item?.inverse).toEqual({ slot: 'groceries' });
+    expect(undos.at(-1)?.Put?.Item?.preconditions).toEqual({ slot: 'meals' });
+  });
+
+  it('409s a stale If-Match, naming the current version so the client can re-apply', async () => {
+    const res = await patch(createApp(), { title: 'Nope' }, { 'If-Match': 'yesterday' });
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe('conflict');
+    expect(body.error.details).toEqual([{ path: 'updatedAt', message: UPDATED_AT }]);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+});
+
+describe('PATCH /v1/lists/:id — who may change what', () => {
+  it('lets a member rename: it changes nothing but the title', async () => {
+    seedGets([pointerRow(BEN, 'member'), listMetaRow()]);
+
+    const res = await patch(asUser(BEN), { title: 'Ours' });
+
+    expect(res.status).toBe(200);
+  });
+
+  it.each([
+    ['capabilities', { capabilities: { checkable: false } }],
+    ['slot', { slot: null }],
+    ['archived', { archived: true }],
+  ])(
+    '403s a member changing %s — a change to the object, not their view',
+    async (field, body) => {
+      seedGets([pointerRow(BEN, 'member'), listMetaRow()]);
+
+      const res = await patch(asUser(BEN), body);
+      const parsed = await res.json();
+
+      expect(res.status).toBe(403);
+      expect(parsed.error.details[0].path).toBe(field);
+      expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+    },
+  );
+
+  it('404s a caller with no pointer, indistinguishable from a missing list', async () => {
+    seedGets([listMetaRow()]);
+
+    const res = await patch(asUser('usr_stranger'), { title: 'Mine now' });
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /v1/lists/:id/behaviour — the refusals', () => {
+  it('requires If-Match', async () => {
+    seedGets([pointerRow(), listMetaRow()]);
+
+    const res = await postBehaviour(
+      createApp(),
+      { behaviour: 'watch' },
+      { headers: { 'If-Match': '' } },
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.details[0].path).toBe('If-Match');
+  });
+
+  /**
+   * The registry classifies this as a mutating POST, so the shared middleware — not a
+   * second, PATCH-shaped receipt path — refuses a request with no key.
+   */
+  it('requires an Idempotency-Key, from the shared middleware', async () => {
+    seedGets([pointerRow(), listMetaRow()]);
+
+    const res = await createApp().fetch(
+      new Request(`http://localhost/v1/lists/${LST}/behaviour`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'If-Match': UPDATED_AT },
+        body: JSON.stringify({ behaviour: 'watch' }),
+      }),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.details[0].path).toBe('Idempotency-Key');
+  });
+
+  it('400s an unknown behaviour and a body carrying anything else', async () => {
+    seedGets([pointerRow(), listMetaRow()]);
+
+    expect((await postBehaviour(createApp(), { behaviour: 'shopping' })).status).toBe(
+      400,
+    );
+    expect(
+      (await postBehaviour(createApp(), { behaviour: 'watch', confirmDataLoss: true }))
+        .status,
+    ).toBe(400);
+  });
+
+  it('403s a member — changing behaviour is the owner’s', async () => {
+    seedGets([pointerRow(BEN, 'member'), listMetaRow()]);
+
+    const res = await postBehaviour(asUser(BEN), { behaviour: 'watch' });
+
+    expect(res.status).toBe(403);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
+  it('answers with current truth, and no Undo offer, when it is already there', async () => {
+    seedGets([pointerRow(), listMetaRow({ behaviour: 'watch' })]);
+
+    const res = await postBehaviour(createApp(), { behaviour: 'watch' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.list.behaviour).toBe('watch');
+    expect(body.data.undoToken).toBeUndefined();
+    expect(
+      transacted().filter(
+        (entry) => entry.Put?.Item?.entity === 'ListBehaviourMigration',
+      ),
+    ).toHaveLength(0);
+  });
+});
+
+describe('POST /v1/lists/:id/behaviour — the destructive confirmation', () => {
+  const watchList = () =>
+    seedGets([pointerRow(), listMetaRow({ behaviour: 'watch', itemCount: 3 })]);
+
+  /**
+   * §1a.1 rule 2: the count is the number of records that **actually carry** the data, not
+   * the collection's size — and rule 4: the fields are named the way the user sees them.
+   * Here two of three items carry watch state and only one of them has a season, so the
+   * confirmation says two items and does not offer to remove an episode nobody set.
+   */
+  it('409s without ?confirmDataLoss=true, naming the fields and the exact count', async () => {
+    watchList();
+    seedItems([
+      itemRow(ITM, 'a0', { behaviour: 'watch', watchStatus: 'watching', season: 2 }),
+      itemRow(ITM2, 'a1', { behaviour: 'watch', watchStatus: 'want' }),
+      itemRow('itm_01J8XKQ2M4N5P6R7S8T9V0W1X5', 'a2'),
+    ]);
+
+    const res = await postBehaviour(createApp(), { behaviour: 'collection' });
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe('conflict');
+    expect(body.error.details).toEqual([
+      { path: 'confirmDataLoss.itemCount', message: '2' },
+      { path: 'confirmDataLoss.fields.0', message: 'Watch status' },
+      { path: 'confirmDataLoss.fields.1', message: 'Season' },
+    ]);
+  });
+
+  it('writes nothing at all — no receipt, no marker, no work record', async () => {
+    watchList();
+    seedItems([itemRow(ITM, 'a0', { behaviour: 'watch', watchStatus: 'want' })]);
+
+    await postBehaviour(createApp(), { behaviour: 'collection' });
+
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
+  /** `watch → meals` is not a sideways move: nothing carries season and status across it. */
+  it('treats watch → meals as destructive too', async () => {
+    watchList();
+    seedItems([itemRow(ITM, 'a0', { behaviour: 'watch', watchStatus: 'want' })]);
+
+    const res = await postBehaviour(createApp(), { behaviour: 'meals' });
+
+    expect(res.status).toBe(409);
+  });
+
+  /**
+   * §1a.1 rule 3: a change that is destructive only *conditionally* shows no confirmation
+   * when nothing would be lost, and a confirmation that can appear with a count of zero is a
+   * bug. An empty watchlist is exactly that case, so it changes immediately.
+   */
+  it('needs no confirmation when no item carries the data being removed', async () => {
+    seedGets([pointerRow(), listMetaRow({ behaviour: 'watch', itemCount: 0 })]);
+    seedItems([]);
+
+    const res = await postBehaviour(createApp(), { behaviour: 'collection' });
+
+    expect(res.status).not.toBe(409);
+    expect(
+      transacted().some((entry) => entry.Put?.Item?.entity === 'ListBehaviourMigration'),
+    ).toBe(true);
+  });
+
+  it('counts a meals item by its ingredients, not by having a details object', async () => {
+    seedGets([pointerRow(), listMetaRow({ behaviour: 'meals', itemCount: 2 })]);
+    seedItems([
+      itemRow(ITM, 'a0', { behaviour: 'meals', ingredients: [] }),
+      itemRow(ITM2, 'a1', {
+        behaviour: 'meals',
+        ingredients: [
+          { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X2', name: 'Chicken' },
+        ],
+      }),
+    ]);
+
+    const res = await postBehaviour(createApp(), { behaviour: 'collection' });
+
+    expect(await res.json()).toMatchObject({
+      error: {
+        details: [
+          { path: 'confirmDataLoss.itemCount', message: '1' },
+          { path: 'confirmDataLoss.fields.0', message: 'Ingredients' },
+        ],
+      },
+    });
+  });
+
+  /**
+   * The confirmed call is a **new logical action** under a newly minted key, which is why the
+   * flag is a query parameter: the two requests are not the same one sent twice, and a client
+   * reusing its key would otherwise have the middleware replay the `409` it already got.
+   */
+  it('starts the migration once the flag is present', async () => {
+    watchList();
+    seedItems([itemRow(ITM, 'a0', { behaviour: 'watch', watchStatus: 'want' })]);
+
+    const res = await postBehaviour(
+      createApp(),
+      { behaviour: 'collection' },
+      { query: '?confirmDataLoss=true' },
+    );
+
+    expect(res.status).not.toBe(409);
+    const work = transacted().find(
+      (entry) => entry.Put?.Item?.entity === 'ListBehaviourMigration',
+    )?.Put?.Item;
+    expect(work).toMatchObject({
+      state: 'snapshotting',
+      fromBehaviour: 'watch',
+      toBehaviour: 'collection',
+      cursor: 0,
+    });
+    // A downgrade is confirmed, not undone: no Undo offer is prepared for it (§4.1).
+    expect(work?.undo).toBeUndefined();
+    // Public behaviour is untouched by the install; only the final transaction flips it.
+    expect(metaUpdate()?.UpdateExpression).toBe(
+      'SET #behaviourMigrationId = :operationId',
+    );
+  });
+});
+
+describe('the route registry', () => {
+  it('classifies the behaviour action as a mutating POST', async () => {
+    const { ROUTE_REGISTRY } = await import('../middleware/routeRegistry.js');
+    const entry = ROUTE_REGISTRY.find(
+      (candidate) =>
+        candidate.method === 'POST' && candidate.pattern === '/v1/lists/:id/behaviour',
+    );
+
+    expect(entry).toEqual({
+      method: 'POST',
+      pattern: '/v1/lists/:id/behaviour',
+      auth: 'authenticated',
+      mutates: true,
+    });
+  });
+
+  /** A settings `PATCH` is guarded by `If-Match`, so it needs no receipt of its own. */
+  it('registers the settings PATCH without replay protection', async () => {
+    const { ROUTE_REGISTRY } = await import('../middleware/routeRegistry.js');
+
+    expect(
+      ROUTE_REGISTRY.find(
+        (candidate) =>
+          candidate.method === 'PATCH' && candidate.pattern === '/v1/lists/:id',
+      ),
+    ).toEqual({ method: 'PATCH', pattern: '/v1/lists/:id', auth: 'authenticated' });
+  });
+});

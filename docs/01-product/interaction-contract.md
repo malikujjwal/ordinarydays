@@ -460,6 +460,7 @@ Section-level empty states on Today are specified in
 | Screen-level refresh failure (cached data present) | Cached content stays. A dismissible banner: `Couldn't refresh.` | `Try again` |
 | Mutation failure | The optimistic change reverts; error toast naming what failed: `Couldn't complete "Gym."` | `Retry` |
 | `409 conflict` on a shared plan | `This plan changed while you were editing.` Client refetches; non-overlapping edits are re-applied, overlapping ones are dropped and named. | `Review` |
+| `409 conflict` on a list behaviour change | Not an error toast: the §1a.1 confirmation dialog, composed from the response's field list and item count. The server sends the labels and the count; the surface supplies the list's own title | `Turn into a plain list` re-sends the change with `?confirmDataLoss=true` under a new key |
 | `403 forbidden` | `Only the person who made this plan can change that.` | — |
 | `404 not_found` | `This isn't here any more.` Navigate back. | — |
 | `422 participant_limit_exceeded` | Inline in the picker: `You can add up to 50 people to a plan.` | — |
