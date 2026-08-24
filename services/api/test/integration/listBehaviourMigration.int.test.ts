@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { List, ListItem } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { BehaviourMigrationWork } from '../../src/repositories/listRepository.js';
@@ -121,6 +122,28 @@ async function storedMeta(listId: string): Promise<Record<string, unknown>> {
   return row;
 }
 
+/** The migration work row for one operation, straight from storage. */
+async function storedWork(
+  listId: string,
+  operationId: string,
+): Promise<Record<string, unknown> | undefined> {
+  return base.getItem<Record<string, unknown>>(
+    keys.listBehaviourMigration(listId, operationId),
+    { consistentRead: true },
+  );
+}
+
+/** The receipt an installed migration carries, so any finisher can record its answer. */
+const preparedReceipt = () => ({
+  userId: DEV,
+  key: crypto.randomUUID(),
+  route: 'POST /v1/lists/:id/behaviour',
+  status: 200,
+  body: '{"data":{}}',
+  ttl: 2_000_000_000,
+  createdAt: NOW,
+});
+
 async function addItems(listId: string, titles: readonly string[]): Promise<string[]> {
   const created: string[] = [];
   for (let from = 0; from < titles.length; from += 100) {
@@ -215,11 +238,17 @@ describe('collection → watch', () => {
       Date.parse(body.data.undoExpiresAt) - Date.parse(body.data.list.updatedAt),
     ).toBe(6000);
 
+    /**
+     * The inverse says what compensation **writes back** — here nothing, because a
+     * `collection` item carries no `details` and undoing removes the attribute. The
+     * precondition says what the forward change **created**, which is §P3-09's "the exact
+     * default fields that operation created": if an item's `details` has moved off it, the
+     * Undo is no longer applicable and P3-10 writes nothing.
+     */
     const undo = await findSettingsUndo(list.listId);
     expect(undo?.kind).toBe('behaviour_upgrade');
     expect(undo?.inverse).toEqual({
       behaviour: 'collection',
-      createdDetails: { behaviour: 'watch', watchStatus: 'want' },
       affectedItemIds: itemIds,
     });
     expect(undo?.preconditions).toEqual({
@@ -242,16 +271,21 @@ describe('collection → watch', () => {
   });
 });
 
-/** The one settings Undo row a completed operation leaves behind. */
-async function findSettingsUndo(
-  listId: string,
-): Promise<Record<string, unknown> | undefined> {
+/** Every settings Undo row on one list, in the order storage returns them. */
+async function allSettingsUndos(listId: string): Promise<Record<string, unknown>[]> {
   const partition = keys.listPartition(listId);
   const rows = await base.queryAll<Record<string, unknown>>(
     { pk: partition.pk },
     { consistentRead: true },
   );
-  return rows.find((row) => row.entity === 'ListUndo');
+  return rows.filter((row) => row.entity === 'ListUndo');
+}
+
+/** The one settings Undo row a completed operation leaves behind. */
+async function findSettingsUndo(
+  listId: string,
+): Promise<Record<string, unknown> | undefined> {
+  return (await allSettingsUndos(listId))[0];
 }
 
 describe('a paused migration', () => {
@@ -280,6 +314,9 @@ describe('a paused migration', () => {
       expectedUpdatedAt: String(meta.updatedAt),
       now: NOW,
       undo: { token: 'tok_paused', expiresAt: '2026-08-24T09:00:06.000Z' },
+      receipt: preparedReceipt(),
+      // Nothing on a `collection` carries typed fields, so this snapshot loses nothing.
+      countLoss: () => 0,
     });
   }
 
@@ -297,6 +334,67 @@ describe('a paused migration', () => {
     await base.putItem(meta);
     await base.deleteAll([keys.listBehaviourMigration(listId, operationId)]);
   }
+
+  /**
+   * The work row carries **no** `ttl`, and that is load-bearing rather than an omission.
+   * Its `META` marker has no expiry, so a work record that aged out of the replay window
+   * would leave a gate nothing can drain, finish or roll back — every read and mutation on
+   * the list refused for good, with no way back short of a migration script.
+   */
+  it('gives the work record no expiry its permanent marker does not share', async () => {
+    const list = await seedList();
+    await addItems(list.listId, ['Severance']);
+    await install(list.listId, 'bmg_no_ttl');
+
+    const row = await storedWork(list.listId, 'bmg_no_ttl');
+
+    expect(row).toBeDefined();
+    expect(row).not.toHaveProperty('ttl');
+    expect((await storedMeta(list.listId)).behaviourMigrationId).toBe('bmg_no_ttl');
+    await abandon(list.listId, 'bmg_no_ttl');
+  });
+
+  /**
+   * §P3-09's replay case, end to end: the author is told to retry, an unrelated read finishes
+   * the work, and the author's key still answers with the response the operation always had —
+   * Undo token included. The receipt rides on the work record precisely so the reader that
+   * commits the final transaction records **this** operation's answer under **this**
+   * operation's key; without it the replay finds no receipt and is then told its `If-Match`
+   * conflicts, by the very write it asked for.
+   */
+  it('replays the original response after an unrelated read finished the migration', async () => {
+    const { list } = await bigList();
+    const meta = await storedMeta(list.listId);
+    const key = crypto.randomUUID();
+
+    const first = await changeBehaviour(list, 'watch', {
+      key,
+      ifMatch: String(meta.updatedAt),
+    });
+    expect(first.status).toBe(503);
+
+    // An unrelated reader drains what is left and commits the final transaction.
+    const page = await request('GET', `/v1/lists/${list.listId}?includeItems=true`);
+    expect(page.status).toBe(200);
+    expect((await storedMeta(list.listId)).behaviour).toBe('watch');
+
+    const replay = await changeBehaviour(list, 'watch', {
+      key,
+      ifMatch: String(meta.updatedAt),
+    });
+    const body = await replay.json();
+
+    expect(replay.status).toBe(200);
+    expect(body.data.list.behaviour).toBe('watch');
+    expect(body.data.undoToken).toEqual(expect.any(String));
+    expect(body.data.undoExpiresAt).toEqual(expect.any(String));
+
+    // And the Undo it hands back is the one whose hash the operation actually stored.
+    const undo = await findSettingsUndo(list.listId);
+    expect(undo?.tokenHash).toBe(
+      createHash('sha256').update(String(body.data.undoToken)).digest('base64url'),
+    );
+  });
 
   /**
    * Criterion 4's first half: the install changes nothing a client can see, and no chunk
@@ -576,6 +674,97 @@ describe('the destructive direction', () => {
     expect(await undoCount(list.listId)).toBe(before);
   });
 
+  /**
+   * §1a.1 rule 3 and §4.1 read together. A departure that loses nothing is not destructive,
+   * so it needs no confirmation — and being additive, it gets §4's standard Undo. Reading the
+   * two rules from different facts is what left an empty watchlist unable to be undone.
+   */
+  it('offers Undo on a departure that loses nothing, and records its inverse', async () => {
+    const list = await seedList({ behaviour: 'watch' });
+
+    const res = await changeBehaviour(list, 'collection');
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.list.behaviour).toBe('collection');
+    expect(body.data.undoToken).toEqual(expect.any(String));
+    expect(body.data.undoExpiresAt).toEqual(expect.any(String));
+    expect(await findSettingsUndo(list.listId)).toMatchObject({
+      kind: 'behaviour_upgrade',
+      inverse: {
+        behaviour: 'watch',
+        restoreDetails: { behaviour: 'watch', watchStatus: 'want' },
+      },
+      preconditions: { behaviour: 'collection' },
+    });
+  });
+
+  /**
+   * The rollback the service reaches for when the gated count disagrees with the one it
+   * previewed before installing — a confirmation is only worth something if it names what is
+   * actually about to go. Proved here at the primitive: an untouched install leaves the list
+   * exactly as it was, and one that has already rewritten a chunk refuses to be unwound.
+   */
+  it('rolls an untouched install back, and refuses once a chunk has landed', async () => {
+    const list = await seedList();
+    const itemIds = await addItems(list.listId, ['Severance', 'Andor']);
+    const before = await storedMeta(list.listId);
+
+    const work = await repository.beginBehaviourMigration(
+      DEV,
+      list.listId,
+      await accessFor(list.listId),
+      {
+        operationId: 'bmg_rollback',
+        toBehaviour: 'watch',
+        toDetails: { behaviour: 'watch', watchStatus: 'want' },
+        expectedUpdatedAt: String(before.updatedAt),
+        now: NOW,
+        receipt: preparedReceipt(),
+        // Stands in for a concurrent write: the gated snapshot says more than the preview did.
+        countLoss: () => 3,
+      },
+    );
+    expect(work.lossCount).toBe(3);
+
+    await repository.abandonBehaviourMigration(work);
+
+    const after = await storedMeta(list.listId);
+    expect(after.behaviourMigrationId).toBeUndefined();
+    expect(after.behaviour).toBe('collection');
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.rankVersion).toBe(before.rankVersion);
+    expect(await storedWork(list.listId, 'bmg_rollback')).toBeUndefined();
+    expect((await storedItems(list.listId)).map((item) => item.details)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    // Usable again, and the id it was holding is free.
+    expect((await request('GET', `/v1/lists/${list.listId}/items`)).status).toBe(200);
+    expect(itemIds).toHaveLength(2);
+
+    // A migration that has already rewritten something is not a rollback candidate.
+    const second = await repository.beginBehaviourMigration(
+      DEV,
+      list.listId,
+      await accessFor(list.listId),
+      {
+        operationId: 'bmg_rollback_late',
+        toBehaviour: 'watch',
+        toDetails: { behaviour: 'watch', watchStatus: 'want' },
+        expectedUpdatedAt: String((await storedMeta(list.listId)).updatedAt),
+        now: NOW,
+        receipt: preparedReceipt(),
+        countLoss: () => 0,
+      },
+    );
+    const advanced = await repository.applyBehaviourMigrationChunk(second);
+    await expect(repository.abandonBehaviourMigration(advanced)).rejects.toBeInstanceOf(
+      repository.BehaviourMigrationContendedError,
+    );
+    await repository.finishBehaviourMigration(advanced, {});
+  });
+
   it('treats watch → meals as destructive, and initialises the meals shape once confirmed', async () => {
     const list = await watchList();
 
@@ -693,6 +882,85 @@ describe('the additive settings around it', () => {
     expect(
       (await findSettingsUndo(mine.listId))?.inverse as Record<string, unknown>,
     ).not.toHaveProperty('removedDefault');
+  });
+
+  /**
+   * Two switches on one sheet, each with its own six seconds. A whole-pair inverse would make
+   * the first toast's Undo depend on the second switch not having been touched since — which
+   * is exactly the sequence a settings sheet invites — so it records one flag and leaves the
+   * other alone.
+   */
+  it('records only the capability flag it moved, so the other can move independently', async () => {
+    const list = await seedList({
+      capabilities: { checkable: true, supportsLocation: false },
+    });
+
+    await request(
+      'PATCH',
+      `/v1/lists/${list.listId}`,
+      { capabilities: { checkable: false } },
+      { 'If-Match': list.updatedAt },
+    );
+    const first = await findSettingsUndo(list.listId);
+
+    expect(first?.inverse).toEqual({ capabilities: { checkable: true } });
+    expect(first?.preconditions).toEqual({ capabilities: { checkable: false } });
+
+    // The other flag moves independently; the first operation's inverse still names one flag.
+    const second = await request(
+      'PATCH',
+      `/v1/lists/${list.listId}`,
+      { capabilities: { supportsLocation: true } },
+      { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
+    );
+    expect(second.status).toBe(200);
+    expect((await storedMeta(list.listId)).capabilities).toEqual({
+      checkable: false,
+      supportsLocation: true,
+    });
+    const undos = await allSettingsUndos(list.listId);
+    expect(undos.map((row) => row.inverse)).toEqual([
+      { capabilities: { checkable: true } },
+      { capabilities: { supportsLocation: false } },
+    ]);
+  });
+
+  /**
+   * A delete is a list mutation like any other: it drains what it can and answers the
+   * retryable `503` when work remains, rather than failing the gate condition and surfacing
+   * as "somebody edited this" for a list that is merely mid-migration.
+   */
+  it('503s a DELETE that arrives while a migration is outstanding', async () => {
+    const list = await seedList();
+    await addItems(
+      list.listId,
+      Array.from({ length: 500 }, (_, index) => `Item ${String(index)}`),
+    );
+    const meta = await storedMeta(list.listId);
+    await repository.beginBehaviourMigration(
+      DEV,
+      list.listId,
+      await accessFor(list.listId),
+      {
+        operationId: 'bmg_delete_fence',
+        toBehaviour: 'watch',
+        toDetails: { behaviour: 'watch', watchStatus: 'want' },
+        expectedUpdatedAt: String(meta.updatedAt),
+        now: NOW,
+        undo: { token: 'tok_delete', expiresAt: '2026-08-24T09:00:06.000Z' },
+        receipt: preparedReceipt(),
+        countLoss: () => 0,
+      },
+    );
+
+    const res = await request('DELETE', `/v1/lists/${list.listId}`);
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBe('1');
+    expect(await storedMeta(list.listId)).toBeDefined();
+    expect(
+      await base.getItem(keys.listTombstone(list.listId), { consistentRead: true }),
+    ).toBeUndefined();
   });
 
   it('archives through PATCH and records the inverse that restores it', async () => {

@@ -4,12 +4,9 @@ import type { AppEnv } from '../app-env.js';
 import { AppError } from '../lib/errors.js';
 import { entityTag } from '../lib/etag.js';
 import { requireUserId } from '../middleware/identity.js';
-import {
-  changeListBehaviour,
-  type ListSettingsResult,
-} from '../services/listMutationService.js';
+import { changeListBehaviour } from '../services/listMutationService.js';
 import { idempotentJson } from './idempotentResponse.js';
-import { toList } from './toList.js';
+import { toListSettings } from './toList.js';
 
 /**
  * `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7, §P3-09).
@@ -28,16 +25,6 @@ import { toList } from './toList.js';
 export const LIST_BEHAVIOUR_PATH = '/:id/behaviour';
 
 const MISSING = 'This change needs an If-Match header carrying the version you loaded.';
-
-function projected(result: ListSettingsResult): Record<string, unknown> {
-  return {
-    list: toList(result.list),
-    ...(result.undoToken === undefined ? {} : { undoToken: result.undoToken }),
-    ...(result.undoExpiresAt === undefined
-      ? {}
-      : { undoExpiresAt: result.undoExpiresAt }),
-  };
-}
 
 export async function changeListBehaviourHandler(
   c: Context<AppEnv, typeof LIST_BEHAVIOUR_PATH>,
@@ -62,7 +49,7 @@ export async function changeListBehaviourHandler(
       query.confirmDataLoss === 'true',
       key,
       now,
-      (result) => receiptFor(projected(result)),
+      (result) => receiptFor(toListSettings(result)),
     ),
   );
 }

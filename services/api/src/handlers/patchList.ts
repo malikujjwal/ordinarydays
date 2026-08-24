@@ -5,7 +5,7 @@ import { AppError } from '../lib/errors.js';
 import { entityTag } from '../lib/etag.js';
 import { requireUserId } from '../middleware/identity.js';
 import { patchListSettings } from '../services/listMutationService.js';
-import { toList } from './toList.js';
+import { toListSettings } from './toList.js';
 
 /**
  * `PATCH /v1/lists/:id` — title, capabilities, slot and archive (`api-contract.md` §2.7).
@@ -52,13 +52,7 @@ export async function patchListHandler(
   );
 
   return c.json({
-    data: {
-      list: toList(result.list),
-      ...(result.undoToken === undefined ? {} : { undoToken: result.undoToken }),
-      ...(result.undoExpiresAt === undefined
-        ? {}
-        : { undoExpiresAt: result.undoExpiresAt }),
-    },
+    data: toListSettings(result),
     meta: { requestId: c.get('requestId') },
   });
 }

@@ -767,14 +767,26 @@ export interface RemovedListDefault {
  */
 export interface ListSettingsInverse {
   readonly behaviour?: ListBehaviour;
-  readonly capabilities?: ListCapabilities;
+  /**
+   * **Only the flags this operation moved**, never the whole pair.
+   *
+   * Turning `Show checkboxes` off and, six seconds later, `Add a place to items` on are two
+   * operations on one object. A whole-pair inverse makes the first Undo either refuse — its
+   * precondition names a `supportsLocation` that has since moved — or put the newer choice
+   * back where it was. Recording one flag restores one flag, which is what the user was
+   * offered when they were shown a toast for one switch.
+   */
+  readonly capabilities?: Partial<ListCapabilities>;
   readonly slot?: DefaultSlot | null;
   readonly archived?: boolean;
   /** Restored only while nothing newer occupies that slot (P3-12). */
   readonly removedDefault?: RemovedListDefault;
-  /** The exact `details` value a behaviour upgrade created on every snapshotted item. */
-  readonly createdDetails?: ListItemDetails;
-  /** The items that upgrade created those defaults on. */
+  /**
+   * The `details` compensation writes back onto every affected item — the source behaviour's
+   * default. Absent means the items had none and compensation removes the attribute.
+   */
+  readonly restoreDetails?: ListItemDetails;
+  /** The items the forward behaviour change transformed. */
   readonly affectedItemIds?: readonly string[];
 }
 
@@ -787,10 +799,16 @@ export interface ListSettingsInverse {
  */
 export interface ListSettingsPreconditions {
   readonly behaviour?: ListBehaviour;
-  readonly capabilities?: ListCapabilities;
+  /** The same flags {@link ListSettingsInverse.capabilities} names, at their new values. */
+  readonly capabilities?: Partial<ListCapabilities>;
   readonly slot?: DefaultSlot | null;
   readonly archived?: boolean;
-  /** Every affected item's `details` must still deep-equal this created default. */
+  /**
+   * §P3-09's "the exact default fields that operation created": every affected item's
+   * `details` must still deep-equal this, or an intervening edit has made the inverse no
+   * longer applicable. Absent means the forward change removed `details` and the items must
+   * still have none.
+   */
   readonly itemDetails?: ListItemDetails;
   /** The profile slot the forward change emptied must still be empty. */
   readonly defaultSlotAbsent?: DefaultSlot;
@@ -2147,10 +2165,22 @@ export interface BehaviourMigrationEntry {
  * that arrives after somebody else's drain reads exactly the response the operation always
  * had rather than a second, differently-stamped one.
  *
+ * `receipt` is the response receipt that final transaction must write, for the same reason:
+ * **any** finisher has to record the answer under the originating caller's key. Without it, a
+ * blocked read that completes somebody else's migration leaves no receipt at all, and the
+ * client's replay finds none — and then fails its own `If-Match`, because finishing moved
+ * `updatedAt`. The operation would have succeeded while its author was told it conflicted,
+ * with the Undo token gone along with the work row.
+ *
  * The Undo token is held here in the clear, and only here: the row is internal, never
  * serialised, and deleted by the same transaction that stores its hash. The alternative —
  * minting a fresh token per attempt — would make the answer depend on which request happened
  * to commit, which is the one thing this record exists to prevent.
+ *
+ * **No `ttl`.** Every other internal row here expires with the replay window, and this one
+ * must not: its `META` marker has no expiry, so a work record that aged out would leave a
+ * gate nothing can drain, finish or roll back — every read and mutation on the list refused
+ * for good. It is removed by the final transaction, by a rollback, or by the delete cascade.
  */
 export interface BehaviourMigrationWork {
   readonly listId: string;
@@ -2167,8 +2197,22 @@ export interface BehaviourMigrationWork {
   readonly expectedUpdatedAt: string;
   /** The `updatedAt` the final transaction writes, whoever runs it. */
   readonly committedAt: string;
-  /** The prepared 6-second offer. Absent on a confirmed downgrade, which is not undoable. */
+  /** The prepared 6-second offer. Absent when the change loses data, which is not undoable. */
   readonly undo?: { readonly token: string; readonly expiresAt: string };
+  /**
+   * The response receipt the final transaction writes, whoever runs it. Absent only while a
+   * `snapshotting` record has not been filled in.
+   */
+  readonly receipt?: IdempotencyReceipt;
+  /**
+   * Items carrying data this change removes, counted over the **gated** snapshot.
+   *
+   * The authoritative count: the marker is down when it is taken, so no item can gain or lose
+   * the data underneath it. The installer compares it against the count it previewed before
+   * installing and rolls the operation back if they disagree — a confirmation is only worth
+   * anything if it names what is actually about to go.
+   */
+  readonly lossCount?: number;
 }
 
 const behaviourMigrationSchema = z.object({
@@ -2192,6 +2236,18 @@ const behaviourMigrationSchema = z.object({
   expectedUpdatedAt: z.string().min(1),
   committedAt: z.string().min(1),
   undo: z.object({ token: z.string().min(1), expiresAt: z.string().min(1) }).optional(),
+  receipt: z
+    .object({
+      userId: z.string().min(1),
+      key: z.string().min(1),
+      route: z.string().min(1),
+      status: z.number().int(),
+      body: z.string().min(1),
+      ttl: z.number().int(),
+      createdAt: z.string().min(1),
+    })
+    .optional(),
+  lossCount: z.number().int().nonnegative().optional(),
 });
 
 /**
@@ -2235,8 +2291,16 @@ export interface BeginBehaviourMigrationOptions {
   readonly expectedUpdatedAt: string;
   /** Also the `updatedAt` the final transaction will write. */
   readonly now: string;
-  /** The prepared Undo offer, for an additive upgrade only. */
+  /** The prepared Undo offer. Absent when the change loses data (§4.1). */
   readonly undo?: { readonly token: string; readonly expiresAt: string };
+  /** The response receipt the final transaction commits, whichever caller runs it. */
+  readonly receipt: IdempotencyReceipt;
+  /**
+   * Counts the items carrying data the change removes, over the gated snapshot. Pure, and
+   * the service's rule rather than storage's — the repository calls it while it holds the
+   * rows and stores the answer with them.
+   */
+  readonly countLoss: (items: readonly ListItem[]) => number;
 }
 
 /**
@@ -2278,6 +2342,7 @@ export async function beginBehaviourMigration(
     expectedUpdatedAt: options.expectedUpdatedAt,
     committedAt: options.now,
     ...(options.undo === undefined ? {} : { undo: options.undo }),
+    receipt: options.receipt,
   };
 
   await transactWrite(
@@ -2306,7 +2371,6 @@ export async function beginBehaviourMigration(
             Item: stamp(ENTITY.behaviourMigration, options.now, options.now, {
               ...listBehaviourMigration(listId, options.operationId),
               ...pending,
-              ttl: ttlFor(options.now),
             }),
             ConditionExpression: 'attribute_not_exists(pk)',
           },
@@ -2322,7 +2386,7 @@ export async function beginBehaviourMigration(
     },
   );
 
-  return snapshotBehaviourMigration(pending, options.now);
+  return snapshotBehaviourMigration(pending, options.now, options.countLoss);
 }
 
 /**
@@ -2336,6 +2400,7 @@ export async function beginBehaviourMigration(
 export async function snapshotBehaviourMigration(
   work: BehaviourMigrationWork,
   now: string,
+  countLoss: (items: readonly ListItem[]) => number,
 ): Promise<BehaviourMigrationWork> {
   if (work.state === 'rewriting') return work;
 
@@ -2345,6 +2410,12 @@ export async function snapshotBehaviourMigration(
     rank: item.rank,
     fromRevision: item.itemRevision,
   }));
+  /**
+   * Counted from the same gated read as the entries, and stored with them, so it describes
+   * exactly the rows this operation is about to rewrite. Any caller that fills a
+   * `snapshotting` record computes the same number from the same rows.
+   */
+  const lossCount = countLoss(items);
 
   await transactWrite(
     new TransactionBuilder('snapshotBehaviourMigration')
@@ -2352,15 +2423,17 @@ export async function snapshotBehaviourMigration(
         Update: {
           Key: listBehaviourMigration(work.listId, work.operationId),
           UpdateExpression:
-            'SET #entries = :entries, #state = :rewriting, #updatedAt = :now',
+            'SET #entries = :entries, #lossCount = :lossCount, #state = :rewriting, #updatedAt = :now',
           ConditionExpression: '#state = :snapshotting',
           ExpressionAttributeNames: {
             '#entries': 'entries',
+            '#lossCount': 'lossCount',
             '#state': 'state',
             '#updatedAt': 'updatedAt',
           },
           ExpressionAttributeValues: {
             ':entries': entries,
+            ':lossCount': lossCount,
             ':rewriting': 'rewriting',
             ':snapshotting': 'snapshotting',
             ':now': now,
@@ -2376,7 +2449,7 @@ export async function snapshotBehaviourMigration(
     },
   );
 
-  return { ...work, state: 'rewriting', entries };
+  return { ...work, state: 'rewriting', entries, lossCount };
 }
 
 /** The in-flight work for a marker, or `undefined` once the record has been cleared. */
@@ -2483,16 +2556,51 @@ export async function applyBehaviourMigrationChunk(
   return { ...work, cursor: nextCursor };
 }
 
+/**
+ * Removes an installed migration that must not proceed, leaving the list exactly as it was.
+ *
+ * The one path that clears a marker without changing behaviour. It exists for a single case:
+ * the gated snapshot disagrees with the count the caller previewed before installing, so the
+ * confirmation this operation is running under does not describe what it would destroy. The
+ * `cursor = 0` condition is what makes it safe — nothing has been rewritten yet, so there is
+ * nothing to put back — and a rolled-back operation leaves no receipt, so its key is free for
+ * the caller's next attempt.
+ */
+export async function abandonBehaviourMigration(
+  work: BehaviourMigrationWork,
+): Promise<void> {
+  await transactWrite(
+    new TransactionBuilder('abandonBehaviourMigration')
+      .add(
+        {
+          Update: {
+            Key: listMeta(work.listId),
+            UpdateExpression: 'REMOVE #behaviourMigrationId',
+            ConditionExpression: '#behaviourMigrationId = :operationId',
+            ExpressionAttributeNames: { '#behaviourMigrationId': 'behaviourMigrationId' },
+            ExpressionAttributeValues: { ':operationId': work.operationId },
+          },
+        },
+        {
+          Delete: {
+            Key: listBehaviourMigration(work.listId, work.operationId),
+            ConditionExpression: '#cursor = :zero',
+            ExpressionAttributeNames: { '#cursor': 'cursor' },
+            ExpressionAttributeValues: { ':zero': 0 },
+          },
+        },
+      )
+      .build(),
+    {
+      operation: 'abandonBehaviourMigration',
+      onConditionFailed: () => new BehaviourMigrationContendedError(),
+    },
+  );
+}
+
 export interface FinishBehaviourMigrationOptions {
-  /** Present only for an additive upgrade; a confirmed downgrade is not undoable (§4.1). */
+  /** Present only when the change lost nothing; a lossy one is not undoable (§4.1). */
   readonly undo?: ListSettingsUndo;
-  /**
-   * Present only when the request that started the operation is also the one finishing it.
-   * A drain provoked by somebody else's blocked read commits the same domain state under no
-   * receipt of its own; the originating key then finds the work gone and the list already at
-   * its target, and records its response then.
-   */
-  readonly idempotencyReceipt?: IdempotencyReceipt;
 }
 
 /**
@@ -2508,9 +2616,10 @@ export interface FinishBehaviourMigrationOptions {
  *
  * The receipt joins **here**, not the install, because the response body names the new
  * behaviour and the new version. A receipt written at step one would replay a list that did
- * not exist yet for the next 24 hours. Its body is nonetheless the body decided at step one:
- * `committedAt` is the accepted moment, so every finisher writes the identical `updatedAt`
- * and no two of them can disagree about what this operation did.
+ * not exist yet for the next 24 hours. It comes from the **work record**, not from whoever
+ * happens to be finishing: a blocked read that completes somebody else's migration must still
+ * record that operation's answer under that operation's key, or its author's replay finds no
+ * receipt and is told its `If-Match` conflicts — by the very write it asked for.
  */
 export async function finishBehaviourMigration(
   work: BehaviourMigrationWork,
@@ -2518,7 +2627,7 @@ export async function finishBehaviourMigration(
 ): Promise<void> {
   const builder = new TransactionBuilder(
     'finishBehaviourMigration',
-    options.idempotencyReceipt === undefined ? 0 : 1,
+    work.receipt === undefined ? 0 : 1,
   ).add({
     Update: {
       Key: listMeta(work.listId),
@@ -2554,14 +2663,12 @@ export async function finishBehaviourMigration(
     Delete: { Key: listBehaviourMigration(work.listId, work.operationId) },
   });
   const receiptIndex = builder.length;
-  if (options.idempotencyReceipt !== undefined) {
-    builder.addReserved(receiptItem(options.idempotencyReceipt));
-  }
+  if (work.receipt !== undefined) builder.addReserved(receiptItem(work.receipt));
 
   await transactWrite(builder.build(), {
     operation: 'finishBehaviourMigration',
     onConditionFailed: (index) =>
-      options.idempotencyReceipt !== undefined && index === receiptIndex
+      work.receipt !== undefined && index === receiptIndex
         ? new IdempotencyRaceError()
         : new BehaviourMigrationContendedError(),
   });

@@ -6,11 +6,12 @@ import {
   deleteList,
   getListMeta,
   getListMetaForDeletion,
+  ListReadFenceError,
   listItems,
   listListsForUser,
 } from '../repositories/listRepository.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
-import { withListWorkDrain } from './listMutationService.js';
+import { drainListWork, withListWorkDrain } from './listMutationService.js';
 
 /**
  * The read and delete halves of Lists CRUD (`phase-03` §P3-05); creation is
@@ -109,6 +110,12 @@ export async function getListDetail(
  * a concurrent selection would wrongly skip the cleanup — and a slot holding any other
  * value, including a newer choice from another device, fails only that item and survives
  * (P3-12's read-side guard remains the belt to these braces).
+ *
+ * A rank repair or behaviour migration holds the same gate every list-partition write
+ * condition-checks, so deleting through one would fail that condition and surface as a bare
+ * `409` — "somebody edited this" for a list that is merely mid-migration. A delete is a list
+ * mutation like any other (`api-contract.md` §2.7), so it drains what it can first and answers
+ * the retryable `503` when work remains, then re-reads the row it is about to remove.
  */
 export async function removeList(
   userId: string,
@@ -116,6 +123,9 @@ export async function removeList(
   now: string,
 ): Promise<string> {
   const access = await assertListAccess(userId, listId, 'owner');
+  if (!(await drainListWork(userId, listId, access.index, now))) {
+    throw new ListReadFenceError();
+  }
   const list = await getListMetaForDeletion(userId, listId, access.index);
   if (list === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
 

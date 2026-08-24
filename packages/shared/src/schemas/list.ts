@@ -517,24 +517,32 @@ export const reversibleItemMutation = z
   .meta({ id: 'ReversibleItemMutation' });
 
 /**
- * What an additive list-settings mutation answers with — `PATCH /v1/lists/:id` and the
- * upgrade direction of `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7).
+ * What a list-settings mutation answers with — `PATCH /v1/lists/:id` and
+ * `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7).
  *
- * The token pair is **optional**, and its absence is meaningful rather than incidental. A
- * rename records no inverse (`interaction-contract.md` §4.1 has no undo row for it), a patch
- * that changes nothing has nothing to take back, and a behaviour **downgrade** is confirmed
- * rather than undone — repeating the call with `?confirmDataLoss=true` is its only path, so
- * offering Undo there would promise a restore the server cannot make. A client offers Undo
- * exactly when both fields are present.
+ * **A union of two shapes, not one shape with two optional fields.** An Undo offer is a token
+ * *and* the deadline it is offered until; a payload carrying one without the other is an
+ * offer no client can act on, and modelling them as independent optionals is what would let a
+ * server emit half of one and a client believe it. Both arms are strict, so a half payload
+ * matches neither and fails.
+ *
+ * The offer's absence is meaningful rather than incidental: a rename records no inverse
+ * (`interaction-contract.md` §4.1 has no undo row for it), a patch that changes nothing has
+ * nothing to take back, and a behaviour change that **lost** data was confirmed rather than
+ * offered — repeating the call with `?confirmDataLoss=true` is its only path, so a token there
+ * would promise a restore the server cannot make.
  *
  * `undoExpiresAt` is the UI offer deadline on the same terms as {@link reversibleItemMutation}:
  * stop offering at that instant, while an inverse the user already accepted stays valid
  * until the shared retention window expires.
  */
 export const listSettingsMutation = z
-  .object({
-    list: listView,
-    undoToken: z.string().min(1).optional(),
-    undoExpiresAt: z.string().min(1).optional(),
-  })
+  .union([
+    z.strictObject({
+      list: listView,
+      undoToken: z.string().min(1),
+      undoExpiresAt: z.string().min(1),
+    }),
+    z.strictObject({ list: listView }),
+  ])
   .meta({ id: 'ListSettingsMutation' });

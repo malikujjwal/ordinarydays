@@ -16,6 +16,7 @@ import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
 import {
+  abandonBehaviourMigration,
   applyBehaviourMigrationChunk,
   BehaviourMigrationAlreadyStartedError,
   BehaviourMigrationContendedError,
@@ -78,8 +79,12 @@ import { drainRankRepair } from './listRankRepairService.js';
  */
 export interface ListSettingsResult {
   readonly list: List;
-  readonly undoToken?: string;
-  readonly undoExpiresAt?: string;
+  /**
+   * Present exactly when there is something to take back. One optional **pair**, not two
+   * optional strings: a token without its deadline is an offer a client cannot time, and
+   * modelling them separately is what would let one path emit half of one.
+   */
+  readonly undo?: { readonly token: string; readonly expiresAt: string };
 }
 
 /** The copy for a stale `If-Match`, and its `409`, exactly as `activityService` produces it. */
@@ -124,6 +129,14 @@ function fenced(): Error {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('base64url');
+}
+
+/** A fresh single-use offer, and the `interaction-contract.md` §4 window it is offered in. */
+function undoOffer(now: string): { token: string; expiresAt: string } {
+  return {
+    token: randomBytes(32).toString('base64url'),
+    expiresAt: new Date(Date.parse(now) + UNDO_OFFER_SECONDS * 1000).toISOString(),
+  };
 }
 
 /**
@@ -233,6 +246,17 @@ function previewDataLoss(
   return { fields: ordered.filter((label) => fields.has(label)), itemCount };
 }
 
+/**
+ * The same rule as {@link previewDataLoss}, reduced to its count.
+ *
+ * Handed to the repository so the number is taken from the **gated** snapshot — the rows the
+ * migration is actually about to rewrite — rather than from an unfenced read that a
+ * concurrent write can invalidate between the preview and the marker going down.
+ */
+function countDataLoss(behaviour: ListBehaviour): (items: readonly ListItem[]) => number {
+  return (items) => previewDataLoss(behaviour, items).itemCount;
+}
+
 const CONFIRM_REQUIRED =
   'Changing this list would remove information its items are carrying.';
 
@@ -260,20 +284,22 @@ type FinishOutcome = 'committed' | 'already-finished';
 /**
  * The Undo record the final transaction stores, derived rather than kept twice.
  *
- * Everything it needs is already in the work record: the behaviour to restore, the exact
- * default the upgrade created, and — once the snapshot is filled — the items it created them
- * on. Deriving it here means **any** finisher writes the identical inverse, including a drain
- * provoked by a stranger's blocked read, so a crashed client cannot leave a completed upgrade
- * without the Undo it was promised.
+ * Everything it needs is already in the work record: the behaviour to restore, the shape its
+ * items had, the shape this operation gave them, and — once the snapshot is filled — which
+ * items those are. Deriving it here means **any** finisher writes the identical inverse,
+ * including a drain provoked by a stranger's blocked read, so a crashed client cannot leave a
+ * completed change without the Undo it was promised.
  *
- * A confirmed downgrade has no `undo` on its work record and gets none: its only path back is
- * a fresh confirmed call (`interaction-contract.md` §4.1).
+ * A change that **lost** data has no `undo` on its work record and gets none: it was confirmed
+ * rather than offered, and there is nothing honest to restore
+ * (`interaction-contract.md` §4.1).
  */
 function undoFor(work: BehaviourMigrationWork): ListSettingsUndo | undefined {
   if (work.undo === undefined) return undefined;
+  const restoreDetails = defaultDetailsFor(work.fromBehaviour);
   const inverse: ListSettingsInverse = {
     behaviour: work.fromBehaviour,
-    ...(work.toDetails === undefined ? {} : { createdDetails: work.toDetails }),
+    ...(restoreDetails === undefined ? {} : { restoreDetails }),
     affectedItemIds: work.entries.map((entry) => entry.itemId),
   };
   const preconditions: ListSettingsPreconditions = {
@@ -297,16 +323,10 @@ function undoFor(work: BehaviourMigrationWork): ListSettingsUndo | undefined {
  * means the migration is **done**, not that anything went wrong. An idempotency race is a
  * different thing entirely and is rethrown for the middleware to recover.
  */
-async function finishOnce(
-  work: BehaviourMigrationWork,
-  receipt?: IdempotencyReceipt,
-): Promise<FinishOutcome> {
+async function finishOnce(work: BehaviourMigrationWork): Promise<FinishOutcome> {
   const undo = undoFor(work);
   try {
-    await finishBehaviourMigration(work, {
-      ...(undo === undefined ? {} : { undo }),
-      ...(receipt === undefined ? {} : { idempotencyReceipt: receipt }),
-    });
+    await finishBehaviourMigration(work, undo === undefined ? {} : { undo });
     return 'committed';
   } catch (error) {
     if (error instanceof IdempotencyRaceError) throw error;
@@ -327,7 +347,6 @@ async function finishOnce(
 async function drainFrom(
   seed: BehaviourMigrationWork,
   now: string,
-  receipt?: IdempotencyReceipt,
 ): Promise<FinishOutcome | undefined> {
   const { listId, operationId } = seed;
 
@@ -339,13 +358,17 @@ async function drainFrom(
     // Finishing it here is what stops a marker with no entries gating the list permanently.
     let current: BehaviourMigrationWork;
     try {
-      current = await snapshotBehaviourMigration(stored, now);
+      current = await snapshotBehaviourMigration(
+        stored,
+        now,
+        countDataLoss(stored.fromBehaviour),
+      );
     } catch (error) {
       if (error instanceof BehaviourMigrationContendedError) continue;
       throw error;
     }
 
-    if (current.cursor >= current.entries.length) return finishOnce(current, receipt);
+    if (current.cursor >= current.entries.length) return finishOnce(current);
 
     try {
       await applyBehaviourMigrationChunk(current);
@@ -358,7 +381,7 @@ async function drainFrom(
   const remaining = await getBehaviourMigrationWork(listId, operationId);
   if (remaining === undefined) return 'already-finished';
   if (remaining.cursor < remaining.entries.length) return undefined;
-  return finishOnce(remaining, receipt);
+  return finishOnce(remaining);
 }
 
 /**
@@ -474,8 +497,27 @@ function assertMayPatch(access: ListAccess, input: PatchListInput): void {
   );
 }
 
-function sameCapabilities(a: ListCapabilities, b: ListCapabilities): boolean {
-  return a.checkable === b.checkable && a.supportsLocation === b.supportsLocation;
+const CAPABILITY_FLAGS = ['checkable', 'supportsLocation'] as const;
+
+/**
+ * The flags this patch actually moves, and their new values — never the whole pair.
+ *
+ * `Show checkboxes` and `Add a place to items` are two switches on one sheet, and each gets
+ * its own six seconds of Undo. Recording the pair would make the first toast's Undo depend on
+ * the second switch not having been touched since, which is exactly the sequence a settings
+ * sheet invites (`interaction-contract.md` §4.1 lists them as one row *per* capability).
+ */
+function movedFlags(
+  stored: ListCapabilities,
+  patch: PatchListInput['capabilities'],
+): Partial<ListCapabilities> {
+  if (patch === undefined) return {};
+  const moved: Partial<ListCapabilities> = {};
+  for (const flag of CAPABILITY_FLAGS) {
+    const next = patch[flag];
+    if (next !== undefined && next !== stored[flag]) moved[flag] = next;
+  }
+  return moved;
 }
 
 interface SettingsChange {
@@ -517,22 +559,14 @@ export async function patchListSettings(
   if (list.updatedAt !== ifMatch) throw staleEdit(list.updatedAt);
 
   /**
-   * The patch is a **partial** pair, merged onto the stored one field by field rather than
-   * by spreading: a flag the client omitted must keep its stored value, and a spread of an
-   * optional-keyed object cannot express that to the type system.
+   * `capabilities` is stored as one attribute, so the write carries the whole merged pair —
+   * safely, because `If-Match` serialises every list-level write. What must **not** be
+   * whole-pair is the Undo record below, which names only the flags that moved.
    */
-  const capabilities =
-    input.capabilities === undefined
-      ? undefined
-      : {
-          checkable: input.capabilities.checkable ?? list.capabilities.checkable,
-          supportsLocation:
-            input.capabilities.supportsLocation ?? list.capabilities.supportsLocation,
-        };
+  const moved = movedFlags(list.capabilities, input.capabilities);
+  const capabilities: ListCapabilities = { ...list.capabilities, ...moved };
   const changed: SettingsChange = {
-    ...(capabilities !== undefined && !sameCapabilities(capabilities, list.capabilities)
-      ? { capabilities }
-      : {}),
+    ...(Object.keys(moved).length > 0 ? { capabilities } : {}),
     ...('slot' in input && input.slot !== undefined && input.slot !== list.slot
       ? { slot: input.slot }
       : {}),
@@ -550,10 +584,7 @@ export async function patchListSettings(
    */
   const clearsDefault = 'slot' in changed && list.slot !== null;
 
-  const undoToken = randomBytes(32).toString('base64url');
-  const undoExpiresAt = new Date(
-    Date.parse(now) + UNDO_OFFER_SECONDS * 1000,
-  ).toISOString();
+  const undo = undoOffer(now);
   /**
    * A server-minted id, unlike the behaviour migration's. Nothing about this write is
    * resumable across requests, so there is nothing for a replay to recognise: the `If-Match`
@@ -562,21 +593,24 @@ export async function patchListSettings(
   const operationId = newListOperationId();
   const reversible = Object.keys(changed).length > 0;
 
+  /** The prior value of every flag this patch moved, and nothing else. */
+  const priorFlags: Partial<ListCapabilities> = Object.fromEntries(
+    Object.keys(moved).map((flag) => [flag, list.capabilities[flag as 'checkable']]),
+  );
+
   const undoFrom = (removedDefault?: RemovedListDefault): ListSettingsUndo => ({
     operationId,
     kind: 'settings',
-    tokenHash: sha256(undoToken),
-    undoExpiresAt,
+    tokenHash: sha256(undo.token),
+    undoExpiresAt: undo.expiresAt,
     inverse: {
-      ...(changed.capabilities === undefined ? {} : { capabilities: list.capabilities }),
+      ...(changed.capabilities === undefined ? {} : { capabilities: priorFlags }),
       ...('slot' in changed ? { slot: list.slot } : {}),
       ...(changed.archived === undefined ? {} : { archived: list.archived }),
       ...(removedDefault === undefined ? {} : { removedDefault }),
     },
     preconditions: {
-      ...(changed.capabilities === undefined
-        ? {}
-        : { capabilities: changed.capabilities }),
+      ...(changed.capabilities === undefined ? {} : { capabilities: moved }),
       ...('slot' in changed ? { slot: changed.slot ?? null } : {}),
       ...(changed.archived === undefined ? {} : { archived: changed.archived }),
       ...(removedDefault === undefined ? {} : { defaultSlotAbsent: removedDefault.slot }),
@@ -613,7 +647,7 @@ export async function patchListSettings(
       ...changed,
       updatedAt: now,
     },
-    ...(reversible ? { undoToken, undoExpiresAt } : {}),
+    ...(reversible ? { undo } : {}),
   };
 }
 
@@ -677,30 +711,37 @@ function migratedList(list: List, work: BehaviourMigrationWork): List {
 function responseFor(list: List, work: BehaviourMigrationWork): ListSettingsResult {
   return {
     list: migratedList(list, work),
-    ...(work.undo === undefined
-      ? {}
-      : { undoToken: work.undo.token, undoExpiresAt: work.undo.expiresAt }),
+    ...(work.undo === undefined ? {} : { undo: work.undo }),
   };
 }
 
 /**
- * A `watch` or `meals` list is leaving a shape that stores data; a `collection` is not.
+ * Whether leaving `from` can take stored data with it.
  *
- * `watch → meals` is destructive in exactly the way `watch → collection` is: it is not a
- * sideways move, because nothing carries season, episode and status across it (§P3-09).
+ * Direction is the *possibility*; the count is the fact. A `collection` stores no typed
+ * fields, so leaving it never loses anything — but leaving `watch` or `meals` only loses
+ * something if some item is actually carrying it, which is `interaction-contract.md` §1a.1
+ * rule 3: a change that is destructive only conditionally is not destructive when the
+ * condition does not hold, and a confirmation that can appear with a count of `0` is a bug.
+ *
+ * The same fact decides both halves of the row. A departure that loses nothing needs no
+ * confirmation **and** is an ordinary additive settings change, so it gets §4.1's standard
+ * Undo; a departure that loses something is confirmed rather than offered, and gets none.
+ * Deciding the two from different rules is what left an empty watchlist unable to be undone.
  */
-function isDestructive(from: ListBehaviour, to: ListBehaviour): boolean {
+function couldLose(from: ListBehaviour, to: ListBehaviour): boolean {
   return from !== to && from !== 'collection';
 }
 
 /**
  * Drives an installed migration to completion and answers with the operation's own response.
  *
- * `already-finished` means a concurrent drain — a replay of this key, or a stranger's blocked
- * read — committed the identical domain state without this request's receipt, so the receipt
- * is written on its own here. It carries the same body either way: `committedAt` and the Undo
- * token were fixed when the operation was accepted, precisely so that no two finishers can
- * disagree about what it did.
+ * The receipt is not passed in: it lives on the work record, so whichever caller commits the
+ * final transaction records this operation's answer under this operation's key. Calling
+ * `receiptFor` here is what sets the response body `idempotentJson` returns — the receipt it
+ * builds is the same one already stored, and `already-finished` means somebody else committed
+ * it. `committedAt`, the Undo offer and the receipt were all fixed when the operation was
+ * accepted, precisely so no two finishers can disagree about what it did.
  */
 async function driveMigration(
   list: List,
@@ -709,9 +750,8 @@ async function driveMigration(
   receiptFor: (result: ListSettingsResult) => IdempotencyReceipt,
 ): Promise<ListSettingsResult> {
   const response = responseFor(list, work);
-  const outcome = await drainFrom(work, now, receiptFor(response));
-  if (outcome === undefined) throw fenced();
-  if (outcome === 'already-finished') await writeReceiptOnly(receiptFor(response));
+  receiptFor(response);
+  if ((await drainFrom(work, now)) === undefined) throw fenced();
   return response;
 }
 
@@ -739,10 +779,18 @@ async function driveMigration(
  *
  * ## Where the confirmation sits
  *
- * A destructive transition is refused **before** step 1, so an unconfirmed call leaves no
- * receipt, no marker and no work record — nothing at all (§P3-09). The confirmed action is a
- * new logical action under a newly minted key, which is why `confirmDataLoss` is a query
- * parameter rather than a body field: the two calls are not the same request sent twice.
+ * A departure that would lose something is refused **before** step 1, so an unconfirmed call
+ * leaves no receipt, no marker and no work record — nothing at all (§P3-09). The confirmed
+ * action is a new logical action under a newly minted key, which is why `confirmDataLoss` is a
+ * query parameter rather than a body field: the two calls are not the same request sent twice.
+ *
+ * That first count is taken from an **unfenced** read, so a write landing between it and the
+ * marker going down could change what the operation is about to destroy. The snapshot taken
+ * under the gate is the authoritative one, and step 1 is rolled back and answered with a fresh
+ * `409` if the two disagree — a confirmation is only worth something if it names what is
+ * actually going. What this cannot see is a write that lands between the `409` and the
+ * confirmed call that follows it; binding those together needs the client to echo the preview
+ * it was shown, which is a contract change (raised in the pull request, not decided here).
  */
 export async function changeListBehaviour(
   userId: string,
@@ -787,34 +835,38 @@ export async function changeListBehaviour(
     return settled;
   }
 
-  const destructive = isDestructive(list.behaviour, input.behaviour);
-  if (destructive && !confirmDataLoss) {
-    const preview = previewDataLoss(
-      list.behaviour,
-      await readAllListItems(userId, listId, access.index),
-    );
-    /**
-     * **Nothing to lose, nothing to confirm.** §1a.1 rule 3 makes a behaviour change
-     * destructive only *conditionally*, and calls a confirmation that can appear with a count
-     * of zero a bug — so an empty watchlist, or a meals list nobody has put an ingredient on,
-     * changes immediately like any additive settings change. `api-contract.md` §2.7 states
-     * the row unconditionally; the product doc outranks it on behaviour and this follows it.
-     */
-    if (preview.itemCount > 0) throw confirmationRequired(preview);
-  }
+  /**
+   * What this change would take with it, counted before anything is written.
+   *
+   * A departure that loses something and was not confirmed stops here, having written
+   * nothing at all — not a receipt, not a marker. A departure that loses nothing carries on
+   * as the additive settings change it is: no confirmation, and the standard Undo below.
+   */
+  const previewed = couldLose(list.behaviour, input.behaviour)
+    ? previewDataLoss(
+        list.behaviour,
+        await readAllListItems(userId, listId, access.index),
+      )
+    : { fields: [], itemCount: 0 };
+  if (previewed.itemCount > 0 && !confirmDataLoss) throw confirmationRequired(previewed);
 
   const toDetails = defaultDetailsFor(input.behaviour);
   /**
-   * Only an upgrade carries an Undo offer. A downgrade is confirmed rather than undone
-   * (`interaction-contract.md` §4.1), and there is nothing honest to restore: the data it
-   * removed is gone, so a token would promise a compensation the server cannot perform.
+   * A change that loses nothing is additive, and additive changes get §4's standard Undo —
+   * whichever direction they run in. A change that loses something is confirmed rather than
+   * offered (§4.1) and gets none: the data it removed is gone, so a token would promise a
+   * compensation the server cannot perform.
    */
-  const undo = destructive
-    ? undefined
-    : {
-        token: randomBytes(32).toString('base64url'),
-        expiresAt: new Date(Date.parse(now) + UNDO_OFFER_SECONDS * 1000).toISOString(),
-      };
+  const undo = previewed.itemCount > 0 ? undefined : undoOffer(now);
+  const optimistic: ListSettingsResult = {
+    list: {
+      ...list,
+      behaviour: input.behaviour,
+      rankVersion: list.rankVersion + 1,
+      updatedAt: now,
+    },
+    ...(undo === undefined ? {} : { undo }),
+  };
 
   let work: BehaviourMigrationWork;
   try {
@@ -825,20 +877,56 @@ export async function changeListBehaviour(
       expectedUpdatedAt: ifMatch,
       now,
       ...(undo === undefined ? {} : { undo }),
+      /**
+       * Built here, stored on the work record, and written by whoever commits the final
+       * transaction. A blocked read that finishes this migration has to record **this**
+       * operation's answer under **this** operation's key, or its author's replay finds no
+       * receipt and is then told its `If-Match` conflicts — by the very write it asked for.
+       */
+      receipt: receiptFor(optimistic),
+      countLoss: countDataLoss(list.behaviour),
     });
   } catch (error) {
     /**
-     * Somebody installed a marker between the read above and this write. The loser sees that
-     * two ways depending on how far it got — the fence assertion on its own META read, or the
-     * conditional install losing — and both mean the same thing: this request has not started
-     * anything, and the client should retry once the list is clear.
+     * The install won, but another caller filled its snapshot first — a drain provoked by a
+     * request this very marker just blocked. Same operation, same gated rows, so the entries
+     * they stored are the ones to continue with rather than a reason to fail.
      */
-    const contended =
-      error instanceof BehaviourMigrationAlreadyStartedError ||
-      error instanceof ListReadFenceError;
-    if (!contended) throw error;
-    await drainListWork(userId, listId, access.index, now);
-    throw fenced();
+    if (error instanceof BehaviourMigrationContendedError) {
+      const stored = await getBehaviourMigrationWork(listId, operationId);
+      if (stored === undefined) throw fenced();
+      work = stored;
+    } else {
+      /**
+       * Somebody installed a marker between the read above and this write. The loser sees
+       * that two ways depending on how far it got — the fence assertion on its own META
+       * read, or the conditional install losing — and both mean the same thing: this request
+       * has not started anything, and the client should retry once the list is clear.
+       */
+      const contended =
+        error instanceof BehaviourMigrationAlreadyStartedError ||
+        error instanceof ListReadFenceError;
+      if (!contended) throw error;
+      await drainListWork(userId, listId, access.index, now);
+      throw fenced();
+    }
+  }
+
+  /**
+   * The gated count is the real one. If it disagrees with the count taken before the marker
+   * went down, a concurrent write changed what this operation would destroy, and the
+   * confirmation it is running under — or the absence of one — no longer describes it. Roll
+   * the untouched install back and answer with the truth; nothing has been rewritten, so
+   * there is nothing to undo, and the key is free for the caller's next attempt.
+   */
+  if ((work.lossCount ?? 0) !== previewed.itemCount) {
+    await abandonBehaviourMigration(work);
+    throw confirmationRequired(
+      previewDataLoss(
+        list.behaviour,
+        await readAllListItems(userId, listId, access.index),
+      ),
+    );
   }
 
   return driveMigration(list, work, now, receiptFor);

@@ -3936,22 +3936,41 @@
         ]
       },
       "ListSettingsMutation": {
-        "type": "object",
-        "properties": {
-          "list": {
-            "$ref": "#/components/schemas/ListView"
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "list": {
+                "$ref": "#/components/schemas/ListView"
+              },
+              "undoToken": {
+                "type": "string",
+                "minLength": 1
+              },
+              "undoExpiresAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "list",
+              "undoToken",
+              "undoExpiresAt"
+            ],
+            "additionalProperties": false
           },
-          "undoToken": {
-            "type": "string",
-            "minLength": 1
-          },
-          "undoExpiresAt": {
-            "type": "string",
-            "minLength": 1
+          {
+            "type": "object",
+            "properties": {
+              "list": {
+                "$ref": "#/components/schemas/ListView"
+              }
+            },
+            "required": [
+              "list"
+            ],
+            "additionalProperties": false
           }
-        },
-        "required": [
-          "list"
         ]
       },
       "PatchListInput": {

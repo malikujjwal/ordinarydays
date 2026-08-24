@@ -827,6 +827,13 @@ is a qualifying collection again. Location mutations use the parallel
 `behaviour === 'collection' && capabilities.supportsLocation` gate; stored locations are
 retained while hidden.
 
+**A lossless departure is additive in every respect, Undo included.** The same count
+decides both halves of the row: a `watch` or `meals` list nothing is carrying data on leaves
+that behaviour with no confirmation *and* with the standard settings Undo token, because
+§1a.1 defines an additive change as one that loses nothing and §4 gives every additive change
+an undo. Only a departure that actually removes something is confirmed rather than offered,
+and only that one answers without a token.
+
 **The destructive row is conditional, and a count of zero means no confirmation.**
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §1a.1 rule 3
 names a behaviour change as exactly the kind of change that is destructive only *sometimes*,
@@ -854,9 +861,26 @@ Each `fields.<n>` is one user-facing label, in the order the confirmation should
 (§1a.1 rule 4), and only fields some item actually carries are named. The client composes the
 dialog sentence around its own list title; the server never sends a pre-joined one.
 
+**The count is re-taken under the gate before the change proceeds.** The count that decides
+the confirmation is read before the migration marker goes down, so a concurrent item write
+can change what the operation is about to destroy. The snapshot taken *under* the marker — no
+item can move while it stands — is authoritative: when the two disagree, the untouched
+install is rolled back and the caller receives a fresh `409`. **Known gap:** this binds the
+count to the request that acts on it, not to the `409` the user was shown. A write landing
+between the preview and the confirmed call that follows it is still invisible, and closing
+that needs the client to echo the preview it was shown — see the open question in P3-09's
+pull request.
+
+**The Undo offer is a pair.** `undoToken` and `undoExpiresAt` are present together or absent
+together; the response schema is a union of exactly those two shapes. A token without the
+deadline it is offered until is an offer no client can time.
+
 Capabilities, slot and archive use `PATCH /v1/lists/:id`; behaviour rows use the dedicated
-replay-protected `POST /v1/lists/:id/behaviour`. Every behaviour change—upgrade, confirmed
-destructive change, and behaviour Undo—uses one resumable migration. The first transaction
+replay-protected `POST /v1/lists/:id/behaviour`. Deleting a list is a list mutation like any
+other: it drains standing work first and answers the same retryable `503` when work remains,
+rather than failing the marker condition as an ordinary edit conflict. Every behaviour
+change—upgrade, confirmed destructive change, and behaviour Undo—uses one resumable
+migration. The first transaction
 leaves public `List.behaviour` unchanged, creates
 `BEHAVIOUR_MIGRATION#<operationId>` and sets `META.behaviourMigrationId`. While present, every
 item read or list/item mutation attempts a bounded drain and otherwise returns `503 internal`
@@ -864,7 +888,12 @@ with `Retry-After: 1` and no rows or writes. Private worker chunks transform the
 at-most-500 item snapshot against the recorded target shape while conditionally advancing each row and
 locator's matching `itemRevision`. The final transaction alone changes
 `List.behaviour`, clears the marker, advances `rankVersion` to invalidate old item cursors,
-records the Undo/receipt and removes the work row. Public schema validation therefore never
+records the Undo/receipt and removes the work row. **The receipt it writes is the one stored
+on the work record**, not one built by whoever is finishing: any caller may drain a migration
+to completion, and a reader that finishes somebody else's must still record that operation's
+answer under that operation's key. Otherwise the author's replay finds no receipt and is then
+told its `If-Match` conflicts — by the very write it asked for — with the Undo token gone
+along with the work row. Public schema validation therefore never
 observes `details.behaviour !== List.behaviour`, including after a crash or retry.
 
 Changing or clearing a slot also removes `user.defaultLists[oldSlot]` when, and only when,

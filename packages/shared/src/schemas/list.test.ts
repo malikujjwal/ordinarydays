@@ -735,7 +735,7 @@ describe('the list settings inputs', () => {
     >().toEqualTypeOf<ListSettingsMutation>();
   });
 
-  /** The token pair is optional: a rename and a confirmed downgrade both answer without it. */
+  /** The offer is optional: a rename, and a change that lost data, both answer without it. */
   it('carries the Undo offer only when there is one', () => {
     const view = listView.parse(storedList);
     expect(listSettingsMutation.safeParse({ list: view }).success).toBe(true);
@@ -746,6 +746,20 @@ describe('the list settings inputs', () => {
         undoExpiresAt: '2026-08-24T09:00:06.000Z',
       }).success,
     ).toBe(true);
+  });
+
+  /**
+   * **Both fields or neither.** A token without the deadline it is offered until is an offer
+   * no client can time, and a deadline without a token names nothing to take back. Two
+   * independent optionals would admit either; a union of two strict shapes admits neither.
+   */
+  it.each([
+    ['a token with no deadline', { undoToken: 'tok' }],
+    ['a deadline with no token', { undoExpiresAt: '2026-08-24T09:00:06.000Z' }],
+  ])('rejects %s', (_case, half) => {
+    const view = listView.parse(storedList);
+
+    expect(listSettingsMutation.safeParse({ list: view, ...half }).success).toBe(false);
   });
 
   /**

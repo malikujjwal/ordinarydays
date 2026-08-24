@@ -265,20 +265,36 @@ describe('PATCH /v1/lists/:id — the additive settings', () => {
     });
   });
 
-  it('records the prior flags as the inverse, and the new ones as its precondition', async () => {
+  /**
+   * **Only the flag that moved.** `Show checkboxes` and `Add a place to items` are two
+   * switches on one sheet, each with its own six seconds of Undo. Recording the pair would
+   * make this toast's Undo depend on the other switch not having been touched since — which
+   * is exactly the sequence a settings sheet invites — and, if applied, would put the newer
+   * choice back where it was.
+   */
+  it('records only the flag it moved, as both the inverse and the precondition', async () => {
     await patch(createApp(), { capabilities: { checkable: false } });
     const undo = undoWrite();
 
     expect(undo?.kind).toBe('settings');
-    expect(undo?.inverse).toEqual({
-      capabilities: { checkable: true, supportsLocation: false },
-    });
-    expect(undo?.preconditions).toEqual({
-      capabilities: { checkable: false, supportsLocation: false },
-    });
+    expect(undo?.inverse).toEqual({ capabilities: { checkable: true } });
+    expect(undo?.preconditions).toEqual({ capabilities: { checkable: false } });
     expect(undo?.consumed).toBe(false);
     // Only the hash is stored: a leaked work row must not be replayable into an Undo.
     expect(JSON.stringify(undo)).not.toContain('undoToken');
+  });
+
+  /** A patch naming both flags but moving one records one; the write still carries the pair. */
+  it('ignores a flag the patch restated without changing', async () => {
+    await patch(createApp(), {
+      capabilities: { checkable: false, supportsLocation: false },
+    });
+
+    expect(metaUpdate()?.ExpressionAttributeValues?.[':capabilities']).toEqual({
+      checkable: false,
+      supportsLocation: false,
+    });
+    expect(undoWrite()?.inverse).toEqual({ capabilities: { checkable: true } });
   });
 
   it('offers no Undo when the supplied flags are the ones already stored', async () => {

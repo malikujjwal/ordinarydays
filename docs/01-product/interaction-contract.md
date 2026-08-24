@@ -91,7 +91,7 @@ line added to it in the same pull request.
 | A list's `supportsLocation` capability, on or off | additive both ways | — (locations are retained when off) |
 | A list's default `slot` | additive | — (moves no items) |
 | List behaviour `collection` → `watch` or `meals` | additive | — (every item gains the new fields at their defaults) |
-| List behaviour `watch` or `meals` → `collection` | destructive | The typed fields, and the exact number of items carrying them |
+| List behaviour `watch` or `meals` → `collection` | destructive **when any item carries the typed fields**; additive otherwise, per rule 3 | The typed fields, and the exact number of items carrying them. With a count of zero it is an ordinary additive change: no confirmation, and §4's standard undo |
 | `Clear checked` on a list | destructive but reversible | **No confirmation dialog.** It applies immediately and the 10-second bulk undo toast states the count — `7 items cleared` (§4). A reversible bulk action gets an undo, not a dialog, and having both would be two interruptions for one decision |
 | Deleting a list | destructive | The item count, how many of those items have a linked activity — those activities survive — and, on a shared list, the number of other members who lose it |
 | Leaving a shared list, or removing someone from one | destructive | That the items they added stay on the list, with counts, and who keeps it ([`plans-and-lists.md`](plans-and-lists.md) §5.11.4) |
@@ -357,7 +357,8 @@ there is one is §1a.1.
 | Toggle a list capability (`Show checkboxes`, `Add a place to items`) | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Additive both ways (§1a.1) |
 | Change a list's default-destination slot | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Restore a removed profile default only when no newer choice occupies that slot |
 | Upgrade a list's behaviour to `watch` or `meals` | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the upgrade-operation token. The compensation restores the previous behaviour and removes only unchanged defaults created by that operation; an intervening edit makes it no longer applicable |
-| Downgrade a list's behaviour to `collection` | **Yes**, naming the fields and the item count (§1a.1) | No | — | Repeat `POST /v1/lists/:id/behaviour` with `?confirmDataLoss=true` |
+| Downgrade a list's behaviour to `collection`, where items carry the typed fields | **Yes**, naming the fields and the item count (§1a.1) | No | — | Repeat `POST /v1/lists/:id/behaviour` with `?confirmDataLoss=true` |
+| Downgrade a list's behaviour where **no** item carries them | No | Yes | 6 s | Additive by §1a.1 rule 3, so it takes the row above it: `POST /v1/lists/:id/undo` with the settings-operation token |
 | Accept a follow-up suggestion (§1a.2) | No | Yes | 6 s | `PATCH` back. Independent of the action that offered it |
 | Remove a participant | **Yes** | No | — | Revokes their token; re-adding sends a new invitation |
 | Delete an activity | **Yes** | No | — | Cascades per [`../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items`](../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items) |

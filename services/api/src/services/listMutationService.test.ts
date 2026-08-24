@@ -30,6 +30,7 @@ vi.mock('../repositories/listRepository.js', async () => {
     snapshotBehaviourMigration: vi.fn(),
     applyBehaviourMigrationChunk: vi.fn(),
     finishBehaviourMigration: vi.fn(),
+    abandonBehaviourMigration: vi.fn(),
     readAllListItems: vi.fn(),
   };
 });
@@ -112,6 +113,8 @@ const work = (
   expectedUpdatedAt: NOW,
   committedAt: NOW,
   undo: { token: 'tok', expiresAt: '2026-08-24T09:00:06.000Z' },
+  receipt: RECEIPT,
+  lossCount: 0,
   ...overrides,
 });
 
@@ -135,8 +138,9 @@ beforeEach(() => {
   });
   vi.mocked(repository.getListMeta).mockResolvedValue(list());
   vi.mocked(repository.snapshotBehaviourMigration).mockImplementation((pending) =>
-    Promise.resolve({ ...pending, state: 'rewriting' }),
+    Promise.resolve({ ...pending, state: 'rewriting', lossCount: 0 }),
   );
+  vi.mocked(repository.abandonBehaviourMigration).mockResolvedValue(undefined);
   vi.mocked(repository.finishBehaviourMigration).mockResolvedValue(undefined);
   vi.mocked(repository.readAllListItems).mockResolvedValue([]);
   vi.mocked(repair.drainRankRepair).mockResolvedValue(true);
@@ -156,16 +160,15 @@ describe('driving a migration to completion', () => {
 
     expect(result.list.behaviour).toBe('watch');
     expect(result.list.rankVersion).toBe(4);
-    expect(result.undoToken).toBe('tok');
-    expect(
-      vi.mocked(repository.finishBehaviourMigration).mock.calls[0]?.[1],
-    ).toMatchObject({
-      idempotencyReceipt: RECEIPT,
+    expect(result.undo?.token).toBe('tok');
+    expect(vi.mocked(repository.finishBehaviourMigration).mock.calls[0]?.[1]).toEqual({
       undo: {
+        operationId: 'bmg_fixture',
         kind: 'behaviour_upgrade',
+        tokenHash: expect.any(String),
+        undoExpiresAt: '2026-08-24T09:00:06.000Z',
         inverse: {
           behaviour: 'collection',
-          createdDetails: { behaviour: 'watch', watchStatus: 'want' },
           affectedItemIds: ['itm_a'],
         },
         preconditions: {
@@ -178,20 +181,40 @@ describe('driving a migration to completion', () => {
   });
 
   /**
-   * Somebody else's blocked read drained this operation and committed it under no receipt of
-   * its own — the only thing that ungates a list whose client never came back. The answer is
-   * still this operation's answer, because `committedAt` and the token were fixed when it was
-   * accepted; all that is left is to record it.
+   * The receipt is **on the work record**, so the caller that commits the final transaction
+   * records this operation's answer under this operation's key — even when that caller is a
+   * blocked read finishing somebody else's migration. Without it the author's replay finds no
+   * receipt and is then told its `If-Match` conflicts, by the very write it asked for.
    */
-  it('writes the receipt on its own when a concurrent drain finished first', async () => {
+  it('hands the final transaction the receipt the operation was accepted under', async () => {
+    installReturns(work({ cursor: 1 }));
+
+    await change();
+
+    expect(vi.mocked(repository.beginBehaviourMigration).mock.calls[0]?.[3].receipt).toBe(
+      RECEIPT,
+    );
+    // Nothing is passed to the finisher: it reads the receipt off the record it was given.
+    expect(
+      vi.mocked(repository.finishBehaviourMigration).mock.calls[0]?.[1],
+    ).not.toHaveProperty('idempotencyReceipt');
+  });
+
+  /**
+   * Somebody else's blocked read drained this operation and committed it — the only thing
+   * that ungates a list whose client never came back. The answer is still this operation's
+   * answer, because `committedAt`, the token and the receipt were all fixed when it was
+   * accepted, so the response this request returns is the one already recorded.
+   */
+  it('returns the operation’s own answer when a concurrent drain finished first', async () => {
     vi.mocked(repository.beginBehaviourMigration).mockResolvedValue(work({ cursor: 1 }));
     vi.mocked(repository.getBehaviourMigrationWork).mockResolvedValue(undefined);
 
     const result = await change();
 
     expect(result.list.behaviour).toBe('watch');
+    expect(result.undo?.token).toBe('tok');
     expect(repository.finishBehaviourMigration).not.toHaveBeenCalled();
-    expect(idempotency.writeReceiptOnly).toHaveBeenCalledWith(RECEIPT);
   });
 
   /** A second finisher fails the condition naming this operation. That means done. */
@@ -205,7 +228,6 @@ describe('driving a migration to completion', () => {
       .mockResolvedValue(undefined);
 
     await expect(change()).resolves.toMatchObject({ list: { behaviour: 'watch' } });
-    expect(idempotency.writeReceiptOnly).toHaveBeenCalled();
   });
 
   it('rethrows an idempotency race for the middleware to recover', async () => {
@@ -234,7 +256,7 @@ describe('driving a migration to completion', () => {
     vi.mocked(repository.snapshotBehaviourMigration)
       .mockRejectedValueOnce(new repository.BehaviourMigrationContendedError())
       .mockImplementation((pending) =>
-        Promise.resolve({ ...pending, state: 'rewriting' }),
+        Promise.resolve({ ...pending, state: 'rewriting', lossCount: 0 }),
       );
 
     await expect(change()).resolves.toMatchObject({ list: { behaviour: 'watch' } });
@@ -309,7 +331,7 @@ describe('a replay that arrives before the receipt exists', () => {
 
     expect(repository.beginBehaviourMigration).not.toHaveBeenCalled();
     expect(resumed.list.behaviour).toBe('watch');
-    expect(resumed.undoToken).toBe('tok');
+    expect(resumed.undo?.token).toBe('tok');
   });
 
   /** A marker installed by somebody else between the read and the write is not ours to keep. */
@@ -327,6 +349,112 @@ describe('a replay that arrives before the receipt exists', () => {
     vi.mocked(repository.beginBehaviourMigration).mockRejectedValue(boom);
 
     await expect(change()).rejects.toBe(boom);
+  });
+});
+
+describe('binding the confirmation to what is actually there', () => {
+  /** A lossy operation's record: no Undo offer was prepared for it (§4.1). */
+  const withoutUndo = (
+    overrides: Partial<BehaviourMigrationWork> = {},
+  ): BehaviourMigrationWork => {
+    const record = work(overrides);
+    delete (record as { undo?: unknown }).undo;
+    return record;
+  };
+
+  const watching = {
+    itemId: 'itm_a',
+    listId: LIST,
+    rank: 'a0',
+    itemRevision: 0,
+    title: 'Severance',
+    checked: false,
+    details: { behaviour: 'watch', watchStatus: 'watching', season: 2 },
+  } as unknown as Awaited<ReturnType<typeof repository.readAllListItems>>[number];
+
+  beforeEach(() => {
+    vi.mocked(repository.getListMeta).mockResolvedValue(list({ behaviour: 'watch' }));
+  });
+
+  /**
+   * The count that decides the confirmation is taken before the marker goes down, so a write
+   * landing in between can change what the operation is about to destroy. The snapshot taken
+   * **under** the gate is the real one, and when the two disagree the untouched install is
+   * rolled back and the caller is answered with the truth.
+   */
+  it('rolls the install back and re-asks when the gated count disagrees', async () => {
+    vi.mocked(repository.readAllListItems).mockResolvedValue([]);
+    vi.mocked(repository.beginBehaviourMigration).mockResolvedValue(
+      work({ fromBehaviour: 'watch', toBehaviour: 'collection', lossCount: 1 }),
+    );
+
+    await expect(change('collection')).rejects.toMatchObject({
+      code: 'conflict',
+      details: [{ path: 'confirmDataLoss.itemCount', message: '0' }],
+    });
+    expect(repository.abandonBehaviourMigration).toHaveBeenCalled();
+    expect(repository.applyBehaviourMigrationChunk).not.toHaveBeenCalled();
+  });
+
+  /** Confirmed is no exemption: it confirmed a loss of two, not of three. */
+  it('re-asks a confirmed change whose gated count moved', async () => {
+    vi.mocked(repository.readAllListItems).mockResolvedValue([watching]);
+    vi.mocked(repository.beginBehaviourMigration).mockResolvedValue(
+      work({ fromBehaviour: 'watch', toBehaviour: 'collection', lossCount: 5 }),
+    );
+
+    await expect(change('collection', true)).rejects.toMatchObject({ code: 'conflict' });
+    expect(repository.abandonBehaviourMigration).toHaveBeenCalled();
+  });
+
+  /**
+   * §1a.1 rule 3 and §4.1 read together: a departure that loses nothing is not destructive,
+   * so it needs no confirmation — and being additive, it gets the standard Undo. Deciding
+   * those two from different rules is what left an empty watchlist unable to be undone.
+   */
+  it('offers Undo on a departure that loses nothing', async () => {
+    vi.mocked(repository.readAllListItems).mockResolvedValue([]);
+    installReturns(
+      work({
+        fromBehaviour: 'watch',
+        toBehaviour: 'collection',
+        cursor: 1,
+        lossCount: 0,
+      }),
+    );
+
+    const result = await change('collection');
+
+    expect(result.undo?.token).toBe('tok');
+    expect(
+      vi.mocked(repository.beginBehaviourMigration).mock.calls[0]?.[3].undo,
+    ).toBeDefined();
+    expect(
+      vi.mocked(repository.finishBehaviourMigration).mock.calls[0]?.[1].undo,
+    ).toBeDefined();
+  });
+
+  /** A departure that does lose something is confirmed rather than offered (§4.1). */
+  it('prepares no Undo for a confirmed lossy departure', async () => {
+    vi.mocked(repository.readAllListItems).mockResolvedValue([watching]);
+    const lossy = withoutUndo({
+      fromBehaviour: 'watch',
+      toBehaviour: 'collection',
+      cursor: 1,
+      lossCount: 1,
+    });
+    vi.mocked(repository.beginBehaviourMigration).mockResolvedValue(lossy);
+    vi.mocked(repository.getBehaviourMigrationWork).mockResolvedValue(lossy);
+
+    const result = await change('collection', true);
+
+    expect(result.undo).toBeUndefined();
+    expect(
+      vi.mocked(repository.beginBehaviourMigration).mock.calls[0]?.[3].undo,
+    ).toBeUndefined();
+    expect(
+      vi.mocked(repository.finishBehaviourMigration).mock.calls[0]?.[1].undo,
+    ).toBeUndefined();
   });
 });
 
@@ -360,6 +488,7 @@ describe('the checks before anything is installed', () => {
       .mockResolvedValueOnce(list({ rankRepairId: 'op_repair' }))
       .mockResolvedValue(list());
     installReturns(work({ cursor: 1 }));
+    vi.mocked(repository.readAllListItems).mockResolvedValue([]);
 
     await expect(change()).resolves.toMatchObject({ list: { behaviour: 'watch' } });
     expect(repair.drainRankRepair).toHaveBeenCalled();

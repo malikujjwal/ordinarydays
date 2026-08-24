@@ -9,18 +9,21 @@ import type { ListView } from './listView.js';
  * the `ListView` projection, so the two storage-only work markers are absent here exactly as
  * they are everywhere else a List reaches a client.
  *
- * The token pair is optional, and its absence carries meaning. A rename has no undo row in
+ * **Two shapes, not one with optional fields.** An Undo offer is a token *and* the deadline
+ * it is offered until, so a client either has both or has none — there is no state in which
+ * one is meaningful alone, and a type that admitted one would invite a caller to read a token
+ * it cannot time.
+ *
+ * The offer's absence carries meaning. A rename has no undo row in
  * `interaction-contract.md` §4.1, a patch that changes nothing has nothing to take back, and
- * a behaviour **downgrade** is confirmed rather than undone — its only path back is a fresh
- * `?confirmDataLoss=true` call, so offering Undo would promise a restore the server cannot
- * make. A client offers Undo exactly when both fields are present.
+ * a behaviour change that **lost** data was confirmed rather than offered — its only path
+ * back is a fresh `?confirmDataLoss=true` call. A change that lost nothing, in either
+ * direction, is an ordinary additive settings change and does carry an offer.
  *
  * `undoExpiresAt` is the presentation deadline on the same terms as
  * {@link ReversibleItemMutation}: stop offering at that instant, while an inverse the user
  * already accepted stays valid for `MAX_AUTOMATIC_INTENT_AGE_DAYS`.
  */
-export interface ListSettingsMutation {
-  list: ListView;
-  undoToken?: string;
-  undoExpiresAt?: string;
-}
+export type ListSettingsMutation =
+  | { list: ListView }
+  | { list: ListView; undoToken: string; undoExpiresAt: string };
