@@ -152,6 +152,38 @@ describe('creating an item', () => {
     expect(body.error.message).toBe('List is full.');
   });
 
+  /**
+   * **The cap is a transaction condition, not a precheck.** From a genuine 499 rows, two
+   * concurrent creates both pass the service's read; without the condition on META the
+   * loser's retry — against a refreshed `rankVersion` that says nothing about capacity —
+   * commits item 501.
+   */
+  it('lets exactly one of two concurrent creates through at 499 real items', async () => {
+    const list = await seedList();
+    // A real 499 rows, not a seeded counter: the condition reads the stored count.
+    for (let from = 0; from < 499; from += 250) {
+      const size = Math.min(250, 499 - from);
+      const res = await request(app(), 'POST', `/v1/lists/${list.listId}/items/bulk`, {
+        items: Array.from({ length: size }, (_, index) => ({
+          title: `Seed ${String(from + index).padStart(3, '0')}`,
+        })),
+      });
+      expect(res.status).toBe(201);
+    }
+    expect((await metaOf(list.listId))?.itemCount).toBe(499);
+
+    const [first, second] = await Promise.all([
+      addItem(list.listId, { title: 'Race A' }),
+      addItem(list.listId, { title: 'Race B' }),
+    ]);
+    const statuses = [first.status, second.status].sort();
+
+    expect(statuses).toEqual([201, 400]);
+    const refused = first.status === 400 ? first : second;
+    expect((await refused.json()).error.message).toBe('List is full.');
+    expect((await metaOf(list.listId))?.itemCount).toBe(500);
+  });
+
   it('404s a stranger without revealing the list', async () => {
     const list = await seedList();
 
@@ -311,6 +343,63 @@ describe('the two-part capability gates', () => {
     );
     expect((await item.json()).data.location.label).toBe('Zahav');
   });
+
+  /**
+   * **Clearing is as gated as setting.** Turning a capability off hides values and never
+   * destroys them (`plans-and-lists.md` §5.5), so a `null` must not be the back door that
+   * removes what the toggle promised to keep.
+   */
+  it('refuses to clear a hidden location, and the value survives', async () => {
+    const list = await seedList({
+      capabilities: { checkable: true, supportsLocation: true },
+    });
+    const created = await (
+      await addItem(list.listId, { title: 'Zahav', location: { label: 'Zahav' } })
+    ).json();
+    await repository.patchListMeta(
+      DEV,
+      list.listId,
+      (await repository.getListPointer(DEV, list.listId)) as never,
+      { capabilities: { checkable: true, supportsLocation: false } },
+      NOW,
+      '2026-08-24T10:00:00.000Z',
+    );
+
+    const res = await request(
+      app(),
+      'PATCH',
+      `/v1/lists/${list.listId}/items/${created.data.itemId}`,
+      { location: null },
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.details?.[0]?.path).toBe('location');
+    const after = await request(
+      app(),
+      'GET',
+      `/v1/lists/${list.listId}/items/${created.data.itemId}`,
+    );
+    expect((await after.json()).data.location.label).toBe('Zahav');
+  });
+
+  it('refuses to clear details, which only a behaviour migration may remove', async () => {
+    const list = await seedList({ behaviour: 'watch', templateKey: 'watchlist' });
+    const created = await (
+      await addItem(list.listId, {
+        title: 'Severance',
+        details: { behaviour: 'watch', watchStatus: 'want' },
+      })
+    ).json();
+
+    const res = await request(
+      app(),
+      'PATCH',
+      `/v1/lists/${list.listId}/items/${created.data.itemId}`,
+      { details: null },
+    );
+
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('bulk creation', () => {
@@ -399,6 +488,69 @@ describe('bulk creation', () => {
     const stored = await itemsOf(list.listId);
     expect(stored).toHaveLength(2);
     expect(stored.map((item) => item.title)).toEqual(['Eggs', 'Milk']);
+    expect((await metaOf(list.listId))?.itemCount).toBe(2);
+  });
+
+  /**
+   * Capacity is measured against the rows the call would **add**, after resolving what is
+   * already committed. Measuring the submitted array instead would reject the very retry
+   * that is meant to finish a batch whose earlier chunk already landed.
+   */
+  it('resumes a >32-item batch near the cap instead of rejecting its own retry', async () => {
+    const list = await seedList();
+    const ids = Array.from({ length: 40 }, () => repository.newItemId());
+    const members = ids.map((itemId, index) => ({
+      itemId,
+      title: `Item ${String(index).padStart(2, '0')}`,
+    }));
+    // 460 rows already there: the 40-item batch exactly reaches the cap…
+    await request(app(), 'POST', `/v1/lists/${list.listId}/items/bulk`, {
+      items: Array.from({ length: 460 }, (_, index) => ({
+        title: `Seed ${String(index).padStart(3, '0')}`,
+      })),
+    });
+    // …and its first chunk of 32 lands, as a crashed attempt would have left it.
+    await request(app(), 'POST', `/v1/lists/${list.listId}/items/bulk`, {
+      items: members.slice(0, 32),
+    });
+    expect((await metaOf(list.listId))?.itemCount).toBe(492);
+
+    // The retry re-sends all 40. Only the eight missing may count against the cap.
+    const res = await request(app(), 'POST', `/v1/lists/${list.listId}/items/bulk`, {
+      items: members,
+    });
+
+    expect(res.status).toBe(201);
+    expect((await metaOf(list.listId))?.itemCount).toBe(500);
+    // And the response reconciles every requested identity, in the order they were sent.
+    const body = await res.json();
+    expect(body.data.map((item: ListItem) => item.itemId)).toEqual(ids);
+  });
+
+  it('answers a fully committed replay with server truth, not an empty array', async () => {
+    const list = await seedList();
+    const members = [
+      { itemId: repository.newItemId(), title: 'Eggs' },
+      { itemId: repository.newItemId(), title: 'Milk' },
+    ];
+    const first = await request(app(), 'POST', `/v1/lists/${list.listId}/items/bulk`, {
+      items: members,
+    });
+    const firstBody = await first.json();
+
+    // A fresh key, so the middleware replays nothing and the service reconciles by id.
+    const replay = await request(app(), 'POST', `/v1/lists/${list.listId}/items/bulk`, {
+      items: members,
+    });
+    const replayBody = await replay.json();
+
+    expect(replay.status).toBe(201);
+    expect(replayBody.data).toHaveLength(2);
+    expect(replayBody.data.map((item: ListItem) => item.itemId)).toEqual(
+      members.map((member) => member.itemId),
+    );
+    // Byte-for-byte the canonical rows, ranks included.
+    expect(replayBody.data).toEqual(firstBody.data);
     expect((await metaOf(list.listId))?.itemCount).toBe(2);
   });
 
@@ -518,20 +670,53 @@ describe('patching an item', () => {
     expect((await metaOf(list.listId))?.itemCount).toBe(3);
   });
 
-  it('400s a reorder mixed with a field edit rather than half-applying it', async () => {
+  /**
+   * A position and ordinary fields arrive together and land together — one transaction, so
+   * a client that dragged a row and renamed it cannot end up with the rename applied and
+   * the move lost.
+   */
+  it('applies a field edit and a move in the same write', async () => {
     const list = await seedList();
+    const first = await (await addItem(list.listId, { title: 'One' })).json();
+    await addItem(list.listId, { title: 'Two' });
+    const third = await (await addItem(list.listId, { title: 'Three' })).json();
+
+    const res = await request(
+      app(),
+      'PATCH',
+      `/v1/lists/${list.listId}/items/${third.data.itemId}`,
+      { title: 'Third, renamed', checked: true, afterItemId: null },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.title).toBe('Third, renamed');
+    expect(body.data.checked).toBe(true);
+    expect((await itemsOf(list.listId)).map((item) => item.title)).toEqual([
+      'Third, renamed',
+      'One',
+      'Two',
+    ]);
+    // The folded-in `checked` still moves the counter.
+    expect((await metaOf(list.listId))?.uncheckedCount).toBe(2);
+    expect(first.data.itemId).toBeDefined();
+  });
+
+  it('refuses a folded-in field the list’s capabilities do not allow', async () => {
+    const list = await seedList({
+      capabilities: { checkable: false, supportsLocation: false },
+    });
     const created = await (await addItem(list.listId, { title: 'Eggs' })).json();
 
     const res = await request(
       app(),
       'PATCH',
       `/v1/lists/${list.listId}/items/${created.data.itemId}`,
-      { title: 'Milk', afterItemId: null },
+      { checked: true, afterItemId: null },
     );
 
     expect(res.status).toBe(400);
-    expect((await res.json()).error.details?.[0]?.path).toBe('afterItemId');
-    expect((await itemsOf(list.listId))[0]?.title).toBe('Eggs');
+    expect((await res.json()).error.details?.[0]?.path).toBe('checked');
   });
 
   it('404s an item that is not on this list', async () => {

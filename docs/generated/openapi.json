@@ -7478,7 +7478,7 @@
       },
       "patch": {
         "summary": "Edit an item, or move it",
-        "description": "**No `If-Match`.** Item writes are per-field last-write-wins — optimistic concurrency on every checkbox in a grocery list would produce constant spurious `409`s — and the internal item revision is a retry fence rather than a client-visible conflict. `note`, `location` and `details` accept `null` to clear the field, which is a different intention from omitting it. `afterItemId` requests a reorder (`null` moves the item to the front) and must arrive **alone**: a reorder and a field edit are two different transactions, and mixing them would leave a half-applied `PATCH` when the second failed. `checked` and `location` are subject to the same two-part behaviour and capability gates as creation.",
+        "description": "**No `If-Match`.** Item writes are per-field last-write-wins — optimistic concurrency on every checkbox in a grocery list would produce constant spurious `409`s — and the internal item revision is a retry fence rather than a client-visible conflict. `note` and `location` accept `null` to clear the field, which is a different intention from omitting it — and clearing is gated exactly as setting is, so a value retained behind a switched-off capability cannot be removed. `afterItemId` requests a reorder (`null` moves the item to the front) and **may arrive alongside ordinary fields**: they land in one transaction, because the reorder already re-puts the whole row at its new key. `checked` and `location` are subject to the same two-part behaviour and capability gates as creation.",
         "tags": [
           "lists"
         ],

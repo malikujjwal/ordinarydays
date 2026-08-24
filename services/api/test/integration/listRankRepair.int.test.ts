@@ -319,7 +319,93 @@ describe('the repair itself', () => {
     await addItems(list.listId, 3);
     const access = await accessFor(list.listId);
 
-    expect(await repair.drainRankRepair(DEV, list.listId, access)).toBe(true);
+    expect(await repair.drainRankRepair(DEV, list.listId, access, LATER)).toBe(true);
     expect((await repository.getListMeta(DEV, list.listId, access))?.rankVersion).toBe(1);
+  });
+});
+
+/**
+ * The window that would otherwise brick a list: the marker is down, and the snapshot the
+ * worker needs does not exist yet. Because the two are written in one transaction, that
+ * state is *recoverable* rather than terminal — the record is present and `snapshotting`,
+ * and any later caller finishes it under the gate.
+ */
+describe('a repair interrupted before its snapshot', () => {
+  it('commits the marker and its work record together, never one alone', async () => {
+    const list = await seedList();
+    await addItems(list.listId, 4);
+    const access = await accessFor(list.listId);
+    const operationId = repository.newListOperationId();
+
+    await repository.beginRankRepair(DEV, list.listId, access, {
+      operationId,
+      now: LATER,
+    });
+
+    // Whatever a crash interrupts, a marker never names a record that is not there.
+    const meta = await repository.getListMeta(DEV, list.listId, access);
+    expect(meta?.rankRepairId).toBe(operationId);
+    expect(await repository.getRankRepairWork(list.listId, operationId)).toBeDefined();
+  });
+
+  it('finishes a snapshot the installer never filled, rather than gating forever', async () => {
+    const list = await seedList();
+    await addItems(list.listId, 5);
+    const access = await accessFor(list.listId);
+    const operationId = repository.newListOperationId();
+    const titles = (await storedItems(list.listId)).map((item) => item.title);
+
+    // Exactly the state a crash between the install and the snapshot leaves behind. The
+    // recorded version must be the list's current one, since the final transaction
+    // condition-checks it before clearing the marker.
+    const before = await repository.getListMeta(DEV, list.listId, access);
+    await base.putItem({
+      ...keys.listRankRepair(list.listId, operationId),
+      entity: 'ListRankRepair',
+      listId: list.listId,
+      operationId,
+      state: 'snapshotting',
+      entries: [],
+      cursor: 0,
+      rankVersion: before?.rankVersion ?? 0,
+      createdAt: LATER,
+      updatedAt: LATER,
+      schemaVersion: 1,
+    });
+    await base.updateItem(keys.listMeta(list.listId), {
+      expression: 'SET #rankRepairId = :operationId',
+      names: { '#rankRepairId': 'rankRepairId' },
+      values: { ':operationId': operationId },
+    });
+
+    // A page read is refused, drains the stranded work, and the list comes back whole.
+    expect(await repair.drainRankRepair(DEV, list.listId, access, LATER)).toBe(true);
+
+    const after = await repository.getListMeta(DEV, list.listId, access);
+    expect(after?.rankRepairId).toBeUndefined();
+    expect((await storedItems(list.listId)).map((item) => item.title)).toEqual(titles);
+    const served = await request('GET', `/v1/lists/${list.listId}/items`);
+    expect(served.status).toBe(200);
+  });
+
+  it('makes a concurrent second start drain the winner rather than snapshot again', async () => {
+    const list = await seedList();
+    await addItems(list.listId, 6);
+    const access = await accessFor(list.listId);
+    const titles = (await storedItems(list.listId)).map((item) => item.title);
+
+    const [first, second] = await Promise.all([
+      repair.repairListRanks(DEV, list.listId, access, LATER),
+      repair.repairListRanks(DEV, list.listId, access, LATER),
+    ]);
+
+    expect(first).toBe(true);
+    expect(second).toBe(true);
+    const after = await repository.getListMeta(DEV, list.listId, access);
+    expect(after?.rankRepairId).toBeUndefined();
+    // One repair happened, not two: order and count are untouched and ranks are distinct.
+    const items = await storedItems(list.listId);
+    expect(items.map((item) => item.title)).toEqual(titles);
+    expect(new Set(items.map((item) => item.rank)).size).toBe(items.length);
   });
 });

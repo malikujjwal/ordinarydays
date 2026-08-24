@@ -1,4 +1,4 @@
-import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
+import { MAX_AUTOMATIC_INTENT_AGE_DAYS, MAX_LIST_ITEMS } from '@od/shared';
 import {
   compareListItems,
   LexoRankOverflowError,
@@ -240,6 +240,21 @@ export class ListMutationRetryExhaustedError extends Error {
   constructor() {
     super('The list kept changing while the update was being applied.');
     this.name = 'ListMutationRetryExhaustedError';
+  }
+}
+
+/**
+ * The list was at its item cap when the write tried to commit.
+ *
+ * Raised from the transaction's own condition rather than from a read, because a service
+ * precheck cannot hold: two creates against a 499-item list both pass it, and the loser
+ * retries against a refreshed `rankVersion` that says nothing about capacity. The service
+ * maps this to the exact `List is full.` copy.
+ */
+export class ListFullError extends Error {
+  constructor() {
+    super('The list is at its item cap.');
+    this.name = 'ListFullError';
   }
 }
 
@@ -1083,30 +1098,47 @@ async function readRestorableRelationships(
 }
 
 /**
- * Which of these item ids already have a live locator.
+ * The canonical item for each of these ids that already exists.
  *
  * The post-receipt replay guard for bulk (§P3-08): once the 24-hour receipt has expired,
- * replay protection falls to the stable client-minted ids, so a chunk resolves what is
- * already committed and writes only the remainder rather than failing the whole batch on an
- * `attribute_not_exists` condition it can no longer distinguish from a genuine collision.
+ * replay protection falls to the stable client-minted ids, so a replay resolves what is
+ * already committed, writes only the remainder, and answers with **server truth for every
+ * requested identity** rather than only the rows this attempt happened to write.
  *
- * A tombstoned id has no locator and is deliberately **absent** from this set: an ordinary
- * create must still fail against its tombstone, which is P3-10's restore path's to reclaim.
+ * It returns the items rather than the ids because a replay's response has to reconcile:
+ * a client that lost the original response needs the stored rank and fields, not the
+ * knowledge that something exists.
+ *
+ * A tombstoned id has no locator and is deliberately **absent**: an ordinary create must
+ * still fail against its tombstone, which is P3-10's restore path's to reclaim.
  */
-export async function resolveExistingItemIds(
+export async function resolveExistingItems(
   userId: string,
   listId: string,
   access: ListAccessGrant,
   itemIds: readonly string[],
-): Promise<Set<string>> {
+): Promise<Map<string, ListItem>> {
   assertListAccessGrant(userId, listId, access);
   const uniqueIds = [...new Set(itemIds)];
-  if (uniqueIds.length === 0) return new Set();
-  const rows = await batchGetItems<StoredItem>(
+  if (uniqueIds.length === 0) return new Map();
+
+  const locatorRows = await batchGetItems<StoredItem>(
     uniqueIds.map((itemId) => listItemLocator(listId, itemId)),
     { consistentRead: true },
   );
-  return new Set(rows.map((row) => locatorSchema.parse(row).itemId));
+  const locators = locatorRows.map((row) => locatorSchema.parse(row));
+  if (locators.length === 0) return new Map();
+
+  const itemRows = await batchGetItems<StoredItem>(
+    locators.map((locator) => listItemKey(listId, locator.rank, locator.itemId)),
+    { consistentRead: true },
+  );
+  return new Map(
+    itemRows.map((row) => {
+      const item = parseListItem(row);
+      return [item.itemId, item] as const;
+    }),
+  );
 }
 
 /** Single-create entry point; bulk uses the same chunk transaction below. */
@@ -1182,7 +1214,13 @@ export async function createListItems(
         Key: listMeta(listId),
         UpdateExpression:
           'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked',
-        ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
+        /**
+         * **The item cap is enforced here, in the transaction**, not only by the service's
+         * precheck. Two creates against a 499-item list both pass that precheck, and the
+         * loser retries against a refreshed `rankVersion` that carries no capacity
+         * information — so without this condition the retry commits item 501.
+         */
+        ConditionExpression: `#rankVersion = :expectedVersion AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
         ExpressionAttributeNames: {
           '#rankVersion': 'rankVersion',
           '#itemCount': 'itemCount',
@@ -1194,6 +1232,7 @@ export async function createListItems(
           ':nextVersion': state.list.rankVersion + 1,
           ':count': created.length,
           ':unchecked': unchecked,
+          ':maxBefore': MAX_LIST_ITEMS - created.length,
         },
       },
     });
@@ -1202,17 +1241,36 @@ export async function createListItems(
       builder.addReserved(receiptItem(options.receiptFor(created)));
     }
 
-    await transactWrite(builder.build(), {
-      operation: 'createListItems',
-      onConditionFailed: (index) => {
-        if (index === deletionGateIndex) return new ListNotFoundError();
-        if (index < metaIndex) return new ListItemIdUnavailableError();
-        if (index === metaIndex) return new RetryableListMutationConflictError();
-        return options.receiptFor !== undefined && index === receiptIndex
-          ? new IdempotencyRaceError()
-          : undefined;
-      },
-    });
+    try {
+      await transactWrite(builder.build(), {
+        operation: 'createListItems',
+        onConditionFailed: (index) => {
+          if (index === deletionGateIndex) return new ListNotFoundError();
+          if (index < metaIndex) return new ListItemIdUnavailableError();
+          if (index === metaIndex) return new RetryableListMutationConflictError();
+          return options.receiptFor !== undefined && index === receiptIndex
+            ? new IdempotencyRaceError()
+            : undefined;
+        },
+      });
+    } catch (error) {
+      /**
+       * The META item now carries two conditions that can each fail, and DynamoDB reports
+       * the item rather than the clause. A strong reread separates them: a full list is
+       * permanent and must surface as such, while a moved version is the ordinary conflict
+       * this function retries.
+       */
+      if (error instanceof RetryableListMutationConflictError) {
+        const current = await getLiveListMetaStrong(listId);
+        if (
+          current !== undefined &&
+          current.itemCount + created.length > MAX_LIST_ITEMS
+        ) {
+          throw new ListFullError();
+        }
+      }
+      throw error;
+    }
     return created;
   });
 }
@@ -1221,6 +1279,16 @@ export interface ReorderListItemOptions {
   readonly now: string;
   /** `null` means the front; `undefined` means the end. */
   readonly afterItemId?: string | null;
+  /**
+   * Field changes to apply **to the moved row, in the same transaction**.
+   *
+   * `PATCH` accepts a position alongside ordinary fields (`api-contract.md` §2.7), and the
+   * two must not be two writes: a client that dragged a row and renamed it in one request
+   * would otherwise see the rename stand while the move failed. Because the reorder already
+   * re-puts the whole row at its new key, folding the patch into that put costs no extra
+   * action — the transaction is still delete, put, locator, version.
+   */
+  readonly patch?: ListItemFieldPatch;
   readonly idempotencyReceipt?: IdempotencyReceipt;
 }
 
@@ -1238,17 +1306,25 @@ export async function reorderListItem(
     if (current === undefined) throw new ListItemNotFoundError();
     const neighbours = await readNeighbours(listId, options.afterItemId, itemId);
     const rank = allocateRanks(neighbours, 1)[0] as string;
-    if (rank === current.item.rank) return current.item;
+    const patched =
+      options.patch === undefined
+        ? current.item
+        : applyItemPatch(current.item, options.patch);
+    // Nothing to do only when the row neither moves nor changes; a same-rank request that
+    // also carries fields still has to write them.
+    if (rank === current.item.rank && options.patch === undefined) return current.item;
 
     const nextRevision = current.item.itemRevision + 1;
-    const next: ListItem = { ...current.item, rank, itemRevision: nextRevision };
+    const next: ListItem = { ...patched, rank, itemRevision: nextRevision };
     const nextRow: StoredItem = {
-      ...current.row,
+      ...withPatchApplied(current.row, options.patch),
       ...listItemKey(listId, rank, itemId),
       rank,
       itemRevision: nextRevision,
       updatedAt: options.now,
     };
+    const uncheckedDelta =
+      current.item.checked === next.checked ? 0 : next.checked ? -1 : 1;
     const builder = new TransactionBuilder(
       'reorderListItem',
       options.idempotencyReceipt === undefined ? 0 : 1,
@@ -1294,15 +1370,23 @@ export async function reorderListItem(
       {
         Update: {
           Key: listMeta(listId),
-          UpdateExpression: 'SET #rankVersion = :nextVersion',
+          // The counter moves only when a folded-in patch flipped `checked`; a plain drag
+          // touches the version and nothing else, so the action count is unchanged either
+          // way (acceptance criterion 16).
+          UpdateExpression:
+            uncheckedDelta === 0
+              ? 'SET #rankVersion = :nextVersion'
+              : 'SET #rankVersion = :nextVersion ADD #uncheckedCount :uncheckedDelta',
           ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
           ExpressionAttributeNames: {
             '#rankVersion': 'rankVersion',
+            ...(uncheckedDelta === 0 ? {} : { '#uncheckedCount': 'uncheckedCount' }),
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
             ':expectedVersion': state.list.rankVersion,
             ':nextVersion': state.list.rankVersion + 1,
+            ...(uncheckedDelta === 0 ? {} : { ':uncheckedDelta': uncheckedDelta }),
           },
         },
       },
@@ -1330,6 +1414,30 @@ export interface ListItemFieldPatch {
   readonly note?: string | null;
   readonly location?: ListItem['location'] | null;
   readonly details?: ListItemDetails | null;
+}
+
+/**
+ * The same field assignment as {@link applyItemPatch}, applied to the **raw stored row** a
+ * reorder is about to move, so a `PATCH` carrying both a position and fields is one write.
+ *
+ * A `null` deletes the attribute rather than storing one, which a spread cannot express —
+ * hence the explicit copy.
+ */
+function withPatchApplied(
+  row: StoredItem,
+  patch: ListItemFieldPatch | undefined,
+): StoredItem {
+  if (patch === undefined) return row;
+  const next: StoredItem = { ...row };
+  if (patch.title !== undefined) next.title = patch.title;
+  if (patch.checked !== undefined) next.checked = patch.checked;
+  for (const field of ['note', 'location', 'details'] as const) {
+    if (!(field in patch)) continue;
+    const value = patch[field];
+    if (value === null || value === undefined) delete next[field];
+    else Object.assign(next, { [field]: value });
+  }
+  return next;
 }
 
 function applyItemPatch(item: ListItem, patch: ListItemFieldPatch): ListItem {
@@ -1459,10 +1567,20 @@ export interface RankRepairEntry {
   readonly toRank: string;
 }
 
-/** The resumable work record. Internal: never serialised to a client. */
+/**
+ * The resumable work record. Internal: never serialised to a client.
+ *
+ * `state` exists because the marker and the snapshot cannot be written together — the
+ * snapshot is read *after* the marker is down, which is what makes it stable. So the record
+ * is created `snapshotting` in the **same transaction** as the marker, and any later caller
+ * can finish the snapshot under the gate. Without it, a crash between the two writes would
+ * leave a marker naming nothing: every read and mutation gated forever, with no record to
+ * resume from (§P3-03, and the same shape P3-09's behaviour migration uses).
+ */
 export interface RankRepairWork {
   readonly listId: string;
   readonly operationId: string;
+  readonly state: 'snapshotting' | 'rewriting';
   readonly entries: RankRepairEntry[];
   /** Index of the next entry to rewrite. A crash resumes here. */
   readonly cursor: number;
@@ -1473,14 +1591,17 @@ export interface RankRepairWork {
 const rankRepairSchema = z.object({
   listId: z.string().min(1),
   operationId: z.string().min(1),
-  entries: z.array(
-    z.object({
-      itemId: z.string().min(1),
-      fromRank: z.string().min(1),
-      fromRevision: z.number().int().nonnegative(),
-      toRank: z.string().min(1),
-    }),
-  ),
+  state: z.enum(['snapshotting', 'rewriting']),
+  entries: z
+    .array(
+      z.object({
+        itemId: z.string().min(1),
+        fromRank: z.string().min(1),
+        fromRevision: z.number().int().nonnegative(),
+        toRank: z.string().min(1),
+      }),
+    )
+    .default([]),
   cursor: z.number().int().nonnegative(),
   rankVersion: z.number().int().nonnegative(),
 });
@@ -1532,33 +1653,78 @@ export async function beginRankRepair(
   if (list === undefined) throw new ListNotFoundError();
   assertFenceOpen(list);
 
+  const pending: RankRepairWork = {
+    listId,
+    operationId: options.operationId,
+    state: 'snapshotting',
+    entries: [],
+    cursor: 0,
+    rankVersion: list.rankVersion,
+  };
+
+  /**
+   * **The marker and its work record land together.** Writing the marker first and the
+   * record afterwards leaves a window in which a crash gates the list forever against a
+   * record nobody has; committing an empty `snapshotting` record alongside it means any
+   * later caller can pick the work up and finish it.
+   */
   await transactWrite(
     new TransactionBuilder('beginRankRepair')
-      .add(listDeletionGate(listId), {
-        Update: {
-          Key: listMeta(listId),
-          UpdateExpression: 'SET #rankRepairId = :operationId',
-          ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
-          ExpressionAttributeNames: { '#rankVersion': 'rankVersion', ...GATE_NAMES },
-          ExpressionAttributeValues: {
-            ':operationId': options.operationId,
-            ':expectedVersion': list.rankVersion,
+      .add(
+        listDeletionGate(listId),
+        {
+          Update: {
+            Key: listMeta(listId),
+            UpdateExpression: 'SET #rankRepairId = :operationId',
+            ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
+            ExpressionAttributeNames: { '#rankVersion': 'rankVersion', ...GATE_NAMES },
+            ExpressionAttributeValues: {
+              ':operationId': options.operationId,
+              ':expectedVersion': list.rankVersion,
+            },
           },
         },
-      })
+        {
+          Put: {
+            Item: stamp(ENTITY.rankRepair, options.now, options.now, {
+              ...listRankRepair(listId, options.operationId),
+              ...pending,
+              ttl: ttlFor(options.now),
+            }),
+            ConditionExpression: 'attribute_not_exists(pk)',
+          },
+        },
+      )
       .build(),
     {
       operation: 'beginRankRepair',
       onConditionFailed: (index) =>
-        index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
+        index === 0 ? new ListNotFoundError() : new RankRepairAlreadyStartedError(),
     },
   );
 
-  const items = await readAllItemsForRepair(listId);
-  let cursor = items.at(-1)?.rank ?? null;
+  return snapshotRankRepair(pending, options.now);
+}
+
+/**
+ * Fills a `snapshotting` record's entries and moves it to `rewriting`.
+ *
+ * Separate from the install because it runs **under the marker**, where every item mutation
+ * is gated and the snapshot therefore cannot go stale. It is idempotent: a caller that finds
+ * the record still `snapshotting` — because the installer crashed, or because it lost a race
+ * — recomputes the same entries from the same rows and commits them conditionally.
+ */
+export async function snapshotRankRepair(
+  work: RankRepairWork,
+  now: string,
+): Promise<RankRepairWork> {
+  if (work.state === 'rewriting') return work;
+
+  const items = await readAllItemsForRepair(work.listId);
+  let previous = items.at(-1)?.rank ?? null;
   const entries: RankRepairEntry[] = items.map((item) => {
-    const toRank = lexoRankBetween(cursor);
-    cursor = toRank;
+    const toRank = lexoRankBetween(previous);
+    previous = toRank;
     return {
       itemId: item.itemId,
       fromRank: item.rank,
@@ -1567,21 +1733,60 @@ export async function beginRankRepair(
     };
   });
 
-  const work: RankRepairWork = {
-    listId,
-    operationId: options.operationId,
-    entries,
-    cursor: 0,
-    rankVersion: list.rankVersion,
-  };
-  await putItem(
-    stamp(ENTITY.rankRepair, options.now, options.now, {
-      ...listRankRepair(listId, options.operationId),
-      ...work,
-      ttl: ttlFor(options.now),
-    }),
+  await transactWrite(
+    new TransactionBuilder('snapshotRankRepair')
+      .add({
+        Update: {
+          Key: listRankRepair(work.listId, work.operationId),
+          UpdateExpression:
+            'SET #entries = :entries, #state = :rewriting, #updatedAt = :now',
+          ConditionExpression: '#state = :snapshotting',
+          ExpressionAttributeNames: {
+            '#entries': 'entries',
+            '#state': 'state',
+            '#updatedAt': 'updatedAt',
+          },
+          ExpressionAttributeValues: {
+            ':entries': entries,
+            ':rewriting': 'rewriting',
+            ':snapshotting': 'snapshotting',
+            ':now': now,
+          },
+        },
+      })
+      .build(),
+    {
+      operation: 'snapshotRankRepair',
+      // A concurrent drain snapshotted first. Its entries are the ones to use — both
+      // computed the same moves from the same gated rows, but only one is stored.
+      onConditionFailed: () => new RankRepairContendedError(),
+    },
   );
-  return work;
+
+  return { ...work, state: 'rewriting', entries };
+}
+
+/** Another caller already installed the marker; drain theirs rather than starting a second. */
+export class RankRepairAlreadyStartedError extends Error {
+  constructor() {
+    super('A rank repair is already in progress for this list.');
+    this.name = 'RankRepairAlreadyStartedError';
+  }
+}
+
+/**
+ * Another caller advanced this repair first.
+ *
+ * Two requests may drain the same operation — one provoked by a blocked write, one by a
+ * fenced read — and they cooperate rather than conflict: the loser re-reads the authoritative
+ * cursor and continues from there. Distinct from a fence failure so the drain can tell
+ * "somebody else did that slice" from "this list is in a state I cannot read".
+ */
+export class RankRepairContendedError extends Error {
+  constructor() {
+    super('Another caller advanced this repair.');
+    this.name = 'RankRepairContendedError';
+  }
 }
 
 /** The in-flight work for a marker, or `undefined` when the record has already been cleared. */
@@ -1621,10 +1826,10 @@ export async function applyRankRepairChunk(
   );
   for (const entry of slice) {
     const row = byItemId.get(entry.itemId);
-    // Gated mutations mean an entry can only be missing if a previous run already moved it;
-    // its cursor advance is committed with the same transaction, so that cannot happen at a
-    // committed boundary. Treat it as a corrupt snapshot rather than skipping silently.
-    if (row === undefined) throw new ListReadFenceError();
+    // Item mutations are gated, so a missing row means a **concurrent drain of this same
+    // operation** already moved it. The cursor read below would have caught that too; this
+    // is the same race seen one step earlier, and the caller re-reads and continues.
+    if (row === undefined) throw new RankRepairContendedError();
     const nextRevision = entry.fromRevision + 1;
     builder.add(
       {
@@ -1683,7 +1888,7 @@ export async function applyRankRepairChunk(
   await transactWrite(builder.build(), {
     operation: 'applyRankRepairChunk',
     onConditionFailed: (index) =>
-      index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
+      index === 0 ? new ListNotFoundError() : new RankRepairContendedError(),
   });
   return { ...work, cursor: nextCursor };
 }

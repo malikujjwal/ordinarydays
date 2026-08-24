@@ -25,6 +25,7 @@ import {
   getListItem,
   getListMeta,
   type ListAccessGrant,
+  ListFullError,
   type ListItemFieldPatch,
   ListItemIdUnavailableError,
   ListItemNotFoundError,
@@ -37,7 +38,7 @@ import {
   newListOperationId,
   patchListItemFields,
   reorderListItem,
-  resolveExistingItemIds,
+  resolveExistingItems,
 } from '../repositories/listRepository.js';
 import { ID_UNAVAILABLE } from './activityService.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
@@ -93,6 +94,7 @@ function itemNotFound(): AppError {
  * they would each surface as a `500` that tells the caller nothing.
  */
 function asAppError(error: unknown): unknown {
+  if (error instanceof ListFullError) return listFull();
   if (error instanceof ListItemNotFoundError) return itemNotFound();
   if (error instanceof ListItemIdUnavailableError) {
     return new AppError('conflict', ID_UNAVAILABLE);
@@ -143,11 +145,17 @@ function assertLocationAllowed(list: List): void {
  * matches it. The discriminant half is the shared `checkDetailsMatchBehaviour` rule applied
  * by the route's `*For(behaviour)` schema; this is the half that schema cannot express,
  * because a `collection` has no arm to match against at all.
+ *
+ * A `null` is refused on every behaviour: a `collection` has nothing to clear, and on
+ * `watch` or `meals` removing the typed fields is a **destructive behaviour change** that
+ * only P3-09's confirmed, gated migration may make — not a field clear on one item.
  */
 function assertDetailsAllowed(list: List, details: unknown): void {
-  if (details == null) return;
   if (list.behaviour === 'collection') {
     refuse('details', 'Items on this list do not carry those fields.');
+  }
+  if (details === null) {
+    refuse('details', 'Those fields are removed by changing the list, not one item.');
   }
 }
 
@@ -156,6 +164,12 @@ function assertDetailsAllowed(list: List, details: unknown): void {
  * question here, and the *shape* is already settled by the route's `*For(behaviour)` schema.
  * Typing them tighter would only re-litigate Zod's `T | undefined` against the domain's
  * `T?` at a boundary that does not read either value.
+ *
+ * **Presence, not truthiness.** A `null` is a request to clear the field, and clearing is
+ * exactly as gated as setting: `PATCH { location: null }` on a list whose `supportsLocation`
+ * is off would otherwise slip past and delete the address the capability toggle promised to
+ * retain (`plans-and-lists.md` §5.5 — turning a capability off hides values, never destroys
+ * them).
  */
 function assertWritableFields(
   list: List,
@@ -166,8 +180,10 @@ function assertWritableFields(
   },
 ): void {
   if (fields.checked !== undefined) assertCheckedAllowed(list);
-  if (fields.location != null) assertLocationAllowed(list);
-  assertDetailsAllowed(list, fields.details);
+  if ('location' in fields && fields.location !== undefined) assertLocationAllowed(list);
+  if ('details' in fields && fields.details !== undefined) {
+    assertDetailsAllowed(list, fields.details);
+  }
 }
 
 /**
@@ -185,10 +201,20 @@ function assertMatchesBehaviour<T>(
   schema.parse(body);
 }
 
+/** The one place the product's `List is full.` copy lives. */
+function listFull(): AppError {
+  return new AppError('validation_failed', FULL, [{ path: 'items', message: FULL }]);
+}
+
+/**
+ * The cheap precheck, which refuses an obviously-full list before any write is attempted.
+ *
+ * It is **not** the enforcement: two creates against a 499-item list both pass it. The cap
+ * is a condition on the create transaction's META update, and a failure there comes back as
+ * `ListFullError` and through {@link asAppError} to the same copy.
+ */
 function assertCapacity(list: List, adding: number): void {
-  if (list.itemCount + adding > MAX_LIST_ITEMS) {
-    throw new AppError('validation_failed', FULL, [{ path: 'items', message: FULL }]);
-  }
+  if (adding > 0 && list.itemCount + adding > MAX_LIST_ITEMS) throw listFull();
 }
 
 /**
@@ -311,7 +337,6 @@ export async function createItemsBulk(
   const list = await loadList(userId, listId, access.index);
   assertMatchesBehaviour(bulkCreateListItemsInputFor(list.behaviour), input);
   for (const member of input.items) assertWritableFields(list, member);
-  assertCapacity(list, input.items.length);
 
   /**
    * The batch is **one ordered sequence from one anchor**, because its ranks come from a
@@ -332,55 +357,74 @@ export async function createItemsBulk(
   }
 
   const planned = input.items.map(toNewItem);
+
+  /**
+   * **Resolve first, then measure.** Capacity is a question about the rows this call would
+   * *add*, not about the array it was handed: a 40-item batch that committed its first
+   * chunk and crashed must be able to finish, and measuring the whole array against a list
+   * those 32 rows already grew would reject the retry that is supposed to complete it.
+   */
+  // Only ids the client actually minted can already exist; a server-minted ULID is new by
+  // construction, so the common online path pays for no extra read.
+  const clientIds = planned.flatMap((item, index) =>
+    input.items[index]?.itemId === undefined ? [] : [item.itemId],
+  );
+  const committed = await resolveExistingItems(userId, listId, access.index, clientIds);
+  const missing = planned.filter((item) => !committed.has(item.itemId));
+  assertCapacity(list, missing.length);
+
+  const positionOf = new Map(planned.map((item, index) => [item.itemId, index]));
   const chunks: NewListItem[][] = [];
-  for (let from = 0; from < planned.length; from += BULK_CHUNK) {
-    chunks.push(planned.slice(from, from + BULK_CHUNK));
+  for (let from = 0; from < missing.length; from += BULK_CHUNK) {
+    chunks.push(missing.slice(from, from + BULK_CHUNK));
   }
 
-  const written: ListItem[] = [];
-  // Where the next chunk hangs off: the caller's anchor first, then the last id actually
-  // committed, so the sent order survives a batch that spans several transactions — and
-  // survives a replay that skipped a chunk it had already written.
-  let after: string | null | undefined = anchor;
+  const created = new Map<string, ListItem>();
+
+  /** The whole batch as server truth, in the order it was sent. */
+  const canonical = (): ListItem[] =>
+    planned.flatMap((item) => {
+      const row = created.get(item.itemId) ?? committed.get(item.itemId);
+      return row === undefined ? [] : [row];
+    });
+
+  if (chunks.length === 0 && receiptFor !== undefined) {
+    // Every id was already committed: no domain rows to write, but the operation still has
+    // to record its receipt or the next replay re-resolves the whole batch.
+    await writeReceiptOnly(receiptFor(canonical()));
+  }
 
   for (const [index, chunk] of chunks.entries()) {
-    const existing = await resolveExistingItemIds(
-      userId,
-      listId,
-      access.index,
-      chunk.map((item) => item.itemId),
-    );
-    const remaining = chunk.filter((item) => !existing.has(item.itemId));
     const isFinal = index === chunks.length - 1;
+    /**
+     * A chunk hangs off **the planned item immediately before its first**, not off the
+     * previous chunk's last — they differ whenever an earlier attempt already committed
+     * something in between. Everything ahead of this chunk is committed by now, either by a
+     * previous attempt or by an earlier iteration, so that predecessor is always resolvable.
+     */
+    const at = positionOf.get(chunk[0]?.itemId ?? '') ?? 0;
+    const predecessor = at > 0 ? planned[at - 1]?.itemId : undefined;
+    const after = predecessor ?? anchor;
 
-    if (remaining.length > 0) {
-      const created = await writeItemsRepairingOnce(
-        userId,
-        listId,
-        access.index,
-        remaining,
-        {
-          now,
-          ...(after === undefined ? {} : { afterItemId: after }),
-          // The receipt joins the **last** chunk, so a crash part-way through records no
-          // successful response and the replay resumes rather than replaying a lie. It is
-          // built from every item this call actually wrote, ranks included.
-          ...(isFinal && receiptFor !== undefined
-            ? { receiptFor: (items: ListItem[]) => receiptFor([...written, ...items]) }
-            : {}),
-        },
-      );
-      written.push(...created);
-    } else if (isFinal && receiptFor !== undefined) {
-      // A replay that found every id already committed still has to record its receipt, or
-      // the next replay would re-resolve the whole batch.
-      await writeReceiptOnly(receiptFor(written));
-    }
-
-    after = chunk.at(-1)?.itemId ?? after;
+    const written = await writeItemsRepairingOnce(userId, listId, access.index, chunk, {
+      now,
+      ...(after === undefined ? {} : { afterItemId: after }),
+      // The receipt joins the **last** chunk, so a crash part-way through records no
+      // successful response and the replay resumes rather than replaying a lie. It is
+      // built from server truth for every requested id, ranks included.
+      ...(isFinal && receiptFor !== undefined
+        ? {
+            receiptFor: (items: ListItem[]) => {
+              for (const item of items) created.set(item.itemId, item);
+              return receiptFor(canonical());
+            },
+          }
+        : {}),
+    });
+    for (const item of written) created.set(item.itemId, item);
   }
 
-  return written;
+  return canonical();
 }
 
 /** `PATCH /v1/lists/:id/items/:itemId`. */
@@ -400,25 +444,9 @@ export async function patchItem(
   const fields = (['title', 'checked', 'note', 'location', 'details'] as const).filter(
     (field) => field in input,
   );
-
-  if (reordering) {
-    /**
-     * A reorder and a field edit are two different transactions — four domain actions
-     * against the ranked row, its locator and `META.rankVersion`, versus a conditional
-     * update of supplied fields. Applying both would either break criterion 16's exact
-     * four-action shape or leave a half-applied `PATCH` when the second failed, so a body
-     * that mixes them is refused and the client sends two requests.
-     */
-    if (fields.length > 0) {
-      refuse(
-        'afterItemId',
-        'Reorder an item in its own request, separately from editing its fields.',
-      );
-    }
-    return moveItem(userId, listId, access.index, itemId, input.afterItemId ?? null, now);
+  if (!reordering && fields.length === 0) {
+    refuse('title', 'This update changes nothing.');
   }
-
-  if (fields.length === 0) refuse('title', 'This update changes nothing.');
 
   // Same parse-boundary cast as `toNewItem`; `null` here means "clear this field" and is
   // carried through deliberately, so it must survive rather than be spread away.
@@ -429,6 +457,25 @@ export async function patchItem(
     ...('location' in input ? { location: input.location ?? null } : {}),
     ...('details' in input ? { details: input.details ?? null } : {}),
   } as ListItemFieldPatch;
+
+  /**
+   * A position and ordinary fields may arrive together (`api-contract.md` §2.7 lists them
+   * in one body), and they must land together: a client that dragged a row and renamed it
+   * in one request must not end up with the rename applied and the move lost. The reorder
+   * already re-puts the whole row at its new key, so the patch folds into that put and the
+   * transaction is still the same four domain actions.
+   */
+  if (reordering) {
+    return moveItem(
+      userId,
+      listId,
+      access.index,
+      itemId,
+      input.afterItemId ?? null,
+      now,
+      fields.length === 0 ? undefined : patch,
+    );
+  }
 
   return mapped(() =>
     patchListItemFields(userId, listId, access.index, itemId, patch, now),
@@ -443,16 +490,16 @@ async function moveItem(
   itemId: string,
   afterItemId: string | null,
   now: string,
+  patch?: ListItemFieldPatch,
 ): Promise<ListItem> {
+  const options = { now, afterItemId, ...(patch === undefined ? {} : { patch }) };
   try {
-    return await reorderListItem(userId, listId, access, itemId, { now, afterItemId });
+    return await reorderListItem(userId, listId, access, itemId, options);
   } catch (error) {
     if (!(error instanceof ListRankRepairRequiredError)) throw asAppError(error);
     const repaired = await repairListRanks(userId, listId, access, now);
     if (!repaired) throw new AppError('internal', BUSY, undefined, 1);
-    return mapped(() =>
-      reorderListItem(userId, listId, access, itemId, { now, afterItemId }),
-    );
+    return mapped(() => reorderListItem(userId, listId, access, itemId, options));
   }
 }
 

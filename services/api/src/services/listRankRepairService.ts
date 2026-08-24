@@ -9,7 +9,10 @@ import {
   ListNotFoundError,
   ListReadFenceError,
   newListOperationId,
+  RankRepairAlreadyStartedError,
+  RankRepairContendedError,
   type RankRepairWork,
+  snapshotRankRepair,
 } from '../repositories/listRepository.js';
 
 /**
@@ -48,19 +51,64 @@ const MAX_DRAIN_CHUNKS = 8;
 const MARKER_WITHOUT_WORK =
   'A list repair marker names no work record; the repair cannot be resumed.';
 
-/** Runs bounded chunks, then commits the final transaction when the snapshot is exhausted. */
-async function drainFrom(work: RankRepairWork): Promise<boolean> {
-  let current = work;
-  for (
-    let chunk = 0;
-    chunk < MAX_DRAIN_CHUNKS && current.cursor < current.entries.length;
-    chunk += 1
-  ) {
-    current = await applyRankRepairChunk(current);
+/**
+ * Completes the snapshot if it is still outstanding, runs bounded chunks, then commits the
+ * final transaction when the snapshot is exhausted.
+ */
+async function drainFrom(seed: RankRepairWork, now: string): Promise<boolean> {
+  const { listId, operationId } = seed;
+
+  for (let chunk = 0; chunk < MAX_DRAIN_CHUNKS; chunk += 1) {
+    /**
+     * The **stored** cursor, re-read every pass. Two requests can drain one operation —
+     * one provoked by a blocked write, one by a fenced read — and applying a slice from a
+     * stale cursor would rewrite rows the other has already moved. Re-reading makes them
+     * cooperate: whoever is behind simply continues from where the list actually is.
+     */
+    const stored = await getRankRepairWork(listId, operationId);
+    if (stored === undefined) return true;
+
+    // Still `snapshotting` means the installer never filled it — a crash, or a lost race.
+    // Finishing it here is what stops a marker with no work gating the list permanently.
+    let current: RankRepairWork;
+    try {
+      current = await snapshotRankRepair(stored, now);
+    } catch (error) {
+      if (error instanceof RankRepairContendedError) continue;
+      throw error;
+    }
+
+    if (current.cursor >= current.entries.length) return finishOnce(current);
+
+    try {
+      await applyRankRepairChunk(current);
+    } catch (error) {
+      if (error instanceof RankRepairContendedError) continue;
+      throw error;
+    }
   }
-  if (current.cursor < current.entries.length) return false;
-  await finishRankRepair(current);
-  return true;
+
+  const remaining = await getRankRepairWork(listId, operationId);
+  if (remaining === undefined) return true;
+  if (remaining.cursor < remaining.entries.length) return false;
+  return finishOnce(remaining);
+}
+
+/**
+ * Commits the final transaction, tolerating a concurrent drain that got there first.
+ *
+ * The condition names this operation id, so a second finisher fails it — and that failure
+ * means the repair is **done**, not that anything went wrong. Anything else rethrows.
+ */
+async function finishOnce(work: RankRepairWork): Promise<boolean> {
+  try {
+    await finishRankRepair(work);
+    return true;
+  } catch (error) {
+    const current = await getRankRepairWork(work.listId, work.operationId);
+    if (current === undefined) return true;
+    throw error;
+  }
 }
 
 /**
@@ -75,6 +123,7 @@ export async function drainRankRepair(
   userId: string,
   listId: string,
   access: ListAccessGrant,
+  now: string,
 ): Promise<boolean> {
   const list = await getListMeta(userId, listId, access);
   if (list === undefined) return true;
@@ -82,15 +131,22 @@ export async function drainRankRepair(
   if (operationId === undefined) return true;
 
   const work = await getRankRepairWork(listId, operationId);
-  // The marker and its work row are installed in one transaction and cleared in another, so
-  // at every committed boundary they agree. A marker alone means the record was removed out
-  // of band, and continuing would rewrite ranks from a snapshot nobody has.
   if (work === undefined) {
+    /**
+     * The marker and its work row are installed in **one transaction** and cleared in
+     * another, so at every committed boundary they agree — including mid-snapshot, which is
+     * what the `snapshotting` state is for. A missing record therefore means one of two
+     * things: a concurrent drain finished and cleared both between the two reads above, or
+     * the record was removed out of band. Re-reading META separates them, because
+     * continuing on a snapshot nobody has would rewrite ranks from nothing.
+     */
+    const after = await getListMeta(userId, listId, access);
+    if (after?.rankRepairId === undefined) return true;
     throw new AppError('internal', 'An unexpected error occurred.', [
       { path: 'rankRepairId', message: MARKER_WITHOUT_WORK },
     ]);
   }
-  return drainFrom(work);
+  return drainFrom(work, now);
 }
 
 /**
@@ -109,13 +165,34 @@ export async function repairListRanks(
 ): Promise<boolean> {
   const list = await getListMeta(userId, listId, access);
   if (list === undefined) throw new ListNotFoundError();
-  if (list.rankRepairId !== undefined) return drainRankRepair(userId, listId, access);
+  if (list.rankRepairId !== undefined) {
+    return drainRankRepair(userId, listId, access, now);
+  }
 
-  const work = await beginRankRepair(userId, listId, access, {
-    operationId: newListOperationId(),
-    now,
-  });
-  return drainFrom(work);
+  try {
+    const work = await beginRankRepair(userId, listId, access, {
+      operationId: newListOperationId(),
+      now,
+    });
+    return await drainFrom(work, now);
+  } catch (error) {
+    /**
+     * Another caller installed the marker between the read above and this write. The loser
+     * sees that two ways depending on how far it got — the fence assertion on its own META
+     * read, or the conditional install losing — and both mean the same thing: drain the
+     * winner's work. There is never a second snapshot of one list.
+     *
+     * A behaviour-migration marker is **not** ours to finish (P3-09 owns it), so the marker
+     * is re-read and anything but a rank repair rethrows as the retryable fence.
+     */
+    const contended =
+      error instanceof RankRepairAlreadyStartedError ||
+      error instanceof ListReadFenceError;
+    if (!contended) throw error;
+    const current = await getListMeta(userId, listId, access);
+    if (current?.rankRepairId === undefined) throw error;
+    return drainRankRepair(userId, listId, access, now);
+  }
 }
 
 /**
@@ -132,12 +209,13 @@ export async function withRepairDrain<T>(
   listId: string,
   access: ListAccessGrant,
   read: () => Promise<T>,
+  now: string = new Date().toISOString(),
 ): Promise<T> {
   try {
     return await read();
   } catch (error) {
     if (!(error instanceof ListReadFenceError)) throw error;
-    const cleared = await drainRankRepair(userId, listId, access);
+    const cleared = await drainRankRepair(userId, listId, access, now);
     if (!cleared) throw error;
     return read();
   }

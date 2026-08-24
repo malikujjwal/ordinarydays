@@ -6,11 +6,12 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/ddb.js';
-import type {
-  CleanupPhase,
-  CleanupRef,
-  CleanupWork,
-  IdempotencyReceipt,
+import {
+  type CleanupPhase,
+  type CleanupRef,
+  type CleanupWork,
+  IdempotencyRaceError,
+  type IdempotencyReceipt,
 } from '../lib/idempotency.js';
 import { cleanup, cleanupPrefix, idempotency } from './keys.js';
 import type { TransactItem } from './tx.js';
@@ -46,13 +47,26 @@ export function receiptItem(receipt: IdempotencyReceipt): TransactItem {
 export async function writeReceiptOnly(receipt: IdempotencyReceipt): Promise<void> {
   const item = receiptItem(receipt).Put;
   if (item === undefined) throw new Error('receiptItem produced no Put.');
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE_NAME,
-      Item: item.Item,
-      ConditionExpression: item.ConditionExpression as string,
-    }),
-  );
+  try {
+    await ddb.send(
+      new PutCommand({
+        TableName: TABLE_NAME,
+        Item: item.Item,
+        ConditionExpression: item.ConditionExpression as string,
+      }),
+    );
+  } catch (error) {
+    /**
+     * A concurrent first attempt won this key. Raised as the typed race — exactly as a
+     * transactional receipt failure is — so the middleware reads the winner's committed
+     * record and returns it. Left raw, the SDK's conditional failure would map to a bare
+     * `409` and the loser would never see the response it was entitled to.
+     */
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      throw new IdempotencyRaceError();
+    }
+    throw error;
+  }
 }
 
 /** Durable remaining phases, committed atomically with main state and the receipt. */

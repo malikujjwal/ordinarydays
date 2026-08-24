@@ -36,12 +36,19 @@ class RetriesExhausted extends Error {
     this.name = 'ListMutationRetryExhaustedError';
   }
 }
+class ListFull extends Error {
+  constructor() {
+    super('full');
+    this.name = 'ListFullError';
+  }
+}
 
 vi.mock('../repositories/listRepository.js', () => ({
   ListRankRepairRequiredError: RepairNeeded,
   ListItemNotFoundError: ItemMissing,
   ListItemIdUnavailableError: IdTaken,
   ListMutationRetryExhaustedError: RetriesExhausted,
+  ListFullError: ListFull,
   ListNotFoundError: class extends Error {},
   ListReadFenceError: class extends Error {},
   newItemId: vi.fn(() => 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X9'),
@@ -54,7 +61,7 @@ vi.mock('../repositories/listRepository.js', () => ({
   getListItem: vi.fn(),
   listItems: vi.fn(),
   batchGetViewerLinks: vi.fn(() => Promise.resolve([])),
-  resolveExistingItemIds: vi.fn(() => Promise.resolve(new Set<string>())),
+  resolveExistingItems: vi.fn(() => Promise.resolve(new Map<string, unknown>())),
 }));
 
 vi.mock('./authz.js', () => ({
@@ -122,7 +129,7 @@ beforeEach(() => {
   vi.mocked(repository.patchListItemFields).mockResolvedValue(anItem());
   vi.mocked(repository.reorderListItem).mockResolvedValue(anItem({ rank: 'W' }));
   vi.mocked(repository.deleteListItem).mockResolvedValue(anItem());
-  vi.mocked(repository.resolveExistingItemIds).mockResolvedValue(new Set());
+  vi.mocked(repository.resolveExistingItems).mockResolvedValue(new Map());
   vi.mocked(repairService.repairListRanks).mockResolvedValue(true);
 });
 
@@ -287,12 +294,28 @@ describe('patch routing', () => {
     });
   });
 
-  it('refuses a reorder mixed with a field edit rather than half-applying it', async () => {
-    await expect(
-      service.patchItem(USER, LIST, ITEM, { title: 'Milk', afterItemId: null }, NOW),
-    ).rejects.toMatchObject({ code: 'validation_failed' });
-    expect(repository.reorderListItem).not.toHaveBeenCalled();
+  /**
+   * A position and fields land in **one** transaction: the reorder already re-puts the whole
+   * row, so the patch folds into that put rather than becoming a second write that could
+   * leave the rename applied and the move lost.
+   */
+  it('folds a field edit into the reorder rather than writing twice', async () => {
+    await service.patchItem(USER, LIST, ITEM, { title: 'Milk', afterItemId: null }, NOW);
+
     expect(repository.patchListItemFields).not.toHaveBeenCalled();
+    expect(repository.reorderListItem).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(repository.reorderListItem).mock.calls[0]?.[4]).toMatchObject({
+      afterItemId: null,
+      patch: { title: 'Milk' },
+    });
+  });
+
+  it('sends no patch when the body carries only a position', async () => {
+    await service.patchItem(USER, LIST, ITEM, { afterItemId: null }, NOW);
+
+    expect(vi.mocked(repository.reorderListItem).mock.calls[0]?.[4]).not.toHaveProperty(
+      'patch',
+    );
   });
 
   it('refuses an empty patch rather than writing a no-op revision', async () => {
@@ -371,7 +394,9 @@ describe('bulk ordering and replay', () => {
 
   it('skips ids already committed rather than failing the batch', async () => {
     const existing = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1AA';
-    vi.mocked(repository.resolveExistingItemIds).mockResolvedValue(new Set([existing]));
+    vi.mocked(repository.resolveExistingItems).mockResolvedValue(
+      new Map([[existing, anItem({ itemId: existing, title: 'Eggs' })]]),
+    );
 
     await service.createItemsBulk(
       USER,
@@ -384,10 +409,62 @@ describe('bulk ordering and replay', () => {
     expect(written?.map((item) => item.title)).toEqual(['Milk']);
   });
 
+  /**
+   * Capacity is measured against what the call would **add**, after resolving what is
+   * already there — otherwise the retry meant to finish an interrupted batch is exactly
+   * the request that gets rejected.
+   */
+  it('counts only the missing ids against the cap', async () => {
+    const existing = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1AA';
+    useList(aList({ itemCount: 500 }));
+    vi.mocked(repository.resolveExistingItems).mockResolvedValue(
+      new Map([[existing, anItem({ itemId: existing, title: 'Eggs' })]]),
+    );
+
+    // Every id is already committed, so the batch adds nothing and the full list is fine.
+    await expect(
+      service.createItemsBulk(
+        USER,
+        LIST,
+        { items: [{ itemId: existing, title: 'Eggs' }] },
+        NOW,
+      ),
+    ).resolves.toHaveLength(1);
+    expect(repository.createListItems).not.toHaveBeenCalled();
+  });
+
+  it('answers a fully committed replay with server truth, in the order sent', async () => {
+    const first = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1AA';
+    const second = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1AB';
+    vi.mocked(repository.resolveExistingItems).mockResolvedValue(
+      new Map([
+        [first, anItem({ itemId: first, title: 'Eggs', rank: 'V' })],
+        [second, anItem({ itemId: second, title: 'Milk', rank: 'W' })],
+      ]),
+    );
+
+    const result = await service.createItemsBulk(
+      USER,
+      LIST,
+      {
+        items: [
+          { itemId: first, title: 'Eggs' },
+          { itemId: second, title: 'Milk' },
+        ],
+      },
+      NOW,
+    );
+
+    expect(result.map((item) => item.itemId)).toEqual([first, second]);
+    expect(result.map((item) => item.rank)).toEqual(['V', 'W']);
+  });
+
   it('records a receipt even when every id was already committed', async () => {
     const idempotency = await import('../repositories/idempotencyRepository.js');
     const existing = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1AA';
-    vi.mocked(repository.resolveExistingItemIds).mockResolvedValue(new Set([existing]));
+    vi.mocked(repository.resolveExistingItems).mockResolvedValue(
+      new Map([[existing, anItem({ itemId: existing, title: 'Eggs' })]]),
+    );
 
     await service.createItemsBulk(
       USER,
@@ -399,6 +476,16 @@ describe('bulk ordering and replay', () => {
 
     expect(idempotency.writeReceiptOnly).toHaveBeenCalledTimes(1);
     expect(repository.createListItems).not.toHaveBeenCalled();
+  });
+});
+
+describe('the transactional item cap', () => {
+  it('maps the repository’s full-list refusal to the exact copy', async () => {
+    vi.mocked(repository.createListItems).mockRejectedValueOnce(new ListFull());
+
+    await expect(
+      service.createItem(USER, LIST, { title: 'One more' }, NOW),
+    ).rejects.toMatchObject({ code: 'validation_failed', message: 'List is full.' });
   });
 });
 
