@@ -1,6 +1,7 @@
 import {
   DeleteCommand,
   GetCommand,
+  PutCommand,
   QueryCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
@@ -31,6 +32,27 @@ export function receiptItem(receipt: IdempotencyReceipt): TransactItem {
       ConditionExpression: 'attribute_not_exists(pk)',
     },
   };
+}
+
+/**
+ * Writes the receipt on its own, for an operation that turned out to have nothing left to do.
+ *
+ * The one caller is P3-08's bulk replay: after the original receipt expires, a batch whose
+ * every stable item id is already committed writes no domain rows, and without this the
+ * operation would record no receipt and re-resolve the whole batch on the next replay. The
+ * conditional put is the same one {@link receiptItem} contributes to a transaction, so a
+ * concurrent first attempt still races on it rather than overwriting a committed response.
+ */
+export async function writeReceiptOnly(receipt: IdempotencyReceipt): Promise<void> {
+  const item = receiptItem(receipt).Put;
+  if (item === undefined) throw new Error('receiptItem produced no Put.');
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: item.Item,
+      ConditionExpression: item.ConditionExpression as string,
+    }),
+  );
 }
 
 /** Durable remaining phases, committed atomically with main state and the receipt. */

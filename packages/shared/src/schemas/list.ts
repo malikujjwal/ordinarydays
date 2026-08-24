@@ -367,3 +367,64 @@ export const listListQuery = z
 export const listDetailQuery = z
   .strictObject({ includeItems: z.enum(['true', 'false']).optional() })
   .meta({ id: 'ListDetailQuery' });
+
+/** `GET /v1/lists/:id/items` query. Strict, so a misspelled parameter is a named `400`. */
+export const listItemPageQuery = z
+  .strictObject({ cursor: cursor.optional() })
+  .meta({ id: 'ListItemPageQuery' });
+
+/**
+ * `PATCH /v1/lists/:id/items/:itemId` (`api-contract.md` §2.7, P3-08).
+ *
+ * **Strict**, so `rank`, `itemRevision`, `listId` and the provenance fields — all
+ * server-owned — are a `400` naming them rather than a save that quietly ignores them.
+ * There is no client `If-Match`: item writes are per-field last-write-wins, and optimistic
+ * concurrency on every checkbox in a grocery list would produce constant spurious `409`s
+ * for no benefit (`data-model.md` §4.6 "Concurrency").
+ *
+ * `note`, `location` and `details` accept `null` to **clear** the field, the same way
+ * `defaultReminderOffset` does on the profile: absent means "leave it alone" and `null`
+ * means "remove it", which are different intentions and must stay distinguishable.
+ *
+ * `afterItemId` requests a reorder — `null` moves the item to the front, an id moves it
+ * after that item. Absent means no reorder at all, which is why it is nullable rather than
+ * merely optional.
+ */
+export const patchListItemInput = z
+  .strictObject({
+    title: title.optional(),
+    checked: z.boolean().optional(),
+    note: z.string().max(MAX_NOTES_LEN).nullable().optional(),
+    location: listItemLocation.nullable().optional(),
+    details: listItemDetailsInput.nullable().optional(),
+    afterItemId: ulidId('itm').nullable().optional(),
+  })
+  .meta({ id: 'PatchListItemInput' });
+
+export type PatchListItemInput = z.infer<typeof patchListItemInput>;
+
+/** The patch input bound to a loaded List's behaviour, like the create helpers above. */
+export function patchListItemInputFor(behaviour: z.infer<typeof listBehaviour>) {
+  return patchListItemInput.superRefine((value, ctx) => {
+    checkDetailsMatchBehaviour(
+      { behaviour, ...(value.details == null ? {} : { details: value.details }) },
+      ctx,
+    );
+  });
+}
+
+/**
+ * What a reversible item mutation answers with (`api-contract.md` §2.7).
+ *
+ * `undoExpiresAt` is the **UI offer deadline**, not the server's replay deadline: the client
+ * must stop offering Undo at that instant, while an inverse the user already accepted stays
+ * valid until the shared retention window expires. Conflating the two is what would make an
+ * accepted offline Undo expire in transit.
+ */
+export const reversibleItemMutation = z
+  .object({
+    affectedCount: z.number().int().nonnegative(),
+    undoToken: z.string().min(1),
+    undoExpiresAt: z.string().min(1),
+  })
+  .meta({ id: 'ReversibleItemMutation' });
