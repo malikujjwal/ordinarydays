@@ -1,0 +1,194 @@
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { LIST_TEMPLATES } from '@od/shared/lists';
+import { mockClient } from 'aws-sdk-client-mock';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+process.env.STAGE = 'local';
+process.env.AUTH_MODE = 'local';
+process.env.TABLE_NAME = 'od-main-local';
+process.env.MEDIA_BUCKET = 'od-media-local';
+process.env.WEB_ORIGINS = 'http://localhost:8081';
+process.env.LOG_LEVEL = 'fatal';
+
+import type { createApp as CreateApp } from '../app.js';
+
+/** `GET /v1/list-templates` (P3-06). */
+const ddbMock = mockClient(DynamoDBDocumentClient);
+
+let createApp: typeof CreateApp;
+
+beforeEach(async () => {
+  ddbMock.reset();
+  vi.resetModules();
+  createApp = (await import('../app.js')).createApp;
+});
+
+const get = (app: ReturnType<typeof CreateApp>, headers: Record<string, string> = {}) =>
+  app.fetch(new Request('http://localhost/v1/list-templates', { headers }));
+
+describe('the catalogue payload', () => {
+  it('returns every template, in catalogue order, in the standard envelope', async () => {
+    const res = await get(createApp());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual(LIST_TEMPLATES);
+    expect(body.data.map((entry: { templateKey: string }) => entry.templateKey)).toEqual(
+      LIST_TEMPLATES.map((entry) => entry.templateKey),
+    );
+    expect(body.meta.requestId).toMatch(/^req_/);
+  });
+
+  it('returns every field of every record — a client previews what it will produce', async () => {
+    const body = await (await get(createApp())).json();
+
+    for (const template of body.data) {
+      expect(Object.keys(template).sort()).toEqual([
+        'behaviour',
+        'capabilities',
+        'chooserLabel',
+        'defaultTitle',
+        'emptyStateCopy',
+        'icon',
+        'slot',
+        'summary',
+        'templateKey',
+      ]);
+    }
+  });
+
+  it('validates against the shared ListTemplate schema', async () => {
+    const { listTemplate } = await import('@od/shared/schemas');
+    const body = await (await get(createApp())).json();
+
+    for (const template of body.data) {
+      expect(listTemplate.safeParse(template).success).toBe(true);
+    }
+  });
+
+  /**
+   * Acceptance criterion 2's half of the path that this route owns: a record added to the
+   * array reaches the response through the same code, with no schema change and no branch.
+   */
+  it('serves a fixture template appended to the catalogue with no branch anywhere', async () => {
+    const { listTemplatesHandler } = await import('../handlers/listTemplates.js');
+    const { entityTag } = await import('../lib/etag.js');
+    const fixture = {
+      templateKey: 'books-to-read',
+      chooserLabel: 'Books to read',
+      summary: 'Things to read next',
+      defaultTitle: 'Books to read',
+      icon: 'book',
+      behaviour: 'collection',
+      capabilities: { checkable: false, supportsLocation: false },
+      slot: null,
+      emptyStateCopy: 'Add a book to read.',
+    } as const;
+    const extended = [...LIST_TEMPLATES, fixture];
+
+    const app = createApp();
+    app.get('/probe', (c) => listTemplatesHandler(c, extended, entityTag(extended)));
+    const body = await (await app.fetch(new Request('http://localhost/probe'))).json();
+
+    expect(body.data).toHaveLength(LIST_TEMPLATES.length + 1);
+    expect(body.data.at(-1)).toEqual(fixture);
+  });
+});
+
+describe('caching', () => {
+  it('sets a public 24-hour cache policy and a strong ETag', async () => {
+    const res = await get(createApp());
+
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=86400');
+    expect(res.headers.get('ETag')).toMatch(/^"[A-Za-z0-9_-]{43}"$/);
+  });
+
+  it('answers 304 with no body for a matching If-None-Match', async () => {
+    const first = await get(createApp());
+    const etag = String(first.headers.get('ETag'));
+
+    const second = await get(createApp(), { 'If-None-Match': etag });
+
+    expect(second.status).toBe(304);
+    expect(await second.text()).toBe('');
+    expect(second.headers.get('ETag')).toBe(etag);
+    expect(second.headers.get('Cache-Control')).toBe('public, max-age=86400');
+  });
+
+  it('serves the payload again when the validator does not match', async () => {
+    const res = await get(createApp(), { 'If-None-Match': '"stale"' });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).data).toEqual(LIST_TEMPLATES);
+  });
+
+  /** A shipped change to the array must invalidate every cached copy. */
+  it('produces a different tag for a mutated catalogue', async () => {
+    const { entityTag } = await import('../lib/etag.js');
+    const current = String((await get(createApp())).headers.get('ETag'));
+
+    const reordered = [...LIST_TEMPLATES].reverse();
+    const relabelled = LIST_TEMPLATES.map((entry, index) =>
+      index === 0 ? { ...entry, chooserLabel: 'Renamed' } : entry,
+    );
+
+    expect(entityTag(LIST_TEMPLATES)).toBe(current);
+    expect(entityTag(reordered)).not.toBe(current);
+    expect(entityTag(relabelled)).not.toBe(current);
+  });
+});
+
+describe('the route contract', () => {
+  it('is registered as an authenticated GET', async () => {
+    const { ROUTE_REGISTRY } = await import('../middleware/routeRegistry.js');
+
+    expect(ROUTE_REGISTRY).toContainEqual({
+      method: 'GET',
+      pattern: '/v1/list-templates',
+      auth: 'authenticated',
+    });
+  });
+
+  it('401s when identity resolution fails', async () => {
+    const { AppError } = await import('../lib/errors.js');
+    const app = createApp({
+      identityProvider: {
+        resolve: () =>
+          Promise.reject(new AppError('unauthenticated', 'Authentication required.')),
+      },
+    });
+
+    const res = await get(app);
+
+    expect(res.status).toBe(401);
+    expect((await res.json()).error.code).toBe('unauthenticated');
+  });
+
+  /**
+   * The layering rules already forbid a repository import here; this asserts the
+   * consequence a reader cares about — serving the catalogue reads no stored data.
+   *
+   * The one command that does fire is the **rate-limit counter**, which every authenticated
+   * route writes at chain position 9 and which belongs to the middleware rather than to
+   * this handler. It is asserted by name rather than excused, so a future read added to
+   * this path fails here instead of hiding behind a loosened count.
+   */
+  it('reads nothing from storage; the only call is the rate-limit counter', async () => {
+    const { GetCommand, QueryCommand, BatchGetCommand, TransactWriteCommand } =
+      await import('@aws-sdk/lib-dynamodb');
+    await get(createApp());
+
+    expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(0);
+    expect(ddbMock.commandCalls(BatchGetCommand)).toHaveLength(0);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+
+    const keys = ddbMock
+      .calls()
+      .map(
+        (call) =>
+          (call.args[0]?.input as { Key?: { pk?: string } } | undefined)?.Key?.pk ?? '',
+      );
+    expect(keys.every((pk) => pk.startsWith('RATE#'))).toBe(true);
+  });
+});

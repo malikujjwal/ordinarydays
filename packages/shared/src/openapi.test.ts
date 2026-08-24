@@ -39,8 +39,8 @@ describe('the generated document', () => {
     // templated; **P2-11 added `/v1/agenda`**; **P2-54 added its targeted activity path**;
     // **P1-11 added `/v1/activities`**;
     // **P1-12 added the detail path**; **P2-16 added the reminder collection and item paths**;
-    // and **P3-05 added the two list paths** — the collection (`GET` and `POST` share it)
-    // and the templated id (`GET` and `DELETE`).
+    // **P3-05 added the two list paths** — the collection (`GET` and `POST` share it)
+    // and the templated id (`GET` and `DELETE`); and **P3-06 added the template catalogue**.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
@@ -61,6 +61,7 @@ describe('the generated document', () => {
       '/v1/activities/{id}/reminders/{reminderId}',
       '/v1/lists',
       '/v1/lists/{id}',
+      '/v1/list-templates',
       '/v1/capture/parse',
       '/v1/capture/extract',
       '/v1/capture/link',
@@ -115,6 +116,7 @@ describe('the generated document', () => {
       'ListDetail',
       'ListDetailItem',
       'ListItemView',
+      'ListTemplate',
       'ListView',
       'Occurrence',
       'PatchActivityInput',
