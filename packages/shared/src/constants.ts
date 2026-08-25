@@ -62,6 +62,16 @@ export const MAX_AUTOMATIC_INTENT_AGE_DAYS = 30;
  */
 export const UNDO_OFFER_SECONDS = 6;
 
+/**
+ * The UI's offer window for a reversible **bulk** action, in seconds
+ * (`interaction-contract.md` §4).
+ *
+ * Ten rather than six "because there is more to notice": a toast that says `7 items cleared`
+ * is asking the user to check seven rows are gone, not one. Same presentation-deadline
+ * semantics as {@link UNDO_OFFER_SECONDS}.
+ */
+export const BULK_UNDO_OFFER_SECONDS = 10;
+
 /** How far back `include=overdue` rolls incomplete tasks forward. */
 export const OVERDUE_WINDOW_DAYS = 30;
 

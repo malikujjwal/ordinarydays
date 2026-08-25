@@ -10,6 +10,7 @@ import {
   listListQuery,
   patchListInput,
   patchListItemInput,
+  undoListOperationInput,
 } from '@od/shared/schemas';
 import { Hono } from 'hono';
 import type { AppEnv } from '../app-env.js';
@@ -20,6 +21,14 @@ import {
 import { createListHandler } from '../handlers/createList.js';
 import { DELETE_LIST_PATH, deleteListHandler } from '../handlers/deleteList.js';
 import { GET_LIST_PATH, getListHandler } from '../handlers/getList.js';
+import {
+  CLEAR_CHECKED_PATH,
+  clearCheckedHandler,
+  UNCHECK_ALL_PATH,
+  UNDO_PATH,
+  uncheckAllHandler,
+  undoListOperationHandler,
+} from '../handlers/listBulk.js';
 import {
   BULK_LIST_ITEMS_PATH,
   bulkCreateListItemsHandler,
@@ -39,8 +48,9 @@ import { PATCH_LIST_PATH, patchListHandler } from '../handlers/patchList.js';
  *
  * Create with template resolution, the Lists-tab page, list detail with its optional fenced
  * item page and the owner-only delete (P3-05); the six item routes (P3-08); and the two
- * settings routes (P3-09). Undo and the schedule bridge are later tasks and are absent rather
- * than stubbed, so `routeSplit`'s `not_implemented` answers for them.
+ * settings routes (P3-09); and the two bulk actions with their compensation endpoint
+ * (P3-10). The schedule bridge is a later task and is absent rather than stubbed, so
+ * `routeSplit`'s `not_implemented` answers for it.
  *
  * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise. Only the
  * mutating `POST`s take an `Idempotency-Key`, and only the two conditional routes — the
@@ -114,6 +124,17 @@ const validateBehaviourQuery = zValidator('query', changeListBehaviourQuery, (re
   if (!result.success) throw result.error;
 });
 
+/**
+ * The compensation body: the opaque token and nothing else, strictly.
+ *
+ * A client must never send the deleted rows back as authority (`api-contract.md` §2.7) — the
+ * server holds the snapshot — so a body that tried to is a `400` naming the field rather than
+ * a restore from data the request supplied.
+ */
+const validateUndo = zValidator('json', undoListOperationInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
 export const lists = new Hono<AppEnv>()
   .get(LIST_LISTS_PATH, validateListQuery, (c) =>
     listListsHandler(c, c.req.valid('query')),
@@ -141,6 +162,11 @@ export const lists = new Hono<AppEnv>()
       c.req.valid('query'),
       new Date().toISOString(),
     ),
+  )
+  .post(CLEAR_CHECKED_PATH, (c) => clearCheckedHandler(c, new Date().toISOString()))
+  .post(UNCHECK_ALL_PATH, (c) => uncheckAllHandler(c, new Date().toISOString()))
+  .post(UNDO_PATH, validateUndo, (c) =>
+    undoListOperationHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   .delete(DELETE_LIST_PATH, deleteListHandler)
   /**

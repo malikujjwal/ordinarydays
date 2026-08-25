@@ -43,7 +43,8 @@ describe('the generated document', () => {
     // and the templated id (`GET` and `DELETE`); **P3-06 added the template catalogue**;
     // **P3-08 added the three item paths** — the collection, its `bulk` action, and the
     // templated item id carrying `GET`, `PATCH` and `DELETE`; and **P3-09 added the
-    // behaviour action**, while giving the templated list id its settings `PATCH`.
+    // behaviour action**, while giving the templated list id its settings `PATCH`; and
+    // **P3-10 added the two bulk actions and the compensation endpoint**.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
@@ -68,6 +69,9 @@ describe('the generated document', () => {
       '/v1/lists/{id}/items',
       '/v1/lists/{id}/items/bulk',
       '/v1/lists/{id}/items/{itemId}',
+      '/v1/lists/{id}/clear-checked',
+      '/v1/lists/{id}/uncheck-all',
+      '/v1/lists/{id}/undo',
       '/v1/list-templates',
       '/v1/capture/parse',
       '/v1/capture/extract',
@@ -128,6 +132,7 @@ describe('the generated document', () => {
       'ListItemView',
       'ListSettingsMutation',
       'ListTemplate',
+      'ListUndoResult',
       'ListView',
       'Occurrence',
       'PatchActivityInput',
@@ -144,6 +149,7 @@ describe('the generated document', () => {
       'SkipActivityInput',
       'SnoozeActivityInput',
       'UncompleteActivityInput',
+      'UndoListOperationInput',
       'UnsnoozeActivityInput',
       'User',
     ]);

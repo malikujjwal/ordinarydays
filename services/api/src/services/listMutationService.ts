@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { UNDO_OFFER_SECONDS } from '@od/shared';
 import {
   type ChangeListBehaviourInput,
@@ -14,6 +14,7 @@ import type {
 } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
+import { hashUndoToken, mintUndoToken } from '../lib/undoToken.js';
 import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
 import {
   abandonBehaviourMigration,
@@ -131,10 +132,19 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('base64url');
 }
 
-/** A fresh single-use offer, and the `interaction-contract.md` §4 window it is offered in. */
-function undoOffer(now: string): { token: string; expiresAt: string } {
+/**
+ * A fresh single-use offer, and the `interaction-contract.md` §4 window it is offered in.
+ *
+ * The token **addresses** the operation it belongs to (P3-10, `lib/undoToken.ts`): the undo
+ * route receives a token and nothing else, and this table has one index that is not worth
+ * spending on the few operations anybody ever undoes.
+ */
+function undoOffer(
+  operationId: string,
+  now: string,
+): { token: string; expiresAt: string } {
   return {
-    token: randomBytes(32).toString('base64url'),
+    token: mintUndoToken(operationId).token,
     expiresAt: new Date(Date.parse(now) + UNDO_OFFER_SECONDS * 1000).toISOString(),
   };
 }
@@ -309,7 +319,7 @@ function undoFor(work: BehaviourMigrationWork): ListSettingsUndo | undefined {
   return {
     operationId: work.operationId,
     kind: 'behaviour_upgrade',
-    tokenHash: sha256(work.undo.token),
+    tokenHash: hashUndoToken(work.undo.token),
     undoExpiresAt: work.undo.expiresAt,
     inverse,
     preconditions,
@@ -584,13 +594,13 @@ export async function patchListSettings(
    */
   const clearsDefault = 'slot' in changed && list.slot !== null;
 
-  const undo = undoOffer(now);
   /**
    * A server-minted id, unlike the behaviour migration's. Nothing about this write is
    * resumable across requests, so there is nothing for a replay to recognise: the `If-Match`
    * already makes a retry either land the same values or be told the version moved.
    */
   const operationId = newListOperationId();
+  const undo = undoOffer(operationId, now);
   const reversible = Object.keys(changed).length > 0;
 
   /** The prior value of every flag this patch moved, and nothing else. */
@@ -601,7 +611,7 @@ export async function patchListSettings(
   const undoFrom = (removedDefault?: RemovedListDefault): ListSettingsUndo => ({
     operationId,
     kind: 'settings',
-    tokenHash: sha256(undo.token),
+    tokenHash: hashUndoToken(undo.token),
     undoExpiresAt: undo.expiresAt,
     inverse: {
       ...(changed.capabilities === undefined ? {} : { capabilities: priorFlags }),
@@ -755,6 +765,74 @@ async function driveMigration(
   return response;
 }
 
+export interface UndoBehaviourUpgradeOptions {
+  readonly operationId: string;
+  readonly toBehaviour: ListBehaviour;
+  readonly toDetails?: ListItemDetails;
+  readonly expectedUpdatedAt: string;
+  readonly now: string;
+  /**
+   * The response receipt this compensation's own final transaction writes. Required, like the
+   * forward change's: the route is a mutating POST, so there is always one.
+   */
+  readonly receipt: IdempotencyReceipt;
+  /** The retained operation being spent, consumed by that same final transaction (P3-10). */
+  readonly consumesUndoOperationId: string;
+}
+
+/**
+ * Runs a behaviour-upgrade Undo through the migration that made it (§P3-09, §P3-10).
+ *
+ * "The same protocol handles confirmed destructive changes and behaviour-upgrade Undo, so
+ * neither direction can expose a META/item mismatch" — a compensation that flipped `META`
+ * back in one write would advertise `collection` over items still shaped for `watch`, which
+ * is the exact failure the three steps exist to prevent. So it installs a marker, rewrites the
+ * items under the gate and flips the behaviour last, like any other behaviour change.
+ *
+ * Two things make it a compensation rather than an ordinary downgrade. It carries **no
+ * `confirmDataLoss` question**, because the caller has already proved the defaults are
+ * untouched and there is nothing to lose; and it prepares **no Undo of its own**, because
+ * undoing an undo is a fresh decision the user makes with a fresh upgrade.
+ *
+ * The operation being spent is consumed by the **final transaction itself**, not afterwards.
+ * Consuming it in a second write left a crash window in which the list was already restored,
+ * the receipt made the replay a no-op, and the token stayed unspent — so once the list was
+ * upgraded again its preconditions were true once more and it could undo the new operation.
+ * Single-use is enforced by the write that uses it (P3-10).
+ */
+export async function undoBehaviourUpgrade(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  options: UndoBehaviourUpgradeOptions,
+): Promise<number> {
+  const migrationId = `bmg_undo_${options.operationId}`;
+  const list = await requireList(userId, listId, access);
+  /**
+   * Already where the inverse wanted it. The compensation still has to be spent, and the
+   * caller does that — this returns without installing a migration that would do nothing.
+   */
+  if (list.behaviour === options.toBehaviour) return 0;
+
+  const work = await beginBehaviourMigration(userId, listId, access, {
+    operationId: migrationId,
+    toBehaviour: options.toBehaviour,
+    ...(options.toDetails === undefined ? {} : { toDetails: options.toDetails }),
+    expectedUpdatedAt: options.expectedUpdatedAt,
+    now: options.now,
+    receipt: options.receipt,
+    consumesUndoOperationId: options.consumesUndoOperationId,
+    /**
+     * Nothing is being lost — the caller checked that every affected item still carries the
+     * default the upgrade created, which is what lets this run with no confirmation at all.
+     */
+    countLoss: () => 0,
+  });
+
+  if ((await drainFrom(work, options.now)) === undefined) throw fenced();
+  return work.entries.length;
+}
+
 /**
  * `POST /v1/lists/:id/behaviour` — the three-step migration, in both directions.
  *
@@ -857,7 +935,7 @@ export async function changeListBehaviour(
    * offered (§4.1) and gets none: the data it removed is gone, so a token would promise a
    * compensation the server cannot perform.
    */
-  const undo = previewed.itemCount > 0 ? undefined : undoOffer(now);
+  const undo = previewed.itemCount > 0 ? undefined : undoOffer(operationId, now);
   const optimistic: ListSettingsResult = {
     list: {
       ...list,

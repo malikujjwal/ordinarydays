@@ -4501,6 +4501,73 @@
           "undoExpiresAt"
         ]
       },
+      "ListUndoResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "applied"
+                ]
+              },
+              "affectedCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "outcome",
+              "affectedCount"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "expired"
+                ]
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "no_longer_applicable"
+                ]
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "UndoListOperationInput": {
+        "type": "object",
+        "properties": {
+          "undoToken": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "undoToken"
+        ],
+        "additionalProperties": false
+      },
       "ListTemplate": {
         "type": "object",
         "properties": {
@@ -7966,6 +8033,252 @@
           },
           "404": {
             "description": "No such list or item — and the answer a repeated delete gets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists/{id}/clear-checked": {
+      "post": {
+        "summary": "Delete every checked item, reversibly",
+        "description": "The end of a shopping trip. **No confirmation dialog** — the count is in the button the user tapped, they ticked each of those rows one at a time, and the 10-second undo window is the safety net. This is the single deliberate exception to the destructive-change rule, recorded in `00-open-decisions.md` item 33. Each deleted item leaves a replay-window tombstone holding its exact snapshot — the row, its rank, its current viewer links and the matching Activity provenance — under **one** single-use operation, however many transactions the delete needed. Valid only on a `collection` whose `checkable` capability is on — on any other list, including one whose stored flag a behaviour change left behind, it is `400`. The hidden retained checks such a list carries are exactly what these must not reach. Both answer `{ affectedCount, undoToken, undoExpiresAt }` with a **10-second** window, and `undoExpiresAt` is the client’s presentation deadline: stop offering a new Undo at that instant, while an inverse the user already accepted stays valid through the shared replay retention.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many were deleted, and the token that can put them back.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ReversibleItemMutation"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection, or a collection whose checkboxes are off — or a missing `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list, or none this caller has a pointer to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists/{id}/uncheck-all": {
+      "post": {
+        "summary": "Uncheck every checked item, reversibly",
+        "description": "The start of the next trip. Not destructive, so no dialog is in question — it still gets the canonical 10-second toast, because every bulk reversible action does. The operation records **exactly the ids it changed**, so compensation re-checks those and not whatever happens to be unchecked when it arrives; an item deleted during the window is simply skipped. Valid only on a `collection` whose `checkable` capability is on — on any other list, including one whose stored flag a behaviour change left behind, it is `400`. The hidden retained checks such a list carries are exactly what these must not reach. Both answer `{ affectedCount, undoToken, undoExpiresAt }` with a **10-second** window, and `undoExpiresAt` is the client’s presentation deadline: stop offering a new Undo at that instant, while an inverse the user already accepted stays valid through the shared replay retention.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many were unchecked, and the token that re-checks them.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ReversibleItemMutation"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection, or a collection whose checkboxes are off — or a missing `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list, or none this caller has a pointer to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists/{id}/undo": {
+      "post": {
+        "summary": "Apply one recorded compensation",
+        "description": "Takes the opaque token a reversible operation returned and applies the inverse **the server recorded** — clients never send deleted row contents back as authority. It is the only route allowed to reclaim an item id protected by a tombstone, and it earns that by naming the operation: every tombstone it removes must carry the same operation id, so one delete’s token can never reclaim another’s ids. Restored items come back with their original ids, their **previous ranks**, their still-live viewer links and the matching Activity provenance; a link whose Activity was deleted or repointed meanwhile is omitted rather than restored dead. Requires its own `Idempotency-Key`. `undoExpiresAt` is **not** consulted here: it governs whether a client may offer a new Undo, never whether an accepted inverse may run, so an inverse replayed after that deadline still applies for as long as the shared retention lasts. Answers `200` with a discriminated outcome — `applied` with its count, `expired` for a token that names nothing or has passed retention, `no_longer_applicable` for one already used or whose recorded preconditions have since moved. The last two write nothing, and none of the three is an error.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UndoListOperationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What happened to the compensation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ListUndoResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A body carrying anything but the token, or a missing `Idempotency-Key`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list, or none this caller has a pointer to.",
             "content": {
               "application/json": {
                 "schema": {

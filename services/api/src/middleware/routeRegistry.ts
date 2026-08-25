@@ -181,6 +181,19 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
   { method: 'GET', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
   { method: 'PATCH', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
   { method: 'DELETE', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
+  {
+    method: 'POST',
+    pattern: '/v1/lists/:id/clear-checked',
+    auth: 'authenticated',
+    mutates: true,
+  },
+  {
+    method: 'POST',
+    pattern: '/v1/lists/:id/uncheck-all',
+    auth: 'authenticated',
+    mutates: true,
+  },
+  { method: 'POST', pattern: '/v1/lists/:id/undo', auth: 'authenticated', mutates: true },
   { method: 'GET', pattern: '/v1/list-templates', auth: 'authenticated' },
 
   /**

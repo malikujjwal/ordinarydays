@@ -682,9 +682,9 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 | `DELETE` | `/v1/lists/:id/items/:itemId` | Removes the ranked row and identity locator, leaves the replay-window item tombstone, and returns an opaque token for the 6-second Undo window. |
 | `POST` | `/v1/lists/:id/items/:itemId/schedule` | **The optional bridge to Activities.** Body = `ScheduleListItemInput` below. Creates an explicit Plan and the permitted per-viewer link pointers; the ListItem itself is not replaced or given a global Activity id. A Watch Plan's explicitly enabled second-object action may create the item first and then call this endpoint with the reviewed Plan fields; the endpoint still requires type and audience and infers neither from the item. |
 | `POST` | `/v1/activities/:id/ingredients/add-to-list` | `{ listId, ingredients: [{ ingredientId, itemId? }] }`. Owner-only meal action. Every stored meal ingredient has a stable client-minted `ing_<ULID>` retained across edits/reorders. The server resolves the selected current ids and explicit writable collection destination, derives item titles/provenance, writes/deduplicates them, and records each source ingredient's `addedToListId` idempotently. A missing/replaced id rejects the whole action; array position is never source identity. |
-| `POST` | `/v1/lists/:id/clear-checked` | Only when `behaviour === 'collection' && capabilities.checkable`. Deletes immediately and returns an opaque token for the 10-second bulk Undo window. |
-| `POST` | `/v1/lists/:id/uncheck-all` | Only when `behaviour === 'collection' && capabilities.checkable`. Sets every currently checked item to unchecked and returns an opaque token for the 10-second bulk Undo window. |
-| `POST` | `/v1/lists/:id/undo` | `{ undoToken }`. Applies the server-recorded compensation for one retained, unused single-delete, `clear-checked`, `uncheck-all`, archive, or additive settings operation. It is the only route allowed to reclaim an item id protected by `ITEM_TOMBSTONE#`; settings compensation applies only while its recorded preconditions remain true. |
+| `POST` | `/v1/lists/:id/clear-checked` | Only when `behaviour === 'collection' && capabilities.checkable`; anything else is `validation_failed`, so the hidden `checked` values a behaviour change retained cannot be reached. Deletes immediately, with **no confirmation dialog** — the single deliberate exception to `../01-product/interaction-contract.md` §1a.1, recorded in `../00-open-decisions.md` item 33 — and returns an opaque token for the 10-second bulk Undo window. Each deleted item leaves a tombstone holding its exact snapshot under **one** operation, however many transactions the delete needs. |
+| `POST` | `/v1/lists/:id/uncheck-all` | Only when `behaviour === 'collection' && capabilities.checkable`, on the same terms. Sets every currently checked item to unchecked, records **exactly the ids it changed**, and returns an opaque token for the 10-second bulk Undo window. Compensation re-checks the surviving members of that set and skips one deleted meanwhile. |
+| `POST` | `/v1/lists/:id/undo` | `{ undoToken }`, strictly — a client never sends deleted row contents back as authority. Requires its own `Idempotency-Key`. Applies the server-recorded compensation for one retained, unused single-delete, `clear-checked`, `uncheck-all`, archive, or additive settings operation. It is the only route allowed to reclaim an item id protected by `ITEM_TOMBSTONE#`; settings compensation applies only while its recorded preconditions remain true. Answers the `ListUndoResult` union below. |
 | `GET` | `/v1/list-templates` | The exact shared template catalogue. Static and cacheable for 24 h. The mobile creation chooser bundles a projection of the same shared module so first-launch offline does not depend on this request; no client owns a second map of labels or defaults. |
 | `GET` | `/v1/lists/:id/members` | The first response row is the owner, synthesised from `List.ownerId`, the owner's `ListIndex` pointer and profile; there is no owner `MEMBER#` row. The owner then receives every non-owner active and invited row. A member receives the synthesised owner and active non-owner roster only; pending identities and addresses are removed server-side. |
 | `POST` | `/v1/lists/:id/members` | `{ personId }` or `{ displayName, email }`. Owner only and always an explicit confirmation. A registered add is active immediately and creates/reuses reciprocal owner-scoped People records plus active `LLINK#` rows on both sides. If the email belongs to no account, it creates an invited member and owner-side invited `LLINK#`, sends email, and writes no recipient pointer. Invited members count toward `memberCount` and the cap of 20 people total, including the owner, but not `sharedListCount`. |
@@ -724,8 +724,33 @@ deleted row contents back as authority. Once the user accepts Undo while it is o
 inverse requires its own `Idempotency-Key`, is replay-safe, and may arrive after
 `undoExpiresAt`. The single-use token remains server-valid through
 `MAX_AUTOMATIC_INTENT_AGE_DAYS`, matching the durable outbox and tombstone retention, so an
-accepted offline inverse cannot expire in transit. The route returns `{ affectedCount }`;
-mismatched, consumed, or retention-expired tokens write nothing.
+accepted offline inverse cannot expire in transit.
+
+**What the route returns — amended in P3-10.** This paragraph previously said the route
+"returns `{ affectedCount }`" while the same section said a mismatched, consumed or
+retention-expired token "returns the typed expired/no-longer-applicable result and writes
+nothing". A bare count cannot express the second, and neither case is a failed request, so
+neither earns an `ErrorCode`. It answers `200` with one **discriminated union**, defined once
+as `ListUndoResult` in `packages/shared/src/schemas/list.ts` and mapped by the client in
+P3-24:
+
+```ts
+{ outcome: 'applied'; affectedCount: number }
+| { outcome: 'expired' }
+| { outcome: 'no_longer_applicable' }
+```
+
+- `applied` — the inverse ran. `affectedCount` is what it touched: items restored, items
+  re-checked, or `1` for a settings or archive inverse.
+- `expired` — the token names no operation, its hash does not match, or the operation is past
+  its replay retention. The three are **deliberately indistinguishable**: telling a caller
+  their token is well-formed but stale would tell them something about an operation they may
+  not own.
+- `no_longer_applicable` — the operation is retained and correctly addressed, but has already
+  been used, or a settings inverse's recorded preconditions no longer hold.
+
+The last two write nothing. `undoExpiresAt` is **never** consulted by this route: it governs
+whether a client may offer a new Undo, never whether an accepted inverse may run.
 
 A metadata-free collision is reconciled by the authenticated exact read: `200` means the
 earlier response was lost and the server representation wins wholesale; `404` is ambiguous

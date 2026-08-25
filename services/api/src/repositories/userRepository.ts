@@ -157,6 +157,38 @@ export async function patchProfile(
  * chosen concurrently on another device fails this item rather than being silently removed,
  * and the caller retries its transaction without it.
  */
+/**
+ * The mirror of {@link removeDefaultListTransactItem}: puts one slot back, and only while it
+ * is still empty (P3-10, `api-contract.md` §2.7).
+ *
+ * A slot inverse restores "the exact `defaultLists[oldSlot]` entry removed by the forward
+ * change ... only if the slot is still absent there; a newer destination choice makes the
+ * whole inverse no longer applicable". The condition is what says that — this item failing
+ * cancels the transaction it is part of, so the Undo writes nothing rather than overwriting
+ * a choice the user has made since.
+ *
+ * A **nested** `SET` through a document path, never a whole-map write, so the sibling slots
+ * survive whatever is happening to them. When the parent map is absent — a profile that has
+ * never had a default — the document path cannot be written, so the caller's inverse fails
+ * cleanly instead of inventing a map that a concurrent creator would then lose.
+ */
+export function restoreDefaultListTransactItem(
+  userId: string,
+  slot: DefaultSlot,
+  listId: string,
+): TransactItem {
+  return {
+    Update: {
+      Key: userProfile(userId),
+      UpdateExpression: 'SET #defaultLists.#slot = :listId',
+      ConditionExpression:
+        'attribute_exists(pk) AND attribute_not_exists(#defaultLists.#slot)',
+      ExpressionAttributeNames: { '#defaultLists': 'defaultLists', '#slot': slot },
+      ExpressionAttributeValues: { ':listId': listId },
+    },
+  };
+}
+
 export function removeDefaultListTransactItem(
   userId: string,
   slot: DefaultSlot,
