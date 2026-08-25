@@ -528,6 +528,38 @@ describe('replay adds nothing twice', () => {
    * After the receipt expires the request runs again for real, and replay protection falls to
    * the stable `itm_` ids the client minted — the same trade `createItemsBulk` documents.
    */
+  /**
+   * Two genuinely concurrent requests under one key. Both the middleware's in-flight marker
+   * and the receipt's conditional put inside the transaction guard this, and the required
+   * client-minted `itemId` guards it a third time — so the assertion worth making is about
+   * storage: one row per ingredient, and one answer.
+   */
+  it('creates each item once when the same key arrives twice at the same moment', async () => {
+    const { list } = await setUp();
+    const key = crypto.randomUUID();
+
+    const [first, second] = await Promise.all([
+      addToList(list.listId, [CHICKEN, TOMATOES], { 'Idempotency-Key': key }),
+      addToList(list.listId, [CHICKEN, TOMATOES], { 'Idempotency-Key': key }),
+    ]);
+
+    const rows = await itemRows(list.listId);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.title).sort()).toEqual(['Chicken', 'Tomatoes']);
+
+    // One of the two may lose the race and be answered from the winner's receipt; whichever
+    // way it fell, neither is an error and both describe the same write.
+    for (const response of [first, second]) expect(response.status).toBe(201);
+    expect(await first.json()).toEqual(await second.json());
+
+    // And the meal agrees with the list, once.
+    const byId = new Map(
+      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
+    );
+    expect(byId.get(CHICKEN)).toBe(list.listId);
+    expect(byId.get(TOMATOES)).toBe(list.listId);
+  });
+
   it('creates no duplicate under a new key, because the item ids are the same', async () => {
     const { list } = await setUp();
 
