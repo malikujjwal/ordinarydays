@@ -363,7 +363,9 @@ async function watchFollowUp(
  *
  * Pure, and the only place the choice is made. `mediaKind` selects: a movie's follow-up is
  * the `watched` transition and a movie has no episode to advance to, while everything else
- * offers the session's own season and episode.
+ * offers the session's own season and episode. Each arm carries the `mediaKind` that chose
+ * it, so the schema refuses a row whose kind and media disagree rather than trusting this
+ * function to be the only producer.
  *
  * **An item with no `mediaKind` takes the progress branch, and is not guessed at.** P3-09's
  * back-fill writes `watchStatus: 'want'` and nothing else, so a `collection` upgraded to
@@ -390,7 +392,6 @@ function suggestionFor(
     listId: list.listId,
     listTitle: list.title,
     itemId: item.itemId,
-    ...(progress.mediaKind === undefined ? {} : { mediaKind: progress.mediaKind }),
     current: {
       watchStatus: progress.watchStatus,
       ...(progress.season === undefined ? {} : { season: progress.season }),
@@ -398,18 +399,36 @@ function suggestionFor(
     },
   };
 
-  if (progress.mediaKind === 'movie') {
-    return { kind: 'watch_watched', ...shared, target: { watchStatus: 'watched' } };
+  const mediaKind = progress.mediaKind;
+  if (mediaKind === 'movie') {
+    return {
+      kind: 'watch_watched',
+      ...shared,
+      mediaKind,
+      target: { watchStatus: 'watched' },
+    };
   }
-  if (session.season === undefined && session.episode === undefined) return undefined;
-  return {
+
+  /**
+   * Two returns rather than one built by spreading, because the target is a union of
+   * "season, optionally with an episode" and "episode alone" — and writing it as two
+   * optionals spread together is exactly how the empty target became expressible. Each
+   * branch here produces one arm of that union, and neither can produce nothing.
+   */
+  const named = {
     kind: 'watch_progress',
     ...shared,
-    target: {
-      ...(session.season === undefined ? {} : { season: session.season }),
-      ...(session.episode === undefined ? {} : { episode: session.episode }),
-    },
-  };
+    ...(mediaKind === undefined ? {} : { mediaKind }),
+  } as const;
+  const { season, episode } = session;
+  if (season !== undefined) {
+    return {
+      ...named,
+      target: { season, ...(episode === undefined ? {} : { episode }) },
+    };
+  }
+  if (episode !== undefined) return { ...named, target: { episode } };
+  return undefined;
 }
 
 /**

@@ -658,6 +658,21 @@ describe('the completion follow-up', () => {
   });
 
   it.each([
+    ['a season alone', { season: 3 }],
+    ['an episode alone', { episode: 7 }],
+    ['both', { season: 3, episode: 7 }],
+  ])('accepts a progress target naming %s', (_why, target) => {
+    expect(
+      completionFollowUp.safeParse({
+        kind: 'watch_progress',
+        ...shared,
+        mediaKind: 'show',
+        target,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
     [
       'a show reaching for the watched transition',
       { kind: 'watch_progress', ...shared, target: { watchStatus: 'watched' } },
@@ -682,6 +697,56 @@ describe('the completion follow-up', () => {
         activityId: 'act_01J0000000000000000000000C',
         target: { episode: 5 },
       },
+    ],
+  ])('rejects %s', (_why, value) => {
+    expect(completionFollowUp.safeParse(value).success).toBe(false);
+  });
+
+  /**
+   * **An empty target is not a weaker question — it is no question.** `Update to ?` renders
+   * nothing, and a client building the confirming `PATCH` from `{}` would send a `details`
+   * body that changes only `watchStatus`, turning the progress row into a status write
+   * nobody asked for (`plans-and-lists.md` §8.4 step 2).
+   */
+  it('rejects a progress target naming neither a season nor an episode', () => {
+    expect(
+      completionFollowUp.safeParse({
+        kind: 'watch_progress',
+        ...shared,
+        mediaKind: 'show',
+        target: {},
+      }).success,
+    ).toBe(false);
+  });
+
+  /**
+   * `mediaKind` is what **chooses** the arm, so these are the rows the two arms exist to
+   * make unrepresentable. Each carries a target its own arm accepts, so the only thing
+   * failing is the media/kind disagreement — a target-shaped rejection would pass whether or
+   * not the coupling held.
+   */
+  it.each([
+    [
+      'a progress row claiming the item is a movie',
+      {
+        kind: 'watch_progress',
+        ...shared,
+        mediaKind: 'movie',
+        target: { season: 2, episode: 5 },
+      },
+    ],
+    [
+      'a watched row claiming the item is a show',
+      {
+        kind: 'watch_watched',
+        ...shared,
+        mediaKind: 'show',
+        target: { watchStatus: 'watched' },
+      },
+    ],
+    [
+      'a watched row that never says the item is a movie',
+      { kind: 'watch_watched', ...shared, target: { watchStatus: 'watched' } },
     ],
   ])('rejects %s', (_why, value) => {
     expect(completionFollowUp.safeParse(value).success).toBe(false);

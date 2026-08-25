@@ -1,3 +1,4 @@
+import { completionFollowUp } from '@od/shared/schemas';
 import type {
   Activity,
   ActivityDetails,
@@ -275,6 +276,44 @@ describe('what the follow-up says', () => {
 
     expect(result.followUp).toMatchObject({ target: { season: 2, episode: 4 } });
   });
+
+  /**
+   * The API never parses its own response, so nothing else in the running system would notice
+   * this service emitting a shape the published contract refuses — and the two rows the
+   * schema's arms exist to forbid are `watch_progress` with `mediaKind: 'movie'` and a target
+   * naming neither season nor episode, both of which are decisions made in this function.
+   * Every producing path is therefore round-tripped through the contract itself.
+   */
+  it.each([
+    ['a show', progress(), watchSession()],
+    ['a movie', progress({ mediaKind: 'movie' }), watchSession()],
+    [
+      'an item with no media kind',
+      { behaviour: 'watch', watchStatus: 'want' } as ListItemDetails,
+      watchSession(),
+    ],
+    [
+      'a season with no episode',
+      progress(),
+      { kind: 'watch', mediaTitle: 'Severance', season: 2 } as ActivityDetails,
+    ],
+    [
+      'an episode with no season',
+      progress(),
+      { kind: 'watch', mediaTitle: 'Severance', episode: 5 } as ActivityDetails,
+    ],
+  ])(
+    'emits a follow-up the shared schema accepts for %s',
+    async (_why, item_, details) => {
+      source({ item: item(item_) });
+
+      const result = await complete(session({ details }));
+
+      expect(completionFollowUp.safeParse(result.followUp)).toMatchObject({
+        success: true,
+      });
+    },
+  );
 
   /**
    * The response body is frozen for replay before the transaction commits, so a follow-up

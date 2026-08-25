@@ -3558,13 +3558,6 @@
                 "type": "string",
                 "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               },
-              "mediaKind": {
-                "type": "string",
-                "enum": [
-                  "movie",
-                  "show"
-                ]
-              },
               "current": {
                 "type": "object",
                 "properties": {
@@ -3592,21 +3585,53 @@
                 ],
                 "additionalProperties": false
               },
+              "mediaKind": {
+                "type": "string",
+                "enum": [
+                  "show"
+                ]
+              },
               "target": {
-                "type": "object",
-                "properties": {
-                  "season": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 1000
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "season": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1000
+                      },
+                      "episode": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000
+                      }
+                    },
+                    "required": [
+                      "season"
+                    ],
+                    "additionalProperties": false
                   },
-                  "episode": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 10000
+                  {
+                    "type": "object",
+                    "properties": {
+                      "season": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1000
+                      },
+                      "episode": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 10000
+                      }
+                    },
+                    "required": [
+                      "episode"
+                    ],
+                    "additionalProperties": false
                   }
-                },
-                "additionalProperties": false
+                ]
               }
             },
             "required": [
@@ -3641,13 +3666,6 @@
                 "type": "string",
                 "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               },
-              "mediaKind": {
-                "type": "string",
-                "enum": [
-                  "movie",
-                  "show"
-                ]
-              },
               "current": {
                 "type": "object",
                 "properties": {
@@ -3675,6 +3693,12 @@
                 ],
                 "additionalProperties": false
               },
+              "mediaKind": {
+                "type": "string",
+                "enum": [
+                  "movie"
+                ]
+              },
               "target": {
                 "type": "object",
                 "properties": {
@@ -3697,6 +3721,7 @@
               "listTitle",
               "itemId",
               "current",
+              "mediaKind",
               "target"
             ],
             "additionalProperties": false

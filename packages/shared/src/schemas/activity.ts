@@ -553,18 +553,17 @@ export const skipActivityInput = z
  * `current.watchStatus` are needed to preserve one and to apply `want → watching` to the
  * other.
  *
- * `mediaKind` is carried **verbatim, and stays optional**, because the item's own field is.
- * A `collection` upgraded to `watch` back-fills `watchStatus: 'want'` and nothing else
- * (P3-09), so a great many real items have no `mediaKind` — and inventing one from the
- * presence of an episode number would be the server deciding what kind of thing this is,
- * which `CLAUDE.md` rule 2 forbids. `kind` already tells the client which copy to render.
+ * **`mediaKind` is deliberately not here.** It is the field that *chooses* the arm, so
+ * sharing it would let the two disagree: a `watch_progress` claiming `movie`, or a
+ * `watch_watched` claiming `show` — the manual-only transition offered on something whose
+ * ending the app cannot know (`plans-and-lists.md` §8.1). Each arm states its own, which is
+ * the whole reason there are two.
  */
 const watchFollowUpItem = {
   listId: ulidId('lst'),
   /** The list's current title, because the copy names it: `Update {list name} item to…`. */
   listTitle: title,
   itemId: ulidId('itm'),
-  mediaKind: watchMediaKind.optional(),
   /** Where the item is now — the `currently S2 E4` half of the question. */
   current: z.strictObject({
     watchStatus,
@@ -572,6 +571,24 @@ const watchFollowUpItem = {
     episode: watchEpisode.optional(),
   }),
 } as const;
+
+/**
+ * The session's own progress, and **at least one of the two**.
+ *
+ * A union of the two shapes rather than a pair of optionals with a refinement, because an
+ * empty target is not a weaker version of this question — it is not a question at all.
+ * `Update to ?` renders nothing a user can answer, and a client building the confirming
+ * `PATCH` from `{}` sends a `details` body that changes only `watchStatus`, quietly turning
+ * the progress row into a status write nobody asked for. The service already declines to
+ * emit one; this is what stops the contract from describing it as legal (P3-43).
+ *
+ * Read as: season with an optional episode, or an episode on its own. `{ season, episode }`,
+ * `{ season }` and `{ episode }` all pass; `{}` matches neither arm.
+ */
+const watchProgressTarget = z.union([
+  z.strictObject({ season: watchSeason, episode: watchEpisode.optional() }),
+  z.strictObject({ season: watchSeason.optional(), episode: watchEpisode }),
+]);
 
 /**
  * The **one** contextual follow-up a completion may offer (P3-16, for P3-24 and P3-43).
@@ -602,8 +619,12 @@ const watchFollowUpItem = {
  * `… currently S2 E4 — Update to S2 E5?` advances progress, and
  * `Update {list name} item to Watched?` moves a movie's status. A show has no `watched`
  * target — the app does not know how many episodes there are, so that transition is manual
- * only (`plans-and-lists.md` §8.1) — and a movie has no episode to advance to. Two arms make
- * each `target` exactly the fields its own row writes.
+ * only (`plans-and-lists.md` §8.1) — and a movie has no episode to advance to.
+ *
+ * So each arm pins **both halves of its own row**: its `mediaKind` and its `target`. Pinning
+ * only the target would leave `kind` and `mediaKind` free to contradict each other, and the
+ * contradiction is the exact mistake the two arms exist to prevent — a `show` offered the
+ * manual-only watched transition, or a `movie` handed an episode to advance to.
  *
  * A `watch_progress` target may repeat the item's current values: that is a **rewatch**, and
  * §8.4 names it as a case the user answers by dismissing. The server does not decide the
@@ -616,19 +637,23 @@ export const completionFollowUp = z
       kind: z.literal('watch_progress'),
       ...watchFollowUpItem,
       /**
-       * The completed session's own progress, which is where §8.4's `Update to S2 E5?`
-       * comes from. At least one of the two is present — a target naming neither is not a
-       * question, and no follow-up is offered instead.
+       * `show`, or absent — never `movie`, which takes the other arm by construction.
+       *
+       * Optional because the item's own field is, and P3-09's back-fill leaves a whole
+       * upgraded `collection` without one (§8.4's decision). What the arm offers is the
+       * season and episode the user typed on this session, which is not an opinion about
+       * what kind of thing the item is (`CLAUDE.md` rule 2).
        */
-      target: z.strictObject({
-        season: watchSeason.optional(),
-        episode: watchEpisode.optional(),
-      }),
+      mediaKind: z.literal('show').optional(),
+      /** Where §8.4's `Update to S2 E5?` comes from. Never empty — see the union above. */
+      target: watchProgressTarget,
     }),
     /** The movie row: offer the one transition a completed movie session evidences. */
     z.strictObject({
       kind: z.literal('watch_watched'),
       ...watchFollowUpItem,
+      /** Required, and only this: the row exists *because* the item says it is a movie. */
+      mediaKind: z.literal('movie'),
       target: z.strictObject({ watchStatus: z.literal('watched') }),
     }),
   ])
