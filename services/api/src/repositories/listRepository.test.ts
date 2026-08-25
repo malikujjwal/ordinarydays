@@ -899,6 +899,121 @@ describe('fenced reads', () => {
   });
 });
 
+/**
+ * The completion follow-up's source read (P3-16, access pattern 8f).
+ *
+ * One fence around three keyed reads. What matters is that the fence really is one — a
+ * pointer read under one `rankVersion` and an item under the next is exactly the mixed
+ * generation the fence exists to refuse — and that a list which is no longer a `watch` list
+ * answers `undefined` before either of them is issued.
+ */
+describe('the watch follow-up source', () => {
+  const watchList = () => list({ behaviour: 'watch', title: 'Movies and shows' });
+  const watched = () =>
+    item({
+      details: { behaviour: 'watch', mediaKind: 'show', watchStatus: 'want', episode: 4 },
+    });
+
+  const mockSource = (
+    options: { meta?: List; link?: Record<string, unknown> | undefined } = {},
+  ) => {
+    const value = watched();
+    const meta = options.meta ?? watchList();
+    const linkRow = 'link' in options ? options.link : viewerLinkRow();
+    vi.mocked(base.getItem).mockImplementation(async (key) => {
+      if (key.sk === keys.listMeta(LIST_ID).sk) return listRow(meta);
+      if (key.sk === keys.listItemActivityLink(LIST_ID, ALICE, ITEM_A).sk) {
+        return linkRow;
+      }
+      if (key.sk === keys.listItemLocator(LIST_ID, ITEM_A).sk) return locatorRow(value);
+      if (key.sk === keys.listItem(LIST_ID, value.rank, ITEM_A).sk) return itemRow(value);
+      return undefined;
+    });
+  };
+
+  it('returns the list, the caller’s own pointer and the exact item', async () => {
+    mockSource();
+
+    await expect(
+      repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A),
+    ).resolves.toEqual({ list: watchList(), link: viewerLink(), item: watched() });
+  });
+
+  it.each([
+    ['the list is no longer a watch list', { meta: list() }],
+    ['the caller has no pointer to the item', { link: undefined }],
+  ])('answers undefined when %s', async (_why, options) => {
+    mockSource(options);
+
+    await expect(
+      repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A),
+    ).resolves.toBeUndefined();
+  });
+
+  it('never reads the pointer or the item for a list of another behaviour', async () => {
+    mockSource({ meta: list() });
+
+    await repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A);
+
+    const read = vi.mocked(base.getItem).mock.calls.map(([key]) => key.sk);
+    expect(read).not.toContain(keys.listItemActivityLink(LIST_ID, ALICE, ITEM_A).sk);
+    expect(read).not.toContain(keys.listItemLocator(LIST_ID, ITEM_A).sk);
+  });
+
+  it('answers undefined when the item is gone', async () => {
+    mockSource();
+    const inner = vi.mocked(base.getItem).getMockImplementation();
+    vi.mocked(base.getItem).mockImplementation(async (key, options) =>
+      key.sk === keys.listItemLocator(LIST_ID, ITEM_A).sk
+        ? undefined
+        : inner?.(key, options),
+    );
+
+    await expect(
+      repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A),
+    ).resolves.toBeUndefined();
+  });
+
+  it('refuses a read whose fence moved underneath it', async () => {
+    mockSource();
+    const inner = vi.mocked(base.getItem).getMockImplementation();
+    let metaReads = 0;
+    vi.mocked(base.getItem).mockImplementation(async (key, options) => {
+      if (key.sk !== keys.listMeta(LIST_ID).sk) return inner?.(key, options);
+      metaReads += 1;
+      return listRow(metaReads === 1 ? watchList() : { ...watchList(), rankVersion: 1 });
+    });
+
+    await expect(
+      repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A),
+    ).rejects.toBeInstanceOf(repository.ListReadFenceError);
+  });
+
+  /** A migration is removing these very fields; describing them would offer to restore them. */
+  it('refuses a read taken across a behaviour migration', async () => {
+    mockSource({
+      meta: { ...watchList(), behaviourMigrationId: 'op_01J8XKQ2M4N5P6R7S8T9V0W1B1' },
+    });
+
+    await expect(
+      repository.readWatchFollowUpSource(ALICE, LIST_ID, access, ITEM_A),
+    ).rejects.toBeInstanceOf(repository.ListReadFenceError);
+  });
+
+  it('refuses a caller whose grant is for another list', async () => {
+    mockSource();
+
+    await expect(
+      repository.readWatchFollowUpSource(
+        ALICE,
+        'lst_01J8XKQ2M4N5P6R7S8T9V0W1B2',
+        access,
+        ITEM_A,
+      ),
+    ).rejects.toBeInstanceOf(repository.ListNotFoundError);
+  });
+});
+
 describe('rank allocation and item mutations', () => {
   it('creates one item and an ordered bulk chunk under one META advance', async () => {
     mockLiveList();
