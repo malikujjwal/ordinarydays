@@ -33,6 +33,8 @@ import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
 import {
+  addIngredientsToListInput,
+  addIngredientsToListResult,
   bulkCreateListItemsInput,
   changeListBehaviourInput,
   changeListBehaviourQuery,
@@ -71,6 +73,7 @@ const activityResponse = envelope(activity);
 const activityDetailResponse = envelope(activityDetail);
 const scheduleActivityResponse = envelope(scheduleActivityResult);
 const activityCompletionResponse = envelope(activityCompletionResult);
+const addIngredientsToListResponse = envelope(addIngredientsToListResult);
 const deletedActivityResponse = envelope(deletedActivity);
 const reminderResponse = envelope(reminder);
 const reminderListResponse = envelope(z.array(reminder));
@@ -637,6 +640,45 @@ registry.registerPath({
     },
     404: {
       description: 'No such activity, or none this caller has any relationship to.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/ingredients/add-to-list',
+  summary: 'Send selected meal ingredients to a list the caller has chosen',
+  description:
+    'Requires an `Idempotency-Key`. Owner-only, and only on a `meal`. `listId` is required ' +
+    'and must be a `collection` the caller may write: the destination is resolved on the ' +
+    'client, from the `groceries` slot, and shown to the user before this is called — the ' +
+    'server never resolves a slot and never falls back to one. Each selected ingredient is ' +
+    'named by its stable `ing_` id and resolved against the current ingredient array, so a ' +
+    'reorder cannot redirect the action; an id that was removed or replaced rejects the ' +
+    'whole request without writing anything. Titles, `sourceActivityId` and `sourceLabel` ' +
+    'are derived server-side and are not accepted on input here or on the ordinary bulk ' +
+    'route. An ingredient whose title already exists **unchecked** on the list extends that ' +
+    "row's label instead of creating a second one; a **checked** match creates a new row.",
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: addIngredientsToListInput } } },
+  },
+  responses: {
+    201: {
+      description:
+        'What happened to each selected ingredient, and the one label the operation used.',
+      content: { 'application/json': { schema: addIngredientsToListResponse } },
+    },
+    400: {
+      description:
+        'Missing idempotency key, a non-meal activity, a destination that is not a ' +
+        'writable collection, or an ingredient id the meal no longer has.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity or list, or no relationship to either.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

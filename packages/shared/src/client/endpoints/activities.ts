@@ -14,6 +14,10 @@ import {
   type UncompleteActivityInput,
 } from '../../schemas/activity.js';
 import { envelope } from '../../schemas/envelope.js';
+import {
+  type AddIngredientsToListInput,
+  addIngredientsToListResult,
+} from '../../schemas/list.js';
 import type {
   SnoozeActivityInput,
   UnsnoozeActivityInput,
@@ -47,6 +51,7 @@ import { ApiError, type HttpClient } from '../http.js';
 export const activityResponse = envelope(activity);
 export const activityDetailResponse = envelope(activityDetail);
 export const activityCompletionResponse = envelope(activityCompletionResult);
+const addIngredientsToListResponse = envelope(addIngredientsToListResult);
 export const deletedActivityResponse = envelope(deletedActivity);
 export const scheduleActivityResponse = envelope(scheduleActivityResult);
 export const reminderResponse = envelope(reminder);
@@ -415,6 +420,31 @@ export function duplicateActivity(
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as Activity);
+}
+
+/**
+ * Sends selected meal ingredients to a list the caller has already chosen (P3-17).
+ *
+ * `listId` is required and comes from the destination the user confirmed — the slot is
+ * resolved client-side, before this is called, and never here.
+ */
+export function addIngredientsToList(
+  client: HttpClient,
+  activityId: string,
+  input: AddIngredientsToListInput,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<z.infer<typeof addIngredientsToListResult>> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/activities/${activityId}/ingredients/add-to-list`,
+      schema: addIngredientsToListResponse,
+      body: input,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
 }
 
 /** Completes an activity or one recurring occurrence. Retries replay byte-for-byte. */

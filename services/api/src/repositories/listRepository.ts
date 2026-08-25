@@ -1862,6 +1862,106 @@ export async function reorderListItem(
   });
 }
 
+/**
+ * Appends one segment to an existing item's `sourceLabel` (P3-17, `plans-and-lists.md` §7.3
+ * step 6).
+ *
+ * ## Why this is not a `ListItemFieldPatch`
+ *
+ * `sourceLabel` is server-owned: {@link ListItemFieldPatch} is what a client `PATCH` reaches,
+ * and every field on it is one a client may author. Adding `sourceLabel` there to save a
+ * function would put provenance one request away from being fabricated, which is the one
+ * thing §6.5 rests on. So this is its own narrow write, reachable only from the add-to-list
+ * action, and it appends rather than sets — the caller may not replace a label through it
+ * either.
+ *
+ * ## The two conditions
+ *
+ * `itemRevision` is the ordinary optimistic fence, and it does the interesting work here:
+ * the service classified this row as *unchecked* a moment ago, and the whole reason it is
+ * being extended rather than duplicated is that classification. A row checked in between must
+ * not be quietly extended — §7.3 says a checked row gets a **new** item, because the previous
+ * one was already bought. The revision moves when `checked` does, so the fence catches it and
+ * the conflict surfaces as the retryable `503` the client repeats from a fresh read.
+ *
+ * `GATES_ABSENT` on META keeps it off a list mid-repair or mid-migration, like every other
+ * item write.
+ */
+export async function extendItemSourceLabel(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  item: ListItem,
+  segment: string,
+  now: string,
+): Promise<ListItem> {
+  assertListAccessGrant(userId, listId, access);
+  const sourceLabel =
+    item.sourceLabel === undefined || item.sourceLabel === ''
+      ? segment
+      : `${item.sourceLabel} · ${segment}`;
+  const next: ListItem = {
+    ...item,
+    sourceLabel,
+    itemRevision: item.itemRevision + 1,
+  };
+
+  const builder = new TransactionBuilder('extendItemSourceLabel').add(
+    listDeletionGate(listId),
+    {
+      Update: {
+        Key: listItemKey(listId, item.rank, item.itemId),
+        UpdateExpression:
+          'SET #sourceLabel = :sourceLabel, #itemRevision = :nextRevision, #updatedAt = :updatedAt',
+        ConditionExpression: '#itemRevision = :expectedRevision',
+        ExpressionAttributeNames: {
+          '#sourceLabel': 'sourceLabel',
+          '#itemRevision': 'itemRevision',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':sourceLabel': sourceLabel,
+          ':expectedRevision': item.itemRevision,
+          ':nextRevision': next.itemRevision,
+          ':updatedAt': now,
+        },
+      },
+    },
+    {
+      Update: {
+        Key: listItemLocator(listId, item.itemId),
+        UpdateExpression: 'SET #itemRevision = :nextRevision, #updatedAt = :updatedAt',
+        ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
+        ExpressionAttributeNames: {
+          '#rank': 'rank',
+          '#itemRevision': 'itemRevision',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':rank': item.rank,
+          ':expectedRevision': item.itemRevision,
+          ':nextRevision': next.itemRevision,
+          ':updatedAt': now,
+        },
+      },
+    },
+    {
+      ConditionCheck: {
+        Key: listMeta(listId),
+        ConditionExpression: GATES_ABSENT,
+        ExpressionAttributeNames: GATE_NAMES,
+      },
+    },
+  );
+
+  await transactWrite(builder.build(), {
+    operation: 'extendItemSourceLabel',
+    onConditionFailed: (index) =>
+      index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
+  });
+  return next;
+}
+
 export interface ListItemFieldPatch {
   readonly title?: string;
   readonly checked?: boolean;

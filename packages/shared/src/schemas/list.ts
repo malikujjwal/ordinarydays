@@ -814,3 +814,88 @@ export const scheduledListItem = z
     viewerLink: listItemActivityLink,
   })
   .meta({ id: 'ScheduledListItem' });
+
+/**
+ * `POST /v1/activities/:id/ingredients/add-to-list` (P3-17, `plans-and-lists.md` §7.3).
+ *
+ * ## What the client may say, and what it may not
+ *
+ * Two things: **which list**, and **which source rows**. Everything a created item carries —
+ * its title, `sourceActivityId`, `sourceLabel` — is derived server-side from the meal that
+ * request names, and none of it appears here. That is the same rule
+ * {@link createListItemInput} enforces by being strict, stated once more where it matters
+ * most: a client able to author `sourceLabel` could write `Sunday dinner` onto an item that
+ * came from nowhere, and provenance that can be fabricated records nothing.
+ *
+ * `listId` is required and is never inferred. §P3-17: "There is no 'the Groceries list' —
+ * there is whichever `collection` the user's `groceries` slot resolves to under P3-12."
+ * Resolution is a **client-side read** over the Lists projection, and the destination is
+ * visible before the write (P3-42). By the time this request exists the user has seen the
+ * name of the list they are writing to, so the server takes it verbatim and checks they may
+ * write it; it does not resolve a slot, and it does not fall back to one if the id is bad.
+ *
+ * ## Why the ingredients are ids rather than an array of rows
+ *
+ * `ingredientId` is the stable `ing_` identity of a row in the meal's own
+ * `details.ingredients` (`data-model.md` §8). The server resolves each one against the
+ * **current** array, so an action composed offline before the user reordered their
+ * ingredients still adds what they picked. A missing id — the row was deleted or replaced —
+ * rejects the whole request rather than resolving to whatever now sits at that position.
+ *
+ * `itemId` is the optional client-minted `itm_` for the row this ingredient would create. It
+ * is replay protection outliving the 24-hour receipt, exactly as it is on bulk create: a
+ * second attempt under a new key writes the same ids and the conditional put refuses the
+ * duplicate. It is per ingredient because each one may become its own row.
+ */
+export const addIngredientsToListInput = z
+  .strictObject({
+    listId: ulidId('lst'),
+    ingredients: z
+      .array(
+        z.strictObject({
+          ingredientId: ulidId('ing'),
+          itemId: ulidId('itm').optional(),
+        }),
+      )
+      .min(1)
+      .max(MAX_INGREDIENTS),
+  })
+  .meta({ id: 'AddIngredientsToListInput' });
+
+export type AddIngredientsToListInput = z.infer<typeof addIngredientsToListInput>;
+
+/**
+ * What the action did, per selected ingredient, so the client can render the result without
+ * re-reading either object.
+ *
+ * `outcome` exists because §7.3 step 6's duplicate rule means "add three ingredients" is not
+ * three creates: an unchecked row with the same title is **extended** rather than duplicated,
+ * and the user should be able to see which of their three taps produced a new line and which
+ * joined one that was already there. A response that returned only `items` would say three
+ * things landed without saying that one of them was already on the list.
+ */
+export const addedIngredient = z
+  .strictObject({
+    ingredientId: ulidId('ing'),
+    outcome: z.enum(['created', 'labelled']),
+    item: listItemView,
+  })
+  .meta({ id: 'AddedIngredient' });
+
+/**
+ * The whole result: the destination, what happened to each ingredient, and the one label.
+ *
+ * `sourceLabel` is returned as its own field as well as on each item because it is computed
+ * **once for the operation** (§7.5 rule 5 asks a question about the list, not about a row),
+ * and a client rendering "added to Groceries as Sunday dinner" should not have to pick one
+ * item and hope the rest agree.
+ */
+export const addIngredientsToListResult = z
+  .object({
+    listId: ulidId('lst'),
+    sourceLabel: freeText,
+    ingredients: z.array(addedIngredient),
+  })
+  .meta({ id: 'AddIngredientsToListResult' });
+
+export type AddIngredientsToListResult = z.infer<typeof addIngredientsToListResult>;

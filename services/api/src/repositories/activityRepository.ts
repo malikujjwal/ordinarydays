@@ -1069,6 +1069,74 @@ export async function listChildPointers(activityId: string): Promise<StoredItem[
  * has since been repointed at a different list is **skipped**, never clobbered. This runs on
  * a retryable cascade, so finding the pointer stale is expected rather than exceptional.
  */
+/** One resolved source row: where it sits now, and the id that must still be there. */
+export interface IngredientAddition {
+  readonly index: number;
+  readonly ingredientId: string;
+}
+
+/**
+ * Records that these ingredient rows have been sent to a list (P3-17, §7.3 step 5).
+ *
+ * ## Located by id, written by index, guarded by both
+ *
+ * DynamoDB addresses a list element by position — `details.ingredients[3].addedToListId` —
+ * and position is the one thing about an ingredient array that is not stable. So the caller
+ * resolves each `ingredientId` to its **current** index and hands both over, and every index
+ * in the update carries its own condition that the id still sitting there is the id that was
+ * resolved. A reorder that lands between the read and this write fails the condition and
+ * changes nothing, rather than marking a neighbour as added — the failure is the point, and
+ * the caller re-resolves.
+ *
+ * ## Idempotent, because it is the step after the commit point
+ *
+ * The items are created first, under the idempotency receipt; this runs after. A crash in
+ * between leaves rows on the list that the meal does not yet show as `Added`, and the user's
+ * next tap re-runs the whole action — where §7.3's duplicate rule finds the unchecked rows it
+ * already created and extends nothing, and this write finally lands. Setting the same
+ * `addedToListId` twice is therefore ordinary, not an error, and the condition permits it by
+ * naming only the id.
+ *
+ * ## `updatedAt` is deliberately not advanced
+ *
+ * This is the same choice {@link clearListProvenance} makes, for the same reason: nothing the
+ * **user** would recognise as a change to their meal has happened. The ingredients, the
+ * title, the schedule and the slot are all exactly as they were; what moved is a bookkeeping
+ * flag about a different object. Advancing `updatedAt` would push a version bump at every
+ * client holding that Activity, invalidate their `If-Match`, and surface in a plan's history
+ * as an edit nobody made.
+ */
+export async function recordIngredientsAddedToList(
+  activityId: string,
+  listId: string,
+  additions: readonly IngredientAddition[],
+): Promise<void> {
+  if (additions.length === 0) return;
+  const names: Record<string, string> = {
+    '#details': 'details',
+    '#ingredients': 'ingredients',
+    '#addedToListId': 'addedToListId',
+    '#ingredientId': 'ingredientId',
+  };
+  const values: Record<string, unknown> = { ':listId': listId };
+  const sets: string[] = [];
+  const conditions: string[] = ['attribute_exists(pk)'];
+
+  for (const addition of additions) {
+    const at = String(addition.index);
+    values[`:id${at}`] = addition.ingredientId;
+    sets.push(`#details.#ingredients[${at}].#addedToListId = :listId`);
+    conditions.push(`#details.#ingredients[${at}].#ingredientId = :id${at}`);
+  }
+
+  await updateItem(activityMeta(activityId), {
+    expression: `SET ${sets.join(', ')}`,
+    names,
+    values,
+    condition: conditions.join(' AND '),
+  });
+}
+
 export async function clearListProvenance(
   activityId: string,
   listId: string,

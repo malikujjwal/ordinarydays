@@ -2,6 +2,7 @@ import { zValidator } from '@hono/zod-validator';
 import {
   activityDetailQuery,
   activityListQuery,
+  addIngredientsToListInput,
   completeActivityInput,
   convertRecurrenceInput,
   createActivityInput,
@@ -22,6 +23,10 @@ import {
   REMINDER_PATH,
   REMINDERS_PATH,
 } from '../handlers/activityReminders.js';
+import {
+  ADD_INGREDIENTS_TO_LIST_PATH,
+  addIngredientsToListHandler,
+} from '../handlers/addIngredientsToList.js';
 import {
   COMPLETE_ACTIVITY_PATH,
   completeActivityHandler,
@@ -66,10 +71,10 @@ import {
 /**
  * `/v1/activities` (`api-contract.md` §2.3).
  *
- * Sixteen routes: the six Phase 1 activity routes, P2-12's sole schedule write path,
+ * Seventeen routes: the six Phase 1 activity routes, P2-12's sole schedule write path,
  * P2-13's complete and uncomplete actions, P2-14's skip action, P2-15's snooze and
- * unsnooze actions, P2-16's three caller-owned reminder-management routes, and P2-54's
- * atomic recurrence conversion. The agenda
+ * unsnooze actions, P2-16's three caller-owned reminder-management routes, P2-54's
+ * atomic recurrence conversion, and P3-17's meal ingredient action. The agenda
  * that powers Today is its own endpoint. Each unavailable route is
  * absent rather than stubbed, so `routeSplit`'s `not_implemented` answers for it — the honest
  * response for a path that is in the contract but not in this build.
@@ -142,6 +147,19 @@ const validateReminder = zValidator('json', reminderInput, (result) => {
 });
 
 /**
+ * Same hook, and the line that keeps provenance underivable from a request (P3-17).
+ *
+ * The schema is strict and names two things: which list, and which source rows by their
+ * stable `ing_` ids. `title`, `sourceActivityId` and `sourceLabel` are absent from it, so a
+ * client sending them gets a `400` naming the field rather than a list item claiming to have
+ * come from a meal it never came from. Everything a created row carries is derived
+ * server-side from the meal this route's `:id` names.
+ */
+const validateAddIngredients = zValidator('json', addIngredientsToListInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+/**
  * Same hook, on the **query string** rather than the body.
  *
  * Strict, so a misspelled `filter` is a `400` naming it rather than a silent fallback to
@@ -203,6 +221,9 @@ export const activities = new Hono<AppEnv>()
   )
   .post(UNCOMPLETE_ACTIVITY_PATH, validateUncomplete, (c) =>
     uncompleteActivityHandler(c, c.req.valid('json'), new Date().toISOString()),
+  )
+  .post(ADD_INGREDIENTS_TO_LIST_PATH, validateAddIngredients, (c) =>
+    addIngredientsToListHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   .post(SKIP_ACTIVITY_PATH, validateSkip, (c) =>
     skipActivityHandler(c, c.req.valid('json'), new Date().toISOString()),

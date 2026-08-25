@@ -939,6 +939,10 @@
                         "items": {
                           "type": "object",
                           "properties": {
+                            "ingredientId": {
+                              "type": "string",
+                              "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                            },
                             "name": {
                               "type": "string",
                               "minLength": 1,
@@ -954,6 +958,7 @@
                             }
                           },
                           "required": [
+                            "ingredientId",
                             "name"
                           ],
                           "additionalProperties": false
@@ -1357,6 +1362,10 @@
                         "items": {
                           "type": "object",
                           "properties": {
+                            "ingredientId": {
+                              "type": "string",
+                              "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                            },
                             "name": {
                               "type": "string",
                               "minLength": 1,
@@ -1372,6 +1381,7 @@
                             }
                           },
                           "required": [
+                            "ingredientId",
                             "name"
                           ],
                           "additionalProperties": false
@@ -2150,6 +2160,10 @@
                         "items": {
                           "type": "object",
                           "properties": {
+                            "ingredientId": {
+                              "type": "string",
+                              "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                            },
                             "name": {
                               "type": "string",
                               "minLength": 1,
@@ -2165,6 +2179,7 @@
                             }
                           },
                           "required": [
+                            "ingredientId",
                             "name"
                           ],
                           "additionalProperties": false
@@ -2678,6 +2693,10 @@
                         "items": {
                           "type": "object",
                           "properties": {
+                            "ingredientId": {
+                              "type": "string",
+                              "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                            },
                             "name": {
                               "type": "string",
                               "minLength": 1,
@@ -2693,6 +2712,7 @@
                             }
                           },
                           "required": [
+                            "ingredientId",
                             "name"
                           ],
                           "additionalProperties": false
@@ -3125,6 +3145,10 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "ingredientId": {
+                          "type": "string",
+                          "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        },
                         "name": {
                           "type": "string",
                           "minLength": 1,
@@ -3140,6 +3164,7 @@
                         }
                       },
                       "required": [
+                        "ingredientId",
                         "name"
                       ],
                       "additionalProperties": false
@@ -3450,6 +3475,252 @@
         "required": [
           "activityId"
         ]
+      },
+      "AddIngredientsToListResult": {
+        "type": "object",
+        "properties": {
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "sourceLabel": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddedIngredient"
+            }
+          }
+        },
+        "required": [
+          "listId",
+          "sourceLabel",
+          "ingredients"
+        ]
+      },
+      "AddedIngredient": {
+        "type": "object",
+        "properties": {
+          "ingredientId": {
+            "type": "string",
+            "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "created",
+              "labelled"
+            ]
+          },
+          "item": {
+            "$ref": "#/components/schemas/ListItemView"
+          }
+        },
+        "required": [
+          "ingredientId",
+          "outcome",
+          "item"
+        ],
+        "additionalProperties": false
+      },
+      "ListItemView": {
+        "type": "object",
+        "properties": {
+          "itemId": {
+            "type": "string",
+            "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "rank": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "checked": {
+            "type": "boolean"
+          },
+          "location": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "lat": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              },
+              "lng": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              }
+            },
+            "required": [
+              "label"
+            ]
+          },
+          "sourceActivityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "sourceLabel": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "behaviour": {
+                    "type": "string",
+                    "enum": [
+                      "watch"
+                    ]
+                  },
+                  "mediaKind": {
+                    "type": "string",
+                    "enum": [
+                      "movie",
+                      "show"
+                    ]
+                  },
+                  "watchStatus": {
+                    "type": "string",
+                    "enum": [
+                      "want",
+                      "watching",
+                      "watched"
+                    ]
+                  },
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "behaviour",
+                  "watchStatus"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "behaviour": {
+                    "type": "string",
+                    "enum": [
+                      "meals"
+                    ]
+                  },
+                  "ingredients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "ingredientId": {
+                          "type": "string",
+                          "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "quantity": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "addedToListId": {
+                          "type": "string",
+                          "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        }
+                      },
+                      "required": [
+                        "ingredientId",
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 60
+                  }
+                },
+                "required": [
+                  "behaviour"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "itemId",
+          "listId",
+          "rank",
+          "title",
+          "checked"
+        ]
+      },
+      "AddIngredientsToListInput": {
+        "type": "object",
+        "properties": {
+          "listId": {
+            "type": "string",
+            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "ingredients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ingredientId": {
+                  "type": "string",
+                  "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                "itemId": {
+                  "type": "string",
+                  "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                }
+              },
+              "required": [
+                "ingredientId"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 60
+          }
+        },
+        "required": [
+          "listId",
+          "ingredients"
+        ],
+        "additionalProperties": false
       },
       "ActivityCompletionResult": {
         "type": "object",
@@ -4044,167 +4315,6 @@
             ],
             "additionalProperties": false
           }
-        ]
-      },
-      "ListItemView": {
-        "type": "object",
-        "properties": {
-          "itemId": {
-            "type": "string",
-            "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-          },
-          "listId": {
-            "type": "string",
-            "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-          },
-          "rank": {
-            "type": "string",
-            "minLength": 1
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "note": {
-            "type": "string",
-            "maxLength": 4000
-          },
-          "checked": {
-            "type": "boolean"
-          },
-          "location": {
-            "type": "object",
-            "properties": {
-              "label": {
-                "type": "string",
-                "maxLength": 120
-              },
-              "address": {
-                "type": "string",
-                "maxLength": 300
-              },
-              "lat": {
-                "type": "number",
-                "minimum": -90,
-                "maximum": 90
-              },
-              "lng": {
-                "type": "number",
-                "minimum": -180,
-                "maximum": 180
-              }
-            },
-            "required": [
-              "label"
-            ]
-          },
-          "sourceActivityId": {
-            "type": "string",
-            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-          },
-          "sourceLabel": {
-            "type": "string",
-            "maxLength": 120
-          },
-          "details": {
-            "oneOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "behaviour": {
-                    "type": "string",
-                    "enum": [
-                      "watch"
-                    ]
-                  },
-                  "mediaKind": {
-                    "type": "string",
-                    "enum": [
-                      "movie",
-                      "show"
-                    ]
-                  },
-                  "watchStatus": {
-                    "type": "string",
-                    "enum": [
-                      "want",
-                      "watching",
-                      "watched"
-                    ]
-                  },
-                  "season": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 1000
-                  },
-                  "episode": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 10000
-                  }
-                },
-                "required": [
-                  "behaviour",
-                  "watchStatus"
-                ],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "behaviour": {
-                    "type": "string",
-                    "enum": [
-                      "meals"
-                    ]
-                  },
-                  "ingredients": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "ingredientId": {
-                          "type": "string",
-                          "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-                        },
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "maxLength": 120
-                        },
-                        "quantity": {
-                          "type": "string",
-                          "maxLength": 120
-                        },
-                        "addedToListId": {
-                          "type": "string",
-                          "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-                        }
-                      },
-                      "required": [
-                        "ingredientId",
-                        "name"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "maxItems": 60
-                  }
-                },
-                "required": [
-                  "behaviour"
-                ],
-                "additionalProperties": false
-              }
-            ]
-          }
-        },
-        "required": [
-          "itemId",
-          "listId",
-          "rank",
-          "title",
-          "checked"
         ]
       },
       "ListItemPlanState": {
@@ -5339,6 +5449,10 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "ingredientId": {
+                          "type": "string",
+                          "pattern": "^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        },
                         "name": {
                           "type": "string",
                           "minLength": 1,
@@ -5354,6 +5468,7 @@
                         }
                       },
                       "required": [
+                        "ingredientId",
                         "name"
                       ],
                       "additionalProperties": false
@@ -7210,6 +7325,94 @@
           },
           "404": {
             "description": "No such activity, or none this caller has any relationship to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/activities/{id}/ingredients/add-to-list": {
+      "post": {
+        "summary": "Send selected meal ingredients to a list the caller has chosen",
+        "description": "Requires an `Idempotency-Key`. Owner-only, and only on a `meal`. `listId` is required and must be a `collection` the caller may write: the destination is resolved on the client, from the `groceries` slot, and shown to the user before this is called — the server never resolves a slot and never falls back to one. Each selected ingredient is named by its stable `ing_` id and resolved against the current ingredient array, so a reorder cannot redirect the action; an id that was removed or replaced rejects the whole request without writing anything. Titles, `sourceActivityId` and `sourceLabel` are derived server-side and are not accepted on input here or on the ordinary bulk route. An ingredient whose title already exists **unchecked** on the list extends that row's label instead of creating a second one; a **checked** match creates a new row.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddIngredientsToListInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "What happened to each selected ingredient, and the one label the operation used.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AddIngredientsToListResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing idempotency key, a non-meal activity, a destination that is not a writable collection, or an ingredient id the meal no longer has.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity or list, or no relationship to either.",
             "content": {
               "application/json": {
                 "schema": {
