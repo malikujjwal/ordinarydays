@@ -12,6 +12,7 @@ import {
 } from '../repositories/listRepository.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
 import { drainListWork, withListWorkDrain } from './listMutationService.js';
+import { profileDefaultToClear } from './listSlotService.js';
 
 /**
  * The read and delete halves of Lists CRUD (`phase-03` §P3-05); creation is
@@ -128,6 +129,7 @@ export async function removeList(
   }
   const list = await getListMetaForDeletion(userId, listId, access.index);
   if (list === undefined) throw new AppError('not_found', LIST_NOT_FOUND);
+  const profileDefault = profileDefaultToClear(list);
 
   await deleteList(userId, listId, access.index, {
     now,
@@ -135,7 +137,7 @@ export async function removeList(
     ...(list.sourceActivityId === undefined
       ? {}
       : { sourceActivityId: list.sourceActivityId }),
-    ...(list.slot === null ? {} : { clearProfileDefault: { slot: list.slot } }),
+    ...(profileDefault === undefined ? {} : { clearProfileDefault: profileDefault }),
   });
 
   return listId;

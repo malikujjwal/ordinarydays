@@ -148,16 +148,6 @@ export async function patchProfile(
 }
 
 /**
- * The conditional transaction item that clears `defaultLists[slot]` when — and only when —
- * that exact slot still points at the list being removed (phase-03 §P3-05; P3-12's slot
- * changes reuse it).
- *
- * A **nested** `REMOVE`, never a whole-map `SET`, so sibling slots survive whatever else is
- * happening to them. The condition re-asserts the value the caller read: a newer destination
- * chosen concurrently on another device fails this item rather than being silently removed,
- * and the caller retries its transaction without it.
- */
-/**
  * The mirror of {@link removeDefaultListTransactItem}: puts one slot back, and only while it
  * is still empty (P3-10, `api-contract.md` §2.7).
  *
@@ -189,6 +179,24 @@ export function restoreDefaultListTransactItem(
   };
 }
 
+/**
+ * The conditional transaction item that clears `defaultLists[slot]` when — and only when —
+ * that exact slot still points at the list being removed (phase-03 §P3-05, §P3-09's slot
+ * change, §P3-12).
+ *
+ * A **nested** `REMOVE`, never a whole-map `SET`, so sibling slots survive whatever else is
+ * happening to them. The condition re-asserts the value the caller read: a newer destination
+ * chosen concurrently on another device fails this item rather than being silently removed,
+ * and the caller retries its transaction without it.
+ *
+ * **It lives here, and there is exactly one of it.** §P3-12 puts the `defaultLists`
+ * invariants in `services/listSlotService.ts`, and the decision half of them is there — which
+ * slot a list write may clear, and why the write attempts it unconditionally. This half
+ * cannot follow: it builds a DynamoDB update over the profile key, so it belongs to the
+ * repository layer (`CLAUDE.md`, `repo-structure.md` §3.1), and both callers are inside
+ * `listRepository`, which a service may not be imported by. The service names this function
+ * as the single implementation instead of copying it.
+ */
 export function removeDefaultListTransactItem(
   userId: string,
   slot: DefaultSlot,
