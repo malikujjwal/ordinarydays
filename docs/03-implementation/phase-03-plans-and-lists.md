@@ -1999,9 +1999,9 @@ while choosing `General`; the result is `custom`, proving the list never chooses
 
 **Approach.** The item stays in its list, in place. When the list-detail response includes the
 caller's `viewerLink` **and its `viewerPlan` carries `schedule.date`**, that caller alone sees
-a state line. `viewerPlan` is `ListItemPlanState` — `activityId`, `type`, `status` and an
-optional `schedule` — supplied by P3-15; the client derives the line from it and never fetches
-Activities per row:
+a state line. `viewerPlan` is `ListItemPlanState` — `type`, `status` and an optional
+`schedule` — supplied by P3-15; the client derives the line from it and never fetches
+Activities per row, and takes the line's tap target from `viewerLink.activityId`:
 
 ```
 Restaurants to try

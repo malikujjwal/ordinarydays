@@ -850,14 +850,15 @@ becomes `task` — a value `ListItemPlanState` does not admit. The row omits the
 deletes nothing: the Activity is readable and the pointer is not stale. What *should* happen to
 the pointer on conversion is an open lifecycle question recorded in `phase-03` §P3-15.
 
-It is deliberately **not** the Activity. Four fields, each earning its place: `activityId` is
-the state line's tap target, `type` selects the verb (`Planned` for an event, `Next session`
-for a watch session, which the list's own behaviour cannot supply for a `custom` Plan made
-from a `watch` list), `status` separates `Done Saturday` from `Planned Saturday`, and
-`schedule` is both the rendered date and the display gate. Absent by design: the Plan's
-`title`, which is independent of the item's after the one-time seed; watch progress, which
-comes from the item's own `details`; and `outcome`, since every completion renders `Done` and
-a skip removes the pointer entirely. Returning the whole Activity would make the list
+It is deliberately **not** the Activity. **Three fields**, each earning its place: `type`
+selects the verb (`Planned` for an event, `Next session` for a watch session, which the list's
+own behaviour cannot supply for a `custom` Plan made from a `watch` list), `status` separates
+`Done Saturday` from `Planned Saturday`, and `schedule` is both the rendered date and the
+display gate. The state line's **tap target is `viewerLink.activityId`** — the id lives on the
+link alone, so the two halves cannot disagree about which Plan they describe. Absent by
+design: that `activityId`; the Plan's `title`, which is independent of the item's after the
+one-time seed; watch progress, which comes from the item's own `details`; and `outcome`, since
+every completion renders `Done` and a skip removes the pointer entirely. Returning the whole Activity would make the list
 projection a second Activity-detail contract and carry a private Plan's every field into a
 list response.
 

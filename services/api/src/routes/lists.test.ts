@@ -522,6 +522,68 @@ describe('GET /v1/lists/:id', () => {
     expect(unlinked.viewerLink).toBeUndefined();
     expect(linked.item).not.toHaveProperty('itemRevision');
     expect(linked.item).not.toHaveProperty('pk');
+
+    /**
+     * The **pair**, on the wire. Asserting only the link would let a handler drop
+     * `viewerPlan` again while the service and schema suites stayed green — the regression
+     * this endpoint is the last line of defence against.
+     */
+    expect(linked.viewerPlan).toEqual({ type: 'custom', status: 'saved' });
+    expect(unlinked.viewerPlan).toBeUndefined();
+  });
+
+  /** The state line's data reaches the wire, with the schedule that gates displaying it. */
+  it('carries the linked Plan’s schedule through to the response', async () => {
+    const scheduled = {
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
+    };
+    seedGets([pointerRow(), listMetaRow(), activityMetaRow(DEV, scheduled)]);
+    ddbMock.on(QueryCommand).resolves({ Items: [itemRow(ITM, 'a0')] as never });
+    ddbMock.on(BatchGetCommand).callsFake((input) => ({
+      Responses: {
+        [TABLE]: batchKeys(input).some((key) => key.pk.startsWith('ACT#'))
+          ? [activityMetaRow(DEV, scheduled)]
+          : [linkRow(ITM)],
+      },
+    }));
+
+    const body = await (
+      await get(createApp(), `/v1/lists/${LST}?includeItems=true`)
+    ).json();
+
+    expect(body.data.items[0].viewerPlan).toEqual({
+      type: 'custom',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
+    });
+    /** The id is on the link alone — one id, so the two halves cannot disagree. */
+    expect(body.data.items[0].viewerPlan).not.toHaveProperty('activityId');
+    expect(body.data.items[0].viewerLink.activityId).toBe(ACT);
+  });
+
+  /**
+   * A Plan converted to a Task keeps its pointer but is not a Plan, so the row describes
+   * neither half rather than emitting a `type` the response schema rejects (P3-15).
+   */
+  it('omits both halves when the linked Activity is no longer a Plan', async () => {
+    const asTask = { objectKind: 'task', type: 'task', details: { kind: 'task' } };
+    seedGets([pointerRow(), listMetaRow(), activityMetaRow(DEV, asTask)]);
+    ddbMock.on(QueryCommand).resolves({ Items: [itemRow(ITM, 'a0')] as never });
+    ddbMock.on(BatchGetCommand).callsFake((input) => ({
+      Responses: {
+        [TABLE]: batchKeys(input).some((key) => key.pk.startsWith('ACT#'))
+          ? [activityMetaRow(DEV, asTask)]
+          : [linkRow(ITM)],
+      },
+    }));
+
+    const body = await (
+      await get(createApp(), `/v1/lists/${LST}?includeItems=true`)
+    ).json();
+
+    expect(body.data.items[0].viewerLink).toBeUndefined();
+    expect(body.data.items[0].viewerPlan).toBeUndefined();
   });
 
   it('omits a stale pointer whose Activity is gone', async () => {

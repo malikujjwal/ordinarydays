@@ -823,7 +823,8 @@ export async function hydrateViewerLinks(
 }
 
 /**
- * The four fields a list row can say about a Plan, and no more (P3-15, P3-34).
+ * The three fields a list row can say about a Plan, and no more (P3-15, P3-34). The Activity's
+ * id is not among them: it is on the `viewerLink` this always travels with.
  *
  * Trimmed here rather than at the handler because the trim is a **contract** decision, not a
  * serialisation one: what a list row may reveal about a caller's private Plan is the same

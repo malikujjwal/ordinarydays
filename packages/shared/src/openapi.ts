@@ -976,7 +976,9 @@ registry.registerPath({
     'items in `(rank, itemId)` order, an opaque cursor bound to the META rank version, and ' +
     'the caller’s own `viewerLink` / trimmed `viewerPlan` pair per linked item — never ' +
     'another member’s pointer or Plan state. The caller filter precedes one bounded Activity ' +
-    'hydration; an unlinked or unreadable row carries neither field. A repair or ' +
+    'hydration. The pair is present only when the pointer resolves to a readable **Plan**: an ' +
+    'unlinked row, one whose Activity the caller may not read, and one whose Plan has since ' +
+    'been converted to a Task all carry neither field. A repair or ' +
     'behaviour-migration fence returns `503` with `Retry-After: 1` and no item rows. Also ' +
     'the authoritative read durable creation reconciles a lost response against: `200` ' +
     'adopts the server row, `404` parks the intent.',
@@ -1163,7 +1165,9 @@ registry.registerPath({
   description:
     'Pages 50 strongly consistent item rows at a time in `(rank, itemId)` order. A linked ' +
     'row carries the **caller’s own** `viewerLink` / trimmed `viewerPlan` pair and nobody ' +
-    'else’s pointer or Plan state; an unlinked or unreadable row carries neither. The caller ' +
+    'else’s pointer or Plan state. The pair is present only when the pointer resolves to a ' +
+    'readable **Plan**: an unlinked row, one whose Activity the caller may not read, and one ' +
+    'whose Plan has since been converted to a Task all carry neither. The caller ' +
     'filter precedes one bounded Activity hydration. Strong META reads before and ' +
     'after the query must agree on `rankVersion` and find neither a rank-repair nor a ' +
     'behaviour-migration marker; a failed fence returns `503 internal` with ' +
@@ -1178,8 +1182,9 @@ registry.registerPath({
   responses: {
     200: {
       description:
-        'One page of items, each with the caller’s `viewerLink` and trimmed `viewerPlan` ' +
-        'together when its link resolves to a readable Activity.',
+        'One page of items. A row carries the caller’s `viewerLink` and trimmed ' +
+        '`viewerPlan` together, or neither — the pair is present only when the pointer ' +
+        'resolves to a readable Plan.',
       content: { 'application/json': { schema: listItemPageResponse } },
     },
     404: {
