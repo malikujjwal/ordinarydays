@@ -1,4 +1,4 @@
-import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { MAX_INGREDIENTS_PER_ADD } from '@od/shared';
 import type { List, ListItem } from '@od/shared/types';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -84,6 +84,16 @@ const rawItem = async (pk: string, sk: string) =>
       new GetCommand({ TableName: TEST_TABLE, Key: { pk, sk }, ConsistentRead: true }),
     )
   ).Item;
+
+/**
+ * The receipt for **one exact key**, not a prefix count.
+ *
+ * `setUp` issues its own POSTs, each with its own random key, so any "are there receipts"
+ * scan is satisfied by those and says nothing about the request under test. Both callers
+ * therefore send a key they chose and ask about that one row.
+ */
+const receiptFor = async (key: string, userId = DEV) =>
+  rawItem(`IDEM#${userId}#${key}`, 'META');
 
 const itemRows = async (listId: string) =>
   (await partition(`LIST#${listId}`)).filter((row) => String(row.sk).startsWith('ITEM#'));
@@ -828,25 +838,13 @@ describe('addedToListId is server-owned in both directions', () => {
  * trusting the response.
  */
 describe('one commit, or none', () => {
-  const receiptRows = async (userId = DEV) =>
-    (
-      await documents.send(
-        new ScanCommand({
-          TableName: TEST_TABLE,
-          FilterExpression: 'begins_with(#pk, :prefix)',
-          ExpressionAttributeNames: { '#pk': 'pk' },
-          ExpressionAttributeValues: { ':prefix': `IDEM#${userId}` },
-          ConsistentRead: true,
-        }),
-      )
-    ).Items ?? [];
-
   it('never stores a receipt without the provenance it describes', async () => {
     const { list } = await setUp();
+    const key = crypto.randomUUID();
 
-    await addToList(list.listId, [CHICKEN, TORTILLAS]);
+    await addToList(list.listId, [CHICKEN, TORTILLAS], { 'Idempotency-Key': key });
 
-    expect(await receiptRows()).not.toHaveLength(0);
+    expect(await receiptFor(key)).toBeDefined();
     const byId = new Map(
       (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
     );
@@ -998,7 +996,10 @@ describe('a change landing between the read and the commit', () => {
         { 'If-Match': String((await storedMeal())?.updatedAt) },
       ),
     );
-    const res = await addToList(list.listId, [CHICKEN, TORTILLAS]);
+    const key = crypto.randomUUID();
+    const res = await addToList(list.listId, [CHICKEN, TORTILLAS], {
+      'Idempotency-Key': key,
+    });
 
     expect(spy).toHaveBeenCalled();
     expect(res.status).toBe(400);
@@ -1009,5 +1010,8 @@ describe('a change landing between the read and the commit', () => {
     for (const ingredient of await storedIngredients()) {
       expect(ingredient).not.toHaveProperty('addedToListId');
     }
+    // And the third thing this test is named for: the receipt rode in the same transaction,
+    // so a rolled-back attempt must leave none under its key.
+    expect(await receiptFor(key)).toBeUndefined();
   });
 });
