@@ -28,6 +28,7 @@ import {
   listParticipants,
   patchActivity,
   putActivityMeta,
+  StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
 import { receiptItem } from '../repositories/idempotencyRepository.js';
 import { findViewerLinksTo } from '../repositories/listRepository.js';
@@ -130,12 +131,11 @@ export async function completeActivity(
   if (status === 'completed') next.completedAt = now;
   const result: ActivityCompletionResult = { activity: next, outcome };
 
-  await patchActivity(userId, next, activity.updatedAt, {
+  await writeStatusClearingLinks(userId, next, activity.updatedAt, {
     previous: activity,
     indexedUserIds: context.indexedUserIds,
     ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
     ...(activity.parentActivityId === undefined ? {} : { updateChildPointer: true }),
-    ...(await viewerLinksClearedBy(next)),
     idempotencyReceipt: receiptFor(result),
   });
   return result;
@@ -250,12 +250,11 @@ export async function skipActivity(
     updatedAt: now,
   });
   const result: ActivityCompletionResult = { activity: next };
-  await patchActivity(userId, next, activity.updatedAt, {
+  await writeStatusClearingLinks(userId, next, activity.updatedAt, {
     previous: activity,
     indexedUserIds: context.indexedUserIds,
     ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
     ...(activity.parentActivityId === undefined ? {} : { updateChildPointer: true }),
-    ...(await viewerLinksClearedBy(next)),
     idempotencyReceipt: receiptFor(result),
   });
   return result;
@@ -296,6 +295,54 @@ async function viewerLinksClearedBy(
       next.activityId,
     ),
   };
+}
+
+/**
+ * How many times a status write will re-read its pointers and try again.
+ *
+ * Each attempt loses only to a pointer that changed **since the read**, and a viewer replaces
+ * their own pointer by making a Plan — a deliberate act, not a loop. Two retries is generous
+ * for that, and bounded so a pathological contender cannot spin.
+ */
+const VIEWER_LINK_ATTEMPTS = 3;
+
+/**
+ * Writes the status, clearing pointers, and does not let a moved pointer cancel the status.
+ *
+ * The pointer deletes are conditional so a viewer who has just planned the item again keeps
+ * their newer pointer — and being in the same transaction as the status write is what makes
+ * skipping one user-visible event. Those two are in tension: a failing condition cancels the
+ * **whole** transaction, so without this the user's skip would silently not happen because an
+ * unrelated pointer moved, surfacing as a retryable `503` with the Plan still un-skipped.
+ *
+ * So a pointer-condition failure is not an error here. It is a signal that the set was read
+ * too early: re-read it, and try again. The next attempt no longer names the replaced pointer,
+ * so the skip commits and the newer Plan's pointer is untouched — which is exactly what both
+ * rules asked for.
+ */
+async function writeStatusClearingLinks(
+  userId: string,
+  next: Activity,
+  expectedUpdatedAt: string,
+  options: Omit<Parameters<typeof patchActivity>[3], 'clearViewerLinks'>,
+): Promise<void> {
+  for (let attempt = 0; attempt < VIEWER_LINK_ATTEMPTS; attempt += 1) {
+    try {
+      await patchActivity(userId, next, expectedUpdatedAt, {
+        ...options,
+        ...(await viewerLinksClearedBy(next)),
+      });
+      return;
+    } catch (error) {
+      if (!(error instanceof StaleViewerLinkError)) throw error;
+    }
+  }
+  /**
+   * Three reads in a row each raced. The status has **not** been written, and saying so is
+   * the honest answer — a retryable conflict the client repeats, rather than a success the
+   * user's Plan does not reflect.
+   */
+  throw new AppError('conflict', 'This changed while you were editing it. Try again.');
 }
 
 /** Snooze a one-off META row or exactly one recurring occurrence. */

@@ -40,7 +40,6 @@ import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import type { Logger } from '../lib/logger.js';
 import {
   ActivityIdUnavailableError,
-  activityFromPartition,
   deleteActivity as deleteActivityRows,
   getActivityMeta,
   getActivityPartition,
@@ -1210,7 +1209,17 @@ export async function removeActivity(
 ): Promise<string> {
   await assertActivityAccess(userId, activityId, 'owner');
 
-  const partition = await getActivityPartition(activityId);
+  /**
+   * **Strongly consistent, because a delete acts on what it reads** (P3-15).
+   *
+   * Two decisions come out of this one read, and both are destructive. The cascade's key list
+   * is built from it, so a row missing from a replica is a row never deleted; and the Plan's
+   * `listId`/`listItemId` are read from it, so a META row that has not replicated yet reads
+   * as a Plan with no list — and its viewer pointer survives a delete that removed the Plan
+   * it names. That is the dead link the lifecycle table exists to prevent, created by the
+   * delete itself.
+   */
+  const partition = await getActivityPartitionStrong(activityId);
 
   await releaseChildren(childIdsOf(partition), now);
   // The repository removes partition children and index pointers next, then META last. That

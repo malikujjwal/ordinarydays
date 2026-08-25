@@ -12,7 +12,6 @@ import type {
   List,
   ListItem,
   ListItemActivityLink,
-  ListItemDetails,
   ReversibleItemMutation,
 } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
@@ -33,7 +32,6 @@ import {
   ListItemIdUnavailableError,
   ListItemNotFoundError,
   ListMutationRetryExhaustedError,
-  ListNotFoundError,
   ListRankRepairRequiredError,
   ListReadFenceError,
   listItems as listItemsPage,

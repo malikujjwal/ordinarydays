@@ -38,6 +38,9 @@ const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X4';
 const ITEM = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X5';
 const NOW = '2026-08-25T09:00:00.000Z';
 
+/** Stands in for the repository's own signal that a pointer moved mid-transaction. */
+class StaleLink extends Error {}
+
 const mocks = {
   getActivityMeta: vi.fn(),
   listParticipants: vi.fn(() => Promise.resolve([])),
@@ -74,6 +77,7 @@ vi.mock('../../repositories/activityRepository.js', () => ({
   putActivityMeta: mocks.putActivityMeta,
   getActivityPartition: mocks.getActivityPartition,
   getActivityPartitionStrong: mocks.getActivityPartitionStrong,
+  StaleViewerLinkError: StaleLink,
   activityFromPartition: mocks.activityFromPartition,
   deleteActivity: mocks.deleteActivity,
 }));
@@ -224,6 +228,55 @@ describe('completed, un-completed and rescheduled keep the pointer', () => {
   });
 });
 
+/* Row 2 — Plan unscheduled. */
+describe('unscheduling keeps the pointer and writes nothing', () => {
+  /**
+   * The row that separates unschedule from skip, and the reason the table has both: an
+   * unscheduled Plan still exists in Needs a date, so its pointer stays and only the state
+   * line goes. A skip removes the pointer because the Plan is no longer something that will
+   * happen.
+   *
+   * Unscheduling runs through the schedule route, not this service, and its rule is a
+   * **negative**: no pointer work anywhere. What is assertable here is that no completion
+   * path treats a date-less Plan as a reason to clear, and that a Plan with no
+   * `schedule.date` still carries its provenance — which is what lets the same pointer
+   * become visible again when the Activity regains a date.
+   */
+  it('leaves an unscheduled Plan’s pointer alone on every non-skip transition', async () => {
+    useActivity(linkedPlan({ status: 'saved', schedule: undefined } as never));
+    mocks.findViewerLinksTo.mockResolvedValue([link()] as never);
+
+    await completion.completeActivity(USER, ACT, {} as never, NOW, receiptFor);
+
+    expect(patchOptions()).not.toHaveProperty('clearViewerLinks');
+    expect(vi.mocked(mocks.findViewerLinksTo)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Skip and unschedule diverge on exactly one thing. A Plan with no date that is *skipped*
+   * still clears — the rule keys on the resulting status, not on whether a date is present.
+   */
+  it('still clears when a date-less Plan is skipped, because status is the key', async () => {
+    useActivity(linkedPlan({ status: 'saved', schedule: undefined } as never));
+    mocks.findViewerLinksTo.mockResolvedValue([link()] as never);
+
+    await completion.skipActivity(USER, ACT, {} as never, NOW, receiptFor);
+
+    expect(patchOptions()?.clearViewerLinks).toEqual([link()]);
+  });
+
+  /** Provenance survives, so rescheduling makes the same pointer meaningful again. */
+  it('keeps listId and listItemId on a Plan that lost its date', async () => {
+    useActivity(linkedPlan({ status: 'saved', schedule: undefined } as never));
+
+    await completion.completeActivity(USER, ACT, {} as never, NOW, receiptFor);
+
+    const written = vi.mocked(mocks.patchActivity).mock.calls[0]?.[1] as Activity;
+    expect(written.listId).toBe(LIST);
+    expect(written.listItemId).toBe(ITEM);
+  });
+});
+
 /* Row 3 — Skipped / didnt_happen. */
 describe('a non-occurrence transition to skipped clears the pointer', () => {
   it('clears through POST /skip', async () => {
@@ -371,9 +424,14 @@ describe('deleting a Plan deletes pointers to it, and nothing else', () => {
     { pk: `ACT#${activity.activityId}`, sk: 'META', entity: 'Activity', ...activity },
   ];
 
+  /**
+   * The partition is supplied through the **strong** read, which is the one the delete uses:
+   * both the cascade's key list and the Plan's provenance come out of it, and a row missing
+   * from a replica is a row never deleted (P3-15, raised in review).
+   */
   const useDeletable = (activity: Activity) => {
     mocks.assertActivityAccess.mockResolvedValue({ activity, isOwner: true } as never);
-    mocks.getActivityPartition.mockResolvedValue(partitionOf(activity) as never);
+    mocks.getActivityPartitionStrong.mockResolvedValue(partitionOf(activity) as never);
     mocks.activityFromPartition.mockReturnValue(activity as never);
   };
 
@@ -507,5 +565,73 @@ describe('deleting a ListItem clears its pointers, and every Plan survives', () 
     expect(vi.mocked(mocks.deleteListItem)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(mocks.deleteActivity)).not.toHaveBeenCalled();
     expect(vi.mocked(mocks.patchActivity)).not.toHaveBeenCalled();
+  });
+});
+
+/* A moved pointer must not cancel the user's skip. */
+describe('a pointer replaced mid-skip does not cancel the skip', () => {
+  /**
+   * The two rules are in tension. The delete is conditional so a viewer who just planned the
+   * item again keeps their newer pointer; it is in the status transaction so skipping is one
+   * event. A failing condition cancels the **whole** transaction — so without a retry the
+   * user's skip silently would not happen because an unrelated pointer moved.
+   */
+  it('re-reads the pointers and commits the skip', async () => {
+    useActivity(linkedPlan());
+    mocks.findViewerLinksTo
+      .mockResolvedValueOnce([link()] as never)
+      .mockResolvedValueOnce([] as never);
+    mocks.patchActivity.mockRejectedValueOnce(new StaleLink());
+
+    await completion.skipActivity(USER, ACT, {} as never, NOW, receiptFor);
+
+    expect(vi.mocked(mocks.patchActivity)).toHaveBeenCalledTimes(2);
+    /** The retry no longer names the replaced pointer, so the newer Plan keeps it. */
+    const second = vi.mocked(mocks.patchActivity).mock.calls[1]?.[3] as {
+      clearViewerLinks?: readonly ListItemActivityLink[];
+    };
+    expect(second.clearViewerLinks).toEqual([]);
+  });
+
+  /** Bounded: a pathological contender gets a retryable conflict, never a silent no-op. */
+  it('gives up with a conflict rather than reporting a skip that did not happen', async () => {
+    useActivity(linkedPlan());
+    mocks.findViewerLinksTo.mockResolvedValue([link()] as never);
+    mocks.patchActivity.mockRejectedValue(new StaleLink());
+
+    await expect(
+      completion.skipActivity(USER, ACT, {} as never, NOW, receiptFor),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(vi.mocked(mocks.patchActivity)).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not swallow an unrelated failure', async () => {
+    useActivity(linkedPlan());
+    mocks.patchActivity.mockRejectedValue(new Error('ProvisionedThroughputExceeded'));
+
+    await expect(
+      completion.skipActivity(USER, ACT, {} as never, NOW, receiptFor),
+    ).rejects.toThrow('ProvisionedThroughputExceeded');
+    expect(vi.mocked(mocks.patchActivity)).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* The delete reads strongly, because it acts on what it reads. */
+describe('deleting a Plan reads its provenance from the leader', () => {
+  it('never takes the cascade’s partition from a replica', async () => {
+    const activity = linkedPlan();
+    mocks.assertActivityAccess.mockResolvedValue({ activity, isOwner: true } as never);
+    mocks.getActivityPartitionStrong.mockResolvedValue([
+      { pk: `ACT#${ACT}`, sk: 'META', entity: 'Activity', ...activity },
+    ] as never);
+    mocks.findViewerLinksTo.mockResolvedValue([link()] as never);
+
+    await activityService.removeActivity(USER, ACT, NOW);
+
+    expect(vi.mocked(mocks.getActivityPartitionStrong)).toHaveBeenCalledWith(ACT);
+    expect(vi.mocked(mocks.getActivityPartition)).not.toHaveBeenCalled();
+    /** A META row that had not replicated would read as a Plan with no list, and its
+     * pointer would outlive the Plan it names. */
+    expect(deleteOptions()?.clearViewerLinks).toEqual([link()]);
   });
 });

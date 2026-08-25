@@ -38,7 +38,6 @@ import {
   deleteItem,
   getItem,
   type Page,
-  putItem,
   query,
   queryAll,
   queryCount,

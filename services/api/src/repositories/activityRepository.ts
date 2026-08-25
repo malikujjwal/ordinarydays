@@ -519,6 +519,21 @@ export async function listParticipants(activityId: string): Promise<StoredItem[]
   return queryAll<StoredItem>({ pk: prefix.pk }, { skPrefix: prefix.skPrefix });
 }
 
+/**
+ * A viewer pointer moved between being read and being cleared (P3-15).
+ *
+ * **Not the caller's problem, and never their error.** The pointer condition exists to
+ * protect a *newer* Plan somebody just made; letting it cancel the transaction would mean
+ * the user's skip silently did not happen because an unrelated pointer changed. The service
+ * re-reads the pointers and retries, and the retry no longer names the replaced one.
+ */
+export class StaleViewerLinkError extends Error {
+  constructor() {
+    super('A viewer link changed while it was being cleared.');
+    this.name = 'StaleViewerLinkError';
+  }
+}
+
 export interface PatchOptions extends CreateOptions {
   /**
    * The index entry as it is **now**, so a bucket change can delete the old row in the same
@@ -580,6 +595,14 @@ export async function patchActivity(
     },
     ...(options.clearViewerLinks ?? []).map(viewerLinkDelete),
   ];
+  /**
+   * Where the pointer deletes sit, so their condition failure can be told apart from every
+   * other one. They are the only items here whose failure is **not** the caller's problem:
+   * see {@link StaleViewerLinkError}.
+   */
+  const viewerLinkIndices = new Set(
+    (options.clearViewerLinks ?? []).map((_link, offset) => offset + 1),
+  );
 
   /**
    * **A whole-item `Put`, and never a `Delete` beside it.**
@@ -674,6 +697,7 @@ export async function patchActivity(
   await transactWrite(builder.build(), {
     operation: 'patchActivity',
     onConditionFailed: (index) => {
+      if (viewerLinkIndices.has(index)) return new StaleViewerLinkError();
       if (index === occurrenceGuardIndex) {
         return new AppError(
           'validation_failed',
