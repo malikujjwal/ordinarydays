@@ -146,6 +146,28 @@ describe('resolveListSlot', () => {
     expect(result.kind).toBe('ask');
   });
 
+  /**
+   * Eligibility is a destination decision, not a rendering one, and this resolve follows the
+   * `PATCH /v1/me` that stored the user's answer. An eventually consistent read can hold the
+   * map from before that answer, keep an archived list looking eligible, or yield a pointer
+   * to a membership just revoked — the dead end §P3-12's read-side guard exists to prevent
+   * (ADR-033).
+   */
+  it('reads both the profile and every list page strongly', async () => {
+    vi.mocked(listRepository.listListsForUser)
+      .mockResolvedValueOnce(page([list(TRADER_JOES, 'groceries')], 'cursor-2'))
+      .mockResolvedValueOnce(page([list(CORNER_SHOP, 'groceries')]));
+
+    await resolveListSlot(USER, 'groceries');
+
+    expect(vi.mocked(userRepository.getProfile).mock.calls[0]?.[1]).toEqual({
+      consistentRead: true,
+    });
+    for (const call of vi.mocked(listRepository.listListsForUser).mock.calls) {
+      expect(call[2]).toEqual({ consistentRead: true });
+    }
+  });
+
   it('resolves against an absent profile map without failing', async () => {
     vi.mocked(listRepository.listListsForUser).mockResolvedValue(
       page([list(TRADER_JOES, 'groceries'), list(CORNER_SHOP, 'groceries')]),

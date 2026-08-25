@@ -45,6 +45,15 @@ import { getProfile } from '../repositories/userRepository.js';
  * of the whole set — "exactly one" and "several" are different answers — and a user whose
  * fifty-first list is their second grocery list would otherwise be told there is only one and
  * never asked.
+ *
+ * **Both reads are strongly consistent, and that is not an optimisation.** This resolve is
+ * the step immediately after the user answered "which list should these go to?", which the
+ * client stored with `PATCH /v1/me`; an eventually consistent profile read can still hold the
+ * map from before the answer and send the items to the destination they just replaced. The
+ * same window makes a list archived seconds ago still look eligible, and a membership just
+ * revoked still yield a pointer to a list the caller can no longer write to. §P3-12's
+ * read-side guard exists so a stale pointer never produces a dead end; a stale *read* would
+ * manufacture exactly the dead end it guards against.
  */
 export async function resolveListSlot(
   userId: string,
@@ -52,7 +61,7 @@ export async function resolveListSlot(
 ): Promise<SlotResolution<List>> {
   const [lists, profile] = await Promise.all([
     ownedAndSharedLists(userId),
-    getProfile(userId),
+    getProfile(userId, { consistentRead: true }),
   ]);
 
   return resolveSlot(slot, lists, profile?.defaultLists);
@@ -65,14 +74,15 @@ export async function resolveListSlot(
  *
  * The drain is bounded by the 100-owned-list cap (P3-05) plus the caller's memberships, and
  * it goes through the ordinary paginated read rather than a new repository surface: there is
- * no new access pattern here, only more of pattern 7.
+ * no new access pattern here, only more of pattern 7 — asked for strongly, which is the one
+ * thing this caller needs that browsing does not.
  */
 async function ownedAndSharedLists(userId: string): Promise<readonly List[]> {
   const lists: List[] = [];
   let cursor: string | undefined;
 
   do {
-    const page = await listListsForUser(userId, cursor);
+    const page = await listListsForUser(userId, cursor, { consistentRead: true });
     lists.push(...page.items.map((entry) => entry.list));
     cursor = page.nextCursor;
   } while (cursor !== undefined);

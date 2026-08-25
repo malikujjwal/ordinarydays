@@ -1,7 +1,7 @@
-import { DynamoDBDocumentClient, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { newUserId, patchProfile } from './userRepository.js';
+import { getProfile, newUserId, patchProfile } from './userRepository.js';
 
 const ddbMock = mockClient(DynamoDBDocumentClient);
 
@@ -19,9 +19,35 @@ const conditionFailed = () => {
 const TRADER_JOES = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const CORNER_SHOP = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3';
 
+const sentGet = () => ddbMock.commandCalls(GetCommand)[0]?.args[0].input;
+
 beforeEach(() => {
   ddbMock.reset();
   ddbMock.on(UpdateCommand).resolves({ Attributes: { userId: 'usr_x' } });
+  ddbMock.on(GetCommand).resolves({ Item: { userId: 'usr_a' } });
+});
+
+describe('getProfile', () => {
+  /**
+   * Rendering a settings screen a fraction of a second behind costs nothing, and this read
+   * happens on every `GET /v1/me`.
+   */
+  it('reads eventually consistently by default', async () => {
+    await getProfile('usr_a');
+
+    expect(sentGet()?.ConsistentRead).toBeUndefined();
+  });
+
+  /**
+   * Slot resolution asks for strong. It reads the profile immediately after the `PATCH
+   * /v1/me` that stored the user's answer to "which list should these go to?", and a stale
+   * map there sends the items to the destination they just replaced (P3-12).
+   */
+  it('reads strongly when the caller asks', async () => {
+    await getProfile('usr_a', { consistentRead: true });
+
+    expect(sentGet()?.ConsistentRead).toBe(true);
+  });
 });
 
 describe('newUserId', () => {

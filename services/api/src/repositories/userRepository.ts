@@ -83,9 +83,20 @@ export async function putProfile(user: User): Promise<void> {
   });
 }
 
-/** The profile, or `undefined` when the table has no row for this user. */
-export function getProfile(userId: string): Promise<User | undefined> {
-  return getItem<User & Record<string, unknown>>(userProfile(userId)) as Promise<
+/**
+ * The profile, or `undefined` when the table has no row for this user.
+ *
+ * `consistentRead` is off by default, which is right for rendering a profile: a settings
+ * screen a fraction of a second behind costs nothing. It is **on for slot resolution**
+ * (P3-12), where the read directly follows the `PATCH /v1/me` that stored the user's answer
+ * to "which list should these go to?" — an eventually consistent read there can return the
+ * map from before the answer and send the items to the destination the user just replaced.
+ */
+export function getProfile(
+  userId: string,
+  options: { readonly consistentRead?: boolean } = {},
+): Promise<User | undefined> {
+  return getItem<User & Record<string, unknown>>(userProfile(userId), options) as Promise<
     User | undefined
   >;
 }
