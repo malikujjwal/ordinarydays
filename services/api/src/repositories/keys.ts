@@ -374,6 +374,19 @@ export const listItemActivityLinkPrefix = (listId: string, viewerUserId: string)
   skPrefix: `LNK#${viewerUserId}#`,
 });
 
+/**
+ * Every viewer's pointer on one list (P3-15).
+ *
+ * The sort key puts the viewer before the item, so "all pointers to item X" cannot be a
+ * prefix — the caller reads this bounded prefix and filters. That ordering is deliberate and
+ * right for the read that matters most: the projection wants one viewer's rows and gets them
+ * without seeing anybody else's (`security-privacy.md` row 15a).
+ */
+export const listItemActivityLinkAllPrefix = (listId: string) => ({
+  pk: listPk(listId),
+  skPrefix: 'LNK#',
+});
+
 /** The deletion guard and exact Undo snapshot for one ListItem. */
 export const listItemTombstone = (listId: string, itemId: string) => ({
   pk: listPk(listId),

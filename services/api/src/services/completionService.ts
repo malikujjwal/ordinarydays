@@ -14,6 +14,7 @@ import {
   type ActivitySchedule,
   type ActivityScope,
   activityScope,
+  type ListItemActivityLink,
   type Occurrence,
   scopeFromWire,
   targetsWholeSeries,
@@ -29,6 +30,7 @@ import {
   putActivityMeta,
 } from '../repositories/activityRepository.js';
 import { receiptItem } from '../repositories/idempotencyRepository.js';
+import { findViewerLinksTo } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import * as occurrenceRepository from '../repositories/occurrenceRepository.js';
 import { TransactionBuilder, transactWrite } from '../repositories/tx.js';
@@ -133,6 +135,7 @@ export async function completeActivity(
     indexedUserIds: context.indexedUserIds,
     ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
     ...(activity.parentActivityId === undefined ? {} : { updateChildPointer: true }),
+    ...(await viewerLinksClearedBy(next)),
     idempotencyReceipt: receiptFor(result),
   });
   return result;
@@ -252,9 +255,47 @@ export async function skipActivity(
     indexedUserIds: context.indexedUserIds,
     ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
     ...(activity.parentActivityId === undefined ? {} : { updateChildPointer: true }),
+    ...(await viewerLinksClearedBy(next)),
     idempotencyReceipt: receiptFor(result),
   });
   return result;
+}
+
+/**
+ * The viewer pointers a status transition clears — keyed on the **resulting status**, never
+ * on which endpoint was called (P3-15).
+ *
+ * That distinction is the whole reason this is one function. A negative outcome —
+ * `didnt_happen`, or `didnt_go` on an event — arrives through `POST /complete` and produces
+ * `status: 'skipped'`. Keying on the endpoint would clear pointers for `/skip` and silently
+ * leave them for the identical transition through `/complete`, so one user action would
+ * behave two ways depending on which route the client happened to use.
+ *
+ * The lifecycle table clears pointers on **skipped** alone. Complete and reschedule keep
+ * them, and `undefined` is what says so — nothing to clear is the absence of pointer work,
+ * not an empty list of it.
+ *
+ * **Uncomplete does not call this, and deliberately does not restore.** No row in the table
+ * restores a cleared pointer: un-completing reverses the status, and the pointer that a skip
+ * removed is not part of that status. Re-linking is `Plan this item` again, which is an
+ * explicit action with its own confirmation.
+ *
+ * Only a non-occurrence transition reaches here. An occurrence-only skip writes its own
+ * occurrence override and returns long before, leaving the series and its pointer untouched
+ * (`agent-playbook.md` §6.7).
+ */
+async function viewerLinksClearedBy(
+  next: Activity,
+): Promise<{ clearViewerLinks?: ListItemActivityLink[] }> {
+  if (next.status !== 'skipped') return {};
+  if (next.listId === undefined || next.listItemId === undefined) return {};
+  return {
+    clearViewerLinks: await findViewerLinksTo(
+      next.listId,
+      next.listItemId,
+      next.activityId,
+    ),
+  };
 }
 
 /** Snooze a one-off META row or exactly one recurring occurrence. */

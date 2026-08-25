@@ -57,6 +57,7 @@ import {
   listBehaviourMigration,
   listBulkOperation,
   listItemActivityLink,
+  listItemActivityLinkAllPrefix,
   listItem as listItemKey,
   listItemLocator,
   listItemPrefix,
@@ -703,6 +704,36 @@ export async function batchGetViewerLinks(
   if (after === undefined) throw new ListNotFoundError();
   assertSameFence(before, after);
   return links;
+}
+
+/**
+ * Every viewer's pointer that currently names this Activity for this item (P3-15).
+ *
+ * Two lifecycle rows need it: a Plan skipped, and a Plan deleted. Both say "clear the
+ * pointers **to that Plan**" — not every pointer on the item, because a different viewer may
+ * have planned the same item independently and their Plan is untouched by what happened to
+ * this one (ADR-034).
+ *
+ * The sort key orders viewer before item, so this reads the list's bounded `LNK#` prefix and
+ * filters rather than seeking. That ordering is right for the read that happens constantly —
+ * one viewer's own rows — and this one happens on a skip or a delete.
+ *
+ * Returns the observed rows rather than keys, so the caller's delete can condition on the
+ * exact `activityId` it saw and lose to any newer pointer.
+ */
+export async function findViewerLinksTo(
+  listId: string,
+  itemId: string,
+  activityId: string,
+): Promise<ListItemActivityLink[]> {
+  const prefix = listItemActivityLinkAllPrefix(listId);
+  const rows = await queryAll<StoredItem>(
+    { pk: prefix.pk },
+    { skPrefix: prefix.skPrefix, consistentRead: true },
+  );
+  return rows
+    .map((row) => parseListItemActivityLink(row))
+    .filter((link) => link.itemId === itemId && link.activityId === activityId);
 }
 
 /**

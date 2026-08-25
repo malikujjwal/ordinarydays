@@ -27,6 +27,7 @@ import type {
   ActivitySchedule,
   ActivityStatus,
   Gsi1Bucket,
+  ListItemActivityLink,
   Occurrence,
   OccurrenceDetailProjection,
   Recurrence,
@@ -39,6 +40,7 @@ import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import type { Logger } from '../lib/logger.js';
 import {
   ActivityIdUnavailableError,
+  activityFromPartition,
   deleteActivity as deleteActivityRows,
   getActivityMeta,
   getActivityPartition,
@@ -50,6 +52,7 @@ import {
   createActivity as putActivity,
   patchActivity as putPatch,
 } from '../repositories/activityRepository.js';
+import { findViewerLinksTo } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import {
   assertActivityAccess,
@@ -1212,9 +1215,44 @@ export async function removeActivity(
   await releaseChildren(childIdsOf(partition), now);
   // The repository removes partition children and index pointers next, then META last. That
   // leaves this access seam present until every retryable cleanup step has succeeded.
-  await deleteActivityRows(userId, activityId, { partition, now });
+  await deleteActivityRows(userId, activityId, {
+    partition,
+    now,
+    ...(await viewerLinksToClear(activityId, partition)),
+  });
 
   return activityId;
+}
+
+/**
+ * The viewer pointers a deleted Plan must take with it — "Plan deleted → pointers to it are
+ * deleted. **The ListItem survives byte-identical**" (`plans-and-lists.md` §6.3, P3-15).
+ *
+ * Read here rather than in the repository because the rows live in the **list's** partition,
+ * which `listRepository` owns; a repository reaching across to another repository's keys is
+ * the cycle `no-circular` refuses, and a service reading both is the ordinary shape.
+ *
+ * Only a Plan that came from a list item has any. Nothing else about the delete changes: the
+ * item itself is never read, never written, and never deleted — neither side cascades into
+ * the other.
+ */
+async function viewerLinksToClear(
+  activityId: string,
+  partition: readonly StoredItem[],
+): Promise<{ clearViewerLinks?: ListItemActivityLink[] }> {
+  /**
+   * The two fields are read straight off the stored META row rather than through
+   * `activityFromPartition`, and that is deliberate: parsing would make **deleting** an
+   * activity fail on a row that no longer satisfies the schema. Delete is the one operation
+   * that has to keep working on a damaged row — it is how a user gets rid of one — so it
+   * reads the two strings it needs and ignores everything else.
+   */
+  const meta = partition.find((row) => row.sk === 'META');
+  const listId = meta?.listId;
+  const listItemId = meta?.listItemId;
+  if (typeof listId !== 'string' || typeof listItemId !== 'string') return {};
+
+  return { clearViewerLinks: await findViewerLinksTo(listId, listItemId, activityId) };
 }
 
 /**

@@ -39,6 +39,7 @@ import {
   gsi1NeedsDate,
   gsi1Recurring,
   gsi1Scheduled,
+  listItemActivityLink,
   occurrence,
   participantPrefix,
   reminder as reminderKey,
@@ -534,6 +535,19 @@ export interface PatchOptions extends CreateOptions {
   readonly occurrenceGuard?:
     | { readonly date: string; readonly kind: 'missing' }
     | { readonly date: string; readonly kind: 'version'; readonly updatedAt: string };
+  /**
+   * Viewer pointers to clear **in this transaction** (P3-15).
+   *
+   * Only a non-occurrence transition to `skipped` supplies any: the lifecycle table clears
+   * pointers when a Plan is skipped and keeps them on complete, uncomplete and reschedule.
+   * Atomic with the status write because the two are one user-visible event — a status that
+   * committed without its pointer clearing would leave a state line pointing at a Plan the
+   * user has just said did not happen.
+   *
+   * Each delete is conditional on the pointer still naming this Activity, so a viewer who
+   * planned the item again in the meantime keeps the newer pointer.
+   */
+  readonly clearViewerLinks?: readonly ListItemActivityLink[];
 }
 
 /**
@@ -564,6 +578,7 @@ export async function patchActivity(
         ExpressionAttributeValues: { ':expected': expectedUpdatedAt },
       },
     },
+    ...(options.clearViewerLinks ?? []).map(viewerLinkDelete),
   ];
 
   /**
@@ -849,6 +864,34 @@ export interface DeleteOptions {
   readonly partition?: readonly StoredItem[];
   /** The delete instant, so the tombstone's `deletedAt` and `ttl` are testable. */
   readonly now?: string;
+  /**
+   * Viewer pointers to this Plan, cleared **before** META (P3-15).
+   *
+   * They live in the list's partition rather than this Activity's, so the ordinary cascade —
+   * which collects this partition's own rows — never saw them. Before META, for the same
+   * reason everything else is: until META goes, an interrupted delete can re-authorise and
+   * resume, and a pointer left behind after META would be a dead link nothing could clean up.
+   */
+  readonly clearViewerLinks?: readonly ListItemActivityLink[];
+}
+
+/**
+ * One conditional pointer removal, shared by the skip transition and the delete cascade.
+ *
+ * **Conditional on the `activityId` the caller observed**, which is the table's "delete only
+ * `LNK#` rows that **still point to it**" in one expression: a viewer who has since planned
+ * the item again owns a pointer to a different Plan, and neither a skip nor a delete of the
+ * older one may touch it.
+ */
+function viewerLinkDelete(link: ListItemActivityLink): TransactItem {
+  return {
+    Delete: {
+      Key: listItemActivityLink(link.listId, link.viewerUserId, link.itemId),
+      ConditionExpression: '#activityId = :activityId',
+      ExpressionAttributeNames: { '#activityId': 'activityId' },
+      ExpressionAttributeValues: { ':activityId': link.activityId },
+    },
+  };
 }
 
 export async function deleteActivity(
@@ -866,6 +909,19 @@ export async function deleteActivity(
 
   for (const indexedUserId of new Set([userId, ...indexedUserIds])) {
     keys.push(activityIndex(indexedUserId, activityId));
+  }
+
+  /**
+   * The list's viewer pointers, each conditional on still naming this Plan. A condition
+   * failure means the viewer planned the item again and that newer pointer stands, so it is
+   * swallowed rather than failing a delete that has already been authorised.
+   */
+  for (const link of options.clearViewerLinks ?? []) {
+    try {
+      await transactWrite([viewerLinkDelete(link)], { operation: 'clearViewerLink' });
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'conflict') throw error;
+    }
   }
 
   // META is the authority seam. Everything else goes first so an interrupted delete can
