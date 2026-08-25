@@ -31,7 +31,7 @@ import { assertListAccess } from './authz.js';
  *
  * The item is **not** copied, moved, checked, hidden, or given an Activity id
  * (`agent-playbook.md` §6.8). Scheduling writes a new Activity carrying provenance back to
- * the item, plus one pointer for the caller. Nothing in this file writes an `ITEM#` row, and
+ * the item, plus one pointer for the caller. Nothing in this file writes an item row, and
  * the response returns the item unchanged so a caller can see that for itself.
  *
  * ## Nothing here infers what the user chose
@@ -77,7 +77,8 @@ export async function scheduleListItem(
 ): Promise<ScheduleListItemResult> {
   /**
    * `write`, which is this codebase's spelling of §P3-13's "member": any member of the list
-   * may plan an item, and the write lands in the list partition as their own `LNK#` pointer.
+   * may plan an item, and the write lands in the list partition as their own viewer-link
+   * pointer.
    * A reader cannot, because they cannot write that pointer.
    */
   const access = await assertListAccess(userId, listId, 'write');
@@ -185,13 +186,27 @@ export async function scheduleListItem(
     });
   } catch (error) {
     if (error instanceof ActivityIdUnavailableError) {
-      return await adoptOrConflict(
+      const adopted = await adoptOrConflict(
         userId,
         listId,
         itemId,
         input.activityId,
         access.index,
       );
+      /**
+       * **Re-stamp the response with what actually happened.** `receiptFor` was already
+       * called above, while the options object was being built — before the transaction ran
+       * and therefore before this collision was known — and calling it is what sets the body
+       * the handler returns. Without this line the client would get the Plan and pointer this
+       * request *proposed* rather than the ones that stand: a `viewerLink` naming the older
+       * Plan and a `linkedAt` minted moments ago, describing a write that never happened.
+       * Storage is right either way; the response would not have been.
+       *
+       * No receipt row is stored, because the adopt path writes nothing. A later replay of
+       * the same key finds no receipt, adopts again, and answers identically.
+       */
+      receiptFor?.(adopted);
+      return adopted;
     }
     throw error;
   }

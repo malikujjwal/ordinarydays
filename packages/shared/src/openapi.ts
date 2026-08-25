@@ -52,6 +52,8 @@ import {
   patchListInput,
   patchListItemInput,
   reversibleItemMutation,
+  scheduledListItem,
+  scheduleListItemInput,
   undoListOperationInput,
 } from './schemas/list.js';
 import { snoozeActivityInput, unsnoozeActivityInput } from './schemas/occurrence.js';
@@ -88,6 +90,7 @@ const listDetailResponse = envelope(listDetail);
 const deletedListResponse = envelope(deletedList);
 const listTemplateListResponse = envelope(z.array(listTemplate));
 const listItemResponse = envelope(listItemView);
+const scheduledListItemResponse = envelope(scheduledListItem);
 const listItemListResponse = envelope(z.array(listItemView));
 const listItemPageResponse = envelope(z.array(listDetailItem));
 const reversibleItemMutationResponse = envelope(reversibleItemMutation);
@@ -1352,6 +1355,54 @@ registry.registerPath({
  * `/v1/list-templates` (P3-06). The registration that brings `ListTemplate` into
  * `components/schemas`, so a generated client can render the chooser from the spec.
  */
+registry.registerPath({
+  method: 'post',
+  path: '/v1/lists/{id}/items/{itemId}/schedule',
+  summary: 'Plan this item — the optional bridge to Activities',
+  description:
+    'Creates a Plan from a list item and links it for the caller. **The item is not ' +
+    'touched**: it is not copied, moved, checked, hidden or given an Activity id, and it ' +
+    'comes back in the response unchanged so a client can see the bridge linked rather ' +
+    'than duplicated. `creationTarget` and `audience` are both **required** and neither is ' +
+    'ever inferred — the server does not read the list’s `behaviour`, `templateKey` or ' +
+    'capabilities to choose a Plan kind, so a `watch` list does not make a `watch` Plan. ' +
+    'In this phase only `just_me` is accepted; `selected_people` is `400` with ' +
+    '`Sharing is coming soon.` until Phase 6, and a non-empty `attachmentIds` is `400` ' +
+    'until the confirm-and-link path lands. `activityId` and every `reminderId` are ' +
+    'permanent client-minted ids, required here because this path is offline-capable: a ' +
+    'replay after the 24-hour receipt expires adopts an Activity already standing at that ' +
+    'id with the same owner, list and item, and rewrites nothing — least of all the ' +
+    'caller’s current pointer, which may name a newer Plan. Any other collision is the ' +
+    'metadata-free durable-create conflict. `viewerLink` is the caller’s own pointer and ' +
+    'never another viewer’s.',
+  tags: ['lists'],
+  request: {
+    params: z.object({ id: listId, itemId }),
+    body: { content: { 'application/json': { schema: scheduleListItemInput } } },
+  },
+  responses: {
+    201: {
+      description: 'The Plan, the unchanged item, and the caller’s link.',
+      content: { 'application/json': { schema: scheduledListItemResponse } },
+    },
+    400: {
+      description:
+        'A missing or incomplete `creationTarget` or `audience`, `details.kind` that ' +
+        'contradicts the chosen Plan kind, a reminder without its id, an unknown field at ' +
+        'any depth, `selected_people`, or a non-empty `attachmentIds`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such list or item, or a tombstoned id.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description: 'That `activityId` is already in use by something else.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
 /**
  * `/v1/lists/{id}` bulk actions and their compensation (P3-10). The registrations that bring
  * `UndoListOperationInput` and `ListUndoResult` into `components/schemas`.
