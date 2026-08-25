@@ -345,13 +345,19 @@ describe('what the catalogue deliberately does not carry (ADR-031, ADR-032, crit
   /**
    * The catalogue module itself still exports the array and nothing else. The barrel gained
    * P3-07's `listTemplateChoices` — a field projection of these same records, with no
-   * ordering or copy of its own — and that is the complete surface; anything resembling a
-   * matcher, registry or suggestion function is still absent from both.
+   * ordering or copy of its own — and P3-12's `resolveSlot`, which picks a *destination*
+   * among the user's existing lists and is forbidden from returning a `templateKey` at all.
+   * That is the complete surface; anything resembling a matcher, registry or suggestion
+   * function is still absent from all three.
    */
   it('exports nothing but the array — no matcher, registry or suggestion function', async () => {
     const mod = await import('../templates.js');
     expect(Object.keys(mod)).toEqual(['LIST_TEMPLATES']);
     const barrel = await import('../index.js');
-    expect(Object.keys(barrel).sort()).toEqual(['LIST_TEMPLATES', 'listTemplateChoices']);
+    expect(Object.keys(barrel).sort()).toEqual([
+      'LIST_TEMPLATES',
+      'listTemplateChoices',
+      'resolveSlot',
+    ]);
   });
 });

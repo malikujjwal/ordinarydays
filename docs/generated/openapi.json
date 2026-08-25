@@ -94,15 +94,15 @@
             "properties": {
               "groceries": {
                 "type": "string",
-                "minLength": 1
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               },
               "watch": {
                 "type": "string",
-                "minLength": 1
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               },
               "meals": {
                 "type": "string",
-                "minLength": 1
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               }
             }
           },
@@ -257,16 +257,25 @@
             "type": "object",
             "properties": {
               "groceries": {
-                "type": "string",
-                "minLength": 1
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               },
               "watch": {
-                "type": "string",
-                "minLength": 1
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               },
               "meals": {
-                "type": "string",
-                "minLength": 1
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
               }
             }
           }
@@ -5034,7 +5043,7 @@
       },
       "patch": {
         "summary": "Update preferences",
-        "description": "Accepts `displayName`, `timezone`, `currency`, `weekStartsOn`, `defaultReminderOffset` and `defaultLists` — and nothing else. The body schema is strict, so any other field is `400` naming it: `email`, `cognitoSub` and `onboardingState` belong to the auth flow. `defaultReminderOffset` takes any integer in `[-10080, 0]`, where `0` is a real \"at the time\" reminder and `null` clears it to Off — the two are different states, not two spellings of one.",
+        "description": "Accepts `displayName`, `timezone`, `currency`, `weekStartsOn`, `defaultReminderOffset` and `defaultLists` — and nothing else. The body schema is strict, so any other field is `400` naming it: `email`, `cognitoSub` and `onboardingState` belong to the auth flow. `defaultReminderOffset` takes any integer in `[-10080, 0]`, where `0` is a real \"at the time\" reminder and `null` clears it to Off — the two are different states, not two spellings of one. `defaultLists` is a **nested per-slot patch**, not a replacement of the stored map: each supplied value is a `lst_` id or `null`, an omitted slot is preserved untouched, and `null` removes only that key. So two devices choosing different slots both keep their answer. The stored map never holds a null — clearing removes the key.",
         "tags": [
           "me"
         ],

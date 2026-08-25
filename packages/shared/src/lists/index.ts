@@ -1,6 +1,6 @@
 /**
- * `@od/shared/lists` — the list template catalogue and, from P3-07, its creation-choice
- * projection.
+ * `@od/shared/lists` — the list template catalogue, its creation-choice projection (P3-07)
+ * and, from P3-12, the pure slot-resolution rule.
  *
  * **Deliberately not re-exported from the root barrel.** `LIST_TEMPLATES` is creation-time
  * data with an import boundary (`list-templates-are-creation-data` in
@@ -13,5 +13,10 @@
  * renderer could mistake for stored-List state.
  */
 
+export {
+  resolveSlot,
+  type SlotEligibleList,
+  type SlotResolution,
+} from './resolveSlot.js';
 export { type ListTemplateChoice, listTemplateChoices } from './templateChoices.js';
 export { LIST_TEMPLATES } from './templates.js';

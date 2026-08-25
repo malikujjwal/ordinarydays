@@ -67,6 +67,10 @@ export interface User {
    * Chosen destination per slot, so "add these ingredients" has somewhere to go without
    * asking every time (`data-model.md` §4.6). Populated from Phase 3; typed now so the
    * profile shape does not change when it is.
+   *
+   * **Stored values are never null.** Clearing a slot removes the key, so a slot is either a
+   * list id or absent and there is no third state to interpret. {@link PatchUserInput} is
+   * the nullable one, and the asymmetry is the point (P3-12).
    */
   defaultLists?: Partial<Record<DefaultSlot, string>>;
 
@@ -98,5 +102,14 @@ export interface PatchUserInput {
   weekStartsOn?: WeekStart;
   /** `null` clears the default to Off. Absent means "leave it alone". */
   defaultReminderOffset?: number | null;
-  defaultLists?: Partial<Record<DefaultSlot, string>>;
+  /**
+   * A **nested per-slot patch**, not a replacement of the stored map (`api-contract.md`
+   * §2.1, P3-12).
+   *
+   * Each slot is independent: omitted preserves it, a `lst_` id sets it, `null` removes just
+   * that key. Two devices setting different slots concurrently therefore both win, which is
+   * the property a whole-map assignment would quietly destroy — the second write would carry
+   * the first device's stale siblings and undo its choice.
+   */
+  defaultLists?: Partial<Record<DefaultSlot, string | null>>;
 }
