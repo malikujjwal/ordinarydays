@@ -1,4 +1,5 @@
-import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { MAX_INGREDIENTS_PER_ADD } from '@od/shared';
 import type { List, ListItem } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
@@ -146,6 +147,15 @@ const addItem = async (listId: string, title: string, checked?: boolean) => {
   return item;
 };
 
+/**
+ * Destination item ids are **required** (tightened in review): they are the replay protection
+ * that outlives the 24-hour receipt. Derived from the ingredient id so a test replaying the
+ * same selection sends the same ids, exactly as an offline client re-sending its queued
+ * payload would.
+ */
+const destinationItemId = (ingredientId: string) =>
+  `itm_${ingredientId.slice('ing_'.length)}`;
+
 const addToList = (
   listId: string,
   ingredientIds: readonly string[],
@@ -157,7 +167,10 @@ const addToList = (
     `/v1/activities/${activityId}/ingredients/add-to-list`,
     {
       listId,
-      ingredients: ingredientIds.map((ingredientId) => ({ ingredientId })),
+      ingredients: ingredientIds.map((ingredientId) => ({
+        ingredientId,
+        itemId: destinationItemId(ingredientId),
+      })),
     },
     headers,
   );
@@ -238,18 +251,44 @@ describe('the confirmed action', () => {
   });
 
   /**
-   * The `updatedAt` decision, asserted rather than only documented: this write is bookkeeping
-   * about a different object, so it must not read as an edit to the meal.
+   * **Corrected in review.** The first version deliberately left `updatedAt` alone, mirroring
+   * `clearListProvenance`. That was wrong: `addedToListId` is rendered — it is what makes an
+   * ingredient row say `Added` — and it lives inside `details`, which `PATCH` replaces
+   * wholesale under `If-Match`. A field that changes what the user sees, on a versioned
+   * object, has to move the version.
+   *
+   * `lastActivityAt` is a different question and still does not move: that field is about
+   * discussion, not edits (P2-06).
    */
-  it('does not advance the meal’s updatedAt', async () => {
+  it('advances the meal’s updatedAt, and returns the new version', async () => {
+    const { list } = await setUp();
+    const before = await storedMeal();
+
+    const res = await addToList(list.listId, [CHICKEN]);
+
+    const after = await storedMeal();
+    expect(after?.updatedAt).not.toBe(before?.updatedAt);
+    expect(((await res.json()).data as Json).activityUpdatedAt).toBe(after?.updatedAt);
+    expect(after?.lastActivityAt).toBe(before?.lastActivityAt);
+  });
+
+  /** The version it returns is usable: a PATCH carrying the stale one must lose. */
+  it('makes a pre-add If-Match stale, so it cannot overwrite the markers', async () => {
     const { list } = await setUp();
     const before = await storedMeal();
 
     await addToList(list.listId, [CHICKEN]);
 
-    const after = await storedMeal();
-    expect(after?.updatedAt).toBe(before?.updatedAt);
-    expect(after?.lastActivityAt).toBe(before?.lastActivityAt);
+    const stale = await request(
+      'PATCH',
+      `/v1/activities/${MEAL}`,
+      { title: 'Chicken tacos, revised' },
+      { 'If-Match': String(before?.updatedAt) },
+    );
+
+    expect(stale.status).toBe(409);
+    const ingredients = await storedIngredients();
+    expect(ingredients[0]?.addedToListId).toBe(list.listId);
   });
 
   it('reports what happened to each ingredient, in the order they were sent', async () => {
@@ -489,19 +528,11 @@ describe('replay adds nothing twice', () => {
    * After the receipt expires the request runs again for real, and replay protection falls to
    * the stable `itm_` ids the client minted — the same trade `createItemsBulk` documents.
    */
-  it('creates no duplicate under a new key when the client minted item ids', async () => {
+  it('creates no duplicate under a new key, because the item ids are the same', async () => {
     const { list } = await setUp();
-    const body = {
-      listId: list.listId,
-      ingredients: [
-        { ingredientId: CHICKEN, itemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B1' },
-        { ingredientId: TOMATOES, itemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B2' },
-      ],
-    };
-    const path = `/v1/activities/${MEAL}/ingredients/add-to-list`;
 
-    expect((await request('POST', path, body)).status).toBe(201);
-    const replay = await request('POST', path, body);
+    expect((await addToList(list.listId, [CHICKEN, TOMATOES])).status).toBe(201);
+    const replay = await addToList(list.listId, [CHICKEN, TOMATOES]);
 
     // The second attempt finds both rows unchecked and already carrying this label, so it
     // extends nothing and creates nothing — §7.3's duplicate rule absorbing the retry.
@@ -572,7 +603,7 @@ describe('what it refuses, and writes nothing for', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           listId: list.listId,
-          ingredients: [{ ingredientId: CHICKEN }],
+          ingredients: [{ ingredientId: CHICKEN, itemId: destinationItemId(CHICKEN) }],
         }),
       }),
     );
@@ -647,5 +678,206 @@ describe('the destination the user confirmed', () => {
 
     const userRows = await partition(`USER#${DEV}`);
     expect(userRows.filter((row) => String(row.sk).startsWith('IDX#'))).toHaveLength(1);
+  });
+});
+
+/**
+ * The provenance the client may **not** author, and the provenance the server must **not**
+ * lose. Both raised in review; both were real, and the second was reachable from the app's
+ * ordinary meal-edit screen.
+ */
+describe('addedToListId is server-owned in both directions', () => {
+  it.each([
+    ['create', '/v1/activities'],
+    ['patch', `/v1/activities/${MEAL}`],
+  ])('rejects a client-supplied addedToListId on %s', async (kind, path) => {
+    if (kind === 'patch') await createMeal();
+    const details = {
+      kind: 'meal',
+      mealSlot: 'dinner',
+      ingredients: [
+        {
+          ingredientId: CHICKEN,
+          name: 'Chicken',
+          addedToListId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1D9',
+        },
+      ],
+    };
+
+    const res =
+      kind === 'create'
+        ? await request('POST', path, {
+            activityId: OTHER_MEAL,
+            objectKind: 'plan',
+            type: 'meal',
+            title: 'Forged',
+            details,
+          })
+        : await request(
+            'PATCH',
+            path,
+            { details },
+            { 'If-Match': String((await storedMeal())?.updatedAt) },
+          );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe('validation_failed');
+  });
+
+  /**
+   * An ordinary edit — renaming an ingredient, fixing a quantity, reordering — used to wipe
+   * every marker, because `PATCH` replaces `details` wholesale and the client cannot send the
+   * field back. The server retains them, matched by `ingredientId`.
+   */
+  it('keeps markers across an edit that renames and reorders ingredients', async () => {
+    const { list } = await setUp();
+    await addToList(list.listId, [CHICKEN, TORTILLAS]);
+
+    const res = await request(
+      'PATCH',
+      `/v1/activities/${MEAL}`,
+      {
+        details: {
+          kind: 'meal',
+          mealSlot: 'dinner',
+          ingredients: [
+            { ingredientId: SOUR_CREAM, name: 'Sour cream' },
+            { ingredientId: TOMATOES, name: 'Vine tomatoes' },
+            { ingredientId: TORTILLAS, name: 'Corn tortillas', quantity: '12' },
+            { ingredientId: CHICKEN, name: 'Chicken thighs' },
+          ],
+        },
+      },
+      { 'If-Match': String((await storedMeal())?.updatedAt) },
+    );
+    expect(res.status).toBe(200);
+
+    const byId = new Map(
+      (await storedIngredients()).map((row) => [row.ingredientId, row]),
+    );
+    expect(byId.get(CHICKEN)?.addedToListId).toBe(list.listId);
+    expect(byId.get(TORTILLAS)?.addedToListId).toBe(list.listId);
+    expect(byId.get(TOMATOES)).not.toHaveProperty('addedToListId');
+    // The edit itself still applied.
+    expect(byId.get(CHICKEN)?.name).toBe('Chicken thighs');
+    expect(byId.get(TORTILLAS)?.quantity).toBe('12');
+  });
+
+  it('does not resurrect a marker for a replaced row', async () => {
+    const { list } = await setUp();
+    await addToList(list.listId, [CHICKEN]);
+
+    await request(
+      'PATCH',
+      `/v1/activities/${MEAL}`,
+      {
+        details: {
+          kind: 'meal',
+          mealSlot: 'dinner',
+          ingredients: [{ ingredientId: SOUR_CREAM, name: 'Chicken' }],
+        },
+      },
+      { 'If-Match': String((await storedMeal())?.updatedAt) },
+    );
+
+    const ingredients = await storedIngredients();
+    expect(ingredients).toHaveLength(1);
+    expect(ingredients[0]).not.toHaveProperty('addedToListId');
+  });
+});
+
+/**
+ * The atomicity the rewrite exists for.
+ *
+ * The first version committed list rows and the receipt, then wrote the meal's provenance
+ * separately. A same-key retry after that gap replayed the stored response and never ran the
+ * write, so the meal permanently disagreed with the list. There is now one transaction, so
+ * the two facts cannot be stored apart — asserted by reading storage directly rather than by
+ * trusting the response.
+ */
+describe('one commit, or none', () => {
+  const receiptRows = async (userId = DEV) =>
+    (
+      await documents.send(
+        new ScanCommand({
+          TableName: TEST_TABLE,
+          FilterExpression: 'begins_with(#pk, :prefix)',
+          ExpressionAttributeNames: { '#pk': 'pk' },
+          ExpressionAttributeValues: { ':prefix': `IDEM#${userId}` },
+          ConsistentRead: true,
+        }),
+      )
+    ).Items ?? [];
+
+  it('never stores a receipt without the provenance it describes', async () => {
+    const { list } = await setUp();
+
+    await addToList(list.listId, [CHICKEN, TORTILLAS]);
+
+    expect(await receiptRows()).not.toHaveLength(0);
+    const byId = new Map(
+      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
+    );
+    expect(byId.get(CHICKEN)).toBe(list.listId);
+    expect(byId.get(TORTILLAS)).toBe(list.listId);
+  });
+
+  /**
+   * A stale ingredient index cancels the whole transaction. The meal is patched to drop a row
+   * after the request body was composed, so the surviving id resolves but the per-index
+   * condition cannot hold — and nothing at all is written, receipt included.
+   */
+  it('leaves no row, no label and no receipt when the meal moves under it', async () => {
+    const { list } = await setUp();
+    await addItem(list.listId, 'Chicken');
+    const before = await itemRows(list.listId);
+
+    await request(
+      'PATCH',
+      `/v1/activities/${MEAL}`,
+      {
+        details: {
+          kind: 'meal',
+          mealSlot: 'dinner',
+          ingredients: INGREDIENTS.filter((row) => row.ingredientId !== CHICKEN),
+        },
+      },
+      { 'If-Match': String((await storedMeal())?.updatedAt) },
+    );
+
+    const res = await addToList(list.listId, [CHICKEN, TORTILLAS]);
+
+    expect(res.status).toBe(400);
+    expect(await itemRows(list.listId)).toEqual(before);
+    for (const ingredient of await storedIngredients()) {
+      expect(ingredient).not.toHaveProperty('addedToListId');
+    }
+  });
+
+  it('caps one operation at MAX_INGREDIENTS_PER_ADD', async () => {
+    const { list } = await setUp();
+
+    const res = await request('POST', `/v1/activities/${MEAL}/ingredients/add-to-list`, {
+      listId: list.listId,
+      ingredients: Array.from({ length: MAX_INGREDIENTS_PER_ADD + 1 }, (_, index) => ({
+        ingredientId: CHICKEN,
+        itemId: `itm_01J8XKQ2M4N5P6R7S8T9V0W${String(index).padStart(2, '0')}`,
+      })),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await itemRows(list.listId)).toHaveLength(0);
+  });
+
+  it('400s a request with no destination item id', async () => {
+    const { list } = await setUp();
+
+    const res = await request('POST', `/v1/activities/${MEAL}/ingredients/add-to-list`, {
+      listId: list.listId,
+      ingredients: [{ ingredientId: CHICKEN }],
+    });
+
+    expect(res.status).toBe(400);
+    expect(await itemRows(list.listId)).toHaveLength(0);
   });
 });

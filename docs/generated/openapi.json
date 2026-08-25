@@ -2172,10 +2172,6 @@
                             "quantity": {
                               "type": "string",
                               "maxLength": 120
-                            },
-                            "addedToListId": {
-                              "type": "string",
-                              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
                             }
                           },
                           "required": [
@@ -2705,10 +2701,6 @@
                             "quantity": {
                               "type": "string",
                               "maxLength": 120
-                            },
-                            "addedToListId": {
-                              "type": "string",
-                              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
                             }
                           },
                           "required": [
@@ -3157,10 +3149,6 @@
                         "quantity": {
                           "type": "string",
                           "maxLength": 120
-                        },
-                        "addedToListId": {
-                          "type": "string",
-                          "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
                         }
                       },
                       "required": [
@@ -3492,12 +3480,17 @@
             "items": {
               "$ref": "#/components/schemas/AddedIngredient"
             }
+          },
+          "activityUpdatedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "required": [
           "listId",
           "sourceLabel",
-          "ingredients"
+          "ingredients",
+          "activityUpdatedAt"
         ]
       },
       "AddedIngredient": {
@@ -3708,12 +3701,13 @@
                 }
               },
               "required": [
-                "ingredientId"
+                "ingredientId",
+                "itemId"
               ],
               "additionalProperties": false
             },
             "minItems": 1,
-            "maxItems": 60
+            "maxItems": 30
           }
         },
         "required": [

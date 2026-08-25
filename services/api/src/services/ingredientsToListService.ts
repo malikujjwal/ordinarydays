@@ -4,26 +4,24 @@ import type { AddIngredientsToListInput } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import type { Activity, List, ListItem, MealIngredient } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
-import type { IdempotencyReceipt } from '../lib/idempotency.js';
+import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import {
   type IngredientAddition,
-  recordIngredientsAddedToList,
+  ingredientsAddedToListItem,
 } from '../repositories/activityRepository.js';
-import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
+import { receiptItem } from '../repositories/idempotencyRepository.js';
 import {
-  createListItems,
-  extendItemSourceLabel,
+  appendListItemCreates,
+  appendSourceLabelExtension,
   getListMeta,
   type ListAccessGrant,
-  ListFullError,
-  ListMutationRetryExhaustedError,
   ListNotFoundError,
   ListRankRepairRequiredError,
   ListReadFenceError,
-  type NewListItem,
-  newItemId,
+  planListItemWrites,
   readAllListItems,
 } from '../repositories/listRepository.js';
+import { TransactionBuilder, transactWrite } from '../repositories/tx.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
 import { withListWorkDrain } from './listMutationService.js';
 import { repairListRanks } from './listRankRepairService.js';
@@ -53,21 +51,33 @@ import { repairListRanks } from './listRankRepairService.js';
  * server-side would be a second implementation of the rule §P3-12 says must have exactly one,
  * and worse, it could disagree with the name the user was shown.
  *
- * ## Order of writes, and why it is this order
+ * ## One transaction, and why it had to become one
  *
- * Three steps, and only the middle one can duplicate anything:
+ * Everything this action writes — created rows, extended labels, the List META counters, the
+ * meal's `addedToListId` markers and its new version, and the idempotency receipt — commits
+ * in a single `TransactWriteItems`.
  *
- * 1. **Extend the labels** of existing unchecked rows. Idempotent by
- *    {@link alreadyLabelled}: a segment a row already carries is not appended twice.
- * 2. **Create the new rows**, carrying the idempotency receipt. This is the commit point.
- * 3. **Record `addedToListId`** on the source ingredients. Idempotent by construction.
+ * The first version did not. It ran three ordered steps and argued that making every step
+ * before the receipt idempotent was equivalent. Review found two holes in that, and both were
+ * real. A same-key retry after the receipt committed replayed the stored response and **never
+ * ran the provenance write**, so the meal permanently disagreed with the list about what had
+ * been added. And a conflict part-way through the creates left rows on the list from an
+ * operation that then answered `503`. Neither is reachable now: there is one commit, so there
+ * is nothing that can be half-done.
  *
- * Everything before the commit point is safe to re-run, which is what makes a crash
- * recoverable: no receipt was stored, so the client's retry replays the whole action and the
- * re-run is a no-op up to the point it failed. A crash *after* the commit point leaves items
- * on the list that the meal does not yet show as `Added` — the user taps again, §7.3's
- * duplicate rule recognises the unchecked rows it just made, and step 3 lands. The failure
- * mode is one redundant tap, in exchange for never creating a row twice.
+ * The cost is a cap — `MAX_INGREDIENTS_PER_ADD`, thirty — because a transaction holds a
+ * hundred items and each created row costs three. A meal may still hold sixty ingredients;
+ * adding them all takes two taps. That is the cheaper side of the trade.
+ *
+ * ## Read, classify, build, commit — and retry the whole cycle
+ *
+ * Classification depends on what is on the list *now*: whether a matching row exists, and
+ * whether it is checked. Between reading that and committing, the list may move. Every
+ * condition in the transaction is therefore tied to something the read observed —
+ * `rankVersion` for the list's shape, each extended row's `itemRevision`, each selected
+ * ingredient's position, and the meal's `updatedAt` — and a condition failure re-runs the
+ * **entire** cycle rather than retrying a stale plan. Reclassifying is the point: a row that
+ * was checked in the meantime must become a new item, not an extended label.
  */
 
 const NOT_A_MEAL = 'Only a meal has ingredients to add.';
@@ -77,6 +87,16 @@ const STALE_INGREDIENT =
 const BUSY = 'That list is busy. Try again.';
 const LIST_FULL = 'List is full.';
 
+/**
+ * How many times the read/classify/commit cycle re-runs before giving up.
+ *
+ * Each attempt loses only to a change that landed **since its read**, and the contenders are
+ * deliberate user acts — checking an item, renaming one, adding another. Three is generous
+ * for that and bounded so a pathological writer cannot spin. `createListItems` uses the same
+ * shape for the same reason.
+ */
+const ATTEMPTS = 3;
+
 /** A selected ingredient, resolved against the meal's current array. */
 interface ResolvedIngredient {
   readonly ingredientId: string;
@@ -84,12 +104,7 @@ interface ResolvedIngredient {
   readonly index: number;
   readonly ingredient: MealIngredient;
   readonly title: string;
-  readonly itemId?: string;
-}
-
-interface PlacedItem {
-  readonly resolved: ResolvedIngredient;
-  readonly item: ListItem;
+  readonly itemId: string;
 }
 
 /**
@@ -104,6 +119,7 @@ interface PlacedItem {
 export interface AddedIngredients {
   readonly listId: string;
   readonly sourceLabel: string;
+  readonly activityUpdatedAt: string;
   readonly ingredients: readonly {
     readonly ingredientId: string;
     readonly outcome: 'created' | 'labelled';
@@ -111,12 +127,20 @@ export interface AddedIngredients {
   }[];
 }
 
+/** Raised when a condition tied to the read failed, so the whole cycle must re-run. */
+class ReclassifyError extends Error {
+  constructor() {
+    super('The list or the meal changed while this was being composed.');
+    this.name = 'ReclassifyError';
+  }
+}
+
 /**
  * `POST /v1/activities/:id/ingredients/add-to-list`.
  *
- * @param receiptFor built from the rows actually written, so a replay returns the ids that
- * were created — the same reason `createListItems` takes a callback rather than a prebuilt
- * receipt (`listRepository.ts`).
+ * @param receiptFor built from the rows actually written, and committed **inside** the same
+ * transaction as those rows. That is what makes a stored receipt and the provenance it
+ * describes inseparable.
  */
 export async function addIngredientsToList(
   userId: string,
@@ -125,72 +149,195 @@ export async function addIngredientsToList(
   now: string,
   receiptFor?: (result: AddedIngredients) => IdempotencyReceipt,
 ): Promise<AddedIngredients> {
+  const access = await assertListAccess(userId, input.listId, 'write');
+
+  for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
+    try {
+      return await attemptAdd(userId, activityId, input, access.index, now, receiptFor);
+    } catch (error) {
+      if (!(error instanceof ReclassifyError)) throw error;
+    }
+  }
+  /**
+   * Three reads in a row each raced. Nothing has been written — every attempt was one
+   * transaction — so the honest answer is the retryable conflict, not a partial success.
+   */
+  throw new AppError('internal', BUSY, undefined, 1);
+}
+
+/** One read/classify/build/commit pass. Either it commits whole or it wrote nothing. */
+async function attemptAdd(
+  userId: string,
+  activityId: string,
+  input: AddIngredientsToListInput,
+  access: ListAccessGrant,
+  now: string,
+  receiptFor?: (result: AddedIngredients) => IdempotencyReceipt,
+): Promise<AddedIngredients> {
+  /**
+   * Re-read inside the cycle, not once outside it. The meal's ingredient array is half of
+   * what the transaction conditions on, so a retry that reused the first read would keep
+   * committing indexes resolved against an array that has since moved.
+   */
   const { activity } = await assertActivityAccess(userId, activityId, 'owner');
   if (activity.type !== 'meal') refuse('activityId', NOT_A_MEAL);
 
-  const access = await assertListAccess(userId, input.listId, 'write');
-  const list = await mapped(() =>
-    loadCollection(userId, input.listId, access.index, now),
-  );
-
+  const list = await mapped(() => loadCollection(userId, input.listId, access, now));
   const selected = resolveSelected(activity, input);
   const existing = await mapped(() =>
     withListWorkDrain(
       userId,
       input.listId,
-      access.index,
-      () => readAllListItems(userId, input.listId, access.index),
+      access,
+      () => readAllListItems(userId, input.listId, access),
       now,
     ),
   );
 
-  const label = provenanceLabel(
+  const sourceLabel = provenanceLabel(
     labelSource(activity),
     labelsFromOtherMeals(existing, activityId),
     today(activity, now),
   );
 
-  const plan = classify(selected, existing);
+  const plan = classify(selected, existing, sourceLabel);
   assertCapacity(list, plan.creates.length);
 
-  // Step 1 — see the ordering note above. Every one of these is a no-op on a second run.
-  const labelled: PlacedItem[] = [];
-  for (const { resolved, match } of plan.extended) {
-    const item = alreadyLabelled(match, label)
-      ? match
-      : await mapped(() =>
-          extendItemSourceLabel(userId, input.listId, access.index, match, label, now),
-        );
-    labelled.push({ resolved, item });
+  const basis = await planWrites(userId, input.listId, access, plan.creates.length, now);
+
+  const created: ListItem[] = plan.creates.map((resolved, index) => ({
+    itemId: resolved.itemId,
+    listId: input.listId,
+    rank: basis.ranks[index] as string,
+    itemRevision: 0,
+    title: resolved.title,
+    checked: false,
+    sourceActivityId: activityId,
+    sourceLabel,
+  }));
+
+  const labelled: ListItem[] = plan.extended.map((row) => ({
+    ...row.match,
+    sourceLabel:
+      row.match.sourceLabel === undefined || row.match.sourceLabel === ''
+        ? sourceLabel
+        : `${row.match.sourceLabel} · ${sourceLabel}`,
+    itemRevision: row.match.itemRevision + 1,
+  }));
+
+  const result = assemble(input.listId, sourceLabel, now, plan, labelled, created);
+
+  const builder = new TransactionBuilder(
+    'addIngredientsToList',
+    receiptFor === undefined ? 0 : 1,
+  );
+  const spans = appendListItemCreates(builder, input.listId, created, basis, now);
+  for (const [index, row] of plan.extended.entries()) {
+    appendSourceLabelExtension(
+      builder,
+      input.listId,
+      row.match,
+      labelled[index]?.sourceLabel ?? sourceLabel,
+      now,
+    );
   }
 
-  // Step 2 — the commit point.
-  const created = await createRows(
-    userId,
-    input.listId,
-    access.index,
-    plan.creates,
-    { activityId, label, now },
-    receiptFor === undefined
-      ? undefined
-      : (rows) => receiptFor(assemble(input.listId, label, plan.order, labelled, rows)),
-  );
-
-  const result = assemble(input.listId, label, plan.order, labelled, created);
-
-  // Step 3 — after the commit point, and idempotent because of it.
-  await recordIngredientsAddedToList(
-    activityId,
-    input.listId,
-    selected.map(
-      (resolved): IngredientAddition => ({
-        index: resolved.index,
-        ingredientId: resolved.ingredientId,
-      }),
+  builder.add(
+    ingredientsAddedToListItem(
+      activityId,
+      input.listId,
+      selected.map(
+        (resolved): IngredientAddition => ({
+          index: resolved.index,
+          ingredientId: resolved.ingredientId,
+        }),
+      ),
+      activity.updatedAt,
+      now,
     ),
   );
 
+  const receiptIndex = builder.length;
+  if (receiptFor !== undefined) builder.addReserved(receiptItem(receiptFor(result)));
+
+  await commit(builder, {
+    deletionGate: spans.deletionGate,
+    receipt: receiptFor === undefined ? undefined : receiptIndex,
+    createdCount: created.length,
+    listId: input.listId,
+    userId,
+    access,
+  });
+
   return result;
+}
+
+/** Allocates ranks, repairing once — after which this attempt re-plans from scratch. */
+async function planWrites(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  count: number,
+  now: string,
+) {
+  try {
+    return await planListItemWrites(userId, listId, access, count);
+  } catch (error) {
+    if (error instanceof ListReadFenceError) {
+      throw new AppError('internal', BUSY, undefined, 1);
+    }
+    if (!(error instanceof ListRankRepairRequiredError)) throw error;
+    const repaired = await repairListRanks(userId, listId, access, now);
+    if (!repaired) throw new AppError('internal', BUSY, undefined, 1);
+    // The repair rewrote every rank, so the classification's rows are stale too.
+    throw new ReclassifyError();
+  }
+}
+
+interface CommitSpans {
+  readonly deletionGate: number;
+  readonly receipt: number | undefined;
+  readonly createdCount: number;
+  readonly listId: string;
+  readonly userId: string;
+  readonly access: ListAccessGrant;
+}
+
+/**
+ * Commits, and turns each condition failure into the answer that names what happened.
+ *
+ * DynamoDB reports which **item** failed, not which clause, so the index is the whole
+ * diagnosis. Everything except the deletion gate, a genuinely full list and an idempotency
+ * race is a {@link ReclassifyError}: the read is stale, and the caller must look again rather
+ * than retry a plan built from what used to be true.
+ */
+async function commit(builder: TransactionBuilder, spans: CommitSpans): Promise<void> {
+  try {
+    await transactWrite(builder.build(), {
+      operation: 'addIngredientsToList',
+      onConditionFailed: (index) => {
+        if (index === spans.deletionGate) return new ListNotFoundError();
+        if (index === spans.receipt) return new IdempotencyRaceError();
+        return new ReclassifyError();
+      },
+    });
+  } catch (error) {
+    /**
+     * META carries two conditions that can each fail and reports neither. A strong reread
+     * separates them: a full list is permanent and must say so, while a moved `rankVersion`
+     * is the ordinary conflict the cycle re-runs. Same reasoning as `createListItems`.
+     */
+    if (error instanceof ReclassifyError && spans.createdCount > 0) {
+      const current = await getListMeta(spans.userId, spans.listId, spans.access);
+      if (
+        current !== undefined &&
+        current.itemCount + spans.createdCount > MAX_LIST_ITEMS
+      ) {
+        refuse('ingredients', LIST_FULL);
+      }
+    }
+    throw error;
+  }
 }
 
 /** The three fields §7.5's rules read, and nothing else the Activity happens to carry. */
@@ -209,12 +356,13 @@ function labelSource(activity: Activity) {
  * This is the function the stable id exists for. An action composed offline, queued, and
  * replayed after the user reordered their ingredients must still add the rows they picked —
  * so the id is looked up, and the index it happens to sit at now is only ever carried as a
- * write condition (`recordIngredientsAddedToList`).
+ * write condition (`ingredientsAddedToListItem`).
  *
- * **A missing id fails the whole request** (§P3-17). The row was deleted or replaced, so the
- * thing the user selected no longer exists; adding the remaining ones would silently deliver
- * a different order than the one they confirmed, and resolving it to whatever now sits at
- * that position is precisely the position-is-identity bug the id removes.
+ * **A missing id fails the whole request** (§P3-17), before anything is written and before
+ * the transaction is even composed. The row was deleted or replaced, so the thing the user
+ * selected no longer exists; adding the remaining ones would silently deliver a different
+ * order than the one they confirmed, and resolving it to whatever now sits at that position
+ * is precisely the position-is-identity bug the id removes.
  *
  * A repeated id is refused for the same reason rather than deduplicated: two selections of
  * one row is not something the picker can produce, so it is a client that has lost track of
@@ -234,10 +382,21 @@ function resolveSelected(
   );
 
   const seen = new Set<string>();
+  const seenItemIds = new Set<string>();
   return input.ingredients.map((selection, position) => {
     const path = `ingredients.${String(position)}.ingredientId`;
     if (seen.has(selection.ingredientId)) refuse(path, STALE_INGREDIENT);
     seen.add(selection.ingredientId);
+
+    /**
+     * Two ingredients sharing one destination `itm_` would make the transaction write the
+     * same key twice, which DynamoDB refuses as a malformed request rather than a condition
+     * failure. Caught here so it reads as the client mistake it is.
+     */
+    if (seenItemIds.has(selection.itemId)) {
+      refuse(`ingredients.${String(position)}.itemId`, STALE_INGREDIENT);
+    }
+    seenItemIds.add(selection.itemId);
 
     const found = byId.get(selection.ingredientId);
     if (found === undefined) refuse(path, STALE_INGREDIENT);
@@ -247,7 +406,7 @@ function resolveSelected(
       index: found.index,
       ingredient: found.ingredient,
       title: formatIngredientTitle(found.ingredient.name, found.ingredient.quantity),
-      ...(selection.itemId === undefined ? {} : { itemId: selection.itemId }),
+      itemId: selection.itemId,
     };
   });
 }
@@ -255,6 +414,8 @@ function resolveSelected(
 interface Plan {
   readonly creates: ResolvedIngredient[];
   readonly extended: { resolved: ResolvedIngredient; match: ListItem }[];
+  /** Selections whose row already carries this label: nothing to write, nothing to create. */
+  readonly unchanged: { resolved: ResolvedIngredient; match: ListItem }[];
   /** The request's order, so the response reads as the user's selection did. */
   readonly order: readonly string[];
 }
@@ -266,6 +427,12 @@ interface Plan {
  * is still on the shopping list, so a second line is noise. Present and **checked** → create,
  * because a checked row means it was already bought and the user needs it again.
  *
+ * A fourth case falls out of replay: an unchecked match that **already carries this exact
+ * label** needs no write at all. That keeps a re-tap after a lost response from turning
+ * `Sunday dinner` into `Sunday dinner · Sunday dinner`, which is not an extension but the
+ * same fact twice. Segments are compared whole, so `Sunday` does not match inside
+ * `Sunday dinner`.
+ *
  * The match is on a case-insensitive, trimmed title. Two ingredients in one request that
  * normalise to the same title are handled the same way: the first claims the match, and the
  * second finds no unchecked row left to join and creates one — the same answer the two taps
@@ -274,6 +441,7 @@ interface Plan {
 function classify(
   selected: readonly ResolvedIngredient[],
   existing: readonly ListItem[],
+  sourceLabel: string,
 ): Plan {
   const unchecked = new Map<string, ListItem>();
   for (const item of existing) {
@@ -284,6 +452,7 @@ function classify(
 
   const creates: ResolvedIngredient[] = [];
   const extended: { resolved: ResolvedIngredient; match: ListItem }[] = [];
+  const unchanged: { resolved: ResolvedIngredient; match: ListItem }[] = [];
   for (const resolved of selected) {
     const key = normalise(resolved.title);
     const match = unchecked.get(key);
@@ -292,22 +461,16 @@ function classify(
       continue;
     }
     unchecked.delete(key);
-    extended.push({ resolved, match });
+    if (alreadyLabelled(match, sourceLabel)) unchanged.push({ resolved, match });
+    else extended.push({ resolved, match });
   }
-  return { creates, extended, order: selected.map((row) => row.ingredientId) };
+  return { creates, extended, unchanged, order: selected.map((row) => row.ingredientId) };
 }
 
 function normalise(title: string): string {
   return title.trim().toLowerCase();
 }
 
-/**
- * Whether this row already carries this exact label segment.
- *
- * The guard that makes step 1 replayable. Without it a retried action turns `Sunday dinner`
- * into `Sunday dinner · Sunday dinner`, which is not an extension — it is the same fact
- * twice. Segments are compared whole, so `Sunday` does not match inside `Sunday dinner`.
- */
 function alreadyLabelled(item: ListItem, label: string): boolean {
   if (item.sourceLabel === undefined) return false;
   return item.sourceLabel.split(' · ').includes(label);
@@ -348,102 +511,37 @@ function today(activity: Activity, now: string): string {
   return toWallDate(now as Instant, timezone as TimeZone);
 }
 
-/** Three transaction items per row plus the fixed three, under the hundred-item ceiling. */
-const CREATE_CHUNK = 32;
-
-/**
- * Creates the new rows, in chunks, with the receipt on the last one.
- *
- * The receipt joins the **final** chunk so a crash part-way through stores no successful
- * response and the replay resumes rather than replaying a lie — the same rule
- * `createItemsBulk` follows, and the reason `MAX_INGREDIENTS` (60) cannot be one transaction.
- */
-async function createRows(
-  userId: string,
-  listId: string,
-  access: ListAccessGrant,
-  rows: readonly ResolvedIngredient[],
-  provenance: { activityId: string; label: string; now: string },
-  receiptFor?: (created: PlacedItem[]) => IdempotencyReceipt,
-): Promise<PlacedItem[]> {
-  if (rows.length === 0) {
-    // Nothing to write, but the operation still records its receipt — otherwise the next
-    // replay re-reads the whole list and re-derives an answer it already gave.
-    if (receiptFor !== undefined) await writeReceiptOnly(receiptFor([]));
-    return [];
-  }
-
-  const planned = rows.map(
-    (resolved): NewListItem => ({
-      itemId: resolved.itemId ?? newItemId(),
-      title: resolved.title,
-      checked: false,
-      sourceActivityId: provenance.activityId,
-      sourceLabel: provenance.label,
-    }),
-  );
-
-  const placed = (items: readonly ListItem[]): PlacedItem[] =>
-    items.map((item, index) => ({ resolved: rows[index] as ResolvedIngredient, item }));
-
-  const created: ListItem[] = [];
-  for (let from = 0; from < planned.length; from += CREATE_CHUNK) {
-    const chunk = planned.slice(from, from + CREATE_CHUNK);
-    const isFinal = from + CREATE_CHUNK >= planned.length;
-    const written = await mapped(() =>
-      createWithRepair(userId, listId, access, chunk, {
-        now: provenance.now,
-        ...(isFinal && receiptFor !== undefined
-          ? {
-              receiptFor: (items: ListItem[]) =>
-                receiptFor(placed([...created, ...items])),
-            }
-          : {}),
-      }),
-    );
-    created.push(...written);
-  }
-
-  return placed(created);
-}
-
-/** The same repair-once answer every other create path gives an exhausted rank gap. */
-async function createWithRepair(
-  userId: string,
-  listId: string,
-  access: ListAccessGrant,
-  items: readonly NewListItem[],
-  options: { now: string; receiptFor?: (items: ListItem[]) => IdempotencyReceipt },
-): Promise<ListItem[]> {
-  try {
-    return await createListItems(userId, listId, access, items, options);
-  } catch (error) {
-    if (!(error instanceof ListRankRepairRequiredError)) throw error;
-    const repaired = await repairListRanks(userId, listId, access, options.now);
-    if (!repaired) throw new AppError('internal', BUSY, undefined, 1);
-    return createListItems(userId, listId, access, items, options);
-  }
-}
-
-/** The response, in the order the user selected, whatever happened to each row. */
+/** The response, in the order the ingredients were sent, whatever happened to each. */
 function assemble(
   listId: string,
   sourceLabel: string,
-  order: readonly string[],
-  labelled: readonly PlacedItem[],
-  created: readonly PlacedItem[],
+  activityUpdatedAt: string,
+  plan: Plan,
+  labelled: readonly ListItem[],
+  created: readonly ListItem[],
 ): AddedIngredients {
   const outcomes = new Map<string, { outcome: 'created' | 'labelled'; item: ListItem }>();
-  for (const row of labelled) {
-    outcomes.set(row.resolved.ingredientId, { outcome: 'labelled', item: row.item });
+  for (const [index, row] of plan.extended.entries()) {
+    const item = labelled[index];
+    if (item !== undefined) {
+      outcomes.set(row.resolved.ingredientId, { outcome: 'labelled', item });
+    }
   }
-  for (const row of created) {
-    outcomes.set(row.resolved.ingredientId, { outcome: 'created', item: row.item });
+  /** Already carried this label, so it reports as `labelled` with the row untouched. */
+  for (const row of plan.unchanged) {
+    outcomes.set(row.resolved.ingredientId, { outcome: 'labelled', item: row.match });
+  }
+  for (const [index, resolved] of plan.creates.entries()) {
+    const item = created[index];
+    if (item !== undefined) {
+      outcomes.set(resolved.ingredientId, { outcome: 'created', item });
+    }
   }
   return {
     listId,
     sourceLabel,
-    ingredients: order.flatMap((ingredientId) => {
+    activityUpdatedAt,
+    ingredients: plan.order.flatMap((ingredientId) => {
       const row = outcomes.get(ingredientId);
       return row === undefined
         ? []
@@ -481,12 +579,10 @@ async function loadCollection(
   return list;
 }
 
-/** Same precheck, same caveat: the create transaction's own condition is the enforcement. */
+/** Same precheck, same caveat: the transaction's own META condition is the enforcement. */
 function assertCapacity(list: List, adding: number): void {
   if (list.itemCount + adding <= MAX_LIST_ITEMS) return;
-  throw new AppError('validation_failed', LIST_FULL, [
-    { path: 'ingredients', message: LIST_FULL },
-  ]);
+  refuse('ingredients', LIST_FULL);
 }
 
 function refuse(path: string, message: string): never {
@@ -497,15 +593,7 @@ async function mapped<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
   } catch (error) {
-    if (error instanceof ListFullError) {
-      throw new AppError('validation_failed', LIST_FULL, [
-        { path: 'ingredients', message: LIST_FULL },
-      ]);
-    }
-    if (
-      error instanceof ListMutationRetryExhaustedError ||
-      error instanceof ListReadFenceError
-    ) {
+    if (error instanceof ListReadFenceError) {
       throw new AppError('internal', BUSY, undefined, 1);
     }
     throw error;

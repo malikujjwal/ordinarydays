@@ -21,6 +21,7 @@ import {
 import type {
   Activity,
   ActivityDetail,
+  ActivityDetails,
   ActivityDetailTarget,
   ActivityFilter,
   ActivityListItem,
@@ -28,6 +29,7 @@ import type {
   ActivityStatus,
   Gsi1Bucket,
   ListItemActivityLink,
+  MealIngredient,
   Occurrence,
   OccurrenceDetailProjection,
   Recurrence,
@@ -890,6 +892,9 @@ function merge(
   const next: Record<string, unknown> = {
     ...base,
     ...pick(patch, 'title', 'notes', 'details'),
+    ...(patch.details === undefined
+      ? {}
+      : { details: withRetainedProvenance(current.details, patch.details) }),
     ...(recurrenceUpdate == null ? {} : { recurrence: recurrenceUpdate }),
     ...nullable(patch, 'location', 'sourceUrl', 'parentActivityId'),
     ...(activeSchedule === undefined ? {} : { schedule: activeSchedule }),
@@ -934,6 +939,60 @@ function targetOf(change: ChangeResult) {
 }
 
 /** Present, non-null keys only — so an absent optional never lands as an explicit undefined. */
+/**
+ * Carries each ingredient's server-owned `addedToListId` across a `details` replacement
+ * (P3-17, raised in review).
+ *
+ * `PATCH /v1/activities/:id` replaces `details` wholesale, and the client cannot send this
+ * field back — `mealIngredientInput` rejects it, because a client able to author it could
+ * fabricate the `Added` state for any well-formed `lst_` id. Both halves of that are right,
+ * and together they mean **the server has to be the one that preserves it**: without this,
+ * renaming an ingredient, fixing a quantity or reordering a row silently cleared every marker
+ * on the meal, and the user was then offered ingredients they had already added.
+ *
+ * Matched by `ingredientId`, never by position — the same rule the add-to-list action
+ * follows, and for the same reason. An id new to this patch is a genuinely new row with no
+ * marker to inherit; a row that was removed takes its marker with it.
+ */
+type PatchedDetails = NonNullable<PatchActivityInput['details']>;
+
+function withRetainedProvenance(
+  current: ActivityDetails | undefined,
+  next: PatchedDetails,
+): PatchedDetails | ActivityDetails {
+  if (next.kind !== 'meal' || next.ingredients === undefined) return next;
+  if (current?.kind !== 'meal') return next;
+
+  const addedToListIdById = new Map(
+    (current.ingredients ?? []).flatMap((ingredient) =>
+      ingredient.addedToListId === undefined
+        ? []
+        : [[ingredient.ingredientId, ingredient.addedToListId] as const],
+    ),
+  );
+  if (addedToListIdById.size === 0) return next;
+
+  // Rebuilt field by field rather than spread: the input ingredient's optionals are
+  // `T | undefined` while the stored shape uses absence, so a spread would carry explicit
+  // `undefined`s into a row `exactOptionalPropertyTypes` says must simply not have them.
+  const ingredients: MealIngredient[] = next.ingredients.map((ingredient) => {
+    const addedToListId = addedToListIdById.get(ingredient.ingredientId);
+    return {
+      ingredientId: ingredient.ingredientId,
+      name: ingredient.name,
+      ...(ingredient.quantity === undefined ? {} : { quantity: ingredient.quantity }),
+      ...(addedToListId === undefined ? {} : { addedToListId }),
+    };
+  });
+
+  return {
+    kind: 'meal',
+    ...(next.mealSlot === undefined ? {} : { mealSlot: next.mealSlot }),
+    ingredients,
+    ...(next.recipeUrl === undefined ? {} : { recipeUrl: next.recipeUrl }),
+  };
+}
+
 function pick<K extends keyof PatchActivityInput>(
   patch: PatchActivityInput,
   ...fields: K[]

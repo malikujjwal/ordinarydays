@@ -100,6 +100,21 @@ export const MAX_ADDRESS_LEN = 300;
 export const MAX_INGREDIENTS = 60;
 
 /**
+ * Ingredients one `add-to-list` action may carry (P3-17).
+ *
+ * Lower than {@link MAX_INGREDIENTS} on purpose, and the reason is arithmetic: the action
+ * commits its list rows, the List META update, the meal's provenance and its idempotency
+ * receipt in **one** DynamoDB transaction, and a transaction holds at most 100 items. Each
+ * created row costs three (the ranked row, its locator, a tombstone check), so 30 rows plus
+ * the deletion gate, META, the Activity and the receipt is 94 — and 60 would be 184.
+ *
+ * A meal may still hold 60 ingredients; adding more than 30 at once takes two taps. That is
+ * the cheaper side of the trade: the alternative is chunking, which is what made the first
+ * version of this action non-atomic (raised in review).
+ */
+export const MAX_INGREDIENTS_PER_ADD = 30;
+
+/**
  * Rule segments in one recurring series (`data-model.md` §4.2).
  *
  * Segments are append-only — every "all future occurrences" edit adds one — so this is the

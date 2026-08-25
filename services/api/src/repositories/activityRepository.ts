@@ -1106,21 +1106,57 @@ export interface IngredientAddition {
  * client holding that Activity, invalidate their `If-Match`, and surface in a plan's history
  * as an edit nobody made.
  */
-export async function recordIngredientsAddedToList(
+/**
+ * The transact item that records these ingredients as added, for a caller composing one
+ * transaction (P3-17).
+ *
+ * ## Located by id, written by index, guarded by both
+ *
+ * DynamoDB addresses a list element by position — `details.ingredients[3].addedToListId` —
+ * and position is the one thing about an ingredient array that is not stable. So the caller
+ * resolves each `ingredientId` to its **current** index and hands both over, and every index
+ * carries its own condition that the id still sitting there is the id that was resolved. A
+ * reorder between the read and the commit fails the condition and cancels the whole
+ * transaction rather than marking a neighbour.
+ *
+ * ## It advances `updatedAt`, and that was a correction
+ *
+ * The first version deliberately did not, mirroring {@link clearListProvenance} on the
+ * grounds that this is bookkeeping about a different object. Review pushed back and was
+ * right for a reason the original argument missed: `addedToListId` is **rendered** — it is
+ * what makes a meal's ingredient row say `Added` — and it lives inside `details`, which
+ * `PATCH` replaces wholesale under `If-Match`. A field that changes what the user sees, on a
+ * versioned object, has to move the version, or a client holding the pre-write copy both
+ * renders staleness and passes the concurrency check.
+ *
+ * `expectedUpdatedAt` is therefore also a **condition**: the caller read this Activity to
+ * resolve the ids, and a patch landing in between must lose here rather than silently having
+ * its ingredient array overwritten by indexes resolved against the old one.
+ */
+export function ingredientsAddedToListItem(
   activityId: string,
   listId: string,
   additions: readonly IngredientAddition[],
-): Promise<void> {
-  if (additions.length === 0) return;
+  expectedUpdatedAt: string,
+  now: string,
+): TransactItem {
   const names: Record<string, string> = {
     '#details': 'details',
     '#ingredients': 'ingredients',
     '#addedToListId': 'addedToListId',
     '#ingredientId': 'ingredientId',
+    '#updatedAt': 'updatedAt',
   };
-  const values: Record<string, unknown> = { ':listId': listId };
-  const sets: string[] = [];
-  const conditions: string[] = ['attribute_exists(pk)'];
+  const values: Record<string, unknown> = {
+    ':listId': listId,
+    ':updatedAt': now,
+    ':expectedUpdatedAt': expectedUpdatedAt,
+  };
+  const sets: string[] = ['#updatedAt = :updatedAt'];
+  const conditions: string[] = [
+    'attribute_exists(pk)',
+    '#updatedAt = :expectedUpdatedAt',
+  ];
 
   for (const addition of additions) {
     const at = String(addition.index);
@@ -1129,12 +1165,15 @@ export async function recordIngredientsAddedToList(
     conditions.push(`#details.#ingredients[${at}].#ingredientId = :id${at}`);
   }
 
-  await updateItem(activityMeta(activityId), {
-    expression: `SET ${sets.join(', ')}`,
-    names,
-    values,
-    condition: conditions.join(' AND '),
-  });
+  return {
+    Update: {
+      Key: activityMeta(activityId),
+      UpdateExpression: `SET ${sets.join(', ')}`,
+      ConditionExpression: conditions.join(' AND '),
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+    },
+  };
 }
 
 export async function clearListProvenance(

@@ -1610,6 +1610,167 @@ export async function createListItem(
 }
 
 /** One ordered bulk chunk: all ranks come from one META version and advance it once. */
+/**
+ * What a composed multi-item list write needs to know before it can build its transaction:
+ * the fenced List, and ranks allocated from neighbours read under that fence.
+ */
+export interface ListWriteBasis {
+  readonly list: List;
+  readonly ranks: readonly string[];
+}
+
+/**
+ * Allocates ranks for `count` new rows under the current fence, without writing.
+ *
+ * Split out of {@link createListItems} so a caller that must commit list rows **and** rows in
+ * another partition in one transaction can still get its ranks from exactly the same
+ * neighbours-under-a-version read (P3-17). The alternative was a second rank allocator, which
+ * is how two callers eventually disagree about what a valid rank is.
+ */
+export async function planListItemWrites(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  count: number,
+  afterItemId?: string | null,
+): Promise<ListWriteBasis> {
+  assertListAccessGrant(userId, listId, access);
+  const state = await readMutationState(userId, listId, access);
+  const neighbours = await readNeighbours(listId, afterItemId);
+  return { list: state.list, ranks: count === 0 ? [] : allocateRanks(neighbours, count) };
+}
+
+/** Where each class of condition failure sits, so a caller can name the right error. */
+export interface ListItemCreateSpans {
+  readonly deletionGate: number;
+  /** Item/locator/tombstone conditions occupy `[deletionGate + 1, meta)`. */
+  readonly meta: number;
+}
+
+/**
+ * Appends the create half of a list-item write to a caller-owned transaction.
+ *
+ * The conditions are {@link createListItems}' own, unchanged: `attribute_not_exists` on both
+ * the ranked row and its locator, a tombstone absence check per item, and the META update
+ * that advances `rankVersion`, moves the counters and **enforces the item cap inside the
+ * transaction** — a service precheck is never a cap, because the retry re-reads
+ * `rankVersion` and learns nothing about capacity.
+ */
+export function appendListItemCreates(
+  builder: TransactionBuilder,
+  listId: string,
+  created: readonly ListItem[],
+  basis: ListWriteBasis,
+  now: string,
+): ListItemCreateSpans {
+  const deletionGate = builder.length;
+  builder.add(listDeletionGate(listId));
+  for (const item of created) {
+    builder.add(
+      {
+        Put: {
+          Item: storedListItem(item, now),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+      {
+        Put: {
+          Item: storedLocator(item, now),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+      {
+        ConditionCheck: {
+          Key: listItemTombstone(listId, item.itemId),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+    );
+  }
+
+  const meta = builder.length;
+  const unchecked = created.filter((item) => !item.checked).length;
+  builder.add({
+    Update: {
+      Key: listMeta(listId),
+      UpdateExpression:
+        'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked',
+      ConditionExpression: `#rankVersion = :expectedVersion AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
+      ExpressionAttributeNames: {
+        '#rankVersion': 'rankVersion',
+        '#itemCount': 'itemCount',
+        '#uncheckedCount': 'uncheckedCount',
+        ...GATE_NAMES,
+      },
+      ExpressionAttributeValues: {
+        ':expectedVersion': basis.list.rankVersion,
+        ':nextVersion': basis.list.rankVersion + 1,
+        ':count': created.length,
+        ':unchecked': unchecked,
+        ':maxBefore': MAX_LIST_ITEMS - created.length,
+      },
+    },
+  });
+  return { deletionGate, meta };
+}
+
+/**
+ * Appends a `sourceLabel` extension for one already-read row (P3-17).
+ *
+ * The standalone {@link extendItemSourceLabel} is this plus its own transaction; a composed
+ * caller needs the items without the commit. Conditioned on the `itemRevision` the caller
+ * read, which is what makes the *unchecked* classification behind the extension safe: the
+ * revision moves when `checked` does, so a row checked in between fails here rather than
+ * being extended when §7.3 says it should have become a new row.
+ */
+export function appendSourceLabelExtension(
+  builder: TransactionBuilder,
+  listId: string,
+  item: ListItem,
+  sourceLabel: string,
+  now: string,
+): void {
+  builder.add(
+    {
+      Update: {
+        Key: listItemKey(listId, item.rank, item.itemId),
+        UpdateExpression:
+          'SET #sourceLabel = :sourceLabel, #itemRevision = :nextRevision, #updatedAt = :updatedAt',
+        ConditionExpression: '#itemRevision = :expectedRevision',
+        ExpressionAttributeNames: {
+          '#sourceLabel': 'sourceLabel',
+          '#itemRevision': 'itemRevision',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':sourceLabel': sourceLabel,
+          ':expectedRevision': item.itemRevision,
+          ':nextRevision': item.itemRevision + 1,
+          ':updatedAt': now,
+        },
+      },
+    },
+    {
+      Update: {
+        Key: listItemLocator(listId, item.itemId),
+        UpdateExpression: 'SET #itemRevision = :nextRevision, #updatedAt = :updatedAt',
+        ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
+        ExpressionAttributeNames: {
+          '#rank': 'rank',
+          '#itemRevision': 'itemRevision',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':rank': item.rank,
+          ':expectedRevision': item.itemRevision,
+          ':nextRevision': item.itemRevision + 1,
+          ':updatedAt': now,
+        },
+      },
+    },
+  );
+}
+
 export async function createListItems(
   userId: string,
   listId: string,
@@ -1860,106 +2021,6 @@ export async function reorderListItem(
     });
     return next;
   });
-}
-
-/**
- * Appends one segment to an existing item's `sourceLabel` (P3-17, `plans-and-lists.md` §7.3
- * step 6).
- *
- * ## Why this is not a `ListItemFieldPatch`
- *
- * `sourceLabel` is server-owned: {@link ListItemFieldPatch} is what a client `PATCH` reaches,
- * and every field on it is one a client may author. Adding `sourceLabel` there to save a
- * function would put provenance one request away from being fabricated, which is the one
- * thing §6.5 rests on. So this is its own narrow write, reachable only from the add-to-list
- * action, and it appends rather than sets — the caller may not replace a label through it
- * either.
- *
- * ## The two conditions
- *
- * `itemRevision` is the ordinary optimistic fence, and it does the interesting work here:
- * the service classified this row as *unchecked* a moment ago, and the whole reason it is
- * being extended rather than duplicated is that classification. A row checked in between must
- * not be quietly extended — §7.3 says a checked row gets a **new** item, because the previous
- * one was already bought. The revision moves when `checked` does, so the fence catches it and
- * the conflict surfaces as the retryable `503` the client repeats from a fresh read.
- *
- * `GATES_ABSENT` on META keeps it off a list mid-repair or mid-migration, like every other
- * item write.
- */
-export async function extendItemSourceLabel(
-  userId: string,
-  listId: string,
-  access: ListAccessGrant,
-  item: ListItem,
-  segment: string,
-  now: string,
-): Promise<ListItem> {
-  assertListAccessGrant(userId, listId, access);
-  const sourceLabel =
-    item.sourceLabel === undefined || item.sourceLabel === ''
-      ? segment
-      : `${item.sourceLabel} · ${segment}`;
-  const next: ListItem = {
-    ...item,
-    sourceLabel,
-    itemRevision: item.itemRevision + 1,
-  };
-
-  const builder = new TransactionBuilder('extendItemSourceLabel').add(
-    listDeletionGate(listId),
-    {
-      Update: {
-        Key: listItemKey(listId, item.rank, item.itemId),
-        UpdateExpression:
-          'SET #sourceLabel = :sourceLabel, #itemRevision = :nextRevision, #updatedAt = :updatedAt',
-        ConditionExpression: '#itemRevision = :expectedRevision',
-        ExpressionAttributeNames: {
-          '#sourceLabel': 'sourceLabel',
-          '#itemRevision': 'itemRevision',
-          '#updatedAt': 'updatedAt',
-        },
-        ExpressionAttributeValues: {
-          ':sourceLabel': sourceLabel,
-          ':expectedRevision': item.itemRevision,
-          ':nextRevision': next.itemRevision,
-          ':updatedAt': now,
-        },
-      },
-    },
-    {
-      Update: {
-        Key: listItemLocator(listId, item.itemId),
-        UpdateExpression: 'SET #itemRevision = :nextRevision, #updatedAt = :updatedAt',
-        ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
-        ExpressionAttributeNames: {
-          '#rank': 'rank',
-          '#itemRevision': 'itemRevision',
-          '#updatedAt': 'updatedAt',
-        },
-        ExpressionAttributeValues: {
-          ':rank': item.rank,
-          ':expectedRevision': item.itemRevision,
-          ':nextRevision': next.itemRevision,
-          ':updatedAt': now,
-        },
-      },
-    },
-    {
-      ConditionCheck: {
-        Key: listMeta(listId),
-        ConditionExpression: GATES_ABSENT,
-        ExpressionAttributeNames: GATE_NAMES,
-      },
-    },
-  );
-
-  await transactWrite(builder.build(), {
-    operation: 'extendItemSourceLabel',
-    onConditionFailed: (index) =>
-      index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
-  });
-  return next;
 }
 
 export interface ListItemFieldPatch {

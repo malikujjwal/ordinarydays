@@ -3,6 +3,7 @@ import {
   MAX_ADDRESS_LEN,
   MAX_FREE_TEXT_LEN,
   MAX_INGREDIENTS,
+  MAX_INGREDIENTS_PER_ADD,
   MAX_LIST_ITEMS,
   MAX_NOTES_LEN,
   MAX_PARTICIPANTS,
@@ -842,10 +843,15 @@ export const scheduledListItem = z
  * ingredients still adds what they picked. A missing id — the row was deleted or replaced —
  * rejects the whole request rather than resolving to whatever now sits at that position.
  *
- * `itemId` is the optional client-minted `itm_` for the row this ingredient would create. It
- * is replay protection outliving the 24-hour receipt, exactly as it is on bulk create: a
- * second attempt under a new key writes the same ids and the conditional put refuses the
- * duplicate. It is per ingredient because each one may become its own row.
+ * `itemId` is the client-minted `itm_` for the row this ingredient would create, and it is
+ * **required** (tightened in review). It is the replay protection that outlives the 24-hour
+ * receipt: a second attempt under a new key writes the same ids, and the conditional put
+ * refuses the duplicate. Letting the server mint one instead would make that second attempt
+ * create a parallel set of rows, so the field a client may omit is the field that makes
+ * replay unsafe. It is per ingredient because each one may become its own row.
+ *
+ * Capped at {@link MAX_INGREDIENTS_PER_ADD}, not {@link MAX_INGREDIENTS}: the whole action is
+ * one DynamoDB transaction, and that is what fits. See the constant for the arithmetic.
  */
 export const addIngredientsToListInput = z
   .strictObject({
@@ -854,11 +860,11 @@ export const addIngredientsToListInput = z
       .array(
         z.strictObject({
           ingredientId: ulidId('ing'),
-          itemId: ulidId('itm').optional(),
+          itemId: ulidId('itm'),
         }),
       )
       .min(1)
-      .max(MAX_INGREDIENTS),
+      .max(MAX_INGREDIENTS_PER_ADD),
   })
   .meta({ id: 'AddIngredientsToListInput' });
 
@@ -895,6 +901,13 @@ export const addIngredientsToListResult = z
     listId: ulidId('lst'),
     sourceLabel: freeText,
     ingredients: z.array(addedIngredient),
+    /**
+     * The meal's new version, because the action advances it (raised in review): the markers
+     * it wrote are rendered on the meal, so a client holding the previous `updatedAt` would
+     * both draw stale rows and pass its next `If-Match`. Returning it lets the caller keep
+     * editing without a refetch.
+     */
+    activityUpdatedAt: z.iso.datetime(),
   })
   .meta({ id: 'AddIngredientsToListResult' });
 

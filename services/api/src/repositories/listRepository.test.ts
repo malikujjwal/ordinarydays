@@ -1,4 +1,4 @@
-import { MAX_LEXO_RANK_LENGTH } from '@od/shared';
+import { MAX_LEXO_RANK_LENGTH, MAX_LIST_ITEMS } from '@od/shared';
 import type {
   Activity,
   List,
@@ -1448,73 +1448,177 @@ describe('delete, restore and cascade', () => {
  * {@link ListItemFieldPatch}: every field on that shape is one a client may author, and
  * provenance that a `PATCH` could set records nothing (`plans-and-lists.md` §6.5).
  */
-describe('extendItemSourceLabel', () => {
-  const target = item({ sourceActivityId: ACTIVITY_ID, itemRevision: 4 });
 
-  const extend = (value: ListItem = target, segment = 'Sunday dinner') =>
-    repository.extendItemSourceLabel(ALICE, LIST_ID, access, value, segment, LATER);
+/**
+ * The builder-level halves of a list write, extracted so a caller that must commit list rows
+ * **and** rows in another partition can do it in one transaction (P3-17).
+ *
+ * `createListItems` is these two plus its own commit, so the conditions asserted here are the
+ * conditions every create path uses — which is the point of the extraction. A second rank
+ * allocator or a second set of conditions is how two callers start disagreeing about what a
+ * valid write is.
+ */
+describe('the composable list-write primitives', () => {
+  type Composed = {
+    Put?: { Item?: Record<string, unknown>; ConditionExpression?: string };
+    Update?: {
+      Key?: Record<string, unknown>;
+      ConditionExpression?: string;
+      ExpressionAttributeValues?: Record<string, unknown>;
+    };
+    ConditionCheck?: { Key?: Record<string, unknown>; ConditionExpression?: string };
+  };
 
-  const written = () =>
-    (vi.mocked(tx.transactWrite).mock.calls[0]?.[0] ?? []) as Record<string, never>[];
+  const builderItems = (builder: { build: () => readonly unknown[] }): Composed[] =>
+    builder.build() as Composed[];
 
-  it('sets the segment alone on a row that has no label yet', async () => {
-    const result = await extend();
+  describe('planListItemWrites', () => {
+    it('returns the fenced list and one rank per requested row', async () => {
+      vi.mocked(base.getItem).mockImplementation((key) =>
+        key.sk === 'META' ? Promise.resolve(listRow()) : Promise.resolve(undefined),
+      );
+      vi.mocked(base.query).mockResolvedValue({ items: [] } as never);
 
-    expect(result.sourceLabel).toBe('Sunday dinner');
-    expect(written()[1]?.Update).toMatchObject({
-      ExpressionAttributeValues: { ':sourceLabel': 'Sunday dinner' },
+      const basis = await repository.planListItemWrites(ALICE, LIST_ID, access, 3);
+
+      expect(basis.list.rankVersion).toBe(0);
+      expect(basis.ranks).toHaveLength(3);
+      expect(new Set(basis.ranks).size).toBe(3);
+    });
+
+    it('allocates nothing when no row is being created', async () => {
+      vi.mocked(base.getItem).mockImplementation((key) =>
+        key.sk === 'META' ? Promise.resolve(listRow()) : Promise.resolve(undefined),
+      );
+      vi.mocked(base.query).mockResolvedValue({ items: [] } as never);
+
+      const basis = await repository.planListItemWrites(ALICE, LIST_ID, access, 0);
+
+      expect(basis.ranks).toEqual([]);
+    });
+
+    it('refuses a grant issued for another list', async () => {
+      await expect(
+        repository.planListItemWrites(ALICE, 'lst_01J8XKQ2M4N5P6R7S8T9V0W1Y9', access, 1),
+      ).rejects.toThrow();
     });
   });
 
-  it('appends to an existing label rather than replacing it', async () => {
-    const result = await extend(item({ ...target, sourceLabel: 'Thursday lunch' }));
+  describe('appendListItemCreates', () => {
+    const appended = (items: ListItem[] = [item()]) => {
+      const builder = new tx.TransactionBuilder('test');
+      const spans = repository.appendListItemCreates(
+        builder,
+        LIST_ID,
+        items,
+        { list: list(), ranks: items.map((row) => row.rank) },
+        NOW,
+      );
+      return { spans, items: builderItems(builder) };
+    };
 
-    expect(result.sourceLabel).toBe('Thursday lunch · Sunday dinner');
-  });
+    it('writes the ranked row, its locator and a tombstone check per item', () => {
+      const { items } = appended([item(), item({ itemId: ITEM_B, rank: 'W' })]);
 
-  /**
-   * The row was classified *unchecked* a moment ago, and that classification is the whole
-   * reason it is being extended rather than duplicated. `itemRevision` moves when `checked`
-   * does, so this fence is what stops a row checked in between being quietly extended when
-   * §7.3 says it should have got a new item.
-   */
-  it('conditions both rows on the revision it read', async () => {
-    await extend();
-
-    expect(written()[1]?.Update).toMatchObject({
-      ConditionExpression: '#itemRevision = :expectedRevision',
-      ExpressionAttributeValues: { ':expectedRevision': 4, ':nextRevision': 5 },
+      // The deletion gate, then three per row, then META.
+      expect(items).toHaveLength(1 + 3 * 2 + 1);
+      expect(items[1]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
+      expect(items[2]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
+      expect(items[3]?.ConditionCheck?.Key).toEqual(
+        keys.listItemTombstone(LIST_ID, ITEM_A),
+      );
     });
-    expect(written()[2]?.Update).toMatchObject({
-      ExpressionAttributeValues: { ':rank': target.rank, ':expectedRevision': 4 },
+
+    /**
+     * The item cap lives **in the transaction**, not only in the service precheck: two
+     * creates against a 499-item list both pass that precheck, and the loser retries against
+     * a refreshed `rankVersion` that carries no capacity information.
+     */
+    it('advances rankVersion and enforces the cap in the META condition', () => {
+      const { spans, items } = appended();
+      const meta = items[spans.meta]?.Update;
+
+      expect(meta?.ConditionExpression).toContain('#rankVersion = :expectedVersion');
+      expect(meta?.ConditionExpression).toContain('#itemCount <= :maxBefore');
+      expect(meta?.ExpressionAttributeValues).toMatchObject({
+        ':expectedVersion': 0,
+        ':nextVersion': 1,
+        ':count': 1,
+        ':maxBefore': MAX_LIST_ITEMS - 1,
+      });
+    });
+
+    it('keeps the write off a list mid-repair or mid-migration', () => {
+      const { spans, items } = appended();
+
+      expect(items[spans.meta]?.Update?.ConditionExpression).toContain('rankRepairId');
+      expect(items[spans.meta]?.Update?.ConditionExpression).toContain(
+        'behaviourMigrationId',
+      );
+    });
+
+    it('counts only unchecked rows toward uncheckedCount', () => {
+      const { spans, items } = appended([
+        item(),
+        item({ itemId: ITEM_B, rank: 'W', checked: true }),
+      ]);
+
+      expect(items[spans.meta]?.Update?.ExpressionAttributeValues).toMatchObject({
+        ':count': 2,
+        ':unchecked': 1,
+      });
+    });
+
+    it('reports the spans a caller needs to name its condition failures', () => {
+      const { spans, items } = appended();
+
+      expect(items[spans.deletionGate]?.ConditionCheck).toBeDefined();
+      expect(items[spans.meta]?.Update?.Key).toEqual(keys.listMeta(LIST_ID));
     });
   });
 
-  it('keeps the write off a list that is mid-repair or mid-migration', async () => {
-    await extend();
+  describe('appendSourceLabelExtension', () => {
+    const appended = (value: ListItem, segment = 'Sunday dinner') => {
+      const builder = new tx.TransactionBuilder('test');
+      repository.appendSourceLabelExtension(builder, LIST_ID, value, segment, LATER);
+      return builderItems(builder);
+    };
 
-    expect(written()[3]?.ConditionCheck).toMatchObject({
-      Key: keys.listMeta(LIST_ID),
+    it('sets the label on the ranked row and moves both revisions', () => {
+      const target = item({ itemRevision: 4 });
+      const items = appended(target);
+
+      expect(items[0]?.Update?.ExpressionAttributeValues).toMatchObject({
+        ':sourceLabel': 'Sunday dinner',
+        ':expectedRevision': 4,
+        ':nextRevision': 5,
+      });
+      expect(items[1]?.Update?.Key).toEqual(keys.listItemLocator(LIST_ID, ITEM_A));
+      expect(items[1]?.Update?.ExpressionAttributeValues).toMatchObject({
+        ':rank': target.rank,
+        ':expectedRevision': 4,
+        ':nextRevision': 5,
+      });
     });
-  });
 
-  it('changes nothing else about the row', async () => {
-    const result = await extend();
+    /**
+     * The classification behind an extension is "this row is **unchecked**", and
+     * `itemRevision` moves when `checked` does — so this condition is what stops a row
+     * checked in between being extended when §7.3 says it should have become a new row.
+     */
+    it('conditions both rows on the revision the caller read', () => {
+      const items = appended(item({ itemRevision: 9 }));
 
-    expect(result).toEqual({ ...target, sourceLabel: 'Sunday dinner', itemRevision: 5 });
-  });
+      expect(items[0]?.Update?.ConditionExpression).toBe(
+        '#itemRevision = :expectedRevision',
+      );
+      expect(items[1]?.Update?.ConditionExpression).toContain(
+        '#itemRevision = :expectedRevision',
+      );
+    });
 
-  it('refuses a grant issued for another list', async () => {
-    await expect(
-      repository.extendItemSourceLabel(
-        ALICE,
-        'lst_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
-        access,
-        target,
-        'Sunday dinner',
-        LATER,
-      ),
-    ).rejects.toThrow();
-    expect(tx.transactWrite).not.toHaveBeenCalled();
+    it('adds exactly two items, leaving the transaction to its caller', () => {
+      expect(appended(item())).toHaveLength(2);
+    });
   });
 });

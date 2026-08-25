@@ -22,6 +22,10 @@ import { toListItem } from './toList.js';
  * items go out through the same projection every other list response uses, so a field this
  * endpoint alone leaked would be a field one call site forgot — the reason the trim lives in
  * the projection rather than at each handler.
+ *
+ * `activityUpdatedAt` is the meal's new version. The action advances it, because the markers
+ * it writes are rendered on the meal, so a client holding the previous value would draw stale
+ * rows *and* pass its next `If-Match` (raised in review). Returning it saves that refetch.
  */
 export const ADD_INGREDIENTS_TO_LIST_PATH = '/:id/ingredients/add-to-list';
 
@@ -37,6 +41,7 @@ export async function addIngredientsToListHandler(
       receiptFor({
         listId: result.listId,
         sourceLabel: result.sourceLabel,
+        activityUpdatedAt: result.activityUpdatedAt,
         ingredients: result.ingredients.map((row) => ({
           ingredientId: row.ingredientId,
           outcome: row.outcome,
