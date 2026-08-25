@@ -258,7 +258,12 @@ describe('who may touch items', () => {
 });
 
 describe('the route registry', () => {
-  it('classifies the two creating POSTs as mutating and nothing else', async () => {
+  /**
+   * P3-13 adds a third mutating POST under this prefix — the bridge. The reads and the
+   * `PATCH`/`DELETE` pair stay unmarked: `mutates` gates the idempotency middleware, and a
+   * route that does not create must not demand a key.
+   */
+  it('classifies the three creating POSTs as mutating and nothing else', async () => {
     const { ROUTE_REGISTRY } = await import('../middleware/routeRegistry.js');
     const itemRoutes = ROUTE_REGISTRY.filter((entry) =>
       entry.pattern.startsWith('/v1/lists/:id/items'),
@@ -281,6 +286,12 @@ describe('the route registry', () => {
       { method: 'GET', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
       { method: 'PATCH', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
       { method: 'DELETE', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
+      {
+        method: 'POST',
+        pattern: '/v1/lists/:id/items/:itemId/schedule',
+        auth: 'authenticated',
+        mutates: true,
+      },
     ]);
   });
 });

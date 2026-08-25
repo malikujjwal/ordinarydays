@@ -824,7 +824,8 @@
                 "required": [
                   "date",
                   "timezone"
-                ]
+                ],
+                "additionalProperties": false
               },
               "recurrence": {
                 "$ref": "#/components/schemas/Recurrence"
@@ -857,7 +858,8 @@
                 },
                 "required": [
                   "label"
-                ]
+                ],
+                "additionalProperties": false
               },
               "parentActivityId": {
                 "type": "string",
@@ -911,7 +913,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -952,7 +955,8 @@
                           },
                           "required": [
                             "name"
-                          ]
+                          ],
+                          "additionalProperties": false
                         },
                         "maxItems": 60
                       },
@@ -963,7 +967,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -1008,7 +1013,8 @@
                     "required": [
                       "kind",
                       "mediaTitle"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -1060,12 +1066,14 @@
                             "type": "string",
                             "maxLength": 120
                           }
-                        }
+                        },
+                        "additionalProperties": false
                       }
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -1083,7 +1091,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   }
                 ]
               },
@@ -1233,7 +1242,8 @@
                 "required": [
                   "date",
                   "timezone"
-                ]
+                ],
+                "additionalProperties": false
               },
               "recurrence": {
                 "$ref": "#/components/schemas/Recurrence"
@@ -1266,7 +1276,8 @@
                 },
                 "required": [
                   "label"
-                ]
+                ],
+                "additionalProperties": false
               },
               "parentActivityId": {
                 "type": "string",
@@ -1320,7 +1331,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -1361,7 +1373,8 @@
                           },
                           "required": [
                             "name"
-                          ]
+                          ],
+                          "additionalProperties": false
                         },
                         "maxItems": 60
                       },
@@ -1372,7 +1385,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -1417,7 +1431,8 @@
                     "required": [
                       "kind",
                       "mediaTitle"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -1469,12 +1484,14 @@
                             "type": "string",
                             "maxLength": 120
                           }
-                        }
+                        },
+                        "additionalProperties": false
                       }
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -1492,7 +1509,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   }
                 ]
               },
@@ -1838,7 +1856,8 @@
                 "required": [
                   "date",
                   "timezone"
-                ]
+                ],
+                "additionalProperties": false
               },
               "recurrence": {
                 "type": "object",
@@ -2088,7 +2107,8 @@
                 },
                 "required": [
                   "label"
-                ]
+                ],
+                "additionalProperties": false
               },
               "details": {
                 "oneOf": [
@@ -2104,7 +2124,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -2145,7 +2166,8 @@
                           },
                           "required": [
                             "name"
-                          ]
+                          ],
+                          "additionalProperties": false
                         },
                         "maxItems": 60
                       },
@@ -2156,7 +2178,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -2201,7 +2224,8 @@
                     "required": [
                       "kind",
                       "mediaTitle"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -2253,12 +2277,14 @@
                             "type": "string",
                             "maxLength": 120
                           }
-                        }
+                        },
+                        "additionalProperties": false
                       }
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -2276,7 +2302,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   }
                 ]
               },
@@ -2357,7 +2384,8 @@
                 "required": [
                   "date",
                   "timezone"
-                ]
+                ],
+                "additionalProperties": false
               },
               "recurrence": {
                 "type": "object",
@@ -2607,7 +2635,8 @@
                 },
                 "required": [
                   "label"
-                ]
+                ],
+                "additionalProperties": false
               },
               "details": {
                 "oneOf": [
@@ -2623,7 +2652,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -2664,7 +2694,8 @@
                           },
                           "required": [
                             "name"
-                          ]
+                          ],
+                          "additionalProperties": false
                         },
                         "maxItems": 60
                       },
@@ -2675,7 +2706,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -2720,7 +2752,8 @@
                     "required": [
                       "kind",
                       "mediaTitle"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -2772,12 +2805,14 @@
                             "type": "string",
                             "maxLength": 120
                           }
-                        }
+                        },
+                        "additionalProperties": false
                       }
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   },
                   {
                     "type": "object",
@@ -2795,7 +2830,8 @@
                     },
                     "required": [
                       "kind"
-                    ]
+                    ],
+                    "additionalProperties": false
                   }
                 ]
               },
@@ -3046,7 +3082,8 @@
             },
             "required": [
               "label"
-            ]
+            ],
+            "additionalProperties": false
           },
           "details": {
             "oneOf": [
@@ -3062,7 +3099,8 @@
                 },
                 "required": [
                   "kind"
-                ]
+                ],
+                "additionalProperties": false
               },
               {
                 "type": "object",
@@ -3103,7 +3141,8 @@
                       },
                       "required": [
                         "name"
-                      ]
+                      ],
+                      "additionalProperties": false
                     },
                     "maxItems": 60
                   },
@@ -3114,7 +3153,8 @@
                 },
                 "required": [
                   "kind"
-                ]
+                ],
+                "additionalProperties": false
               },
               {
                 "type": "object",
@@ -3159,7 +3199,8 @@
                 "required": [
                   "kind",
                   "mediaTitle"
-                ]
+                ],
+                "additionalProperties": false
               },
               {
                 "type": "object",
@@ -3211,12 +3252,14 @@
                         "type": "string",
                         "maxLength": 120
                       }
-                    }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "required": [
                   "kind"
-                ]
+                ],
+                "additionalProperties": false
               },
               {
                 "type": "object",
@@ -3234,7 +3277,8 @@
                 },
                 "required": [
                   "kind"
-                ]
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -4509,6 +4553,684 @@
           "undoToken",
           "undoExpiresAt"
         ]
+      },
+      "ScheduledListItem": {
+        "type": "object",
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/Activity"
+          },
+          "item": {
+            "$ref": "#/components/schemas/ListItemView"
+          },
+          "viewerLink": {
+            "type": "object",
+            "properties": {
+              "listId": {
+                "type": "string",
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "itemId": {
+                "type": "string",
+                "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "viewerUserId": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 40,
+                "pattern": "^usr_[A-Za-z0-9_-]+$"
+              },
+              "activityId": {
+                "type": "string",
+                "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "linkedAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "listId",
+              "itemId",
+              "viewerUserId",
+              "activityId",
+              "linkedAt"
+            ]
+          }
+        },
+        "required": [
+          "activity",
+          "item",
+          "viewerLink"
+        ]
+      },
+      "ScheduleListItemInput": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "creationTarget": {
+            "type": "object",
+            "properties": {
+              "objectKind": {
+                "type": "string",
+                "enum": [
+                  "plan"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "meal",
+                  "watch",
+                  "event",
+                  "custom"
+                ]
+              }
+            },
+            "required": [
+              "objectKind",
+              "type"
+            ],
+            "additionalProperties": false
+          },
+          "audience": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "just_me"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "selected_people"
+                    ]
+                  },
+                  "participants": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "personId": {
+                              "type": "string",
+                              "pattern": "^psn_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                            }
+                          },
+                          "required": [
+                            "personId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "displayName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            },
+                            "email": {
+                              "type": "string",
+                              "format": "email"
+                            }
+                          },
+                          "required": [
+                            "displayName"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 50
+                  }
+                },
+                "required": [
+                  "mode",
+                  "participants"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "schedule": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "time": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "endTime": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "timezone": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64,
+                "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
+              }
+            },
+            "required": [
+              "date",
+              "timezone"
+            ],
+            "additionalProperties": false
+          },
+          "recurrence": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "after_completion"
+                ]
+              },
+              "segments": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "freq": {
+                      "type": "string",
+                      "enum": [
+                        "daily",
+                        "weekly",
+                        "monthly",
+                        "yearly",
+                        "interval_days",
+                        "weekdays",
+                        "custom"
+                      ]
+                    },
+                    "interval": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 365
+                    },
+                    "byWeekday": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "enum": [
+                              0
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              1
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              2
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              3
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              4
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              5
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              6
+                            ]
+                          }
+                        ]
+                      },
+                      "minItems": 1,
+                      "maxItems": 7
+                    },
+                    "byMonthDay": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 31
+                      }
+                    },
+                    "byMonth": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "enum": [
+                              1
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              2
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              3
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              4
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              5
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              6
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              7
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              8
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              9
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              10
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              11
+                            ]
+                          },
+                          {
+                            "type": "number",
+                            "enum": [
+                              12
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    "rrule": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 500
+                    },
+                    "effectiveFrom": {
+                      "type": "string",
+                      "format": "date"
+                    },
+                    "time": {
+                      "type": "string",
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                    },
+                    "endTime": {
+                      "type": "string",
+                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                    }
+                  },
+                  "required": [
+                    "freq",
+                    "effectiveFrom"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 20
+              },
+              "endDate": {
+                "type": "string",
+                "format": "date"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 999
+              }
+            },
+            "required": [
+              "mode",
+              "segments"
+            ],
+            "additionalProperties": false
+          },
+          "reminders": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "reminderId": {
+                  "type": "string",
+                  "pattern": "^rem_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                },
+                "offsetMinutes": {
+                  "type": "integer",
+                  "minimum": -10080,
+                  "maximum": 0
+                }
+              },
+              "required": [
+                "reminderId",
+                "offsetMinutes"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 3
+          },
+          "location": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 120
+              },
+              "address": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "lat": {
+                "type": "number",
+                "minimum": -90,
+                "maximum": 90
+              },
+              "lng": {
+                "type": "number",
+                "minimum": -180,
+                "maximum": 180
+              },
+              "mapUrl": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "task"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "meal"
+                    ]
+                  },
+                  "mealSlot": {
+                    "type": "string",
+                    "enum": [
+                      "breakfast",
+                      "lunch",
+                      "dinner",
+                      "snack"
+                    ]
+                  },
+                  "ingredients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "quantity": {
+                          "type": "string",
+                          "maxLength": 120
+                        },
+                        "addedToListId": {
+                          "type": "string",
+                          "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 60
+                  },
+                  "recipeUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "watch"
+                    ]
+                  },
+                  "mediaTitle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "mediaKind": {
+                    "type": "string",
+                    "enum": [
+                      "movie",
+                      "show"
+                    ]
+                  },
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  },
+                  "episodeTitle": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "service": {
+                    "type": "string",
+                    "maxLength": 120
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mediaTitle"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "event"
+                    ]
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "priceCents": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "currency": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 3
+                  },
+                  "ticketUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "organiser": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "reservation": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      "time": {
+                        "type": "string",
+                        "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+                      },
+                      "partySize": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 99
+                      },
+                      "reference": {
+                        "type": "string",
+                        "maxLength": 120
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "custom"
+                    ]
+                  },
+                  "shortcutId": {
+                    "type": "string",
+                    "pattern": "^sct_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "attachmentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^att_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "maxItems": 20
+          },
+          "sourceUrl": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "activityId",
+          "creationTarget",
+          "audience"
+        ],
+        "additionalProperties": false
       },
       "ListUndoResult": {
         "oneOf": [
@@ -8042,6 +8764,113 @@
           },
           "404": {
             "description": "No such list or item — and the answer a repeated delete gets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lists/{id}/items/{itemId}/schedule": {
+      "post": {
+        "summary": "Plan this item — the optional bridge to Activities",
+        "description": "Creates a Plan from a list item and links it for the caller. **The item is not touched**: it is not copied, moved, checked, hidden or given an Activity id, and it comes back in the response unchanged so a client can see the bridge linked rather than duplicated. `creationTarget` and `audience` are both **required** and neither is ever inferred — the server does not read the list’s `behaviour`, `templateKey` or capabilities to choose a Plan kind, so a `watch` list does not make a `watch` Plan. In this phase only `just_me` is accepted; `selected_people` is `400` with `Sharing is coming soon.` until Phase 6, and a non-empty `attachmentIds` is `400` until the confirm-and-link path lands. `activityId` and every `reminderId` are permanent client-minted ids, required here because this path is offline-capable: a replay after the 24-hour receipt expires adopts an Activity already standing at that id with the same owner, list and item, and rewrites nothing — least of all the caller’s current pointer, which may name a newer Plan. Any other collision is the metadata-free durable-create conflict. `viewerLink` is the caller’s own pointer and never another viewer’s.",
+        "tags": [
+          "lists"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "itemId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleListItemInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Plan, the unchanged item, and the caller’s link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ScheduledListItem"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing or incomplete `creationTarget` or `audience`, `details.kind` that contradicts the chosen Plan kind, a reminder without its id, an unknown field at any depth, `selected_people`, or a non-empty `attachmentIds`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such list or item, or a tombstoned id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That `activityId` is already in use by something else.",
             "content": {
               "application/json": {
                 "schema": {

@@ -44,7 +44,8 @@ describe('the generated document', () => {
     // **P3-08 added the three item paths** — the collection, its `bulk` action, and the
     // templated item id carrying `GET`, `PATCH` and `DELETE`; and **P3-09 added the
     // behaviour action**, while giving the templated list id its settings `PATCH`; and
-    // **P3-10 added the two bulk actions and the compensation endpoint**.
+    // **P3-10 added the two bulk actions and the compensation endpoint**; and **P3-13 added
+    // the schedule bridge** under the templated item id.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
@@ -69,6 +70,7 @@ describe('the generated document', () => {
       '/v1/lists/{id}/items',
       '/v1/lists/{id}/items/bulk',
       '/v1/lists/{id}/items/{itemId}',
+      '/v1/lists/{id}/items/{itemId}/schedule',
       '/v1/lists/{id}/clear-checked',
       '/v1/lists/{id}/uncheck-all',
       '/v1/lists/{id}/undo',
@@ -146,6 +148,8 @@ describe('the generated document', () => {
       'ReversibleItemMutation',
       'ScheduleActivityInput',
       'ScheduleActivityResult',
+      'ScheduleListItemInput',
+      'ScheduledListItem',
       'SkipActivityInput',
       'SnoozeActivityInput',
       'UncompleteActivityInput',

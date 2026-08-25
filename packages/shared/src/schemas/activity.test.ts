@@ -448,6 +448,53 @@ describe('patch', () => {
     expect(patchActivityInput.safeParse({ ownerId: 'usr_other' }).success).toBe(false);
   });
 
+  /**
+   * Strictness holds **all the way down**, not only at the top level (P3-13). Before that,
+   * `activityLocation` and every `activityDetails` arm were plain `z.object`s, so a nested
+   * unknown field parsed happily and vanished — and the activity that got written was
+   * quietly smaller than the one the user confirmed, which is the exact failure the
+   * `activityDetails` doc comment already claimed did not happen.
+   */
+  it.each([
+    [
+      'an authority field on location',
+      { location: { label: 'Zahav', ownerId: 'usr_other' } },
+    ],
+    ['a field from another details arm', { details: { kind: 'meal', season: 3 } }],
+    [
+      'an unknown field on an ingredient',
+      { details: { kind: 'meal', ingredients: [{ name: 'Eggs', aisle: 4 }] } },
+    ],
+  ])('rejects %s on a patch rather than stripping it', (_why, body) => {
+    expect(patchActivityInput.safeParse(body).success).toBe(false);
+  });
+
+  it.each([
+    [
+      'an unknown field on schedule',
+      {
+        schedule: {
+          date: '2026-09-01',
+          timezone: 'America/New_York',
+          occurrenceDate: 'x',
+        },
+      },
+    ],
+    [
+      'a field from another details arm',
+      { details: { kind: 'event', watchStatus: 'want' } },
+    ],
+  ])('rejects %s on a create rather than stripping it', (_why, overrides) => {
+    expect(
+      createActivityInput.safeParse({
+        objectKind: 'plan',
+        type: 'event',
+        title: 'Zahav',
+        ...overrides,
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts editedFromDate with a recurrence append request', () => {
     expect(
       patchActivityInput.safeParse({

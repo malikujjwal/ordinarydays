@@ -2,7 +2,13 @@ import { assertNever, MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
 import { deriveGsi1Bucket } from '@od/shared/activity';
 import { activity as activitySchema } from '@od/shared/schemas';
 import { TABLE } from '@od/shared/table';
-import type { Activity, ActivitySchedule, Gsi1Bucket, Reminder } from '@od/shared/types';
+import type {
+  Activity,
+  ActivitySchedule,
+  Gsi1Bucket,
+  ListItemActivityLink,
+  Reminder,
+} from '@od/shared/types';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
 import { AppError } from '../lib/errors.js';
@@ -37,6 +43,7 @@ import {
   participantPrefix,
   reminder as reminderKey,
 } from './keys.js';
+import { listItemActivityLinkRow } from './listLinkRow.js';
 import type { StoredItem } from './migrate.js';
 import { type TransactItem, TransactionBuilder, transactWrite } from './tx.js';
 
@@ -300,6 +307,19 @@ export interface CreateOptions {
   readonly childPointerRank?: string;
   /** Successful HTTP receipt attached to this domain transaction (P2-38). */
   readonly idempotencyReceipt?: IdempotencyReceipt;
+  /**
+   * The caller's `ListItemActivityLink`, written in **this** transaction (P3-13).
+   *
+   * The bridge's Plan and the pointer that makes it reachable from the item are one atomic
+   * unit: a Plan committed without its pointer is a Plan the list can never show, and a
+   * pointer committed without its Plan is a dead link. Same key per viewer, so a later
+   * confirmed action replaces only this caller's pointer and never another member's
+   * (ADR-034).
+   *
+   * The `ITEM#` row is not here, and that is the point — the item is not copied, moved,
+   * checked, hidden or given an Activity id (`agent-playbook.md` §6.8).
+   */
+  readonly listItemLink?: ListItemActivityLink;
 }
 
 /**
@@ -367,6 +387,12 @@ export async function createActivity(
           ...row,
         }),
       },
+    });
+  }
+
+  if (options.listItemLink !== undefined) {
+    items.push({
+      Put: { Item: listItemActivityLinkRow(options.listItemLink, activity.createdAt) },
     });
   }
 
