@@ -294,11 +294,10 @@ describe('a stale read re-runs the whole cycle', () => {
       return Promise.resolve([existingItem({ checked: attempt > 1 })]) as never;
     });
     vi.mocked(tx.transactWrite).mockImplementationOnce((_items, options) => {
-      // Anything that is not the deletion gate or the receipt is a reclassify signal, and
-      // the gate is always the first item the create span appends.
+      // Past the create span, so this is a stale-read signal rather than a taken item id.
       throw (
         options as { onConditionFailed: (index: number) => Error }
-      ).onConditionFailed(1);
+      ).onConditionFailed(4);
     });
 
     const result = await run();
@@ -309,15 +308,36 @@ describe('a stale read re-runs the whole cycle', () => {
   });
 
   it('gives up with the retryable conflict after three raced attempts', async () => {
+    // An extension, so the create span is empty and this index is past it.
     vi.mocked(listRepository.readAllListItems).mockResolvedValue([existingItem()]);
+    vi.mocked(tx.transactWrite).mockImplementation((_items, options) => {
+      throw (
+        options as { onConditionFailed: (index: number) => Error }
+      ).onConditionFailed(4);
+    });
+
+    await expect(run()).rejects.toMatchObject({ code: 'internal' });
+    expect(tx.transactWrite).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * The one failure that must not loop: a client-minted `itm_` already taken. Re-reading
+   * cannot free it, so a `503` telling the caller to retry would never come good.
+   *
+   * Not reachable from the ordinary replay — a row this action created is unchecked and
+   * already carries this label, so the re-run classifies it as unchanged and composes no
+   * create at all. What reaches here is a replay after the receipt expired onto a row the
+   * user has since checked.
+   */
+  it('answers conflict, once, when the destination item id is already taken', async () => {
     vi.mocked(tx.transactWrite).mockImplementation((_items, options) => {
       throw (
         options as { onConditionFailed: (index: number) => Error }
       ).onConditionFailed(1);
     });
 
-    await expect(run()).rejects.toMatchObject({ code: 'internal' });
-    expect(tx.transactWrite).toHaveBeenCalledTimes(3);
+    await expect(run()).rejects.toMatchObject({ code: 'conflict' });
+    expect(tx.transactWrite).toHaveBeenCalledOnce();
   });
 });
 

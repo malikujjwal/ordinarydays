@@ -22,6 +22,7 @@ import {
   readAllListItems,
 } from '../repositories/listRepository.js';
 import { TransactionBuilder, transactWrite } from '../repositories/tx.js';
+import { ID_UNAVAILABLE } from './activityService.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
 import { withListWorkDrain } from './listMutationService.js';
 import { repairListRanks } from './listRankRepairService.js';
@@ -262,6 +263,7 @@ async function attemptAdd(
 
   await commit(builder, {
     deletionGate: spans.deletionGate,
+    createSpanEnd: spans.meta,
     receipt: receiptFor === undefined ? undefined : receiptIndex,
     createdCount: created.length,
     listId: input.listId,
@@ -296,6 +298,8 @@ async function planWrites(
 
 interface CommitSpans {
   readonly deletionGate: number;
+  /** Item, locator and tombstone conditions live in `(deletionGate, createSpanEnd)`. */
+  readonly createSpanEnd: number;
   readonly receipt: number | undefined;
   readonly createdCount: number;
   readonly listId: string;
@@ -318,6 +322,20 @@ async function commit(builder: TransactionBuilder, spans: CommitSpans): Promise<
       onConditionFailed: (index) => {
         if (index === spans.deletionGate) return new ListNotFoundError();
         if (index === spans.receipt) return new IdempotencyRaceError();
+        /**
+         * A create-slot failure means the client's `itm_` is already taken — by a live row or
+         * by a tombstone — and **re-reading cannot change that**, so this is the one failure
+         * that must not loop.
+         *
+         * It is not reachable from the ordinary replay: a row this action created is
+         * unchecked and already carries this label, so the re-run classifies it as unchanged
+         * and composes no create at all. What reaches here is a replay after the receipt
+         * expired onto a row the user has since **checked** — a genuine conflict, and a `503`
+         * telling them to retry would be a `503` that never comes good.
+         */
+        if (index > spans.deletionGate && index < spans.createSpanEnd) {
+          return new AppError('conflict', ID_UNAVAILABLE);
+        }
         return new ReclassifyError();
       },
     });
