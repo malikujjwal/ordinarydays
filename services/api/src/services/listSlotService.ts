@@ -58,6 +58,15 @@ export async function resolveListSlot(
   return resolveSlot(slot, lists, profile?.defaultLists);
 }
 
+/**
+ * Every list the caller can reach, owned or shared — a slot is a property of the List and a
+ * default is a property of the user, so a shared grocery list the caller is a member of is as
+ * eligible as one they own.
+ *
+ * The drain is bounded by the 100-owned-list cap (P3-05) plus the caller's memberships, and
+ * it goes through the ordinary paginated read rather than a new repository surface: there is
+ * no new access pattern here, only more of pattern 7.
+ */
 async function ownedAndSharedLists(userId: string): Promise<readonly List[]> {
   const lists: List[] = [];
   let cursor: string | undefined;
