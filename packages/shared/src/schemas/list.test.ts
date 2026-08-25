@@ -1014,3 +1014,73 @@ describe('ScheduleListItemInput — the rules it shares with the create path', (
     ).toBe(false);
   });
 });
+
+/**
+ * Strictness has to hold **all the way down**, not just at the top level.
+ *
+ * A `z.object` strips what it does not recognise, so before P3-13 a nested unknown field
+ * parsed happily and vanished — and the Plan that got written was quietly smaller than the
+ * one the user confirmed. The top-level cases live above; these are the nested ones, one per
+ * object that a request can reach.
+ */
+describe('ScheduleListItemInput — strict all the way down', () => {
+  it.each([
+    [
+      'an unknown field on schedule',
+      {
+        schedule: {
+          date: '2026-09-01',
+          timezone: 'America/New_York',
+          occurrenceDate: '2026-09-02',
+        },
+      },
+    ],
+    [
+      'an authority field on location',
+      { location: { label: 'Zahav', ownerId: 'usr_someone' } },
+    ],
+    [
+      'a field belonging to another details arm',
+      { details: { kind: 'event', watchStatus: 'want' } },
+    ],
+    [
+      'a list-item field on meal ingredients',
+      {
+        creationTarget: { objectKind: 'plan', type: 'meal' },
+        details: { kind: 'meal', ingredients: [{ name: 'Eggs', season: 3 }] },
+      },
+    ],
+    [
+      'an unknown field on an event reservation',
+      { details: { kind: 'event', reservation: { name: 'Sam', tableNumber: 4 } } },
+    ],
+    [
+      'an unknown field on a reminder',
+      {
+        schedule: { date: '2026-09-01', time: '19:30', timezone: 'America/New_York' },
+        reminders: [{ reminderId: BRIDGE_REM, offsetMinutes: -30, channel: 'sms' }],
+      },
+    ],
+  ])('rejects %s rather than stripping it', (_why, overrides) => {
+    expect(
+      scheduleListItemInput.safeParse({ ...validSchedule, ...overrides }).success,
+    ).toBe(false);
+  });
+
+  /**
+   * The derived UTC instants are the server's, computed from the wall-clock fields and the
+   * zone. A request that supplied one would be asserting an answer it cannot know.
+   */
+  it('rejects a request supplying the server-derived UTC instants', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        schedule: {
+          date: '2026-09-01',
+          timezone: 'America/New_York',
+          scheduledAtUtc: '2026-09-01T23:30:00.000Z',
+        },
+      }).success,
+    ).toBe(false);
+  });
+});

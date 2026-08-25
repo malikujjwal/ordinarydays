@@ -36,7 +36,22 @@ const title = z
   .min(1, 'A title is required')
   .max(MAX_TITLE_LEN, `A title is at most ${MAX_TITLE_LEN} characters`);
 
-export const activitySchedule = z.object({
+/**
+ * The schedule a **request** may carry — strict, and without the two derived UTC instants.
+ *
+ * Separate from the stored {@link activitySchedule} because `scheduledAtUtc` and `endAtUtc`
+ * are the server's, computed from the wall-clock fields and the zone. Shared by every create
+ * path — `POST /v1/activities` and P3-13's bridge — so a field one accepts is a field the
+ * other accepts, and neither silently drops one the user filled in.
+ */
+export const activityScheduleInput = z.strictObject({
+  date: isoDate,
+  time: hhmm.optional(),
+  endTime: hhmm.optional(),
+  timezone: ianaTimezone,
+});
+
+export const activitySchedule = z.strictObject({
   date: isoDate,
   time: hhmm.optional(),
   endTime: hhmm.optional(),
@@ -45,7 +60,7 @@ export const activitySchedule = z.object({
   endAtUtc: z.iso.datetime().optional(),
 });
 
-export const activityLocation = z.object({
+export const activityLocation = z.strictObject({
   label: freeText,
   address: z.string().trim().max(MAX_ADDRESS_LEN).optional(),
   lat: z.number().min(-90).max(90).optional(),
@@ -53,13 +68,13 @@ export const activityLocation = z.object({
   mapUrl: z.url().optional(),
 });
 
-export const mealIngredient = z.object({
+export const mealIngredient = z.strictObject({
   name: freeText.min(1),
   quantity: freeText.optional(),
   addedToListId: ulidId('lst').optional(),
 });
 
-export const eventReservation = z.object({
+export const eventReservation = z.strictObject({
   name: freeText.optional(),
   time: hhmm.optional(),
   partySize: z.number().int().positive().max(99).optional(),
@@ -71,16 +86,22 @@ export const eventReservation = z.object({
  *
  * Each arm names only its own fields, so a body carrying `season` on a meal fails rather
  * than being silently dropped.
+ *
+ * **Every arm is strict, and that is what makes the sentence above true** (P3-13). A plain
+ * `z.object` strips unknown keys, so `{ kind: 'meal', season: 3 }` parsed happily with
+ * `season` removed and the user got a Plan quietly smaller than the one they confirmed. The
+ * list schemas already took this position for the same reason — a nested object carries no
+ * `pk`/`sk`, so there is nothing legitimate to strip — and the two sides now agree.
  */
 export const activityDetails = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('task') }),
-  z.object({
+  z.strictObject({ kind: z.literal('task') }),
+  z.strictObject({
     kind: z.literal('meal'),
     mealSlot: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).optional(),
     ingredients: z.array(mealIngredient).max(MAX_INGREDIENTS).optional(),
     recipeUrl: z.url().optional(),
   }),
-  z.object({
+  z.strictObject({
     kind: z.literal('watch'),
     mediaTitle: title,
     mediaKind: z.enum(['movie', 'show']).optional(),
@@ -89,7 +110,7 @@ export const activityDetails = z.discriminatedUnion('kind', [
     episodeTitle: freeText.optional(),
     service: freeText.optional(),
   }),
-  z.object({
+  z.strictObject({
     kind: z.literal('event'),
     description: z.string().trim().max(MAX_NOTES_LEN).optional(),
     priceCents: cents.nonnegative('A price cannot be negative').optional(),
@@ -98,7 +119,7 @@ export const activityDetails = z.discriminatedUnion('kind', [
     organiser: freeText.optional(),
     reservation: eventReservation.optional(),
   }),
-  z.object({ kind: z.literal('custom'), shortcutId: ulidId('sct').optional() }),
+  z.strictObject({ kind: z.literal('custom'), shortcutId: ulidId('sct').optional() }),
 ]);
 
 /**
@@ -260,14 +281,7 @@ const createFieldsShape = {
   activityId: ulidId('act').optional(),
   title,
   notes: z.string().max(MAX_NOTES_LEN).optional(),
-  schedule: z
-    .object({
-      date: isoDate,
-      time: hhmm.optional(),
-      endTime: hhmm.optional(),
-      timezone: ianaTimezone,
-    })
-    .optional(),
+  schedule: activityScheduleInput.optional(),
   recurrence: createRecurrence.optional(),
   /**
    * Written as `REM#` rows for the **creator alone**. Never a field on the stored Activity,

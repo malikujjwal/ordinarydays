@@ -13,6 +13,7 @@ import {
   activity,
   activityDetails,
   activityLocation,
+  activityScheduleInput,
   checkDetailsMatchType,
   checkSchedule,
   participantInput,
@@ -679,14 +680,7 @@ export const scheduleListItemInput = z
       .max(MAX_TITLE_LEN, `A title is at most ${MAX_TITLE_LEN} characters`)
       .optional(),
     notes: z.string().max(MAX_NOTES_LEN).optional(),
-    schedule: z
-      .object({
-        date: isoDate,
-        time: hhmm.optional(),
-        endTime: hhmm.optional(),
-        timezone: ianaTimezone,
-      })
-      .optional(),
+    schedule: activityScheduleInput.optional(),
     /** Single-segment, like every other create path: `createRecurrence` is that rule. */
     recurrence: createRecurrence.optional(),
     reminders: z
