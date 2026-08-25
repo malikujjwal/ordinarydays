@@ -127,9 +127,17 @@ export async function listListItemsHandler(
   const page = await listItemsFor(requireUserId(c), c.req.param('id'), query.cursor);
 
   return c.json({
-    data: page.items.map(({ item, viewerLink }) => ({
-      item: toListItem(item),
-      ...(viewerLink === undefined ? {} : { viewerLink: toListItemLink(viewerLink) }),
+    data: page.items.map((row) => ({
+      item: toListItem(row.item),
+      /**
+       * Narrowed rather than destructured, so a half-pair cannot be written here. The plan is
+       * passed through rather than re-projected: `toPlanState` in the service already trimmed
+       * it to what a row may reveal, and a second trim here would be a second place to get
+       * that contract wrong.
+       */
+      ...('viewerLink' in row
+        ? { viewerLink: toListItemLink(row.viewerLink), viewerPlan: row.viewerPlan }
+        : {}),
     })),
     meta: {
       requestId: c.get('requestId'),

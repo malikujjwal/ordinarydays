@@ -73,6 +73,7 @@ vi.mock('./authz.js', () => ({
   assertListAccess: vi.fn(() => Promise.resolve({ index: {}, isOwner: true })),
   assertActivityAccess: vi.fn(() => Promise.resolve({})),
   assertActivityReadAccessFromPartition: vi.fn(() => Promise.resolve({})),
+  readableActivities: vi.fn(() => Promise.resolve(new Map())),
 }));
 
 vi.mock('./listRankRepairService.js', () => ({
@@ -140,6 +141,21 @@ beforeEach(() => {
   vi.mocked(repository.resolveExistingItems).mockResolvedValue(new Map());
   vi.mocked(repairService.repairListRanks).mockResolvedValue(true);
 });
+
+/**
+ * Reads a row's link/plan pair without narrowing at every assertion. The projection is a
+ * union — a row has both or neither — so this returns `undefined` for an unlinked row rather
+ * than pretending the fields are optional.
+ */
+const linkedRow = (row: unknown) =>
+  row as {
+    viewerLink?: { activityId: string };
+    viewerPlan?: {
+      type?: string;
+      status?: string;
+      schedule?: { date?: string; time?: string; timezone?: string };
+    };
+  };
 
 describe('the item cap', () => {
   it('refuses the 501st with exactly "List is full." and writes nothing', async () => {
@@ -530,15 +546,24 @@ describe('reads', () => {
         linkedAt: NOW,
       },
     ]);
-    // The second link's Activity is gone, so it is omitted rather than serialised dead.
-    vi.mocked(authz.assertActivityAccess)
-      .mockResolvedValueOnce({} as never)
-      .mockRejectedValueOnce(new AppError('not_found', 'Activity not found.'));
+    /**
+     * The second link's Activity is gone, so it is omitted rather than serialised dead. The
+     * batched check answers by **absence** from the map — it does not throw, because a caller
+     * asking about many activities wants to know which ones it may read.
+     */
+    vi.mocked(authz.readableActivities).mockResolvedValue(
+      new Map([
+        [
+          'act_01J8XKQ2M4N5P6R7S8T9V0W1X5',
+          { objectKind: 'plan', type: 'event', status: 'scheduled' } as never,
+        ],
+      ]),
+    );
 
     const page = await service.listItemsFor(USER, LIST, undefined);
 
-    expect(page.items[0]?.viewerLink).toBeDefined();
-    expect(page.items[1]?.viewerLink).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerLink).toBeDefined();
+    expect(linkedRow(page.items[1])?.viewerLink).toBeUndefined();
   });
 
   it('404s the exact read for a missing or tombstoned id alike', async () => {
@@ -575,9 +600,8 @@ describe('cleaning up a stale viewer pointer', () => {
       itemIds: [ITEM],
     } as never);
     vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([LINK as never]);
-    vi.mocked(authz.assertActivityAccess).mockRejectedValue(
-      new AppError('not_found', 'Activity not found.'),
-    );
+    /** Absent from the batch means stale — deleted, or not this caller's to read. */
+    vi.mocked(authz.readableActivities).mockResolvedValue(new Map());
   };
 
   /**
@@ -591,7 +615,7 @@ describe('cleaning up a stale viewer pointer', () => {
 
     const page = await service.listItemsFor(USER, LIST, undefined);
 
-    expect(page.items[0]?.viewerLink).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
     expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
   });
 
@@ -656,7 +680,9 @@ describe('cleaning up a stale viewer pointer', () => {
       itemIds: [ITEM],
     } as never);
     vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([LINK as never]);
-    vi.mocked(authz.assertActivityAccess).mockResolvedValue({} as never);
+    vi.mocked(authz.readableActivities).mockResolvedValue(
+      new Map([[LINK.activityId, {} as never]]),
+    );
 
     await service.listItemsFor(USER, LIST, undefined);
 
@@ -664,5 +690,276 @@ describe('cleaning up a stale viewer pointer', () => {
       vi.mocked(activityRepository.getActivityPartitionStrong),
     ).not.toHaveBeenCalled();
     expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The read shape of a full page, raised in review (P3-15).
+ *
+ * A fifty-item page used to authorise one Activity per link, **sequentially** — fifty round
+ * trips on every list open, for data the response then discarded. These assert the shape
+ * rather than the timing: what matters is that the page issues bounded batch reads and not a
+ * read per link, which is the property a `Promise.all` would also violate even though it
+ * looks faster.
+ */
+describe('a full page of linked items reads in bounded batches', () => {
+  const PAGE = 50;
+
+  const linkedPage = () => {
+    const items = Array.from({ length: PAGE }, (_index, position) =>
+      anItem({
+        itemId: `itm_01J8XKQ2M4N5P6R7S8T9V0W${String(position).padStart(3, '0')}`,
+        rank: `a${position}`,
+      }),
+    );
+    const links = items.map((item, position) => ({
+      listId: LIST,
+      itemId: item.itemId,
+      viewerUserId: USER,
+      activityId: `act_01J8XKQ2M4N5P6R7S8T9V0W${String(position).padStart(3, '0')}`,
+      linkedAt: NOW,
+    }));
+    useList();
+    vi.mocked(repository.listItems).mockResolvedValue({
+      list: aList(),
+      items,
+      itemIds: items.map((item) => item.itemId),
+    } as never);
+    vi.mocked(repository.batchGetViewerLinks).mockResolvedValue(links as never);
+    vi.mocked(authz.readableActivities).mockResolvedValue(
+      new Map(links.map((entry) => [entry.activityId, {} as never])),
+    );
+    return { items, links };
+  };
+
+  it('authorises the whole page in one call, not one per link', async () => {
+    const { links } = linkedPage();
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(page.items).toHaveLength(PAGE);
+    expect(vi.mocked(authz.readableActivities)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(authz.readableActivities).mock.calls[0]?.[1]).toEqual(
+      links.map((entry) => entry.activityId),
+    );
+  });
+
+  /**
+   * The regression guard. `assertActivityAccess` is the per-link path this replaced, and each
+   * of its calls is a `GetItem`; reintroducing it inside the loop is the easy mistake.
+   */
+  it('performs no per-link authorisation read', async () => {
+    linkedPage();
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(vi.mocked(authz.assertActivityAccess)).not.toHaveBeenCalled();
+  });
+
+  /** One caller-link batch read for the page, not one per item. */
+  it('reads the caller’s links in one batch', async () => {
+    linkedPage();
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(vi.mocked(repository.batchGetViewerLinks)).toHaveBeenCalledTimes(1);
+  });
+
+  /** Nothing is confirmed strongly or deleted when every pointer resolves. */
+  it('reads nothing strongly when the whole page is readable', async () => {
+    linkedPage();
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(
+      vi.mocked(activityRepository.getActivityPartitionStrong),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The state line's data, and the assertion the projection lacked (P3-15, raised in review).
+ *
+ * Every earlier projection test asserted `viewerLink.activityId` — that a link exists. None
+ * proved a row could tell **which** state the Plan is in, which is the whole of P3-34: a
+ * scheduled Plan and the same Plan after unscheduling produced identical responses.
+ */
+describe('the caller’s Plan state reaches the row', () => {
+  const LINKED = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X4';
+
+  const withPlan = (plan: Record<string, unknown>) => {
+    useList();
+    vi.mocked(repository.listItems).mockResolvedValue({
+      list: aList(),
+      items: [anItem()],
+      itemIds: [ITEM],
+    } as never);
+    vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([
+      {
+        listId: LIST,
+        itemId: ITEM,
+        viewerUserId: USER,
+        activityId: LINKED,
+        linkedAt: NOW,
+      },
+    ] as never);
+    vi.mocked(authz.readableActivities).mockResolvedValue(
+      new Map([[LINKED, { activityId: LINKED, objectKind: 'plan', ...plan } as never]]),
+    );
+  };
+
+  const planOf = async () =>
+    linkedRow((await service.listItemsFor(USER, LIST, undefined)).items[0])?.viewerPlan;
+
+  /** Scheduled: a date is present, which is what makes the line displayable at all. */
+  it('carries the schedule of a scheduled Plan', async () => {
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
+    });
+
+    expect(await planOf()).toEqual({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
+    });
+  });
+
+  /**
+   * Unscheduled: the pointer stays and the **schedule is absent**, which is exactly how the
+   * client knows to hide the line. This is the pair that used to be indistinguishable.
+   */
+  it('omits the schedule of an unscheduled Plan, keeping the link', async () => {
+    withPlan({ type: 'event', status: 'saved' });
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(linkedRow(page.items[0])?.viewerLink?.activityId).toBe(LINKED);
+    expect(linkedRow(page.items[0])?.viewerPlan?.schedule).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerPlan?.status).toBe('saved');
+  });
+
+  it('distinguishes scheduled from unscheduled in the response', async () => {
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+    const scheduled = await planOf();
+
+    withPlan({ type: 'event', status: 'saved' });
+    const unscheduled = await planOf();
+
+    expect(scheduled).not.toEqual(unscheduled);
+  });
+
+  /** Completed: `Done Saturday` rather than `Planned Saturday`, from `status`. */
+  it('carries the completed status', async () => {
+    withPlan({
+      type: 'event',
+      status: 'completed',
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+
+    expect((await planOf())?.status).toBe('completed');
+  });
+
+  /** Rescheduled: the same Plan, a different date — the line updates rather than vanishing. */
+  it('reflects a rescheduled Plan’s new date', async () => {
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+    const before = await planOf();
+
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-12', timezone: 'America/New_York' },
+    });
+    const after = await planOf();
+
+    expect(before?.schedule?.date).toBe('2026-09-05');
+    expect(after?.schedule?.date).toBe('2026-09-12');
+  });
+
+  /**
+   * The verb differs by kind — an event is `Planned`, a watch session is `Next session` — and
+   * inferring it from the list's behaviour would be wrong for a `custom` Plan made from a
+   * `watch` list, which the bridge explicitly allows.
+   */
+  it('carries the Plan kind, which the list behaviour cannot supply', async () => {
+    withPlan({ type: 'watch', status: 'scheduled' });
+
+    expect((await planOf())?.type).toBe('watch');
+  });
+
+  /**
+   * The trim is the contract. A row must not become a second Activity-detail surface, so the
+   * Plan's own title — independent of the item's since the one-time seed — never travels.
+   */
+  it('carries exactly the three fields, and no more', async () => {
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      title: 'A private plan title',
+      notes: 'private',
+      ownerId: USER,
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+
+    const plan = await planOf();
+
+    expect(Object.keys(plan ?? {}).sort()).toEqual(['schedule', 'status', 'type']);
+  });
+
+  /**
+   * A Plan with no participants, prep tasks or expenses may legitimately convert to a Task
+   * (`api-contract.md` §2.3), and conversion keeps `listId`/`listItemId`, so the pointer
+   * survives. The projection cannot describe a Task as a Plan — `type: 'task'` is not a
+   * `PlanType` — and used to emit exactly that behind a cast, producing a response its own
+   * schema rejects.
+   *
+   * Omitting the pair is the conservative answer while the lifecycle rule is undecided: it
+   * emits nothing invalid and deletes nothing.
+   */
+  it('omits the pair when the linked Activity is no longer a Plan', async () => {
+    withPlan({ objectKind: 'task', type: 'task', status: 'scheduled' });
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(linkedRow(page.items[0])?.viewerPlan).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
+  });
+
+  /** A converted Task is readable, so its pointer is not stale and nothing is cleaned up. */
+  it('does not treat a converted Task’s pointer as stale', async () => {
+    withPlan({ objectKind: 'task', type: 'task', status: 'scheduled' });
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(activityRepository.getActivityPartitionStrong),
+    ).not.toHaveBeenCalled();
+  });
+
+  /** No link, no plan: the two arrive together or not at all. */
+  it('omits the plan when there is no readable link', async () => {
+    useList();
+    vi.mocked(repository.listItems).mockResolvedValue({
+      list: aList(),
+      items: [anItem()],
+      itemIds: [ITEM],
+    } as never);
+    vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([] as never);
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerPlan).toBeUndefined();
   });
 });

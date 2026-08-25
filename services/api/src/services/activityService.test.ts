@@ -27,6 +27,7 @@ vi.mock('../repositories/activityRepository.js', () => ({
   newReminderId: vi.fn(() => 'rem_01J8XKQ2M4N5P6R7S8T9V0W1X2'),
   getActivityMeta: vi.fn(),
   getActivityPartition: vi.fn(),
+  getActivityPartitionStrong: vi.fn(),
   listParticipants: vi.fn(() => Promise.resolve([])),
   deleteActivity: vi.fn(() => Promise.resolve()),
 }));
@@ -52,6 +53,7 @@ beforeEach(() => {
   vi.mocked(repository.createActivity).mockResolvedValue(undefined);
   vi.mocked(repository.getActivityMeta).mockReset();
   vi.mocked(repository.getActivityPartition).mockReset();
+  vi.mocked(repository.getActivityPartitionStrong).mockReset();
   vi.mocked(repository.listParticipants).mockReset();
   vi.mocked(repository.listParticipants).mockResolvedValue([]);
   vi.mocked(repository.deleteActivity).mockReset();
@@ -599,7 +601,7 @@ describe('removeActivity replay recovery', () => {
       .mockResolvedValueOnce(child)
       .mockResolvedValueOnce(meta as never)
       .mockResolvedValueOnce(undefined);
-    vi.mocked(repository.getActivityPartition)
+    vi.mocked(repository.getActivityPartitionStrong)
       .mockResolvedValueOnce([
         meta,
         {

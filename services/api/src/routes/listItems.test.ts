@@ -295,3 +295,185 @@ describe('the route registry', () => {
     ]);
   });
 });
+
+/**
+ * The paginated item page's own projection (P3-15, raised in review).
+ *
+ * `GET /v1/lists/:id` and `GET /v1/lists/:id/items` are **two handlers**, each narrowing the
+ * link/plan union separately, so a green service suite proves nothing about either one's
+ * wire output. This route had no successful linked-row test at all: it could have dropped
+ * `viewerPlan` entirely and every other suite would have stayed green.
+ */
+describe('GET /v1/lists/:id/items — the caller’s link and Plan on the wire', () => {
+  const TABLE = 'od-main-local';
+
+  const itemRow = (itemId: string, rank: string) => ({
+    pk: `LIST#${LST}`,
+    sk: `ITEM#${rank}#${itemId}`,
+    entity: 'ListItem',
+    itemId,
+    listId: LST,
+    rank,
+    itemRevision: 1,
+    title: 'Zahav',
+    checked: false,
+  });
+
+  const linkRow = (itemId: string) => ({
+    pk: `LIST#${LST}`,
+    sk: `LNK#${DEV}#${itemId}`,
+    entity: 'ListItemActivityLink',
+    listId: LST,
+    itemId,
+    viewerUserId: DEV,
+    activityId: ACT,
+    linkedAt: '2026-08-23T00:00:00.000Z',
+  });
+
+  const activityMetaRow = (overrides: Record<string, unknown> = {}) => ({
+    pk: `ACT#${ACT}`,
+    sk: 'META',
+    entity: 'Activity',
+    activityId: ACT,
+    ownerId: DEV,
+    objectKind: 'plan',
+    type: 'event',
+    status: 'scheduled',
+    schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
+    title: 'Dinner at Zahav',
+    details: { kind: 'event' },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: '2026-08-23T00:00:00.000Z',
+    lastActivityAt: '2026-08-23T00:00:00.000Z',
+    updatedAt: '2026-08-23T00:00:00.000Z',
+    schemaVersion: 1,
+    ...overrides,
+  });
+
+  /** The keys one `BatchGetItem` asked for, so the mock can answer per partition. */
+  const batchKeys = (input: {
+    RequestItems?: Record<string, { Keys?: Record<string, unknown>[] }>;
+  }): string[] =>
+    ((input.RequestItems?.[TABLE]?.Keys ?? []) as { pk?: unknown }[]).map((key) =>
+      String(key.pk ?? ''),
+    );
+
+  const seedPage = (activity: Record<string, unknown> | undefined, linked = true) => {
+    seedGets([pointerRow(), listMetaRow()]);
+    ddbMock
+      .on(QueryCommand)
+      .callsFake((input) =>
+        String(input.ExpressionAttributeValues?.[':pk'] ?? '').startsWith('LIST#')
+          ? { Items: [itemRow(ITM, 'a0')] }
+          : { Items: [] },
+      );
+    ddbMock.on(BatchGetCommand).callsFake((input) => ({
+      Responses: {
+        [TABLE]: batchKeys(input).some((pk) => pk.startsWith('ACT#'))
+          ? activity === undefined
+            ? []
+            : [activity]
+          : linked
+            ? [linkRow(ITM)]
+            : [],
+      },
+    }));
+  };
+
+  const firstRow = async () => {
+    const res = await send(createApp(), 'GET', `/v1/lists/${LST}/items`);
+    expect(res.status).toBe(200);
+    return (await res.json()).data[0];
+  };
+
+  it('returns the link and the trimmed Plan together', async () => {
+    seedPage(activityMetaRow());
+
+    const row = await firstRow();
+
+    expect(row.viewerLink).toMatchObject({
+      itemId: ITM,
+      viewerUserId: DEV,
+      activityId: ACT,
+    });
+    expect(row.viewerPlan).toEqual({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
+    });
+  });
+
+  /** One id, on the link alone, so the halves cannot disagree about which Plan. */
+  it('keeps the Activity id on the link and off the Plan state', async () => {
+    seedPage(activityMetaRow());
+
+    const row = await firstRow();
+
+    expect(row.viewerPlan).not.toHaveProperty('activityId');
+    expect(row.viewerLink.activityId).toBe(ACT);
+  });
+
+  /** Unscheduled: the link stays, the schedule goes, and the client hides the line. */
+  it('omits the schedule of an unscheduled Plan while keeping the link', async () => {
+    seedPage(activityMetaRow({ status: 'saved', schedule: undefined }));
+
+    const row = await firstRow();
+
+    expect(row.viewerLink.activityId).toBe(ACT);
+    expect(row.viewerPlan).toEqual({ type: 'event', status: 'saved' });
+  });
+
+  it('carries neither half for an item nobody planned', async () => {
+    seedPage(activityMetaRow(), false);
+
+    const row = await firstRow();
+
+    expect(row.viewerLink).toBeUndefined();
+    expect(row.viewerPlan).toBeUndefined();
+  });
+
+  /** A stale pointer: readable link row, no Activity behind it. */
+  it('carries neither half when the Activity is gone', async () => {
+    seedPage(undefined);
+
+    const row = await firstRow();
+
+    expect(row.viewerLink).toBeUndefined();
+    expect(row.viewerPlan).toBeUndefined();
+  });
+
+  /**
+   * A Plan converted to a Task keeps its pointer but is not a Plan, so the row describes
+   * neither half rather than emitting a `type` the response schema rejects.
+   */
+  it('carries neither half when the Plan became a Task', async () => {
+    seedPage(
+      activityMetaRow({
+        objectKind: 'task',
+        type: 'task',
+        details: { kind: 'task' },
+      }),
+    );
+
+    const row = await firstRow();
+
+    expect(row.viewerLink).toBeUndefined();
+    expect(row.viewerPlan).toBeUndefined();
+  });
+
+  it('never leaks a storage attribute through either half', async () => {
+    seedPage(activityMetaRow());
+
+    const row = await firstRow();
+
+    for (const part of [row.item, row.viewerLink, row.viewerPlan]) {
+      expect(part).not.toHaveProperty('pk');
+      expect(part).not.toHaveProperty('sk');
+      expect(part).not.toHaveProperty('entity');
+    }
+  });
+});

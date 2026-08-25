@@ -9,10 +9,11 @@ import {
   patchListItemInputFor,
 } from '@od/shared/schemas';
 import type {
+  Activity,
   List,
   ListItem,
   ListItemActivityLink,
-  ListItemDetails,
+  ListItemPlanState,
   ReversibleItemMutation,
 } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
@@ -33,7 +34,6 @@ import {
   ListItemIdUnavailableError,
   ListItemNotFoundError,
   ListMutationRetryExhaustedError,
-  ListNotFoundError,
   ListRankRepairRequiredError,
   ListReadFenceError,
   listItems as listItemsPage,
@@ -47,9 +47,9 @@ import {
 } from '../repositories/listRepository.js';
 import { ID_UNAVAILABLE } from './activityService.js';
 import {
-  assertActivityAccess,
   assertActivityReadAccessFromPartition,
   assertListAccess,
+  readableActivities,
 } from './authz.js';
 import { drainListWork, withListWorkDrain } from './listMutationService.js';
 import { repairListRanks } from './listRankRepairService.js';
@@ -704,8 +704,24 @@ export async function uncheckAllItems(
   return runBulkChecked(userId, listId, 'uncheck_all', idempotencyKey, now, receiptFor);
 }
 
+/**
+ * One joined row: the item alone, or the item with the caller's pointer **and** the Plan that
+ * pointer resolved to.
+ *
+ * Two shapes rather than two optionals, mirroring `ListDetailItem`: a link without state
+ * cannot render a state line and state without a link names a Plan the row cannot navigate
+ * to, so the projection cannot express half a pair even by accident.
+ */
+export type HydratedListItem =
+  | { readonly item: ListItem }
+  | {
+      readonly item: ListItem;
+      readonly viewerLink: ListItemActivityLink;
+      readonly viewerPlan: ListItemPlanState;
+    };
+
 export interface ListItemsProjection {
-  readonly items: { item: ListItem; viewerLink?: ListItemActivityLink }[];
+  readonly items: HydratedListItem[];
   readonly nextCursor?: string;
 }
 
@@ -755,41 +771,91 @@ export async function hydrateViewerLinks(
   listId: string,
   access: ListAccessGrant,
   items: readonly ListItem[],
-): Promise<{ item: ListItem; viewerLink?: ListItemActivityLink }[]> {
+): Promise<HydratedListItem[]> {
   const links = await batchGetViewerLinks(
     userId,
     listId,
     access,
     items.map((item) => item.itemId),
   );
-  const readable = new Map<string, ListItemActivityLink>();
+  /**
+   * One batched authorisation for the whole page, not one per link.
+   *
+   * The ids come from rows the repository already filtered to this caller, so no other
+   * viewer's Activity is named here — the caller-scoping happens **before** any Activity is
+   * loaded, which is what `security-privacy.md` row 15a rests on and is easy to get backwards
+   * when a loop becomes a batch.
+   *
+   * A link absent from the result is stale for one of the two reasons the access rule
+   * deliberately cannot tell apart: the Activity is gone, or it is not this caller's to read.
+   */
+  const authorised = await readableActivities(
+    userId,
+    links.map((entry) => entry.activityId),
+  );
+
+  const readable = new Map<string, { link: ListItemActivityLink; plan: Activity }>();
   const stale: ListItemActivityLink[] = [];
   for (const link of links) {
-    try {
-      await assertActivityAccess(userId, link.activityId, 'read');
-      readable.set(link.itemId, link);
-    } catch (error) {
-      /**
-       * `not_found` covers both halves of the rule: the Activity was deleted, or it is one
-       * this caller may not read. The two are deliberately indistinguishable here — the
-       * access check answers `404` for a stranger precisely so a pointer cannot be used to
-       * probe for an Activity's existence.
-       */
-      if (error instanceof AppError && error.code === 'not_found') {
-        stale.push(link);
-        continue;
-      }
-      throw error;
+    const plan = authorised.get(link.activityId);
+    if (plan !== undefined) {
+      readable.set(link.itemId, { link, plan });
+      continue;
     }
+    stale.push(link);
   }
 
-  const projection = items.map((item) => {
-    const viewerLink = readable.get(item.itemId);
-    return { item, ...(viewerLink === undefined ? {} : { viewerLink }) };
+  const projection = items.map((item): HydratedListItem => {
+    const joined = readable.get(item.itemId);
+    if (joined === undefined) return { item };
+    /**
+     * The pointer and the Plan it resolved to travel together, or neither does. The batch
+     * already holds the Activity — this is what it was read for — so the row can say whether
+     * the Plan is scheduled, unscheduled or done rather than only that one exists (P3-34).
+     */
+    const viewerPlan = toPlanState(joined.plan);
+    if (viewerPlan === undefined) return { item };
+    return { item, viewerLink: joined.link, viewerPlan };
   });
 
   await removeStaleViewerLinks(listId, userId, stale);
   return projection;
+}
+
+/**
+ * The three fields a list row can say about a Plan, and no more (P3-15, P3-34). The Activity's
+ * id is not among them: it is on the `viewerLink` this always travels with.
+ *
+ * Trimmed here rather than at the handler because the trim is a **contract** decision, not a
+ * serialisation one: what a list row may reveal about a caller's private Plan is the same
+ * question wherever the projection is consumed, and two call sites trimming independently is
+ * how one of them eventually ships a field nobody meant to.
+ */
+function toPlanState(plan: Activity): ListItemPlanState | undefined {
+  /**
+   * **A linked Activity that is no longer a Plan has no row state**, and the cast that used
+   * to paper over this was hiding a real defect (raised in review).
+   *
+   * A Plan with no participants, prep tasks or expenses may legitimately convert to a Task
+   * through `PATCH /v1/activities/:id` (`api-contract.md` §2.3). Conversion keeps `listId`
+   * and `listItemId`, so its pointer survives — and `type` becomes `task`, which
+   * `ListItemPlanState` rejects. The API was therefore able to emit a response its own schema
+   * refuses.
+   *
+   * Returning `undefined` omits the pair rather than describing a Task as a Plan. It does
+   * **not** make the pointer stale: the Activity is readable and the row is intact, so
+   * nothing is cleaned up. What should happen to a list pointer when its Plan stops being one
+   * is a lifecycle rule no canonical doc states — the table in `plans-and-lists.md` §6.3 has
+   * no row for conversion — so it is raised rather than decided here, and this is the
+   * conservative behaviour in the meantime: emit nothing invalid, delete nothing.
+   */
+  if (plan.objectKind !== 'plan') return undefined;
+
+  return {
+    type: plan.type as ListItemPlanState['type'],
+    status: plan.status,
+    ...(plan.schedule === undefined ? {} : { schedule: plan.schedule }),
+  };
 }
 
 /** Best-effort, and silent: see {@link hydrateViewerLinks}. */

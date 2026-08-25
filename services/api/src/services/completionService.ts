@@ -14,6 +14,7 @@ import {
   type ActivitySchedule,
   type ActivityScope,
   activityScope,
+  type ListItemActivityLink,
   type Occurrence,
   scopeFromWire,
   targetsWholeSeries,
@@ -27,8 +28,10 @@ import {
   listParticipants,
   patchActivity,
   putActivityMeta,
+  StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
 import { receiptItem } from '../repositories/idempotencyRepository.js';
+import { findViewerLinksTo } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import * as occurrenceRepository from '../repositories/occurrenceRepository.js';
 import { TransactionBuilder, transactWrite } from '../repositories/tx.js';
@@ -128,7 +131,7 @@ export async function completeActivity(
   if (status === 'completed') next.completedAt = now;
   const result: ActivityCompletionResult = { activity: next, outcome };
 
-  await patchActivity(userId, next, activity.updatedAt, {
+  await writeStatusClearingLinks(userId, next, activity.updatedAt, {
     previous: activity,
     indexedUserIds: context.indexedUserIds,
     ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
@@ -247,7 +250,7 @@ export async function skipActivity(
     updatedAt: now,
   });
   const result: ActivityCompletionResult = { activity: next };
-  await patchActivity(userId, next, activity.updatedAt, {
+  await writeStatusClearingLinks(userId, next, activity.updatedAt, {
     previous: activity,
     indexedUserIds: context.indexedUserIds,
     ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
@@ -255,6 +258,91 @@ export async function skipActivity(
     idempotencyReceipt: receiptFor(result),
   });
   return result;
+}
+
+/**
+ * The viewer pointers a status transition clears — keyed on the **resulting status**, never
+ * on which endpoint was called (P3-15).
+ *
+ * That distinction is the whole reason this is one function. A negative outcome —
+ * `didnt_happen`, or `didnt_go` on an event — arrives through `POST /complete` and produces
+ * `status: 'skipped'`. Keying on the endpoint would clear pointers for `/skip` and silently
+ * leave them for the identical transition through `/complete`, so one user action would
+ * behave two ways depending on which route the client happened to use.
+ *
+ * The lifecycle table clears pointers on **skipped** alone. Complete and reschedule keep
+ * them, and `undefined` is what says so — nothing to clear is the absence of pointer work,
+ * not an empty list of it.
+ *
+ * **Uncomplete does not call this, and deliberately does not restore.** No row in the table
+ * restores a cleared pointer: un-completing reverses the status, and the pointer that a skip
+ * removed is not part of that status. Re-linking is `Plan this item` again, which is an
+ * explicit action with its own confirmation.
+ *
+ * Only a non-occurrence transition reaches here. An occurrence-only skip writes its own
+ * occurrence override and returns long before, leaving the series and its pointer untouched
+ * (`agent-playbook.md` §6.7).
+ */
+async function viewerLinksClearedBy(
+  next: Activity,
+): Promise<{ clearViewerLinks?: ListItemActivityLink[] }> {
+  if (next.status !== 'skipped') return {};
+  if (next.listId === undefined || next.listItemId === undefined) return {};
+  return {
+    clearViewerLinks: await findViewerLinksTo(
+      next.listId,
+      next.listItemId,
+      next.activityId,
+    ),
+  };
+}
+
+/**
+ * How many times a status write will re-read its pointers and try again.
+ *
+ * Each attempt loses only to a pointer that changed **since the read**, and a viewer replaces
+ * their own pointer by making a Plan — a deliberate act, not a loop. Two retries is generous
+ * for that, and bounded so a pathological contender cannot spin.
+ */
+const VIEWER_LINK_ATTEMPTS = 3;
+
+/**
+ * Writes the status, clearing pointers, and does not let a moved pointer cancel the status.
+ *
+ * The pointer deletes are conditional so a viewer who has just planned the item again keeps
+ * their newer pointer — and being in the same transaction as the status write is what makes
+ * skipping one user-visible event. Those two are in tension: a failing condition cancels the
+ * **whole** transaction, so without this the user's skip would silently not happen because an
+ * unrelated pointer moved, surfacing as a retryable `503` with the Plan still un-skipped.
+ *
+ * So a pointer-condition failure is not an error here. It is a signal that the set was read
+ * too early: re-read it, and try again. The next attempt no longer names the replaced pointer,
+ * so the skip commits and the newer Plan's pointer is untouched — which is exactly what both
+ * rules asked for.
+ */
+async function writeStatusClearingLinks(
+  userId: string,
+  next: Activity,
+  expectedUpdatedAt: string,
+  options: Omit<Parameters<typeof patchActivity>[3], 'clearViewerLinks'>,
+): Promise<void> {
+  for (let attempt = 0; attempt < VIEWER_LINK_ATTEMPTS; attempt += 1) {
+    try {
+      await patchActivity(userId, next, expectedUpdatedAt, {
+        ...options,
+        ...(await viewerLinksClearedBy(next)),
+      });
+      return;
+    } catch (error) {
+      if (!(error instanceof StaleViewerLinkError)) throw error;
+    }
+  }
+  /**
+   * Three reads in a row each raced. The status has **not** been written, and saying so is
+   * the honest answer — a retryable conflict the client repeats, rather than a success the
+   * user's Plan does not reflect.
+   */
+  throw new AppError('conflict', 'This changed while you were editing it. Try again.');
 }
 
 /** Snooze a one-off META row or exactly one recurring occurrence. */

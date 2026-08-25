@@ -3783,48 +3783,70 @@
         ]
       },
       "ListDetailItem": {
-        "type": "object",
-        "properties": {
-          "item": {
-            "$ref": "#/components/schemas/ListItemView"
-          },
-          "viewerLink": {
+        "anyOf": [
+          {
             "type": "object",
             "properties": {
-              "listId": {
-                "type": "string",
-                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              "item": {
+                "$ref": "#/components/schemas/ListItemView"
               },
-              "itemId": {
-                "type": "string",
-                "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              "viewerLink": {
+                "type": "object",
+                "properties": {
+                  "listId": {
+                    "type": "string",
+                    "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                  },
+                  "itemId": {
+                    "type": "string",
+                    "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                  },
+                  "viewerUserId": {
+                    "type": "string",
+                    "minLength": 5,
+                    "maxLength": 40,
+                    "pattern": "^usr_[A-Za-z0-9_-]+$"
+                  },
+                  "activityId": {
+                    "type": "string",
+                    "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+                  },
+                  "linkedAt": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "listId",
+                  "itemId",
+                  "viewerUserId",
+                  "activityId",
+                  "linkedAt"
+                ]
               },
-              "viewerUserId": {
-                "type": "string",
-                "minLength": 5,
-                "maxLength": 40,
-                "pattern": "^usr_[A-Za-z0-9_-]+$"
-              },
-              "activityId": {
-                "type": "string",
-                "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-              },
-              "linkedAt": {
-                "type": "string",
-                "minLength": 1
+              "viewerPlan": {
+                "$ref": "#/components/schemas/ListItemPlanState"
               }
             },
             "required": [
-              "listId",
-              "itemId",
-              "viewerUserId",
-              "activityId",
-              "linkedAt"
-            ]
+              "item",
+              "viewerLink",
+              "viewerPlan"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "item": {
+                "$ref": "#/components/schemas/ListItemView"
+              }
+            },
+            "required": [
+              "item"
+            ],
+            "additionalProperties": false
           }
-        },
-        "required": [
-          "item"
         ]
       },
       "ListItemView": {
@@ -3987,6 +4009,71 @@
           "title",
           "checked"
         ]
+      },
+      "ListItemPlanState": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "meal",
+              "watch",
+              "event",
+              "custom"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "saved",
+              "scheduled",
+              "completed",
+              "skipped",
+              "cancelled"
+            ]
+          },
+          "schedule": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "time": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "endTime": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "timezone": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64,
+                "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
+              },
+              "scheduledAtUtc": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "endAtUtc": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "date",
+              "timezone"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "type",
+          "status"
+        ],
+        "additionalProperties": false
       },
       "ListSettingsMutation": {
         "anyOf": [
@@ -7865,7 +7952,7 @@
     "/v1/lists/{id}": {
       "get": {
         "summary": "One list, with an optional first item page",
-        "description": "META alone by default. With `includeItems=true`, adds the strongly fenced first 50 items in `(rank, itemId)` order, an opaque cursor bound to the META rank version, and the caller’s own `viewerLink` per item — never another member’s. A repair or behaviour-migration fence returns `503` with `Retry-After: 1` and no item rows. Also the authoritative read durable creation reconciles a lost response against: `200` adopts the server row, `404` parks the intent.",
+        "description": "META alone by default. With `includeItems=true`, adds the strongly fenced first 50 items in `(rank, itemId)` order, an opaque cursor bound to the META rank version, and the caller’s own `viewerLink` / trimmed `viewerPlan` pair per linked item — never another member’s pointer or Plan state. The caller filter precedes one bounded Activity hydration. The pair is present only when the pointer resolves to a readable **Plan**: an unlinked row, one whose Activity the caller may not read, and one whose Plan has since been converted to a Task all carry neither field. A repair or behaviour-migration fence returns `503` with `Retry-After: 1` and no item rows. Also the authoritative read durable creation reconciles a lost response against: `200` adopts the server row, `404` parks the intent.",
         "tags": [
           "lists"
         ],
@@ -8259,7 +8346,7 @@
     "/v1/lists/{id}/items": {
       "get": {
         "summary": "One page of a list’s items",
-        "description": "Pages 50 strongly consistent item rows at a time in `(rank, itemId)` order, each with the **caller’s own** `viewerLink` and nobody else’s. Strong META reads before and after the query must agree on `rankVersion` and find neither a rank-repair nor a behaviour-migration marker; a failed fence returns `503 internal` with `Retry-After: 1` and no rows, and the client restarts at page one. `meta.nextCursor` is bound to the rank generation that issued it, so a cursor minted before a repair is rejected rather than resumed across changed sort keys.",
+        "description": "Pages 50 strongly consistent item rows at a time in `(rank, itemId)` order. A linked row carries the **caller’s own** `viewerLink` / trimmed `viewerPlan` pair and nobody else’s pointer or Plan state. The pair is present only when the pointer resolves to a readable **Plan**: an unlinked row, one whose Activity the caller may not read, and one whose Plan has since been converted to a Task all carry neither. The caller filter precedes one bounded Activity hydration. Strong META reads before and after the query must agree on `rankVersion` and find neither a rank-repair nor a behaviour-migration marker; a failed fence returns `503 internal` with `Retry-After: 1` and no rows, and the client restarts at page one. `meta.nextCursor` is bound to the rank generation that issued it, so a cursor minted before a repair is rejected rather than resumed across changed sort keys.",
         "tags": [
           "lists"
         ],
@@ -8287,7 +8374,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One page of items, each with the caller’s link when it has one.",
+            "description": "One page of items. A row carries the caller’s `viewerLink` and trimmed `viewerPlan` together, or neither — the pair is present only when the pointer resolves to a readable Plan.",
             "content": {
               "application/json": {
                 "schema": {

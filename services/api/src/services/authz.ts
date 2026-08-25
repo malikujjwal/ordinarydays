@@ -2,6 +2,7 @@ import type { Activity } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import {
   activityFromPartition,
+  batchGetActivityMeta,
   getActivityMeta,
   getActivityPartitionStrong,
   listParticipants,
@@ -140,7 +141,29 @@ export async function assertActivityAccess(
     return { activity, isOwner: true, viaParent: false };
   }
 
-  if (await isParticipant(activityId, userId)) {
+  const granted = await grantFromParticipation(activity, userId, level);
+  if (granted !== undefined) return granted;
+
+  throw new AppError('not_found', NOT_FOUND);
+}
+
+/**
+ * Everything the access rule checks **after** ownership, in one place.
+ *
+ * Extracted in P3-15 so the batched multi-activity check below reaches the same verdict as
+ * the single-activity one from the same code. Two implementations of an authorisation rule
+ * that agree today are two implementations that disagree later, and this is the rule the
+ * list projection's caller-scoping rests on (`security-privacy.md` row 15a).
+ *
+ * Takes the activity rather than its id, so a caller that already holds the row — the batch
+ * path does — does not read it a second time.
+ */
+async function grantFromParticipation(
+  activity: Activity,
+  userId: string,
+  level: AccessLevel,
+): Promise<ActivityAccess | undefined> {
+  if (await isParticipant(activity.activityId, userId)) {
     return grantToParticipant(activity, level, false);
   }
 
@@ -162,7 +185,88 @@ export async function assertActivityAccess(
     }
   }
 
-  throw new AppError('not_found', NOT_FOUND);
+  return undefined;
+}
+
+/**
+ * Which of these activities the caller may **read**, resolved in bounded batches rather than
+ * one authorisation per id (P3-15, raised in review).
+ *
+ * ## Why this exists
+ *
+ * The list projection authorises one Activity per viewer link. Doing that through
+ * `assertActivityAccess` costs a `GetItem` each, **sequentially** — a fifty-item page with
+ * fifty links is fifty round trips. Once shared Plans arrive it is worse than one read each:
+ * a non-owner also costs a participant `Query`, and a prep task adds its parent's META and
+ * participants on top. Batching the META reads alone would leave those behind.
+ *
+ * ## What is batched, and what cannot be
+ *
+ * Every META arrives in **one** `BatchGetItem` — which retries `UnprocessedKeys` and fails
+ * loudly rather than silently short — and ownership, the only evidence most links will ever
+ * need, is decided from that batch with no further read at all.
+ *
+ * Participant evidence cannot join it: `PART#` rows are keyed by `personId`, not by user, so
+ * membership is a `Query` per activity and DynamoDB has no multi-partition Query batch. Those
+ * resolve for the non-owned remainder only, in **bounded chunks** — never a `Promise.all` over
+ * the page. Firing fifty Queries at once trades serial latency for a burst, which is the same
+ * cost in a different shape and is exactly what the bounded-batch design exists to avoid.
+ *
+ * In this phase that remainder is always empty: no Activity has participants until Phase 6,
+ * so every link is resolved by the single batch. When sharing lands, the right fix is to make
+ * participation answerable from a **keyed** row so it can join the batch — the caller's own
+ * index entry is the obvious candidate — but that changes which row is authoritative for
+ * access, which is a Phase 6 decision and not one to make here by implication.
+ *
+ * ## What it deliberately does not do
+ *
+ * It does not throw. A caller asking about many activities wants to know which ones it may
+ * read, and a missing row and a stranger's row are the same answer — absent from the result
+ * — for the same reason `assertActivityAccess` answers `404` to both: a pointer must not
+ * become a way to probe for an Activity's existence.
+ */
+/**
+ * How many participant `Query`s may be in flight at once.
+ *
+ * Small on purpose. This path exists to stop a page issuing one read per link, and replacing
+ * a serial walk with a simultaneous burst of the same size would miss the point — it moves
+ * the cost from latency to throughput pressure and makes throttling more likely, not less.
+ */
+const PARTICIPANT_READ_CHUNK = 5;
+
+export async function readableActivities(
+  userId: string,
+  activityIds: readonly string[],
+): Promise<Map<string, Activity>> {
+  const unique = [...new Set(activityIds)];
+  if (unique.length === 0) return new Map();
+
+  const metas = await batchGetActivityMeta(unique);
+  const readable = new Map<string, Activity>();
+  const unresolved: Activity[] = [];
+
+  for (const activity of metas) {
+    if (activity.ownerId === userId) {
+      readable.set(activity.activityId, activity);
+      continue;
+    }
+    unresolved.push(activity);
+  }
+
+  for (let start = 0; start < unresolved.length; start += PARTICIPANT_READ_CHUNK) {
+    const chunk = unresolved.slice(start, start + PARTICIPANT_READ_CHUNK);
+    const grants = await Promise.all(
+      chunk.map(async (activity) => ({
+        activity,
+        granted: await grantFromParticipation(activity, userId, 'read'),
+      })),
+    );
+    for (const { activity, granted } of grants) {
+      if (granted !== undefined) readable.set(activity.activityId, activity);
+    }
+  }
+
+  return readable;
 }
 
 /**

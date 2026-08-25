@@ -1079,14 +1079,37 @@ the product", so it gets its own task and its own test file.
 
 Neither side ever cascade-deletes the other.
 
+**Two transitions the table does not cover, raised in P3-15 and deliberately not decided
+there.** A linked Plan may legitimately **convert to a Task** — permitted by
+`api-contract.md` §2.3 when it has no participants, prep tasks or expenses — and it may be
+**cancelled** through an ordinary `PATCH`. Neither clears the pointer today, and neither has
+a row here. A Task is not a Plan, so the read side cannot describe one: the projection omits
+the link/plan pair for a converted Task rather than emitting a shape its own schema rejects,
+and deletes nothing, because the Activity is readable and the pointer is not stale. That is
+interim behaviour, not a decision. The decision — clear the pointer on conversion, or keep it
+and give P3-34 a Task and a cancelled line to render — belongs to the founder (§8).
+
+**What the read side must carry.** Rows 1 and 2 both turn on the client seeing the Plan's
+current state, so the projection returns `viewerPlan` — `ListItemPlanState`, the caller's
+linked Plan trimmed to `type`, `status` and an optional `schedule` — beside `viewerLink`
+(`api-contract.md` §3). The two are one shape, not two optional fields: a row has both or
+neither. Without it a scheduled Plan and the same Plan after
+unscheduling are indistinguishable in the response, and P3-34 has no state to render. The
+Activities are hydrated in **one bounded batch** per page, after the caller filter, never one
+read per link.
+
 **Tests.** One test per row, all in
 `services/api/src/services/__tests__/listLinkLifecycle.test.ts`. The lifecycle test separates
 skip from unschedule: skip clears the pointer, unschedule retains it but renders no state line,
 and a later reschedule makes that same pointer visible again. A recurring occurrence skip
 leaves its series pointer byte-identical. Plus a test that deletes an
 Activity and asserts the item is byte-identical. Completing a Plan linked from a checkable
-list leaves `checked` byte-identical. A projection seeded with links for two viewers returns
-only the caller's link and never attempts to load the other viewer's Activity.
+list leaves `checked` byte-identical. Projection tests distinguish scheduled, unscheduled,
+completed and rescheduled versions of one linked Plan; each linked row carries matching
+`viewerLink` and `viewerPlan`, while an unlinked or unreadable row carries neither. A fixture
+with links for two viewers returns only the caller's pair and never attempts to load the other
+viewer's Activity. A route test proves both list read endpoints serialise the pair rather than
+discarding the state after the service projection.
 
 ---
 
@@ -1975,8 +1998,10 @@ while choosing `General`; the result is `custom`, proving the list never chooses
 ### P3-34 — The caller-scoped Plan state line on a list item
 
 **Approach.** The item stays in its list, in place. When the list-detail response includes the
-caller's `viewerLink` **and the hydrated linked Activity has `schedule.date`**, that caller
-alone sees a state line:
+caller's `viewerLink` **and its `viewerPlan` carries `schedule.date`**, that caller alone sees
+a state line. `viewerPlan` is `ListItemPlanState` — `type`, `status` and an optional
+`schedule` — supplied by P3-15; the client derives the line from it and never fetches
+Activities per row, and takes the line's tap target from `viewerLink.activityId`:
 
 ```
 Restaurants to try
@@ -1988,6 +2013,13 @@ Rules that are easy to get wrong:
 
 - The state line shows the caller-linked Activity's date and time in the relative format used
   elsewhere: weekday name within 7 days, otherwise `d MMM`.
+- **`viewerPlan.status` selects the line, and two of its five values have no copy yet.**
+  `scheduled` renders `Planned …` (or `Next session …` for a `watch` Plan) and `completed`
+  renders `Done …`. `saved` has no date and so renders nothing. **`cancelled` and `skipped`
+  are open**: a skip clears the pointer, so a skipped Plan should not normally reach a row at
+  all, but cancellation is an ordinary `PATCH` that clears nothing — a cancelled Plan with a
+  date is currently reachable and has no defined line. Deciding that is a §8 trigger, not an
+  implementation choice; until it is decided, do not invent a line for either.
 - Unscheduling retains `viewerLink` but hides the line; rescheduling the same Activity makes
   it visible again. Link presence alone is never display eligibility.
 - **Tapping the state line opens the Activity. Tapping the title opens the item detail.**

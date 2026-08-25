@@ -131,6 +131,7 @@ describe('the generated document', () => {
       'HealthResponse',
       'ListDetail',
       'ListDetailItem',
+      'ListItemPlanState',
       'ListItemView',
       'ListSettingsMutation',
       'ListTemplate',

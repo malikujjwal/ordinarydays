@@ -974,7 +974,11 @@ registry.registerPath({
   description:
     'META alone by default. With `includeItems=true`, adds the strongly fenced first 50 ' +
     'items in `(rank, itemId)` order, an opaque cursor bound to the META rank version, and ' +
-    'the caller’s own `viewerLink` per item — never another member’s. A repair or ' +
+    'the caller’s own `viewerLink` / trimmed `viewerPlan` pair per linked item — never ' +
+    'another member’s pointer or Plan state. The caller filter precedes one bounded Activity ' +
+    'hydration. The pair is present only when the pointer resolves to a readable **Plan**: an ' +
+    'unlinked row, one whose Activity the caller may not read, and one whose Plan has since ' +
+    'been converted to a Task all carry neither field. A repair or ' +
     'behaviour-migration fence returns `503` with `Retry-After: 1` and no item rows. Also ' +
     'the authoritative read durable creation reconciles a lost response against: `200` ' +
     'adopts the server row, `404` parks the intent.',
@@ -1159,8 +1163,12 @@ registry.registerPath({
   path: '/v1/lists/{id}/items',
   summary: 'One page of a list’s items',
   description:
-    'Pages 50 strongly consistent item rows at a time in `(rank, itemId)` order, each with ' +
-    'the **caller’s own** `viewerLink` and nobody else’s. Strong META reads before and ' +
+    'Pages 50 strongly consistent item rows at a time in `(rank, itemId)` order. A linked ' +
+    'row carries the **caller’s own** `viewerLink` / trimmed `viewerPlan` pair and nobody ' +
+    'else’s pointer or Plan state. The pair is present only when the pointer resolves to a ' +
+    'readable **Plan**: an unlinked row, one whose Activity the caller may not read, and one ' +
+    'whose Plan has since been converted to a Task all carry neither. The caller ' +
+    'filter precedes one bounded Activity hydration. Strong META reads before and ' +
     'after the query must agree on `rankVersion` and find neither a rank-repair nor a ' +
     'behaviour-migration marker; a failed fence returns `503 internal` with ' +
     '`Retry-After: 1` and no rows, and the client restarts at page one. `meta.nextCursor` ' +
@@ -1173,7 +1181,10 @@ registry.registerPath({
   },
   responses: {
     200: {
-      description: 'One page of items, each with the caller’s link when it has one.',
+      description:
+        'One page of items. A row carries the caller’s `viewerLink` and trimmed ' +
+        '`viewerPlan` together, or neither — the pair is present only when the pointer ' +
+        'resolves to a readable Plan.',
       content: { 'application/json': { schema: listItemPageResponse } },
     },
     404: {
