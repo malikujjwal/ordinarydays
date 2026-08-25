@@ -179,6 +179,8 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     mutates: true,
   },
   { method: 'GET', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
+  { method: 'PATCH', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
+  { method: 'DELETE', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
   /**
    * The optional bridge to Activities (P3-13). Creating, so it takes an `Idempotency-Key`:
    * a retry whose first response was lost must not produce a second Plan.
@@ -189,8 +191,6 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
     mutates: true,
   },
-  { method: 'PATCH', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
-  { method: 'DELETE', pattern: '/v1/lists/:id/items/:itemId', auth: 'authenticated' },
   {
     method: 'POST',
     pattern: '/v1/lists/:id/clear-checked',

@@ -71,7 +71,11 @@ import {
  */
 
 /** Phase 1 rejects sharing rather than dropping it silently (P1-11). */
-const SHARING_SOON = 'Sharing is coming soon.';
+/**
+ * Exported from P3-13: the bridge refuses `selected_people` with the **same** copy, so the
+ * two paths cannot drift into telling a user two different things about one missing feature.
+ */
+export const SHARING_SOON = 'Sharing is coming soon.';
 
 /**
  * Two levels: a plan, and its prep tasks (`plans-and-lists.md` §3). A third is refused rather
@@ -248,7 +252,11 @@ function validateRecurrence(candidate: Recurrence): Recurrence {
   );
 }
 
-function recurrenceForCreate(
+/**
+ * Exported from P3-13, so the bridge derives its stored recurrence with this function rather
+ * than a second copy — §P3-13 says to import the create path's derivations, not re-derive.
+ */
+export function recurrenceForCreate(
   supplied: Recurrence | undefined,
   schedule: ActivitySchedule | undefined,
 ): Recurrence | undefined {

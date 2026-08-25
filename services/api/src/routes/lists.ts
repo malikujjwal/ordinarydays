@@ -10,6 +10,7 @@ import {
   listListQuery,
   patchListInput,
   patchListItemInput,
+  scheduleListItemInput,
   undoListOperationInput,
 } from '@od/shared/schemas';
 import { Hono } from 'hono';
@@ -42,6 +43,10 @@ import {
 } from '../handlers/listItems.js';
 import { LIST_LISTS_PATH, listListsHandler } from '../handlers/listLists.js';
 import { PATCH_LIST_PATH, patchListHandler } from '../handlers/patchList.js';
+import {
+  SCHEDULE_LIST_ITEM_PATH,
+  scheduleListItemHandler,
+} from '../handlers/scheduleListItem.js';
 
 /**
  * `/v1/lists` (`api-contract.md` §2.7).
@@ -49,8 +54,7 @@ import { PATCH_LIST_PATH, patchListHandler } from '../handlers/patchList.js';
  * Create with template resolution, the Lists-tab page, list detail with its optional fenced
  * item page and the owner-only delete (P3-05); the six item routes (P3-08); and the two
  * settings routes (P3-09); and the two bulk actions with their compensation endpoint
- * (P3-10). The schedule bridge is a later task and is absent rather than stubbed, so
- * `routeSplit`'s `not_implemented` answers for it.
+ * (P3-10); and the optional bridge to Activities (P3-13).
  *
  * Every entry is registered in `ROUTE_REGISTRY`; app construction throws otherwise. Only the
  * mutating `POST`s take an `Idempotency-Key`, and only the two conditional routes — the
@@ -91,6 +95,16 @@ const validateDetailQuery = zValidator('query', listDetailQuery, (result) => {
  * applied once the row is loaded (`schemas/list.ts`, P3-01).
  */
 const validateCreateItem = zValidator('json', createListItemInput, (result) => {
+  if (!result.success) throw result.error;
+});
+
+/**
+ * The bridge body. **Strict all the way down**, which is what makes the endpoint's promise
+ * keepable: both explicit choices are required, so a request that skipped the Plan-kind or
+ * audience step never reaches the handler, and no nested unknown field is quietly stripped
+ * from a Plan the user thought they were confirming (`CLAUDE.md` rule 2, P3-13).
+ */
+const validateSchedule = zValidator('json', scheduleListItemInput, (result) => {
   if (!result.success) throw result.error;
 });
 
@@ -193,4 +207,12 @@ export const lists = new Hono<AppEnv>()
    * goes, or it does not and the answer is `404` — the same reasoning the Activity delete
    * records.
    */
-  .delete(LIST_ITEM_PATH, deleteListItemHandler);
+  .delete(LIST_ITEM_PATH, deleteListItemHandler)
+  /**
+   * The optional bridge to Activities (P3-13). Creating, so it takes an `Idempotency-Key`;
+   * no `If-Match`, because it edits nothing — it adds a Plan and the caller's pointer beside
+   * an item it leaves byte-identical.
+   */
+  .post(SCHEDULE_LIST_ITEM_PATH, validateSchedule, (c) =>
+    scheduleListItemHandler(c, c.req.valid('json'), new Date().toISOString()),
+  );
