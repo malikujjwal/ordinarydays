@@ -1,6 +1,7 @@
 import { MAX_LIST_ITEMS } from '@od/shared';
 import { formatIngredientTitle, provenanceLabel } from '@od/shared/lists';
 import type { AddIngredientsToListInput } from '@od/shared/schemas';
+import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import type { Activity, List, ListItem, MealIngredient } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
@@ -344,13 +345,7 @@ function labelsFromOtherMeals(items: readonly ListItem[], activityId: string): s
 function today(activity: Activity, now: string): string {
   const timezone = activity.schedule?.timezone;
   if (timezone === undefined) return now.slice(0, 10);
-  // `en-CA` formats as `YYYY-MM-DD`, which is the wall-date shape the rules compare.
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date(now));
+  return toWallDate(now as Instant, timezone as TimeZone);
 }
 
 /** Three transaction items per row plus the fixed three, under the hundred-item ceiling. */
