@@ -1242,7 +1242,8 @@ their response. An unscheduled pointer remains stored but renders no line. The i
 moved, checked, or hidden.
 
 The response carries that Plan's state as a trimmed projection beside the pointer — its kind,
-its status and its schedule, and nothing else about it
+its status and its schedule, and nothing else about it. Pointer and state arrive together or
+not at all
 ([`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §3). The Plan's
 own title never travels: the row shows the item's title, and the two are independent after
 the one-time seed (§6.1).

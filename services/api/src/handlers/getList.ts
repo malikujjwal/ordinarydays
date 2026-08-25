@@ -32,12 +32,18 @@ export async function getListHandler(
       ...(detail.items === undefined
         ? {}
         : {
-            items: detail.items.map(({ item, viewerLink, viewerPlan }) => ({
-              item: toListItem(item),
-              ...(viewerLink === undefined
-                ? {}
-                : { viewerLink: toListItemLink(viewerLink) }),
-              ...(viewerPlan === undefined ? {} : { viewerPlan }),
+            items: detail.items.map((row) => ({
+              item: toListItem(row.item),
+              /**
+               * Narrowed rather than destructured: the row is a union of linked and unlinked
+               * shapes, so a half-pair cannot be written here even by mistake.
+               */
+              ...('viewerLink' in row
+                ? {
+                    viewerLink: toListItemLink(row.viewerLink),
+                    viewerPlan: row.viewerPlan,
+                  }
+                : {}),
             })),
           }),
       ...(detail.nextCursor === undefined ? {} : { nextCursor: detail.nextCursor }),

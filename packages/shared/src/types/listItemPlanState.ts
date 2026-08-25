@@ -9,10 +9,11 @@ import type { ActivityStatus, PlanType } from './vocabulary.js';
  * would make the list projection a second Activity-detail contract, with two shapes to keep
  * in step and a private Plan's every field travelling into a list response.
  *
- * Four fields, each earning its place:
+ * Three fields, each earning its place. The Activity's id is **not** among them: it is already
+ * on the `viewerLink` this always travels with, and one id in two places is one id that can
+ * disagree with itself. The state line's tap target reads it from the link
+ * (`interaction-contract.md` §6.2).
  *
- * - `activityId` — the state line's tap target is the Activity, while the title's is the item
- *   (`interaction-contract.md` §6.2).
  * - `type` — the verb differs by kind: an event is `Planned`, a watch session is
  *   `Next session`. Inferring it from the list's behaviour would be wrong for a `custom` Plan
  *   made from a `watch` list, which the bridge explicitly allows.
@@ -27,7 +28,6 @@ import type { ActivityStatus, PlanType } from './vocabulary.js';
  * `Done`, and a skip removes the pointer entirely, so no line survives to vary.
  */
 export interface ListItemPlanState {
-  activityId: string;
   type: PlanType;
   status: ActivityStatus;
   schedule?: ActivitySchedule;

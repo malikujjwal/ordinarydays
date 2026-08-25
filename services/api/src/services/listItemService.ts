@@ -704,12 +704,21 @@ export async function uncheckAllItems(
   return runBulkChecked(userId, listId, 'uncheck_all', idempotencyKey, now, receiptFor);
 }
 
-/** One joined row: the item, the caller's pointer, and the Plan that pointer resolved to. */
-export interface HydratedListItem {
-  readonly item: ListItem;
-  readonly viewerLink?: ListItemActivityLink;
-  readonly viewerPlan?: ListItemPlanState;
-}
+/**
+ * One joined row: the item alone, or the item with the caller's pointer **and** the Plan that
+ * pointer resolved to.
+ *
+ * Two shapes rather than two optionals, mirroring `ListDetailItem`: a link without state
+ * cannot render a state line and state without a link names a Plan the row cannot navigate
+ * to, so the projection cannot express half a pair even by accident.
+ */
+export type HydratedListItem =
+  | { readonly item: ListItem }
+  | {
+      readonly item: ListItem;
+      readonly viewerLink: ListItemActivityLink;
+      readonly viewerPlan: ListItemPlanState;
+    };
 
 export interface ListItemsProjection {
   readonly items: HydratedListItem[];
@@ -796,15 +805,17 @@ export async function hydrateViewerLinks(
     stale.push(link);
   }
 
-  const projection = items.map((item) => {
+  const projection = items.map((item): HydratedListItem => {
     const joined = readable.get(item.itemId);
     if (joined === undefined) return { item };
     /**
-     * The pointer and the Plan it resolved to travel together. The batch already holds the
-     * Activity — this is what it was read for — so the row can say whether the Plan is
-     * scheduled, unscheduled or done rather than only that one exists (P3-34).
+     * The pointer and the Plan it resolved to travel together, or neither does. The batch
+     * already holds the Activity — this is what it was read for — so the row can say whether
+     * the Plan is scheduled, unscheduled or done rather than only that one exists (P3-34).
      */
-    return { item, viewerLink: joined.link, viewerPlan: toPlanState(joined.plan) };
+    const viewerPlan = toPlanState(joined.plan);
+    if (viewerPlan === undefined) return { item };
+    return { item, viewerLink: joined.link, viewerPlan };
   });
 
   await removeStaleViewerLinks(listId, userId, stale);
@@ -819,9 +830,27 @@ export async function hydrateViewerLinks(
  * question wherever the projection is consumed, and two call sites trimming independently is
  * how one of them eventually ships a field nobody meant to.
  */
-function toPlanState(plan: Activity): ListItemPlanState {
+function toPlanState(plan: Activity): ListItemPlanState | undefined {
+  /**
+   * **A linked Activity that is no longer a Plan has no row state**, and the cast that used
+   * to paper over this was hiding a real defect (raised in review).
+   *
+   * A Plan with no participants, prep tasks or expenses may legitimately convert to a Task
+   * through `PATCH /v1/activities/:id` (`api-contract.md` §2.3). Conversion keeps `listId`
+   * and `listItemId`, so its pointer survives — and `type` becomes `task`, which
+   * `ListItemPlanState` rejects. The API was therefore able to emit a response its own schema
+   * refuses.
+   *
+   * Returning `undefined` omits the pair rather than describing a Task as a Plan. It does
+   * **not** make the pointer stale: the Activity is readable and the row is intact, so
+   * nothing is cleaned up. What should happen to a list pointer when its Plan stops being one
+   * is a lifecycle rule no canonical doc states — the table in `plans-and-lists.md` §6.3 has
+   * no row for conversion — so it is raised rather than decided here, and this is the
+   * conservative behaviour in the meantime: emit nothing invalid, delete nothing.
+   */
+  if (plan.objectKind !== 'plan') return undefined;
+
   return {
-    activityId: plan.activityId,
     type: plan.type as ListItemPlanState['type'],
     status: plan.status,
     ...(plan.schedule === undefined ? {} : { schedule: plan.schedule }),

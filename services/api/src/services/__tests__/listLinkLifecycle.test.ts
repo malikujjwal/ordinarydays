@@ -188,6 +188,14 @@ beforeEach(() => {
 });
 
 /* Row 1 — Completed / un-completed / rescheduled. */
+/**
+ * Reads a row's link/plan pair without narrowing at every assertion. The projection is a
+ * union — a row has both or neither — so this returns `undefined` for an unlinked row rather
+ * than pretending the fields are optional.
+ */
+const linkedRow = (row: unknown) =>
+  row as { viewerLink?: { activityId: string }; viewerPlan?: Record<string, unknown> };
+
 describe('completed, un-completed and rescheduled keep the pointer', () => {
   it('requests no pointer work when a Plan is completed', async () => {
     useActivity(linkedPlan());
@@ -516,11 +524,15 @@ describe('the projection returns only the caller’s link', () => {
     } as never);
     /** The repository returns only the caller's rows; the other viewer's never arrives. */
     mocks.batchGetViewerLinks.mockResolvedValue([link(USER, ACT)] as never);
-    mocks.readableActivities.mockResolvedValue(new Map([[ACT, {}]]) as never);
+    mocks.readableActivities.mockResolvedValue(
+      new Map([
+        [ACT, { objectKind: 'plan', type: 'event', status: 'scheduled' }],
+      ]) as never,
+    );
 
     const page = await listItemService.listItemsFor(USER, LIST, undefined);
 
-    expect(page.items[0]?.viewerLink?.activityId).toBe(ACT);
+    expect(linkedRow(page.items[0])?.viewerLink?.activityId).toBe(ACT);
     /**
      * The batched check is handed only the caller's own activity ids, so the other viewer's
      * Activity is never even named — the scoping happens before any load, which is the
@@ -539,7 +551,11 @@ describe('the projection returns only the caller’s link', () => {
       itemIds: [ITEM],
     } as never);
     mocks.batchGetViewerLinks.mockResolvedValue([link()] as never);
-    mocks.readableActivities.mockResolvedValue(new Map([[ACT, {}]]) as never);
+    mocks.readableActivities.mockResolvedValue(
+      new Map([
+        [ACT, { objectKind: 'plan', type: 'event', status: 'scheduled' }],
+      ]) as never,
+    );
 
     const page = await listItemService.listItemsFor(USER, LIST, undefined);
 

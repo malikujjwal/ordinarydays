@@ -438,9 +438,14 @@ export const listItemView = listItem
  * would make the list projection a second Activity-detail contract, with two shapes to keep
  * in step and a private Plan's every field travelling into a list response.
  *
- * Four fields, each earning its place:
+ * **Strict**, unlike the stored shapes around it. This is built by the service rather than
+ * read back from a row, so there is nothing legitimate to strip — and an `activityId` that
+ * slipped in here would be a second copy of one the link already carries.
  *
- * - `activityId` — the state line's tap target is the Activity (`interaction-contract.md` §6.2).
+ * Three fields, each earning its place. The Activity's id is **not** among them: it is already
+ * on the `viewerLink` this always travels with, and one id in two places is one id that can
+ * disagree with itself. The state line's tap target reads it from the link.
+ *
  * - `type` — the verb differs by kind: an event is `Planned`, a watch session is
  *   `Next session`. Inferring it from the list's behaviour would be wrong for a `custom` Plan
  *   made from a `watch` list, which the bridge explicitly allows.
@@ -455,8 +460,7 @@ export const listItemView = listItem
  * `Done`, and a skip removes the pointer entirely, so no line survives to vary.
  */
 export const listItemPlanState = z
-  .object({
-    activityId: ulidId('act'),
+  .strictObject({
     type: planType,
     status: z.enum(['saved', 'scheduled', 'completed', 'skipped', 'cancelled']),
     schedule: activitySchedule.optional(),
@@ -464,21 +468,30 @@ export const listItemPlanState = z
   .meta({ id: 'ListItemPlanState' });
 
 /**
- * One row of a list detail's item page: the item, the **caller's own** Activity link, and the
- * trimmed state of the Plan that link names. Present only when this viewer has planned the
- * item and may still read that Activity; another member's pointer is never response data
- * (ADR-034, `api-contract.md` §3).
+ * One row of a list detail's item page (`api-contract.md` §3, ADR-034).
  *
- * `viewerLink` and `viewerPlan` arrive together or not at all — the link is the pointer, the
- * plan is what it resolved to, and a pointer whose Activity the caller cannot read is omitted
- * rather than serialised as a dead link.
+ * **Two shapes, not one with two optional fields** — the same choice, for the same reason, as
+ * {@link listSettingsMutation}. The link is the pointer and the plan is what it resolved to,
+ * so a row has both or neither: a link without state cannot render a state line, and state
+ * without a link names a Plan the row cannot navigate to. Modelling them as independent
+ * optionals is what would let a server emit half a pair and a client believe it.
+ *
+ * **Both arms are strict, and the linked arm is first.** A non-strict union would match a
+ * linked row against the unlinked arm and *strip* the link on the way through, which is a
+ * silent data loss no test would notice.
+ *
+ * Present only when this viewer has planned the item and may still read that Activity;
+ * another member's pointer is never response data.
  */
 export const listDetailItem = z
-  .object({
-    item: listItemView,
-    viewerLink: listItemActivityLink.optional(),
-    viewerPlan: listItemPlanState.optional(),
-  })
+  .union([
+    z.strictObject({
+      item: listItemView,
+      viewerLink: listItemActivityLink,
+      viewerPlan: listItemPlanState,
+    }),
+    z.strictObject({ item: listItemView }),
+  ])
   .meta({ id: 'ListDetailItem' });
 
 /**

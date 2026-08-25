@@ -34,7 +34,7 @@ import {
   listBehaviour,
   type listCapabilities,
   listDetail,
-  type listDetailItem,
+  listDetailItem,
   listDetailQuery,
   listIndex,
   listItem,
@@ -659,11 +659,83 @@ describe('the response projections', () => {
               activityId: ACT,
               linkedAt: '2026-08-23T00:00:00.000Z',
             },
+            viewerPlan: { type: 'event', status: 'scheduled' },
           },
         ],
         nextCursor: 'eyJwayI6ImEifQ',
       }).success,
     ).toBe(true);
+  });
+});
+
+/**
+ * A row has a link **and** its Plan state, or neither (`api-contract.md` §3, P3-15).
+ *
+ * Modelled as two strict arms rather than two optional fields, because independent optionals
+ * are what let a server emit half a pair and a client believe it. An earlier version of this
+ * file asserted that a link without state parsed — encoding exactly the invariant the
+ * contract forbids.
+ */
+describe('a list row carries both halves of the link, or neither', () => {
+  const viewerLink = {
+    listId: LST,
+    itemId: ITM,
+    viewerUserId: 'usr_local_dev',
+    activityId: ACT,
+    linkedAt: '2026-08-23T00:00:00.000Z',
+  };
+  const viewerPlan = { type: 'event', status: 'scheduled' } as const;
+  const item = () => listItemView.parse(storedItem);
+
+  it('accepts an unlinked row', () => {
+    expect(listDetailItem.safeParse({ item: item() }).success).toBe(true);
+  });
+
+  it('accepts a row carrying both halves', () => {
+    expect(
+      listDetailItem.safeParse({ item: item(), viewerLink, viewerPlan }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a link with no Plan state — the row could render no state line', () => {
+    expect(listDetailItem.safeParse({ item: item(), viewerLink }).success).toBe(false);
+  });
+
+  it('rejects Plan state with no link — the row could not navigate to it', () => {
+    expect(listDetailItem.safeParse({ item: item(), viewerPlan }).success).toBe(false);
+  });
+
+  /**
+   * The linked arm is first and both are strict, so a linked row cannot match the unlinked
+   * arm and have its link silently stripped on the way through.
+   */
+  it('keeps both halves rather than stripping them into the unlinked arm', () => {
+    const parsed = listDetailItem.parse({ item: item(), viewerLink, viewerPlan });
+
+    expect(parsed).toHaveProperty('viewerLink');
+    expect(parsed).toHaveProperty('viewerPlan');
+  });
+
+  /** A Task is not a Plan: the projection has no shape for one, by construction. */
+  it('rejects a Task as Plan state', () => {
+    expect(
+      listDetailItem.safeParse({
+        item: item(),
+        viewerLink,
+        viewerPlan: { type: 'task', status: 'scheduled' },
+      }).success,
+    ).toBe(false);
+  });
+
+  /** The id lives on the link alone, so the two can never disagree about which Plan. */
+  it('rejects an activityId on the Plan state', () => {
+    expect(
+      listDetailItem.safeParse({
+        item: item(),
+        viewerLink,
+        viewerPlan: { ...viewerPlan, activityId: ACT },
+      }).success,
+    ).toBe(false);
   });
 });
 

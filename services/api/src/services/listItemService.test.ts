@@ -142,6 +142,21 @@ beforeEach(() => {
   vi.mocked(repairService.repairListRanks).mockResolvedValue(true);
 });
 
+/**
+ * Reads a row's link/plan pair without narrowing at every assertion. The projection is a
+ * union — a row has both or neither — so this returns `undefined` for an unlinked row rather
+ * than pretending the fields are optional.
+ */
+const linkedRow = (row: unknown) =>
+  row as {
+    viewerLink?: { activityId: string };
+    viewerPlan?: {
+      type?: string;
+      status?: string;
+      schedule?: { date?: string; time?: string; timezone?: string };
+    };
+  };
+
 describe('the item cap', () => {
   it('refuses the 501st with exactly "List is full." and writes nothing', async () => {
     useList(aList({ itemCount: 500 }));
@@ -537,13 +552,18 @@ describe('reads', () => {
      * asking about many activities wants to know which ones it may read.
      */
     vi.mocked(authz.readableActivities).mockResolvedValue(
-      new Map([['act_01J8XKQ2M4N5P6R7S8T9V0W1X5', {} as never]]),
+      new Map([
+        [
+          'act_01J8XKQ2M4N5P6R7S8T9V0W1X5',
+          { objectKind: 'plan', type: 'event', status: 'scheduled' } as never,
+        ],
+      ]),
     );
 
     const page = await service.listItemsFor(USER, LIST, undefined);
 
-    expect(page.items[0]?.viewerLink).toBeDefined();
-    expect(page.items[1]?.viewerLink).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerLink).toBeDefined();
+    expect(linkedRow(page.items[1])?.viewerLink).toBeUndefined();
   });
 
   it('404s the exact read for a missing or tombstoned id alike', async () => {
@@ -595,7 +615,7 @@ describe('cleaning up a stale viewer pointer', () => {
 
     const page = await service.listItemsFor(USER, LIST, undefined);
 
-    expect(page.items[0]?.viewerLink).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
     expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
   });
 
@@ -785,12 +805,12 @@ describe('the caller’s Plan state reaches the row', () => {
       },
     ] as never);
     vi.mocked(authz.readableActivities).mockResolvedValue(
-      new Map([[LINKED, { activityId: LINKED, ...plan } as never]]),
+      new Map([[LINKED, { activityId: LINKED, objectKind: 'plan', ...plan } as never]]),
     );
   };
 
   const planOf = async () =>
-    (await service.listItemsFor(USER, LIST, undefined)).items[0]?.viewerPlan;
+    linkedRow((await service.listItemsFor(USER, LIST, undefined)).items[0])?.viewerPlan;
 
   /** Scheduled: a date is present, which is what makes the line displayable at all. */
   it('carries the schedule of a scheduled Plan', async () => {
@@ -801,7 +821,6 @@ describe('the caller’s Plan state reaches the row', () => {
     });
 
     expect(await planOf()).toEqual({
-      activityId: LINKED,
       type: 'event',
       status: 'scheduled',
       schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
@@ -817,9 +836,9 @@ describe('the caller’s Plan state reaches the row', () => {
 
     const page = await service.listItemsFor(USER, LIST, undefined);
 
-    expect(page.items[0]?.viewerLink?.activityId).toBe(LINKED);
-    expect(page.items[0]?.viewerPlan?.schedule).toBeUndefined();
-    expect(page.items[0]?.viewerPlan?.status).toBe('saved');
+    expect(linkedRow(page.items[0])?.viewerLink?.activityId).toBe(LINKED);
+    expect(linkedRow(page.items[0])?.viewerPlan?.schedule).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerPlan?.status).toBe('saved');
   });
 
   it('distinguishes scheduled from unscheduled in the response', async () => {
@@ -882,7 +901,7 @@ describe('the caller’s Plan state reaches the row', () => {
    * The trim is the contract. A row must not become a second Activity-detail surface, so the
    * Plan's own title — independent of the item's since the one-time seed — never travels.
    */
-  it('carries exactly the four fields, and no more', async () => {
+  it('carries exactly the three fields, and no more', async () => {
     withPlan({
       type: 'event',
       status: 'scheduled',
@@ -894,12 +913,38 @@ describe('the caller’s Plan state reaches the row', () => {
 
     const plan = await planOf();
 
-    expect(Object.keys(plan ?? {}).sort()).toEqual([
-      'activityId',
-      'schedule',
-      'status',
-      'type',
-    ]);
+    expect(Object.keys(plan ?? {}).sort()).toEqual(['schedule', 'status', 'type']);
+  });
+
+  /**
+   * A Plan with no participants, prep tasks or expenses may legitimately convert to a Task
+   * (`api-contract.md` §2.3), and conversion keeps `listId`/`listItemId`, so the pointer
+   * survives. The projection cannot describe a Task as a Plan — `type: 'task'` is not a
+   * `PlanType` — and used to emit exactly that behind a cast, producing a response its own
+   * schema rejects.
+   *
+   * Omitting the pair is the conservative answer while the lifecycle rule is undecided: it
+   * emits nothing invalid and deletes nothing.
+   */
+  it('omits the pair when the linked Activity is no longer a Plan', async () => {
+    withPlan({ objectKind: 'task', type: 'task', status: 'scheduled' });
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(linkedRow(page.items[0])?.viewerPlan).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
+  });
+
+  /** A converted Task is readable, so its pointer is not stale and nothing is cleaned up. */
+  it('does not treat a converted Task’s pointer as stale', async () => {
+    withPlan({ objectKind: 'task', type: 'task', status: 'scheduled' });
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(activityRepository.getActivityPartitionStrong),
+    ).not.toHaveBeenCalled();
   });
 
   /** No link, no plan: the two arrive together or not at all. */
@@ -914,7 +959,7 @@ describe('the caller’s Plan state reaches the row', () => {
 
     const page = await service.listItemsFor(USER, LIST, undefined);
 
-    expect(page.items[0]?.viewerLink).toBeUndefined();
-    expect(page.items[0]?.viewerPlan).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerLink).toBeUndefined();
+    expect(linkedRow(page.items[0])?.viewerPlan).toBeUndefined();
   });
 });
