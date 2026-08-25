@@ -2,7 +2,6 @@ import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { Page } from '../repositories/base.js';
 import {
-  batchGetViewerLinks,
   deleteList,
   getListMeta,
   getListMetaForDeletion,
@@ -10,7 +9,8 @@ import {
   listItems,
   listListsForUser,
 } from '../repositories/listRepository.js';
-import { assertActivityAccess, assertListAccess } from './authz.js';
+import { assertListAccess } from './authz.js';
+import { hydrateViewerLinks } from './listItemService.js';
 import { drainListWork, withListWorkDrain } from './listMutationService.js';
 import { profileDefaultToClear } from './listSlotService.js';
 
@@ -76,24 +76,19 @@ export async function getListDetail(
     return fenced;
   });
 
-  const links = await batchGetViewerLinks(userId, listId, access.index, page.itemIds);
-  const readable = new Map<string, ListItemActivityLink>();
-  for (const link of links) {
-    try {
-      await assertActivityAccess(userId, link.activityId, 'read');
-      readable.set(link.itemId, link);
-    } catch (error) {
-      if (error instanceof AppError && error.code === 'not_found') continue;
-      throw error;
-    }
-  }
-
+  /**
+   * The one implementation of the viewer-link rule, shared with the item page (P3-14).
+   *
+   * This projection had its own copy — the same batch read, the same access check, the same
+   * omit-on-`not_found` — sitting beside `hydrateViewerLinks`, whose doc comment already
+   * claimed the two were one. They agreed, which is the only reason nothing had gone wrong;
+   * they would not have stayed agreeing, and this is a rule the security model rests on.
+   * `page.itemIds` is `page.items.map((item) => item.itemId)`, so nothing is lost by deriving
+   * the ids there instead.
+   */
   return {
     list: page.list,
-    items: page.items.map((item) => {
-      const viewerLink = readable.get(item.itemId);
-      return { item, ...(viewerLink === undefined ? {} : { viewerLink }) };
-    }),
+    items: await hydrateViewerLinks(userId, listId, access.index, page.items),
     ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
   };
 }

@@ -35,6 +35,7 @@ import { clearListProvenance } from './activityRepository.js';
 import {
   batchGetItems,
   deleteAll,
+  deleteItem,
   getItem,
   type Page,
   putItem,
@@ -702,6 +703,32 @@ export async function batchGetViewerLinks(
   if (after === undefined) throw new ListNotFoundError();
   assertSameFence(before, after);
   return links;
+}
+
+/**
+ * Removes one viewer's pointer, but **only while it still names the Activity that was found
+ * unreadable** (P3-14, `api-contract.md` §3).
+ *
+ * The condition is the whole safety of this. The projection decides a pointer is stale, then
+ * deletes it a moment later; between those two instants the viewer may have scheduled the
+ * item again, and an unconditional delete would remove the pointer to a Plan they just made.
+ * Naming the exact `activityId` the read rejected means a replaced pointer fails the
+ * condition and survives.
+ *
+ * Idempotent by construction: deleting an absent row is a no-op, and a second pass over the
+ * same stale pointer finds nothing to remove.
+ */
+export async function deleteStaleViewerLink(
+  listId: string,
+  viewerUserId: string,
+  itemId: string,
+  activityId: string,
+): Promise<void> {
+  await deleteItem(listItemActivityLink(listId, viewerUserId, itemId), {
+    expression: '#activityId = :activityId',
+    names: { '#activityId': 'activityId' },
+    values: { ':activityId': activityId },
+  });
 }
 
 interface ResolvedItem {
