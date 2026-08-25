@@ -896,6 +896,15 @@ For a legacy profile with no parent map, conditionally create the one-key map, a
 concurrent creator retry the nested operation. This preserves sibling slots even when two
 devices set different defaults concurrently.
 
+`listSlotService.ts` is the API-side home of these invariants: `resolveListSlot`, which drains
+the caller's list index, reads the profile and hands both to the pure rule, and
+`profileDefaultToClear`, the single answer to "which default may this list write clear" that
+P3-05's delete and P3-09's slot change both ask. The conditional transaction item itself —
+`removeDefaultListTransactItem` — stays in `userRepository`: it builds a DynamoDB update over
+the profile key, so it belongs to the repository layer, and both of its callers are inside
+`listRepository`, which may not import a service. There is still exactly one implementation;
+the service names it rather than copying it (P3-12).
+
 > **Decision:** a per-operation override is a parameter to that request and is **not**
 > written to the profile. Choosing a different destination once must not silently become
 > permanent, and most-recently-used is rejected outright (ADR-033). Opening a list writes
@@ -925,7 +934,12 @@ the result is exactly `{ kind: 'none', slot: 'groceries' }` and contains no temp
 A no-destination Watch case returns `none`, then the client presents exactly the three Watch
 styles unselected without `resolveSlot` returning or persisting a `templateKey`. A profile
 integration test starts with all three slots, sets `groceries`, then clears `watch` with
-`null`, proving each request preserves every omitted slot.
+`null`, proving each request preserves every omitted slot. The one line here that needs the
+activity-scoped ingredient action — "passing the visibly chosen `listId` to the ingredient
+action uses that list and leaves `defaultLists` unchanged" — is **deferred to P3-17**, which
+owns that endpoint and already carries the same assertion in its own test list; a
+per-operation override is a parameter to that request, so P3-12 has no surface to point it
+at.
 
 ---
 
