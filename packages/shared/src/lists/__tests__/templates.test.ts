@@ -345,10 +345,12 @@ describe('what the catalogue deliberately does not carry (ADR-031, ADR-032, crit
   /**
    * The catalogue module itself still exports the array and nothing else. The barrel gained
    * P3-07's `listTemplateChoices` — a field projection of these same records, with no
-   * ordering or copy of its own — and P3-12's `resolveSlot`, which picks a *destination*
-   * among the user's existing lists and is forbidden from returning a `templateKey` at all.
-   * That is the complete surface; anything resembling a matcher, registry or suggestion
-   * function is still absent from all three.
+   * ordering or copy of its own — P3-12's `resolveSlot`, which picks a *destination* among
+   * the user's existing lists and is forbidden from returning a `templateKey` at all, and
+   * P3-17's two string functions, which format an item title and a provenance label from a
+   * meal the user has already chosen. None of the four reads the catalogue to decide
+   * anything, and anything resembling a matcher, registry or suggestion function is still
+   * absent from all of them.
    */
   it('exports nothing but the array — no matcher, registry or suggestion function', async () => {
     const mod = await import('../templates.js');
@@ -356,7 +358,9 @@ describe('what the catalogue deliberately does not carry (ADR-031, ADR-032, crit
     const barrel = await import('../index.js');
     expect(Object.keys(barrel).sort()).toEqual([
       'LIST_TEMPLATES',
+      'formatIngredientTitle',
       'listTemplateChoices',
+      'provenanceLabel',
       'resolveSlot',
     ]);
   });

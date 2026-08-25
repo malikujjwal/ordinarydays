@@ -1442,3 +1442,79 @@ describe('delete, restore and cascade', () => {
     ]);
   });
 });
+
+/**
+ * `sourceLabel` extension (P3-17), which is deliberately not reachable through
+ * {@link ListItemFieldPatch}: every field on that shape is one a client may author, and
+ * provenance that a `PATCH` could set records nothing (`plans-and-lists.md` §6.5).
+ */
+describe('extendItemSourceLabel', () => {
+  const target = item({ sourceActivityId: ACTIVITY_ID, itemRevision: 4 });
+
+  const extend = (value: ListItem = target, segment = 'Sunday dinner') =>
+    repository.extendItemSourceLabel(ALICE, LIST_ID, access, value, segment, LATER);
+
+  const written = () =>
+    (vi.mocked(tx.transactWrite).mock.calls[0]?.[0] ?? []) as Record<string, never>[];
+
+  it('sets the segment alone on a row that has no label yet', async () => {
+    const result = await extend();
+
+    expect(result.sourceLabel).toBe('Sunday dinner');
+    expect(written()[1]?.Update).toMatchObject({
+      ExpressionAttributeValues: { ':sourceLabel': 'Sunday dinner' },
+    });
+  });
+
+  it('appends to an existing label rather than replacing it', async () => {
+    const result = await extend(item({ ...target, sourceLabel: 'Thursday lunch' }));
+
+    expect(result.sourceLabel).toBe('Thursday lunch · Sunday dinner');
+  });
+
+  /**
+   * The row was classified *unchecked* a moment ago, and that classification is the whole
+   * reason it is being extended rather than duplicated. `itemRevision` moves when `checked`
+   * does, so this fence is what stops a row checked in between being quietly extended when
+   * §7.3 says it should have got a new item.
+   */
+  it('conditions both rows on the revision it read', async () => {
+    await extend();
+
+    expect(written()[1]?.Update).toMatchObject({
+      ConditionExpression: '#itemRevision = :expectedRevision',
+      ExpressionAttributeValues: { ':expectedRevision': 4, ':nextRevision': 5 },
+    });
+    expect(written()[2]?.Update).toMatchObject({
+      ExpressionAttributeValues: { ':rank': target.rank, ':expectedRevision': 4 },
+    });
+  });
+
+  it('keeps the write off a list that is mid-repair or mid-migration', async () => {
+    await extend();
+
+    expect(written()[3]?.ConditionCheck).toMatchObject({
+      Key: keys.listMeta(LIST_ID),
+    });
+  });
+
+  it('changes nothing else about the row', async () => {
+    const result = await extend();
+
+    expect(result).toEqual({ ...target, sourceLabel: 'Sunday dinner', itemRevision: 5 });
+  });
+
+  it('refuses a grant issued for another list', async () => {
+    await expect(
+      repository.extendItemSourceLabel(
+        ALICE,
+        'lst_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
+        access,
+        target,
+        'Sunday dinner',
+        LATER,
+      ),
+    ).rejects.toThrow();
+    expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+});

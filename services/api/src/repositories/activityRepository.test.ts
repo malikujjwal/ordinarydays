@@ -3,6 +3,7 @@ import {
   DynamoDBDocumentClient,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
 import type { Activity } from '@od/shared/types';
@@ -16,6 +17,7 @@ import {
   newActivityId,
   newReminderId,
   patchActivity,
+  recordIngredientsAddedToList,
   touchLastActivity,
   writeSchedule,
 } from './activityRepository.js';
@@ -684,5 +686,75 @@ describe('overdue task window', () => {
         ':to': '2026-08-05T23:59',
       },
     });
+  });
+});
+
+/**
+ * The `addedToListId` write-back (P3-17).
+ *
+ * DynamoDB addresses a list element by position, and position is the one thing about an
+ * ingredient array that is not stable. These assertions are about the seam that makes that
+ * safe: the caller resolves ids to indexes, and every index carries a condition that the id
+ * still sitting there is the one that was resolved.
+ */
+describe('recordIngredientsAddedToList', () => {
+  const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+  const CHICKEN = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1';
+  const TORTILLAS = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2';
+
+  const sent = () => ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input;
+
+  beforeEach(() => {
+    ddbMock.on(UpdateCommand).resolves({});
+  });
+
+  it('sets the flag at each resolved index, in one update', async () => {
+    await recordIngredientsAddedToList(ACT, LIST, [
+      { index: 0, ingredientId: CHICKEN },
+      { index: 3, ingredientId: TORTILLAS },
+    ]);
+
+    expect(ddbMock.commandCalls(UpdateCommand)).toHaveLength(1);
+    expect(sent()?.UpdateExpression).toBe(
+      'SET #details.#ingredients[0].#addedToListId = :listId, ' +
+        '#details.#ingredients[3].#addedToListId = :listId',
+    );
+    expect(sent()?.ExpressionAttributeValues).toMatchObject({ ':listId': LIST });
+  });
+
+  /** A reorder between the read and this write must fail, not mark a neighbour. */
+  it('conditions every index on the id that was resolved there', async () => {
+    await recordIngredientsAddedToList(ACT, LIST, [
+      { index: 0, ingredientId: CHICKEN },
+      { index: 3, ingredientId: TORTILLAS },
+    ]);
+
+    expect(sent()?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND ' +
+        '#details.#ingredients[0].#ingredientId = :id0 AND ' +
+        '#details.#ingredients[3].#ingredientId = :id3',
+    );
+    expect(sent()?.ExpressionAttributeValues).toMatchObject({
+      ':id0': CHICKEN,
+      ':id3': TORTILLAS,
+    });
+  });
+
+  /**
+   * The `updatedAt` decision, mirroring `clearListProvenance`: nothing the user would
+   * recognise as a change to their meal happened, so advancing the version would invalidate
+   * every holder's `If-Match` and read as an edit nobody made.
+   */
+  it('leaves updatedAt and lastActivityAt alone', async () => {
+    await recordIngredientsAddedToList(ACT, LIST, [{ index: 0, ingredientId: CHICKEN }]);
+
+    expect(sent()?.UpdateExpression).not.toContain('updatedAt');
+    expect(sent()?.UpdateExpression).not.toContain('lastActivityAt');
+  });
+
+  it('writes nothing at all when no ingredient was selected', async () => {
+    await recordIngredientsAddedToList(ACT, LIST, []);
+
+    expect(ddbMock.commandCalls(UpdateCommand)).toHaveLength(0);
   });
 });

@@ -1,3 +1,4 @@
+import type { ActivityDetails } from '@od/shared/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   centsToDraft,
@@ -111,13 +112,13 @@ describe('toActivityDetails', () => {
    * nothing.
    */
   it('carries stored ingredient ids back into the draft rather than re-minting', () => {
-    const stored = {
+    const stored: ActivityDetails = {
       kind: 'meal',
       ingredients: [
         { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X2', name: 'Chicken' },
         { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X3', name: 'Salt' },
       ],
-    } as const;
+    };
 
     const draft = fromActivityDetails(stored);
 
