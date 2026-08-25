@@ -108,7 +108,7 @@ export const activityDetails = z.discriminatedUnion('kind', [
  * Shared by the stored shape and both inputs, so the three cannot drift into disagreeing
  * about what a well-formed schedule is.
  */
-function checkSchedule(
+export function checkSchedule(
   schedule: { date?: unknown; time?: string | undefined; endTime?: string | undefined },
   ctx: z.RefinementCtx,
 ): void {
@@ -132,8 +132,14 @@ function checkSchedule(
   }
 }
 
-/** `details.kind` must equal `type`. The single most useful validation in the product. */
-function checkDetailsMatchType(
+/**
+ * `details.kind` must equal `type`. The single most useful validation in the product.
+ *
+ * Exported so the list bridge (P3-13) applies the identical rule rather than restating it.
+ * A second copy that drifted would let one create path accept a `meal` payload on a `watch`
+ * Plan while the other refused it.
+ */
+export function checkDetailsMatchType(
   value: { type: string; details?: { kind: string } | undefined },
   ctx: z.RefinementCtx,
 ): void {

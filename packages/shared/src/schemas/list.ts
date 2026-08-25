@@ -5,9 +5,22 @@ import {
   MAX_INGREDIENTS,
   MAX_LIST_ITEMS,
   MAX_NOTES_LEN,
+  MAX_PARTICIPANTS,
+  MAX_REMINDERS_PER_USER_PER_ACTIVITY,
   MAX_TITLE_LEN,
 } from '../constants.js';
-import { cursor, ulidId, userId } from './common.js';
+import {
+  activity,
+  activityDetails,
+  activityLocation,
+  checkDetailsMatchType,
+  checkSchedule,
+  participantInput,
+  planType,
+} from './activity.js';
+import { cursor, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
+import { createRecurrence } from './recurrence.js';
+import { reminderInputsForSchedule, reminderOffsetMinutes } from './reminder.js';
 import { defaultSlot } from './user.js';
 
 /**
@@ -592,3 +605,157 @@ export const listSettingsMutation = z
     z.strictObject({ list: listView }),
   ])
   .meta({ id: 'ListSettingsMutation' });
+
+/**
+ * `POST /v1/lists/:id/items/:itemId/schedule` — the optional bridge to Activities
+ * (`api-contract.md` §2.7, `phase-03` §P3-13, ADR-034, ADR-046, ADR-055).
+ *
+ * ## Why this is its own schema and not `CreateActivityInput` with fields removed
+ *
+ * The contract says it outright: "deliberately not `CreateActivityInput` with fields removed
+ * by convention. It is a separate schema so neither audience nor type can be inferred."
+ * Removing fields by convention is a rule that lives in prose; a separate strict schema is a
+ * rule the compiler and the validator both hold. Both halves of the user's choice —
+ * `creationTarget` and `audience` — are **required**, so a request that has not been through
+ * the Plan-kind and audience steps cannot be constructed at all (`CLAUDE.md` rule 2).
+ *
+ * Nothing here is derived from the item, the list, or the title. The server never reads
+ * `behaviour`, `templateKey` or any capability to choose or pre-select the type.
+ *
+ * ## Why the two ids are required here and optional on `POST /v1/activities`
+ *
+ * This route is offline-capable. The native client mints `activityId` and every
+ * `reminderId` before the intent enters SQLite, so a replay after the 24-hour idempotency
+ * receipt expires is still duplicate-safe, and a reminder can be armed locally under the
+ * identity it will keep forever (ADR-055, P2-57). A server-minted id would arrive too late
+ * to be either of those things, so omitting one is a `400` rather than a fallback.
+ */
+const scheduleReminderInput = z.strictObject({
+  /** Required here, unlike the create path: the device armed this id before it was sent. */
+  reminderId: ulidId('rem'),
+  offsetMinutes: reminderOffsetMinutes,
+});
+
+/**
+ * The Plan kind the user chose, and nothing else.
+ *
+ * `objectKind` is pinned to `plan` because a list item cannot bridge to a Task: a Task is
+ * something you do, and `Plan this item` is the action that turns a possibility into a
+ * commitment (`plans-and-lists.md` §6). Strict, so a `listId` or a stray `objectKind: 'task'`
+ * is a `400` naming it.
+ */
+export const scheduleCreationTarget = z.strictObject({
+  objectKind: z.literal('plan'),
+  type: planType,
+});
+
+/**
+ * **Just me** or **Choose people** — the second explicit choice, never a default.
+ *
+ * A discriminated union rather than an optional participant array, so "the user has not
+ * chosen yet" is unrepresentable. `selected_people` is in the schema from this phase so the
+ * contract and the client are stable, and the service refuses it with `Sharing is coming
+ * soon.` until Phase 6; at least one participant, because choosing people and naming none is
+ * a half-made choice.
+ */
+export const scheduleAudience = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('just_me') }),
+  z.strictObject({
+    mode: z.literal('selected_people'),
+    participants: z.array(participantInput).min(1).max(MAX_PARTICIPANTS),
+  }),
+]);
+
+export const scheduleListItemInput = z
+  .strictObject({
+    activityId: ulidId('act'),
+    creationTarget: scheduleCreationTarget,
+    audience: scheduleAudience,
+    /** Omitted copies the item title **once**; after that the two are independent (P3-14). */
+    title: z
+      .string()
+      .trim()
+      .min(1, 'A title is required')
+      .max(MAX_TITLE_LEN, `A title is at most ${MAX_TITLE_LEN} characters`)
+      .optional(),
+    notes: z.string().max(MAX_NOTES_LEN).optional(),
+    schedule: z
+      .object({
+        date: isoDate,
+        time: hhmm.optional(),
+        endTime: hhmm.optional(),
+        timezone: ianaTimezone,
+      })
+      .optional(),
+    /** Single-segment, like every other create path: `createRecurrence` is that rule. */
+    recurrence: createRecurrence.optional(),
+    reminders: z
+      .array(scheduleReminderInput)
+      .max(MAX_REMINDERS_PER_USER_PER_ACTIVITY)
+      .optional(),
+    location: activityLocation.optional(),
+    details: activityDetails.optional(),
+    attachmentIds: z.array(ulidId('att')).max(20).optional(),
+    sourceUrl: z.url().optional(),
+  })
+  .superRefine((value, ctx) => {
+    /**
+     * The same three rules the create path applies, from the same functions rather than a
+     * second copy — a copy that drifted would let one path accept a `meal` payload on a
+     * `watch` Plan while the other refused it.
+     */
+    checkDetailsMatchType(
+      {
+        type: value.creationTarget.type,
+        ...(value.details === undefined ? {} : { details: value.details }),
+      },
+      ctx,
+    );
+    if (value.schedule !== undefined) checkSchedule(value.schedule, ctx);
+    if (value.recurrence !== undefined && value.schedule === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Repeat needs a scheduled date.',
+        path: ['recurrence'],
+      });
+    }
+    if (value.reminders !== undefined) {
+      const result = reminderInputsForSchedule(value.schedule).safeParse(value.reminders);
+      if (!result.success) {
+        for (const issue of result.error.issues) {
+          ctx.addIssue({
+            code: 'custom',
+            message: issue.message,
+            path: ['reminders', ...issue.path],
+          });
+        }
+      }
+    }
+  })
+  .meta({ id: 'ScheduleListItemInput' });
+
+/**
+ * Inferred from the schema, not hand-written — the same choice `CreateActivityInput` makes,
+ * for the same reason. Because it is inferred from a shape whose `creationTarget` and
+ * `audience` are required, and whose `audience` is a discriminated union, there is no
+ * assignable value that has skipped either explicit choice. A draft the user has not finished
+ * making cannot be widened into a request (`CLAUDE.md` rule 2).
+ */
+export type ScheduleListItemInput = z.infer<typeof scheduleListItemInput>;
+
+/**
+ * `{ activity, item, viewerLink }` — the Plan that was created, the item **unchanged**, and
+ * the caller's own pointer.
+ *
+ * `viewerLink` is singular and belongs to the caller: "no other viewer's pointer may be
+ * serialised" (§P3-13). Returning the item alongside is what lets the client prove to itself
+ * that the bridge linked rather than duplicated — the same `itemId`, the same title, the same
+ * `checked`, byte for byte.
+ */
+export const scheduledListItem = z
+  .object({
+    activity,
+    item: listItemView,
+    viewerLink: listItemActivityLink,
+  })
+  .meta({ id: 'ScheduledListItem' });

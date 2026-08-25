@@ -18,6 +18,7 @@ import type { ListDetailItem } from '../types/listDetailItem.js';
 import type { ListItemView } from '../types/listItemView.js';
 import type { ListSettingsMutation } from '../types/listSettingsMutation.js';
 import type { ListView } from '../types/listView.js';
+import type { ScheduledListItem } from '../types/scheduledListItem.js';
 import {
   bulkCreateListItemsInput,
   bulkCreateListItemsInputFor,
@@ -47,6 +48,8 @@ import {
   listTemplate,
   listView,
   patchListInput,
+  type scheduledListItem,
+  scheduleListItemInput,
 } from './list.js';
 
 /**
@@ -55,6 +58,10 @@ import {
  * `tsconfig.test.json`; see `activity.test.ts` for why that matters.
  */
 describe('the schema and the interface are the same shape', () => {
+  it('ScheduledListItem is assignable both ways', () => {
+    expectTypeOf<z.infer<typeof scheduledListItem>>().toEqualTypeOf<ScheduledListItem>();
+  });
+
   it('ListBehaviour is assignable both ways', () => {
     expectTypeOf<z.infer<typeof listBehaviour>>().toEqualTypeOf<ListBehaviour>();
   });
@@ -771,5 +778,239 @@ describe('the list settings inputs', () => {
     expect(DATA_LOSS_DETAIL_PATHS.itemCount).toBe('confirmDataLoss.itemCount');
     expect(DATA_LOSS_DETAIL_PATHS.field(0)).toBe('confirmDataLoss.fields.0');
     expect(DATA_LOSS_DETAIL_PATHS.field(2)).toBe('confirmDataLoss.fields.2');
+  });
+});
+
+/**
+ * `ScheduleListItemInput` — the bridge contract (`api-contract.md` §2.7, `phase-03` §P3-13).
+ *
+ * Two properties carry most of these cases. **Both explicit choices are required**, so a
+ * request that skipped the Plan-kind step or the audience step cannot be built at all
+ * (`CLAUDE.md` rule 2). And **both offline ids are required**, unlike the create path, because
+ * a replay after the idempotency receipt expires is duplicate-safe only when the ids were
+ * fixed before the first attempt (ADR-055).
+ */
+const BRIDGE_ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+const BRIDGE_REM = 'rem_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+const BRIDGE_ATT = 'att_01J8XKQ2M4N5P6R7S8T9V0W1X4';
+
+const validSchedule = {
+  activityId: BRIDGE_ACT,
+  creationTarget: { objectKind: 'plan', type: 'event' },
+  audience: { mode: 'just_me' },
+} as const;
+
+describe('ScheduleListItemInput — the explicit choices are required', () => {
+  it('accepts the minimum: an id, a Plan kind and an audience', () => {
+    expect(scheduleListItemInput.safeParse(validSchedule).success).toBe(true);
+  });
+
+  it.each([
+    ['activityId', 'activityId'],
+    ['creationTarget', 'creationTarget'],
+    ['audience', 'audience'],
+  ])('rejects a request with no %s', (_why, field) => {
+    const body: Record<string, unknown> = { ...validSchedule };
+    delete body[field];
+
+    expect(scheduleListItemInput.safeParse(body).success).toBe(false);
+  });
+
+  /** A Plan target with no type is half a choice, and half a choice is not a default. */
+  it('rejects a creationTarget carrying no type', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        creationTarget: { objectKind: 'plan' },
+      }).success,
+    ).toBe(false);
+  });
+
+  /** A list item cannot bridge to a Task: `Plan this item` makes a commitment, not a chore. */
+  it('rejects objectKind task', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        creationTarget: { objectKind: 'task', type: 'task' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(['meal', 'watch', 'event', 'custom'])('accepts the Plan kind %s', (type) => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        creationTarget: { objectKind: 'plan', type },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects an audience mode it does not define', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        audience: { mode: 'everyone' },
+      }).success,
+    ).toBe(false);
+  });
+
+  /** Choosing people and naming none is a half-made choice, so the union requires one. */
+  it('rejects selected_people with an empty participant list', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        audience: { mode: 'selected_people', participants: [] },
+      }).success,
+    ).toBe(false);
+  });
+
+  /** The shape exists now so Phase 6 rewrites no client; the service is what refuses it. */
+  it('accepts selected_people with a participant, which the service then refuses', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        audience: {
+          mode: 'selected_people',
+          participants: [{ displayName: 'Sam' }],
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  /** Strict, so a mistyped field is a 400 naming it rather than a quietly smaller Plan. */
+  it('rejects a field it does not accept', () => {
+    expect(
+      scheduleListItemInput.safeParse({ ...validSchedule, listId: 'lst_x' }).success,
+    ).toBe(false);
+    expect(
+      scheduleListItemInput.safeParse({ ...validSchedule, participants: [] }).success,
+    ).toBe(false);
+  });
+});
+
+describe('ScheduleListItemInput — the offline ids', () => {
+  it.each([
+    ['a bare string', 'not-an-id'],
+    ['another entity id', 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2'],
+  ])('rejects an activityId that is %s', (_why, activityId) => {
+    expect(
+      scheduleListItemInput.safeParse({ ...validSchedule, activityId }).success,
+    ).toBe(false);
+  });
+
+  /**
+   * The create path lets the server mint one; this path cannot, because the device armed the
+   * reminder locally under an id it must keep (P2-57).
+   */
+  it('rejects a reminder with no reminderId', () => {
+    const parsed = scheduleListItemInput.safeParse({
+      ...validSchedule,
+      schedule: { date: '2026-09-01', time: '19:30', timezone: 'America/New_York' },
+      reminders: [{ offsetMinutes: -30 }],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it('accepts a reminder carrying its client-minted id', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        schedule: { date: '2026-09-01', time: '19:30', timezone: 'America/New_York' },
+        reminders: [{ reminderId: BRIDGE_REM, offsetMinutes: -30 }],
+      }).success,
+    ).toBe(true);
+  });
+
+  /** The same schedule rule the create path applies, from the same function. */
+  it('rejects a reminder with no schedule to count back from', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        reminders: [{ reminderId: BRIDGE_REM, offsetMinutes: -30 }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a minute-precision reminder on a date-only Plan', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        schedule: { date: '2026-09-01', timezone: 'America/New_York' },
+        reminders: [{ reminderId: BRIDGE_REM, offsetMinutes: -30 }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('ScheduleListItemInput — the rules it shares with the create path', () => {
+  it('rejects details whose kind contradicts the chosen Plan kind', () => {
+    const parsed = scheduleListItemInput.safeParse({
+      ...validSchedule,
+      creationTarget: { objectKind: 'plan', type: 'watch' },
+      details: { kind: 'meal', mealSlot: 'dinner' },
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  /**
+   * The bridge creates an **Activity**, so `details` is `activityDetails` — a watch Plan
+   * carries `mediaTitle`, not the `watchStatus` that belongs to a watch *ListItem*. The two
+   * unions are deliberately different shapes and this pins which one the bridge validates.
+   */
+  it('accepts details that match the chosen Plan kind', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        creationTarget: { objectKind: 'plan', type: 'watch' },
+        details: { kind: 'watch', mediaTitle: 'Severance' },
+      }).success,
+    ).toBe(true);
+  });
+
+  /** The ListItem watch shape is not the Activity watch shape, and must not be accepted. */
+  it('rejects list-item watch details on a watch Plan', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        creationTarget: { objectKind: 'plan', type: 'watch' },
+        details: { kind: 'watch', watchStatus: 'want' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a repeat with no scheduled date', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        recurrence: {
+          segments: [
+            { effectiveFrom: '2026-09-01', rule: { freq: 'weekly', interval: 1 } },
+          ],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an end time with no start time', () => {
+    expect(
+      scheduleListItemInput.safeParse({
+        ...validSchedule,
+        schedule: {
+          date: '2026-09-01',
+          endTime: '21:00',
+          timezone: 'America/New_York',
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('bounds attachmentIds at twenty', () => {
+    const ids = Array.from({ length: 21 }, () => BRIDGE_ATT);
+
+    expect(
+      scheduleListItemInput.safeParse({ ...validSchedule, attachmentIds: ids }).success,
+    ).toBe(false);
   });
 });

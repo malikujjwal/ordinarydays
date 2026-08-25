@@ -72,6 +72,7 @@ export type {
 } from './recurrence.js';
 export type { Reminder } from './reminder.js';
 export type { ReversibleItemMutation } from './reversibleItemMutation.js';
+export type { ScheduledListItem } from './scheduledListItem.js';
 export type { ActivityScope } from './scope.js';
 export {
   activityScope,

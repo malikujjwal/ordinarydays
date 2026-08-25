@@ -7,7 +7,11 @@ export interface ReminderSchedule {
   readonly time?: string | undefined;
 }
 
-const reminderOffsetMinutes = z
+/**
+ * Exported from P3-13, so the list bridge bounds its reminder offsets with the same rule
+ * rather than a second copy of the range.
+ */
+export const reminderOffsetMinutes = z
   .number()
   .int('A reminder offset is a whole number of minutes')
   .min(-10080, 'A reminder cannot be more than a week before')
