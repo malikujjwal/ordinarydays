@@ -18,11 +18,13 @@ import type {
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import { mintUndoToken } from '../lib/undoToken.js';
+import { getActivityPartitionStrong } from '../repositories/activityRepository.js';
 import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
 import {
   batchGetViewerLinks,
   createListItems,
   deleteListItem,
+  deleteStaleViewerLink,
   getListItem,
   getListMeta,
   type ListAccessGrant,
@@ -44,7 +46,11 @@ import {
   runBulkCheckedOperation,
 } from '../repositories/listRepository.js';
 import { ID_UNAVAILABLE } from './activityService.js';
-import { assertActivityAccess, assertListAccess } from './authz.js';
+import {
+  assertActivityAccess,
+  assertActivityReadAccessFromPartition,
+  assertListAccess,
+} from './authz.js';
 import { drainListWork, withListWorkDrain } from './listMutationService.js';
 import { repairListRanks } from './listRankRepairService.js';
 
@@ -712,6 +718,37 @@ export interface ListItemsProjection {
  * omitted rather than serialised as a dead link (`api-contract.md` §3, ADR-034). Shared by
  * list detail (P3-05) and the item page, so there is one implementation of a rule the
  * security model rests on.
+ *
+ * ## Omitted, then removed (P3-14)
+ *
+ * `api-contract.md` §3 says a stale pointer is "omitted and queued for cleanup". There is no
+ * queue in this phase, so the cleanup is a **best-effort conditional delete after the read**
+ * — the response is already decided by the time it runs, and it cannot change what the caller
+ * sees. Without it, a pointer at a deleted Plan is re-read and re-rejected on every single
+ * list open, forever.
+ *
+ * Best-effort literally: a failure is swallowed, because a pointer that outlives one attempt
+ * is a row nobody can see and the next read will try again. It is awaited rather than left
+ * floating so a failing delete cannot surface as an unhandled rejection in an unrelated
+ * request (`coding-standards.md` §6.1), and it only runs when something was actually stale,
+ * so the ordinary read pays nothing.
+ *
+ * ## Why the deletion re-checks, and the read does not
+ *
+ * The projection's access check is an ordinary eventually consistent read, and that is fine
+ * for **omitting**: a Plan created moments ago whose Activity has not reached the replica
+ * yet loses its state line for one read and gets it back on the next. Omission is
+ * self-healing.
+ *
+ * Deletion is not. Classifying a pointer stale from a lagging replica and then removing it
+ * would permanently strand a Plan that exists and is readable — the Activity survives, but
+ * nothing points at it and the user cannot navigate back. So the destructive step re-checks
+ * **strongly** first, and only removes a pointer whose Activity is still absent or still
+ * unreadable when read from the leader. §P3-14 permits cleanup for a deleted or inaccessible
+ * Plan; a replica that has not caught up is neither.
+ *
+ * The re-check runs only for pointers that already looked stale, which is rare, so the
+ * ordinary read still pays nothing for it.
  */
 export async function hydrateViewerLinks(
   userId: string,
@@ -726,19 +763,74 @@ export async function hydrateViewerLinks(
     items.map((item) => item.itemId),
   );
   const readable = new Map<string, ListItemActivityLink>();
+  const stale: ListItemActivityLink[] = [];
   for (const link of links) {
     try {
       await assertActivityAccess(userId, link.activityId, 'read');
       readable.set(link.itemId, link);
     } catch (error) {
-      if (error instanceof AppError && error.code === 'not_found') continue;
+      /**
+       * `not_found` covers both halves of the rule: the Activity was deleted, or it is one
+       * this caller may not read. The two are deliberately indistinguishable here — the
+       * access check answers `404` for a stranger precisely so a pointer cannot be used to
+       * probe for an Activity's existence.
+       */
+      if (error instanceof AppError && error.code === 'not_found') {
+        stale.push(link);
+        continue;
+      }
       throw error;
     }
   }
-  return items.map((item) => {
+
+  const projection = items.map((item) => {
     const viewerLink = readable.get(item.itemId);
     return { item, ...(viewerLink === undefined ? {} : { viewerLink }) };
   });
+
+  await removeStaleViewerLinks(listId, userId, stale);
+  return projection;
+}
+
+/** Best-effort, and silent: see {@link hydrateViewerLinks}. */
+async function removeStaleViewerLinks(
+  listId: string,
+  userId: string,
+  stale: readonly ListItemActivityLink[],
+): Promise<void> {
+  for (const link of stale) {
+    try {
+      if (await stillUnreadable(userId, link.activityId)) {
+        await deleteStaleViewerLink(listId, userId, link.itemId, link);
+      }
+    } catch {
+      /**
+       * Swallowed on purpose, including the condition failure that means the pointer was
+       * rewritten between the read and this delete — that row is live and must survive.
+       * Nothing here can fail the read it belongs to.
+       */
+    }
+  }
+}
+
+/**
+ * The strong second opinion, taken from the leader rather than a replica.
+ *
+ * `true` only when the Activity is genuinely gone or genuinely not this caller's to read.
+ * A `not_found` from the first, eventually consistent check is a suspicion; this is the
+ * confirmation, and nothing is deleted without it.
+ */
+async function stillUnreadable(userId: string, activityId: string): Promise<boolean> {
+  try {
+    await assertActivityReadAccessFromPartition(
+      userId,
+      await getActivityPartitionStrong(activityId),
+    );
+    return false;
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'not_found') return true;
+    throw error;
+  }
 }
 
 /** `GET /v1/lists/:id/items?cursor=` — pattern 8's fenced page, with the caller's links. */

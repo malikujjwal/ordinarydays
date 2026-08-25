@@ -61,12 +61,18 @@ vi.mock('../repositories/listRepository.js', () => ({
   getListItem: vi.fn(),
   listItems: vi.fn(),
   batchGetViewerLinks: vi.fn(() => Promise.resolve([])),
+  deleteStaleViewerLink: vi.fn(() => Promise.resolve()),
   resolveExistingItems: vi.fn(() => Promise.resolve(new Map<string, unknown>())),
+}));
+
+vi.mock('../repositories/activityRepository.js', () => ({
+  getActivityPartitionStrong: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock('./authz.js', () => ({
   assertListAccess: vi.fn(() => Promise.resolve({ index: {}, isOwner: true })),
   assertActivityAccess: vi.fn(() => Promise.resolve({})),
+  assertActivityReadAccessFromPartition: vi.fn(() => Promise.resolve({})),
 }));
 
 vi.mock('./listRankRepairService.js', () => ({
@@ -81,6 +87,8 @@ vi.mock('../repositories/idempotencyRepository.js', () => ({
 }));
 
 const repository = await import('../repositories/listRepository.js');
+const activityRepository = await import('../repositories/activityRepository.js');
+const authz = await import('./authz.js');
 const repairService = await import('./listRankRepairService.js');
 const service = await import('./listItemService.js');
 
@@ -500,7 +508,6 @@ describe('the transactional item cap', () => {
 
 describe('reads', () => {
   it('joins only links whose Activity the caller may still read', async () => {
-    const authz = await import('./authz.js');
     const items = [anItem(), anItem({ itemId: 'itm_01J8XKQ2M4N5P6R7S8T9V0W1AA' })];
     vi.mocked(repository.listItems).mockResolvedValue({
       list: aList(),
@@ -540,5 +547,122 @@ describe('reads', () => {
     await expect(service.getItemById(USER, LIST, ITEM)).rejects.toMatchObject({
       code: 'not_found',
     });
+  });
+});
+
+/**
+ * The destructive half of the stale-pointer rule (P3-14), raised in review.
+ *
+ * These cover what a real table cannot: DynamoDB Local answers every read from the leader,
+ * so replica lag — the thing that makes an eventually consistent classification unsafe to act
+ * on — is unobservable there. The assertions are on which read the service issues before it
+ * deletes anything.
+ */
+describe('cleaning up a stale viewer pointer', () => {
+  const LINK = {
+    listId: LIST,
+    itemId: ITEM,
+    viewerUserId: USER,
+    activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X4',
+    linkedAt: '2026-08-25T09:00:00.000Z',
+  };
+
+  const withStaleLink = () => {
+    useList();
+    vi.mocked(repository.listItems).mockResolvedValue({
+      list: aList(),
+      items: [anItem()],
+      itemIds: [ITEM],
+    } as never);
+    vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([LINK as never]);
+    vi.mocked(authz.assertActivityAccess).mockRejectedValue(
+      new AppError('not_found', 'Activity not found.'),
+    );
+  };
+
+  /**
+   * The failure this exists to prevent: a Plan created moments ago whose Activity has not
+   * reached the replica the projection read. Omitting its state line for one read is
+   * self-healing; deleting the pointer strands a Plan that exists, permanently.
+   */
+  it('does not delete when a strong read finds the Activity after all', async () => {
+    withStaleLink();
+    vi.mocked(authz.assertActivityReadAccessFromPartition).mockResolvedValue({} as never);
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(page.items[0]?.viewerLink).toBeUndefined();
+    expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
+  });
+
+  it('confirms from the leader before deleting, not from the projection read', async () => {
+    withStaleLink();
+    vi.mocked(authz.assertActivityReadAccessFromPartition).mockRejectedValue(
+      new AppError('not_found', 'Activity not found.'),
+    );
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(vi.mocked(activityRepository.getActivityPartitionStrong)).toHaveBeenCalledWith(
+      LINK.activityId,
+    );
+    expect(vi.mocked(repository.deleteStaleViewerLink)).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * `linkedAt` travels with `activityId` so the condition catches a pointer refreshed to the
+   * **same** Activity — which is what re-adding a viewer to a Plan produces, and what an
+   * `activityId`-only condition happily deleted.
+   */
+  it('passes the observed row so any rewrite beats the delete', async () => {
+    withStaleLink();
+    vi.mocked(authz.assertActivityReadAccessFromPartition).mockRejectedValue(
+      new AppError('not_found', 'Activity not found.'),
+    );
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(vi.mocked(repository.deleteStaleViewerLink)).toHaveBeenCalledWith(
+      LIST,
+      USER,
+      ITEM,
+      expect.objectContaining({
+        activityId: LINK.activityId,
+        linkedAt: LINK.linkedAt,
+      }),
+    );
+  });
+
+  /** Best-effort: a failing cleanup must never fail the read it belongs to. */
+  it('answers the read even when the delete throws', async () => {
+    withStaleLink();
+    vi.mocked(authz.assertActivityReadAccessFromPartition).mockRejectedValue(
+      new AppError('not_found', 'Activity not found.'),
+    );
+    vi.mocked(repository.deleteStaleViewerLink).mockRejectedValue(
+      new Error('ConditionalCheckFailedException'),
+    );
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(page.items[0]?.item.itemId).toBe(ITEM);
+  });
+
+  it('reads nothing strongly and deletes nothing when every pointer is readable', async () => {
+    useList();
+    vi.mocked(repository.listItems).mockResolvedValue({
+      list: aList(),
+      items: [anItem()],
+      itemIds: [ITEM],
+    } as never);
+    vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([LINK as never]);
+    vi.mocked(authz.assertActivityAccess).mockResolvedValue({} as never);
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(
+      vi.mocked(activityRepository.getActivityPartitionStrong),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
   });
 });
