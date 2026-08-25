@@ -1,6 +1,7 @@
+import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import type { List, User } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { useTestTable } from './harness.js';
+import { documents, TEST_TABLE, useTestTable } from './harness.js';
 
 useTestTable();
 
@@ -16,6 +17,11 @@ useTestTable();
  * the map is genuinely created on a profile that has none, and that concurrent writers do
  * not lose each other's slots.
  *
+ * **What this file cannot prove:** DynamoDB Local answers every read immediately, so nothing
+ * here can distinguish a strong read from an eventually consistent one. That the resolver
+ * asks for `ConsistentRead` on all three of its read shapes is pinned in the repository and
+ * service unit suites instead, where the command input is observable.
+ *
  * **Deferred here, deliberately:** §P3-12's test line "passing the visibly chosen `listId` to
  * the ingredient action uses that list and leaves `defaultLists` unchanged" needs the
  * activity-scoped ingredient action, which is P3-17's endpoint. The per-operation override is
@@ -26,10 +32,12 @@ useTestTable();
 type AppModule = typeof import('../../src/app.js');
 type UserRepository = typeof import('../../src/repositories/userRepository.js');
 type SlotService = typeof import('../../src/services/listSlotService.js');
+type Keys = typeof import('../../src/repositories/keys.js');
 
 let createApp: AppModule['createApp'];
 let userRepository: UserRepository;
 let resolveListSlot: SlotService['resolveListSlot'];
+let keys: Keys;
 
 const DEV = 'usr_local_dev';
 const NOW = '2026-08-24T09:00:00.000Z';
@@ -41,6 +49,7 @@ beforeAll(async () => {
   userRepository = await import('../../src/repositories/userRepository.js');
   resolveListSlot = (await import('../../src/services/listSlotService.js'))
     .resolveListSlot;
+  keys = await import('../../src/repositories/keys.js');
 });
 
 const app = () => createApp();
@@ -325,6 +334,31 @@ describe('slot resolution over real lists', () => {
     ).toBe(false);
     // The pointer is still stored; the read is what refuses to follow it.
     expect(await storedDefaults()).toEqual({ groceries: traderJoes.listId });
+  });
+
+  /**
+   * Eligibility follows the caller's own index pointer, so a membership that has been revoked
+   * stops being a candidate. Resolving a list the caller can no longer write to would hand
+   * the ingredients flow a destination whose add is about to be refused.
+   */
+  it('stops offering a list once the caller’s pointer is gone', async () => {
+    await seedProfile();
+    const traderJoes = await createList('Trader Joe’s');
+    const cornerShop = await createList('Corner shop');
+    expect((await resolveListSlot(DEV, 'groceries')).kind).toBe('ask');
+
+    await documents.send(
+      new DeleteCommand({
+        TableName: TEST_TABLE,
+        Key: keys.listPointer(DEV, cornerShop.listId),
+      }),
+    );
+
+    expect(await resolveListSlot(DEV, 'groceries')).toEqual({
+      kind: 'use',
+      listId: traderJoes.listId,
+      wasDefault: false,
+    });
   });
 
   it('returns exactly none, with no template or title, when no list holds the slot', async () => {

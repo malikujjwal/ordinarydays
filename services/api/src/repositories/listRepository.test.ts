@@ -710,6 +710,45 @@ describe('identity and list storage', () => {
     });
   });
 
+  /**
+   * Browsing the Lists tab a fraction of a second behind is invisible, and this is the
+   * endpoint a client hits most — a strong read here would double its capacity cost for
+   * nothing.
+   */
+  it('reads the index eventually consistently by default', async () => {
+    vi.mocked(base.query).mockResolvedValue({ items: [indexRow()] });
+    vi.mocked(base.batchGetItems).mockResolvedValue([listRow()]);
+
+    await repository.listListsForUser(ALICE);
+
+    expect(vi.mocked(base.query).mock.calls[0]?.[1]).not.toMatchObject({
+      consistentRead: true,
+    });
+    expect(vi.mocked(base.batchGetItems).mock.calls[0]?.[1]).not.toMatchObject({
+      consistentRead: true,
+    });
+  });
+
+  /**
+   * Slot resolution asks for strong reads, and needs **both** halves: a strong pointer Query
+   * paired with a stale META read would still see a list as unarchived after the user
+   * archived it, which is the destination decision going wrong rather than a page being
+   * slightly behind (P3-12).
+   */
+  it('reads both the pointers and the META rows strongly when asked', async () => {
+    vi.mocked(base.query).mockResolvedValue({ items: [indexRow()] });
+    vi.mocked(base.batchGetItems).mockResolvedValue([listRow()]);
+
+    await repository.listListsForUser(ALICE, undefined, { consistentRead: true });
+
+    expect(vi.mocked(base.query).mock.calls[0]?.[1]).toMatchObject({
+      consistentRead: true,
+    });
+    expect(vi.mocked(base.batchGetItems).mock.calls[0]?.[1]).toMatchObject({
+      consistentRead: true,
+    });
+  });
+
   it('counts only owner pointers', async () => {
     vi.mocked(base.queryCount).mockResolvedValue(7);
     await expect(repository.countOwnedLists(ALICE)).resolves.toBe(7);

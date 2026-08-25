@@ -525,12 +525,31 @@ export interface UserListEntry {
   readonly index: ListIndex;
 }
 
-/** Pattern 7: one pointer Query and one META BatchGet, restored to pointer order. */
+/**
+ * Pattern 7: one pointer Query and one META BatchGet, restored to pointer order.
+ *
+ * ## `consistentRead`, and why it is a parameter
+ *
+ * Off by default, which is right for `GET /v1/lists`: browsing an index a fraction of a
+ * second behind is invisible, and a strong read costs twice the capacity on the one endpoint
+ * a client hits most.
+ *
+ * **Slot resolution asks for it on** (P3-12). Eligibility is not a rendering decision, it is
+ * a destination decision, and every part of it turns on state the user may have changed a
+ * moment ago: a list archived seconds earlier is still a candidate to a stale read; a
+ * membership just revoked still yields a pointer to a list the caller can no longer write to;
+ * and "exactly one" versus "several" — which is the difference between using a list silently
+ * and asking — turns on a pointer that may have only just been created or removed. The read
+ * fences the whole set, both halves, because a strong pointer Query paired with a stale META
+ * read would still see a list as unarchived after the user archived it.
+ */
 export async function listListsForUser(
   userId: string,
   cursor?: string,
+  options: { readonly consistentRead?: boolean } = {},
 ): Promise<Page<UserListEntry>> {
   const prefix = listPointerPrefix(userId);
+  const strong = options.consistentRead === true ? { consistentRead: true } : {};
   const pointerPage = await query<StoredItem>(
     { pk: prefix.pk },
     {
@@ -538,6 +557,7 @@ export async function listListsForUser(
       limit: PAGE_SIZE,
       ...(cursor === undefined ? {} : { cursor }),
       keyAttributes: TABLE_KEY,
+      ...strong,
     },
   );
   const pointers = pointerPage.items.map(parseListIndex);
@@ -546,6 +566,7 @@ export async function listListsForUser(
       listMeta(pointer.listId),
       listTombstone(pointer.listId),
     ]),
+    strong,
   );
   const lists = new Map(
     rows

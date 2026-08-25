@@ -897,7 +897,12 @@ concurrent creator retry the nested operation. This preserves sibling slots even
 devices set different defaults concurrently.
 
 `listSlotService.ts` is the API-side home of these invariants: `resolveListSlot`, which drains
-the caller's list index, reads the profile and hands both to the pure rule, and
+the caller's list index, reads the profile and hands both to the pure rule — **both reads
+strongly consistent**, because this resolve is the step straight after the `PATCH /v1/me` that
+stored the user's answer, and an eventually consistent read there returns the map from before
+it, keeps a list archived seconds ago looking eligible, and yields pointers to memberships
+already revoked. `GET /v1/lists` keeps its cheaper eventually consistent read; eligibility is
+a destination decision, not a rendering one. Alongside it, 
 `profileDefaultToClear`, the single answer to "which default may this list write clear" that
 P3-05's delete and P3-09's slot change both ask. The conditional transaction item itself —
 `removeDefaultListTransactItem` — stays in `userRepository`: it builds a DynamoDB update over

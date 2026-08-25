@@ -1094,6 +1094,15 @@ correct, because there are no siblings to lose — and a writer that loses that 
 nested operation. Removing the last key leaves an empty map rather than deleting the
 attribute; empty and absent are the same state to every reader.
 
+**Resolution reads both sides strongly.** The profile `GetItem` and every page of the list
+index — its pointer `Query` and its `META`/tombstone `BatchGetItem` alike — are issued with
+`ConsistentRead` when a slot is being resolved, and only then. The four-step rule turns on
+current state the user may have changed a moment ago: the default they have just chosen, a
+list they have just archived, a membership just revoked, and the pointer count that separates
+"exactly one" from "several". Serving those from a stale replica manufactures the dead end the
+read-side guard exists to prevent. Ordinary list browsing keeps the cheaper eventually
+consistent read.
+
 Resolution rule for any "add to X" flow:
 
 1. Exactly one list with `slot === 'groceries'` → use it, do not ask.
