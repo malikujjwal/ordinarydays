@@ -90,8 +90,24 @@ link a ListItem to a new Plan (§6), but the words themselves never cause that b
 
 Plans has three stages, in this fixed order, served by one `GET /v1/plans`
 ([`../02-architecture/api-contract.md#22a-plans`](../02-architecture/api-contract.md#22a-plans)).
-A stage with nothing in it renders its heading and its empty line; it is not hidden, because
-the three stages together are the shape of the screen.
+
+> **Amendment (2026-08-25, founder) — the stages are a switcher, not a stack.** The three
+> stages were previously stacked on one scroll, each rendering its heading and its empty line
+> so that "the three stages together are the shape of the screen". That reasoning was sound
+> and the layout was not: `needsDate` **does not paginate**, so eight undated plans push
+> Upcoming below the fold and thirty put it somewhere nobody scrolls. Where "what is on
+> Friday" lives then depends on how many loose ideas you happen to be holding — which is the
+> backlog dynamic §1.3.2 exists to prevent, arriving through layout instead of through a
+> badge. The stages now render as a `SegmentedControl` (`Needs a date · Upcoming · Past`),
+> one stage visible at a time.
+>
+> **Nothing in §1.3.2 forbade a switcher; it forbids the numbers on it.** The control carries
+> no counts, no badges and no dots — its three words are always on screen, which is what
+> preserves the vocabulary the stacked layout was protecting. A selected stage with nothing
+> in it still renders its own empty line (§1.3.3), and when **all three** are empty the
+> switcher is replaced by the single `No plans` state rather than showing an empty control.
+
+| Stage | Contains | Order | Source |
 
 | Stage | Contains | Order | Source |
 | --- | --- | --- | --- |
@@ -232,6 +248,72 @@ line of guidance, at most one action.
 Both `Add` actions open the same global **Task / Plan / List item** chooser with nothing
 selected. Being on the Plans tab never pre-selects Plan or skips the Plan-kind choice.
 
+#### 1.3.4 The calendar navigator
+
+> **Added 2026-08-25 (founder).** This resolves `../00-open-decisions.md` deferred item #52,
+> which parked a week strip and a date scrubber because "selection, focus, accessibility, and
+> synchronisation behavior has not been designed". The answer is none of the three candidates
+> that item listed: a familiar month calendar, shared by two stages.
+
+A chronological list answers *what is next* and cannot answer *what does my month look like*,
+because distribution is not visible in a sequence you have to scroll. Upcoming and Past each
+carry a calendar; **Needs a date does not**, having no dates to navigate.
+
+**The invariant that removes the edge cases: the tab determines eligibility, not the
+displayed month.** Every visible date belonging to the active stage is interactive, including
+adjacent-month spillover. Selecting one changes the month on screen and **never** the stage.
+
+| | Upcoming | Past |
+| --- | --- | --- |
+| Dataset | Today and future | Strictly before today |
+| Collapsed | Rolling `Next 7 days`, today → +6 | Rolling `Previous 7 days`, −6 → today |
+| Expanded | A normal month calendar, the same geometry in both |  |
+| Month navigation | Current month and forward | Current month and backward |
+| Encoding | Bar = plan load · dot = tasks present | Dot = known activity. **No dot = no claim** |
+| Day tap | Jumps within the active stage. Never switches stage, never writes. | |
+| Header tap | Month/year grid, clamped to the stage's direction | |
+
+**Today belongs to Upcoming.** It is still actionable, so it sits with planning semantics —
+and it therefore renders inert at the end of Past's `Previous 7 days` strip, present as a
+boundary rather than a target.
+
+**Three visual states, because there are three meanings.** A live date in the displayed month
+gets the normal treatment; a live date spilling in from a neighbouring month is subordinate
+but plainly readable and tappable; an out-of-stage date is inert. The middle state is the one
+to get right — a date the user can see and legitimately act on must not look disabled — and
+spillover carries its density with it, because rendering a visible, eligible day as an empty
+cell would undermine the one thing the calendar is for.
+
+**Absence of a past marker is not a claim of emptiness.** A dot means loaded-and-found; no dot
+means nothing is known yet. That is the only honest reading when the data arrives by
+pagination, and it is why Past never gets a load bar: a bar implies a measured quantity. It
+also requires the client to track which ranges it has actually fetched — otherwise the dots
+are whatever happens to be in memory, and the rule is decorative. No summary endpoint answers
+"which months contain history"; that would be a second projection able to disagree with the
+list.
+
+**The clamp is visible, not merely enforced.** In Upcoming the back arrow and every earlier
+month are dimmed; in Past the forward arrow is. Nothing silently does nothing.
+
+**Two rules hold the whole thing together.**
+
+1. **The calendar and the list derive from the same effective agenda state** — the projected
+   one the list renders, including optimistic local writes, never a raw network payload. A
+   reschedule that moves a row to Friday must move its density with it in the same frame.
+2. **The calendar chooses the query window; it never becomes a second pagination or data
+   model.** It is random access — *land here* — after which the ordinary cursor and window
+   paging continue from that point
+   ([`../02-architecture/api-contract.md#22a-plans`](../02-architecture/api-contract.md#22a-plans)).
+
+Dates here are viewer-local `WallDate`s throughout — cell, grouping, request bounds and the
+today boundary share one definition, per
+[`../04-conventions/coding-standards.md`](../04-conventions/coding-standards.md) §4.4. A
+calendar that interpreted dates in UTC while the agenda used viewer-local wall dates would
+disagree with the list at every midnight boundary.
+
+Collapsed or expanded is remembered **locally** on each platform. It is view state, not
+profile data.
+
 ### 1.4 Giving a needs-a-date plan a date
 
 This is the one transition the stage exists for, and it is destructive: it discards
@@ -300,6 +382,36 @@ Sections render in this fixed order and a section with nothing in it collapses t
 "add" affordance rather than disappearing, so the plan's capabilities stay discoverable.
 
 ### 2.1 Anatomy
+
+> **Amendment (2026-08-25, founder) — the screen grows as the plan does.** This section and
+> [`../04-conventions/design-system.md`](../04-conventions/design-system.md) §7.5 disagreed:
+> §2.1 specified ten expanded sections with the completion button last, while §7.5 — written
+> later and **built by P2-41** — specified collapsed disclosure rows with the completion
+> action directly under the schedule line. Neither answered the question that actually
+> decides the screen, which is what it looks like *in between* empty and full. The rule below
+> replaces the disagreement; the anatomy and section table that follow remain canonical for
+> **what each section contains and who may act on it**, not for whether it renders expanded.
+>
+> **Rows split in two, by what they are.** A **setting** exists whether you have touched it or
+> not — every activity has a notes field, a reminder state, a recurrence state. A **section**
+> exists only because you put something in it.
+>
+> | What is in it | How it renders |
+> | --- | --- |
+> | A setting | Always, one compact row, value on the right. Notes, Reminder, Repeat. |
+> | A section holding nothing | It does not render. It is discoverable as a named chip in one `Add to this plan` row at the foot. |
+> | A section holding 1–3 rows | Expanded in full, with its own add affordance beneath. |
+> | A section holding 4 or more | The first three rows, then `Show all n`. |
+> | Notes over two lines | Clamped to two, the accessible name carrying the whole text. |
+> | A capability not yet built | `Coming later`, subordinate, no chevron, no tap (§2.2). |
+>
+> **The completion action stays directly under the schedule line**, keeping §7.5: the screen's
+> hero is the thing you came to do, and ten sections must not push it below the fold.
+>
+> Two failures this is calibrated against. A plan with two prep tasks must not hide them
+> behind a disclosure that costs a tap to reveal less text than the row occupied — that is
+> §7.5's flaw. A plan with twenty prep tasks and twelve updates must not render a wall — that
+> is §2.1's. The thresholds are where those two meet.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -383,6 +495,14 @@ inherits the creator's, and the owner cannot set one for anyone else.
 > interaction. Those rows have no chevron, disabled action, expansion or tap behaviour.
 > Recipe, Expenses and Updates remain absent until their own product conditions and
 > implementation are available.
+
+> **Amended 2026-08-25 by §2.1.** The table below still governs *whether a capability is
+> available at all*. What changed is the empty case: a section holding nothing no longer
+> renders its own heading plus an add affordance — it collapses into the single
+> `Add to this plan` chip row, and reappears as a section the moment it holds something. Rows
+> reading "Never hidden. Empty state is the `X` affordance alone" should be read as "never
+> *unavailable*; its empty state is a chip". Settings rows — Notes, Reminder, Repeat — are
+> unaffected and always render.
 
 | Section | Hidden when |
 | --- | --- |

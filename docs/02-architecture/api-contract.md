@@ -314,7 +314,7 @@ Agenda warnings are successful-response diagnostics, not error codes:
 ### 2.2a Plans
 
 ```
-GET /v1/plans?upcomingFrom=YYYY-MM-DD&upcomingTo=YYYY-MM-DD&cursor=...
+GET /v1/plans?upcomingFrom=YYYY-MM-DD&upcomingTo=YYYY-MM-DD&pastBefore=YYYY-MM-DD&cursor=...
 ```
 
 Powers the Plans tab, which has three stages:
@@ -339,7 +339,7 @@ Powers the Plans tab, which has three stages:
 | --- | --- | --- |
 | `needsDate` | `GSI1` `gsi1pk = U#<u>#P` | `lastActivityAt` descending — the plan being discussed floats up, not the oldest |
 | `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, queried with the access-pattern-1 two-day overlap, timezone-converted and filtered to the exact requested viewer window, merged with expansion of `U#<u>#R` | viewer-local date ascending |
-| `past` | the same dated-Activity bucket with a two-day overlap above the viewer-local today boundary, timezone-converted and filtered to dates before today | viewer-local date descending, `?cursor=` |
+| `past` | the same dated-Activity bucket with a two-day overlap above the viewer-local today boundary, timezone-converted and filtered to dates before today — or before `pastBefore` when supplied | viewer-local date descending, `?pastBefore=` to land, `?cursor=` to continue |
 
 The initial request may omit `upcomingFrom` and `upcomingTo`; they default to today through
 61 days later, an inclusive 62-day window. If either is supplied, both are required and the
@@ -362,6 +362,24 @@ each bounded series' first later occurrence, so no empty date gap is scanned to 
 response window. Its
 successful-response warnings, including `series_limit_exceeded` and duplicate-occurrence
 diagnostics, are returned in `warnings`. No request assumes an unbounded future response.
+
+**`pastBefore` is random access into Past; `cursor` continues from where you landed.**
+Optional, a `WallDate`, and **exclusive** — `pastBefore=2026-04-01` returns dates strictly
+before 1 April, so it is the natural expression of "show me March". It reads the same
+dated-Activity bucket the stage already uses, descending, with a different start key: no new
+index, no new access pattern, no summary projection.
+
+`pastBefore` and `cursor` are **mutually exclusive**; sending both is `validation_failed`
+naming the conflict, rather than silently preferring one. The two answer different questions
+— `pastBefore` says *land here*, `cursor` says *continue* — and a request that says both has
+no single correct reading. A jump therefore starts a fresh Past sequence: the response
+carries a new cursor, and any cursor the client was holding is discarded rather than merged.
+`upcomingFrom`/`upcomingTo` are unaffected and keep their existing strict pairing.
+
+The calendar navigator (`plans-and-lists.md` §1.3) is the intended caller on both sides. It
+requests the **visible grid range** rather than the nominal month — a month grid can show up
+to 42 days once adjacent-month cells are included — which stays comfortably inside
+`MAX_AGENDA_DAYS`. It selects the window; it never becomes a second pagination model.
 
 `warnings` is `Array<AgendaWarning | 'needs_date_limit_exceeded'>`. The additional value
 means the response contains the first 200 Needs-a-date rows; it is a diagnostic, never a

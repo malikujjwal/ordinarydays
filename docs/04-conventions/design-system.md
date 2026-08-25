@@ -461,10 +461,22 @@ background.
 | `event` | `map-pin` | `#8C4A5E` | `#AD748C` | 6.1:1 / ≥ 3:1 |
 | `custom` | `diamond` | `#6E675F` | `#9F988D` | 4.8:1 / ≥ 3:1 |
 
-Non-task rows render a small non-interactive marker in the type's accent — outlined, in
-the mock's style (a diamond outline for events, a ring for meals), sized `16 × 16` and
-`accessibilityElementsHidden` — its meaning goes into the row's label instead
-(`interaction-contract.md` §6.2). On cards the same accent tints a `44 × 44` icon
+Non-task rows render a small non-interactive marker in the type's accent — outlined, sized
+`16 × 16` and `accessibilityElementsHidden` — its meaning goes into the row's label instead
+(`interaction-contract.md` §6.2).
+
+> **Corrected 2026-08-25 (founder), P3-48.** This paragraph named abstract shapes — "a
+> diamond outline for events, a ring for meals" — which contradicted the table directly above
+> it, and `RowLeading.tsx` shipped neither: every non-task type rendered one 8 pt filled grey
+> square rotated 45°, ignoring both the glyph and the accent. **The table is correct and is
+> what the icon registry implements.** The marker is the type's own glyph — `bowl`,
+> `play-rect`, `map-pin`, and `diamond` for `custom`, which is the visible **General** Plan
+> kind. The diamond is one mark of four, not the mark for all of them.
+>
+> Cards were already right: an icon squircle renders the type's glyph, so before this
+> correction the same plan showed a map-pin on one surface and a grey diamond on another.
+> Keep the marker's 1.5 stroke visibly lighter than the checkbox border on the adjacent row —
+> it has no hit target and must not start reading as a control. On cards the same accent tints a `44 × 44` icon
 **squircle** (`radius.md`, the type's `*Surface` tint as fill, the accent as glyph).
 
 ### 5.3 Row subtitle format per type
@@ -774,9 +786,28 @@ card:
  └──────────────────────────┘
 ```
 
-The count line is the list's own vocabulary (`7 remaining`, `6 shows`, `9 meals`,
-`4 of 12 packed`, `12 places`, `4 ideas`) — supplied by the template's copy, never
-computed wording. `+ New list` is a `footnoteStrong` accent text action in the screen
+> **Corrected 2026-08-25 (founder), P3-25.** The count line was specified as "the list's
+> own vocabulary (`7 remaining`, `4 of 12 packed`, `12 places`) — supplied by the template's
+> copy". **No such field exists**: a §5.3 catalogue record carries a chooser label, summary,
+> default title, icon, behaviour, capability defaults, slot and empty-state copy, and nothing
+> else. Adding one would put per-type copy back into the catalogue and make the card renderer
+> read it again — precisely what ADR-031 removed and what P3-25's grep test forbids. It would
+> also drift, since template values are frozen at creation: a list made a year ago would
+> describe itself differently from the same template today, on a line that is arithmetic.
+>
+> **One vocabulary, every list**: `n items`, with `· k checked` appended only when
+> `behaviour === 'collection' && capabilities.checkable`, both from `itemCount` and
+> `uncheckedCount` on the `META` row the index already batch-reads. The progress bar is gated
+> on the same flag. A seventeenth template — or a fiftieth — then renders correctly on day one
+> with no catalogue copy at all.
+
+The count line is computed from the List's own stored fields, never from template copy.
+
+`Updated today` renders **`lastItemActivityAt`**, not `updatedAt`
+(`data-model.md` §4.6). `updatedAt` backs `If-Match` and moves on a rename or a settings
+change but not on checking an item, so a card using it would say `Updated 3 days ago`
+immediately after the list was used, and move when it was renamed — backwards from what the
+line means to a reader. `+ New list` is a `footnoteStrong` accent text action in the screen
 header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutates.
 
 ### 7.3 Plans — event cards
@@ -813,9 +844,25 @@ header, not a FAB. Tapping a card opens the list (U1); nothing on the card mutat
  └───────────────────────────────────────────────────────┘
 ```
 
-- The stage switcher is the `SegmentedControl` (`Needs a date · Upcoming · Past`), with
-  counts where a stage carries a badge-worthy number; below it, the `All · Personal ·
-  Shared` filter Chips.
+- The stage switcher is the `SegmentedControl` (`Needs a date · Upcoming · Past`); below it,
+  the `All · Personal · Shared` filter Chips.
+
+  > **Corrected 2026-08-25 (founder), P3-35.** This line said "with counts where a stage
+  > carries a badge-worthy number". `plans-and-lists.md` §1.3.2 rule 1 is "no badge on the
+  > Plans tab, **ever, for any stage**" and rule 2 forbids a count in a stage heading — so
+  > there is no badge-worthy number to render. The control carries its three words and
+  > nothing else. The switcher itself stands (§1.3, amended the same day): its three words
+  > stay on screen, which is what preserves the vocabulary while `needsDate` — which does not
+  > paginate — stops burying Upcoming below the fold.
+
+- **The calendar navigator sits directly beneath the switcher on Upcoming and Past**, and is
+  absent on Needs a date. Collapsed it is a seven-column rolling strip; expanded it is a
+  normal month calendar of the same seven columns, so one day-cell component serves both.
+  Three cell treatments, and the middle one is the one to get right: a live date in the
+  displayed month is normal, a live date spilling in from an adjacent month is subordinate
+  but plainly readable and tappable, and an out-of-stage date is inert. Behaviour, eligibility
+  and encoding are canonical in
+  [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §1.3.4.
 - The whole card is one tap target → plan detail (U1). The RSVP pill, when present, is a
   separate target.
 - At most one system-feed line renders at a card's foot (the most recent unseen entry, in
@@ -873,6 +920,23 @@ and the reference for every later task that adds a capability to this screen.
  ☐ Defrost chicken
  + Add task
 ```
+
+> **Amended 2026-08-25 (founder), P3-36 — reconciled with `plans-and-lists.md` §2.1.** The two
+> documents disagreed: §2.1 specified ten expanded sections with the completion button last;
+> this section specified collapsed disclosure rows throughout. **Rule 1 below wins and is
+> unchanged** — the completion action stays at the top. Rule 2 is narrowed: *always collapsed*
+> becomes *collapsed once it has outgrown the screen*.
+>
+> A **setting** (Notes, Reminder, Repeat) always renders as one compact row. A **section**
+> does not exist until it holds something, and is discoverable meanwhile as a named chip in a
+> single `Add to this plan` row at the foot. A section holding 1–3 rows renders them in full;
+> 4 or more shows the first three, then `Show all n`. The full rule, with its rationale, is
+> canonical in [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §2.1.
+>
+> The reason rule 2 needed narrowing: a disclosure that costs a tap to reveal *less text than
+> the row occupied* is not hiding anything, and a plan with two prep tasks was exactly that
+> case. Rule 2's warning still stands for the case it was written about — a collapsed row must
+> never render a long value in full.
 
 **Three rules hold the whole screen.**
 
