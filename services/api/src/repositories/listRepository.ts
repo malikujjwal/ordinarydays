@@ -71,6 +71,10 @@ import {
   listUndo,
   sourceList,
 } from './keys.js';
+import {
+  LIST_ITEM_ACTIVITY_LINK_ENTITY,
+  listItemActivityLinkRow,
+} from './listLinkRow.js';
 import type { StoredItem } from './migrate.js';
 import { MAX_TRANSACT_ITEMS, TransactionBuilder, transactWrite } from './tx.js';
 import {
@@ -114,7 +118,8 @@ const ENTITY = {
   item: 'ListItem',
   locator: 'ListItemLocator',
   itemTombstone: 'ListItemTombstone',
-  link: 'ListItemActivityLink',
+  /** The one spelling lives beside the row builder both repositories share (P3-13). */
+  link: LIST_ITEM_ACTIVITY_LINK_ENTITY,
   /** Written first in Phase 6; the delete cascade already iterates it (§P3-05). */
   member: 'ListMember',
   rankRepair: 'ListRankRepair',
@@ -1258,11 +1263,13 @@ function storedLocator(item: ListItem, now: string): StoredItem {
   });
 }
 
+/**
+ * Delegates to the shared builder (P3-13). The bridge writes this same row inside the
+ * Activity-create transaction, and a second construction here would be the same row spelled
+ * twice — the shape that drifts the first time a field is added.
+ */
 function storedListItemActivityLink(link: ListItemActivityLink, now: string): StoredItem {
-  return stamp(ENTITY.link, now, now, {
-    ...listItemActivityLink(link.listId, link.viewerUserId, link.itemId),
-    ...link,
-  });
+  return listItemActivityLinkRow(link, now);
 }
 
 type ActivityProvenance = ItemTombstone['activityProvenance'][number];
