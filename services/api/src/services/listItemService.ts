@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { BULK_UNDO_OFFER_SECONDS, MAX_LIST_ITEMS, UNDO_OFFER_SECONDS } from '@od/shared';
 import {
   type BulkCreateListItemsInput,
@@ -21,7 +22,6 @@ import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
 import {
   batchGetViewerLinks,
   createListItems,
-  deleteCheckedListItems,
   deleteListItem,
   getListItem,
   getListMeta,
@@ -41,7 +41,7 @@ import {
   patchListItemFields,
   reorderListItem,
   resolveExistingItems,
-  uncheckAllListItems,
+  runBulkCheckedOperation,
 } from '../repositories/listRepository.js';
 import { ID_UNAVAILABLE } from './activityService.js';
 import { assertActivityAccess, assertListAccess } from './authz.js';
@@ -589,17 +589,75 @@ function assertBulkCheckedAllowed(list: List): void {
   }
 }
 
-/** Mints one bulk operation's identity and its 10-second offer (`interaction-contract.md` §4). */
-function bulkOperation(now: string) {
-  const operationId = newListOperationId();
-  const { token, tokenHash } = mintUndoToken(operationId);
+/**
+ * The operation's stable identity: this caller's `Idempotency-Key`, hashed (P3-10).
+ *
+ * A bulk action at the item cap is twenty-odd transactions, and the `UNDO#` record naming
+ * every id lands in the first of them. If a retry minted a **fresh** operation it would delete
+ * whatever was left under a second one and strand the first chunks' rows behind a token nobody
+ * ever received. Deriving the id from the key is what makes the retry finish the operation it
+ * already started, and answer with the token that operation already promised. The same
+ * reasoning, and the same derivation, as the behaviour migration's.
+ */
+function bulkOperationId(userId: string, idempotencyKey: string): string {
+  return `blk_${createHash('sha256')
+    .update(`${userId}:${idempotencyKey}`)
+    .digest('base64url')
+    .slice(0, 32)}`;
+}
+
+/**
+ * Runs one bulk checked action, resuming this key's own outstanding one.
+ *
+ * The plan — the token, its 10-second window and the receipt — is made **once**, when the
+ * operation is new, and recorded. A resume reads it back rather than deciding again, so every
+ * attempt answers with the same token for the same operation.
+ */
+async function runBulkChecked(
+  userId: string,
+  listId: string,
+  kind: 'clear_checked' | 'uncheck_all',
+  idempotencyKey: string,
+  now: string,
+  receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
+): Promise<ReversibleItemMutation> {
+  const access = await assertListAccess(userId, listId, 'write');
+  const list = await loadList(userId, listId, access.index, now);
+  assertBulkCheckedAllowed(list);
+
+  const operationId = bulkOperationId(userId, idempotencyKey);
+  const result = await mapped(() =>
+    runBulkCheckedOperation(userId, listId, access.index, {
+      operationId,
+      kind,
+      now,
+      plan: (itemIds) => {
+        const { token, tokenHash } = mintUndoToken(operationId);
+        const undoExpiresAt = new Date(
+          Date.parse(now) + BULK_UNDO_OFFER_SECONDS * 1000,
+        ).toISOString();
+        return {
+          undoToken: token,
+          tokenHash,
+          undoExpiresAt,
+          ...(receiptFor === undefined
+            ? {}
+            : {
+                receipt: receiptFor({
+                  affectedCount: itemIds.length,
+                  undoToken: token,
+                  undoExpiresAt,
+                }),
+              }),
+        };
+      },
+    }),
+  );
+
   return {
-    operationId,
-    tokenHash,
-    undoToken: token,
-    undoExpiresAt: new Date(
-      Date.parse(now) + BULK_UNDO_OFFER_SECONDS * 1000,
-    ).toISOString(),
+    affectedCount: result.affectedCount,
+    undoToken: result.undoToken,
+    undoExpiresAt: result.undoExpiresAt,
   };
 }
 
@@ -609,44 +667,17 @@ function bulkOperation(now: string) {
  * **No confirmation dialog**, by the decision recorded in §P3-10 and `00-open-decisions.md`
  * item 33: the count is in the button the user tapped, they ticked each of those rows one at
  * a time, and the 10-second undo window is the safety net. This is the single deliberate
- * exception to `interaction-contract.md` §1a.1, and it is the reason the response carries a
- * token rather than the endpoint carrying a precondition.
+ * exception to `interaction-contract.md` §1a.1, and the reason the response carries a token
+ * rather than the endpoint carrying a precondition.
  */
 export async function clearCheckedItems(
   userId: string,
   listId: string,
+  idempotencyKey: string,
   now: string,
   receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
 ): Promise<ReversibleItemMutation> {
-  const access = await assertListAccess(userId, listId, 'write');
-  const list = await loadList(userId, listId, access.index, now);
-  assertBulkCheckedAllowed(list);
-
-  const operation = bulkOperation(now);
-  const deleted = await mapped(() =>
-    deleteCheckedListItems(userId, listId, access.index, {
-      operationId: operation.operationId,
-      tokenHash: operation.tokenHash,
-      undoExpiresAt: operation.undoExpiresAt,
-      now,
-      ...(receiptFor === undefined
-        ? {}
-        : {
-            receiptFor: (itemIds: readonly string[]) =>
-              receiptFor({
-                affectedCount: itemIds.length,
-                undoToken: operation.undoToken,
-                undoExpiresAt: operation.undoExpiresAt,
-              }),
-          }),
-    }),
-  );
-
-  return {
-    affectedCount: deleted.length,
-    undoToken: operation.undoToken,
-    undoExpiresAt: operation.undoExpiresAt,
-  };
+  return runBulkChecked(userId, listId, 'clear_checked', idempotencyKey, now, receiptFor);
 }
 
 /**
@@ -660,38 +691,11 @@ export async function clearCheckedItems(
 export async function uncheckAllItems(
   userId: string,
   listId: string,
+  idempotencyKey: string,
   now: string,
   receiptFor?: (result: ReversibleItemMutation) => IdempotencyReceipt,
 ): Promise<ReversibleItemMutation> {
-  const access = await assertListAccess(userId, listId, 'write');
-  const list = await loadList(userId, listId, access.index, now);
-  assertBulkCheckedAllowed(list);
-
-  const operation = bulkOperation(now);
-  const changed = await mapped(() =>
-    uncheckAllListItems(userId, listId, access.index, {
-      operationId: operation.operationId,
-      tokenHash: operation.tokenHash,
-      undoExpiresAt: operation.undoExpiresAt,
-      now,
-      ...(receiptFor === undefined
-        ? {}
-        : {
-            receiptFor: (itemIds: readonly string[]) =>
-              receiptFor({
-                affectedCount: itemIds.length,
-                undoToken: operation.undoToken,
-                undoExpiresAt: operation.undoExpiresAt,
-              }),
-          }),
-    }),
-  );
-
-  return {
-    affectedCount: changed.length,
-    undoToken: operation.undoToken,
-    undoExpiresAt: operation.undoExpiresAt,
-  };
+  return runBulkChecked(userId, listId, 'uncheck_all', idempotencyKey, now, receiptFor);
 }
 
 export interface ListItemsProjection {

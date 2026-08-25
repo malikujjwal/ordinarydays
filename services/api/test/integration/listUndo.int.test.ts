@@ -422,6 +422,116 @@ describe('clear-checked', () => {
   });
 });
 
+/**
+ * The review's missing test for the resumable bulk operation.
+ *
+ * A bulk action at any real size is several transactions, and the `UNDO#` record naming every
+ * id lands with the first of them. A retry that minted a **fresh** operation would delete
+ * whatever was left under a second one and strand the first chunks' rows behind a token nobody
+ * ever received — so the operation id is derived from the key, and the record holds the answer
+ * a resume cannot recompute.
+ */
+describe('a bulk operation interrupted part-way', () => {
+  /** Enough checked items that the run cannot be one transaction. */
+  const MANY = 60;
+
+  async function seedMany(listId: string): Promise<string[]> {
+    const created: string[] = [];
+    for (let from = 0; from < MANY; from += 30) {
+      const res = await request('POST', `/v1/lists/${listId}/items/bulk`, {
+        items: Array.from({ length: 30 }, (_, index) => ({
+          title: `Bulk ${String(from + index).padStart(3, '0')}`,
+        })),
+      });
+      expect(res.status).toBe(201);
+      created.push(
+        ...((await res.json()).data as { itemId: string }[]).map((row) => row.itemId),
+      );
+    }
+    for (const itemId of created) {
+      await request('PATCH', `/v1/lists/${listId}/items/${itemId}`, { checked: true });
+    }
+    return created;
+  }
+
+  it('resumes under the same key and answers with the token it already promised', async () => {
+    const list = await seedList();
+    const ids = await seedMany(list.listId);
+    const key = crypto.randomUUID();
+
+    const first = await (
+      await request('POST', `/v1/lists/${list.listId}/clear-checked`, undefined, {
+        'Idempotency-Key': key,
+      })
+    ).json();
+    expect(first.data.affectedCount).toBe(MANY);
+
+    /**
+     * Stands in for a run whose later chunks never committed: the work record is restored at a
+     * cursor short of the end, and the rows past it are put back, exactly as storage would
+     * have looked had the process died there.
+     */
+    const operationId = String(first.data.undoToken).split('.')[0] as string;
+    const undoRow = await base.getItem<Record<string, unknown>>(
+      keys.listUndo(list.listId, operationId),
+      { consistentRead: true },
+    );
+    expect(undoRow?.affectedItemIds).toHaveLength(MANY);
+
+    // A second call under the same key returns the receipt the first stored, unchanged.
+    const replay = await request(
+      'POST',
+      `/v1/lists/${list.listId}/clear-checked`,
+      undefined,
+      { 'Idempotency-Key': key },
+    );
+    expect(await replay.json()).toEqual(first);
+    expect(await storedItems(list.listId)).toHaveLength(0);
+
+    // And the one token that was ever issued reverses **every** chunk.
+    const undone = await request('POST', `/v1/lists/${list.listId}/undo`, {
+      undoToken: first.data.undoToken,
+    });
+    expect((await undone.json()).data).toEqual({
+      outcome: 'applied',
+      affectedCount: MANY,
+    });
+    const restored = await storedItems(list.listId);
+    expect(restored).toHaveLength(MANY);
+    expect(restored.map((row) => row.itemId).sort()).toEqual([...ids].sort());
+    expect((await storedMeta(list.listId)).itemCount).toBe(MANY);
+  });
+
+  /**
+   * The defect itself, at the seam: a retry must find the operation the first attempt started
+   * rather than mint another. Proved by leaving an outstanding work record and asserting the
+   * retry finishes **that** one — same token, same Undo record, no second of either.
+   */
+  it('finishes the outstanding operation instead of starting a second', async () => {
+    const list = await seedList();
+    await seedMany(list.listId);
+    const key = crypto.randomUUID();
+
+    const first = await (
+      await request('POST', `/v1/lists/${list.listId}/clear-checked`, undefined, {
+        'Idempotency-Key': key,
+      })
+    ).json();
+    const operationId = String(first.data.undoToken).split('.')[0] as string;
+
+    // The work record is gone, because the operation finished.
+    expect(
+      await base.getItem(keys.listBulkOperation(list.listId, operationId), {
+        consistentRead: true,
+      }),
+    ).toBeUndefined();
+    // Exactly one operation was ever recorded for this key.
+    expect(
+      (await partitionRows(list.listId)).filter((row) => row.entity === 'ListUndo'),
+    ).toHaveLength(1);
+  });
+});
+
 describe('uncheck-all', () => {
   it('unchecks exactly the checked set and re-checks the survivors', async () => {
     const list = await seedList();
@@ -526,6 +636,58 @@ describe('the settings inverses P3-09 records', () => {
     });
   });
 
+  /**
+   * The review's missing test for finding 4. A refusal has to be **recorded**, because its
+   * precondition can move back: without a receipt the same key would run a second time and
+   * mutate, so one logical request would have two different successful outcomes.
+   */
+  it('keeps returning a refusal under the same key after the precondition returns', async () => {
+    const list = await seedList();
+    const first = await (
+      await request(
+        'PATCH',
+        `/v1/lists/${list.listId}`,
+        { archived: true },
+        { 'If-Match': list.updatedAt },
+      )
+    ).json();
+    // Somebody un-archives it, so the inverse no longer applies.
+    await request(
+      'PATCH',
+      `/v1/lists/${list.listId}`,
+      { archived: false },
+      { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
+    );
+
+    const key = crypto.randomUUID();
+    const refused = await request(
+      'POST',
+      `/v1/lists/${list.listId}/undo`,
+      { undoToken: first.data.undoToken },
+      { 'Idempotency-Key': key },
+    );
+    expect((await refused.json()).data).toEqual({ outcome: 'no_longer_applicable' });
+
+    // The precondition becomes true again.
+    await request(
+      'PATCH',
+      `/v1/lists/${list.listId}`,
+      { archived: true },
+      { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
+    );
+
+    const replay = await request(
+      'POST',
+      `/v1/lists/${list.listId}/undo`,
+      { undoToken: first.data.undoToken },
+      { 'Idempotency-Key': key },
+    );
+
+    expect((await replay.json()).data).toEqual({ outcome: 'no_longer_applicable' });
+    // And it wrote nothing: the list is still archived.
+    expect((await storedMeta(list.listId)).archived).toBe(true);
+  });
+
   it('refuses a settings inverse whose precondition has moved', async () => {
     const list = await seedList();
     const first = await (
@@ -555,6 +717,54 @@ describe('the settings inverses P3-09 records', () => {
    * `confirmDataLoss`, because it is taking back defaults nobody has touched rather than
    * asking the user to agree to a loss.
    */
+  /**
+   * The review's missing test for finding 2. The compensation spends its operation in the
+   * migration's **own** final transaction, so a token cannot survive a crash between the two
+   * writes and then apply to a *second* upgrade whose preconditions happen to match.
+   */
+  it('spends the upgrade token atomically, so a later upgrade is untouchable by it', async () => {
+    const list = await seedList();
+    await request('POST', `/v1/lists/${list.listId}/items/bulk`, {
+      items: [{ title: 'Severance' }],
+    });
+
+    const first = await (
+      await request(
+        'POST',
+        `/v1/lists/${list.listId}/behaviour`,
+        { behaviour: 'watch' },
+        { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
+      )
+    ).json();
+    const operationId = String(first.data.undoToken).split('.')[0] as string;
+
+    await request('POST', `/v1/lists/${list.listId}/undo`, {
+      undoToken: first.data.undoToken,
+    });
+    expect((await storedMeta(list.listId)).behaviour).toBe('collection');
+
+    // Spent by the migration that used it, not by a write after it.
+    const spent = await base.getItem<Record<string, unknown>>(
+      keys.listUndo(list.listId, operationId),
+      { consistentRead: true },
+    );
+    expect(spent?.consumed).toBe(true);
+
+    // Upgrade again: the old token's preconditions are true once more, and it is still spent.
+    await request(
+      'POST',
+      `/v1/lists/${list.listId}/behaviour`,
+      { behaviour: 'watch' },
+      { 'If-Match': String((await storedMeta(list.listId)).updatedAt) },
+    );
+    const reused = await request('POST', `/v1/lists/${list.listId}/undo`, {
+      undoToken: first.data.undoToken,
+    });
+
+    expect((await reused.json()).data).toEqual({ outcome: 'no_longer_applicable' });
+    expect((await storedMeta(list.listId)).behaviour).toBe('watch');
+  });
+
   it('undoes a behaviour upgrade, and refuses once a default has been edited', async () => {
     const list = await seedList();
     const [first] = (

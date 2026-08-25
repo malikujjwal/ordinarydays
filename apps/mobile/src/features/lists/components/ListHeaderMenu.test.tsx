@@ -72,7 +72,12 @@ describe('ListHeaderMenu', () => {
     expect(screen.queryByText(/can.t be undone/i)).toBeNull();
   });
 
-  it('invokes each bulk action once, ready for its ten-second toast', () => {
+  /**
+   * The **ten seconds** themselves live in `model/bulkUndoToast.ts` and are asserted there:
+   * this component only reports the tap, and a test here that claimed to check a duration
+   * would be checking nothing.
+   */
+  it('invokes each bulk action exactly once', () => {
     const { onClearChecked, onUncheckAll } = mount();
 
     fireEvent.click(screen.getByTestId('list-clear-checked'));

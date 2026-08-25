@@ -161,7 +161,7 @@ async function applyBehaviourUpgrade(
    * before the migration starts rather than after its snapshot decides.
    */
   const affectedCount = (inverse.affectedItemIds ?? []).length;
-  await undoBehaviourUpgrade(userId, listId, access, {
+  const migrated = await undoBehaviourUpgrade(userId, listId, access, {
     operationId: operation.operationId,
     toBehaviour: inverse.behaviour,
     ...(inverse.restoreDetails === undefined
@@ -170,11 +170,21 @@ async function applyBehaviourUpgrade(
     expectedUpdatedAt: list.updatedAt,
     now,
     receipt: receiptFor(affectedCount),
+    /** Spent by the migration's own final transaction, never by a write after it. */
+    consumesUndoOperationId: operation.operationId,
   });
-  await consumeListUndoOperation(userId, listId, access, {
-    operationId: operation.operationId,
-    now,
-  });
+  /**
+   * The list was already where the inverse wanted it, so no migration ran and nothing spent
+   * the operation. It still has to be single-use, so it is spent here — the one path where
+   * that is a separate write, and the one where there is no domain change to lose.
+   */
+  if (migrated === 0) {
+    await consumeListUndoOperation(userId, listId, access, {
+      operationId: operation.operationId,
+      now,
+      receiptFor,
+    });
+  }
   return { outcome: 'applied', affectedCount };
 }
 

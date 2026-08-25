@@ -246,71 +246,140 @@ describe('the bulk checked operations', () => {
     );
   };
 
-  const bulkOptions = {
-    operationId: 'op_bulk',
+  const plan = () => ({
+    undoToken: 'blk_op.secret',
     tokenHash: 'stored-hash',
     undoExpiresAt: LATER,
-    now: LATER,
-  };
+    receipt,
+  });
+
+  const run = (kind: 'clear_checked' | 'uncheck_all') =>
+    repository.runBulkCheckedOperation(ALICE, LIST_ID, access, {
+      operationId: 'blk_op',
+      kind,
+      now: LATER,
+      plan,
+    });
 
   /**
    * One `UNDO#` record for the whole run, however many transactions it takes: "bounded
-   * receipt-aware chunks preserve one logical Undo operation". It lands in the **first**
-   * chunk naming every id, so a run that fails half way still leaves one operation that
-   * names the whole set.
+   * receipt-aware chunks preserve one logical Undo operation". It lands with the work record
+   * before anything is applied, naming every id the operation will take.
    */
   it('deletes only the checked rows under one operation naming them all', async () => {
     seedChecked(3, [item({ itemId: ITEM_B, rank: 'z0', checked: false })]);
 
-    const deleted = await repository.deleteCheckedListItems(ALICE, LIST_ID, access, {
-      ...bulkOptions,
-      receiptFor: () => receipt,
-    });
+    const result = await run('clear_checked');
 
-    expect(deleted).toHaveLength(3);
+    expect(result.affectedCount).toBe(3);
+    expect(result.undoToken).toBe('blk_op.secret');
     const undos = written('ListUndo');
     expect(undos).toHaveLength(1);
     expect(undos[0]).toMatchObject({
       kind: 'clear_checked',
       consumed: false,
       tokenHash: 'stored-hash',
-      affectedItemIds: deleted.map((value) => value.itemId),
+      affectedItemIds: checkedItems(3).map((value) => value.itemId),
     });
-    const tombstones = written('ListItemTombstone');
-    expect(tombstones).toHaveLength(3);
-    expect(tombstones[0]).toMatchObject({ operationId: 'op_bulk' });
+    expect(written('ListItemTombstone')).toHaveLength(3);
     // The unchecked row is not touched.
     expect(
       transacted().some((entry) => String(entry.Delete?.Key?.sk ?? '').includes(ITEM_B)),
     ).toBe(false);
   });
 
+  /**
+   * The token the client will receive, the deadline it was promised for and the receipt the
+   * last chunk will store are all decided **once** and recorded, so a retry that resumes this
+   * operation answers with the same values rather than minting a second set.
+   */
+  it('records the prepared answer, and deletes it when the operation finishes', async () => {
+    seedChecked(2);
+
+    await run('clear_checked');
+
+    const work = written('ListBulkOperation');
+    expect(work).toHaveLength(1);
+    expect(work[0]).toMatchObject({
+      operationId: 'blk_op',
+      kind: 'clear_checked',
+      cursor: 0,
+      undoToken: 'blk_op.secret',
+      undoExpiresAt: LATER,
+    });
+    // Deleted by the transaction that finishes, so the plaintext token's life is the run.
+    expect(
+      transacted().some(
+        (entry) => entry.Delete?.Key?.sk === keys.listBulkOperation(LIST_ID, 'blk_op').sk,
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * The defect this record exists to prevent: a retry under the same key must **resume**, not
+   * start again. It reads back the token the first attempt promised rather than minting one
+   * the client would never receive.
+   */
+  it('resumes an outstanding operation without re-planning it', async () => {
+    seedChecked(2);
+    vi.mocked(base.getItem).mockImplementation(async (key) => {
+      if (key.sk === keys.listMeta(LIST_ID).sk) return listRow({ itemCount: 2 });
+      if (key.sk === keys.listBulkOperation(LIST_ID, 'blk_op').sk) {
+        return {
+          ...keys.listBulkOperation(LIST_ID, 'blk_op'),
+          entity: 'ListBulkOperation',
+          schemaVersion: 1,
+          listId: LIST_ID,
+          operationId: 'blk_op',
+          kind: 'clear_checked',
+          itemIds: checkedItems(2).map((value) => value.itemId),
+          cursor: 1,
+          undoToken: 'blk_op.first-attempt-secret',
+          undoExpiresAt: NOW,
+          receipt,
+        };
+      }
+      return undefined;
+    });
+    const planSpy = vi.fn(plan);
+
+    const result = await repository.runBulkCheckedOperation(ALICE, LIST_ID, access, {
+      operationId: 'blk_op',
+      kind: 'clear_checked',
+      now: LATER,
+      plan: planSpy,
+    });
+
+    expect(planSpy).not.toHaveBeenCalled();
+    expect(result.undoToken).toBe('blk_op.first-attempt-secret');
+    expect(result.undoExpiresAt).toBe(NOW);
+    expect(result.affectedCount).toBe(2);
+    // No second operation record, and no second Undo record.
+    expect(written('ListBulkOperation')).toHaveLength(0);
+    expect(written('ListUndo')).toHaveLength(0);
+    // Only the item the cursor had not reached.
+    expect(written('ListItemTombstone')).toHaveLength(1);
+  });
+
   /** Every deleted row was checked, so none of them was contributing to `uncheckedCount`. */
   it('moves itemCount and leaves uncheckedCount alone', async () => {
     seedChecked(2);
 
-    await repository.deleteCheckedListItems(ALICE, LIST_ID, access, bulkOptions);
+    await run('clear_checked');
 
     const meta = transacted().find(
-      (entry) => entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk,
+      (entry) =>
+        entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk &&
+        String(entry.Update.UpdateExpression).includes('itemCount'),
     )?.Update;
-    expect(meta?.UpdateExpression).toBe('ADD #itemCount :removed');
-    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':removed': -2 });
+    expect(meta?.UpdateExpression).toBe('ADD #itemCount :delta');
+    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':delta': -2 });
   });
 
-  /**
-   * The menu hides `Clear checked` at zero, but the endpoint still answers — so the operation
-   * is recorded either way and the token it returns resolves like any other.
-   */
   it('records an empty operation when nothing is checked', async () => {
     seedChecked(0);
 
-    const deleted = await repository.deleteCheckedListItems(ALICE, LIST_ID, access, {
-      ...bulkOptions,
-      receiptFor: () => receipt,
-    });
-
-    expect(deleted).toEqual([]);
+    await expect(run('clear_checked')).resolves.toMatchObject({ affectedCount: 0 });
     expect(written('ListUndo')[0]).toMatchObject({ affectedItemIds: [] });
     expect(written('ListItemTombstone')).toHaveLength(0);
   });
@@ -318,16 +387,10 @@ describe('the bulk checked operations', () => {
   it('unchecks exactly the checked set, advancing both revisions', async () => {
     seedChecked(2);
 
-    const changed = await repository.uncheckAllListItems(ALICE, LIST_ID, access, {
-      ...bulkOptions,
-      receiptFor: () => receipt,
-    });
+    const result = await run('uncheck_all');
 
-    expect(changed).toHaveLength(2);
-    expect(written('ListUndo')[0]).toMatchObject({
-      kind: 'uncheck_all',
-      affectedItemIds: changed.map((value) => value.itemId),
-    });
+    expect(result.affectedCount).toBe(2);
+    expect(written('ListUndo')[0]).toMatchObject({ kind: 'uncheck_all' });
     const rowUpdate = transacted().find((entry) =>
       String(entry.Update?.UpdateExpression ?? '').includes('#checked = :false'),
     )?.Update;
@@ -339,15 +402,13 @@ describe('the bulk checked operations', () => {
         entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk &&
         String(entry.Update.UpdateExpression).includes('uncheckedCount'),
     )?.Update;
-    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':freed': 2 });
+    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':delta': 2 });
   });
 
   it('records an empty uncheck-all when nothing is checked', async () => {
     seedChecked(0);
 
-    await expect(
-      repository.uncheckAllListItems(ALICE, LIST_ID, access, bulkOptions),
-    ).resolves.toEqual([]);
+    await expect(run('uncheck_all')).resolves.toMatchObject({ affectedCount: 0 });
     expect(written('ListUndo')[0]).toMatchObject({
       kind: 'uncheck_all',
       affectedItemIds: [],

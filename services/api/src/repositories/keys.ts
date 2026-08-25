@@ -392,6 +392,18 @@ export const listRankRepair = (listId: string, operationId: string) => ({
   sk: `RANK_REPAIR#${operationId}`,
 });
 
+/**
+ * Resumable work for one bulk checked operation (P3-10).
+ *
+ * `clear-checked` and `uncheck-all` do not fit in one transaction at the item cap, so they
+ * need somewhere to keep the answer they already committed to while the rest of the chunks
+ * run. Removed by the transaction that finishes the operation.
+ */
+export const listBulkOperation = (listId: string, operationId: string) => ({
+  pk: listPk(listId),
+  sk: `BULK_OP#${operationId}`,
+});
+
 /** Resumable behaviour-migration work for one operation. */
 export const listBehaviourMigration = (listId: string, operationId: string) => ({
   pk: listPk(listId),

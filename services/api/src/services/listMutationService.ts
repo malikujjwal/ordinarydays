@@ -776,6 +776,8 @@ export interface UndoBehaviourUpgradeOptions {
    * forward change's: the route is a mutating POST, so there is always one.
    */
   readonly receipt: IdempotencyReceipt;
+  /** The retained operation being spent, consumed by that same final transaction (P3-10). */
+  readonly consumesUndoOperationId: string;
 }
 
 /**
@@ -792,10 +794,11 @@ export interface UndoBehaviourUpgradeOptions {
  * untouched and there is nothing to lose; and it prepares **no Undo of its own**, because
  * undoing an undo is a fresh decision the user makes with a fresh upgrade.
  *
- * The operation is spent by the compensation service after this returns. A crash in between
- * leaves the token unconsumed against a list already restored, and the replay converges: the
- * behaviour is where the inverse wanted it, so the migration is a no-op and the token is spent
- * then. The idempotency receipt covers the ordinary case.
+ * The operation being spent is consumed by the **final transaction itself**, not afterwards.
+ * Consuming it in a second write left a crash window in which the list was already restored,
+ * the receipt made the replay a no-op, and the token stayed unspent — so once the list was
+ * upgraded again its preconditions were true once more and it could undo the new operation.
+ * Single-use is enforced by the write that uses it (P3-10).
  */
 export async function undoBehaviourUpgrade(
   userId: string,
@@ -805,6 +808,10 @@ export async function undoBehaviourUpgrade(
 ): Promise<number> {
   const migrationId = `bmg_undo_${options.operationId}`;
   const list = await requireList(userId, listId, access);
+  /**
+   * Already where the inverse wanted it. The compensation still has to be spent, and the
+   * caller does that — this returns without installing a migration that would do nothing.
+   */
   if (list.behaviour === options.toBehaviour) return 0;
 
   const work = await beginBehaviourMigration(userId, listId, access, {
@@ -814,6 +821,7 @@ export async function undoBehaviourUpgrade(
     expectedUpdatedAt: options.expectedUpdatedAt,
     now: options.now,
     receipt: options.receipt,
+    consumesUndoOperationId: options.consumesUndoOperationId,
     /**
      * Nothing is being lost — the caller checked that every affected item still carries the
      * default the upgrade created, which is what lets this run with no confirmation at all.

@@ -2,6 +2,7 @@ import type { UndoListOperationInput } from '@od/shared/schemas';
 import type { Context } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { requireUserId } from '../middleware/identity.js';
+import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
 import { clearCheckedItems, uncheckAllItems } from '../services/listItemService.js';
 import { undoListOperation } from '../services/listUndoService.js';
 import { idempotentJson } from './idempotentResponse.js';
@@ -35,8 +36,8 @@ export async function clearCheckedHandler(
   now: string,
 ): Promise<Response> {
   const listId = c.req.param('id');
-  return idempotentJson(c, 200, async (receiptFor) =>
-    clearCheckedItems(requireUserId(c), listId, now, (result) => receiptFor(result)),
+  return idempotentJson(c, 200, async (receiptFor, key) =>
+    clearCheckedItems(requireUserId(c), listId, key, now, (result) => receiptFor(result)),
   );
 }
 
@@ -46,8 +47,8 @@ export async function uncheckAllHandler(
   now: string,
 ): Promise<Response> {
   const listId = c.req.param('id');
-  return idempotentJson(c, 200, async (receiptFor) =>
-    uncheckAllItems(requireUserId(c), listId, now, (result) => receiptFor(result)),
+  return idempotentJson(c, 200, async (receiptFor, key) =>
+    uncheckAllItems(requireUserId(c), listId, key, now, (result) => receiptFor(result)),
   );
 }
 
@@ -75,13 +76,21 @@ export async function undoListOperationHandler(
       (affectedCount) => receiptFor({ outcome: 'applied', affectedCount }),
     );
     /**
-     * Sets the response body for the two outcomes that **write nothing** — and therefore
-     * store no receipt, so a replay of the same key re-answers rather than replaying. Both
-     * are idempotent by construction: a token that named nothing still names nothing, and one
-     * whose preconditions moved has not moved back. On the applied path the compensation's
-     * own transaction already stored this body; building it again is the same JSON.
+     * Sets the response body for the two outcomes the compensation itself does not receipt,
+     * because it wrote nothing to receipt alongside.
+     *
+     * `no_longer_applicable` is then **stored on its own**. Its preconditions can move back:
+     * a settings inverse refused because somebody re-archived the list becomes applicable
+     * again when they un-archive it, and without a receipt the same key would run a second
+     * time and mutate — one logical request with two different successful outcomes. Storing
+     * the refusal is what makes the retry return the refusal.
+     *
+     * `expired` needs none: a token that names no operation names none tomorrow either, a
+     * hash mismatch stays mismatched, and retention only moves one way. It is idempotent by
+     * construction rather than by record.
      */
-    receiptFor(result);
+    const receipt = receiptFor(result);
+    if (result.outcome === 'no_longer_applicable') await writeReceiptOnly(receipt);
     return result;
   });
 }

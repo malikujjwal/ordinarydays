@@ -54,6 +54,7 @@ import {
   activityMeta,
   activityTombstone,
   listBehaviourMigration,
+  listBulkOperation,
   listItemActivityLink,
   listItem as listItemKey,
   listItemLocator,
@@ -118,6 +119,7 @@ const ENTITY = {
   member: 'ListMember',
   rankRepair: 'ListRankRepair',
   behaviourMigration: 'ListBehaviourMigration',
+  bulkOperation: 'ListBulkOperation',
   undo: 'ListUndo',
   tombstone: 'ListTombstone',
   sourceList: 'SourceList',
@@ -2299,6 +2301,17 @@ export interface BehaviourMigrationWork {
   /** The prepared 6-second offer. Absent when the change loses data, which is not undoable. */
   readonly undo?: { readonly token: string; readonly expiresAt: string };
   /**
+   * The retained operation this migration is the compensation **for**, spent by the same
+   * transaction that finishes it (P3-10).
+   *
+   * A behaviour-upgrade Undo used to consume its token in a transaction after the migration's.
+   * A crash in between left the operation unconsumed while the receipt made the replay a
+   * no-op, so the cleanup never ran — and once the list was upgraded again, that old token's
+   * preconditions were true once more and it could undo somebody else's operation. Single-use
+   * has to be enforced by the write that uses it.
+   */
+  readonly consumesUndoOperationId?: string;
+  /**
    * The response receipt the final transaction writes, whoever runs it. Absent only while a
    * `snapshotting` record has not been filled in.
    */
@@ -2335,6 +2348,7 @@ const behaviourMigrationSchema = z.object({
   expectedUpdatedAt: z.string().min(1),
   committedAt: z.string().min(1),
   undo: z.object({ token: z.string().min(1), expiresAt: z.string().min(1) }).optional(),
+  consumesUndoOperationId: z.string().min(1).optional(),
   receipt: z
     .object({
       userId: z.string().min(1),
@@ -2392,6 +2406,8 @@ export interface BeginBehaviourMigrationOptions {
   readonly now: string;
   /** The prepared Undo offer. Absent when the change loses data (§4.1). */
   readonly undo?: { readonly token: string; readonly expiresAt: string };
+  /** The retained operation this migration compensates, spent by its final transaction. */
+  readonly consumesUndoOperationId?: string;
   /** The response receipt the final transaction commits, whichever caller runs it. */
   readonly receipt: IdempotencyReceipt;
   /**
@@ -2441,6 +2457,9 @@ export async function beginBehaviourMigration(
     expectedUpdatedAt: options.expectedUpdatedAt,
     committedAt: options.now,
     ...(options.undo === undefined ? {} : { undo: options.undo }),
+    ...(options.consumesUndoOperationId === undefined
+      ? {}
+      : { consumesUndoOperationId: options.consumesUndoOperationId }),
     receipt: options.receipt,
   };
 
@@ -2758,6 +2777,16 @@ export async function finishBehaviourMigration(
       },
     });
   }
+  /**
+   * A migration that **is** a compensation spends its source operation here, not afterwards.
+   * The condition is `consumed = false`, so the operation is single-use however many times
+   * this transaction is retried, and no crash can leave a spent inverse looking unspent.
+   */
+  if (work.consumesUndoOperationId !== undefined) {
+    builder.add(
+      consumeUndoAction(work.listId, work.consumesUndoOperationId, work.committedAt),
+    );
+  }
   builder.add({
     Delete: { Key: listBehaviourMigration(work.listId, work.operationId) },
   });
@@ -3018,256 +3047,235 @@ export async function deleteListItem(
   });
 }
 
-export interface BulkItemOperationOptions {
+/**
+ * The answer a bulk operation committed to before it had finished committing it (P3-10).
+ *
+ * ## Why this row exists
+ *
+ * `clear-checked` at the item cap is twenty-odd transactions. The `UNDO#` record naming every
+ * id lands in the first of them, so a run that dies half way leaves rows deleted under an
+ * operation that is perfectly restorable — **provided anybody can still reach its token**.
+ * Without this record they cannot: a retry under the same `Idempotency-Key` would find no
+ * receipt, mint a fresh operation and a fresh token, delete whatever was left, and strand the
+ * first chunks' items behind a token nobody ever received.
+ *
+ * So the operation id is derived from that key, and this row holds what a resume cannot
+ * recompute: the token it already promised, the deadline it promised it for, the stable
+ * snapshot it is working through, how far it got, and the receipt the last chunk will store.
+ * A retry finds it and finishes the same operation, with the same answer.
+ *
+ * The token is held in the clear, and only here: the row is internal, never serialised, and
+ * **deleted by the transaction that finishes the operation** — so its plaintext lives for the
+ * seconds the run takes, not for the thirty days the `UNDO#` record is retained.
+ */
+export interface BulkItemOperationWork {
+  readonly listId: string;
   readonly operationId: string;
+  readonly kind: 'clear_checked' | 'uncheck_all';
+  /** Taken once, before the first chunk. What the operation applies, and what Undo reverses. */
+  readonly itemIds: readonly string[];
+  /** How many of them are done. A retry resumes here. */
+  readonly cursor: number;
+  readonly undoToken: string;
+  readonly undoExpiresAt: string;
+  readonly receipt?: IdempotencyReceipt;
+}
+
+const bulkOperationSchema = z.object({
+  listId: z.string().min(1),
+  operationId: z.string().min(1),
+  kind: z.enum(['clear_checked', 'uncheck_all']),
+  itemIds: z.array(z.string().min(1)).default([]),
+  cursor: z.number().int().nonnegative(),
+  undoToken: z.string().min(1),
+  undoExpiresAt: z.string().min(1),
+  receipt: z
+    .object({
+      userId: z.string().min(1),
+      key: z.string().min(1),
+      route: z.string().min(1),
+      status: z.number().int(),
+      body: z.string().min(1),
+      ttl: z.number().int(),
+      createdAt: z.string().min(1),
+    })
+    .optional(),
+});
+
+/** The outstanding work for one operation, or `undefined` once it has finished. */
+export async function getBulkItemOperation(
+  listId: string,
+  operationId: string,
+): Promise<BulkItemOperationWork | undefined> {
+  const row = await getItem<StoredItem>(listBulkOperation(listId, operationId), {
+    consistentRead: true,
+  });
+  return row === undefined
+    ? undefined
+    : (bulkOperationSchema.parse(row) as BulkItemOperationWork);
+}
+
+/** What the service decides when an operation is **new**; a resume uses what was recorded. */
+export interface BulkOperationPlan {
+  readonly undoToken: string;
   readonly tokenHash: string;
   readonly undoExpiresAt: string;
+  readonly receipt?: IdempotencyReceipt;
+}
+
+export interface RunBulkOperationOptions {
+  readonly operationId: string;
+  readonly kind: 'clear_checked' | 'uncheck_all';
   readonly now: string;
-  /**
-   * Built from the ids this operation really touched, and joined to the **last** chunk.
-   *
-   * `createListItems`'s reason: a receipt built before the work knows what it did would
-   * replay a count that was never true, and one committed with an early chunk would record a
-   * success for an operation that had not finished.
-   */
-  readonly receiptFor?: (itemIds: readonly string[]) => IdempotencyReceipt;
+  readonly plan: (itemIds: readonly string[]) => BulkOperationPlan;
+}
+
+export interface BulkOperationResult {
+  readonly affectedCount: number;
+  readonly undoToken: string;
+  readonly undoExpiresAt: string;
 }
 
 /**
- * Deletes every checked item as **one logical operation** (§P3-10, `data-model.md` §7).
+ * Runs one bulk checked operation to completion, resuming one already started (§P3-10).
  *
- * Chunked by cost, because it does not fit in one transaction at the item cap — but the
- * `UNDO#` record naming every id it will delete lands in the **first** chunk, so a run that
- * fails half way still leaves one operation that names the whole set. Compensation then puts
- * back whatever was actually taken: a tombstone that is not there is an item this operation
- * never got to, which is the same thing as one it has already restored.
+ * Three phases, for the reason the behaviour migration has three: the snapshot cannot be
+ * written in the same transaction that takes it, and the work has to survive between them.
  *
- * `uncheckedCount` is deliberately untouched. Every item this deletes is checked, so none of
- * them was contributing to it.
+ * 1. The stable snapshot is taken, the caller plans the answer, and one transaction installs
+ *    the work record **and** the `UNDO#` record naming every id. Nothing is applied yet, so a
+ *    crash here leaves an operation that reverses nothing — which is what it did.
+ * 2. Bounded chunks apply the change and advance the stored cursor in the same transaction, so
+ *    a crash resumes at a chunk boundary and never half-applies one item.
+ * 3. One final transaction stores the response receipt and deletes the work record, so the
+ *    plaintext token it was holding goes with it.
+ *
+ * Each chunk re-reads its items' current revisions rather than trusting the snapshot's. The
+ * ids are what the operation recorded and will reverse; the revisions are how it writes them
+ * safely, and a resume minutes later must use the current ones.
  */
-export async function deleteCheckedListItems(
+export async function runBulkCheckedOperation(
   userId: string,
   listId: string,
   access: ListAccessGrant,
-  options: BulkItemOperationOptions,
-): Promise<ListItem[]> {
+  options: RunBulkOperationOptions,
+): Promise<BulkOperationResult> {
   const state = await readMutationState(userId, listId, access);
-  const checked = (await readAllItemsUnfenced(listId)).filter((item) => item.checked);
-  const ttl = ttlFor(options.now);
 
-  const snapshots = await Promise.all(
-    checked.map(async (item) => ({
-      item,
-      relationships: await readRelationshipSnapshot(state.list, item.itemId),
-    })),
-  );
-
-  const chunks = costedChunks(
-    snapshots,
-    // The ranked row, its locator and its tombstone, plus one action per active viewer and
-    // one more per Activity whose provenance points back at this item.
-    (entry) =>
-      3 +
-      entry.relationships.viewerIds.length +
-      entry.relationships.activityProvenance.length,
-  );
-
-  const deleted: ListItem[] = [];
-  for (const [index, chunk] of chunks.entries()) {
-    const isFirst = index === 0;
-    const isLast = index === chunks.length - 1;
-    const builder = new TransactionBuilder(
-      'deleteCheckedListItems',
-      isLast && options.receiptFor !== undefined ? 1 : 0,
-    ).add(listDeletionGate(listId));
-
-    for (const { item, relationships } of chunk) {
-      builder.add(
-        {
-          Delete: {
-            Key: listItemKey(listId, item.rank, item.itemId),
-            ConditionExpression: '#itemRevision = :expectedRevision',
-            ExpressionAttributeNames: { '#itemRevision': 'itemRevision' },
-            ExpressionAttributeValues: { ':expectedRevision': item.itemRevision },
-          },
-        },
-        {
-          Delete: {
-            Key: listItemLocator(listId, item.itemId),
-            ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
-            ExpressionAttributeNames: {
-              '#rank': 'rank',
-              '#itemRevision': 'itemRevision',
-            },
-            ExpressionAttributeValues: {
-              ':rank': item.rank,
-              ':expectedRevision': item.itemRevision,
-            },
-          },
-        },
-      );
-      const linkedViewerIds = new Set(
-        relationships.viewerLinks.map((link) => link.viewerUserId),
-      );
-      for (const link of relationships.viewerLinks) {
-        builder.add({
-          Delete: {
-            Key: listItemActivityLink(listId, link.viewerUserId, item.itemId),
-            ConditionExpression: '#activityId = :activityId',
-            ExpressionAttributeNames: { '#activityId': 'activityId' },
-            ExpressionAttributeValues: { ':activityId': link.activityId },
-          },
-        });
-      }
-      for (const viewerUserId of relationships.viewerIds) {
-        if (linkedViewerIds.has(viewerUserId)) continue;
-        builder.add({
-          ConditionCheck: {
-            Key: listItemActivityLink(listId, viewerUserId, item.itemId),
-            ConditionExpression: 'attribute_not_exists(pk)',
-          },
-        });
-      }
-      for (const provenance of relationships.activityProvenance) {
-        builder.add({
-          Update: {
-            Key: activityMeta(provenance.activityId),
-            UpdateExpression: 'REMOVE #listId, #listItemId',
-            ConditionExpression: '#listId = :listId AND #listItemId = :listItemId',
-            ExpressionAttributeNames: {
-              '#listId': 'listId',
-              '#listItemId': 'listItemId',
-            },
-            ExpressionAttributeValues: {
-              ':listId': provenance.listId,
-              ':listItemId': provenance.listItemId,
-            },
-          },
-        });
-      }
-      builder.add({
-        Put: {
-          Item: stamp(ENTITY.itemTombstone, options.now, options.now, {
-            ...listItemTombstone(listId, item.itemId),
-            listId,
-            itemId: item.itemId,
-            operationId: options.operationId,
-            deletedAt: options.now,
-            ttl,
-            snapshot: item,
-            viewerLinks: relationships.viewerLinks,
-            activityProvenance: relationships.activityProvenance,
-          }),
-          ConditionExpression: 'attribute_not_exists(pk)',
-        },
-      });
-    }
-
-    if (isFirst) {
-      builder.add({
-        Put: {
-          Item: bulkUndoItem(listId, {
-            operationId: options.operationId,
-            kind: 'clear_checked',
-            tokenHash: options.tokenHash,
-            undoExpiresAt: options.undoExpiresAt,
-            affectedItemIds: checked.map((item) => item.itemId),
-            now: options.now,
-          }),
-          ConditionExpression: 'attribute_not_exists(pk)',
-        },
-      });
-    }
-    builder.add({
-      Update: {
-        Key: listMeta(listId),
-        UpdateExpression: 'ADD #itemCount :removed',
-        ConditionExpression: GATES_ABSENT,
-        ExpressionAttributeNames: { '#itemCount': 'itemCount', ...GATE_NAMES },
-        ExpressionAttributeValues: { ':removed': -chunk.length },
-      },
-    });
-    if (isLast && options.receiptFor !== undefined) {
-      builder.addReserved(
-        receiptItem(options.receiptFor(checked.map((item) => item.itemId))),
-      );
-    }
-
-    await transactWrite(builder.build(), {
-      operation: 'deleteCheckedListItems',
-      onConditionFailed: (index) =>
-        index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
-    });
-    deleted.push(...chunk.map((entry) => entry.item));
-  }
-
-  if (chunks.length === 0) {
-    /**
-     * Nothing is checked. The operation is still recorded, so the token this returns resolves
-     * like any other and compensates an empty set — the alternative is a response shape whose
-     * Undo fields are sometimes absent, for a case the menu already hides (§P3-10).
-     */
+  let work = await getBulkItemOperation(listId, options.operationId);
+  if (work === undefined) {
+    const checked = (await readAllItemsUnfenced(listId)).filter((item) => item.checked);
+    const itemIds = checked.map((item) => item.itemId);
+    const plan = options.plan(itemIds);
+    work = {
+      listId,
+      operationId: options.operationId,
+      kind: options.kind,
+      itemIds,
+      cursor: 0,
+      undoToken: plan.undoToken,
+      undoExpiresAt: plan.undoExpiresAt,
+      ...(plan.receipt === undefined ? {} : { receipt: plan.receipt }),
+    };
     await transactWrite(
-      new TransactionBuilder(
-        'deleteCheckedListItems',
-        options.receiptFor === undefined ? 0 : 1,
-      )
-        .add(listDeletionGate(listId), {
-          Put: {
-            Item: bulkUndoItem(listId, {
-              operationId: options.operationId,
-              kind: 'clear_checked',
-              tokenHash: options.tokenHash,
-              undoExpiresAt: options.undoExpiresAt,
-              affectedItemIds: [],
-              now: options.now,
-            }),
-            ConditionExpression: 'attribute_not_exists(pk)',
+      new TransactionBuilder('beginBulkCheckedOperation')
+        .add(
+          listDeletionGate(listId),
+          {
+            Put: {
+              Item: stamp(ENTITY.bulkOperation, options.now, options.now, {
+                ...listBulkOperation(listId, options.operationId),
+                ...work,
+                ttl: ttlFor(options.now),
+              }),
+              ConditionExpression: 'attribute_not_exists(pk)',
+            },
           },
-        })
-        .addReserved(
-          ...(options.receiptFor === undefined
-            ? []
-            : [receiptItem(options.receiptFor([]))]),
+          {
+            Put: {
+              Item: bulkUndoItem(listId, {
+                operationId: options.operationId,
+                kind: options.kind,
+                tokenHash: plan.tokenHash,
+                undoExpiresAt: plan.undoExpiresAt,
+                affectedItemIds: itemIds,
+                now: options.now,
+              }),
+              ConditionExpression: 'attribute_not_exists(pk)',
+            },
+          },
         )
         .build(),
       {
-        operation: 'deleteCheckedListItems',
+        operation: 'beginBulkCheckedOperation',
         onConditionFailed: (index) =>
-          index === 0 ? new ListNotFoundError() : new IdempotencyRaceError(),
+          index === 0 ? new ListNotFoundError() : new BulkOperationContendedError(),
       },
     );
   }
 
-  return deleted;
+  while (work.cursor < work.itemIds.length) {
+    work = await applyBulkChunk(state.list, work, options.now);
+  }
+  await finishBulkOperation(work);
+
+  return {
+    affectedCount: work.itemIds.length,
+    undoToken: work.undoToken,
+    undoExpiresAt: work.undoExpiresAt,
+  };
 }
 
-/**
- * Sets every currently checked item unchecked, and records exactly that set (§P3-10).
- *
- * Each row advances the `itemRevision` it shares with its locator, for the reason an ordinary
- * field patch does: a reorder racing this must retry against refreshed truth rather than
- * moving a stale full-row image back over it.
- */
-export async function uncheckAllListItems(
-  userId: string,
-  listId: string,
-  access: ListAccessGrant,
-  options: BulkItemOperationOptions,
-): Promise<ListItem[]> {
-  await readMutationState(userId, listId, access);
-  const checked = (await readAllItemsUnfenced(listId)).filter((item) => item.checked);
-  const chunks = costedChunks(checked, () => 2);
+/** Another caller is already running this operation; its own retry will finish it. */
+export class BulkOperationContendedError extends Error {
+  constructor() {
+    super('This bulk operation is already running.');
+    this.name = 'BulkOperationContendedError';
+  }
+}
 
-  for (const [index, chunk] of chunks.entries()) {
-    const isFirst = index === 0;
-    const isLast = index === chunks.length - 1;
-    const builder = new TransactionBuilder(
-      'uncheckAllListItems',
-      isLast && options.receiptFor !== undefined ? 1 : 0,
-    ).add(listDeletionGate(listId));
+/** Applies the next bounded slice and advances the stored cursor in the same transaction. */
+async function applyBulkChunk(
+  list: List,
+  work: BulkItemOperationWork,
+  now: string,
+): Promise<BulkItemOperationWork> {
+  const { listId, operationId } = work;
+  const remaining = work.itemIds.slice(work.cursor);
+  const current = new Map(
+    (await readAllItemsUnfenced(listId)).map((item) => [item.itemId, item] as const),
+  );
 
-    for (const item of chunk) {
+  const pending = await Promise.all(
+    remaining.map(async (itemId) => {
+      const item = current.get(itemId);
+      if (item === undefined) return { itemId, item: undefined, cost: 1 };
+      if (work.kind === 'uncheck_all') return { itemId, item, cost: 2 };
+      const relationships = await readRelationshipSnapshot(list, itemId);
+      return {
+        itemId,
+        item,
+        relationships,
+        cost:
+          3 + relationships.viewerIds.length + relationships.activityProvenance.length,
+      };
+    }),
+  );
+
+  const [chunk = []] = costedChunks(pending, (entry) => entry.cost);
+  const builder = new TransactionBuilder('applyBulkChunk').add(listDeletionGate(listId));
+  let applied = 0;
+
+  for (const entry of chunk) {
+    /**
+     * An id the snapshot named that is no longer here — deleted by hand, or applied by a
+     * previous attempt of this same operation whose response was lost. Either way the change
+     * this chunk would make is already true, so the cursor moves past it.
+     */
+    if (entry.item === undefined) continue;
+    const item = entry.item;
+    if (work.kind === 'uncheck_all') {
+      if (!item.checked) continue;
       const nextRevision = item.itemRevision + 1;
       builder.add(
         {
@@ -3286,7 +3294,7 @@ export async function uncheckAllListItems(
               ':true': true,
               ':expected': item.itemRevision,
               ':next': nextRevision,
-              ':now': options.now,
+              ':now': now,
             },
           },
         },
@@ -3307,79 +3315,151 @@ export async function uncheckAllListItems(
           },
         },
       );
+      applied += 1;
+      continue;
     }
 
-    if (isFirst) {
+    const relationships = entry.relationships;
+    if (relationships === undefined) continue;
+    builder.add(
+      {
+        Delete: {
+          Key: listItemKey(listId, item.rank, item.itemId),
+          ConditionExpression: '#itemRevision = :expectedRevision',
+          ExpressionAttributeNames: { '#itemRevision': 'itemRevision' },
+          ExpressionAttributeValues: { ':expectedRevision': item.itemRevision },
+        },
+      },
+      {
+        Delete: {
+          Key: listItemLocator(listId, item.itemId),
+          ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
+          ExpressionAttributeNames: { '#rank': 'rank', '#itemRevision': 'itemRevision' },
+          ExpressionAttributeValues: {
+            ':rank': item.rank,
+            ':expectedRevision': item.itemRevision,
+          },
+        },
+      },
+    );
+    const linkedViewerIds = new Set(
+      relationships.viewerLinks.map((link) => link.viewerUserId),
+    );
+    for (const link of relationships.viewerLinks) {
       builder.add({
-        Put: {
-          Item: bulkUndoItem(listId, {
-            operationId: options.operationId,
-            kind: 'uncheck_all',
-            tokenHash: options.tokenHash,
-            undoExpiresAt: options.undoExpiresAt,
-            affectedItemIds: checked.map((item) => item.itemId),
-            now: options.now,
-          }),
+        Delete: {
+          Key: listItemActivityLink(listId, link.viewerUserId, item.itemId),
+          ConditionExpression: '#activityId = :activityId',
+          ExpressionAttributeNames: { '#activityId': 'activityId' },
+          ExpressionAttributeValues: { ':activityId': link.activityId },
+        },
+      });
+    }
+    for (const viewerUserId of relationships.viewerIds) {
+      if (linkedViewerIds.has(viewerUserId)) continue;
+      builder.add({
+        ConditionCheck: {
+          Key: listItemActivityLink(listId, viewerUserId, item.itemId),
           ConditionExpression: 'attribute_not_exists(pk)',
         },
       });
     }
+    for (const provenance of relationships.activityProvenance) {
+      builder.add({
+        Update: {
+          Key: activityMeta(provenance.activityId),
+          UpdateExpression: 'REMOVE #listId, #listItemId',
+          ConditionExpression: '#listId = :listId AND #listItemId = :listItemId',
+          ExpressionAttributeNames: { '#listId': 'listId', '#listItemId': 'listItemId' },
+          ExpressionAttributeValues: {
+            ':listId': provenance.listId,
+            ':listItemId': provenance.listItemId,
+          },
+        },
+      });
+    }
+    builder.add({
+      Put: {
+        Item: stamp(ENTITY.itemTombstone, now, now, {
+          ...listItemTombstone(listId, item.itemId),
+          listId,
+          itemId: item.itemId,
+          operationId,
+          deletedAt: now,
+          ttl: ttlFor(now),
+          snapshot: item,
+          viewerLinks: relationships.viewerLinks,
+          activityProvenance: relationships.activityProvenance,
+        }),
+        ConditionExpression: 'attribute_not_exists(pk)',
+      },
+    });
+    applied += 1;
+  }
+
+  if (applied > 0) {
     builder.add({
       Update: {
         Key: listMeta(listId),
-        UpdateExpression: 'ADD #uncheckedCount :freed',
+        UpdateExpression:
+          work.kind === 'uncheck_all'
+            ? 'ADD #uncheckedCount :delta'
+            : 'ADD #itemCount :delta',
         ConditionExpression: GATES_ABSENT,
-        ExpressionAttributeNames: { '#uncheckedCount': 'uncheckedCount', ...GATE_NAMES },
-        ExpressionAttributeValues: { ':freed': chunk.length },
+        ExpressionAttributeNames: {
+          ...(work.kind === 'uncheck_all'
+            ? { '#uncheckedCount': 'uncheckedCount' }
+            : { '#itemCount': 'itemCount' }),
+          ...GATE_NAMES,
+        },
+        ExpressionAttributeValues: {
+          ':delta': work.kind === 'uncheck_all' ? applied : -applied,
+        },
       },
-    });
-    if (isLast && options.receiptFor !== undefined) {
-      builder.addReserved(
-        receiptItem(options.receiptFor(checked.map((item) => item.itemId))),
-      );
-    }
-
-    await transactWrite(builder.build(), {
-      operation: 'uncheckAllListItems',
-      onConditionFailed: (index) =>
-        index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
     });
   }
 
-  if (chunks.length === 0) {
-    await transactWrite(
-      new TransactionBuilder(
-        'uncheckAllListItems',
-        options.receiptFor === undefined ? 0 : 1,
-      )
-        .add(listDeletionGate(listId), {
-          Put: {
-            Item: bulkUndoItem(listId, {
-              operationId: options.operationId,
-              kind: 'uncheck_all',
-              tokenHash: options.tokenHash,
-              undoExpiresAt: options.undoExpiresAt,
-              affectedItemIds: [],
-              now: options.now,
-            }),
-            ConditionExpression: 'attribute_not_exists(pk)',
-          },
-        })
-        .addReserved(
-          ...(options.receiptFor === undefined
-            ? []
-            : [receiptItem(options.receiptFor([]))]),
-        )
-        .build(),
-      {
-        operation: 'uncheckAllListItems',
-        onConditionFailed: (index) =>
-          index === 0 ? new ListNotFoundError() : new IdempotencyRaceError(),
+  const nextCursor = work.cursor + chunk.length;
+  builder.add({
+    Update: {
+      Key: listBulkOperation(listId, operationId),
+      UpdateExpression: 'SET #cursor = :nextCursor',
+      ConditionExpression: '#cursor = :expectedCursor',
+      ExpressionAttributeNames: { '#cursor': 'cursor' },
+      ExpressionAttributeValues: {
+        ':nextCursor': nextCursor,
+        ':expectedCursor': work.cursor,
       },
-    );
-  }
+    },
+  });
 
-  return checked;
+  await transactWrite(builder.build(), {
+    operation: 'applyBulkChunk',
+    onConditionFailed: (index) =>
+      index === 0 ? new ListNotFoundError() : new RetryableListMutationConflictError(),
+  });
+  return { ...work, cursor: nextCursor };
+}
+
+/**
+ * Stores the response receipt and removes the work record, atomically.
+ *
+ * The receipt lands **here**, with the last chunk, so a replay that arrives before the
+ * operation is done finds none and resumes it rather than being told it succeeded. Deleting
+ * the work record in the same transaction is what bounds the plaintext token's life to the
+ * run itself.
+ */
+async function finishBulkOperation(work: BulkItemOperationWork): Promise<void> {
+  const builder = new TransactionBuilder(
+    'finishBulkOperation',
+    work.receipt === undefined ? 0 : 1,
+  ).add({ Delete: { Key: listBulkOperation(work.listId, work.operationId) } });
+  if (work.receipt !== undefined) builder.addReserved(receiptItem(work.receipt));
+
+  await transactWrite(builder.build(), {
+    operation: 'finishBulkOperation',
+    onConditionFailed: () => new IdempotencyRaceError(),
+  });
 }
 
 export interface CompensateOptions {
@@ -3411,16 +3491,24 @@ export async function recheckListItems(
   itemIds: readonly string[],
   options: CompensateOptions,
 ): Promise<number> {
-  return retryMutation(async () => {
-    await readMutationState(userId, listId, access);
-    const wanted = new Set(itemIds);
-    const surviving = (await readAllItemsUnfenced(listId)).filter(
-      (item) => wanted.has(item.itemId) && !item.checked,
-    );
-    const chunks = costedChunks(surviving, () => 2);
-    const lastIndex = chunks.length - 1;
+  await readMutationState(userId, listId, access);
+  const wanted = new Set(itemIds);
+  const surviving = (await readAllItemsUnfenced(listId)).filter(
+    (item) => wanted.has(item.itemId) && !item.checked,
+  );
+  const chunks = costedChunks(surviving, () => 2);
+  const lastIndex = chunks.length - 1;
 
-    for (const [index, chunk] of chunks.entries()) {
+  /**
+   * The retry wraps **one chunk**, never the whole compensation.
+   *
+   * Retrying the whole thing re-read current storage from the top, so a chunk that had already
+   * committed disappeared from the count — and worse, an item that chunk re-checked and the
+   * user then unchecked would re-enter the query and be overwritten by the same old inverse.
+   * A compensation must not undo a choice the user made after it.
+   */
+  for (const [index, chunk] of chunks.entries()) {
+    await retryMutation(async () => {
       const isLast = index === lastIndex;
       const builder = new TransactionBuilder(
         'recheckListItems',
@@ -3435,6 +3523,11 @@ export async function recheckListItems(
               Key: listItemKey(listId, item.rank, item.itemId),
               UpdateExpression:
                 'SET #checked = :true, #itemRevision = :next, #updatedAt = :now',
+              /**
+               * The revision this chunk read. An item somebody has touched since fails the
+               * condition and the chunk retries against the newer row — it never re-checks a
+               * row on the strength of a revision the compensation saw before.
+               */
               ConditionExpression: '#itemRevision = :expected',
               ExpressionAttributeNames: {
                 '#checked': 'checked',
@@ -3488,16 +3581,20 @@ export async function recheckListItems(
 
       await transactWrite(builder.build(), {
         operation: 'recheckListItems',
-        onConditionFailed: (index) => {
-          if (index === 0) return new ListNotFoundError();
+        onConditionFailed: (entry) => {
+          if (entry === 0) return new ListNotFoundError();
           return new RetryableListMutationConflictError();
         },
       });
-    }
+    });
+  }
 
-    if (chunks.length === 0) await consumeOnly(listId, options);
-    return surviving.length;
-  });
+  if (chunks.length === 0) await consumeOnly(listId, options);
+  /**
+   * The count is the set this attempt found to compensate, decided before any of it ran, so a
+   * chunk-level retry cannot shrink it half way through.
+   */
+  return surviving.length;
 }
 
 /** Spends an operation whose inverse touched nothing that still exists. */
@@ -3552,13 +3649,12 @@ export async function restoreListItems(
   itemIds: readonly string[],
   options: RestoreListItemOptions,
 ): Promise<ListItem[]> {
-  return retryMutation(async () => {
-    const state = await readMutationState(userId, listId, access);
-    if (itemIds.length === 0) {
-      await consumeOnly(listId, options);
-      return [];
-    }
-
+  const state = await readMutationState(userId, listId, access);
+  if (itemIds.length === 0) {
+    await consumeOnly(listId, options);
+    return [];
+  }
+  {
     const tombstoneRows = await batchGetItems<StoredItem>(
       itemIds.map((itemId) => listItemTombstone(listId, itemId)),
       { consistentRead: true },
@@ -3588,115 +3684,123 @@ export async function restoreListItems(
 
     let version = state.list.rankVersion;
     const restored: ListItem[] = [];
+    /**
+     * The retry wraps **one chunk**. Retrying the whole restore re-read the tombstones from
+     * the top, and the ones an earlier chunk had already removed were gone — so the count it
+     * reported, and the items it returned, shrank to whatever the last attempt happened to
+     * find rather than what the operation actually put back.
+     */
     for (const [index, chunk] of chunks.entries()) {
-      const isLast = index === chunks.length - 1;
-      const builder = new TransactionBuilder(
-        'restoreListItems',
-        isLast && options.receiptFor !== undefined ? 1 : 0,
-      ).add(listDeletionGate(listId));
-      const relationshipIndexes: number[] = [];
+      await retryMutation(async () => {
+        const isLast = index === chunks.length - 1;
+        const builder = new TransactionBuilder(
+          'restoreListItems',
+          isLast && options.receiptFor !== undefined ? 1 : 0,
+        ).add(listDeletionGate(listId));
+        const relationshipIndexes: number[] = [];
 
-      for (const { item, relationships } of chunk) {
-        builder.add(
-          {
-            Put: {
-              Item: storedListItem(item, options.now),
-              ConditionExpression: 'attribute_not_exists(pk)',
+        for (const { item, relationships } of chunk) {
+          builder.add(
+            {
+              Put: {
+                Item: storedListItem(item, options.now),
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
             },
-          },
-          {
-            Put: {
-              Item: storedLocator(item, options.now),
-              ConditionExpression: 'attribute_not_exists(pk)',
+            {
+              Put: {
+                Item: storedLocator(item, options.now),
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
             },
-          },
-        );
-        for (const link of relationships.linksToPut) {
-          relationshipIndexes.push(builder.length);
+          );
+          for (const link of relationships.linksToPut) {
+            relationshipIndexes.push(builder.length);
+            builder.add({
+              Put: {
+                Item: storedListItemActivityLink(link, options.now),
+                ConditionExpression: 'attribute_not_exists(pk)',
+              },
+            });
+          }
+          for (const provenance of relationships.activityProvenanceToPut) {
+            relationshipIndexes.push(builder.length);
+            builder.add({
+              Update: {
+                Key: activityMeta(provenance.activityId),
+                UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
+                ConditionExpression:
+                  'attribute_exists(pk) AND attribute_not_exists(#listId) AND attribute_not_exists(#listItemId)',
+                ExpressionAttributeNames: {
+                  '#listId': 'listId',
+                  '#listItemId': 'listItemId',
+                },
+                ExpressionAttributeValues: {
+                  ':listId': provenance.listId,
+                  ':listItemId': provenance.listItemId,
+                },
+              },
+            });
+          }
           builder.add({
-            Put: {
-              Item: storedListItemActivityLink(link, options.now),
-              ConditionExpression: 'attribute_not_exists(pk)',
+            Delete: {
+              Key: listItemTombstone(listId, item.itemId),
+              ConditionExpression: '#operationId = :operationId',
+              ExpressionAttributeNames: { '#operationId': 'operationId' },
+              ExpressionAttributeValues: { ':operationId': options.operationId },
             },
           });
         }
-        for (const provenance of relationships.activityProvenanceToPut) {
-          relationshipIndexes.push(builder.length);
-          builder.add({
-            Update: {
-              Key: activityMeta(provenance.activityId),
-              UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
-              ConditionExpression:
-                'attribute_exists(pk) AND attribute_not_exists(#listId) AND attribute_not_exists(#listItemId)',
-              ExpressionAttributeNames: {
-                '#listId': 'listId',
-                '#listItemId': 'listItemId',
-              },
-              ExpressionAttributeValues: {
-                ':listId': provenance.listId,
-                ':listItemId': provenance.listItemId,
-              },
-            },
-          });
-        }
+
+        if (isLast)
+          builder.add(consumeUndoAction(listId, options.operationId, options.now));
+        const nextVersion = version + 1;
         builder.add({
-          Delete: {
-            Key: listItemTombstone(listId, item.itemId),
-            ConditionExpression: '#operationId = :operationId',
-            ExpressionAttributeNames: { '#operationId': 'operationId' },
-            ExpressionAttributeValues: { ':operationId': options.operationId },
+          Update: {
+            Key: listMeta(listId),
+            UpdateExpression:
+              'SET #rankVersion = :nextVersion ADD #itemCount :count, #uncheckedCount :unchecked',
+            ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
+            ExpressionAttributeNames: {
+              '#rankVersion': 'rankVersion',
+              '#itemCount': 'itemCount',
+              '#uncheckedCount': 'uncheckedCount',
+              ...GATE_NAMES,
+            },
+            ExpressionAttributeValues: {
+              ':expectedVersion': version,
+              ':nextVersion': nextVersion,
+              ':count': chunk.length,
+              ':unchecked': chunk.filter((entry) => !entry.item.checked).length,
+            },
           },
         });
-      }
+        const metaIndex = builder.length - 1;
+        const receiptIndex = builder.length;
+        if (isLast && options.receiptFor !== undefined) {
+          builder.addReserved(receiptItem(options.receiptFor(tombstones.length)));
+        }
 
-      if (isLast)
-        builder.add(consumeUndoAction(listId, options.operationId, options.now));
-      const nextVersion = version + 1;
-      builder.add({
-        Update: {
-          Key: listMeta(listId),
-          UpdateExpression:
-            'SET #rankVersion = :nextVersion ADD #itemCount :count, #uncheckedCount :unchecked',
-          ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
-          ExpressionAttributeNames: {
-            '#rankVersion': 'rankVersion',
-            '#itemCount': 'itemCount',
-            '#uncheckedCount': 'uncheckedCount',
-            ...GATE_NAMES,
+        await transactWrite(builder.build(), {
+          operation: 'restoreListItems',
+          onConditionFailed: (entry) => {
+            if (entry === 0) return new ListNotFoundError();
+            if (entry === metaIndex || relationshipIndexes.includes(entry)) {
+              return new RetryableListMutationConflictError();
+            }
+            if (isLast && options.receiptFor !== undefined && entry === receiptIndex) {
+              return new IdempotencyRaceError();
+            }
+            return new ListUndoNotApplicableError();
           },
-          ExpressionAttributeValues: {
-            ':expectedVersion': version,
-            ':nextVersion': nextVersion,
-            ':count': chunk.length,
-            ':unchecked': chunk.filter((entry) => !entry.item.checked).length,
-          },
-        },
+        });
+        version = nextVersion;
       });
-      const metaIndex = builder.length - 1;
-      const receiptIndex = builder.length;
-      if (isLast && options.receiptFor !== undefined) {
-        builder.addReserved(receiptItem(options.receiptFor(tombstones.length)));
-      }
-
-      await transactWrite(builder.build(), {
-        operation: 'restoreListItems',
-        onConditionFailed: (index) => {
-          if (index === 0) return new ListNotFoundError();
-          if (index === metaIndex || relationshipIndexes.includes(index)) {
-            return new RetryableListMutationConflictError();
-          }
-          if (isLast && options.receiptFor !== undefined && index === receiptIndex) {
-            return new IdempotencyRaceError();
-          }
-          return new ListUndoNotApplicableError();
-        },
-      });
-      version = nextVersion;
       restored.push(...chunk.map((entry) => entry.item));
     }
 
     return restored;
-  });
+  }
 }
 
 /** The narrow single-item form P3-08's delete undo uses; one id is one chunk. */
