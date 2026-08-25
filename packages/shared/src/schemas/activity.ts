@@ -9,7 +9,18 @@ import {
   MAX_TITLE_LEN,
 } from '../constants.js';
 import { activityActionCapabilities } from './capabilities.js';
-import { cents, cursor, hhmm, ianaTimezone, isoDate, ulidId, userId } from './common.js';
+import {
+  cents,
+  cursor,
+  hhmm,
+  ianaTimezone,
+  isoDate,
+  ulidId,
+  userId,
+  watchEpisode,
+  watchMediaKind,
+  watchSeason,
+} from './common.js';
 import { occurrence } from './occurrence.js';
 import { createRecurrence, recurrence } from './recurrence.js';
 import { reminder, reminderInput, reminderInputsForSchedule } from './reminder.js';
@@ -104,9 +115,9 @@ export const activityDetails = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('watch'),
     mediaTitle: title,
-    mediaKind: z.enum(['movie', 'show']).optional(),
-    season: z.number().int().min(0).max(1000).optional(),
-    episode: z.number().int().min(0).max(10000).optional(),
+    mediaKind: watchMediaKind.optional(),
+    season: watchSeason.optional(),
+    episode: watchEpisode.optional(),
     episodeTitle: freeText.optional(),
     service: freeText.optional(),
   }),
