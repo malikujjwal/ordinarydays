@@ -127,9 +127,15 @@ export async function listListItemsHandler(
   const page = await listItemsFor(requireUserId(c), c.req.param('id'), query.cursor);
 
   return c.json({
-    data: page.items.map(({ item, viewerLink }) => ({
+    data: page.items.map(({ item, viewerLink, viewerPlan }) => ({
       item: toListItem(item),
       ...(viewerLink === undefined ? {} : { viewerLink: toListItemLink(viewerLink) }),
+      /**
+       * Passed through rather than re-projected: `toPlanState` in the service already trimmed
+       * it to the four fields a row may reveal, and a second trim here would be a second
+       * place to get that contract wrong.
+       */
+      ...(viewerPlan === undefined ? {} : { viewerPlan }),
     })),
     meta: {
       requestId: c.get('requestId'),

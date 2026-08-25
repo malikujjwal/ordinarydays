@@ -9,9 +9,11 @@ import {
   patchListItemInputFor,
 } from '@od/shared/schemas';
 import type {
+  Activity,
   List,
   ListItem,
   ListItemActivityLink,
+  ListItemPlanState,
   ReversibleItemMutation,
 } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
@@ -702,8 +704,15 @@ export async function uncheckAllItems(
   return runBulkChecked(userId, listId, 'uncheck_all', idempotencyKey, now, receiptFor);
 }
 
+/** One joined row: the item, the caller's pointer, and the Plan that pointer resolved to. */
+export interface HydratedListItem {
+  readonly item: ListItem;
+  readonly viewerLink?: ListItemActivityLink;
+  readonly viewerPlan?: ListItemPlanState;
+}
+
 export interface ListItemsProjection {
-  readonly items: { item: ListItem; viewerLink?: ListItemActivityLink }[];
+  readonly items: HydratedListItem[];
   readonly nextCursor?: string;
 }
 
@@ -753,7 +762,7 @@ export async function hydrateViewerLinks(
   listId: string,
   access: ListAccessGrant,
   items: readonly ListItem[],
-): Promise<{ item: ListItem; viewerLink?: ListItemActivityLink }[]> {
+): Promise<HydratedListItem[]> {
   const links = await batchGetViewerLinks(
     userId,
     listId,
@@ -776,23 +785,47 @@ export async function hydrateViewerLinks(
     links.map((entry) => entry.activityId),
   );
 
-  const readable = new Map<string, ListItemActivityLink>();
+  const readable = new Map<string, { link: ListItemActivityLink; plan: Activity }>();
   const stale: ListItemActivityLink[] = [];
   for (const link of links) {
-    if (authorised.has(link.activityId)) {
-      readable.set(link.itemId, link);
+    const plan = authorised.get(link.activityId);
+    if (plan !== undefined) {
+      readable.set(link.itemId, { link, plan });
       continue;
     }
     stale.push(link);
   }
 
   const projection = items.map((item) => {
-    const viewerLink = readable.get(item.itemId);
-    return { item, ...(viewerLink === undefined ? {} : { viewerLink }) };
+    const joined = readable.get(item.itemId);
+    if (joined === undefined) return { item };
+    /**
+     * The pointer and the Plan it resolved to travel together. The batch already holds the
+     * Activity — this is what it was read for — so the row can say whether the Plan is
+     * scheduled, unscheduled or done rather than only that one exists (P3-34).
+     */
+    return { item, viewerLink: joined.link, viewerPlan: toPlanState(joined.plan) };
   });
 
   await removeStaleViewerLinks(listId, userId, stale);
   return projection;
+}
+
+/**
+ * The four fields a list row can say about a Plan, and no more (P3-15, P3-34).
+ *
+ * Trimmed here rather than at the handler because the trim is a **contract** decision, not a
+ * serialisation one: what a list row may reveal about a caller's private Plan is the same
+ * question wherever the projection is consumed, and two call sites trimming independently is
+ * how one of them eventually ships a field nobody meant to.
+ */
+function toPlanState(plan: Activity): ListItemPlanState {
+  return {
+    activityId: plan.activityId,
+    type: plan.type as ListItemPlanState['type'],
+    status: plan.status,
+    ...(plan.schedule === undefined ? {} : { schedule: plan.schedule }),
+  };
 }
 
 /** Best-effort, and silent: see {@link hydrateViewerLinks}. */

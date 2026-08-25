@@ -757,3 +757,164 @@ describe('a full page of linked items reads in bounded batches', () => {
     expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The state line's data, and the assertion the projection lacked (P3-15, raised in review).
+ *
+ * Every earlier projection test asserted `viewerLink.activityId` — that a link exists. None
+ * proved a row could tell **which** state the Plan is in, which is the whole of P3-34: a
+ * scheduled Plan and the same Plan after unscheduling produced identical responses.
+ */
+describe('the caller’s Plan state reaches the row', () => {
+  const LINKED = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X4';
+
+  const withPlan = (plan: Record<string, unknown>) => {
+    useList();
+    vi.mocked(repository.listItems).mockResolvedValue({
+      list: aList(),
+      items: [anItem()],
+      itemIds: [ITEM],
+    } as never);
+    vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([
+      {
+        listId: LIST,
+        itemId: ITEM,
+        viewerUserId: USER,
+        activityId: LINKED,
+        linkedAt: NOW,
+      },
+    ] as never);
+    vi.mocked(authz.readableActivities).mockResolvedValue(
+      new Map([[LINKED, { activityId: LINKED, ...plan } as never]]),
+    );
+  };
+
+  const planOf = async () =>
+    (await service.listItemsFor(USER, LIST, undefined)).items[0]?.viewerPlan;
+
+  /** Scheduled: a date is present, which is what makes the line displayable at all. */
+  it('carries the schedule of a scheduled Plan', async () => {
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
+    });
+
+    expect(await planOf()).toEqual({
+      activityId: LINKED,
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', time: '19:00', timezone: 'America/New_York' },
+    });
+  });
+
+  /**
+   * Unscheduled: the pointer stays and the **schedule is absent**, which is exactly how the
+   * client knows to hide the line. This is the pair that used to be indistinguishable.
+   */
+  it('omits the schedule of an unscheduled Plan, keeping the link', async () => {
+    withPlan({ type: 'event', status: 'saved' });
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(page.items[0]?.viewerLink?.activityId).toBe(LINKED);
+    expect(page.items[0]?.viewerPlan?.schedule).toBeUndefined();
+    expect(page.items[0]?.viewerPlan?.status).toBe('saved');
+  });
+
+  it('distinguishes scheduled from unscheduled in the response', async () => {
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+    const scheduled = await planOf();
+
+    withPlan({ type: 'event', status: 'saved' });
+    const unscheduled = await planOf();
+
+    expect(scheduled).not.toEqual(unscheduled);
+  });
+
+  /** Completed: `Done Saturday` rather than `Planned Saturday`, from `status`. */
+  it('carries the completed status', async () => {
+    withPlan({
+      type: 'event',
+      status: 'completed',
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+
+    expect((await planOf())?.status).toBe('completed');
+  });
+
+  /** Rescheduled: the same Plan, a different date — the line updates rather than vanishing. */
+  it('reflects a rescheduled Plan’s new date', async () => {
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+    const before = await planOf();
+
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      schedule: { date: '2026-09-12', timezone: 'America/New_York' },
+    });
+    const after = await planOf();
+
+    expect(before?.schedule?.date).toBe('2026-09-05');
+    expect(after?.schedule?.date).toBe('2026-09-12');
+  });
+
+  /**
+   * The verb differs by kind — an event is `Planned`, a watch session is `Next session` — and
+   * inferring it from the list's behaviour would be wrong for a `custom` Plan made from a
+   * `watch` list, which the bridge explicitly allows.
+   */
+  it('carries the Plan kind, which the list behaviour cannot supply', async () => {
+    withPlan({ type: 'watch', status: 'scheduled' });
+
+    expect((await planOf())?.type).toBe('watch');
+  });
+
+  /**
+   * The trim is the contract. A row must not become a second Activity-detail surface, so the
+   * Plan's own title — independent of the item's since the one-time seed — never travels.
+   */
+  it('carries exactly the four fields, and no more', async () => {
+    withPlan({
+      type: 'event',
+      status: 'scheduled',
+      title: 'A private plan title',
+      notes: 'private',
+      ownerId: USER,
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+
+    const plan = await planOf();
+
+    expect(Object.keys(plan ?? {}).sort()).toEqual([
+      'activityId',
+      'schedule',
+      'status',
+      'type',
+    ]);
+  });
+
+  /** No link, no plan: the two arrive together or not at all. */
+  it('omits the plan when there is no readable link', async () => {
+    useList();
+    vi.mocked(repository.listItems).mockResolvedValue({
+      list: aList(),
+      items: [anItem()],
+      itemIds: [ITEM],
+    } as never);
+    vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([] as never);
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(page.items[0]?.viewerLink).toBeUndefined();
+    expect(page.items[0]?.viewerPlan).toBeUndefined();
+  });
+});

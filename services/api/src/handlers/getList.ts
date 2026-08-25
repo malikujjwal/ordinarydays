@@ -32,11 +32,12 @@ export async function getListHandler(
       ...(detail.items === undefined
         ? {}
         : {
-            items: detail.items.map(({ item, viewerLink }) => ({
+            items: detail.items.map(({ item, viewerLink, viewerPlan }) => ({
               item: toListItem(item),
               ...(viewerLink === undefined
                 ? {}
                 : { viewerLink: toListItemLink(viewerLink) }),
+              ...(viewerPlan === undefined ? {} : { viewerPlan }),
             })),
           }),
       ...(detail.nextCursor === undefined ? {} : { nextCursor: detail.nextCursor }),

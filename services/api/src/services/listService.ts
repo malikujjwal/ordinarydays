@@ -1,4 +1,4 @@
-import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
+import type { List } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { Page } from '../repositories/base.js';
 import {
@@ -10,7 +10,7 @@ import {
   listListsForUser,
 } from '../repositories/listRepository.js';
 import { assertListAccess } from './authz.js';
-import { hydrateViewerLinks } from './listItemService.js';
+import { type HydratedListItem, hydrateViewerLinks } from './listItemService.js';
 import { drainListWork, withListWorkDrain } from './listMutationService.js';
 import { profileDefaultToClear } from './listSlotService.js';
 
@@ -37,7 +37,7 @@ export async function listLists(userId: string, cursor?: string): Promise<Page<L
 
 export interface ListDetailProjection {
   readonly list: List;
-  readonly items?: { item: ListItem; viewerLink?: ListItemActivityLink }[];
+  readonly items?: HydratedListItem[];
   readonly nextCursor?: string;
 }
 

@@ -3821,6 +3821,9 @@
               "activityId",
               "linkedAt"
             ]
+          },
+          "viewerPlan": {
+            "$ref": "#/components/schemas/ListItemPlanState"
           }
         },
         "required": [
@@ -3986,6 +3989,75 @@
           "rank",
           "title",
           "checked"
+        ]
+      },
+      "ListItemPlanState": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "meal",
+              "watch",
+              "event",
+              "custom"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "saved",
+              "scheduled",
+              "completed",
+              "skipped",
+              "cancelled"
+            ]
+          },
+          "schedule": {
+            "type": "object",
+            "properties": {
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "time": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "endTime": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+              },
+              "timezone": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64,
+                "pattern": "^(?:UTC|[A-Za-z][A-Za-z0-9_+-]*(?:\\/[A-Za-z0-9_+-]+)+)$"
+              },
+              "scheduledAtUtc": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "endAtUtc": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "date",
+              "timezone"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "activityId",
+          "type",
+          "status"
         ]
       },
       "ListSettingsMutation": {

@@ -1079,6 +1079,14 @@ the product", so it gets its own task and its own test file.
 
 Neither side ever cascade-deletes the other.
 
+**What the read side must carry.** Rows 1 and 2 both turn on the client seeing the Plan's
+current state, so the projection returns `viewerPlan` — `ListItemPlanState`, the caller's
+linked Plan trimmed to `activityId`, `type`, `status` and an optional `schedule` — beside
+`viewerLink` (`api-contract.md` §3). Without it a scheduled Plan and the same Plan after
+unscheduling are indistinguishable in the response, and P3-34 has no state to render. The
+Activities are hydrated in **one bounded batch** per page, after the caller filter, never one
+read per link.
+
 **Tests.** One test per row, all in
 `services/api/src/services/__tests__/listLinkLifecycle.test.ts`. The lifecycle test separates
 skip from unschedule: skip clears the pointer, unschedule retains it but renders no state line,
@@ -1975,8 +1983,10 @@ while choosing `General`; the result is `custom`, proving the list never chooses
 ### P3-34 — The caller-scoped Plan state line on a list item
 
 **Approach.** The item stays in its list, in place. When the list-detail response includes the
-caller's `viewerLink` **and the hydrated linked Activity has `schedule.date`**, that caller
-alone sees a state line:
+caller's `viewerLink` **and its `viewerPlan` carries `schedule.date`**, that caller alone sees
+a state line. `viewerPlan` is `ListItemPlanState` — `activityId`, `type`, `status` and an
+optional `schedule` — supplied by P3-15; the client derives the line from it and never fetches
+Activities per row:
 
 ```
 Restaurants to try

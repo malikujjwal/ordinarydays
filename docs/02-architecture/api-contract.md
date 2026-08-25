@@ -833,6 +833,26 @@ runs; a stale pointer is omitted and queued for cleanup rather than producing a 
 The link may remain present when its Activity is unscheduled, but a state line is displayable
 only when the hydrated Activity has `schedule.date`.
 
+**What the row carries — added in P3-15.** A row that has a `viewerLink` also has a
+`viewerPlan`: `ListItemPlanState`, the caller's linked Plan trimmed to `activityId`, `type`,
+`status` and an optional `schedule`. The two travel together or not at all — the link is the
+pointer, the plan is what it resolved to — because a row carrying only the pointer cannot tell
+a scheduled Plan from an unscheduled or completed one, which is the whole of the state line.
+
+It is deliberately **not** the Activity. Four fields, each earning its place: `activityId` is
+the state line's tap target, `type` selects the verb (`Planned` for an event, `Next session`
+for a watch session, which the list's own behaviour cannot supply for a `custom` Plan made
+from a `watch` list), `status` separates `Done Saturday` from `Planned Saturday`, and
+`schedule` is both the rendered date and the display gate. Absent by design: the Plan's
+`title`, which is independent of the item's after the one-time seed; watch progress, which
+comes from the item's own `details`; and `outcome`, since every completion renders `Done` and
+a skip removes the pointer entirely. Returning the whole Activity would make the list
+projection a second Activity-detail contract and carry a private Plan's every field into a
+list response.
+
+The Activities are hydrated with **one bounded batch** for the page, never one read per link,
+and the caller filter still happens first, so no other viewer's Activity is loaded at all.
+
 **List settings and behaviour change rules** — the product-wide additive/destructive rule
 (`../01-product/interaction-contract.md`):
 

@@ -57,6 +57,7 @@ export type {
 } from './list.js';
 export type { ListDetail } from './listDetail.js';
 export type { ListDetailItem } from './listDetailItem.js';
+export type { ListItemPlanState } from './listItemPlanState.js';
 export type { ListItemView } from './listItemView.js';
 export type { ListSettingsMutation } from './listSettingsMutation.js';
 export type { ListUndoResult } from './listUndoResult.js';
