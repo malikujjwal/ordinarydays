@@ -118,6 +118,7 @@ describe('the generated document', () => {
       'CaptureParseInput',
       'ChangeListBehaviourInput',
       'CompleteActivityInput',
+      'CompletionFollowUp',
       'ConvertRecurrenceInput',
       'CreateActivityInput',
       'CreateListInput',

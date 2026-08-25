@@ -20,6 +20,7 @@ import {
   watchEpisode,
   watchMediaKind,
   watchSeason,
+  watchStatus,
 } from './common.js';
 import { occurrence } from './occurrence.js';
 import { createRecurrence, recurrence } from './recurrence.js';
@@ -542,13 +543,115 @@ export const skipActivityInput = z
   .strictObject({ occurrenceDate: isoDate.optional() })
   .meta({ id: 'SkipActivityInput' });
 
-/** Canonical mutation result for complete and uncomplete. */
+/**
+ * What both watch follow-ups say about the item they would update.
+ *
+ * Everything here is read from the ListItem, so the client renders
+ * `Movies and shows · currently S2 E4` without a second request
+ * (`plans-and-lists.md` §8.4 step 2), and builds the confirming `PATCH` from the same
+ * payload: an item `details` body is a whole replacement, so `mediaKind` and
+ * `current.watchStatus` are needed to preserve one and to apply `want → watching` to the
+ * other.
+ *
+ * `mediaKind` is carried **verbatim, and stays optional**, because the item's own field is.
+ * A `collection` upgraded to `watch` back-fills `watchStatus: 'want'` and nothing else
+ * (P3-09), so a great many real items have no `mediaKind` — and inventing one from the
+ * presence of an episode number would be the server deciding what kind of thing this is,
+ * which `CLAUDE.md` rule 2 forbids. `kind` already tells the client which copy to render.
+ */
+const watchFollowUpItem = {
+  listId: ulidId('lst'),
+  /** The list's current title, because the copy names it: `Update {list name} item to…`. */
+  listTitle: title,
+  itemId: ulidId('itm'),
+  mediaKind: watchMediaKind.optional(),
+  /** Where the item is now — the `currently S2 E4` half of the question. */
+  current: z.strictObject({
+    watchStatus,
+    season: watchSeason.optional(),
+    episode: watchEpisode.optional(),
+  }),
+} as const;
+
+/**
+ * The **one** contextual follow-up a completion may offer (P3-16, for P3-24 and P3-43).
+ *
+ * ## It is data, and only data
+ *
+ * Nothing here has been written. The completion wrote the Activity and nothing else; this
+ * describes an update the user may confirm, and confirming it is an ordinary
+ * `PATCH /v1/lists/:id/items/:itemId` the client issues, through the route that already
+ * enforces every behaviour and field gate. There is no confirm endpoint and there is no
+ * server-side accept: `interaction-contract.md` §1a.2 makes an accepted follow-up its own
+ * user action with its own undo, and a second write hanging off the completion would be
+ * exactly the auto-create `CLAUDE.md` rule 5 and `agent-playbook.md` §6.9 exist to prevent.
+ * Dismissal is therefore not a request at all — it is the absence of one.
+ *
+ * ## One field, not one per catalogue row
+ *
+ * `interaction-contract.md` §1a.2 allows **exactly one** follow-up, and a union in one
+ * optional field is what makes a second one unrepresentable. Sibling optional fields —
+ * `watchFollowUp`, `mealFollowUp`, `prepTaskFollowUp` — would let a response carry three at
+ * once and leave "one at a time" as a rule some future handler has to remember. The
+ * remaining rows of `activities.md` §5.3 arrive as further arms, and the priority between
+ * them is decided here, once, where the response is built.
+ *
+ * ## Why two arms rather than one with a variable target
+ *
+ * §5.3 has two watch rows with two different questions and two different writes:
+ * `… currently S2 E4 — Update to S2 E5?` advances progress, and
+ * `Update {list name} item to Watched?` moves a movie's status. A show has no `watched`
+ * target — the app does not know how many episodes there are, so that transition is manual
+ * only (`plans-and-lists.md` §8.1) — and a movie has no episode to advance to. Two arms make
+ * each `target` exactly the fields its own row writes.
+ *
+ * A `watch_progress` target may repeat the item's current values: that is a **rewatch**, and
+ * §8.4 names it as a case the user answers by dismissing. The server does not decide the
+ * question is not worth asking.
+ */
+export const completionFollowUp = z
+  .discriminatedUnion('kind', [
+    /** The show row: offer this session's season and episode. */
+    z.strictObject({
+      kind: z.literal('watch_progress'),
+      ...watchFollowUpItem,
+      /**
+       * The completed session's own progress, which is where §8.4's `Update to S2 E5?`
+       * comes from. At least one of the two is present — a target naming neither is not a
+       * question, and no follow-up is offered instead.
+       */
+      target: z.strictObject({
+        season: watchSeason.optional(),
+        episode: watchEpisode.optional(),
+      }),
+    }),
+    /** The movie row: offer the one transition a completed movie session evidences. */
+    z.strictObject({
+      kind: z.literal('watch_watched'),
+      ...watchFollowUpItem,
+      target: z.strictObject({ watchStatus: z.literal('watched') }),
+    }),
+  ])
+  .meta({ id: 'CompletionFollowUp' });
+
+export type CompletionFollowUp = z.infer<typeof completionFollowUp>;
+
+/**
+ * Canonical mutation result for complete and uncomplete.
+ *
+ * `followUp` is additive and optional in both directions: a client that does not know the
+ * field ignores it, and a completion that has nothing to suggest omits it rather than
+ * sending an empty one. Its absence is the normal case and carries no information — a
+ * recurring occurrence, a negative outcome, an unlinked Plan and a list changed away from
+ * `watch` all produce the same silence, deliberately (P3-16).
+ */
 export const activityCompletionResult = z
   .object({
     activity,
     occurrenceDate: isoDate.optional(),
     occurrence: occurrence.optional(),
     outcome: activityOutcome.optional(),
+    followUp: completionFollowUp.optional(),
   })
   .meta({ id: 'ActivityCompletionResult' });
 
