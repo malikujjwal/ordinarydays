@@ -4,6 +4,7 @@ import {
   assertActivityAccess,
   assertActivityReadAccessFromPartition,
   assertListAccess,
+  readableActivities,
 } from './authz.js';
 
 /**
@@ -20,6 +21,7 @@ vi.mock('../repositories/activityRepository.js', () => ({
   ),
   getActivityMeta: vi.fn(),
   getActivityPartitionStrong: vi.fn(),
+  batchGetActivityMeta: vi.fn(() => Promise.resolve([])),
   listParticipants: vi.fn(() => Promise.resolve([])),
 }));
 
@@ -375,3 +377,95 @@ function prep(overrides: Record<string, unknown> = {}): Activity {
     ...overrides,
   });
 }
+
+/**
+ * `readableActivities` — the batched read the list projection uses (P3-15, raised in review).
+ *
+ * The projection used to authorise one Activity per viewer link, **sequentially**: a
+ * fifty-item page was fifty round trips. These assert the read *shape*, because that is what
+ * regresses — a `Promise.all` over the page would still look correct here while issuing fifty
+ * simultaneous requests, so the assertions are on call counts and on the absence of the
+ * per-activity read, not on timing.
+ */
+describe('readableActivities', () => {
+  const owned = (activityId: string): Activity =>
+    ({ activityId, ownerId: OWNER, title: 'x' }) as Activity;
+
+  const idsFor = (count: number) =>
+    Array.from(
+      { length: count },
+      (_entry, index) => `act_01J8XKQ2M4N5P6R7S8T9V0W${String(index).padStart(3, '0')}`,
+    );
+
+  beforeEach(() => {
+    vi.mocked(repository.batchGetActivityMeta).mockReset();
+    vi.mocked(repository.getActivityMeta).mockReset();
+    vi.mocked(repository.listParticipants).mockReset();
+    vi.mocked(repository.listParticipants).mockResolvedValue([] as never);
+  });
+
+  it('reads a fifty-link page in one batch and no per-activity read', async () => {
+    const ids = idsFor(50);
+    vi.mocked(repository.batchGetActivityMeta).mockResolvedValue(ids.map(owned) as never);
+
+    const readable = await readableActivities(OWNER, ids);
+
+    expect(readable.size).toBe(50);
+    expect(vi.mocked(repository.batchGetActivityMeta)).toHaveBeenCalledTimes(1);
+    /** The regression guard: one `GetItem` per link is exactly what this replaced. */
+    expect(vi.mocked(repository.getActivityMeta)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Ownership is decided from the batch alone. Most links will only ever need this, so the
+   * common page costs one read in total rather than one plus a membership check each.
+   */
+  it('needs no participant read for activities the caller owns', async () => {
+    const ids = idsFor(10);
+    vi.mocked(repository.batchGetActivityMeta).mockResolvedValue(ids.map(owned) as never);
+
+    await readableActivities(OWNER, ids);
+
+    expect(vi.mocked(repository.listParticipants)).not.toHaveBeenCalled();
+  });
+
+  /** A row the batch did not return is absent, not an error — the caller wants a verdict. */
+  it('omits ids the batch did not return rather than throwing', async () => {
+    const ids = idsFor(3);
+    vi.mocked(repository.batchGetActivityMeta).mockResolvedValue([
+      owned(ids[0] as string),
+    ] as never);
+
+    const readable = await readableActivities(OWNER, ids);
+
+    expect([...readable.keys()]).toEqual([ids[0]]);
+  });
+
+  /** A stranger's Activity is absent for the same reason, and by the same rule. */
+  it('omits an activity the caller may not read', async () => {
+    const ids = idsFor(1);
+    vi.mocked(repository.batchGetActivityMeta).mockResolvedValue([
+      { activityId: ids[0], ownerId: 'usr_somebody_else', title: 'x' },
+    ] as never);
+
+    expect((await readableActivities(STRANGER, ids)).size).toBe(0);
+  });
+
+  it('asks for each id once, however many links name it', async () => {
+    const repeated = ['act_01J8XKQ2M4N5P6R7S8T9V0W000', 'act_01J8XKQ2M4N5P6R7S8T9V0W000'];
+    vi.mocked(repository.batchGetActivityMeta).mockResolvedValue([
+      owned(repeated[0] as string),
+    ] as never);
+
+    await readableActivities(OWNER, repeated);
+
+    expect(vi.mocked(repository.batchGetActivityMeta).mock.calls[0]?.[0]).toEqual([
+      repeated[0],
+    ]);
+  });
+
+  it('reads nothing at all for an empty page', async () => {
+    expect((await readableActivities(OWNER, [])).size).toBe(0);
+    expect(vi.mocked(repository.batchGetActivityMeta)).not.toHaveBeenCalled();
+  });
+});

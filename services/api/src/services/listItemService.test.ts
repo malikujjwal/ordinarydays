@@ -73,6 +73,7 @@ vi.mock('./authz.js', () => ({
   assertListAccess: vi.fn(() => Promise.resolve({ index: {}, isOwner: true })),
   assertActivityAccess: vi.fn(() => Promise.resolve({})),
   assertActivityReadAccessFromPartition: vi.fn(() => Promise.resolve({})),
+  readableActivities: vi.fn(() => Promise.resolve(new Map())),
 }));
 
 vi.mock('./listRankRepairService.js', () => ({
@@ -530,10 +531,14 @@ describe('reads', () => {
         linkedAt: NOW,
       },
     ]);
-    // The second link's Activity is gone, so it is omitted rather than serialised dead.
-    vi.mocked(authz.assertActivityAccess)
-      .mockResolvedValueOnce({} as never)
-      .mockRejectedValueOnce(new AppError('not_found', 'Activity not found.'));
+    /**
+     * The second link's Activity is gone, so it is omitted rather than serialised dead. The
+     * batched check answers by **absence** from the map — it does not throw, because a caller
+     * asking about many activities wants to know which ones it may read.
+     */
+    vi.mocked(authz.readableActivities).mockResolvedValue(
+      new Map([['act_01J8XKQ2M4N5P6R7S8T9V0W1X5', {} as never]]),
+    );
 
     const page = await service.listItemsFor(USER, LIST, undefined);
 
@@ -575,9 +580,8 @@ describe('cleaning up a stale viewer pointer', () => {
       itemIds: [ITEM],
     } as never);
     vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([LINK as never]);
-    vi.mocked(authz.assertActivityAccess).mockRejectedValue(
-      new AppError('not_found', 'Activity not found.'),
-    );
+    /** Absent from the batch means stale — deleted, or not this caller's to read. */
+    vi.mocked(authz.readableActivities).mockResolvedValue(new Map());
   };
 
   /**
@@ -656,7 +660,94 @@ describe('cleaning up a stale viewer pointer', () => {
       itemIds: [ITEM],
     } as never);
     vi.mocked(repository.batchGetViewerLinks).mockResolvedValue([LINK as never]);
-    vi.mocked(authz.assertActivityAccess).mockResolvedValue({} as never);
+    vi.mocked(authz.readableActivities).mockResolvedValue(
+      new Map([[LINK.activityId, {} as never]]),
+    );
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(
+      vi.mocked(activityRepository.getActivityPartitionStrong),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(repository.deleteStaleViewerLink)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The read shape of a full page, raised in review (P3-15).
+ *
+ * A fifty-item page used to authorise one Activity per link, **sequentially** — fifty round
+ * trips on every list open, for data the response then discarded. These assert the shape
+ * rather than the timing: what matters is that the page issues bounded batch reads and not a
+ * read per link, which is the property a `Promise.all` would also violate even though it
+ * looks faster.
+ */
+describe('a full page of linked items reads in bounded batches', () => {
+  const PAGE = 50;
+
+  const linkedPage = () => {
+    const items = Array.from({ length: PAGE }, (_index, position) =>
+      anItem({
+        itemId: `itm_01J8XKQ2M4N5P6R7S8T9V0W${String(position).padStart(3, '0')}`,
+        rank: `a${position}`,
+      }),
+    );
+    const links = items.map((item, position) => ({
+      listId: LIST,
+      itemId: item.itemId,
+      viewerUserId: USER,
+      activityId: `act_01J8XKQ2M4N5P6R7S8T9V0W${String(position).padStart(3, '0')}`,
+      linkedAt: NOW,
+    }));
+    useList();
+    vi.mocked(repository.listItems).mockResolvedValue({
+      list: aList(),
+      items,
+      itemIds: items.map((item) => item.itemId),
+    } as never);
+    vi.mocked(repository.batchGetViewerLinks).mockResolvedValue(links as never);
+    vi.mocked(authz.readableActivities).mockResolvedValue(
+      new Map(links.map((entry) => [entry.activityId, {} as never])),
+    );
+    return { items, links };
+  };
+
+  it('authorises the whole page in one call, not one per link', async () => {
+    const { links } = linkedPage();
+
+    const page = await service.listItemsFor(USER, LIST, undefined);
+
+    expect(page.items).toHaveLength(PAGE);
+    expect(vi.mocked(authz.readableActivities)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(authz.readableActivities).mock.calls[0]?.[1]).toEqual(
+      links.map((entry) => entry.activityId),
+    );
+  });
+
+  /**
+   * The regression guard. `assertActivityAccess` is the per-link path this replaced, and each
+   * of its calls is a `GetItem`; reintroducing it inside the loop is the easy mistake.
+   */
+  it('performs no per-link authorisation read', async () => {
+    linkedPage();
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(vi.mocked(authz.assertActivityAccess)).not.toHaveBeenCalled();
+  });
+
+  /** One caller-link batch read for the page, not one per item. */
+  it('reads the caller’s links in one batch', async () => {
+    linkedPage();
+
+    await service.listItemsFor(USER, LIST, undefined);
+
+    expect(vi.mocked(repository.batchGetViewerLinks)).toHaveBeenCalledTimes(1);
+  });
+
+  /** Nothing is confirmed strongly or deleted when every pointer resolves. */
+  it('reads nothing strongly when the whole page is readable', async () => {
+    linkedPage();
 
     await service.listItemsFor(USER, LIST, undefined);
 

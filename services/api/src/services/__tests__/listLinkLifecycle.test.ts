@@ -62,6 +62,9 @@ const mocks = {
     Promise.resolve({}),
   ),
   assertActivityReadAccessFromPartition: vi.fn(() => Promise.resolve({})),
+  readableActivities: vi.fn((_u: string, _ids: readonly string[]) =>
+    Promise.resolve(new Map()),
+  ),
   assertListAccess: vi.fn(() => Promise.resolve({ index: {}, isOwner: true })),
   getActivityPartitionStrong: vi.fn(() => Promise.resolve([])),
   putOccurrence: vi.fn(() => Promise.resolve()),
@@ -98,6 +101,7 @@ vi.mock('../authz.js', () => ({
   assertActivityAccess: mocks.assertActivityAccess,
   assertActivityReadAccessFromPartition: mocks.assertActivityReadAccessFromPartition,
   assertListAccess: mocks.assertListAccess,
+  readableActivities: mocks.readableActivities,
 }));
 
 vi.mock('../../repositories/occurrenceRepository.js', () => ({
@@ -512,13 +516,19 @@ describe('the projection returns only the caller’s link', () => {
     } as never);
     /** The repository returns only the caller's rows; the other viewer's never arrives. */
     mocks.batchGetViewerLinks.mockResolvedValue([link(USER, ACT)] as never);
+    mocks.readableActivities.mockResolvedValue(new Map([[ACT, {}]]) as never);
 
     const page = await listItemService.listItemsFor(USER, LIST, undefined);
 
     expect(page.items[0]?.viewerLink?.activityId).toBe(ACT);
-    for (const call of vi.mocked(mocks.assertActivityAccess).mock.calls) {
-      expect(call[1]).not.toBe(OTHER_ACT);
-    }
+    /**
+     * The batched check is handed only the caller's own activity ids, so the other viewer's
+     * Activity is never even named — the scoping happens before any load, which is the
+     * property batching makes easy to get backwards.
+     */
+    const asked = vi.mocked(mocks.readableActivities).mock.calls[0]?.[1] ?? [];
+    expect(asked).not.toContain(OTHER_ACT);
+    expect(asked).toEqual([ACT]);
   });
 
   it('joins the caller’s link onto the item without altering the item', async () => {
@@ -529,6 +539,7 @@ describe('the projection returns only the caller’s link', () => {
       itemIds: [ITEM],
     } as never);
     mocks.batchGetViewerLinks.mockResolvedValue([link()] as never);
+    mocks.readableActivities.mockResolvedValue(new Map([[ACT, {}]]) as never);
 
     const page = await listItemService.listItemsFor(USER, LIST, undefined);
 

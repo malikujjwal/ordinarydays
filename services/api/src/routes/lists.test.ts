@@ -458,6 +458,14 @@ describe('GET /v1/lists', () => {
   });
 });
 
+/** The keys one `BatchGetItem` asked for, so a mock can answer per partition. */
+const batchKeys = (input: {
+  RequestItems?: Record<string, { Keys?: Record<string, unknown>[] }>;
+}): { pk: string }[] =>
+  ((input.RequestItems?.[TABLE]?.Keys ?? []) as { pk?: unknown }[]).map((key) => ({
+    pk: String(key.pk ?? ''),
+  }));
+
 describe('GET /v1/lists/:id', () => {
   it('returns META only without the flag', async () => {
     seedGets([pointerRow(), listMetaRow()]);
@@ -485,9 +493,19 @@ describe('GET /v1/lists/:id', () => {
     ddbMock
       .on(QueryCommand)
       .resolves({ Items: [itemRow(ITM, 'a0'), itemRow(ITM2, 'a1')] as never });
-    ddbMock
-      .on(BatchGetCommand)
-      .resolves({ Responses: { [TABLE]: [linkRow(ITM)] as never } });
+    /**
+     * Two different batches now reach this mock: the viewer links, keyed into the list
+     * partition, and the Activity METAs the batched authorisation reads (P3-15). Answering
+     * both from one canned list would hand `parseActivity` a link row, so it discriminates on
+     * the keys it was actually asked for.
+     */
+    ddbMock.on(BatchGetCommand).callsFake((input) => ({
+      Responses: {
+        [TABLE]: batchKeys(input).some((key) => key.pk.startsWith('ACT#'))
+          ? [activityMetaRow()]
+          : [linkRow(ITM)],
+      },
+    }));
 
     const body = await (
       await get(createApp(), `/v1/lists/${LST}?includeItems=true`)
@@ -516,9 +534,14 @@ describe('GET /v1/lists/:id', () => {
           ? { Items: [itemRow(ITM, 'a0')] }
           : { Items: [] },
       );
-    ddbMock
-      .on(BatchGetCommand)
-      .resolves({ Responses: { [TABLE]: [linkRow(ITM)] as never } });
+    /** The Activity batch finds nothing, which is what makes the pointer stale. */
+    ddbMock.on(BatchGetCommand).callsFake((input) => ({
+      Responses: {
+        [TABLE]: batchKeys(input).some((key) => key.pk.startsWith('ACT#'))
+          ? []
+          : [linkRow(ITM)],
+      },
+    }));
 
     const body = await (
       await get(createApp(), `/v1/lists/${LST}?includeItems=true`)

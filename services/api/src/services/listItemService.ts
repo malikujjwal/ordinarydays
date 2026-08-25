@@ -45,9 +45,9 @@ import {
 } from '../repositories/listRepository.js';
 import { ID_UNAVAILABLE } from './activityService.js';
 import {
-  assertActivityAccess,
   assertActivityReadAccessFromPartition,
   assertListAccess,
+  readableActivities,
 } from './authz.js';
 import { drainListWork, withListWorkDrain } from './listMutationService.js';
 import { repairListRanks } from './listRankRepairService.js';
@@ -760,25 +760,30 @@ export async function hydrateViewerLinks(
     access,
     items.map((item) => item.itemId),
   );
+  /**
+   * One batched authorisation for the whole page, not one per link.
+   *
+   * The ids come from rows the repository already filtered to this caller, so no other
+   * viewer's Activity is named here — the caller-scoping happens **before** any Activity is
+   * loaded, which is what `security-privacy.md` row 15a rests on and is easy to get backwards
+   * when a loop becomes a batch.
+   *
+   * A link absent from the result is stale for one of the two reasons the access rule
+   * deliberately cannot tell apart: the Activity is gone, or it is not this caller's to read.
+   */
+  const authorised = await readableActivities(
+    userId,
+    links.map((entry) => entry.activityId),
+  );
+
   const readable = new Map<string, ListItemActivityLink>();
   const stale: ListItemActivityLink[] = [];
   for (const link of links) {
-    try {
-      await assertActivityAccess(userId, link.activityId, 'read');
+    if (authorised.has(link.activityId)) {
       readable.set(link.itemId, link);
-    } catch (error) {
-      /**
-       * `not_found` covers both halves of the rule: the Activity was deleted, or it is one
-       * this caller may not read. The two are deliberately indistinguishable here — the
-       * access check answers `404` for a stranger precisely so a pointer cannot be used to
-       * probe for an Activity's existence.
-       */
-      if (error instanceof AppError && error.code === 'not_found') {
-        stale.push(link);
-        continue;
-      }
-      throw error;
+      continue;
     }
+    stale.push(link);
   }
 
   const projection = items.map((item) => {
