@@ -1012,6 +1012,7 @@ interface List {
   behaviourMigrationId?: string;   // blocks item reads/mutations until behaviour migration commits; never serialised
   archived: boolean;
   updatedAt: string;               // backs If-Match on list-level edits
+  lastItemActivityAt: string;      // last write to any item in this list; never backs If-Match
 }
 
 interface ListIndex {              // USER#<u> / LIST#<l> — owner + each active non-owner
@@ -1066,6 +1067,20 @@ interface ListItemActivityLink {   // LIST#<listId> / LNK#<viewerUserId>#<itemId
   linkedAt: string;
 }
 ```
+
+**Two timestamps on a List, two jobs.** `updatedAt` backs `If-Match` on list-level edits and
+moves only when the List row itself changes — a rename, a capability toggle, a slot change.
+`lastItemActivityAt` moves when any **item** is created, edited, checked, deleted, reordered
+or touched by a bulk operation, and backs nothing. The Lists index renders the second
+(`design-system.md` §7.2): a card that still said `Updated 3 days ago` immediately after the
+user checked three things off, while moving the moment they renamed the list, would be
+backwards from what the line means to a reader. One field for both would also make an
+ordinary item write bump the concurrency token every open list-settings sheet is holding.
+
+This is the same split ADR-039 already made between `lastActivityAt` and `updatedAt` on an
+Activity, for the same reason and with the same rule: **the display timestamp never backs a
+precondition, and the precondition timestamp is never displayed.** It is stored on the `META`
+row the Lists index already batch-reads, so it costs no extra read, no index and no query.
 
 #### Default slots
 

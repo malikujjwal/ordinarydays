@@ -282,7 +282,7 @@ graph TD
     P2["Phase 2 · Today and tasks<br/>local · 48 tasks · 120 AWU"]
     P25["Phase 2.5 · Recurrence stabilization<br/>local · 5 tasks · 16 AWU"]
     P26["Phase 2.6 · Sync hardening<br/>local · 8 tasks · 30 AWU"]
-    P3["Phase 3 · Plans and lists<br/>local · 43 tasks · 110 AWU"]
+    P3["Phase 3 · Plans and lists<br/>local · 47 tasks · 119 AWU"]
     P4["Phase 4 · Deploy and identity<br/>first AWS spend · 33 tasks · 72 AWU"]
     P5["Phase 5 · Ship v1<br/>TestFlight · 37 tasks · 82 AWU"]
     P6["Phase 6 · Sharing, invites and shared lists<br/>52 tasks · 125 AWU"]
@@ -449,16 +449,16 @@ sizings did not support; those are corrected here.
 | 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **120** | ~6.0 weeks |
 | 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **16** | ~0.8 weeks |
 | 2.6 — Sync hardening | 8 (P2-48…P2-50, P2-57, P2-59 and P2-61…P2-63; P2-58 parked and P2-60 historical, uncounted) | 0 / 1 / 7 | **30** | ~1.5 weeks |
-| 3 — Plans and lists | 43 (44 minus P3-11, cut 2026-08-07) | 4 / 25 / 14 | **110** | ~5.5 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **165** | **23 / 90 / 52** | **411** | **~20.6 weeks** |
+| 3 — Plans and lists | 47 (44 minus P3-11, cut 2026-08-07; plus P3-45…P3-48 — 2026-08-25) | 5 / 27 / 15 | **119** | ~6.0 weeks |
+| **0–3 subtotal (local, $0 AWS)** | **169** | **24 / 92 / 53** | **420** | **~21.0 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
-| **0–5 subtotal (shipped to TestFlight)** | **235** | **35 / 135 / 65** | **565** | **~28.3 weeks** |
+| **0–5 subtotal (shipped to TestFlight)** | **239** | **36 / 137 / 66** | **574** | **~28.7 weeks** |
 | 6 — Sharing, invites and shared lists | 52 | 7 / 31 / 14 | **125** | ~6 weeks |
 | 7 — People and expenses | 32 | 2 / 22 / 8 | **78** | ~4 weeks |
 | 8 — AI capture | 30 | 3 / 15 / 12 | **81** | ~4 weeks |
 | 9 — Follow-up and launch | 35 | 1 / 23 / 11 | **91** | ~4.5 weeks |
-| **Total 0–9 plus Phases 2.5 and 2.6** | **384** | **48 / 226 / 110** | **940** | **~47.0 weeks (~10.9 months)** |
+| **Total 0–9 plus Phases 2.5 and 2.6** | **388** | **49 / 228 / 111** | **949** | **~47.5 weeks (~11.0 months)** |
 
 Phase 1's row nets three separate changes on 2026-08-08: **+2 M** for P1-30 and P1-31, and
 **−1 S** for P1-19, whose seam turned out to have shipped in P0-20 (its subsection is kept
@@ -509,6 +509,17 @@ The Phase 2 gate amendment on **2026-08-10** expanded P2-04, P2-12, P2-15 and P2
 to L: service-level recurrence enforcement, the sole cross-layer schedule write path,
 one-off/occurrence snooze plus unsnooze, and transport-level ETag body caching. That is
 **+8 AWU**, with no new task and no dependency inversion.
+
+A Phase 3 design pass on **2026-08-25**, run against the Plans and Lists screens before their
+mobile tasks started, added **P3-45** (the eleven catalogue icons P3-02 named but never drew,
+M), **P3-46** (`List.lastItemActivityAt` and its writers, M), **P3-47** (the Upcoming/Past
+calendar navigator, L) and **P3-48** (per-type row markers in `RowLeading`, S). Net **+4 tasks
+and +9 AWU**, giving **388 tasks and 949 AWU**. Two of the four are consequences of tasks that
+had already shipped — P3-02 named icons that do not exist, and the four writers that must bump
+`lastItemActivityAt` are all on `main` — which is the same lesson as the fourteenth correction:
+unowned work found by reading the plan against the code, not scope growth. The other two are
+genuine additions the founder accepted after seeing the screens drawn. P3-46 is cheapest now
+and dearer later: nothing is deployed before Phase 4, so it needs no migration today.
 
 The second Phase 2 gate on **2026-08-10** moved six agenda-boundary cases from P2-02 to
 P2-08, assigned the as-built repository, dependency-install and platform files to their

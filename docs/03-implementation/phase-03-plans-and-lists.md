@@ -91,6 +91,19 @@ Today's Anytime list and is not a backlog with a counter on it.
 - [ ] Attachments: presigned `PUT`, confirm-and-link, `primaryAttachmentId` as the hero
       image, the viewer, delete.
 - [ ] Follow-up suggestions after completion, all dismissible, none of which write.
+- [ ] The eleven catalogue icons P3-02 named but never drew, and a test that every
+      `LIST_TEMPLATES` icon resolves to an exported component.
+- [ ] `List.lastItemActivityAt`, bumped by every item writer and by neither `If-Match` nor a
+      list-level edit, backing the Lists index's `Updated today`.
+- [ ] `pastBefore` on `GET /v1/plans` — exclusive, mutually exclusive with `cursor` — so a
+      historical month is random access rather than N sequential cursor pages.
+- [ ] The Plans stages behind a `SegmentedControl` with no counts on it, and the calendar
+      navigator beneath it on Upcoming and Past: one day cell, collapsed as a rolling seven
+      days and expanded as a month, eligibility from the stage rather than the displayed
+      month, and a pure derive over the same projected agenda the list renders.
+- [ ] Plan detail as settings-always plus sections-once-filled, with 1–3 expanded, 4-or-more
+      peeking at three, and the completion action still at the top.
+- [ ] Per-type row markers in `RowLeading`, which changes Today as well as Plans.
 
 ## Tasks
 
@@ -140,6 +153,16 @@ Today's Anytime list and is not a backlog with a counter on it.
 | P3-42 | Explicit Plan-to-list side effects: Meal ingredients and Watch items | mobile | P3-13, P3-17, P3-12, P3-26, P1-25 | no | L |
 | P3-43 | Follow-up suggestions after completion | mobile | P3-16, P3-17, P3-18 | no | M |
 | P3-44 | E2E: the worked examples, a list that links to nothing, and a plan with no date | ci | P3-34, P3-35, P3-42, P3-38 | no | L |
+| P3-45 | The eleven missing catalogue icons | ui | P3-02 | yes | M |
+| P3-46 | `List.lastItemActivityAt` and every writer that must bump it | shared/api | P3-04, P3-05, P3-08, P3-10 | no | M |
+| P3-47 | The Upcoming/Past calendar navigator | mobile | P3-35, P3-20, P3-24 | no | L |
+| P3-48 | Per-type row markers in `RowLeading` | mobile | P2-44 | yes | S |
+
+> **Added 2026-08-25 (founder).** P3-45 to P3-48 came out of the design pass on the Plans and
+> Lists screens. Two of them are consequences of tasks that have **already shipped**, so they
+> are forward work rather than amendments: P3-45 closes a gap P3-02 left, and P3-46 adds a
+> field whose four writers (P3-04, P3-05, P3-08, P3-10) are all on `main`. **P3-45 and P3-46
+> both gate P3-25** and want doing before the mobile work starts.
 
 P3-23 is mechanical; follow the canonical sections and skip the discussion.
 
@@ -1336,6 +1359,17 @@ delete `404`s; the schedule path writes exactly one system entry per date change
 
 ### P3-20 — `GET /v1/plans` — the three-stage Plans endpoint
 
+> **Amended 2026-08-25 (founder) — add `pastBefore`.** Past was reachable only by walking the
+> cursor, so landing on a month six back meant N sequential round trips, each gated on the
+> last. `pastBefore` is an optional exclusive `WallDate` on this endpoint: it reads the same
+> dated-Activity bucket descending with a different start key — no new index, no new access
+> pattern, no summary projection. It is **mutually exclusive with `cursor`**; both together is
+> `validation_failed` naming the conflict, and a jump starts a fresh Past sequence whose
+> response carries a new cursor. Contract in `api-contract.md` §2.2a; the calendar navigator
+> (P3-47) is the caller. Tests: `pastBefore` is exclusive of its bound date; `pastBefore` plus
+> `cursor` is rejected rather than silently preferring one; a jump followed by ordinary cursor
+> paging continues backward without re-serving the landing page.
+
 **Files.** `services/api/src/routes/plans.ts`,
 `services/api/src/services/plansService.ts`,
 `packages/shared/src/schemas/plans.ts`.
@@ -1544,6 +1578,15 @@ these writes bumps `icsSequence`.
 
 ### P3-24 — Shared API client: lists, templates, items, attachments, updates
 
+> **Amended 2026-08-25 (founder).** The Plans reader also surfaces `pastBefore` (P3-20), and
+> its typing must make the exclusivity unrepresentable rather than merely documented: a Past
+> request carries **either** a landing date **or** a continuation cursor, never a shape that
+> can hold both. Responses merge into a **date-keyed** store rather than one cached by window
+> bounds — a month grid can request up to 42 days, so consecutive months overlap, and keying
+> by bounds would re-fetch and re-store the overlap while making "August → September → August"
+> free only if the exact bounds repeat. The same store is what lets P3-47 answer which ranges
+> have actually been loaded, which its no-dot-means-no-claim rule depends on.
+
 **Files.**
 `packages/shared/src/client/endpoints/{lists,listItems,listTemplates,attachments,updates}.ts`.
 
@@ -1591,6 +1634,14 @@ grep test that no exported client function has a `rank` parameter.
 ---
 
 ### P3-25 — Lists index screen
+
+> **Amended 2026-08-25 (founder).** The count line below is confirmed as written — `n items`
+> plus `· k checked` for a checkable collection, from `META` — and `design-system.md` §7.2 was
+> corrected to match, having specified template-supplied vocabulary that no catalogue field
+> could supply. Two additions: the card also renders `Updated today` from **`lastItemActivityAt`**
+> (P3-46), never `updatedAt`; and the stored `icon` only resolves once **P3-45** exists, since
+> eleven of the seventeen templates name glyphs the registry does not yet have. **This task now
+> depends on P3-45 and P3-46.**
 
 **Files.** `apps/mobile/app/(app)/(tabs)/lists.tsx`,
 `apps/mobile/src/features/lists/{hooks/useLists.ts, components/ListIndexRow.tsx}`.
@@ -2041,6 +2092,19 @@ from both a checked and unchecked source fixture leaves the ListItem byte-identi
 
 ### P3-35 — The Plans tab: three stages
 
+> **Amended 2026-08-25 (founder) — the stages are a switcher, not a stack.** Everything below
+> about *content* stands: the three stages, their order, their ordering rules, their empty
+> copy, and every prohibition in §1.3.2. What changes is that they render behind a
+> `SegmentedControl` rather than stacked on one scroll, because `needsDate` does not paginate
+> and eight undated plans were burying Upcoming below the fold. Consequences for the text
+> below: **"A stage with nothing in it renders its heading and its empty line"** now means the
+> *selected* stage renders its own empty line, and the all-three-empty case replaces the
+> switcher with the single `No plans` screen (§1.3.3). The switcher carries **no counts** —
+> `design-system.md` §7.3 was corrected, having asked for them in direct conflict with
+> §1.3.2's first two rules. The grep test for badge components and stage-length counts is
+> unchanged and now also covers the switcher. The calendar navigator that sits beneath it is
+> **P3-47**, not this task.
+
 **Files.** `apps/mobile/app/(app)/(tabs)/plans.tsx`,
 `apps/mobile/src/features/plans/{hooks/usePlans.ts, components/NeedsDateRow.tsx,
 model/rsvpSummary.ts}`.
@@ -2117,6 +2181,23 @@ months out, reaches the sentinel, and renders that plan after exactly one furthe
 ---
 
 ### P3-36 — Plan detail screen: full anatomy
+
+> **Amended 2026-08-25 (founder) — settings always, sections once filled.** This task pointed
+> at `plans-and-lists.md` §2.1's ten expanded sections while `design-system.md` §7.5 —
+> written later and **already built by P2-41** — specified collapsed disclosure rows with the
+> completion action at the top. Both documents were amended together; build to the reconciled
+> rule, which is canonical in §2.1:
+>
+> - **Settings** (Notes, Reminder, Repeat) always render, one compact row each.
+> - **Sections** do not exist until they hold something; meanwhile they are named chips in one
+>   `Add to this plan` row at the foot.
+> - A section of **1–3 rows renders in full**; **4 or more** shows three then `Show all n`.
+> - The **completion action stays at the top**, directly under the schedule line (§7.5 rule 1).
+> - `Coming later` rows for unbuilt capabilities are unchanged.
+>
+> The one-request rule, the bounded reads, the undated-plan rule and the "your reminders only"
+> rule below are all unaffected. `Show all n` needs a destination: prefer a pushed sub-screen,
+> since Prep and Updates both already have their own pagination endpoints.
 
 **Approach.** One screen and one `GET /v1/activities/:id`. That one HTTP response is composed
 from bounded storage reads, not an unbounded whole-partition Query: first a strongly
@@ -2500,6 +2581,162 @@ or count appeared anywhere at any point.
 Playwright on web for all five; Maestro on iOS for the first and the fifth.
 
 **Tests.** These are the tests. They gate the phase.
+
+---
+
+### P3-45 — The eleven missing catalogue icons
+
+**Files.** `packages/ui/src/icons/index.tsx`.
+
+**What to build.** P3-02 shipped `packages/shared/src/lists/templates.ts` naming fifteen
+icons. **Four exist** — `bowl`, `check-square`, `map-pin`, `play-rect`. The other eleven do
+not: `bag`, `book`, `cart`, `cup`, `film`, `gift`, `glass`, `heart`, `list`, `star`,
+`suitcase`. Nothing has surfaced it because no screen renders a list card yet; P3-25 is the
+first and would fail on eleven of the seventeen templates.
+
+**Approach.** Draw the eleven to the registry's existing grammar: a `24 × 24` viewBox, the
+shared `stroke` constant (1.5 weight, round caps and joins), no fill, colour taken from the
+`color` prop. `CheckSquare`'s filled check is the documented exception and is not a licence
+for more. Each is exported by name and added to the same barrel as the rest.
+
+**Founder approval.** Given 2026-08-25. `plans-and-lists.md` §5.3 requires it — "a new
+template must reuse an icon already in `packages/ui/src/icons/` unless the founder approves a
+new one" — precisely so that adding a template does not quietly become a design task. It did
+here, once, and this closes it.
+
+**Edge cases.** Do not let a template share a glyph with another to avoid drawing one; the
+catalogue's seventeen entries are meant to be distinguishable at a glance in the style
+chooser. `list` is the `simple-list` glyph and must not be confused with `ListLines`, which is
+the Lists **tab** icon.
+
+**Tests.** A test asserting **every** `icon` value in `LIST_TEMPLATES` resolves to an exported
+component — the assertion that would have caught this at P3-02, and that keeps a
+seventeenth template honest. Render each at 24 and at 44 and assert a non-empty path set.
+
+---
+
+### P3-46 — `List.lastItemActivityAt` and every writer that must bump it
+
+**Files.** `packages/shared/src/types/list.ts`, `packages/shared/src/schemas/list.ts`,
+`services/api/src/repositories/listRepository.ts`, `listService.ts`, `listItemService.ts`.
+
+**What to build.** A second timestamp on `List`, per `data-model.md` §4.6. `updatedAt` backs
+`If-Match` and moves only when the List row itself changes; `lastItemActivityAt` moves when
+any **item** is created, edited, checked, deleted, reordered or touched by a bulk operation,
+and backs nothing. The Lists index renders the second (P3-25, `design-system.md` §7.2).
+
+**Why it is its own task.** Its four natural owners — P3-04, P3-05, P3-08, P3-10 — are all on
+`main`. This is forward work against shipped code, not an amendment to their text.
+
+**Approach.** Required, not optional: `POST /v1/lists` seeds it equal to `createdAt`, and
+every item write path sets it. **Nothing is deployed yet** — no AWS account exists before
+Phase 4 (`00-open-decisions.md` #50) — so there is no migration, no backfill and no
+absent-value branch to carry. That is only true now; the same change after Phase 4 needs a
+migration path, which is the reason to do it here rather than later.
+
+It is written on the same `LIST#<listId>` / `META` row the Lists index already
+`BatchGetItem`s, so it costs no extra read, no index and no query. It must **not** participate
+in `If-Match`: an ordinary item write would otherwise bump the concurrency token every open
+list-settings sheet is holding.
+
+**Edge cases.** A bulk operation bumps it once for the operation, not once per item. Undo of
+a bulk operation bumps it again — the list did change, twice. A behaviour migration is a
+list-level change and moves `updatedAt`, not this.
+
+**Tests.** Checking an item moves `lastItemActivityAt` and leaves `updatedAt` untouched;
+renaming the list does the reverse. A `PATCH` carrying a stale `If-Match` still fails on
+`updatedAt` after an unrelated item write — the regression this split exists to prevent.
+`clear-checked` bumps once. Every item route is covered, because a missed writer is invisible
+until a card silently goes stale.
+
+---
+
+### P3-47 — The Upcoming/Past calendar navigator
+
+**Files.** `apps/mobile/src/features/plans/components/{CalendarNavigator.tsx, DayCell.tsx}`,
+`apps/mobile/src/features/plans/model/deriveCalendarCells.ts`.
+
+**What to build.** The control specified in
+[`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §1.3.4: collapsed, a
+rolling seven-day strip; expanded, a normal month calendar. On Upcoming and Past only — Needs
+a date has no dates to navigate. It resolves `00-open-decisions.md` #52.
+
+**Approach.**
+
+- **One day-cell component.** Seven columns at `compact` give ~44 pt cells, and the month grid
+  is also seven columns — so the same cell is drawn seven times collapsed and up to
+  forty-two times expanded. Only the date sequence differs.
+- **Eligibility comes from the stage, never the displayed month.** One expression, no
+  month-boundary branch. Adjacent-month spillover that belongs to the active stage is live and
+  **carries its density**; out-of-stage dates are inert. Three visual treatments — normal,
+  subordinate-but-live, inert — and the middle one must not read as disabled.
+- **`deriveCalendarCells(items, window)` is pure** and takes the **projected** agenda the list
+  renders, including optimistic local writes. It takes no response envelope, no cache handle
+  and issues no fetch, so the calendar cannot diverge from the list by construction rather
+  than by discipline. On native that means subscribing to the same SQLite repository
+  projection the list uses; wiring it to the query cache is the defect this signature exists
+  to prevent.
+- **`WallDate` throughout** — cell, grouping, request bounds and the today boundary share one
+  viewer-local definition (`coding-standards.md` §4.4). The derive path constructs **no `Date`
+  object at all**; day-of-week and days-in-month come from `date-fns`, which is greppable in
+  review.
+- **Navigation selects a window; it is not a second pagination model.** A fetch is issued only
+  when the visible grid leaves the loaded range, and it requests the **visible grid range**
+  (up to 42 days, inside `MAX_AGENDA_DAYS`), not the nominal month. Forward uses
+  `upcomingFrom`/`upcomingTo`; backward uses `pastBefore` (P3-20). Ordinary cursor and window
+  paging continue from the landing point.
+- **Expanding never fetches.** Collapsed and expanded are the same projection over the same
+  data. Expanded-or-collapsed is remembered **locally** per platform — view state, not profile
+  data, so no `User` field.
+- **Gesture contract.** Changing the visible month during a gesture does not fetch. Fetch on
+  settle, and cancel a superseded request. While a cold month loads, keep the calendar shell
+  and its weekday header with quiet skeleton density; never collapse the control or block the
+  Plans screen.
+
+**Edge cases.**
+
+- Today belongs to Upcoming, so it is inert at the end of Past's `Previous 7 days` strip.
+- The clamp is visible: Upcoming dims the back arrow and every earlier month, Past the
+  forward arrow.
+- Past shows presence, never load. **No dot means no claim**, which requires tracking which
+  ranges have actually been fetched — without it the dots are whatever survives cache
+  eviction. No "which months contain history" endpoint: that is a second projection able to
+  disagree with the list.
+
+**Tests.** Unit over `deriveCalendarCells`: for both stages, every cell's live/spill/inert
+state is rebuilt independently from the stage rule and compared, including the today boundary
+and both spillover directions; spillover cells carry density. A test that the function is
+never handed a network payload — its signature admits none. A render test that expanding
+issues zero requests. A gesture test that three fast month changes issue one request for the
+settled month and cancel the rest. An offline test that a month with no loaded range renders
+the shell and no false dots. A grep test that the feature directory constructs no `Date`.
+
+---
+
+### P3-48 — Per-type row markers in `RowLeading`
+
+**Files.** `apps/mobile/src/features/agenda/components/RowLeading.tsx`.
+
+**What to build.** `RowLeading` receives only `hasCheckbox`, so every non-task activity — event,
+meal, watch, general — renders one 8 pt filled grey square rotated 45°, ignoring both the
+per-type glyph and the per-type accent that `design-system.md` §5.2 specifies. Pass the
+activity `type` and render its glyph at `16 × 16` in its accent.
+
+**Note the blast radius.** This is P2-44 code and **Today renders it too**, so this changes
+both tabs. It is listed in Phase 3 because that is when it was caught, not because it is
+Plans-only.
+
+**Approach.** `type → glyph` is the §5.2 table: `bowl`, `play-rect`, `map-pin`, and `diamond`
+for `custom`, the visible **General** kind. Use `type`, never `hasCheckbox`, to choose — the
+latter is capability-gated, so a task the caller cannot complete would fall through to a
+marker. The marker stays non-interactive, keeps no hit target, and remains
+`accessibilityElementsHidden`; its meaning is already in the row's label. Keep its 1.5 stroke
+visibly lighter than the checkbox border on the adjacent row so it does not begin to read as
+a control. §5.2's prose was corrected in the same pass — its table was always right.
+
+**Tests.** A render matrix asserting each `type` produces its own glyph and accent, and that
+`custom` is the only diamond. A test that a non-completable task still renders a checkbox
+rather than a marker. Snapshot both Today and Plans, since both consume this component.
 
 ## Acceptance criteria
 
