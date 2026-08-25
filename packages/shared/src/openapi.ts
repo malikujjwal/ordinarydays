@@ -179,7 +179,11 @@ registry.registerPath({
     'strict, so any other field is `400` naming it: `email`, `cognitoSub` and ' +
     '`onboardingState` belong to the auth flow. `defaultReminderOffset` takes any integer ' +
     'in `[-10080, 0]`, where `0` is a real "at the time" reminder and `null` clears it to ' +
-    'Off — the two are different states, not two spellings of one.',
+    'Off — the two are different states, not two spellings of one. `defaultLists` is a ' +
+    '**nested per-slot patch**, not a replacement of the stored map: each supplied value ' +
+    'is a `lst_` id or `null`, an omitted slot is preserved untouched, and `null` removes ' +
+    'only that key. So two devices choosing different slots both keep their answer. The ' +
+    'stored map never holds a null — clearing removes the key.',
   tags: ['me'],
   request: {
     body: {

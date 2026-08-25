@@ -40,6 +40,7 @@ import {
 } from '../repositories/listRepository.js';
 import { assertListAccess, type ListAccess } from './authz.js';
 import { drainRankRepair } from './listRankRepairService.js';
+import { profileDefaultToClear } from './listSlotService.js';
 
 /**
  * List settings: capabilities, slot, archive and rename on `PATCH /v1/lists/:id`, and the
@@ -587,12 +588,12 @@ export async function patchListSettings(
 
   /**
    * Changing or clearing a slot removes `defaultLists[oldSlot]` in the **same transaction**,
-   * conditioned on that slot still naming this list (`api-contract.md` §2.7, P3-12). The
-   * caller supplies it whenever the list held a slot; no profile pre-read decides it, because
-   * a read that missed a concurrent selection would wrongly skip the cleanup, and a slot that
-   * now names a newer destination fails only that item and survives.
+   * conditioned on that slot still naming this list (`api-contract.md` §2.7, P3-12).
+   * `profileDefaultToClear` is the one place that decides which slot that is — the delete
+   * path asks it the same question — and it reads no profile, because a read that missed a
+   * concurrent selection would wrongly skip the cleanup.
    */
-  const clearsDefault = 'slot' in changed && list.slot !== null;
+  const clearsDefault = 'slot' in changed ? profileDefaultToClear(list) : undefined;
 
   /**
    * A server-minted id, unlike the behaviour migration's. Nothing about this write is
@@ -638,9 +639,7 @@ export async function patchListSettings(
     list.updatedAt,
     now,
     {
-      ...(clearsDefault && list.slot !== null
-        ? { clearProfileDefault: { slot: list.slot } }
-        : {}),
+      ...(clearsDefault === undefined ? {} : { clearProfileDefault: clearsDefault }),
       ...(reversible ? { undoFor: undoFrom } : {}),
     },
   );

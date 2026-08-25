@@ -177,7 +177,11 @@ describe('nothing but a tap may choose a style', () => {
     expect(Object.keys(module)).toEqual(['listTemplateChoices']);
 
     const barrel = await import('../index.js');
-    expect(Object.keys(barrel).sort()).toEqual(['LIST_TEMPLATES', 'listTemplateChoices']);
+    expect(Object.keys(barrel).sort()).toEqual([
+      'LIST_TEMPLATES',
+      'listTemplateChoices',
+      'resolveSlot',
+    ]);
     for (const key of Object.keys(barrel)) {
       expect(key.toLowerCase()).not.toContain('suggest');
       expect(key.toLowerCase()).not.toContain('match');

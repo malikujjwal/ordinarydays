@@ -5,7 +5,19 @@ import { newUserId, patchProfile } from './userRepository.js';
 
 const ddbMock = mockClient(DynamoDBDocumentClient);
 
-const sentUpdate = () => ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input;
+const sentUpdate = (n = 0) => ddbMock.commandCalls(UpdateCommand)[n]?.args[0].input;
+
+const updateCount = () => ddbMock.commandCalls(UpdateCommand).length;
+
+/** The failure DynamoDB raises when a `ConditionExpression` does not hold. */
+const conditionFailed = () => {
+  const error = new Error('The conditional request failed');
+  error.name = 'ConditionalCheckFailedException';
+  return error;
+};
+
+const TRADER_JOES = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+const CORNER_SHOP = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3';
 
 beforeEach(() => {
   ddbMock.reset();
@@ -121,5 +133,230 @@ describe('patchProfile', () => {
     );
 
     expect(updated?.displayName).toBe('Ada');
+  });
+});
+
+/**
+ * The nested per-slot patch (`api-contract.md` §2.1, `phase-03` §P3-12).
+ *
+ * The property under test throughout is that **an omitted slot is never named in the
+ * expression**. A whole-map assignment would carry the caller's stale siblings and quietly
+ * undo a choice another device made in between, and it is the one thing this path must never
+ * emit against a profile that already has a map.
+ */
+describe('patchProfile — defaultLists is a nested patch, not a replacement map', () => {
+  it('sets one slot through its own document path', async () => {
+    await patchProfile(
+      'usr_a',
+      { defaultLists: { groceries: TRADER_JOES } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    const input = sentUpdate();
+    expect(input?.UpdateExpression).toContain('#defaultLists.#slot_groceries = ');
+    expect(input?.ExpressionAttributeNames?.['#slot_groceries']).toBe('groceries');
+    expect(input?.ExpressionAttributeValues?.[':slot_groceries']).toBe(TRADER_JOES);
+  });
+
+  it('clears one slot with a nested REMOVE, not a stored null', async () => {
+    await patchProfile(
+      'usr_a',
+      { defaultLists: { watch: null } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    const input = sentUpdate();
+    expect(input?.UpdateExpression).toContain('REMOVE #defaultLists.#slot_watch');
+    expect(input?.ExpressionAttributeValues).not.toHaveProperty(':slot_watch');
+  });
+
+  it('never assigns the whole map when one already exists', async () => {
+    await patchProfile(
+      'usr_a',
+      { defaultLists: { groceries: TRADER_JOES, watch: null } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    const expression = String(sentUpdate()?.UpdateExpression);
+    expect(expression).not.toMatch(/#defaultLists\s*=/);
+    expect(expression).toContain('#defaultLists.#slot_groceries = ');
+    expect(expression).toContain('REMOVE #defaultLists.#slot_watch');
+  });
+
+  /** The omitted slot must not appear anywhere — not as a path, a name, or a value. */
+  it('names no slot the patch omitted', async () => {
+    await patchProfile(
+      'usr_a',
+      { defaultLists: { groceries: TRADER_JOES } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    const input = sentUpdate();
+    expect(String(input?.UpdateExpression)).not.toContain('meals');
+    expect(input?.ExpressionAttributeNames).not.toHaveProperty('#slot_meals');
+    expect(input?.ExpressionAttributeNames).not.toHaveProperty('#slot_watch');
+  });
+
+  it('applies slots and ordinary fields in one update', async () => {
+    await patchProfile(
+      'usr_a',
+      { displayName: 'Ada', defaultLists: { groceries: TRADER_JOES } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    const expression = String(sentUpdate()?.UpdateExpression);
+    expect(expression).toContain('#displayName = :displayName');
+    expect(expression).toContain('#defaultLists.#slot_groceries = ');
+    expect(updateCount()).toBe(1);
+  });
+
+  /**
+   * A document path cannot be written into an attribute that is not there, so the parent map
+   * is required up front. Failing that condition is what routes a legacy profile to the
+   * create below, rather than a second behaviour that has to agree with this one.
+   */
+  it('requires both the profile and the parent map', async () => {
+    await patchProfile(
+      'usr_a',
+      { defaultLists: { groceries: TRADER_JOES } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    expect(sentUpdate()?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND attribute_exists(#defaultLists)',
+    );
+  });
+
+  it('requires only the profile when no slot is in play', async () => {
+    await patchProfile('usr_a', { displayName: 'Ada' }, '2026-08-24T12:00:00.000Z');
+
+    expect(sentUpdate()?.ConditionExpression).toBe('attribute_exists(pk)');
+    expect(sentUpdate()?.ExpressionAttributeNames).not.toHaveProperty('#defaultLists');
+  });
+});
+
+describe('patchProfile — a legacy profile with no slot map', () => {
+  /** First attempt fails the parent-map condition; the second creates the map. */
+  const noMapThenCreated = () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejectsOnce(conditionFailed())
+      .resolves({ Attributes: { userId: 'usr_a' } });
+  };
+
+  it('creates the map holding exactly the slots this patch sets', async () => {
+    noMapThenCreated();
+
+    await patchProfile(
+      'usr_a',
+      { defaultLists: { groceries: TRADER_JOES } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    const create = sentUpdate(1);
+    expect(create?.UpdateExpression).toContain('#defaultLists = :defaultLists');
+    expect(create?.ExpressionAttributeValues?.[':defaultLists']).toEqual({
+      groceries: TRADER_JOES,
+    });
+  });
+
+  /**
+   * The one place a whole-map `SET` is correct, and this condition is why: there are no
+   * sibling slots to lose, because there is no map.
+   */
+  it('creates conditionally, so it can only ever be a create', async () => {
+    noMapThenCreated();
+
+    await patchProfile(
+      'usr_a',
+      { defaultLists: { groceries: TRADER_JOES } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    expect(sentUpdate(1)?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND attribute_not_exists(#defaultLists)',
+    );
+  });
+
+  /** Clearing a slot that was never set creates nothing; the other fields still land. */
+  it('creates no map for a patch that only clears', async () => {
+    noMapThenCreated();
+
+    await patchProfile(
+      'usr_a',
+      { displayName: 'Ada', defaultLists: { watch: null } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    const create = sentUpdate(1);
+    expect(create?.UpdateExpression).toContain('#displayName = :displayName');
+    expect(create?.UpdateExpression).not.toContain('#defaultLists = ');
+    expect(create?.ExpressionAttributeValues).not.toHaveProperty(':defaultLists');
+  });
+
+  /**
+   * Another device created the map in between. The nested operation is retried, so this
+   * patch's slot lands and the concurrent creator's other slots survive — which is the whole
+   * reason the retry is a nested write rather than a second create.
+   */
+  it('retries the nested write after losing the create race', async () => {
+    ddbMock
+      .on(UpdateCommand)
+      .rejectsOnce(conditionFailed())
+      .rejectsOnce(conditionFailed())
+      .resolves({
+        Attributes: { userId: 'usr_a', defaultLists: { watch: CORNER_SHOP } },
+      });
+
+    const updated = await patchProfile(
+      'usr_a',
+      { defaultLists: { groceries: TRADER_JOES } },
+      '2026-08-24T12:00:00.000Z',
+    );
+
+    expect(updateCount()).toBe(3);
+    expect(sentUpdate(2)?.UpdateExpression).toContain('#defaultLists.#slot_groceries = ');
+    expect(sentUpdate(2)?.UpdateExpression).not.toMatch(/#defaultLists\s*=\s*:/);
+    expect(updated?.defaultLists).toEqual({ watch: CORNER_SHOP });
+  });
+
+  /**
+   * All three conditions can only have failed on `attribute_exists(pk)`, which is a profile
+   * that is not there — the `404` `userService` maps this to.
+   */
+  it('gives up after three attempts, so a missing profile still surfaces', async () => {
+    ddbMock.on(UpdateCommand).rejects(conditionFailed());
+
+    await expect(
+      patchProfile(
+        'usr_a',
+        { defaultLists: { groceries: TRADER_JOES } },
+        '2026-08-24T12:00:00.000Z',
+      ),
+    ).rejects.toThrow('The conditional request failed');
+    expect(updateCount()).toBe(3);
+  });
+
+  it('does not retry a patch that names no slot', async () => {
+    ddbMock.on(UpdateCommand).rejects(conditionFailed());
+
+    await expect(
+      patchProfile('usr_a', { displayName: 'Ada' }, '2026-08-24T12:00:00.000Z'),
+    ).rejects.toThrow('The conditional request failed');
+    expect(updateCount()).toBe(1);
+  });
+
+  /** A real storage failure is not a condition failure and must not be retried away. */
+  it('propagates any other failure without a second attempt', async () => {
+    ddbMock.on(UpdateCommand).rejects(new Error('ProvisionedThroughputExceeded'));
+
+    await expect(
+      patchProfile(
+        'usr_a',
+        { defaultLists: { groceries: TRADER_JOES } },
+        '2026-08-24T12:00:00.000Z',
+      ),
+    ).rejects.toThrow('ProvisionedThroughputExceeded');
+    expect(updateCount()).toBe(1);
   });
 });

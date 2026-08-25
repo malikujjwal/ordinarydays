@@ -1081,7 +1081,18 @@ defaultLists?: Partial<Record<DefaultSlot, string>>;  // slot → listId
 The stored map contains only resolved ids. `PATCH /v1/me` accepts
 `defaultLists?: Partial<Record<DefaultSlot, string | null>>` as a nested patch: omitted slots
 survive, a string replaces one slot, and `null` removes one slot rather than replacing the
-whole map.
+whole map. Both maps assert a `lst_` ULID (P3-12); a destination nothing can resolve is not a
+value worth storing.
+
+**Mechanically, that is document paths, not an assignment.** The repository applies each
+supplied slot as `SET defaultLists.<slot>` or `REMOVE defaultLists.<slot>` and never emits
+`SET defaultLists = :map`, which would carry whatever the caller read moments earlier and
+silently undo a sibling slot chosen on another device in between. A profile predating the map
+has none to write a path into, so one is created holding just the supplied slots under
+`attribute_not_exists(defaultLists)` — the single case where assigning the whole map is
+correct, because there are no siblings to lose — and a writer that loses that race retries the
+nested operation. Removing the last key leaves an empty map rather than deleting the
+attribute; empty and absent are the same state to every reader.
 
 Resolution rule for any "add to X" flow:
 

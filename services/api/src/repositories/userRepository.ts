@@ -107,18 +107,112 @@ export function getProfile(userId: string): Promise<User | undefined> {
  * `null` is meaningful for `defaultReminderOffset` — it is *Off*, distinct from `0`, which
  * is a real "at the time" reminder (ADR-047). So a null is written as `REMOVE`, clearing the
  * attribute, rather than stored as a null or skipped as absent.
+ *
+ * ## `defaultLists` is a nested patch, and that is the whole point
+ *
+ * Every other field here is a whole attribute, so patching it is one assignment. The slot map
+ * is not: it holds three independent user choices, and `PATCH /v1/me` may carry any subset of
+ * them (`api-contract.md` §2.1, `phase-03` §P3-12). So each supplied slot is applied through
+ * its own **document path** — `SET defaultLists.<slot>` for an id, `REMOVE defaultLists.<slot>`
+ * for a `null` — and an omitted slot is never named in the expression at all.
+ *
+ * `SET #defaultLists = :map` is what this must never emit. It would carry whatever the caller
+ * read moments earlier, so a phone setting `groceries` would silently restore its stale
+ * `watch` over a choice the tablet made in between: two devices, one surviving answer, no
+ * conflict anywhere to notice. Document paths make those two writes independent.
  */
 export async function patchProfile(
   userId: string,
   patch: PatchUserInput,
   updatedAt: string,
 ): Promise<User | undefined> {
+  const nested = await applyProfileUpdate(userId, nestedSlotUpdate(patch, updatedAt));
+  if (nested.applied) return nested.profile;
+
+  /**
+   * The condition failed and no slot was in play, so the only thing it can have been is
+   * `attribute_exists(pk)`: there is no profile. That is the caller's `404`.
+   */
+  if (!touchesSlots(patch)) throw nested.conflict;
+
+  /**
+   * A **legacy profile with no slot map**. A document path cannot be written into an
+   * attribute that does not exist, so the map is created holding exactly the slots this
+   * patch sets — one key, usually — under a condition that makes it a create rather than an
+   * overwrite. `attribute_not_exists` means there are no sibling slots to lose, which is the
+   * property the whole-map ban exists to protect; slots this patch clears are simply absent
+   * from the new map, which is what clearing them means.
+   */
+  const created = await applyProfileUpdate(
+    userId,
+    createdSlotMapUpdate(patch, updatedAt),
+  );
+  if (created.applied) return created.profile;
+
+  /**
+   * Lost the race: another device created the map between the two attempts. Now the document
+   * path is writable, so the nested operation is retried — and it applies **only** this
+   * patch's slots, leaving whatever the concurrent creator chose for the others.
+   *
+   * Three attempts is provably enough. If the profile exists, the first failure says the map
+   * was absent and the second says it is now present; nothing in the product removes the map
+   * as a whole — a slot is cleared one document path at a time — so it cannot vanish again
+   * and this attempt's condition holds. If the profile does not exist, all three fail on
+   * `attribute_exists(pk)` and the caller gets its `404`.
+   */
+  const retried = await applyProfileUpdate(userId, nestedSlotUpdate(patch, updatedAt));
+  if (retried.applied) return retried.profile;
+  throw retried.conflict;
+}
+
+/** Whether this patch names any slot at all; `{}` names none and needs no map. */
+function touchesSlots(patch: PatchUserInput): boolean {
+  return Object.values(patch.defaultLists ?? {}).some((value) => value !== undefined);
+}
+
+interface ProfileUpdate {
+  readonly expression: string;
+  readonly names: Record<string, string>;
+  readonly values: Record<string, unknown>;
+  readonly condition: string;
+}
+
+type ProfileUpdateResult =
+  | { readonly applied: true; readonly profile: User | undefined }
+  | { readonly applied: false; readonly conflict: unknown };
+
+/**
+ * One attempt. A failed condition is an answer here rather than an error — which of the two
+ * conditions failed is what {@link patchProfile} decides next from — so it is returned;
+ * anything else is a real storage failure and propagates untouched.
+ */
+async function applyProfileUpdate(
+  userId: string,
+  update: ProfileUpdate,
+): Promise<ProfileUpdateResult> {
+  try {
+    const profile = await updateItem<User & Record<string, unknown>>(
+      userProfile(userId),
+      update,
+    );
+    return { applied: true, profile: profile as User | undefined };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return { applied: false, conflict: error };
+    }
+    throw error;
+  }
+}
+
+/** `updatedAt` plus every patched field except the slot map, which the two builders own. */
+function scalarClauses(patch: PatchUserInput, updatedAt: string) {
   const sets: string[] = ['#updatedAt = :updatedAt'];
   const removes: string[] = [];
   const names: Record<string, string> = { '#updatedAt': 'updatedAt' };
   const values: Record<string, unknown> = { ':updatedAt': updatedAt };
 
   for (const [field, value] of Object.entries(patch)) {
+    if (field === 'defaultLists') continue;
     names[`#${field}`] = field;
     if (value === null) {
       removes.push(`#${field}`);
@@ -128,35 +222,82 @@ export async function patchProfile(
     values[`:${field}`] = value;
   }
 
-  const expression = [
+  return { sets, removes, names, values };
+}
+
+function expressionOf(sets: readonly string[], removes: readonly string[]): string {
+  return [
     `SET ${sets.join(', ')}`,
     removes.length > 0 ? `REMOVE ${removes.join(', ')}` : undefined,
   ]
     .filter((clause): clause is string => clause !== undefined)
     .join(' ');
-
-  const updated = await updateItem<User & Record<string, unknown>>(userProfile(userId), {
-    expression,
-    names,
-    values,
-    // The profile must already exist. `pk` is on every stored item, so this is the cheapest
-    // existence check available and needs no extra read.
-    condition: 'attribute_exists(pk)',
-  });
-
-  return updated as User | undefined;
 }
 
 /**
- * The conditional transaction item that clears `defaultLists[slot]` when — and only when —
- * that exact slot still points at the list being removed (phase-03 §P3-05; P3-12's slot
- * changes reuse it).
+ * The ordinary shape: one document path per supplied slot, and the map itself never assigned.
  *
- * A **nested** `REMOVE`, never a whole-map `SET`, so sibling slots survive whatever else is
- * happening to them. The condition re-asserts the value the caller read: a newer destination
- * chosen concurrently on another device fails this item rather than being silently removed,
- * and the caller retries its transaction without it.
+ * The condition requires the parent map for **any** slot in the patch, not only for a slot
+ * being set. A clear against a profile that has no map is a no-op either way, but failing the
+ * condition routes it through the create below, so one branch handles every absent-map case
+ * rather than two behaviours that have to agree.
  */
+function nestedSlotUpdate(patch: PatchUserInput, updatedAt: string): ProfileUpdate {
+  const { sets, removes, names, values } = scalarClauses(patch, updatedAt);
+  const conditions = ['attribute_exists(pk)'];
+
+  for (const [slot, listId] of Object.entries(patch.defaultLists ?? {})) {
+    if (listId === undefined) continue;
+    names['#defaultLists'] = 'defaultLists';
+    names[`#slot_${slot}`] = slot;
+    if (listId === null) {
+      removes.push(`#defaultLists.#slot_${slot}`);
+      continue;
+    }
+    sets.push(`#defaultLists.#slot_${slot} = :slot_${slot}`);
+    values[`:slot_${slot}`] = listId;
+  }
+
+  if ('#defaultLists' in names) conditions.push('attribute_exists(#defaultLists)');
+
+  return {
+    expression: expressionOf(sets, removes),
+    names,
+    values,
+    condition: conditions.join(' AND '),
+  };
+}
+
+/**
+ * The legacy-profile shape: create the map holding this patch's set slots, and only while
+ * there is no map to overwrite.
+ *
+ * This is the one place a whole-map `SET` is correct, and `attribute_not_exists` is what
+ * makes it so — there are no siblings to lose. A patch that only clears slots creates no map
+ * at all: it lands its other fields and leaves the profile exactly as slot-less as it was.
+ */
+function createdSlotMapUpdate(patch: PatchUserInput, updatedAt: string): ProfileUpdate {
+  const { sets, removes, names, values } = scalarClauses(patch, updatedAt);
+  const map = Object.fromEntries(
+    Object.entries(patch.defaultLists ?? {}).filter(
+      (entry): entry is [string, string] => entry[1] !== null && entry[1] !== undefined,
+    ),
+  );
+
+  names['#defaultLists'] = 'defaultLists';
+  if (Object.keys(map).length > 0) {
+    sets.push('#defaultLists = :defaultLists');
+    values[':defaultLists'] = map;
+  }
+
+  return {
+    expression: expressionOf(sets, removes),
+    names,
+    values,
+    condition: 'attribute_exists(pk) AND attribute_not_exists(#defaultLists)',
+  };
+}
+
 /**
  * The mirror of {@link removeDefaultListTransactItem}: puts one slot back, and only while it
  * is still empty (P3-10, `api-contract.md` §2.7).
@@ -189,6 +330,24 @@ export function restoreDefaultListTransactItem(
   };
 }
 
+/**
+ * The conditional transaction item that clears `defaultLists[slot]` when — and only when —
+ * that exact slot still points at the list being removed (phase-03 §P3-05, §P3-09's slot
+ * change, §P3-12).
+ *
+ * A **nested** `REMOVE`, never a whole-map `SET`, so sibling slots survive whatever else is
+ * happening to them. The condition re-asserts the value the caller read: a newer destination
+ * chosen concurrently on another device fails this item rather than being silently removed,
+ * and the caller retries its transaction without it.
+ *
+ * **It lives here, and there is exactly one of it.** §P3-12 puts the `defaultLists`
+ * invariants in `services/listSlotService.ts`, and the decision half of them is there — which
+ * slot a list write may clear, and why the write attempts it unconditionally. This half
+ * cannot follow: it builds a DynamoDB update over the profile key, so it belongs to the
+ * repository layer (`CLAUDE.md`, `repo-structure.md` §3.1), and both callers are inside
+ * `listRepository`, which a service may not be imported by. The service names this function
+ * as the single implementation instead of copying it.
+ */
 export function removeDefaultListTransactItem(
   userId: string,
   slot: DefaultSlot,

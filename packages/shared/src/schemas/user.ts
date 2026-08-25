@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { hhmm, ianaTimezone, userId } from './common.js';
+import { hhmm, ianaTimezone, ulidId, userId } from './common.js';
 
 /**
  * The user profile, as a schema (`data-model.md` §4.0, `api-contract.md` §2.1).
@@ -43,6 +43,27 @@ export const currencyCode = z
   .length(3)
   .regex(/^[A-Z]{3}$/, 'Expected an ISO 4217 currency code, e.g. USD');
 
+/**
+ * The **stored** slot map: resolved list ids only, and never a null.
+ *
+ * Clearing a slot removes the key rather than writing an empty value, so there is no third
+ * state for a reader to interpret — a slot is either set to a list or absent
+ * (`data-model.md` §4.6). The patch input below is the nullable one, and the two are
+ * deliberately different shapes.
+ */
+export const storedDefaultLists = z.partialRecord(defaultSlot, ulidId('lst'));
+
+/**
+ * The **patch** slot map: a nested per-slot patch, not a replacement of the stored map
+ * (`api-contract.md` §2.1, `phase-03` §P3-12).
+ *
+ * Each of the three keys is independent. An omitted slot is preserved untouched, a `lst_`
+ * id sets just that slot, and `null` removes just that key. Sending
+ * `{ groceries: 'lst_…' }` therefore does not clear `watch` — which is the whole reason the
+ * repository applies these through document paths instead of assigning the map.
+ */
+export const patchDefaultLists = z.partialRecord(defaultSlot, ulidId('lst').nullable());
+
 export const user = z
   .object({
     userId,
@@ -53,7 +74,7 @@ export const user = z
     defaultReminderOffset: defaultReminderOffset.nullable().optional(),
     allDayReminderHour: z.number().int().min(0).max(23).optional(),
     quietHours: quietHours.optional(),
-    defaultLists: z.partialRecord(defaultSlot, z.string().min(1)).optional(),
+    defaultLists: storedDefaultLists.optional(),
     email: z.email().optional(),
     cognitoSub: z.string().min(1).optional(),
     onboardingState: onboardingState.optional(),
@@ -75,6 +96,6 @@ export const patchUserInput = z
     currency: currencyCode.optional(),
     weekStartsOn: weekStart.optional(),
     defaultReminderOffset: defaultReminderOffset.nullable().optional(),
-    defaultLists: z.partialRecord(defaultSlot, z.string().min(1)).optional(),
+    defaultLists: patchDefaultLists.optional(),
   })
   .meta({ id: 'PatchUserInput' });
