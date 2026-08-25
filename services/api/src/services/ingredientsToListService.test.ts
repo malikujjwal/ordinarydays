@@ -18,6 +18,7 @@ vi.mock('../repositories/activityRepository.js', () => ({
   })),
 }));
 vi.mock('../repositories/idempotencyRepository.js', () => ({
+  loadReceipt: vi.fn(),
   receiptItem: vi.fn(() => ({ Put: { Item: { receipt: true } } })),
 }));
 vi.mock('../repositories/listRepository.js', () => ({
@@ -53,6 +54,7 @@ vi.mock('./listMutationService.js', () => ({
 vi.mock('./listRankRepairService.js', () => ({ repairListRanks: vi.fn() }));
 
 const activityRepository = await import('../repositories/activityRepository.js');
+const idempotencyRepository = await import('../repositories/idempotencyRepository.js');
 const listRepository = await import('../repositories/listRepository.js');
 const tx = await import('../repositories/tx.js');
 const authz = await import('./authz.js');
@@ -330,13 +332,38 @@ describe('a stale read re-runs the whole cycle', () => {
    * user has since checked.
    */
   it('answers conflict, once, when the destination item id is already taken', async () => {
+    vi.mocked(idempotencyRepository.loadReceipt).mockResolvedValue(undefined);
     vi.mocked(tx.transactWrite).mockImplementation((_items, options) => {
       throw (
         options as { onConditionFailed: (index: number) => Error }
       ).onConditionFailed(1);
     });
 
-    await expect(run()).rejects.toMatchObject({ code: 'conflict' });
+    await expect(
+      addIngredientsToList(USER, MEAL, input(), NOW, undefined, 'key-1'),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(tx.transactWrite).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * DynamoDB reports only the first failing item, and the item `Put` sits before the receipt
+   * — so the loser of a same-key race lands on the create slot, not on its receipt. Answering
+   * `409` there would tell a caller their write failed at the moment the winner performed it.
+   * A stored receipt under the key is what tells the two apart.
+   */
+  it('hands a same-key race back as one, so the winner’s receipt answers it', async () => {
+    vi.mocked(idempotencyRepository.loadReceipt).mockResolvedValue({
+      body: '{}',
+    } as never);
+    vi.mocked(tx.transactWrite).mockImplementation((_items, options) => {
+      throw (
+        options as { onConditionFailed: (index: number) => Error }
+      ).onConditionFailed(1);
+    });
+
+    await expect(
+      addIngredientsToList(USER, MEAL, input(), NOW, undefined, 'key-1'),
+    ).rejects.toMatchObject({ name: 'IdempotencyRaceError' });
     expect(tx.transactWrite).toHaveBeenCalledOnce();
   });
 });

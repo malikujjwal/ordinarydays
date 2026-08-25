@@ -9,7 +9,7 @@ import {
   type IngredientAddition,
   ingredientsAddedToListItem,
 } from '../repositories/activityRepository.js';
-import { receiptItem } from '../repositories/idempotencyRepository.js';
+import { loadReceipt, receiptItem } from '../repositories/idempotencyRepository.js';
 import {
   appendListItemCreates,
   appendSourceLabelExtension,
@@ -128,6 +128,14 @@ export interface AddedIngredients {
   }[];
 }
 
+/** Raised when a client-minted destination id was already taken; see {@link commit}. */
+class TakenItemIdError extends Error {
+  constructor() {
+    super('That destination item id is already in use.');
+    this.name = 'TakenItemIdError';
+  }
+}
+
 /** Raised when a condition tied to the read failed, so the whole cycle must re-run. */
 class ReclassifyError extends Error {
   constructor() {
@@ -149,12 +157,21 @@ export async function addIngredientsToList(
   input: AddIngredientsToListInput,
   now: string,
   receiptFor?: (result: AddedIngredients) => IdempotencyReceipt,
+  idempotencyKey?: string,
 ): Promise<AddedIngredients> {
   const access = await assertListAccess(userId, input.listId, 'write');
 
   for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
     try {
-      return await attemptAdd(userId, activityId, input, access.index, now, receiptFor);
+      return await attemptAdd(
+        userId,
+        activityId,
+        input,
+        access.index,
+        now,
+        receiptFor,
+        idempotencyKey,
+      );
     } catch (error) {
       if (!(error instanceof ReclassifyError)) throw error;
     }
@@ -174,6 +191,7 @@ async function attemptAdd(
   access: ListAccessGrant,
   now: string,
   receiptFor?: (result: AddedIngredients) => IdempotencyReceipt,
+  idempotencyKey?: string,
 ): Promise<AddedIngredients> {
   /**
    * Re-read inside the cycle, not once outside it. The meal's ingredient array is half of
@@ -269,6 +287,7 @@ async function attemptAdd(
     listId: input.listId,
     userId,
     access,
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
   });
 
   return result;
@@ -305,6 +324,7 @@ interface CommitSpans {
   readonly listId: string;
   readonly userId: string;
   readonly access: ListAccessGrant;
+  readonly idempotencyKey?: string;
 }
 
 /**
@@ -323,23 +343,40 @@ async function commit(builder: TransactionBuilder, spans: CommitSpans): Promise<
         if (index === spans.deletionGate) return new ListNotFoundError();
         if (index === spans.receipt) return new IdempotencyRaceError();
         /**
-         * A create-slot failure means the client's `itm_` is already taken — by a live row or
-         * by a tombstone — and **re-reading cannot change that**, so this is the one failure
-         * that must not loop.
-         *
-         * It is not reachable from the ordinary replay: a row this action created is
-         * unchecked and already carries this label, so the re-run classifies it as unchanged
-         * and composes no create at all. What reaches here is a replay after the receipt
-         * expired onto a row the user has since **checked** — a genuine conflict, and a `503`
-         * telling them to retry would be a `503` that never comes good.
+         * A create-slot failure means the client's `itm_` is already taken, and re-reading
+         * cannot free it — so this is the one failure that must not loop. Which answer it
+         * deserves depends on **who** took it, and that is decided in the catch below rather
+         * than here, because telling them apart needs a read.
          */
         if (index > spans.deletionGate && index < spans.createSpanEnd) {
-          return new AppError('conflict', ID_UNAVAILABLE);
+          return new TakenItemIdError();
         }
         return new ReclassifyError();
       },
     });
   } catch (error) {
+    /**
+     * Who took the id.
+     *
+     * DynamoDB reports only the **first** failing item, and the item `Put` sits before the
+     * receipt — so a concurrent duplicate of this very request surfaces here rather than as
+     * an idempotency race, and answering `409` would tell a caller their write failed when
+     * the winner had just performed it.
+     *
+     * A stored receipt under this key is what tells the two apart. Found: this is that race,
+     * so hand it back as one and let the middleware answer from the winner's receipt.
+     * Absent: something else holds the id — a replay after the receipt expired onto a row
+     * the user has since checked — which is a genuine conflict no retry would resolve.
+     */
+    if (error instanceof TakenItemIdError) {
+      const winner =
+        spans.idempotencyKey === undefined
+          ? undefined
+          : await loadReceipt(spans.userId, spans.idempotencyKey);
+      throw winner === undefined
+        ? new AppError('conflict', ID_UNAVAILABLE)
+        : new IdempotencyRaceError();
+    }
     /**
      * META carries two conditions that can each fail and reports neither. A strong reread
      * separates them: a full list is permanent and must say so, while a moved `rankVersion`

@@ -36,18 +36,29 @@ export async function addIngredientsToListHandler(
 ): Promise<Response> {
   const userId = requireUserId(c);
 
-  return idempotentJson(c, 201, (receiptFor) =>
-    addIngredientsToList(userId, c.req.param('id'), input, now, (result) =>
-      receiptFor({
-        listId: result.listId,
-        sourceLabel: result.sourceLabel,
-        activityUpdatedAt: result.activityUpdatedAt,
-        ingredients: result.ingredients.map((row) => ({
-          ingredientId: row.ingredientId,
-          outcome: row.outcome,
-          item: toListItem(row.item),
-        })),
-      }),
+  return idempotentJson(c, 201, (receiptFor, key) =>
+    addIngredientsToList(
+      userId,
+      c.req.param('id'),
+      input,
+      now,
+      (result) =>
+        receiptFor({
+          listId: result.listId,
+          sourceLabel: result.sourceLabel,
+          activityUpdatedAt: result.activityUpdatedAt,
+          ingredients: result.ingredients.map((row) => ({
+            ingredientId: row.ingredientId,
+            outcome: row.outcome,
+            item: toListItem(row.item),
+          })),
+        }),
+      /**
+       * The key, so the service can tell a same-key race from a genuinely taken destination
+       * id when its transaction loses on an item `Put` — see `ingredientsToListService`'s
+       * `commit`. Most operations ignore this argument; this one needs it.
+       */
+      key,
     ),
   );
 }
