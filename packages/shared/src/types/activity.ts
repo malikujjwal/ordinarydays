@@ -45,9 +45,17 @@ export interface ActivityLocation {
 }
 
 export interface MealIngredient {
+  /**
+   * A client-minted `ing_` embedded-row identity, not an entity id (`data-model.md` §8).
+   *
+   * Minted before a new row is accepted and retained through edits and reordering, so an
+   * add-to-list action can name the same row after the array moves. Replacing a row mints a
+   * new one; removing it makes the old one stale.
+   */
+  ingredientId: string;
   name: string;
   quantity?: string;
-  /** Set when the row has been sent to a list. Phase 3. */
+  /** Set when the row has been sent to a list. Server-owned; written only by P3-17. */
   addedToListId?: string;
 }
 

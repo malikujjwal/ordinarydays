@@ -83,6 +83,19 @@ function seededId(index: number): string {
 }
 
 /**
+ * A fixed `ing_` embedded-row identity, deterministic for the same reason `seededId` is.
+ *
+ * P3-17 makes `ingredientId` required, which is a **breaking change for stored rows** — and
+ * the seed is where that boundary is drawn (§P3-17). Re-running the seed is the migration:
+ * this is pre-deploy local data, and inventing an index-derived compatibility id for the old
+ * shape would build exactly the position-is-identity fallback the field exists to remove.
+ */
+function seededIngredientId(activityIndex: number, row: number): string {
+  const suffix = `${CROCKFORD[activityIndex % 32]}${CROCKFORD[row % 32]}`;
+  return `ing_01J8SEED${'0'.repeat(16)}${suffix}`;
+}
+
+/**
  * Dates relative to **today**, so the data stays plausible in six weeks.
  *
  * Only the ids are fixed. That means a given activity moves date as the weeks pass, which is
@@ -299,6 +312,7 @@ function activities(): Activity[] {
         kind: 'meal',
         mealSlot: 'dinner',
         ingredients: Array.from({ length: 60 }, (_, i) => ({
+          ingredientId: seededIngredientId(21, i),
           name: `Ingredient ${i + 1}`,
           quantity: `${i + 1} g`,
         })),

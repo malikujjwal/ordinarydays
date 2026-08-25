@@ -27,7 +27,10 @@ const fullDetails: Record<ActivityType, ActivityDetails> = {
     kind: 'meal',
     mealSlot: 'dinner',
     recipeUrl: 'https://example.com/tacos',
-    ingredients: [{ name: 'Tortillas' }, { name: 'Chicken' }],
+    ingredients: [
+      { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X2', name: 'Tortillas' },
+      { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X3', name: 'Chicken' },
+    ],
   },
   watch: {
     kind: 'watch',

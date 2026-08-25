@@ -1,5 +1,6 @@
 import type { ActivityDetails, ActivityType } from '@od/shared/types';
 import type { MealSlot } from '@/features/compose/model/fields';
+import { newLocalId } from '@/lib/localIds';
 
 /**
  * The shape a half-filled form holds, and its two conversions (P1-25).
@@ -15,8 +16,13 @@ import type { MealSlot } from '@/features/compose/model/fields';
  */
 export interface DraftIngredient {
   /**
-   * Stable for the row's lifetime, so React keys it by identity rather than by position.
-   * Local to the draft and never sent — the server has no notion of an ingredient id.
+   * The row's `ing_` identity — stable for its lifetime, so React keys it by identity rather
+   * than by position **and** the server can name the same row after a reorder.
+   *
+   * It was a local `row-N` counter until P3-17, described here as "never sent — the server
+   * has no notion of an ingredient id". It is now sent, and is the same value the meal
+   * stores: `data-model.md` §8's client-minted embedded-row identity. A row loaded from an
+   * existing meal keeps the id it already has; only a genuinely new row mints one.
    */
   id: string;
   name: string;
@@ -109,16 +115,19 @@ export const EMPTY_SCHEDULE: DraftSchedule = Object.freeze({
 export const EMPTY_LOCATION: DraftLocation = Object.freeze({ label: '', address: '' });
 
 /**
- * A new ingredient row.
+ * A new ingredient row, with a freshly minted `ing_` id.
  *
- * A counter rather than a UUID: the id never leaves this draft, and reaching for
- * `expo-crypto` here would put a native module behind a plus button.
+ * This used to be a counter, on the reasoning that the id never left the draft and reaching
+ * for `expo-crypto` would put a native module behind a plus button. P3-17 makes the id part
+ * of the stored meal, so it has to be a real ULID from the device's CSPRNG — the same
+ * generator the reminder ids already use. It is still one call per tap of `+`.
+ *
+ * **Only a new row calls this.** Editing or reordering keeps the id it has, and
+ * {@link fromActivityDetails} carries the stored id back in rather than re-minting, because
+ * re-minting on open would make every id stale the moment a meal was edited.
  */
-let rowCounter = 0;
-
 export function newIngredient(): DraftIngredient {
-  rowCounter += 1;
-  return { id: `row-${rowCounter}`, name: '', quantity: '', selected: false };
+  return { id: newLocalId('ing'), name: '', quantity: '', selected: false };
 }
 
 const trimmed = (value: string): string | undefined => {
@@ -208,6 +217,7 @@ function kindedDetails(
       const ingredients = details.ingredients
         .filter((row) => row.name.trim() !== '')
         .map((row) => ({
+          ingredientId: row.id,
           name: row.name.trim(),
           ...(trimmed(row.quantity) === undefined
             ? {}
@@ -294,7 +304,8 @@ export function fromActivityDetails(details: ActivityDetails): DraftDetails {
         ...next,
         mealSlot: details.mealSlot,
         ingredients: (details.ingredients ?? []).map((row) => ({
-          ...newIngredient(),
+          /** The stored id, retained — see {@link newIngredient}. Never re-minted here. */
+          id: row.ingredientId,
           name: row.name,
           quantity: row.quantity ?? '',
           selected: false,

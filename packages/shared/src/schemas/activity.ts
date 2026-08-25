@@ -80,7 +80,30 @@ export const activityLocation = z.strictObject({
   mapUrl: z.url().optional(),
 });
 
+/**
+ * One row of a meal's ingredient list (`data-model.md` §4.4).
+ *
+ * ## `ingredientId` is required, and is an embedded-row identity
+ *
+ * `data-model.md` §8: `ing_` is "a client-minted embedded-row identity, not an entity id".
+ * It has no endpoint and no tombstone. Its whole job is to let
+ * `POST /v1/activities/:id/ingredients/add-to-list` name the same row after the array has
+ * moved — an offline action selected before a reorder must still add what the user picked,
+ * and array position cannot say that (P3-17, `plans-and-lists.md` §7.3 step 3).
+ *
+ * It is **required**, not optional, because an optional one is not an identity: the server
+ * would need a fallback for rows without it, and the only available fallback is the index —
+ * which is precisely the thing that cannot be trusted. Removing or replacing a row makes its
+ * id stale, and a stale id rejects the whole action rather than resolving to a neighbour.
+ *
+ * `addedToListId` stays server-owned: it records that the add-to-list action ran, so a client
+ * able to set it on an ordinary create would be fabricating that for any well-formed `lst_`.
+ * It is not rejected here, because this same shape is what the server stores and reads back;
+ * the create/patch boundary is `activityDetails`, which is reached only through routes that
+ * never let a client author it.
+ */
 export const mealIngredient = z.strictObject({
+  ingredientId: ulidId('ing'),
   name: freeText.min(1),
   quantity: freeText.optional(),
   addedToListId: ulidId('lst').optional(),

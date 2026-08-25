@@ -29,6 +29,19 @@ function encodeRandom(bytes: Uint8Array): string {
   return encoded.slice(0, 16).padEnd(16, '0');
 }
 
-export function newLocalId(prefix: 'rem'): string {
+/**
+ * A client-minted prefixed ULID, from the device's CSPRNG.
+ *
+ * Both prefixes name something the client must be able to identify **before** the server has
+ * seen it: a `rem_` reminder queued offline and armed locally under the same id it will
+ * eventually be stored under (P2-57), and an `ing_` ingredient row an add-to-list action
+ * names after the array has been reordered (P3-17, `data-model.md` §8). Neither is an entity
+ * id the client may invent authority with — they are identities, and the server still decides
+ * what may be done with them.
+ *
+ * The union is closed on purpose: a new prefix is a decision about what a client may name,
+ * so it is made here rather than by passing a different string at a call site.
+ */
+export function newLocalId(prefix: 'rem' | 'ing'): string {
   return `${prefix}_${encodeTime(Date.now())}${encodeRandom(getRandomBytes(10))}`;
 }
