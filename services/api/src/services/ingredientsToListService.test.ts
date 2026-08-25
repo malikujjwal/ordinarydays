@@ -37,8 +37,9 @@ vi.mock('../repositories/listRepository.js', () => ({
   ListNotFoundError: class extends Error {},
   ListRankRepairRequiredError: class extends Error {},
   ListReadFenceError: class extends Error {},
+  ListSnapshotStaleError: class extends Error {},
   planListItemWrites: vi.fn(),
-  readAllListItems: vi.fn(),
+  snapshotListItems: vi.fn(),
 }));
 vi.mock('../repositories/tx.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../repositories/tx.js')>();
@@ -143,6 +144,11 @@ const run = (activity = meal(), selections?: Parameters<typeof input>[0]) => {
   return addIngredientsToList(USER, MEAL, input(selections), NOW);
 };
 
+/** Seeds the fenced snapshot the classification is decided from. */
+const snapshot = (items: ListItem[], rankVersion = 1) => {
+  vi.mocked(listRepository.snapshotListItems).mockResolvedValue({ items, rankVersion });
+};
+
 /** Every item the one transaction was built from. */
 const committed = () =>
   (vi.mocked(tx.transactWrite).mock.calls[0]?.[0] ?? []) as Record<string, never>[];
@@ -154,7 +160,7 @@ beforeEach(() => {
     index: { grant: true },
   } as never);
   vi.mocked(listRepository.getListMeta).mockResolvedValue(list());
-  vi.mocked(listRepository.readAllListItems).mockResolvedValue([]);
+  snapshot([]);
   vi.mocked(listRepository.planListItemWrites).mockImplementation((_u, _l, _a, count) =>
     Promise.resolve({
       list: list(),
@@ -245,7 +251,7 @@ describe('everything commits in one transaction', () => {
   });
 
   it('carries the created rows, the meal provenance and the receipt together', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([existingItem()]);
+    snapshot([existingItem()]);
 
     await addIngredientsToList(
       USER,
@@ -290,10 +296,13 @@ describe('a stale read re-runs the whole cycle', () => {
   /** Reclassifying is the point: a row checked in between must become a new item. */
   it('re-reads and reclassifies after a condition failure, then commits', async () => {
     let attempt = 0;
-    vi.mocked(listRepository.readAllListItems).mockImplementation(() => {
+    vi.mocked(listRepository.snapshotListItems).mockImplementation(() => {
       attempt += 1;
       // First read: Chicken is unchecked, so it would be extended. Second: checked.
-      return Promise.resolve([existingItem({ checked: attempt > 1 })]) as never;
+      return Promise.resolve({
+        items: [existingItem({ checked: attempt > 1 })],
+        rankVersion: 1,
+      }) as never;
     });
     vi.mocked(tx.transactWrite).mockImplementationOnce((_items, options) => {
       // Past the create span, so this is a stale-read signal rather than a taken item id.
@@ -304,14 +313,46 @@ describe('a stale read re-runs the whole cycle', () => {
 
     const result = await run();
 
-    expect(vi.mocked(listRepository.readAllListItems).mock.calls).toHaveLength(2);
+    expect(vi.mocked(listRepository.snapshotListItems).mock.calls).toHaveLength(2);
     expect(tx.transactWrite).toHaveBeenCalledTimes(2);
     expect(result.ingredients[0]?.outcome).toBe('created');
   });
 
+  /**
+   * The P1 raised in review: the service snapshotted the list, classified against it, and
+   * then let rank allocation read `rankVersion` **again**. A create landing between the two
+   * was adopted by the later read, so the condition passed and the duplicate the
+   * classification existed to prevent was written anyway.
+   *
+   * Deterministic here: the snapshot is taken at version 1 and rank planning finds 2.
+   */
+  it('reclassifies rather than committing under a version it did not read', async () => {
+    snapshot([], 1);
+    vi.mocked(listRepository.planListItemWrites).mockImplementationOnce(() => {
+      throw new listRepository.ListSnapshotStaleError();
+    });
+
+    await run();
+
+    expect(vi.mocked(listRepository.snapshotListItems).mock.calls).toHaveLength(2);
+    expect(tx.transactWrite).toHaveBeenCalledOnce();
+  });
+
+  it('asks rank allocation to commit under the exact version it snapshotted', async () => {
+    snapshot([], 7);
+
+    await run();
+
+    expect(vi.mocked(listRepository.planListItemWrites).mock.calls[0]?.[4]).toMatchObject(
+      {
+        expectedRankVersion: 7,
+      },
+    );
+  });
+
   it('gives up with the retryable conflict after three raced attempts', async () => {
     // An extension, so the create span is empty and this index is past it.
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([existingItem()]);
+    snapshot([existingItem()]);
     vi.mocked(tx.transactWrite).mockImplementation((_items, options) => {
       throw (
         options as { onConditionFailed: (index: number) => Error }
@@ -396,7 +437,7 @@ describe('what it derives, and what it refuses to be told', () => {
   });
 
   it('appends the meal title when another meal already used the label', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([
+    snapshot([
       existingItem({
         title: 'Potatoes',
         sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
@@ -410,7 +451,7 @@ describe('what it derives, and what it refuses to be told', () => {
   });
 
   it('ignores its own earlier rows when deciding whether the label collides', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([
+    snapshot([
       existingItem({
         title: 'Tomatoes',
         sourceActivityId: MEAL,
@@ -442,7 +483,7 @@ describe('the duplicate rule chooses which row is written', () => {
   });
 
   it('extends and creates nothing when an unchecked row matches', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([existingItem()]);
+    snapshot([existingItem()]);
 
     const result = await run();
 
@@ -454,17 +495,13 @@ describe('the duplicate rule chooses which row is written', () => {
   });
 
   it('matches case-insensitively, on trimmed titles', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([
-      existingItem({ title: '  cHiCkEn  ' }),
-    ]);
+    snapshot([existingItem({ title: '  cHiCkEn  ' })]);
 
     expect((await run()).ingredients[0]?.outcome).toBe('labelled');
   });
 
   it('creates a second row when the match is checked, because it was bought', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([
-      existingItem({ checked: true }),
-    ]);
+    snapshot([existingItem({ checked: true })]);
 
     const result = await run();
 
@@ -473,7 +510,7 @@ describe('the duplicate rule chooses which row is written', () => {
   });
 
   it('appends to an existing label rather than replacing it', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([
+    snapshot([
       existingItem({
         sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
         sourceLabel: 'Thursday lunch',
@@ -489,9 +526,7 @@ describe('the duplicate rule chooses which row is written', () => {
 
   /** A re-tap after a lost response must not read `Sunday dinner · Sunday dinner`. */
   it('writes nothing for a row that already carries this label', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([
-      existingItem({ sourceActivityId: MEAL, sourceLabel: 'Sunday dinner' }),
-    ]);
+    snapshot([existingItem({ sourceActivityId: MEAL, sourceLabel: 'Sunday dinner' })]);
 
     const result = await run();
 
@@ -503,7 +538,7 @@ describe('the duplicate rule chooses which row is written', () => {
   });
 
   it('compares whole segments, so a prefix is not a match', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([
+    snapshot([
       existingItem({
         sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
         sourceLabel: 'Sunday',
@@ -516,7 +551,7 @@ describe('the duplicate rule chooses which row is written', () => {
   });
 
   it('lets only the first of two identical titles claim the one matching row', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([existingItem()]);
+    snapshot([existingItem()]);
     const twoChickens = meal({
       details: {
         kind: 'meal',
@@ -539,9 +574,7 @@ describe('the duplicate rule chooses which row is written', () => {
 
 describe('the response', () => {
   it('reads in the order the ingredients were sent, whatever happened to each', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([
-      existingItem({ title: 'Tortillas (8)' }),
-    ]);
+    snapshot([existingItem({ title: 'Tortillas (8)' })]);
 
     const result = await run(meal(), [
       { ingredientId: TORTILLAS, itemId: ITEM_TWO },
@@ -556,7 +589,7 @@ describe('the response', () => {
   });
 
   it('names every selected ingredient, including deduplicated ones', async () => {
-    vi.mocked(listRepository.readAllListItems).mockResolvedValue([existingItem()]);
+    snapshot([existingItem()]);
 
     const result = await run(meal(), [
       { ingredientId: CHICKEN, itemId: ITEM_ONE },

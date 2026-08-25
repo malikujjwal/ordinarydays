@@ -18,8 +18,9 @@ import {
   ListNotFoundError,
   ListRankRepairRequiredError,
   ListReadFenceError,
+  ListSnapshotStaleError,
   planListItemWrites,
-  readAllListItems,
+  snapshotListItems,
 } from '../repositories/listRepository.js';
 import { TransactionBuilder, transactWrite } from '../repositories/tx.js';
 import { ID_UNAVAILABLE } from './activityService.js';
@@ -203,15 +204,20 @@ async function attemptAdd(
 
   const list = await mapped(() => loadCollection(userId, input.listId, access, now));
   const selected = resolveSelected(activity, input);
-  const existing = await mapped(() =>
+  /**
+   * The snapshot everything below is decided from — and the version it was taken under, which
+   * the transaction must commit under too. See {@link snapshotListItems}.
+   */
+  const snapshot = await mapped(() =>
     withListWorkDrain(
       userId,
       input.listId,
       access,
-      () => readAllListItems(userId, input.listId, access),
+      () => snapshotListItems(userId, input.listId, access),
       now,
     ),
   );
+  const existing = snapshot.items;
 
   const sourceLabel = provenanceLabel(
     labelSource(activity),
@@ -222,7 +228,14 @@ async function attemptAdd(
   const plan = classify(selected, existing, sourceLabel);
   assertCapacity(list, plan.creates.length);
 
-  const basis = await planWrites(userId, input.listId, access, plan.creates.length, now);
+  const basis = await planWrites(
+    userId,
+    input.listId,
+    access,
+    plan.creates.length,
+    snapshot.rankVersion,
+    now,
+  );
 
   const created: ListItem[] = plan.creates.map((resolved, index) => ({
     itemId: resolved.itemId,
@@ -293,17 +306,28 @@ async function attemptAdd(
   return result;
 }
 
-/** Allocates ranks, repairing once — after which this attempt re-plans from scratch. */
+/**
+ * Allocates ranks under the snapshot's own version, repairing once if the gap is exhausted.
+ *
+ * `expectedRankVersion` is the whole point: the classification above decided what to create
+ * from rows read at that version, so committing under a **later** one would accept a create
+ * that landed in between and write the duplicate the classification was meant to prevent.
+ * A moved version is not a retry of this plan — it is a reason to make a new one.
+ */
 async function planWrites(
   userId: string,
   listId: string,
   access: ListAccessGrant,
   count: number,
+  expectedRankVersion: number,
   now: string,
 ) {
   try {
-    return await planListItemWrites(userId, listId, access, count);
+    return await planListItemWrites(userId, listId, access, count, {
+      expectedRankVersion,
+    });
   } catch (error) {
+    if (error instanceof ListSnapshotStaleError) throw new ReclassifyError();
     if (error instanceof ListReadFenceError) {
       throw new AppError('internal', BUSY, undefined, 1);
     }

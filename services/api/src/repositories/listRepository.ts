@@ -297,6 +297,19 @@ class StaleProfileDefaultError extends Error {
   }
 }
 
+/**
+ * The list moved between a caller's deciding read and its rank allocation.
+ *
+ * Exported, unlike its retryable sibling, because the caller has to do more than retry the
+ * write: whatever it decided from the old snapshot has to be decided again (P3-17).
+ */
+export class ListSnapshotStaleError extends Error {
+  constructor() {
+    super('The list changed after it was read.');
+    this.name = 'ListSnapshotStaleError';
+  }
+}
+
 class RetryableListMutationConflictError extends Error {
   constructor() {
     super('Retry the list mutation against current storage state.');
@@ -902,6 +915,55 @@ export async function readAllListItems(
   if (list === undefined) throw new ListNotFoundError();
   assertFenceOpen(list);
   return readAllItemsUnfenced(listId);
+}
+
+/** Every item on one list, **and the version they were read under** (P3-17). */
+export interface ListItemSnapshot {
+  readonly items: ListItem[];
+  readonly rankVersion: number;
+}
+
+/**
+ * Pattern 8e's read, with the pre/post fence that lets the caller **decide** from it.
+ *
+ * ## Why this is not {@link readAllListItems}
+ *
+ * That one answers "what is on this list", which is all its three callers need — a data-loss
+ * count and an Undo filter, both of which only report. P3-17 does something else with the
+ * same rows: it classifies each ingredient against them, and then **writes** on the strength
+ * of that classification. A read that only reports may be a moment stale; a read that decides
+ * may not.
+ *
+ * So this returns the `rankVersion` as well, and requires it unchanged across the item query
+ * — the same pre/post fence `getListItem` uses. That version is then the one the caller's
+ * transaction must commit under, which is what makes "no matching row exists, so create one"
+ * a claim the transaction can actually enforce.
+ *
+ * **This closes a real hole** (raised in review). The service used to snapshot here and read
+ * `rankVersion` again inside rank allocation, so a concurrent create landing between the two
+ * was adopted by the later read: the condition passed, and the duplicate the classification
+ * was supposed to prevent was written anyway. Two reads of one version is one read too many.
+ *
+ * Left as a separate function rather than folded into `readAllListItems` because the stricter
+ * fence would newly reject the other three callers' reads on an unrelated concurrent create,
+ * and making a *count* fail because someone else added a row is not an improvement.
+ */
+export async function snapshotListItems(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+): Promise<ListItemSnapshot> {
+  assertListAccessGrant(userId, listId, access);
+  const before = await getLiveListMetaStrong(listId);
+  if (before === undefined) throw new ListNotFoundError();
+  assertFenceOpen(before);
+
+  const items = await readAllItemsUnfenced(listId);
+
+  const after = await getLiveListMetaStrong(listId);
+  if (after === undefined) throw new ListNotFoundError();
+  assertSameFence(before, after);
+  return { items, rankVersion: after.rankVersion };
 }
 
 export interface ListMetaPatch {
@@ -1626,17 +1688,39 @@ export interface ListWriteBasis {
  * another partition in one transaction can still get its ranks from exactly the same
  * neighbours-under-a-version read (P3-17). The alternative was a second rank allocator, which
  * is how two callers eventually disagree about what a valid rank is.
+ *
+ * ## `expectedRankVersion`, and why it is not optional in spirit
+ *
+ * This function reads `rankVersion` to build the condition the caller's transaction commits
+ * under. A caller that **decided something** from an earlier read of the same list — P3-17
+ * classifies each ingredient against a {@link snapshotListItems} snapshot — must commit under
+ * *that* version, not under whatever this read happens to find. Adopting a newer one silently
+ * launders a stale decision into a passing condition: a create that landed in between is
+ * accepted by the condition and the duplicate is written (raised in review).
+ *
+ * So a caller with a snapshot passes its version and gets {@link ListSnapshotStaleError} if
+ * the list has moved since. Callers with nothing to preserve — an ordinary create, which
+ * decides nothing from a prior read — omit it and take the current version, as before.
  */
 export async function planListItemWrites(
   userId: string,
   listId: string,
   access: ListAccessGrant,
   count: number,
-  afterItemId?: string | null,
+  options: {
+    readonly afterItemId?: string | null;
+    readonly expectedRankVersion?: number;
+  } = {},
 ): Promise<ListWriteBasis> {
   assertListAccessGrant(userId, listId, access);
   const state = await readMutationState(userId, listId, access);
-  const neighbours = await readNeighbours(listId, afterItemId);
+  if (
+    options.expectedRankVersion !== undefined &&
+    state.list.rankVersion !== options.expectedRankVersion
+  ) {
+    throw new ListSnapshotStaleError();
+  }
+  const neighbours = await readNeighbours(listId, options.afterItemId);
   return { list: state.list, ranks: count === 0 ? [] : allocateRanks(neighbours, count) };
 }
 

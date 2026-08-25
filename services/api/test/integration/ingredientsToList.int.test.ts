@@ -1,7 +1,7 @@
 import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { MAX_INGREDIENTS_PER_ADD } from '@od/shared';
 import type { List, ListItem } from '@od/shared/types';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
 
 useTestTable();
@@ -854,38 +854,6 @@ describe('one commit, or none', () => {
     expect(byId.get(TORTILLAS)).toBe(list.listId);
   });
 
-  /**
-   * A stale ingredient index cancels the whole transaction. The meal is patched to drop a row
-   * after the request body was composed, so the surviving id resolves but the per-index
-   * condition cannot hold — and nothing at all is written, receipt included.
-   */
-  it('leaves no row, no label and no receipt when the meal moves under it', async () => {
-    const { list } = await setUp();
-    await addItem(list.listId, 'Chicken');
-    const before = await itemRows(list.listId);
-
-    await request(
-      'PATCH',
-      `/v1/activities/${MEAL}`,
-      {
-        details: {
-          kind: 'meal',
-          mealSlot: 'dinner',
-          ingredients: INGREDIENTS.filter((row) => row.ingredientId !== CHICKEN),
-        },
-      },
-      { 'If-Match': String((await storedMeal())?.updatedAt) },
-    );
-
-    const res = await addToList(list.listId, [CHICKEN, TORTILLAS]);
-
-    expect(res.status).toBe(400);
-    expect(await itemRows(list.listId)).toEqual(before);
-    for (const ingredient of await storedIngredients()) {
-      expect(ingredient).not.toHaveProperty('addedToListId');
-    }
-  });
-
   it('caps one operation at MAX_INGREDIENTS_PER_ADD', async () => {
     const { list } = await setUp();
 
@@ -911,5 +879,135 @@ describe('one commit, or none', () => {
 
     expect(res.status).toBe(400);
     expect(await itemRows(list.listId)).toHaveLength(0);
+  });
+});
+
+/**
+ * The two races that only exist **between** the service's reads and its commit, injected
+ * rather than hoped for.
+ *
+ * `planListItemWrites` is the seam: by the time it runs the meal has been read, the
+ * destination validated, the ingredient ids resolved and the list classified — and nothing
+ * has been written. A wrapper that mutates storage there, once, puts a real concurrent change
+ * in exactly the window the conditions exist to catch, on the real table.
+ *
+ * The earlier version of the stale-meal test patched the meal *before* sending the request,
+ * so the handler read the already-changed array and refused it during selection. That proves
+ * the selection guard, which is worth proving, and proves nothing at all about whether a
+ * transaction condition failure rolls back the rows, the provenance and the receipt together
+ * (raised in review). These do.
+ */
+describe('a change landing between the read and the commit', () => {
+  /** Runs `injected` the first time the service reaches rank allocation, then calls through. */
+  const injectOnce = async (injected: () => Promise<unknown>) => {
+    const listRepository = await import('../../src/repositories/listRepository.js');
+    const original = listRepository.planListItemWrites;
+    let fired = false;
+    return vi
+      .spyOn(listRepository, 'planListItemWrites')
+      .mockImplementation(async (...args) => {
+        if (!fired) {
+          fired = true;
+          await injected();
+        }
+        return original(...args);
+      });
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * The P1. A matching row appears after classification said "absent, create one". The
+   * snapshot's `rankVersion` is the version the transaction must commit under, so the create
+   * cannot be laundered through a newer one — the attempt reclassifies and extends instead.
+   */
+  it('does not duplicate a title another writer added after classification', async () => {
+    const { list } = await setUp();
+
+    const spy = await injectOnce(() => addItem(list.listId, 'Chicken'));
+    const res = await addToList(list.listId, [CHICKEN]);
+
+    expect(spy).toHaveBeenCalled();
+    expect(res.status).toBe(201);
+
+    const rows = await itemRows(list.listId);
+    const chicken = rows.filter((row) => String(row.title).toLowerCase() === 'chicken');
+    expect(chicken).toHaveLength(1);
+    // Reclassified: the row that appeared is unchecked, so it was labelled, not duplicated.
+    expect(chicken[0]?.sourceLabel).toBe('Sunday dinner');
+    expect(
+      ((await res.json()).data as { ingredients: Json[] }).ingredients[0]?.outcome,
+    ).toBe('labelled');
+  });
+
+  /**
+   * The meal's own version moves in the window. The transaction's condition on the read
+   * `updatedAt` fails, the whole attempt rolls back, and the retry re-reads and commits — so
+   * the observable outcome is success with exactly one row, not two.
+   */
+  it('rolls back and retries when the meal changes under it', async () => {
+    const { list } = await setUp();
+
+    const spy = await injectOnce(async () =>
+      request(
+        'PATCH',
+        `/v1/activities/${MEAL}`,
+        { title: 'Chicken tacos, revised' },
+        { 'If-Match': String((await storedMeal())?.updatedAt) },
+      ),
+    );
+    const res = await addToList(list.listId, [CHICKEN, TORTILLAS]);
+
+    expect(spy).toHaveBeenCalled();
+    expect(res.status).toBe(201);
+
+    const rows = await itemRows(list.listId);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.title).sort()).toEqual(['Chicken', 'Tortillas (8)']);
+
+    const byId = new Map(
+      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
+    );
+    expect(byId.get(CHICKEN)).toBe(list.listId);
+    expect(byId.get(TORTILLAS)).toBe(list.listId);
+  });
+
+  /**
+   * And when the retry cannot succeed — the selected row is gone by the time it re-reads —
+   * the first attempt's transaction must have left **nothing**: no row, no label on the
+   * pre-existing row, and no receipt.
+   */
+  it('leaves no row, no label and no receipt when the selected row disappears', async () => {
+    const { list } = await setUp();
+    const existing = await addItem(list.listId, 'Tortillas (8)');
+    const before = await itemRows(list.listId);
+
+    const spy = await injectOnce(async () =>
+      request(
+        'PATCH',
+        `/v1/activities/${MEAL}`,
+        {
+          details: {
+            kind: 'meal',
+            mealSlot: 'dinner',
+            ingredients: INGREDIENTS.filter((row) => row.ingredientId !== CHICKEN),
+          },
+        },
+        { 'If-Match': String((await storedMeal())?.updatedAt) },
+      ),
+    );
+    const res = await addToList(list.listId, [CHICKEN, TORTILLAS]);
+
+    expect(spy).toHaveBeenCalled();
+    expect(res.status).toBe(400);
+
+    // The pre-existing row is byte-identical: no label was extended by the failed attempt.
+    expect(await itemRows(list.listId)).toEqual(before);
+    expect(before.map((row) => row.itemId)).toEqual([existing.itemId]);
+    for (const ingredient of await storedIngredients()) {
+      expect(ingredient).not.toHaveProperty('addedToListId');
+    }
   });
 });
