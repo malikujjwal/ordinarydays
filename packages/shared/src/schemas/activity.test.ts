@@ -4,9 +4,11 @@ import type { Activity, ActivityDetails } from '../types/activity.js';
 import type { ActivityDetail } from '../types/activityDetail.js';
 import {
   activity,
+  activityCompletionResult,
   activityDetail,
   type activityDetails,
   completeActivityInput,
+  completionFollowUp,
   createActivityInput,
   patchActivityInput,
   skipActivityInput,
@@ -599,5 +601,160 @@ describe('createActivityInput accepts a client-minted activityId', () => {
         createdAt: '2026-08-17T10:00:00.000Z',
       }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * The completion follow-up (P3-16).
+ *
+ * The schema is the only thing standing between the server and a payload that describes a
+ * write nobody asked for, so what it **refuses** is the interesting half.
+ */
+describe('the completion follow-up', () => {
+  const LIST = 'lst_01J0000000000000000000000A';
+  const ITEM = 'itm_01J0000000000000000000000B';
+  const shared = {
+    listId: LIST,
+    listTitle: 'Movies and shows',
+    itemId: ITEM,
+    current: { watchStatus: 'watching', season: 2, episode: 4 },
+  } as const;
+
+  it('accepts the show row: current progress and the session as the target', () => {
+    const parsed = completionFollowUp.safeParse({
+      kind: 'watch_progress',
+      ...shared,
+      mediaKind: 'show',
+      target: { season: 2, episode: 5 },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('accepts the movie row, whose only target is the watched transition', () => {
+    expect(
+      completionFollowUp.safeParse({
+        kind: 'watch_watched',
+        ...shared,
+        mediaKind: 'movie',
+        current: { watchStatus: 'want' },
+        target: { watchStatus: 'watched' },
+      }).success,
+    ).toBe(true);
+  });
+
+  /**
+   * A `collection` upgraded to `watch` back-fills `watchStatus` and nothing else (P3-09), so
+   * an item with no `mediaKind` is ordinary rather than malformed. `kind` carries the copy.
+   */
+  it('accepts an item that has never said whether it is a movie or a show', () => {
+    expect(
+      completionFollowUp.safeParse({
+        kind: 'watch_progress',
+        ...shared,
+        current: { watchStatus: 'want' },
+        target: { episode: 1 },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ['a season alone', { season: 3 }],
+    ['an episode alone', { episode: 7 }],
+    ['both', { season: 3, episode: 7 }],
+  ])('accepts a progress target naming %s', (_why, target) => {
+    expect(
+      completionFollowUp.safeParse({
+        kind: 'watch_progress',
+        ...shared,
+        mediaKind: 'show',
+        target,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      'a show reaching for the watched transition',
+      { kind: 'watch_progress', ...shared, target: { watchStatus: 'watched' } },
+    ],
+    [
+      'a movie carrying an episode to advance to',
+      { kind: 'watch_watched', ...shared, target: { season: 2, episode: 5 } },
+    ],
+    [
+      'a target that would move the item somewhere other than watched',
+      { kind: 'watch_watched', ...shared, target: { watchStatus: 'watching' } },
+    ],
+    [
+      'an unknown follow-up kind',
+      { kind: 'watch_next_episode', ...shared, target: { episode: 6 } },
+    ],
+    [
+      'an activity id, which would let a client confirm against the wrong object',
+      {
+        kind: 'watch_progress',
+        ...shared,
+        activityId: 'act_01J0000000000000000000000C',
+        target: { episode: 5 },
+      },
+    ],
+  ])('rejects %s', (_why, value) => {
+    expect(completionFollowUp.safeParse(value).success).toBe(false);
+  });
+
+  /**
+   * **An empty target is not a weaker question — it is no question.** `Update to ?` renders
+   * nothing, and a client building the confirming `PATCH` from `{}` would send a `details`
+   * body that changes only `watchStatus`, turning the progress row into a status write
+   * nobody asked for (`plans-and-lists.md` §8.4 step 2).
+   */
+  it('rejects a progress target naming neither a season nor an episode', () => {
+    expect(
+      completionFollowUp.safeParse({
+        kind: 'watch_progress',
+        ...shared,
+        mediaKind: 'show',
+        target: {},
+      }).success,
+    ).toBe(false);
+  });
+
+  /**
+   * `mediaKind` is what **chooses** the arm, so these are the rows the two arms exist to
+   * make unrepresentable. Each carries a target its own arm accepts, so the only thing
+   * failing is the media/kind disagreement — a target-shaped rejection would pass whether or
+   * not the coupling held.
+   */
+  it.each([
+    [
+      'a progress row claiming the item is a movie',
+      {
+        kind: 'watch_progress',
+        ...shared,
+        mediaKind: 'movie',
+        target: { season: 2, episode: 5 },
+      },
+    ],
+    [
+      'a watched row claiming the item is a show',
+      {
+        kind: 'watch_watched',
+        ...shared,
+        mediaKind: 'show',
+        target: { watchStatus: 'watched' },
+      },
+    ],
+    [
+      'a watched row that never says the item is a movie',
+      { kind: 'watch_watched', ...shared, target: { watchStatus: 'watched' } },
+    ],
+  ])('rejects %s', (_why, value) => {
+    expect(completionFollowUp.safeParse(value).success).toBe(false);
+  });
+
+  it('is optional on the result, so a completion with nothing to suggest is valid', () => {
+    const result = activityCompletionResult.safeParse({ activity: task });
+    expect(result.success).toBe(true);
+    expect(result.success && 'followUp' in result.data).toBe(false);
   });
 });

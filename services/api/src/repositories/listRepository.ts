@@ -816,6 +816,72 @@ export async function getListItem(
   return resolved?.item;
 }
 
+/** What a completed watch session needs in order to describe a follow-up (P3-16). */
+export interface WatchFollowUpSource {
+  readonly list: List;
+  readonly link: ListItemActivityLink;
+  readonly item: ListItem;
+}
+
+/**
+ * The list, the caller's own pointer and the exact item, read together under one fence
+ * (access pattern 8f).
+ *
+ * ## Why this is one read and not three existing ones
+ *
+ * Composing `getListMeta`, `batchGetViewerLinks` and `getListItem` would answer the same
+ * question — and would take three independent pre/post fences to do it, roughly thirteen
+ * round trips hung off a completion that is already several reads deep. Worse, three fences
+ * is three *different* fences: the pointer could be read under one `rankVersion` and the
+ * item under the next, which is precisely the mixed generation each fence exists to refuse.
+ *
+ * One fence, and the three keyed reads inside it issued together. The suggestion is either
+ * a consistent picture of one list or it is not offered.
+ *
+ * ## What the fence is protecting here
+ *
+ * §P3-16's edge case: a list changed away from `behaviour: 'watch'` loses its items' typed
+ * `details`, and P3-09 removes them a chunk at a time. Mid-migration the rows are a mix of
+ * both shapes, so an unfenced read could find watch `details` on a row the migration has not
+ * reached yet and offer to update progress the user has just chosen to delete.
+ *
+ * A missing list, a non-`watch` one, a missing pointer and a missing item are all
+ * `undefined` — one absent thing among four, with nothing to tell apart. A fence failure
+ * still **throws** `ListReadFenceError`, as it does at every other call site rather than
+ * being quietly special here; turning that into "no follow-up" is the caller's policy
+ * decision and is made in the service, where it can be read next to the rest of the rule.
+ */
+export async function readWatchFollowUpSource(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  itemId: string,
+): Promise<WatchFollowUpSource | undefined> {
+  assertListAccessGrant(userId, listId, access);
+  const before = await getLiveListMetaStrong(listId);
+  if (before === undefined) return undefined;
+  assertFenceOpen(before);
+  if (before.behaviour !== 'watch') return undefined;
+
+  const [linkRow, resolved] = await Promise.all([
+    getItem<StoredItem>(listItemActivityLink(listId, userId, itemId), {
+      consistentRead: true,
+    }),
+    resolveItemStrong(listId, itemId),
+  ]);
+
+  const after = await getLiveListMetaStrong(listId);
+  if (after === undefined) return undefined;
+  assertSameFence(before, after);
+
+  if (linkRow === undefined || resolved === undefined) return undefined;
+  return {
+    list: after,
+    link: parseListItemActivityLink(linkRow),
+    item: resolved.item,
+  };
+}
+
 /**
  * Every item on one list, unpaged (access pattern 8e).
  *

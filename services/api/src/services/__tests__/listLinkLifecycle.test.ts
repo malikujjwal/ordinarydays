@@ -53,6 +53,12 @@ const mocks = {
   deleteActivity: vi.fn((_u: string, _a: string, _o?: unknown) => Promise.resolve()),
   findViewerLinksTo: vi.fn(() => Promise.resolve([])),
   batchGetViewerLinks: vi.fn(() => Promise.resolve([])),
+  /**
+   * Never reached from here — no row in this table completes a `watch` Plan — but the mock
+   * stands in for the whole module, and one missing export is a confusing failure later
+   * rather than a clear one now. What it decides is `watchFollowUp.test.ts`'s subject.
+   */
+  readWatchFollowUpSource: vi.fn(() => Promise.resolve(undefined)),
   deleteStaleViewerLink: vi.fn(() => Promise.resolve()),
   getListMeta: vi.fn(),
   listItems: vi.fn(),
@@ -88,6 +94,7 @@ vi.mock('../../repositories/activityRepository.js', () => ({
 vi.mock('../../repositories/listRepository.js', () => ({
   findViewerLinksTo: mocks.findViewerLinksTo,
   batchGetViewerLinks: mocks.batchGetViewerLinks,
+  readWatchFollowUpSource: mocks.readWatchFollowUpSource,
   deleteStaleViewerLink: mocks.deleteStaleViewerLink,
   getListMeta: mocks.getListMeta,
   listItems: mocks.listItems,

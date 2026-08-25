@@ -93,9 +93,29 @@ export const cursor = z
   .max(2048)
   .regex(/^[A-Za-z0-9_-]+={0,2}$/, 'Malformed cursor');
 
+/**
+ * The four watch-progress primitives, shared by the three places that describe watch state.
+ *
+ * A `watch` Activity's `details` and a `watch` ListItem's `details` are separate shapes —
+ * one is a session, the other is what the viewer has seen — but they answer the same
+ * questions with the same values, and P3-16's completion follow-up carries both sides in one
+ * payload. Declared here rather than three times so the bounds cannot drift into a season a
+ * ListItem accepts and an Activity rejects.
+ */
+export const watchMediaKind = z.enum(['movie', 'show']);
+
+/** The three headings a `watch` list groups under (`plans-and-lists.md` §8.1). */
+export const watchStatus = z.enum(['want', 'watching', 'watched']);
+
+/** Free integers, not a catalogue lookup: the app never looks anything up (§8.1). */
+export const watchSeason = z.number().int().min(0).max(1000);
+export const watchEpisode = z.number().int().min(0).max(10000);
+
 export type IsoDate = z.infer<typeof isoDate>;
 export type Hhmm = z.infer<typeof hhmm>;
 export type IanaTimezone = z.infer<typeof ianaTimezone>;
 export type Cents = z.infer<typeof cents>;
 export type UserId = z.infer<typeof userId>;
 export type Cursor = z.infer<typeof cursor>;
+export type WatchMediaKind = z.infer<typeof watchMediaKind>;
+export type WatchStatus = z.infer<typeof watchStatus>;

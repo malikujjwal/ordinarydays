@@ -20,7 +20,15 @@ import {
   participantInput,
   planType,
 } from './activity.js';
-import { cursor, ulidId, userId } from './common.js';
+import {
+  cursor,
+  ulidId,
+  userId,
+  watchEpisode,
+  watchMediaKind,
+  watchSeason,
+  watchStatus,
+} from './common.js';
 import { createRecurrence } from './recurrence.js';
 import { reminderInputsForSchedule, reminderOffsetMinutes } from './reminder.js';
 import { defaultSlot } from './user.js';
@@ -135,10 +143,10 @@ export const listMember = z.object({
  */
 const watchDetails = z.strictObject({
   behaviour: z.literal('watch'),
-  mediaKind: z.enum(['movie', 'show']).optional(),
-  watchStatus: z.enum(['want', 'watching', 'watched']),
-  season: z.number().int().min(0).max(1000).optional(),
-  episode: z.number().int().min(0).max(10000).optional(),
+  mediaKind: watchMediaKind.optional(),
+  watchStatus,
+  season: watchSeason.optional(),
+  episode: watchEpisode.optional(),
 });
 
 /** What a client may say about an ingredient. `addedToListId` is deliberately not here. */

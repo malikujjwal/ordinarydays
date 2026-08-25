@@ -3,6 +3,7 @@ import {
   type ActivityCompletionResult,
   activity as activitySchema,
   type CompleteActivityInput,
+  type CompletionFollowUp,
   type SkipActivityInput,
   type SnoozeActivityInput,
   type UncompleteActivityInput,
@@ -10,11 +11,15 @@ import {
 } from '@od/shared/schemas';
 import {
   type Activity,
+  type ActivityDetails,
   type ActivityOutcome,
   type ActivitySchedule,
   type ActivityScope,
   activityScope,
+  type List,
+  type ListItem,
   type ListItemActivityLink,
+  type ListItemDetails,
   type Occurrence,
   scopeFromWire,
   targetsWholeSeries,
@@ -23,6 +28,7 @@ import { differenceInCalendarDays, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { AppError } from '../lib/errors.js';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
+import { logger } from '../lib/logger.js';
 import {
   getActivityMeta,
   listParticipants,
@@ -31,11 +37,15 @@ import {
   StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
 import { receiptItem } from '../repositories/idempotencyRepository.js';
-import { findViewerLinksTo } from '../repositories/listRepository.js';
+import {
+  findViewerLinksTo,
+  readWatchFollowUpSource,
+} from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import * as occurrenceRepository from '../repositories/occurrenceRepository.js';
 import { TransactionBuilder, transactWrite } from '../repositories/tx.js';
 import { deriveActionCapabilities } from './actionCapabilities.js';
+import { assertListAccess } from './authz.js';
 
 const NOT_FOUND = 'Activity not found.';
 const OWNER_ONLY = 'Only the person who created this can change it.';
@@ -129,7 +139,18 @@ export async function completeActivity(
   });
   next.outcome = outcome;
   if (status === 'completed') next.completedAt = now;
-  const result: ActivityCompletionResult = { activity: next, outcome };
+  /**
+   * Computed **before** the write, because `receiptFor` freezes the response body below and a
+   * replay must return the same one. A negative outcome produced `skipped` above and gets
+   * nothing: it cleared the pointer this would have read, and a session that did not happen
+   * is not evidence about anything.
+   */
+  const followUp = status === 'completed' ? await watchFollowUp(userId, next) : undefined;
+  const result: ActivityCompletionResult = {
+    activity: next,
+    outcome,
+    ...(followUp === undefined ? {} : { followUp }),
+  };
 
   await writeStatusClearingLinks(userId, next, activity.updatedAt, {
     previous: activity,
@@ -258,6 +279,156 @@ export async function skipActivity(
     idempotencyReceipt: receiptFor(result),
   });
   return result;
+}
+
+type WatchProgress = Extract<ListItemDetails, { behaviour: 'watch' }>;
+type WatchSession = Extract<ActivityDetails, { kind: 'watch' }>;
+
+/**
+ * The one contextual follow-up a completed watch session may offer (P3-16).
+ *
+ * ## It reads. It never writes.
+ *
+ * Everything below produces a value the response carries and the client renders. Confirming
+ * is a separate user action: an ordinary `PATCH /v1/lists/:id/items/:itemId` the client
+ * issues, through the route that already enforces the behaviour and field gates. There is no
+ * confirm endpoint, and a write reachable from here would be exactly the auto-create
+ * `CLAUDE.md` rule 5 and `agent-playbook.md` §6.9 forbid — the tell being a mutation inside
+ * a handler for a different operation.
+ *
+ * ## The five things that must all hold
+ *
+ * A `watch` Activity; both halves of its list provenance; the caller's **own** pointer
+ * resolving to **this** Activity; a list still on `behaviour: 'watch'`; and an item that
+ * still exists with typed watch `details`. A miss on any one of them is silence, not an
+ * error — the caller completed something, and there is nothing to tell them about it.
+ *
+ * The pointer identity is the one worth spelling out. `listItemId` on the Activity says which
+ * item this Plan came from; the viewer-link row says which Plan this viewer currently has for
+ * that item. They disagree once the viewer plans the same item again, and it is the **pointer**
+ * that decides, because it is the pointer the item's own state line renders from
+ * (`ADR-034`). Completing last week's superseded session must not offer to advance progress
+ * on behalf of the session that replaced it. And reading the caller's key directly means
+ * another member's private Plan for the same item is never loaded, let alone described
+ * (`security-privacy.md` row 15a).
+ *
+ * ## Nothing here can fail the completion
+ *
+ * The user completed their Plan; a suggestion about a list is not worth losing that to. Every
+ * failure — no list pointer for this caller, a list mid-migration answering the retryable
+ * fence error, a row that will not parse — becomes no follow-up, logged with ids only. It is
+ * awaited rather than left floating so a rejection cannot surface in an unrelated request
+ * (`coding-standards.md` §6.1).
+ *
+ * There is no recurrence check here because there cannot be one to make: an occurrence
+ * completion returned long before this point with its occurrence override, and an unscoped
+ * recurring completion was rejected by `assertOccurrenceScoped`. Both leave series META
+ * untouched, which is the whole of `CLAUDE.md` rule 3 and the reason a recurring occurrence
+ * offers nothing (`activities.md` §5.3, last row).
+ */
+async function watchFollowUp(
+  userId: string,
+  activity: Activity,
+): Promise<CompletionFollowUp | undefined> {
+  // `details.kind` and `type` are equal by schema refinement, so this is the `watch` check
+  // and the narrowing `suggestionFor` needs, in one line rather than a check plus a cast.
+  if (activity.details.kind !== 'watch') return undefined;
+  const { listId, listItemId } = activity;
+  if (listId === undefined || listItemId === undefined) return undefined;
+
+  try {
+    const access = await assertListAccess(userId, listId, 'read');
+    const source = await readWatchFollowUpSource(
+      userId,
+      listId,
+      access.index,
+      listItemId,
+    );
+    if (source === undefined) return undefined;
+    if (source.link.activityId !== activity.activityId) return undefined;
+    const progress = source.item.details;
+    if (progress?.behaviour !== 'watch') return undefined;
+    return suggestionFor(source.list, source.item, progress, activity.details);
+  } catch (error) {
+    logger.info(
+      { userId, activityId: activity.activityId, listId, listItemId, err: error },
+      'No completion follow-up: the linked list item could not be read.',
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Which of `activities.md` §5.3's two watch rows this is, and what it would set.
+ *
+ * Pure, and the only place the choice is made. `mediaKind` selects: a movie's follow-up is
+ * the `watched` transition and a movie has no episode to advance to, while everything else
+ * offers the session's own season and episode. Each arm carries the `mediaKind` that chose
+ * it, so the schema refuses a row whose kind and media disagree rather than trusting this
+ * function to be the only producer.
+ *
+ * **An item with no `mediaKind` takes the progress branch, and is not guessed at.** P3-09's
+ * back-fill writes `watchStatus: 'want'` and nothing else, so a `collection` upgraded to
+ * `watch` has a whole list of them, and refusing those items a follow-up would quietly make
+ * the feature depend on how the list was created. What the progress branch offers is not an
+ * opinion about the media: it is the season and episode **the user typed on this session**,
+ * copied onto the item they said it came from. When the session names neither there is
+ * nothing to copy and nothing is offered — `Update to ?` is not a question, and `watched` is
+ * not an answer the app is allowed to reach for on a show, whose ending it cannot know
+ * (`plans-and-lists.md` §8.1).
+ *
+ * A target equal to the item's current values is left alone rather than suppressed. That is a
+ * **rewatch**, which §8.4 names as an ordinary case the user answers by dismissing; deciding
+ * the question is not worth asking would be the server having an opinion about what the
+ * session meant.
+ */
+function suggestionFor(
+  list: List,
+  item: ListItem,
+  progress: WatchProgress,
+  session: WatchSession,
+): CompletionFollowUp | undefined {
+  const shared = {
+    listId: list.listId,
+    listTitle: list.title,
+    itemId: item.itemId,
+    current: {
+      watchStatus: progress.watchStatus,
+      ...(progress.season === undefined ? {} : { season: progress.season }),
+      ...(progress.episode === undefined ? {} : { episode: progress.episode }),
+    },
+  };
+
+  const mediaKind = progress.mediaKind;
+  if (mediaKind === 'movie') {
+    return {
+      kind: 'watch_watched',
+      ...shared,
+      mediaKind,
+      target: { watchStatus: 'watched' },
+    };
+  }
+
+  /**
+   * Two returns rather than one built by spreading, because the target is a union of
+   * "season, optionally with an episode" and "episode alone" — and writing it as two
+   * optionals spread together is exactly how the empty target became expressible. Each
+   * branch here produces one arm of that union, and neither can produce nothing.
+   */
+  const named = {
+    kind: 'watch_progress',
+    ...shared,
+    ...(mediaKind === undefined ? {} : { mediaKind }),
+  } as const;
+  const { season, episode } = session;
+  if (season !== undefined) {
+    return {
+      ...named,
+      target: { season, ...(episode === undefined ? {} : { episode }) },
+    };
+  }
+  if (episode !== undefined) return { ...named, target: { episode } };
+  return undefined;
 }
 
 /**
