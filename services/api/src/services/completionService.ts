@@ -298,9 +298,9 @@ type WatchSession = Extract<ActivityDetails, { kind: 'watch' }>;
  *
  * ## The five things that must all hold
  *
- * A `watch` Activity, carrying both halves of its list provenance; the caller's **own**
- * pointer resolving to **this** Activity; a list still on `behaviour: 'watch'`; and an item
- * that still exists with typed watch `details`. A miss on any one of them is silence, not an
+ * A `watch` Activity; both halves of its list provenance; the caller's **own** pointer
+ * resolving to **this** Activity; a list still on `behaviour: 'watch'`; and an item that
+ * still exists with typed watch `details`. A miss on any one of them is silence, not an
  * error — the caller completed something, and there is nothing to tell them about it.
  *
  * The pointer identity is the one worth spelling out. `listItemId` on the Activity says which
@@ -330,6 +330,8 @@ async function watchFollowUp(
   userId: string,
   activity: Activity,
 ): Promise<CompletionFollowUp | undefined> {
+  // `details.kind` and `type` are equal by schema refinement, so this is the `watch` check
+  // and the narrowing `suggestionFor` needs, in one line rather than a check plus a cast.
   if (activity.details.kind !== 'watch') return undefined;
   const { listId, listItemId } = activity;
   if (listId === undefined || listItemId === undefined) return undefined;
