@@ -3474,6 +3474,9 @@
               "didnt_happen",
               "didnt_go"
             ]
+          },
+          "followUp": {
+            "$ref": "#/components/schemas/CompletionFollowUp"
           }
         },
         "required": [
@@ -3529,6 +3532,175 @@
           "activityId",
           "date",
           "status"
+        ]
+      },
+      "CompletionFollowUp": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "watch_progress"
+                ]
+              },
+              "listId": {
+                "type": "string",
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "listTitle": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "itemId": {
+                "type": "string",
+                "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "mediaKind": {
+                "type": "string",
+                "enum": [
+                  "movie",
+                  "show"
+                ]
+              },
+              "current": {
+                "type": "object",
+                "properties": {
+                  "watchStatus": {
+                    "type": "string",
+                    "enum": [
+                      "want",
+                      "watching",
+                      "watched"
+                    ]
+                  },
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "watchStatus"
+                ],
+                "additionalProperties": false
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "listId",
+              "listTitle",
+              "itemId",
+              "current",
+              "target"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "watch_watched"
+                ]
+              },
+              "listId": {
+                "type": "string",
+                "pattern": "^lst_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "listTitle": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "itemId": {
+                "type": "string",
+                "pattern": "^itm_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+              },
+              "mediaKind": {
+                "type": "string",
+                "enum": [
+                  "movie",
+                  "show"
+                ]
+              },
+              "current": {
+                "type": "object",
+                "properties": {
+                  "watchStatus": {
+                    "type": "string",
+                    "enum": [
+                      "want",
+                      "watching",
+                      "watched"
+                    ]
+                  },
+                  "season": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000
+                  }
+                },
+                "required": [
+                  "watchStatus"
+                ],
+                "additionalProperties": false
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "watchStatus": {
+                    "type": "string",
+                    "enum": [
+                      "watched"
+                    ]
+                  }
+                },
+                "required": [
+                  "watchStatus"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "listId",
+              "listTitle",
+              "itemId",
+              "current",
+              "target"
+            ],
+            "additionalProperties": false
+          }
         ]
       },
       "CompleteActivityInput": {

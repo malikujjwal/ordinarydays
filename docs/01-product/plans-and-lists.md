@@ -1545,6 +1545,25 @@ step 2, or an Activity in step 3, is a bug, not a shortcut.
 For a `movie`, step 2 offers `Update {list name} item to Watched?` instead, which sets the
 named item to `watched`, and there is no step 3.
 
+> **Decision — an item that has never said which it is (added 2026-08-25, P3-16).** `mediaKind`
+> is optional (§8.1), and a `collection` upgraded to `watch` back-fills `watchStatus: 'want'`
+> and nothing else (§5.5), so a whole upgraded list can have no `mediaKind` at all. Those items
+> get **step 2's progress question**, offering the season and episode the user typed on the
+> session — which is not the app deciding what kind of thing the item is, only copying this
+> session's own values onto the item it came from. When the session names neither a season nor
+> an episode there is nothing to copy and **nothing is offered**: `Update to ?` is not a
+> question, and `watched` is not an answer the app may reach for on something that might be a
+> show, whose ending it cannot know (§8.1). A `movie` item still gets the watched transition,
+> because that is what its own `mediaKind` says.
+>
+> Offering step 2 when the session repeats the item's current progress is also deliberate: that
+> is a rewatch, and dismissing is the right answer to it. The app does not decide the question
+> is not worth asking.
+>
+> The server carries all of this as data on the completion response and writes none of it
+> ([`../02-architecture/api-contract.md`](../02-architecture/api-contract.md) §2.3,
+> `POST /v1/activities/:id/complete`). Confirming is the ordinary item `PATCH`.
+
 **Watch progress is per person, not per pair, and that is known.** A watchlist item is a
 `ListItem` in its owner's partition, so two people who watch a show together each keep their
 own `season`/`episode` and each is offered their own follow-up after the shared session.
