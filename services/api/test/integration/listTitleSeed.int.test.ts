@@ -338,6 +338,56 @@ describe('a stale pointer is omitted, then removed', () => {
     expect(link?.activityId).toBe(ACT_TWO);
   });
 
+  /**
+   * The condition matches `linkedAt` as well as `activityId`, so a pointer **refreshed to the
+   * same Activity** also beats the delete. That is what re-adding a viewer to a Plan they had
+   * lost access to produces: same key, same `activityId`, new `linkedAt`. On `activityId`
+   * alone the cleanup deleted that newly valid pointer.
+   *
+   * Exercised against the repository directly, because the rewrite has to land between the
+   * classification and the delete — two steps inside one request that a caller cannot
+   * interleave from outside.
+   */
+  it('spares a pointer refreshed to the same Activity with a new linkedAt', async () => {
+    const { list, item } = await setUp();
+    await plan(list.listId, item.itemId);
+    const observed = await storedLink(list.listId, DEV, item.itemId);
+    const repository = await import('../../src/repositories/listRepository.js');
+
+    /** Sharing refreshes the same viewer/item key to the same Plan. */
+    await documents.send(
+      new PutCommand({
+        TableName: TEST_TABLE,
+        Item: { ...observed, linkedAt: '2026-08-26T09:00:00.000Z' },
+      }),
+    );
+
+    await expect(
+      repository.deleteStaleViewerLink(list.listId, DEV, item.itemId, {
+        activityId: String(observed?.activityId),
+        linkedAt: String(observed?.linkedAt),
+      }),
+    ).rejects.toMatchObject({ name: 'ConditionalCheckFailedException' });
+
+    const survivor = await storedLink(list.listId, DEV, item.itemId);
+    expect(survivor?.activityId).toBe(ACT);
+    expect(survivor?.linkedAt).toBe('2026-08-26T09:00:00.000Z');
+  });
+
+  it('removes the pointer when it is still exactly the row that was read', async () => {
+    const { list, item } = await setUp();
+    await plan(list.listId, item.itemId);
+    const observed = await storedLink(list.listId, DEV, item.itemId);
+    const repository = await import('../../src/repositories/listRepository.js');
+
+    await repository.deleteStaleViewerLink(list.listId, DEV, item.itemId, {
+      activityId: String(observed?.activityId),
+      linkedAt: String(observed?.linkedAt),
+    });
+
+    expect(await storedLink(list.listId, DEV, item.itemId)).toBeUndefined();
+  });
+
   /** Idempotent: a second pass over an already-removed pointer changes nothing. */
   it('is a no-op once the row is gone', async () => {
     const { list, item } = await setUp();

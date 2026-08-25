@@ -18,6 +18,7 @@ import type {
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import { mintUndoToken } from '../lib/undoToken.js';
+import { getActivityPartitionStrong } from '../repositories/activityRepository.js';
 import { writeReceiptOnly } from '../repositories/idempotencyRepository.js';
 import {
   batchGetViewerLinks,
@@ -45,7 +46,11 @@ import {
   runBulkCheckedOperation,
 } from '../repositories/listRepository.js';
 import { ID_UNAVAILABLE } from './activityService.js';
-import { assertActivityAccess, assertListAccess } from './authz.js';
+import {
+  assertActivityAccess,
+  assertActivityReadAccessFromPartition,
+  assertListAccess,
+} from './authz.js';
 import { drainListWork, withListWorkDrain } from './listMutationService.js';
 import { repairListRanks } from './listRankRepairService.js';
 
@@ -727,6 +732,23 @@ export interface ListItemsProjection {
  * floating so a failing delete cannot surface as an unhandled rejection in an unrelated
  * request (`coding-standards.md` §6.1), and it only runs when something was actually stale,
  * so the ordinary read pays nothing.
+ *
+ * ## Why the deletion re-checks, and the read does not
+ *
+ * The projection's access check is an ordinary eventually consistent read, and that is fine
+ * for **omitting**: a Plan created moments ago whose Activity has not reached the replica
+ * yet loses its state line for one read and gets it back on the next. Omission is
+ * self-healing.
+ *
+ * Deletion is not. Classifying a pointer stale from a lagging replica and then removing it
+ * would permanently strand a Plan that exists and is readable — the Activity survives, but
+ * nothing points at it and the user cannot navigate back. So the destructive step re-checks
+ * **strongly** first, and only removes a pointer whose Activity is still absent or still
+ * unreadable when read from the leader. §P3-14 permits cleanup for a deleted or inaccessible
+ * Plan; a replica that has not caught up is neither.
+ *
+ * The re-check runs only for pointers that already looked stale, which is rare, so the
+ * ordinary read still pays nothing for it.
  */
 export async function hydrateViewerLinks(
   userId: string,
@@ -778,14 +800,36 @@ async function removeStaleViewerLinks(
 ): Promise<void> {
   for (const link of stale) {
     try {
-      await deleteStaleViewerLink(listId, userId, link.itemId, link.activityId);
+      if (await stillUnreadable(userId, link.activityId)) {
+        await deleteStaleViewerLink(listId, userId, link.itemId, link);
+      }
     } catch {
       /**
-       * Swallowed on purpose, including the condition failure that means the viewer
-       * scheduled this item again between the read and this delete — that pointer is live
-       * and must survive. Nothing here can fail the read it belongs to.
+       * Swallowed on purpose, including the condition failure that means the pointer was
+       * rewritten between the read and this delete — that row is live and must survive.
+       * Nothing here can fail the read it belongs to.
        */
     }
+  }
+}
+
+/**
+ * The strong second opinion, taken from the leader rather than a replica.
+ *
+ * `true` only when the Activity is genuinely gone or genuinely not this caller's to read.
+ * A `not_found` from the first, eventually consistent check is a suspicion; this is the
+ * confirmation, and nothing is deleted without it.
+ */
+async function stillUnreadable(userId: string, activityId: string): Promise<boolean> {
+  try {
+    await assertActivityReadAccessFromPartition(
+      userId,
+      await getActivityPartitionStrong(activityId),
+    );
+    return false;
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'not_found') return true;
+    throw error;
   }
 }
 

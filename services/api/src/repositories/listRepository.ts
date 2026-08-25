@@ -706,14 +706,20 @@ export async function batchGetViewerLinks(
 }
 
 /**
- * Removes one viewer's pointer, but **only while it still names the Activity that was found
- * unreadable** (P3-14, `api-contract.md` §3).
+ * Removes one viewer's pointer, but **only while it is still byte-for-byte the row the read
+ * found unreadable** (P3-14, `api-contract.md` §3).
  *
  * The condition is the whole safety of this. The projection decides a pointer is stale, then
- * deletes it a moment later; between those two instants the viewer may have scheduled the
- * item again, and an unconditional delete would remove the pointer to a Plan they just made.
- * Naming the exact `activityId` the read rejected means a replaced pointer fails the
- * condition and survives.
+ * deletes it a moment later, and anything at all may have happened in between.
+ *
+ * It matches on `activityId` **and** `linkedAt`, not `activityId` alone. Both change when the
+ * viewer schedules a different Plan, but only `linkedAt` changes when the pointer is rewritten
+ * to the *same* Activity — which is exactly what re-adding a viewer to a Plan they had lost
+ * access to does. On `activityId` alone that refreshed, valid pointer still matched the
+ * condition and was deleted, crossing the sharing boundary `security-privacy.md` row 15a
+ * protects. Matching the pair means **any** rewrite wins and the cleanup loses, which is the
+ * right way round: a pointer that should have gone will be caught by the next read, while one
+ * deleted in error is gone for good.
  *
  * Idempotent by construction: deleting an absent row is a no-op, and a second pass over the
  * same stale pointer finds nothing to remove.
@@ -722,12 +728,12 @@ export async function deleteStaleViewerLink(
   listId: string,
   viewerUserId: string,
   itemId: string,
-  activityId: string,
+  observed: Pick<ListItemActivityLink, 'activityId' | 'linkedAt'>,
 ): Promise<void> {
   await deleteItem(listItemActivityLink(listId, viewerUserId, itemId), {
-    expression: '#activityId = :activityId',
-    names: { '#activityId': 'activityId' },
-    values: { ':activityId': activityId },
+    expression: '#activityId = :activityId AND #linkedAt = :linkedAt',
+    names: { '#activityId': 'activityId', '#linkedAt': 'linkedAt' },
+    values: { ':activityId': observed.activityId, ':linkedAt': observed.linkedAt },
   });
 }
 
