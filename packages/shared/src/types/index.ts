@@ -49,6 +49,11 @@ export type {
   AgendaWarning,
 } from './agenda.js';
 export { assertNever } from './assert.js';
+export type {
+  RequestUploadUrlInput,
+  RequestUploadUrlResult,
+  UploadContentType,
+} from './attachment.js';
 export type { DeletedList } from './deletedList.js';
 export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type {

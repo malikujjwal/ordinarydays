@@ -319,6 +319,36 @@ export const devicePrefix = (userId: string) => ({
   skPrefix: 'DEVICE#',
 });
 
+/**
+ * Phase 3. The caller's durable pending-upload record, one per attachment id
+ * (`data-model.md` §3.2, §4.3c).
+ *
+ * **Keyed by the uploader, not by the Activity**, because it exists before any Activity is
+ * named: the upload URL is issued with no destination, and the confirmation records the
+ * target on the row afterwards. Keying it under the eventual Activity would mean the row had
+ * nowhere to live for the whole window it exists to cover.
+ *
+ * It carries no `ttl`. `cleanupAfter` is read by the bounded drain below and is a value the
+ * service compares, not an attribute DynamoDB acts on: a row silently removed by expiry
+ * would take the record of an in-flight permanent copy with it, which is exactly the
+ * crash-point evidence the row is there to keep (`api-contract.md` §2.6).
+ */
+export const pendingUpload = (userId: string, attachmentId: string) => ({
+  pk: userPk(userId),
+  sk: `UPLOAD#${attachmentId}`,
+});
+
+/**
+ * Every unresolved upload the caller has (pattern 6b).
+ *
+ * Bounded by the model at 20, which is what lets the drain read the whole set before issuing
+ * another URL rather than needing a Stream or a scheduled worker.
+ */
+export const pendingUploadPrefix = (userId: string) => ({
+  pk: userPk(userId),
+  skPrefix: 'UPLOAD#',
+});
+
 /** Phase 9. */
 export const shortcut = (userId: string, shortcutId: string) => ({
   pk: userPk(userId),

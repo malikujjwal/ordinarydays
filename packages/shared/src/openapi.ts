@@ -22,6 +22,7 @@ import {
   postActivityUpdateResult,
 } from './schemas/activityUpdate.js';
 import { activityAgendaData, agendaData, agendaQuery } from './schemas/agenda.js';
+import { requestUploadUrlInput, requestUploadUrlResult } from './schemas/attachment.js';
 import {
   captureExtractInput,
   captureLinkInput,
@@ -87,6 +88,7 @@ const deletedReminderResponse = envelope(deletedReminder);
 const plansResponse = envelope(plansData);
 const activityUpdatePageResponse = envelope(activityUpdatePage);
 const postActivityUpdateResponse = envelope(postActivityUpdateResult);
+const requestUploadUrlResponse = envelope(requestUploadUrlResult);
 
 /**
  * The list envelope. `data` is an array and `meta.nextCursor` is present only when there is
@@ -1842,6 +1844,54 @@ registry.registerPath({
       description:
         'An unsupported timezone, a window past the cap, a reversed range, a field belonging ' +
         'to another mode, or a cursor issued for different bounds.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * `/v1/attachments/upload-url` (P3-21). The step that has no Activity yet: confirming and
+ * linking an upload is activity-scoped and arrives with P3-22.
+ */
+registry.registerPath({
+  method: 'post',
+  path: '/v1/attachments/upload-url',
+  summary: 'Request a presigned URL to upload an image',
+  description:
+    'Records the caller’s durable pending upload and returns a presigned S3 `PUT`. The ' +
+    'bytes never pass through the API: the client uploads to the returned URL directly. ' +
+    'The URL expires in five minutes and its signature covers **both** the declared ' +
+    '`Content-Type` and the declared `Content-Length`, so an upload that differs from what ' +
+    'was declared is refused by the store rather than by this service. Image types only, up ' +
+    'to `MAX_UPLOAD_BYTES` (10 MB). Before issuing a URL the request drains the caller’s ' +
+    'expired unresolved records and refuses once ' +
+    '`MAX_UNRESOLVED_UPLOADS` (20) are still live. Creating, so an `Idempotency-Key` is ' +
+    'required — and a replay answers with the URL originally issued, which may by then have ' +
+    'expired; a client in that position requests a fresh one. `key` is the temporary key ' +
+    'this URL writes to; confirmation copies it to the permanent one. Neither is ever a URL: ' +
+    'media is served by unguessable key.',
+  tags: ['attachments'],
+  request: {
+    body: {
+      content: { 'application/json': { schema: requestUploadUrlInput } },
+    },
+  },
+  responses: {
+    201: {
+      description:
+        'The pending record is written and the URL is signed. `attachmentId` is what the ' +
+        'confirmation step addresses this upload by.',
+      content: { 'application/json': { schema: requestUploadUrlResponse } },
+    },
+    400: {
+      description:
+        'A content type outside the four image types, a `byteSize` over the cap or not a ' +
+        'positive integer, a field outside the accepted set — the body is strict — or ' +
+        'twenty unresolved uploads already live after the drain.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    429: {
+      description: 'Over the 60-per-hour limit for this route. Carries `Retry-After`.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

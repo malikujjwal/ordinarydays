@@ -992,7 +992,7 @@ docker compose up -d
 pnpm --filter @od/api ddb:create-table   # scripts/create-local-table.ts, same schema as CDK
 pnpm --filter @od/api ddb:seed           # a founder-sized fixture set
 pnpm --filter @od/api s3:create-bucket   # creates od-media-local in MinIO, idempotent
-pnpm test:int                             # isolated in-memory DynamoDB Local on :8002
+pnpm test:int                             # in-memory DynamoDB Local on :8002, plus MinIO
 open http://localhost:8001               # browse items
 open http://localhost:9001               # browse objects
 ```
@@ -1260,7 +1260,7 @@ there. That is correct — an untrusted PR should not be able to read the accoun
 > | --- | --- |
 > | `validate` | `check-node-versions.mjs`, `biome ci .`, `turbo run typecheck`, `typecheck:e2e`, `turbo run test -- --coverage`, `gen:openapi:check`, `check:bundle-size`, `expo-doctor`, gitleaks, coverage upload |
 > | `depcruise` | `pnpm depcruise`, then each of the four forbidden-pattern checks as its own step |
-> | `integration` | `pnpm test:int`, which starts and health-checks the profiled in-memory database before Turbo runs the suite |
+> | `integration` | `pnpm test:int`, which starts and health-checks the profiled in-memory database and MinIO before Turbo runs the suite |
 > | `e2e` | **P1-29.** `playwright install --with-deps chromium`, `scripts/dev-preflight.mjs`, then `pnpm run e2e:web` (which builds the web export first). Uploads `playwright-report/` on failure. `testing.md` §6.1 describes running this against the deployed dev site; that is Phase 4, and `E2E_BASE_URL` re-aims it then without the job changing shape. |
 > | `synth` | `cdk synth 'od-*-dev' --quiet`, **no credentials, no `id-token: write`** |
 >
@@ -1277,9 +1277,16 @@ there. That is correct — an untrusted PR should not be able to read the accoun
 > import that `tsc` accepted fails here.
 >
 > **Amended 2026-08-26:** `integration` no longer runs the development preflight. The root
-> `pnpm test:int` command starts only `dynamodb-test` through its Compose profile and waits on
-> that service's health check. The suite owns disposable per-file tables, so CI does not need
-> the persistent development database, `od-main-local`, or `.env.local`.
+> `pnpm test:int` command starts `dynamodb-test` through its Compose profile and `minio` by
+> name, and waits on both services' health checks. The suite owns disposable per-file tables,
+> so CI does not need the persistent development database, `od-main-local`, or `.env.local`.
+>
+> **Amended 2026-08-26 (P3-21):** `minio` joins that command because the attachment tests need
+> a store that validates a SigV4 presigned `PUT`. It is named explicitly rather than given the
+> `test` profile: unlike the disposable test database it is the **same** service `pnpm dev`
+> uses, and the point of MinIO is that there is no test-only shape of the object store. It
+> needs no AWS credentials — `vitest.int.config.ts` supplies MinIO's own root user and
+> password — so the "no credentials anywhere in this workflow" rule is unaffected.
 >
 > Two details that cost time to find rather than to fix: `expo-doctor` is not on the
 > workspace PATH and must be run through `npx` from `apps/mobile` (P0-22), and the checkout

@@ -60,6 +60,24 @@ export default defineConfig({
       WEB_ORIGINS: 'http://localhost:8081',
       LOG_LEVEL: 'fatal',
       DDB_ENDPOINT: process.env.DDB_ENDPOINT ?? 'http://127.0.0.1:8002',
+      /**
+       * MinIO, brought up by the same `pnpm test:int` that starts DynamoDB Local (P3-21).
+       *
+       * Overridable like `DDB_ENDPOINT`, for an externally managed store. Unlike it, the
+       * **credentials are fixed rather than inherited**: DynamoDB Local accepts any value,
+       * while MinIO checks the signature against its root user, so a developer with a real
+       * AWS profile exported would otherwise watch every presigned upload fail with
+       * `SignatureDoesNotMatch` for a reason that has nothing to do with the code. These are
+       * the compose file's `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD`, and no real
+       * credential is involved on a laptop or in CI.
+       *
+       * Unlike DynamoDB there is **one** bucket rather than one per file: object keys carry a
+       * fresh ULID, so files cannot collide, and keeping the local store's shape identical to
+       * the deployed one is the whole reason MinIO is here rather than a mock.
+       */
+      S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://127.0.0.1:9000',
+      AWS_ACCESS_KEY_ID: 'local',
+      AWS_SECRET_ACCESS_KEY: 'localsecret',
     },
   },
 });

@@ -1,6 +1,4 @@
 # Local backing services. See docs/02-architecture/infrastructure.md §6.1.
-# The `minio` service joins the stack in Phase 3 (P3-21), the first consumer of
-# object storage. Do not add it before then.
 services:
   dynamodb:
     image: amazon/dynamodb-local:latest
@@ -28,3 +26,18 @@ services:
       DYNAMO_ENDPOINT: http://dynamodb:8000
       AWS_REGION: us-east-1
     depends_on: [dynamodb]
+  # The local media bucket (P3-21), the first consumer of object storage. MinIO speaks the
+  # S3 API including SigV4 presigned PUT, so the attachment path is @aws-sdk/client-s3 either
+  # way and only the endpoint and credentials differ. `pnpm --filter @od/api s3:create-bucket`
+  # creates `od-media-local` in it, idempotently.
+  #
+  # It models no part of CloudFront, OAC or Block Public Access; those are properties of the
+  # deployed bucket, asserted by the CDK tests.
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports: ["9000:9000", "9001:9001"]
+    environment:
+      MINIO_ROOT_USER: local
+      MINIO_ROOT_PASSWORD: localsecret
+    volumes: ["./.minio-data:/data"]

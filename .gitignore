@@ -48,6 +48,9 @@ playwright-report/
 .dynamodb-data/
 shared-local-instance.db
 
+# Local object store (MinIO)
+.minio-data/
+
 # Editor and OS
 .DS_Store
 Thumbs.db

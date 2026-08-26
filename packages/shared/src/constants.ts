@@ -14,6 +14,27 @@ export const MAX_AGENDA_DAYS = 62;
 /** Largest attachment accepted through a presigned upload. */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
+/**
+ * Unresolved upload records one user may hold at once (`api-contract.md` §2.6).
+ *
+ * The cap is what makes the whole confirmation state machine servable by a bounded Query:
+ * at most twenty rows, so a caller's outstanding work can be read and drained in full before
+ * another URL is issued, and no DynamoDB Stream or scheduled worker is needed to find it.
+ * Raising this number is not a tuning decision — it is a decision to need a worker.
+ */
+export const MAX_UNRESOLVED_UPLOADS = 20;
+
+/**
+ * How long a pending upload record and its temporary object survive.
+ *
+ * **One day, and the two halves must agree.** The deployed bucket's lifecycle rule expires
+ * the `tmp/` prefix after this many days; the drain deletes a record whose `cleanupAfter` has
+ * passed. If the record outlived the object the drain would try to delete something already
+ * gone, and if the object outlived the record it would be an orphan nothing knows about.
+ * P3-23 configures the lifecycle rule from this constant rather than restating the number.
+ */
+export const PENDING_UPLOAD_CLEANUP_DAYS = 1;
+
 /** Items in one List. */
 export const MAX_LIST_ITEMS = 500;
 

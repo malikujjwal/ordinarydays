@@ -116,6 +116,11 @@ describe('§3.2 the user partition', () => {
     ],
     ['device', keys.device(USR, 'dev_1'), { pk: `USER#${USR}`, sk: 'DEVICE#dev_1' }],
     [
+      'pendingUpload',
+      keys.pendingUpload(USR, 'att_1'),
+      { pk: `USER#${USR}`, sk: 'UPLOAD#att_1' },
+    ],
+    [
       'shortcut',
       keys.shortcut(USR, 'sct_1'),
       { pk: `USER#${USR}`, sk: 'SHORTCUT#sct_1' },
@@ -366,6 +371,12 @@ describe('sort-key prefixes match the keys they are meant to select', () => {
     ],
     ['devicePrefix', keys.devicePrefix(USR), 'DEVICE#', keys.device(USR, 'dev_1').sk],
     [
+      'pendingUploadPrefix',
+      keys.pendingUploadPrefix(USR),
+      'UPLOAD#',
+      keys.pendingUpload(USR, 'att_1').sk,
+    ],
+    [
       'listItemPrefix',
       keys.listItemPrefix(LST),
       'ITEM#',
@@ -403,6 +414,7 @@ describe('tenancy is in the key, not in a default', () => {
     keys.person(userId, PSN).pk,
     keys.balance(userId, PSN, 'USD').pk,
     keys.device(userId, 'dev_1').pk,
+    keys.pendingUpload(userId, 'att_1').pk,
     keys.idempotency(userId, 'k').pk,
     keys.gsi1Bucket(userId, 'S').gsi1pk,
     keys.gsi1Bucket(userId, 'N').gsi1pk,
