@@ -291,6 +291,183 @@ describe('childCount through a prep task’s life', () => {
   });
 });
 
+/**
+ * The counter is not covered by `updatedAt`, and that is deliberate — a prep task being added
+ * must not 409 an open editor. The cost is that the two writes which *care* about the counter
+ * cannot see each other through `updatedAt`, so each conditions on what the other changes.
+ */
+describe('attaching a child races converting the plan', () => {
+  /**
+   * **The invariant under real concurrency, not the regression guard.** Two requests fired
+   * together do not reliably interleave inside the window — this passes against the unfixed
+   * code whenever they happen to serialise, which was observed. It earns its place by
+   * asserting the invariant end to end through the HTTP layer; the test below it is the one
+   * that fails when the conditions are removed, because it reproduces the damaging order by
+   * construction instead of hoping for it.
+   */
+  it('commits exactly one of a concurrent attach and Plan → Task conversion', async () => {
+    const plan = await createPlan('Poconos trip');
+
+    const [attach, convert] = await Promise.all([
+      createChild(plan.activityId, { title: 'Book hotel' }),
+      patch(
+        plan.activityId,
+        { objectKind: 'task', type: 'task', details: { kind: 'task' } },
+        plan.updatedAt,
+      ),
+    ]);
+
+    const attached = attach.status === 201;
+    const converted = convert.status === 200;
+    expect(attached).not.toBe(converted);
+
+    const parent = await repo.getActivityMeta(plan.activityId);
+    const pointers = await repo.listChildPointers(plan.activityId);
+
+    if (attached) {
+      // The conversion lost: the plan is still a Plan and still counts its child.
+      expect(parent?.objectKind).toBe('plan');
+      expect(parent?.childCount).toBe(1);
+      expect(pointers).toHaveLength(1);
+      // And it is told what actually blocked it, not handed back its own token.
+      expect(convert.status).toBe(409);
+      expect((await convert.json()).error.message).toBe(
+        'Remove 1 prep task before changing this to a Task.',
+      );
+    } else {
+      // The attach lost: nothing was written for it, so no child is stranded on a Task.
+      expect(parent?.objectKind).toBe('task');
+      expect(parent?.childCount).toBe(0);
+      expect(pointers).toEqual([]);
+      expect(await activityRows()).toHaveLength(1);
+      expect(attach.status).toBe(400);
+      expect((await attach.json()).error.message).toBe('A prep task belongs to a plan.');
+    }
+  });
+
+  /**
+   * The **service** half: an ordinary stale conversion is refused before any transaction is
+   * built, by the 409 guard reading the current row. Worth keeping, but it is not the guard
+   * on the condition — see the two repository tests below, which is where the conditions
+   * actually live.
+   */
+  it('refuses a conversion once the plan has a child, at the service guard', async () => {
+    const plan = await createPlan('Poconos trip');
+    const stale = plan.updatedAt;
+
+    await createChild(plan.activityId, { title: 'Book hotel' });
+
+    const parent = await repo.getActivityMeta(plan.activityId);
+    expect(parent?.updatedAt).toBe(stale);
+    expect(parent?.childCount).toBe(1);
+
+    const res = await patch(
+      plan.activityId,
+      { objectKind: 'task', type: 'task', details: { kind: 'task' } },
+      stale,
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.message).toBe(
+      'Remove 1 prep task before changing this to a Task.',
+    );
+    expect((await repo.getActivityMeta(plan.activityId))?.objectKind).toBe('plan');
+  });
+});
+
+/**
+ * The conditions themselves, driven at the **repository**, in both orders.
+ *
+ * Every route-level test above is refused by a service precheck reading current truth, which
+ * is correct behaviour and useless as a guard on a transaction condition: the request never
+ * reaches DynamoDB. These two build the losing write from a snapshot taken **before** the
+ * other one landed — exactly what a real concurrent request holds — and hand it to the
+ * repository, so the condition is the only thing that can refuse it. Remove either half of
+ * the pair and the matching test fails.
+ */
+describe('the transaction conditions, from a stale snapshot', () => {
+  it('refuses a conversion built before the child attached', async () => {
+    const plan = await createPlan('Poconos trip');
+    const snapshot = await repo.getActivityMeta(plan.activityId);
+    if (snapshot === undefined) throw new Error('the plan should exist');
+
+    // The attach lands after the conversion was authorised, moving childCount but not
+    // updatedAt — so the conversion's version condition would still pass on its own.
+    await createChild(plan.activityId, { title: 'Book hotel' });
+
+    const converted = {
+      ...snapshot,
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+      updatedAt: '2026-08-26T12:00:00.000Z',
+    } as unknown as Parameters<typeof repo.patchActivity>[1];
+
+    await expect(
+      repo.patchActivity(DEV, converted, snapshot.updatedAt, {
+        previous: snapshot,
+        expectedChildCount: 0,
+      }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+
+    const parent = await repo.getActivityMeta(plan.activityId);
+    expect(parent?.objectKind).toBe('plan');
+    expect(parent?.childCount).toBe(1);
+    expect(await repo.listChildPointers(plan.activityId)).toHaveLength(1);
+  });
+
+  it('refuses an attach built before the plan was converted', async () => {
+    const CHILD_ID = 'act_01M0Z943P3VCA6E1P2X4N44N99';
+    const plan = await createPlan('Poconos trip');
+    const snapshot = await repo.getActivityMeta(plan.activityId);
+    if (snapshot === undefined) throw new Error('the plan should exist');
+
+    // The conversion lands after the attach was authorised: legal, the plan is still empty.
+    const convert = await patch(
+      plan.activityId,
+      { objectKind: 'task', type: 'task', details: { kind: 'task' } },
+      snapshot.updatedAt,
+    );
+    expect(convert.status).toBe(200);
+
+    /**
+     * Built field by field rather than spread from the snapshot: the stored row carries its
+     * own `pk`/`sk`, and reusing them puts this write on the **plan's** key, where the id
+     * condition fails first and the parent condition is never reached. The first version of
+     * this test did exactly that and passed for the wrong reason.
+     */
+    const child = {
+      activityId: CHILD_ID,
+      ownerId: DEV,
+      status: 'saved',
+      objectKind: 'task',
+      type: 'task',
+      title: 'Book hotel',
+      details: { kind: 'task' },
+      parentActivityId: plan.activityId,
+      participantCount: 0,
+      childCount: 0,
+      expenseTotalCents: 0,
+      visibility: 'private',
+      icsSequence: 0,
+      createdAt: snapshot.createdAt,
+      lastActivityAt: snapshot.createdAt,
+      updatedAt: snapshot.createdAt,
+      schemaVersion: 1,
+    } as unknown as Parameters<typeof repo.createActivity>[1];
+
+    await expect(repo.createActivity(DEV, child, {})).rejects.toBeInstanceOf(
+      repo.ParentUnavailableError,
+    );
+
+    const parent = await repo.getActivityMeta(plan.activityId);
+    expect(parent?.objectKind).toBe('task');
+    expect(parent?.childCount).toBe(0);
+    expect(await repo.listChildPointers(plan.activityId)).toEqual([]);
+    expect(await repo.getActivityMeta(CHILD_ID)).toBeUndefined();
+  });
+});
+
 describe('the bounded collection read', () => {
   it('answers the complete set and exact counts from one capped Query', async () => {
     const plan = await createPlan();
@@ -376,24 +553,87 @@ describe('the recurrence bit on the pointer', () => {
   });
 });
 
-describe('nesting stays two levels deep', () => {
-  it('refuses a prep task assembled onto a task that already has one', async () => {
-    const plan = await createPlan();
-    const middle = await dataOf(
+describe('a prep task hangs off a plan', () => {
+  /**
+   * `plans-and-lists.md` §3 opens with "`parentActivityId` set to the plan" and caps the
+   * count "per Plan". A Task parent produces a row no screen can render — the PREP section
+   * belongs to plan detail, and Task detail has none.
+   */
+  it('refuses a task as the parent, on POST', async () => {
+    const standalone = await dataOf(
       await post('/v1/activities', {
         objectKind: 'task',
         type: 'task',
         title: 'Sort the garage',
       }),
     );
+
+    const res = await createChild(standalone.activityId, { title: 'Find the boxes' });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.message).toBe('A prep task belongs to a plan.');
+    expect(await childCountOf(standalone.activityId)).toBe(0);
+    expect(await repo.listChildPointers(standalone.activityId)).toEqual([]);
+  });
+
+  it('refuses a task as the parent, on PATCH', async () => {
+    const standalone = await dataOf(
+      await post('/v1/activities', {
+        objectKind: 'task',
+        type: 'task',
+        title: 'Sort the garage',
+      }),
+    );
+    const orphan = await dataOf(
+      await post('/v1/activities', {
+        objectKind: 'task',
+        type: 'task',
+        title: 'Find the boxes',
+      }),
+    );
+
+    const res = await patch(
+      orphan.activityId,
+      { parentActivityId: standalone.activityId },
+      orphan.updatedAt,
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.message).toBe('A prep task belongs to a plan.');
+    expect(await childCountOf(standalone.activityId)).toBe(0);
+  });
+});
+
+describe('nesting stays two levels deep', () => {
+  /**
+   * A Task holding children is no longer reachable through the API — a parent must be a Plan,
+   * and a Plan with children refuses conversion — so the state is seeded **directly**. The
+   * check stays because legacy and repaired rows can still present it, and the previous
+   * version of this test manufactured the state through the public API, which quietly
+   * asserted that an invalid shape was legal.
+   */
+  it('refuses attaching an activity that already has prep tasks of its own', async () => {
+    const plan = await createPlan();
+    const middle = await createPlan('Sort the garage');
     const leaf = await dataOf(
       await createChild(middle.activityId, { title: 'Find the boxes' }),
     );
 
+    // Seeded, not reachable: a Task carrying the children a Plan accumulated.
+    const corrupted = await repo.getActivityMeta(middle.activityId);
+    await base.putItem({
+      ...(corrupted as unknown as Record<string, unknown>),
+      ...keys.activityMeta(middle.activityId),
+      entity: 'Activity',
+      objectKind: 'task',
+      type: 'task',
+      details: { kind: 'task' },
+    });
+
     const res = await patch(
       middle.activityId,
       { parentActivityId: plan.activityId },
-      middle.updatedAt,
+      String(corrupted?.updatedAt),
     );
 
     expect(res.status).toBe(400);

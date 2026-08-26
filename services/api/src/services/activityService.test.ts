@@ -1,6 +1,7 @@
 import type { CreateActivityInput } from '@od/shared/schemas';
 import type { Activity } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AppError } from '../lib/errors.js';
 import type { PrepTaskPointer } from '../repositories/activityRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import {
@@ -1070,6 +1071,54 @@ describe('patchActivity', () => {
   };
 
   /**
+   * The Plan → Task conversion losing its pinned `childCount`, which is only reachable as a
+   * race: the 409 guard refuses an already-populated plan from the row it reads, so the
+   * transaction condition can only fail when a child attached *after* that read. Mocked
+   * rather than raced, because the window cannot be forced against a real table.
+   */
+  describe('when the pinned childCount loses', () => {
+    it('names the prep-task blocker rather than handing back the caller’s own token', async () => {
+      // Read: an empty plan, so the 409 guard lets the conversion through.
+      vi.mocked(repository.getActivityMeta).mockResolvedValueOnce(stored() as never);
+      vi.mocked(repository.listParticipants).mockResolvedValue([]);
+      // The write is cancelled, and the re-read shows why: a child arrived, and `updatedAt`
+      // did not move — because the counter is an `ADD` that deliberately leaves it alone.
+      vi.mocked(repository.patchActivity).mockRejectedValueOnce(
+        new AppError('conflict', 'cancelled'),
+      );
+      vi.mocked(repository.getActivityMeta).mockResolvedValueOnce(
+        stored({ childCount: 1 }) as never,
+      );
+
+      await expect(
+        patchActivity(USER, PLAN, { objectKind: 'task', type: 'task' }, VERSION, LATER),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        message: 'Remove 1 prep task before changing this to a Task.',
+      });
+    });
+
+    /** A version that genuinely moved is still an ordinary stale edit, reported as one. */
+    it('still reports a real stale edit when the version moved', async () => {
+      vi.mocked(repository.getActivityMeta).mockResolvedValueOnce(stored() as never);
+      vi.mocked(repository.listParticipants).mockResolvedValue([]);
+      vi.mocked(repository.patchActivity).mockRejectedValueOnce(
+        new AppError('conflict', 'cancelled'),
+      );
+      vi.mocked(repository.getActivityMeta).mockResolvedValueOnce(
+        stored({ updatedAt: LATER }) as never,
+      );
+
+      await expect(
+        patchActivity(USER, PLAN, { objectKind: 'task', type: 'task' }, VERSION, LATER),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        details: [{ path: 'updatedAt', message: LATER }],
+      });
+    });
+  });
+
+  /**
    * §6.3 point 7: the dropped payload is logged so a support request can recover it from the
    * logs inside the retention window. It is not restorable through the UI, so this line is
    * the only copy — and it carries the **`details` object itself**, not a summary.
@@ -1766,6 +1815,36 @@ describe('the prep-task cap', () => {
     ).rejects.toMatchObject({
       code: 'validation_failed',
       message: 'Plan has too many prep tasks.',
+    });
+  });
+
+  /**
+   * The attach's three conditions, and which sentence each one earns.
+   *
+   * These are only reachable as a **race** — the preflight refuses a non-Plan parent and a
+   * full plan outright — so they are driven here with the repository mocked rather than in
+   * DynamoDB Local, where the interleaving cannot be forced. The first read is the preflight,
+   * the second is `parentRejected`'s strong re-read after the transaction cancelled.
+   */
+  it('reports a parent converted mid-write as not a plan, not as a full one', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(plan())
+      .mockResolvedValueOnce(
+        plan({ objectKind: 'task', type: 'task', details: { kind: 'task' } } as never),
+      );
+    vi.mocked(repository.createActivity).mockRejectedValueOnce(
+      new repository.ParentUnavailableError(),
+    );
+
+    await expect(
+      createActivity(
+        USER,
+        task({ parentActivityId: PLAN, activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XC' }),
+        NOW,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: 'A prep task belongs to a plan.',
     });
   });
 

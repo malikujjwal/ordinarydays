@@ -109,6 +109,21 @@ const NESTING_CAP =
 const CHILD_MUST_BE_TASK = 'Only a task can be a prep task.';
 
 /**
+ * The other end of the same relationship: a prep task hangs off a **Plan**.
+ *
+ * `plans-and-lists.md` §3 opens with "`parentActivityId` set to the plan" and caps the count
+ * "per Plan"; §P3-18 says "A Plan has at most 50 prep tasks". A Task parent contradicts all
+ * three, and produces a row no screen can render: the PREP section belongs to plan detail
+ * (§P3-37), and Task detail (`today-and-tasks.md` §5.6) has no PREP section at all — it shows
+ * a `Related plan` row and nothing else. So a child under a Task is invisible, uncountable
+ * against a per-Plan cap, and unreachable by the drill-down that `3 of 5 done` promises.
+ *
+ * See the PR description for the one sentence in §3 that reads the other way; it is amended
+ * in the same change rather than silently outvoted.
+ */
+const PARENT_MUST_BE_PLAN = 'A prep task belongs to a plan.';
+
+/**
  * The prep-task kind rule, on whatever write is producing the attached state.
  *
  * Separate from {@link assertCanParent} because the two do not fire together. Attaching is a
@@ -287,6 +302,8 @@ async function assertCanParent(
     'write',
   );
 
+  if (parent.objectKind !== 'plan') throw parentFailure(PARENT_MUST_BE_PLAN);
+
   if (parent.parentActivityId !== undefined) throw parentFailure(NESTING_CAP);
 
   /**
@@ -305,25 +322,32 @@ async function assertCanParent(
 }
 
 /**
- * The answer when the parent's counter condition cancelled the write.
+ * The answer when the parent's attach condition cancelled the write.
  *
- * One extra `GetItem`, on a path that is a genuine race rather than an ordinary request: the
- * count was under the cap when it was read and is not any more, or the plan was deleted
- * between the two. Re-reading is what keeps the copy honest — "the plan is full" and "the
- * plan is gone" are different things to a client, and the transaction can only report that
- * one condition failed.
+ * One extra `GetItem`, on a path that is a genuine race rather than an ordinary request. The
+ * transaction can only report *that* a condition failed, and this attach carries **three** of
+ * them, so the re-read is what turns one cancellation into the right sentence:
+ *
+ * | Re-read finds | Which condition lost | Answer |
+ * | --- | --- | --- |
+ * | nothing | `attribute_exists(pk)` | `not_found` — the plan was deleted between the two |
+ * | an activity that is not a Plan | `objectKind = plan` | {@link PARENT_MUST_BE_PLAN} — it was converted out from under us |
+ * | a Plan | `childCount < cap` | {@link PREP_TASKS_FULL} |
+ *
+ * The middle row is the conversion race's losing side, and reporting it as "the plan is full"
+ * — which this did before the `objectKind` condition existed to lose — sends the user to
+ * delete prep tasks from a plan that has none and is no longer a plan.
  */
 async function parentRejected(parentActivityId: string): Promise<AppError> {
   /**
-   * **Strongly consistent, because the miss is the answer.** This read exists to tell
-   * "the plan is gone" from "the plan is full", and a default-consistency `GetItem` that
-   * has not caught up reports the first about a plan that is merely the second — sending
-   * a client to recover from a deletion that never happened.
+   * **Strongly consistent, because what it finds is the answer.** A default-consistency
+   * `GetItem` that has not caught up reports a deletion that never happened, or reads a
+   * pre-conversion Plan and blames a cap that was never the problem.
    */
   const parent = await getActivityMeta(parentActivityId, { consistentRead: true });
-  return parent === undefined
-    ? new AppError('not_found', 'Activity not found.')
-    : parentFailure(PREP_TASKS_FULL);
+  if (parent === undefined) return new AppError('not_found', 'Activity not found.');
+  if (parent.objectKind !== 'plan') return parentFailure(PARENT_MUST_BE_PLAN);
+  return parentFailure(PREP_TASKS_FULL);
 }
 
 export interface CreateResult {
@@ -917,6 +941,17 @@ export async function patchActivity(
           : { requireMissingOccurrenceDate: correctionDate }),
         ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
         ...(reparents || childPointerStale ? { updateChildPointer: true } : {}),
+        /**
+         * A Plan → Task conversion is legal only at `childCount === 0`, and
+         * {@link applyKindChange} has already refused it otherwise from the row we read.
+         * That decision is about a counter `updatedAt` does not track, so it is pinned into
+         * the write as well: an attach landing in between must lose here rather than have
+         * its parent silently converted out from under it, leaving the child and its `SUB#`
+         * pointer hanging off a Task with a `childCount` of zero.
+         */
+        ...(current.objectKind === 'plan' && next.objectKind === 'task'
+          ? { expectedChildCount: current.childCount }
+          : {}),
       },
       convertedListLink,
     );
@@ -925,7 +960,24 @@ export async function patchActivity(
       throw await parentRejected(next.parentActivityId);
     }
     if (error instanceof AppError && error.code === 'conflict') {
-      const fresh = await getActivityMeta(activityId);
+      /**
+       * **Strongly consistent, and read for two different reasons.** A cancelled patch has
+       * two shapes now, and `updatedAt` alone cannot tell them apart — because the second
+       * shape is precisely the one `updatedAt` does not track.
+       *
+       * - The **version moved**: an ordinary stale edit. Report the current value so the
+       *   client can refetch and re-apply.
+       * - The version is **unchanged**: then `updatedAt` cannot have failed, so the pinned
+       *   `childCount` did. Answering "this changed while you were editing it" alongside the
+       *   very token the caller just sent is both false and un-actionable — retrying with it
+       *   hits the same wall for ever. Re-run the kind change against the fresh row and
+       *   answer with the blocker it actually produces: `Remove 1 prep task before changing
+       *   this to a Task.`
+       */
+      const fresh = await getActivityMeta(activityId, { consistentRead: true });
+      if (fresh !== undefined && fresh.updatedAt === ifMatch) {
+        applyKindChange(fresh, patch, log);
+      }
       throw staleEdit(String(fresh?.updatedAt ?? current.updatedAt));
     }
     throw error;
@@ -1497,8 +1549,8 @@ export async function duplicateActivity(
  * This list was written when none of these rows existed and has been corrected as they
  * arrived; read it as a statement about today, not about Phase 1.
  *
- * - **Viewer links (`LNK#`) are cleared**, by {@link viewerLinksToClear} below — P3-15 added
- *   them and this cascade handles them.
+ * - **Viewer-link rows are cleared**, by {@link viewerLinksToClear} below — P3-15 added them
+ *   and this cascade handles them.
  * - **`SOURCE_LIST#` reverse projections are deleted with the partition, but the
  *   `List.sourceActivityId` they point back from is NOT cleared.** P3-05 ships the write
  *   (`CreateListInput.sourceActivityId`), so those rows exist in real tables now and the

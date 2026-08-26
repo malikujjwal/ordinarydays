@@ -394,14 +394,30 @@ function childCountDelta(parentActivityId: string, delta: 1 | -1): TransactItem 
     Update: {
       Key: activityMeta(parentActivityId),
       UpdateExpression: 'ADD #childCount :delta',
+      /**
+       * The increment also requires the parent to **still be a Plan**, which is the other
+       * half of the conversion race (P3-18 review).
+       *
+       * `childCount` moves by `ADD` and deliberately does not touch `updatedAt`, so the
+       * Plan → Task conversion's `updatedAt` condition cannot see an attach that lands
+       * between its read and its write. Both sides therefore condition on what the other
+       * one changes: the conversion pins the `childCount` it validated, and the attach pins
+       * the `objectKind` it read. Neither can commit on top of the other, and a caller that
+       * loses re-reads rather than being told a lie about a parent that has since changed
+       * kind. The **decrement** is deliberately not gated this way — a child leaving a
+       * parent that is somehow no longer a Plan must still be able to clean up after itself.
+       */
       ConditionExpression:
         delta === 1
-          ? 'attribute_exists(pk) AND #childCount < :cap'
+          ? 'attribute_exists(pk) AND #childCount < :cap AND #objectKind = :plan'
           : 'attribute_exists(pk) AND #childCount > :zero',
-      ExpressionAttributeNames: { '#childCount': 'childCount' },
+      ExpressionAttributeNames:
+        delta === 1
+          ? { '#childCount': 'childCount', '#objectKind': 'objectKind' }
+          : { '#childCount': 'childCount' },
       ExpressionAttributeValues:
         delta === 1
-          ? { ':delta': 1, ':cap': MAX_PREP_TASKS_PER_PLAN }
+          ? { ':delta': 1, ':cap': MAX_PREP_TASKS_PER_PLAN, ':plan': 'plan' }
           : { ':delta': -1, ':zero': 0 },
     },
   };
@@ -663,6 +679,21 @@ export interface PatchOptions extends CreateOptions {
    * planned the item again in the meantime keeps the newer pointer.
    */
   readonly clearViewerLinks?: readonly ListItemActivityLink[];
+  /**
+   * Pin the `childCount` this write was authorised against (P3-18 review).
+   *
+   * `updatedAt` is not a sufficient concurrency token for a decision made about
+   * `childCount`, because the counter moves by `ADD` and deliberately leaves `updatedAt`
+   * alone — that is what stops a prep task being added from 409ing an unrelated open editor.
+   * The cost is that a Plan → Task conversion, which is legal only at `childCount === 0`,
+   * cannot see an attach that lands between its read and its write: the stale whole-item
+   * `Put` still satisfies `updatedAt` and would reinstate `childCount: 0` on a parent that
+   * now has a child, leaving the child and its `SUB#` pointer attached to a Task.
+   *
+   * So the conversion pins the number instead. Supplied only by the path whose authorisation
+   * depends on it; every other patch leaves it absent and is unaffected.
+   */
+  readonly expectedChildCount?: number;
 }
 
 /**
@@ -688,9 +719,21 @@ export async function patchActivity(
     {
       Put: {
         Item: stamp(ENTITY.activity, next, { ...activityMeta(next.activityId), ...next }),
-        ConditionExpression: '#updatedAt = :expected',
-        ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
-        ExpressionAttributeValues: { ':expected': expectedUpdatedAt },
+        ConditionExpression:
+          options.expectedChildCount === undefined
+            ? '#updatedAt = :expected'
+            : '#updatedAt = :expected AND #childCount = :expectedChildCount',
+        ExpressionAttributeNames:
+          options.expectedChildCount === undefined
+            ? { '#updatedAt': 'updatedAt' }
+            : { '#updatedAt': 'updatedAt', '#childCount': 'childCount' },
+        ExpressionAttributeValues:
+          options.expectedChildCount === undefined
+            ? { ':expected': expectedUpdatedAt }
+            : {
+                ':expected': expectedUpdatedAt,
+                ':expectedChildCount': options.expectedChildCount,
+              },
       },
     },
     ...(options.clearViewerLinks ?? []).map(viewerLinkDelete),

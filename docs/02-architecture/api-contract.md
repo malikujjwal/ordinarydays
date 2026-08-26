@@ -506,7 +506,15 @@ level a `POST` refuses. An activity may not be its own parent. **Only a Task may
 already-attached prep task into a Plan both answer `validation_failed` with
 `Only a task can be a prep task.` and write nothing. The check is on the state the write
 produces, because the conversion changes no parent and so is invisible to every check that
-fires when the relationship moves. A plan already holding
+fires when the relationship moves. **The parent must be a Plan**: a `parentActivityId` naming
+a Task is `validation_failed` with `A prep task belongs to a plan.`
+
+The attach and the Plan → Task conversion each condition on what the other changes, because
+`childCount` moves by `ADD` and deliberately does not advance `updatedAt`. The conversion —
+legal only at `childCount === 0` — pins the count it validated, and the attach pins the
+parent's `objectKind`. Exactly one of a concurrent pair commits; without both, a stale
+conversion `Put` would satisfy its `updatedAt` condition and reinstate `childCount: 0` on a
+parent that had just gained a child, stranding that child and its `SUB#` pointer on a Task. A plan already holding
 `MAX_PREP_TASKS_PER_PLAN` prep tasks refuses the next one — on `POST` and on `PATCH` alike —
 with `validation_failed` on `parentActivityId` and the exact message
 `Plan has too many prep tasks.`, writing nothing. Setting, clearing or changing the field

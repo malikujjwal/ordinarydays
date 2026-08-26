@@ -611,8 +611,18 @@ sitting in another plan's PREP section (`validation_failed`, P3-18).
 | On parent deletion | `parentActivityId` is cleared; the task survives ([`today-and-tasks.md`](today-and-tasks.md#55-related-plan)) |
 | Shared plans | Prep tasks on a shared plan are visible to **any participant of the plan**, who may complete, uncomplete and edit them whoever created them. Their completion writes to the updates feed. A prep task is an item on a shared checklist, so ticking `Book hotel` says nothing about whether the trip happened; completing the **plan** stays with the owner ([`activities.md`](activities.md#51-states) §5.1). The rule is one line in the authorisation middleware — a participant of the parent may act on a child — in [`../02-architecture/api-contract.md#3-authorisation-rules`](../02-architecture/api-contract.md#3-authorisation-rules) §3. |
 
-A prep task may itself have a prep task. Nesting is capped at **2 levels** (a plan, and its
-prep tasks). A `POST` that would create a third level returns `validation_failed`.
+Nesting is capped at **2 levels** (a plan, and its prep tasks). A `POST` that would create a
+third level returns `validation_failed`, and so does a `PATCH` that would assemble one.
+
+> **Corrected 2026-08-26 (P3-18 review).** This paragraph opened with "A prep task may itself
+> have a prep task", which contradicted the very next sentence, the section's own opening line
+> (`parentActivityId` set **to the plan**), the Cap row (**per Plan**), §P3-18 ("A Plan has at
+> most 50 prep tasks") and the code, which has refused a parent that itself has a parent since
+> Phase 1. It also described something no screen can show: the PREP section belongs to plan
+> detail (§P3-37), and Task detail has no PREP section at all
+> ([`today-and-tasks.md`](today-and-tasks.md#56-task-detail) §5.6). Read as: **a prep task's
+> parent is always a Plan**, which is what everything else in this document already said. A
+> `parentActivityId` naming a Task is `validation_failed` with `A prep task belongs to a plan.`
 
 > **Decision:** the nesting cap is 2. Arbitrary nesting turns the product into an outliner,
 > which is on the non-goals list in [`overview.md`](overview.md#6-non-goals).

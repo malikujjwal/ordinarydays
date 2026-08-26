@@ -846,7 +846,31 @@ describe('prep-task pointer and parent counter', () => {
     await createActivity(ALICE, activity({ parentActivityId: PARENT }));
 
     expect(counterFor(PARENT)?.ConditionExpression).toBe(
-      'attribute_exists(pk) AND #childCount < :cap',
+      'attribute_exists(pk) AND #childCount < :cap AND #objectKind = :plan',
+    );
+  });
+
+  /**
+   * The kind term is half of a pair: the Plan → Task conversion pins the `childCount` it
+   * validated, and this pins the `objectKind` it read. `updatedAt` cannot mediate between
+   * them, because the counter moves by `ADD` and deliberately does not advance it.
+   */
+  it('conditions the increment on the parent still being a plan', async () => {
+    await createActivity(ALICE, activity({ parentActivityId: PARENT }));
+
+    const counter = counterFor(PARENT);
+    expect(counter?.ExpressionAttributeValues).toMatchObject({ ':plan': 'plan' });
+    expect(counter?.ExpressionAttributeNames).toMatchObject({
+      '#objectKind': 'objectKind',
+    });
+  });
+
+  /** A child must always be able to clean up after itself, whatever the parent became. */
+  it('does not gate the decrement on the parent being a plan', async () => {
+    await detachChildFromParent(PARENT, 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB');
+
+    expect(counterFor(PARENT)?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND #childCount > :zero',
     );
   });
 
