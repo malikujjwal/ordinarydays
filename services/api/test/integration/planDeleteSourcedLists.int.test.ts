@@ -1,6 +1,6 @@
 import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type { List } from '@od/shared/types';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
 
 useTestTable();
@@ -18,12 +18,40 @@ useTestTable();
  * to lose the packing list.
  */
 
+/**
+ * Partial mock, original behaviour: the point is to **count** calls to the clear, not to
+ * change what it does. Every assertion in this file still runs against the real repository
+ * writing to the real table.
+ */
+vi.mock('../../src/repositories/listRepository.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/repositories/listRepository.js')>();
+  return { ...actual, clearSourceActivity: vi.fn(actual.clearSourceActivity) };
+});
+
+/**
+ * The same shape for the Activity repository, so the cascade can be **interrupted** at the
+ * one seam whose ordering this task depends on. Original behaviour unless a test says
+ * otherwise.
+ */
+vi.mock('../../src/repositories/activityRepository.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/repositories/activityRepository.js')>();
+  return { ...actual, deleteActivity: vi.fn(actual.deleteActivity) };
+});
+
 type AppModule = typeof import('../../src/app.js');
+type ListRepo = typeof import('../../src/repositories/listRepository.js');
+type ActivityRepo = typeof import('../../src/repositories/activityRepository.js');
 
 let createApp: AppModule['createApp'];
+let listRepo: ListRepo;
+let activityRepo: ActivityRepo;
 
 beforeAll(async () => {
   createApp = (await import('../../src/app.js')).createApp;
+  listRepo = await import('../../src/repositories/listRepository.js');
+  activityRepo = await import('../../src/repositories/activityRepository.js');
 });
 
 const app = () => createApp();
@@ -86,6 +114,19 @@ const listMetaOf = async (listId: string) =>
     )
   ).Item;
 
+/** The List's actual ranked item rows — not the counter, which could outlive them. */
+const itemRowsOf = async (listId: string) =>
+  (
+    await documents.send(
+      new QueryCommand({
+        TableName: TEST_TABLE,
+        KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+        ExpressionAttributeValues: { ':pk': `LIST#${listId}`, ':prefix': 'ITEM#' },
+        ConsistentRead: true,
+      }),
+    )
+  ).Items ?? [];
+
 /** The id-only reverse projections in the Activity's own partition. */
 const projectionsOf = async (activityId: string) =>
   (
@@ -119,6 +160,15 @@ describe('deleting a plan that sourced lists', () => {
     expect(survivor).not.toHaveProperty('sourceActivityId');
     expect(survivor?.title).toBe('Packing');
     expect(survivor?.itemCount).toBe(2);
+
+    /**
+     * The **rows**, not the counter. `itemCount` is a denormalised number on META and would
+     * still read `2` over a partition whose item rows had been deleted, so a test that stops
+     * at the counter cannot tell "the items survived" from "the bookkeeping did".
+     */
+    const items = await itemRowsOf(list.listId);
+    expect(items.map((row) => row.title).sort()).toEqual(['Boots', 'Passport']);
+
     expect(await projectionsOf(plan.activityId)).toEqual([]);
   });
 
@@ -187,6 +237,51 @@ describe('deleting a plan that sourced lists', () => {
     expect(after?.itemVersion).toBe(before?.itemVersion);
   });
 
+  /**
+   * **The ordering property, which nothing else here can see.**
+   *
+   * Every other test in this file passes an uninterrupted delete, and would go on passing if
+   * the clear were moved *after* `deleteActivity` — the end state is identical when nothing
+   * fails. The difference only exists in the window between the two, so the window is what
+   * this opens: fail the cascade once, immediately after the clears, and look.
+   *
+   * If the order were reversed, the interrupted attempt would have destroyed the projections
+   * and META while leaving the back-link set, and the retry would answer `404` with no rows
+   * left naming the List. That is a dangling pointer nothing could ever find again.
+   */
+  it('clears before the cascade, so an interrupted delete resumes', async () => {
+    const plan = await createPlan();
+    const list = await createSourcedList(plan.activityId);
+
+    vi.mocked(activityRepo.deleteActivity).mockRejectedValueOnce(
+      new Error('interrupted after the clears, before the cascade'),
+    );
+
+    const interrupted = await del(`/v1/activities/${plan.activityId}`);
+    expect(interrupted.status).toBe(500);
+
+    // The back-link is already gone; the Plan and its projections are not. That combination
+    // is only reachable when the clear runs first.
+    expect(await listMetaOf(list.listId)).not.toHaveProperty('sourceActivityId');
+    expect(await projectionsOf(plan.activityId)).toHaveLength(1);
+    expect(
+      (
+        await documents.send(
+          new GetCommand({
+            TableName: TEST_TABLE,
+            Key: { pk: `ACT#${plan.activityId}`, sk: 'META' },
+            ConsistentRead: true,
+          }),
+        )
+      ).Item,
+    ).toBeDefined();
+
+    // The retry finishes the job it could still authorise.
+    expect((await del(`/v1/activities/${plan.activityId}`)).status).toBe(200);
+    expect(await projectionsOf(plan.activityId)).toEqual([]);
+    expect(await listMetaOf(list.listId)).not.toHaveProperty('sourceActivityId');
+  });
+
   it('is safe to replay: a second delete changes nothing', async () => {
     const plan = await createPlan();
     const list = await createSourcedList(plan.activityId);
@@ -200,9 +295,35 @@ describe('deleting a plan that sourced lists', () => {
 
   it('writes nothing extra for a plan that sourced no lists', async () => {
     const plan = await createPlan();
-
     expect(await projectionsOf(plan.activityId)).toEqual([]);
+
+    /**
+     * Counted, not inferred. A `200` and an empty projection set are equally true of a
+     * cascade that issued a pointless conditional write against every List the user owns —
+     * the claim is that it issues **none**, so the call itself is what the test watches.
+     */
+    vi.mocked(listRepo.clearSourceActivity).mockClear();
+
     expect((await del(`/v1/activities/${plan.activityId}`)).status).toBe(200);
+
+    expect(listRepo.clearSourceActivity).not.toHaveBeenCalled();
+  });
+
+  /** The converse, so the spy above is proved to be capable of firing at all. */
+  it('clears once per sourced list, and only for those', async () => {
+    const plan = await createPlan();
+    const list = await createSourcedList(plan.activityId);
+    await createSourcedList(await createPlan('Unrelated').then((p) => p.activityId));
+
+    vi.mocked(listRepo.clearSourceActivity).mockClear();
+
+    expect((await del(`/v1/activities/${plan.activityId}`)).status).toBe(200);
+
+    expect(listRepo.clearSourceActivity).toHaveBeenCalledTimes(1);
+    expect(listRepo.clearSourceActivity).toHaveBeenCalledWith(
+      list.listId,
+      plan.activityId,
+    );
   });
 
   /** The other direction, unchanged by this task and asserted so it stays that way. */

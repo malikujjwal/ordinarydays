@@ -1554,15 +1554,12 @@ export async function duplicateActivity(
  *
  * - **Viewer-link rows are cleared**, by {@link viewerLinksToClear} below — P3-15 added them
  *   and this cascade handles them.
- * - **`SOURCE_LIST#` reverse projections are deleted with the partition, but the
- *   `List.sourceActivityId` they point back from is NOT cleared.** P3-05 ships the write
- *   (`CreateListInput.sourceActivityId`), so those rows exist in real tables now and the
- *   sentence that used to stand here — "nothing writes them yet" — is false. The result is a
- *   surviving List whose provenance link names a deleted Plan, with the reverse pointer that
- *   would have found it deleted in the same pass. `data-model.md` §7 *Delete activity* and
- *   `api-contract.md` §2.3 both require the clear; §P3-38 owns the implementation and its
- *   test. **Raised in P3-18 review and open** — it is named here rather than left for the
- *   next reader to rediscover from a comment that told them there was nothing to do.
+ * - **`SOURCE_LIST#` back-links are cleared**, by {@link clearSourcedListBacklinks} below
+ *   (§P3-49) — and **before** the cascade removes the projections, because those rows are the
+ *   only record of which Lists point here. `data-model.md` §7 *Delete activity* and
+ *   `api-contract.md` §2.3 both require the clear. This bullet twice said the opposite: first
+ *   that nothing wrote these rows, then that the clear was somebody else's open work. Both
+ *   were true when written and neither is now.
  * - Expense locators (Phase 7) and EventBridge schedules (Phase 5) genuinely have no rows to
  *   delete, because nothing writes them yet. **There is no settlement guard here** and
  *   `settlement_conflict` is deliberately not in the error union: a guard over rows no schema
