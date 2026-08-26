@@ -58,6 +58,7 @@ import {
   patchActivity as putPatch,
   StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
+import { listActivityUpdates } from '../repositories/activityUpdateRepository.js';
 import {
   clearSourceActivity,
   findViewerLinksTo,
@@ -1796,11 +1797,31 @@ export async function getActivityDetail(
   const access = await assertActivityReadAccessFromPartition(userId, partition);
 
   const mayAct = access.isOwner || access.viaParent;
-  return projectDetail(partition, userId, target, {
-    complete: mayAct,
-    skip: mayAct,
-    snooze: mayAct,
-  });
+  /**
+   * The feed's first page, from its **own bounded Query** rather than filtered out of the
+   * partition above (§2.3, P3-19).
+   *
+   * Filtering would be one fewer round trip and wrong twice. The partition read is unbounded
+   * — P3-36 replaces it with bounded prefix reads, and until then filtering would silently
+   * make the embedded page as large as the feed. And a page assembled in memory has no
+   * cursor: `LastEvaluatedKey` comes from a Query that actually stopped at fifty, so a client
+   * paging older entries needs this read to have happened.
+   *
+   * This also deliberately runs for a Task. An ordinary Task returns an empty collection; a
+   * Plan converted to a Task returns the retained, read-only discussion history that the
+   * conversion is not allowed to erase or strand.
+   */
+  const feed = await listActivityUpdates(target.activityId);
+
+  return {
+    ...projectDetail(partition, userId, target, {
+      complete: mayAct,
+      skip: mayAct,
+      snooze: mayAct,
+    }),
+    updates: feed.updates,
+    ...(feed.cursor === undefined ? {} : { updatesCursor: feed.cursor }),
+  };
 }
 
 /**

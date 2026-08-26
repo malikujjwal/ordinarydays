@@ -345,12 +345,19 @@ describe('reading one activity back', () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
+    /**
+     * Each collection is **added** as its phase lands rather than changing the envelope —
+     * `updates` is P3-19's. An activity with no feed still carries the key, as an empty array,
+     * so a client never has to tell "no entries" from "this server does not have the feed".
+     */
     expect(Object.keys(body.data).sort()).toEqual([
       'activity',
       'capabilities',
       'completedOccurrenceCount',
       'reminders',
+      'updates',
     ]);
+    expect(body.data.updates).toEqual([]);
     expect(body.data.completedOccurrenceCount).toBe(0);
     expect(body.data.activity).toMatchObject({
       activityId: data.activityId,
@@ -545,6 +552,43 @@ describe('patching an activity', () => {
     );
 
     expect(res.status).toBe(200);
+  });
+
+  it('merges discussion activity when a patch was built before the post committed', async () => {
+    const createdPlan = await created({
+      objectKind: 'plan',
+      type: 'custom',
+      title: 'Dinner sometime',
+    });
+    const before = await repo.getActivityMeta(createdPlan.activityId, {
+      consistentRead: true,
+    });
+    if (before === undefined) throw new Error('Expected the created Activity META row');
+
+    const staleNext = {
+      ...before,
+      title: 'Dinner at Zahav',
+      updatedAt: '2026-08-10T13:00:00.000Z',
+    };
+    const touchedAt = '2026-08-10T12:00:00.000Z';
+    const items: Parameters<typeof repo.touchLastActivity>[3] = [];
+    repo.touchLastActivity(before, touchedAt, [DEV], items);
+    await tx.transactWrite(items, { operation: 'touchBeforeStalePatchTest' });
+
+    await repo.patchActivity(DEV, staleNext, before.updatedAt, { previous: before });
+
+    expect(
+      await repo.getActivityMeta(createdPlan.activityId, { consistentRead: true }),
+    ).toMatchObject({
+      title: 'Dinner at Zahav',
+      lastActivityAt: touchedAt,
+      updatedAt: staleNext.updatedAt,
+    });
+    expect((await indexRows(DEV))[0]).toMatchObject({
+      activityId: createdPlan.activityId,
+      lastActivityAt: touchedAt,
+      gsi1sk: `${touchedAt}#${createdPlan.activityId}`,
+    });
   });
 
   it('persists, so the next read sees it', async () => {

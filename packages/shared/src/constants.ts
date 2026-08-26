@@ -168,3 +168,15 @@ export const MAX_OWNED_LISTS = 100;
  * of 2 is the independent structural limit and neither implies the other.
  */
 export const MAX_PREP_TASKS_PER_PLAN = 50;
+
+/**
+ * One feed entry's body (`api-contract.md` §2.5; decision recorded in §P3-19).
+ *
+ * Long enough for a real note about a plan — "moved the booking to 8, the earlier table was
+ * gone" — and short enough that fifty of them are a bounded page rather than a surprise.
+ * Fifty is the page size, so the worst case a detail response can carry is this times fifty.
+ */
+export const MAX_UPDATE_BODY_LEN = 2000;
+
+/** One newest-first page of the feed (`api-contract.md` §2.5, access pattern 4). */
+export const UPDATES_PAGE_SIZE = 50;

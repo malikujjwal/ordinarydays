@@ -588,9 +588,22 @@ export function putActivityMeta(
   transaction.add({
     Put: {
       Item: stamp(ENTITY.activity, next, { ...activityMeta(next.activityId), ...next }),
-      ConditionExpression: '#updatedAt = :expected',
-      ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
-      ExpressionAttributeValues: { ':expected': expectedUpdatedAt },
+      ConditionExpression:
+        '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents',
+      ExpressionAttributeNames: {
+        '#updatedAt': 'updatedAt',
+        '#lastActivityAt': 'lastActivityAt',
+        '#participantCount': 'participantCount',
+        '#childCount': 'childCount',
+        '#expenseTotalCents': 'expenseTotalCents',
+      },
+      ExpressionAttributeValues: {
+        ':expected': expectedUpdatedAt,
+        ':expectedLastActivityAt': next.lastActivityAt,
+        ':expectedParticipantCount': next.participantCount,
+        ':expectedChildCount': next.childCount,
+        ':expectedExpenseTotalCents': next.expenseTotalCents,
+      },
     },
   });
 }
@@ -623,9 +636,18 @@ function parseActivity(value: unknown): Activity {
  * `packages/shared` until Phase 6 defines it, and inventing one here to satisfy a read would
  * be inventing a shape against no implementation.
  */
-export async function listParticipants(activityId: string): Promise<StoredItem[]> {
+export async function listParticipants(
+  activityId: string,
+  options: { readonly consistentRead?: boolean } = {},
+): Promise<StoredItem[]> {
   const prefix = participantPrefix(activityId);
-  return queryAll<StoredItem>({ pk: prefix.pk }, { skPrefix: prefix.skPrefix });
+  return queryAll<StoredItem>(
+    { pk: prefix.pk },
+    {
+      skPrefix: prefix.skPrefix,
+      ...(options.consistentRead === true ? { consistentRead: true } : {}),
+    },
+  );
 }
 
 /**
@@ -694,6 +716,59 @@ export interface PatchOptions extends CreateOptions {
    * depends on it; every other patch leaves it absent and is unaffected.
    */
   readonly expectedChildCount?: number;
+  /**
+   * Items the caller needs committed **with** this patch (P3-19).
+   *
+   * The feed's system entry for a completion uses it, for the same reason the schedule path
+   * does: a completion that committed while its feed row failed would leave the two
+   * disagreeing, and the feed's only job is to agree with the plan. Opaque here by design —
+   * the repository composes what it is handed and never learns the feed's row shape.
+   */
+  readonly extraItems?: readonly TransactItem[];
+  /** Rebuilds an idempotency receipt if a discussion-state retry changes the response. */
+  readonly idempotencyReceiptFor?: (activity: Activity) => IdempotencyReceipt;
+}
+
+const ACTIVITY_META_MERGE_ATTEMPTS = 3;
+
+type IndependentActivityState = Pick<
+  Activity,
+  'lastActivityAt' | 'participantCount' | 'childCount' | 'expenseTotalCents'
+>;
+
+function independentActivityState(activity: Activity): IndependentActivityState {
+  return {
+    lastActivityAt: activity.lastActivityAt,
+    participantCount: activity.participantCount,
+    childCount: activity.childCount,
+    expenseTotalCents: activity.expenseTotalCents,
+  };
+}
+
+function independentStateMoved(
+  expected: IndependentActivityState,
+  fresh: Activity,
+): boolean {
+  return (
+    fresh.lastActivityAt !== expected.lastActivityAt ||
+    fresh.participantCount !== expected.participantCount ||
+    fresh.childCount !== expected.childCount ||
+    fresh.expenseTotalCents !== expected.expenseTotalCents
+  );
+}
+
+function mergeIndependentState(next: Activity, fresh: Activity): void {
+  next.lastActivityAt = fresh.lastActivityAt;
+  next.participantCount = fresh.participantCount;
+  next.childCount = fresh.childCount;
+  next.expenseTotalCents = fresh.expenseTotalCents;
+}
+
+class ActivityMetaConflictError extends Error {
+  constructor() {
+    super('The Activity META condition changed.');
+    this.name = 'ActivityMetaConflictError';
+  }
 }
 
 /**
@@ -713,6 +788,89 @@ export async function patchActivity(
   expectedUpdatedAt: string,
   options: PatchOptions,
 ): Promise<void> {
+  let expectedIndependent: IndependentActivityState = {
+    ...independentActivityState(options.previous),
+    ...(options.expectedChildCount === undefined
+      ? {}
+      : { childCount: options.expectedChildCount }),
+  };
+
+  for (let attempt = 0; attempt < ACTIVITY_META_MERGE_ATTEMPTS; attempt += 1) {
+    try {
+      await patchActivityOnce(
+        userId,
+        next,
+        expectedUpdatedAt,
+        expectedIndependent,
+        options,
+      );
+      return;
+    } catch (error) {
+      if (!(error instanceof ActivityMetaConflictError)) throw error;
+
+      const fresh = await getActivityMeta(next.activityId, { consistentRead: true });
+      if (fresh === undefined || fresh.updatedAt !== expectedUpdatedAt) {
+        throw new AppError(
+          'conflict',
+          'This changed while you were editing it. Review the update.',
+        );
+      }
+
+      if (!independentStateMoved(expectedIndependent, fresh)) {
+        throw new AppError(
+          'conflict',
+          'This changed while you were editing it. Review the update.',
+        );
+      }
+
+      /**
+       * `indexedUserIds` was resolved from the participant set beside `previous`. If that set
+       * moved, retrying it would rewrite only the stale viewers' projections and omit a new
+       * participant (or recreate a removed one's row). The service must resolve access and
+       * viewers again; only scalar state that does not change the write set is mergeable here.
+       */
+      if (fresh.participantCount !== expectedIndependent.participantCount) {
+        throw new AppError(
+          'conflict',
+          'This changed while you were editing it. Review the update.',
+        );
+      }
+
+      /**
+       * A Plan -> Task conversion made a decision from all three counters. If any changed,
+       * the service must re-run the blocker rule against the fresh row rather than merging a
+       * value that may make the conversion illegal. Ordinary edits depend on none of them,
+       * so they may preserve the fresh values and continue without a false client conflict.
+       */
+      if (
+        options.expectedChildCount !== undefined &&
+        (fresh.childCount !== expectedIndependent.childCount ||
+          fresh.expenseTotalCents !== expectedIndependent.expenseTotalCents)
+      ) {
+        throw new AppError(
+          'conflict',
+          'This changed while you were editing it. Review the update.',
+        );
+      }
+
+      mergeIndependentState(next, fresh);
+      expectedIndependent = independentActivityState(fresh);
+    }
+  }
+
+  throw new AppError(
+    'conflict',
+    'This changed while you were editing it. Review the update.',
+  );
+}
+
+async function patchActivityOnce(
+  userId: string,
+  next: Activity,
+  expectedUpdatedAt: string,
+  expectedIndependent: IndependentActivityState,
+  options: PatchOptions,
+): Promise<void> {
   const userIds = options.indexedUserIds ?? [userId];
 
   const items: TransactItem[] = [
@@ -720,20 +878,21 @@ export async function patchActivity(
       Put: {
         Item: stamp(ENTITY.activity, next, { ...activityMeta(next.activityId), ...next }),
         ConditionExpression:
-          options.expectedChildCount === undefined
-            ? '#updatedAt = :expected'
-            : '#updatedAt = :expected AND #childCount = :expectedChildCount',
-        ExpressionAttributeNames:
-          options.expectedChildCount === undefined
-            ? { '#updatedAt': 'updatedAt' }
-            : { '#updatedAt': 'updatedAt', '#childCount': 'childCount' },
-        ExpressionAttributeValues:
-          options.expectedChildCount === undefined
-            ? { ':expected': expectedUpdatedAt }
-            : {
-                ':expected': expectedUpdatedAt,
-                ':expectedChildCount': options.expectedChildCount,
-              },
+          '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents',
+        ExpressionAttributeNames: {
+          '#updatedAt': 'updatedAt',
+          '#lastActivityAt': 'lastActivityAt',
+          '#participantCount': 'participantCount',
+          '#childCount': 'childCount',
+          '#expenseTotalCents': 'expenseTotalCents',
+        },
+        ExpressionAttributeValues: {
+          ':expected': expectedUpdatedAt,
+          ':expectedLastActivityAt': expectedIndependent.lastActivityAt,
+          ':expectedParticipantCount': expectedIndependent.participantCount,
+          ':expectedChildCount': expectedIndependent.childCount,
+          ':expectedExpenseTotalCents': expectedIndependent.expenseTotalCents,
+        },
       },
     },
     ...(options.clearViewerLinks ?? []).map(viewerLinkDelete),
@@ -829,6 +988,8 @@ export async function patchActivity(
     }
   }
 
+  items.push(...(options.extraItems ?? []));
+
   const occurrenceGuardIndex =
     options.requireMissingOccurrenceDate === undefined ? undefined : items.length;
   if (options.requireMissingOccurrenceDate !== undefined) {
@@ -865,13 +1026,17 @@ export async function patchActivity(
     'patchActivity',
     options.idempotencyReceipt === undefined ? 0 : 1,
   ).add(...items);
+  const receiptIndex = builder.length;
   if (options.idempotencyReceipt !== undefined) {
-    builder.addReserved(receiptItem(options.idempotencyReceipt));
+    builder.addReserved(
+      receiptItem(options.idempotencyReceiptFor?.(next) ?? options.idempotencyReceipt),
+    );
   }
 
   await transactWrite(builder.build(), {
     operation: 'patchActivity',
     onConditionFailed: (index) => {
+      if (index === 0) return new ActivityMetaConflictError();
       if (viewerLinkIndices.has(index)) return new StaleViewerLinkError();
       if (counterIndices.has(index)) return new ParentUnavailableError();
       if (index === occurrenceGuardIndex) {
@@ -886,19 +1051,34 @@ export async function patchActivity(
           'This occurrence changed while repeat was being updated. Try again.',
         );
       }
-      return options.idempotencyReceipt === undefined
-        ? undefined
-        : new IdempotencyRaceError();
+      return options.idempotencyReceipt !== undefined && index === receiptIndex
+        ? new IdempotencyRaceError()
+        : undefined;
     },
   });
 }
 
 export interface ScheduleWriteOptions {
   readonly previous: Activity;
+  /**
+   * Items the caller needs committed **with** the schedule change (P3-19).
+   *
+   * The feed's system entry uses this: a schedule write that succeeded while its "Date set to
+   * Saturday" row failed would leave a feed that disagrees with the plan, and agreeing with
+   * the plan is the feed's only job. They join the same transaction rather than following it,
+   * so there is no window in which one exists without the other.
+   *
+   * Deliberately opaque here. The repository does not know what a system entry is and must
+   * not — it composes items it is handed, which is what stops this becoming a second place
+   * that knows the feed's row shape.
+   */
+  readonly extraItems?: readonly TransactItem[];
   readonly indexedUserIds: readonly string[];
   readonly participantRows?: readonly StoredItem[];
   readonly taskSubtitle?: string;
   readonly idempotencyReceipt: IdempotencyReceipt;
+  /** Rebuilds the stored response when an internal discussion-state retry changes META. */
+  readonly idempotencyReceiptFor?: (activity: Activity) => IdempotencyReceipt;
   readonly cleanupWork?: CleanupWork;
   readonly rsvpResetPending?: boolean;
 }
@@ -906,6 +1086,51 @@ export interface ScheduleWriteOptions {
 /** Atomically rewrites schedule state and every transaction-coupled projection. */
 export async function writeSchedule(
   next: Activity,
+  options: ScheduleWriteOptions,
+): Promise<void> {
+  let expectedIndependent = independentActivityState(options.previous);
+
+  for (let attempt = 0; attempt < ACTIVITY_META_MERGE_ATTEMPTS; attempt += 1) {
+    try {
+      await writeScheduleOnce(next, expectedIndependent, options);
+      return;
+    } catch (error) {
+      if (!(error instanceof ActivityMetaConflictError)) throw error;
+
+      const fresh = await getActivityMeta(next.activityId, { consistentRead: true });
+      if (fresh === undefined || fresh.updatedAt !== options.previous.updatedAt) {
+        throw new AppError(
+          'conflict',
+          'This changed while you were editing it. Review the update.',
+        );
+      }
+      if (!independentStateMoved(expectedIndependent, fresh)) {
+        throw new AppError(
+          'conflict',
+          'This changed while you were editing it. Review the update.',
+        );
+      }
+      if (fresh.participantCount !== expectedIndependent.participantCount) {
+        throw new AppError(
+          'conflict',
+          'This changed while you were editing it. Review the update.',
+        );
+      }
+
+      mergeIndependentState(next, fresh);
+      expectedIndependent = independentActivityState(fresh);
+    }
+  }
+
+  throw new AppError(
+    'conflict',
+    'This changed while you were editing it. Review the update.',
+  );
+}
+
+async function writeScheduleOnce(
+  next: Activity,
+  expectedIndependent: IndependentActivityState,
   options: ScheduleWriteOptions,
 ): Promise<void> {
   const items: TransactItem[] = [
@@ -916,9 +1141,22 @@ export async function writeSchedule(
           ...next,
           ...(options.rsvpResetPending === true ? { rsvpResetPending: true } : {}),
         }),
-        ConditionExpression: '#updatedAt = :expected',
-        ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
-        ExpressionAttributeValues: { ':expected': options.previous.updatedAt },
+        ConditionExpression:
+          '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents',
+        ExpressionAttributeNames: {
+          '#updatedAt': 'updatedAt',
+          '#lastActivityAt': 'lastActivityAt',
+          '#participantCount': 'participantCount',
+          '#childCount': 'childCount',
+          '#expenseTotalCents': 'expenseTotalCents',
+        },
+        ExpressionAttributeValues: {
+          ':expected': options.previous.updatedAt,
+          ':expectedLastActivityAt': expectedIndependent.lastActivityAt,
+          ':expectedParticipantCount': expectedIndependent.participantCount,
+          ':expectedChildCount': expectedIndependent.childCount,
+          ':expectedExpenseTotalCents': expectedIndependent.expenseTotalCents,
+        },
       },
     },
   ];
@@ -929,6 +1167,7 @@ export async function writeSchedule(
   for (const row of options.participantRows ?? []) {
     items.push({ Put: { Item: { ...row, updatedAt: next.updatedAt } } });
   }
+  items.push(...(options.extraItems ?? []));
   if (next.parentActivityId !== undefined && next.status !== options.previous.status) {
     items.push({
       Update: {
@@ -955,13 +1194,15 @@ export async function writeSchedule(
   const builder = new TransactionBuilder('writeSchedule', reserved).add(...items);
   const receiptIndex = builder.length;
   builder.addReserved(
-    receiptItem(options.idempotencyReceipt),
+    receiptItem(options.idempotencyReceiptFor?.(next) ?? options.idempotencyReceipt),
     ...(options.cleanupWork === undefined ? [] : [cleanupItem(options.cleanupWork)]),
   );
   await transactWrite(builder.build(), {
     operation: 'writeSchedule',
-    onConditionFailed: (index) =>
-      index === receiptIndex ? new IdempotencyRaceError() : undefined,
+    onConditionFailed: (index) => {
+      if (index === 0) return new ActivityMetaConflictError();
+      return index === receiptIndex ? new IdempotencyRaceError() : undefined;
+    },
   });
 }
 
@@ -1028,14 +1269,35 @@ export function touchLastActivity(
   const touched: Activity = { ...activity, lastActivityAt: at };
 
   tx.push({
-    Put: {
-      Item: stamp(ENTITY.activity, touched, {
-        ...activityMeta(touched.activityId),
-        ...touched,
-      }),
-      ConditionExpression: '#updatedAt = :expected',
-      ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
-      ExpressionAttributeValues: { ':expected': activity.updatedAt },
+    Update: {
+      Key: activityMeta(touched.activityId),
+      UpdateExpression: 'SET #lastActivityAt = :at',
+      /**
+       * **Both timestamps**, and the second one is not redundant (P3-19 review).
+       *
+       * `updatedAt` alone cannot serialise two concurrent discussion writes, because neither
+       * of them moves it — that is the whole point of the split. Two posts read the same
+       * `updatedAt`; the later one commits; the earlier one then passes an `updatedAt`
+       * condition that nothing has changed and sets META to its **older**
+       * `lastActivityAt`. Both entries survive, but the plan walks backwards down Needs a
+       * date and the timestamp the first response called authoritative is now a lie.
+       *
+       * So the write also pins the `lastActivityAt` it read. The loser's condition fails, and
+       * its caller retries from fresh META — which is where the value it must not regress is.
+       * It is a field-level `Update`, not a whole-row `Put`, so an independently committed
+       * participant, prep-task or expense counter cannot be rolled back by the stale META
+       * snapshot from which this discussion write was composed.
+       */
+      ConditionExpression: '#updatedAt = :expected AND #lastActivityAt = :expectedLast',
+      ExpressionAttributeNames: {
+        '#updatedAt': 'updatedAt',
+        '#lastActivityAt': 'lastActivityAt',
+      },
+      ExpressionAttributeValues: {
+        ':expected': activity.updatedAt,
+        ':expectedLast': activity.lastActivityAt,
+        ':at': at,
+      },
     },
   });
 

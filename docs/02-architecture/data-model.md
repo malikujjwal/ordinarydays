@@ -1408,6 +1408,51 @@ interface Invite {
 }
 ```
 
+### 4.10 ActivityUpdate
+
+The plan's activity feed. Named in §3.1's key table since Phase 1; the shape is added here by
+**P3-19**, the task that first writes one.
+
+```ts
+interface ActivityUpdate {
+  updateId: string;            // upd_ ULID, seeded from createdAt — see below
+  activityId: string;
+  kind: 'user' | 'system';
+  authorUserId?: string;       // user entries only; a system entry has no author
+  body: string;                // 1..MAX_UPDATE_BODY_LEN (2000)
+  createdAt: string;
+  schemaVersion: 1;
+}
+```
+
+**Rules**
+
+- **`kind` is server-authored on both paths.** A `user` entry comes from `POST`; a `system`
+  entry is written only through `updatesService.writeSystemUpdate`, by the service that owns
+  the event it records. A client that could claim the kind could forge the record.
+- **`authorUserId` is present exactly when `kind === 'user'`.** A system entry has no author
+  because nobody wrote it, and attributing it to whoever triggered the edit would misreport a
+  record of what happened as somebody's remark.
+- **The id is a ULID seeded from the entry's own `createdAt`**, so the sort key
+  `UPD#<createdAt>#<updateId>` is reconstructible from the id alone and
+  `DELETE /v1/activities/:id/updates/:updateId` is one `GetItem`. Without it the row would be
+  unreachable from a URL that carries no timestamp, and finding it would mean paging a
+  partition the user grows without limit — which §5 forbids. Two entries inside one
+  millisecond share a `createdAt`, so the monotonic id is also the sort key's tie-break.
+- **A posted `user` entry bumps `lastActivityAt` and never `updatedAt`** (§3.5). A `system`
+  entry bumps **neither**: §3.5's bumpers are the things that mean "this plan is being
+  discussed", and a record that the date moved is the receipt for an edit rather than a
+  discussion — the edit itself has already moved `updatedAt` through its own path. Recorded in
+  P3-19 and open to correction.
+- A `system` entry is written in the **same transaction** as the change it records, so the
+  feed cannot disagree with the plan in either direction.
+- Plan → Task conversion retains every existing `ActivityUpdate`. The Task accepts no new
+  user or system entries, but the existing rows remain readable as conversion history and
+  an author may still delete their own `user` entry. Conversion is not permission to erase
+  discussion content as an undocumented side effect.
+- Neither kind increments `icsSequence` (§4.1) — nothing here appears in an exported calendar
+  event.
+
 ---
 
 ## 5. Access patterns
@@ -1566,6 +1611,7 @@ status/body.
 
 | Operation | Items written |
 | --- | --- |
+| Post a feed entry | `ACT#/UPD#<createdAt>#<updateId>` plus `ACT#/META` and every owner/participant `USER#/IDX#` carrying the new `lastActivityAt`, and the idempotency receipt — one transaction (P3-19). META is conditioned on the `updatedAt` the write read, and `updatedAt` itself is byte-identical afterwards: a comment must never `409` an owner's open edit sheet. A **system** entry is a single `UPD#` put with no META write at all, joined to the transaction of the change it records. |
 | Create activity (attach half) | The parent's `childCount` increment is conditional on `attribute_exists(pk) AND childCount < MAX_PREP_TASKS_PER_PLAN AND objectKind = 'plan'` (P3-18 review). The kind term pairs with the conversion row below: because the counter moves by `ADD` and does not advance `updatedAt`, neither write can see the other through `updatedAt` alone, so each conditions on the attribute the other changes. The decrement is not kind-gated — a child must always be able to clean up after itself. |
 | Convert a Plan to a Task | `ACT#/META` and every index row, conditional on **both** the read `updatedAt` and the `childCount` the 409 guard validated (P3-18 review). Pinning the count is what stops a prep task attached between the read and the write from being silently orphaned onto a Task by a stale whole-item `Put` that still satisfies `updatedAt`. |
 | Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and — when `parentActivityId` is set — `ACT#<parent>/SUB#<child>` with `isRecurring` plus the parent's `ACT#<parent>/META` `childCount` increment, conditioned on the parent existing and being under `MAX_PREP_TASKS_PER_PLAN` (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two; **amended in P3-18**: the counter joins the same transaction, so the cap is a condition rather than a precheck and the pointer can never outlive the count) |

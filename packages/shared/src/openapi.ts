@@ -16,6 +16,11 @@ import {
   skipActivityInput,
   uncompleteActivityInput,
 } from './schemas/activity.js';
+import {
+  activityUpdatePage,
+  postActivityUpdateInput,
+  postActivityUpdateResult,
+} from './schemas/activityUpdate.js';
 import { activityAgendaData, agendaData, agendaQuery } from './schemas/agenda.js';
 import {
   captureExtractInput,
@@ -78,6 +83,8 @@ const deletedActivityResponse = envelope(deletedActivity);
 const reminderResponse = envelope(reminder);
 const reminderListResponse = envelope(z.array(reminder));
 const deletedReminderResponse = envelope(deletedReminder);
+const activityUpdatePageResponse = envelope(activityUpdatePage);
+const postActivityUpdateResponse = envelope(postActivityUpdateResult);
 
 /**
  * The list envelope. `data` is an array and `meta.nextCursor` is present only when there is
@@ -1698,6 +1705,87 @@ registry.registerPath({
     },
     500: {
       description: 'Unexpected failure. The message is always the literal safe string.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * The plan's activity feed (§2.5, P3-19).
+ *
+ * Only `POST` mutates, so only it takes an `Idempotency-Key`.
+ */
+registry.registerPath({
+  method: 'get',
+  path: '/v1/activities/{id}/updates',
+  summary: 'One newest-first page of the plan’s feed',
+  description:
+    'Fifty entries per page, newest first, continued with the opaque `cursor` the previous ' +
+    'page returned. The first page is already embedded in activity detail, so a client ' +
+    'opening a plan issues no request here until it pages older entries.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    query: z.object({ cursor: z.string().min(1).optional() }),
+  },
+  responses: {
+    200: {
+      description: 'One page of entries, with a cursor when more remain.',
+      content: { 'application/json': { schema: activityUpdatePageResponse } },
+    },
+    404: {
+      description: 'No such activity, or the caller is a stranger.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/updates',
+  summary: 'Post one entry to the plan’s feed',
+  description:
+    'Takes `{ body }` and nothing else: `kind`, `authorUserId` and `createdAt` are ' +
+    'server-authored, and a request carrying any of them is `validation_failed` rather than ' +
+    'a save that quietly ignores them. Requires `Idempotency-Key`. The response carries the ' +
+    'plan’s new `lastActivityAt`, authoritative while the GSI projection converges.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: postActivityUpdateInput } } },
+  },
+  responses: {
+    201: {
+      description: 'The stored entry and the plan’s new `lastActivityAt`.',
+      content: { 'application/json': { schema: postActivityUpdateResponse } },
+    },
+    400: {
+      description:
+        'An empty or oversized body, a server-authored field, or a missing idempotency key.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity, or the caller is a stranger.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/v1/activities/{id}/updates/{updateId}',
+  summary: 'Delete one of the caller’s own feed entries',
+  description:
+    'Author only, and only on `kind: user` entries — a system entry is the record of ' +
+    'what happened and is undeletable. A missing entry, a system entry and another author’s ' +
+    'entry all answer `404`, so the response reports nothing about a row the caller may not read.',
+  tags: ['activities'],
+  request: { params: z.object({ id: activityId, updateId: ulidId('upd') }) },
+  responses: {
+    204: { description: 'The entry is gone.' },
+    404: {
+      description:
+        'No such activity, no caller relationship, or no caller-authored user entry.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

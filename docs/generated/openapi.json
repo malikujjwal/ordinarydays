@@ -3075,11 +3075,70 @@
           "completedOccurrenceCount": {
             "type": "integer",
             "minimum": 0
+          },
+          "updates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityUpdate"
+            }
+          },
+          "updatesCursor": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
           "activity",
           "reminders"
+        ]
+      },
+      "ActivityUpdate": {
+        "type": "object",
+        "properties": {
+          "updateId": {
+            "type": "string",
+            "pattern": "^upd_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "user",
+              "system"
+            ]
+          },
+          "authorUserId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 40,
+            "pattern": "^usr_[A-Za-z0-9_-]+$"
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "schemaVersion": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          }
+        },
+        "required": [
+          "updateId",
+          "activityId",
+          "kind",
+          "body",
+          "createdAt",
+          "schemaVersion"
         ]
       },
       "PatchActivityInput": {
@@ -6144,6 +6203,54 @@
           "data",
           "meta"
         ]
+      },
+      "ActivityUpdatePage": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityUpdate"
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "PostActivityUpdateResult": {
+        "type": "object",
+        "properties": {
+          "update": {
+            "$ref": "#/components/schemas/ActivityUpdate"
+          },
+          "lastActivityAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "update",
+          "lastActivityAt"
+        ]
+      },
+      "PostActivityUpdateInput": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -9851,6 +9958,214 @@
           },
           "500": {
             "description": "Unexpected failure. The message is always the literal safe string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/activities/{id}/updates": {
+      "get": {
+        "summary": "One newest-first page of the plan’s feed",
+        "description": "Fifty entries per page, newest first, continued with the opaque `cursor` the previous page returned. The first page is already embedded in activity detail, so a client opening a plan issues no request here until it pages older entries.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of entries, with a cursor when more remain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ActivityUpdatePage"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or the caller is a stranger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Post one entry to the plan’s feed",
+        "description": "Takes `{ body }` and nothing else: `kind`, `authorUserId` and `createdAt` are server-authored, and a request carrying any of them is `validation_failed` rather than a save that quietly ignores them. Requires `Idempotency-Key`. The response carries the plan’s new `lastActivityAt`, authoritative while the GSI projection converges.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostActivityUpdateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored entry and the plan’s new `lastActivityAt`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PostActivityUpdateResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An empty or oversized body, a server-authored field, or a missing idempotency key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such activity, or the caller is a stranger.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/activities/{id}/updates/{updateId}": {
+      "delete": {
+        "summary": "Delete one of the caller’s own feed entries",
+        "description": "Author only, and only on `kind: user` entries — a system entry is the record of what happened and is undeletable. A missing entry, a system entry and another author’s entry all answer `404`, so the response reports nothing about a row the caller may not read.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^upd_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+            },
+            "required": true,
+            "name": "updateId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The entry is gone."
+          },
+          "404": {
+            "description": "No such activity, no caller relationship, or no caller-authored user entry.",
             "content": {
               "application/json": {
                 "schema": {

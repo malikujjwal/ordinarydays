@@ -47,7 +47,9 @@ describe('the generated document', () => {
     // **P3-10 added the two bulk actions and the compensation endpoint**; **P3-13 added
     // the schedule bridge** under the templated item id; and **P3-17 added the meal
     // ingredient action**, which is a §2.7 list operation authorised by the meal, so it is
-    // registered under the activity path its `:id` names.
+    // registered under the activity path its `:id` names. **P3-19 added the two feed paths**
+    // — the collection carrying `GET` and `POST`, and the templated entry id carrying the
+    // author-only `DELETE`.
     expect(Object.keys(document.paths ?? {})).toEqual([
       '/v1/me',
       '/v1/me/devices',
@@ -82,6 +84,8 @@ describe('the generated document', () => {
       '/v1/capture/extract',
       '/v1/capture/link',
       '/v1/health',
+      '/v1/activities/{id}/updates',
+      '/v1/activities/{id}/updates/{updateId}',
     ]);
   });
 
@@ -113,6 +117,8 @@ describe('the generated document', () => {
       'ActivityCompletionResult',
       'ActivityDetail',
       'ActivityListItem',
+      'ActivityUpdate',
+      'ActivityUpdatePage',
       'AddIngredientsToListInput',
       'AddIngredientsToListResult',
       'AddedIngredient',
@@ -150,6 +156,8 @@ describe('the generated document', () => {
       'PatchListInput',
       'PatchListItemInput',
       'PatchUserInput',
+      'PostActivityUpdateInput',
+      'PostActivityUpdateResult',
       'Recurrence',
       'RegisterDeviceInput',
       'Reminder',
@@ -186,6 +194,8 @@ describe('the generated document', () => {
       'completedOccurrenceCount',
       'occurrence',
       'reminders',
+      'updates',
+      'updatesCursor',
     ]);
     expect(detail.required).toEqual(expect.arrayContaining(['activity', 'reminders']));
   });

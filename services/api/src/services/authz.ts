@@ -55,6 +55,11 @@ export interface ActivityAccess {
   readonly viaParent: boolean;
 }
 
+export interface ActivityAccessOptions {
+  /** Use the authority rows written in the immediately preceding request. */
+  readonly consistentRead?: boolean;
+}
+
 /** What a successful pointer-based List check resolved. */
 export interface ListAccess {
   readonly index: ListAccessGrant;
@@ -102,8 +107,12 @@ function belongsTo(row: StoredItem, userId: string): boolean {
   return typeof row.userId === 'string' && row.userId === userId;
 }
 
-async function isParticipant(activityId: string, userId: string): Promise<boolean> {
-  const rows = await listParticipants(activityId);
+async function isParticipant(
+  activityId: string,
+  userId: string,
+  options: ActivityAccessOptions,
+): Promise<boolean> {
+  const rows = await listParticipants(activityId, options);
   return rows.some((row) => belongsTo(row, userId));
 }
 
@@ -130,8 +139,9 @@ export async function assertActivityAccess(
   userId: string,
   activityId: string,
   level: AccessLevel,
+  options: ActivityAccessOptions = {},
 ): Promise<ActivityAccess> {
-  const activity = await getActivityMeta(activityId);
+  const activity = await getActivityMeta(activityId, options);
 
   // A missing activity and an activity belonging to a stranger produce the same answer, from
   // the same line, so the two cannot drift apart into a timing or a message difference.
@@ -141,7 +151,7 @@ export async function assertActivityAccess(
     return { activity, isOwner: true, viaParent: false };
   }
 
-  const granted = await grantFromParticipation(activity, userId, level);
+  const granted = await grantFromParticipation(activity, userId, level, options);
   if (granted !== undefined) return granted;
 
   throw new AppError('not_found', NOT_FOUND);
@@ -162,8 +172,9 @@ async function grantFromParticipation(
   activity: Activity,
   userId: string,
   level: AccessLevel,
+  options: ActivityAccessOptions = {},
 ): Promise<ActivityAccess | undefined> {
-  if (await isParticipant(activity.activityId, userId)) {
+  if (await isParticipant(activity.activityId, userId, options)) {
     return grantToParticipant(activity, level, false);
   }
 
@@ -173,13 +184,13 @@ async function grantFromParticipation(
    * task's own delete is not a shared-checklist tick.
    */
   if (activity.parentActivityId !== undefined) {
-    const parent = await getActivityMeta(activity.parentActivityId);
+    const parent = await getActivityMeta(activity.parentActivityId, options);
     if (parent !== undefined && parent.ownerId === userId) {
       return grantToParticipant(activity, level, true);
     }
     if (
       parent !== undefined &&
-      (await isParticipant(activity.parentActivityId, userId))
+      (await isParticipant(activity.parentActivityId, userId, options))
     ) {
       return grantToParticipant(activity, level, true);
     }

@@ -209,6 +209,16 @@ describe('the owner', () => {
 
     expect(repository.listParticipants).not.toHaveBeenCalled();
   });
+
+  it('passes an authoritative-read request to the META repository', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
+
+    await assertActivityAccess(OWNER, PLAN, 'read', { consistentRead: true });
+
+    expect(repository.getActivityMeta).toHaveBeenCalledWith(PLAN, {
+      consistentRead: true,
+    });
+  });
 });
 
 describe('a stranger', () => {
@@ -277,6 +287,14 @@ describe('a participant', () => {
 
     expect(access.isOwner).toBe(false);
     expect(access.viaParent).toBe(false);
+  });
+
+  it('uses the same authoritative mode for the participant rows', async () => {
+    await assertActivityAccess(PARTICIPANT, PLAN, 'read', { consistentRead: true });
+
+    expect(repository.listParticipants).toHaveBeenCalledWith(PLAN, {
+      consistentRead: true,
+    });
   });
 
   /**

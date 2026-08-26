@@ -200,6 +200,11 @@ describe('one-off completion transaction and replay', () => {
       status: 'completed',
       outcome: 'done',
     });
+    /**
+     * **No feed row**, because this fixture is a Task. The feed is the plan's; Task detail has
+     * no section that could show one, so writing history here would be storage nothing can
+     * reach (P3-19 review).
+     */
     expect(items.map((item) => item.Put?.Item?.entity ?? Object.keys(item)[0])).toEqual([
       'Activity',
       'ActivityIndex',
@@ -211,6 +216,30 @@ describe('one-off completion transaction and replay', () => {
         .filter((item) => item.Put?.Item?.entity === 'ActivityIndex')
         .map((item) => item.Put?.Item?.status),
     ).toEqual(['completed', 'completed']);
+  });
+
+  /**
+   * The plan case: the feed's entry joins the **same** transaction. A completion that
+   * committed while its feed row failed would leave the two disagreeing, and agreeing with
+   * the plan is the feed's only job.
+   */
+  it('writes the feed entry in the completion transaction, for a plan', async () => {
+    seed({
+      activity: meta({
+        objectKind: 'plan',
+        type: 'event',
+        details: { kind: 'event' },
+      }),
+    });
+
+    expect((await post(createApp(), 'complete', {})).status).toBe(200);
+
+    const entries = transactionItems().filter(
+      (item) => item.Put?.Item?.entity === 'ActivityUpdate',
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.Put?.Item).toMatchObject({ kind: 'system' });
+    expect(entries[0]?.Put?.Item).not.toHaveProperty('authorUserId');
   });
 
   it('replays the original bytes and performs only one domain transaction', async () => {
@@ -535,7 +564,7 @@ describe('P2-14 skip', () => {
     expect((await noKey.json()).error.details[0].path).toBe('Idempotency-Key');
   });
 
-  it('leaves all projected state unchanged when the transaction is cancelled', async () => {
+  it('returns conflict and leaves all projected state unchanged when META moved', async () => {
     const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
     const original = meta();
     const state = seed({
@@ -551,7 +580,7 @@ describe('P2-14 skip', () => {
 
     const response = await post(createApp(), 'skip', {});
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     expect(state.currentActivity()).toEqual(original);
   });
 });

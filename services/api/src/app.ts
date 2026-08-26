@@ -22,6 +22,7 @@ import { health } from './routes/health.js';
 import { lists } from './routes/lists.js';
 import { listTemplates } from './routes/listTemplates.js';
 import { me } from './routes/me.js';
+import { updates } from './routes/updates.js';
 import { drainScheduleCleanup } from './services/scheduleService.js';
 
 /**
@@ -95,6 +96,12 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
   app.route('/v1/me', me);
   app.route('/v1/agenda', agenda);
   app.route('/v1/activities', activities);
+  /**
+   * The feed mounts on the same prefix (`api-contract.md` §2.5). A second router rather than
+   * three more routes on `activities`: the sub-resource has its own service and paging rule,
+   * and Hono matches the more specific path regardless of registration order.
+   */
+  app.route('/v1/activities', updates);
   app.route('/v1/lists', lists);
   app.route('/v1/list-templates', listTemplates);
   app.route('/v1/capture', capture);

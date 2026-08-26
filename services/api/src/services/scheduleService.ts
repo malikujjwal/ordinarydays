@@ -1,7 +1,7 @@
 import { differenceInWallDays, expandRecurrence } from '@od/shared/recurrence';
 import type { ScheduleActivityInput, ScheduleActivityResult } from '@od/shared/schemas';
 import { activity as activitySchema } from '@od/shared/schemas';
-import type { Activity, Occurrence } from '@od/shared/types';
+import type { Activity, ActivitySchedule, Occurrence } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type {
   CleanupPhase,
@@ -22,6 +22,7 @@ import {
   get as getOccurrence,
   writeOccurrenceSchedule,
 } from '../repositories/occurrenceRepository.js';
+import type { TransactItem } from '../repositories/tx.js';
 import { toSchedule } from './activityService.js';
 import { assertActivityAccess } from './authz.js';
 import {
@@ -29,6 +30,7 @@ import {
   drainActivityCleanup,
   drainCleanup,
 } from './idempotencyCleanupService.js';
+import { hasUpdatesFeed, writeSystemUpdate } from './updatesService.js';
 
 type ReceiptFor = (data: unknown, cleanupRef?: CleanupRef) => IdempotencyReceipt;
 
@@ -310,7 +312,7 @@ export async function scheduleActivity(
     changedParticipants.length > 45 || (clearDate && participants.length > 45);
   if (deferredParticipants) kinds.push('reset_rsvp');
 
-  const result: ScheduleActivityResult = {
+  let result: ScheduleActivityResult = {
     activity: projectActivity(next),
     ...(rsvpReset ? { rsvpReset: true } : {}),
     ...(normalised ? { reminderOffsetsNormalized: true } : {}),
@@ -329,16 +331,103 @@ export async function scheduleActivity(
       typeof row.userId === 'string' ? [row.userId] : [],
     ),
   ];
+  /**
+   * **Exactly one system entry per schedule event** (§P3-19, `plans-and-lists.md` §1.4).
+   *
+   * The three events are distinct and mutually exclusive, which is why this is one call and
+   * not three appends: a plan either gains its first date, moves to another one, or keeps its
+   * date and changes its time. An unscheduling is a fourth — the plan loses its date and
+   * returns to Needs a date — and it is recorded too, because "the date went away" is exactly
+   * the kind of thing a participant coming back to the plan needs to see.
+   *
+   * A write that changes nothing (`changed === false`) writes no entry: an idempotent replay
+   * must not add a row saying the date was set to what it already was. Nor does a **Task**:
+   * the feed is the plan's, and Task detail has no section that could ever show one.
+   */
+  const systemEntry = hasUpdatesFeed(previous)
+    ? scheduleSystemEntry(previous, next, changed, now)
+    : undefined;
+
   await writeSchedule(next, {
     previous,
     indexedUserIds,
+    ...(systemEntry === undefined ? {} : { extraItems: [systemEntry] }),
     ...(!deferredParticipants && changedParticipants.length > 0
       ? { participantRows: changedParticipants }
       : {}),
     idempotencyReceipt: receipt,
+    idempotencyReceiptFor: (committed) => {
+      result = { ...result, activity: projectActivity(committed) };
+      return receiptFor(result, work === undefined ? undefined : ref);
+    },
     ...(work === undefined ? {} : { cleanupWork: work }),
     ...(deferredParticipants ? { rsvpResetPending: true } : {}),
   });
   if (work !== undefined) await drainScheduleCleanup(ref);
   return result;
+}
+
+/**
+ * The one-line record of what just happened to this plan's schedule, or `undefined`.
+ *
+ * Copy is deliberately the plain past tense the feed reads in — `plans-and-lists.md` §2.1 row
+ * 9 specifies that these entries exist and P3-39 renders them without an author, but neither
+ * fixes the wording, so it is settled here and named in the PR. Dates are the stored wall
+ * clock, not a localisation: the feed is a record, and a record of "8 PM" that renders as
+ * "20:00" to the next reader has changed what it says.
+ */
+function scheduleSystemEntry(
+  previous: Activity,
+  next: Activity,
+  changed: boolean,
+  now: string,
+): TransactItem | undefined {
+  if (!changed) return undefined;
+
+  const before = previous.schedule;
+  const after = next.schedule;
+
+  if (after === undefined) {
+    return before === undefined
+      ? undefined
+      : writeSystemUpdate(previous.activityId, 'Date removed.', now);
+  }
+
+  if (before?.date === undefined) {
+    return writeSystemUpdate(
+      previous.activityId,
+      `Date set to ${scheduleLabel(after)}.`,
+      now,
+    );
+  }
+
+  if (before.date !== after.date) {
+    return writeSystemUpdate(
+      previous.activityId,
+      `Date changed to ${scheduleLabel(after)}.`,
+      now,
+    );
+  }
+
+  if (before.time !== after.time) {
+    return writeSystemUpdate(
+      previous.activityId,
+      after.time === undefined ? 'Time removed.' : `Time changed to ${after.time}.`,
+      now,
+    );
+  }
+
+  /**
+   * A change this function has no sentence for — an end time, or a timezone. Silence rather
+   * than a vague "the schedule changed": an entry nobody can act on is noise in a feed whose
+   * value is that every row means something.
+   */
+  return undefined;
+}
+
+/** `2026-08-09` or `2026-08-09 at 19:30` — the stored wall clock, unlocalised. */
+function scheduleLabel(schedule: ActivitySchedule): string {
+  return schedule.time === undefined
+    ? schedule.date
+    : `${schedule.date} at ${schedule.time}`;
 }

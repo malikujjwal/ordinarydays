@@ -435,6 +435,56 @@ describe('schedule transaction', () => {
     });
   });
 
+  it('merges a discussion touch that committed after the schedule was built', async () => {
+    const before = anActivity({
+      objectKind: 'plan',
+      type: 'custom',
+      details: { kind: 'custom' },
+    } as Partial<Activity>);
+    await repo.createActivity(ALICE, before);
+    const after = {
+      ...before,
+      status: 'scheduled',
+      schedule: { date: '2026-08-15', timezone: 'UTC' },
+      icsSequence: 1,
+      updatedAt: '2026-08-08T11:00:00.000Z',
+    } as Activity;
+    const touchedAt = '2026-08-08T10:30:00.000Z';
+    const touchItems: Parameters<typeof repo.touchLastActivity>[3] = [];
+    repo.touchLastActivity(before, touchedAt, [ALICE], touchItems);
+    await tx.transactWrite(touchItems, { operation: 'touchBeforeScheduleTest' });
+
+    const initialReceipt = receiptFor({ activity: after });
+    await repo.writeSchedule(after, {
+      previous: before,
+      indexedUserIds: [ALICE],
+      idempotencyReceipt: initialReceipt,
+      idempotencyReceiptFor: (committed) => ({
+        ...initialReceipt,
+        body: JSON.stringify({ data: { activity: committed } }),
+      }),
+    });
+
+    expect(
+      await repo.getActivityMeta(before.activityId, { consistentRead: true }),
+    ).toMatchObject({
+      schedule: { date: '2026-08-15', timezone: 'UTC' },
+      lastActivityAt: touchedAt,
+    });
+    expect(
+      await base.getItem(keys.activityIndex(ALICE, before.activityId)),
+    ).toMatchObject({
+      activityId: before.activityId,
+      lastActivityAt: touchedAt,
+    });
+    const storedReceipt = await base.getItem<Record<string, unknown>>(
+      keys.idempotency(ALICE, initialReceipt.key),
+    );
+    expect(JSON.parse(String(storedReceipt?.body)).data.activity.lastActivityAt).toBe(
+      touchedAt,
+    );
+  });
+
   it('persists unschedule cleanup with the cleared META and successful receipt', async () => {
     const before = anActivity({
       status: 'scheduled',
