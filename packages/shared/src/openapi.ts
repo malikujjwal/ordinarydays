@@ -22,7 +22,14 @@ import {
   postActivityUpdateResult,
 } from './schemas/activityUpdate.js';
 import { activityAgendaData, agendaData, agendaQuery } from './schemas/agenda.js';
-import { requestUploadUrlInput, requestUploadUrlResult } from './schemas/attachment.js';
+import {
+  attachment,
+  attachmentId,
+  confirmAttachmentInput,
+  deletedAttachment,
+  requestUploadUrlInput,
+  requestUploadUrlResult,
+} from './schemas/attachment.js';
 import {
   captureExtractInput,
   captureLinkInput,
@@ -89,6 +96,8 @@ const plansResponse = envelope(plansData);
 const activityUpdatePageResponse = envelope(activityUpdatePage);
 const postActivityUpdateResponse = envelope(postActivityUpdateResult);
 const requestUploadUrlResponse = envelope(requestUploadUrlResult);
+const attachmentResponse = envelope(attachment);
+const deletedAttachmentResponse = envelope(deletedAttachment);
 
 /**
  * The list envelope. `data` is an array and `meta.nextCursor` is present only when there is
@@ -1892,6 +1901,84 @@ registry.registerPath({
     },
     429: {
       description: 'Over the 60-per-hour limit for this route. Carries `Retry-After`.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * The two activity-scoped attachment routes (P3-22). Confirming is authorised by the plan
+ * that will own the image, which is why they sit on the activity prefix rather than beside
+ * `upload-url`.
+ */
+registry.registerPath({
+  method: 'post',
+  path: '/v1/activities/{id}/attachments',
+  summary: 'Confirm an uploaded image and link it to the activity',
+  description:
+    'Completes the cross-store state machine: verifies the uploaded object against the type ' +
+    'and length that were signed into its URL, records this activity on the pending record ' +
+    'and marks it `confirming` **before** any permanent copy, copies to ' +
+    '`u/<userId>/<ulid>.<ext>`, verifies the copy, then writes the attachment row and ' +
+    'consumes the pending record in one transaction, and only then removes the temporary ' +
+    'object. Every crash point is therefore a recorded state a later request completes or ' +
+    'cleans, never an object nothing refers to. **Idempotent by resumption**: re-confirming ' +
+    'an already-linked id returns the existing row. Owner-only. The response carries a ' +
+    '`key`, never a URL — media is served by unguessable key.',
+  tags: ['attachments'],
+  request: {
+    params: z.object({ id: ulidId('act') }),
+    body: { content: { 'application/json': { schema: confirmAttachmentInput } } },
+  },
+  responses: {
+    201: {
+      description:
+        'The image is linked. Also the answer to a re-confirm, which returns the row that ' +
+        'is already there rather than a different status for a retry.',
+      content: { 'application/json': { schema: attachmentResponse } },
+    },
+    400: {
+      description:
+        'The id names no pending upload, its object was never uploaded or has expired past ' +
+        'the one-day `tmp/` lifecycle, or this activity already holds ' +
+        '`MAX_ATTACHMENTS_PER_ACTIVITY` (20) images. Nothing is written.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description:
+        'No such activity for this caller. Also the answer for another user’s ' +
+        '`attachmentId`: the object key is derived from the **caller’s** id, so it cannot ' +
+        'resolve to somebody else’s upload.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/v1/activities/{id}/attachments/{attachmentId}',
+  summary: 'Remove an attachment',
+  description:
+    'Removes the row and the stored object. **When the deleted attachment is the activity’s ' +
+    '`primaryAttachmentId`, the same write clears that field**, so the hero can never point ' +
+    'at an image that is gone; `coverCleared` says whether it did, so a client can drop its ' +
+    'hero without a refetch. Owner-only. Answers `200` with the envelope rather than `204`, ' +
+    'because every response carries `{ data, meta }` and a `204` has no body to carry one in.',
+  tags: ['attachments'],
+  request: {
+    params: z.object({ id: ulidId('act'), attachmentId }),
+  },
+  responses: {
+    200: {
+      description:
+        'The attachment is gone. `coverCleared` reports whether it was the hero.',
+      content: { 'application/json': { schema: deletedAttachmentResponse } },
+    },
+    404: {
+      description:
+        'No such activity for this caller, or no such attachment on it — whether the id was ' +
+        'never linked or the row is already gone. A retried delete lands here, and for that ' +
+        'caller `404` means "already gone".',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

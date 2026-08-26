@@ -17,7 +17,7 @@ import { assertRegistryMatchesRoutes, routeSplit } from './middleware/routeSplit
 import { securityHeaders } from './middleware/securityHeaders.js';
 import { activities } from './routes/activities.js';
 import { agenda } from './routes/agenda.js';
-import { attachments } from './routes/attachments.js';
+import { activityAttachments, attachments } from './routes/attachments.js';
 import { capture } from './routes/capture.js';
 import { health } from './routes/health.js';
 import { lists } from './routes/lists.js';
@@ -104,6 +104,8 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
    * and Hono matches the more specific path regardless of registration order.
    */
   app.route('/v1/activities', updates);
+  /** §2.6's two activity-scoped routes, on the same prefix and for the same reason (P3-22). */
+  app.route('/v1/activities', activityAttachments);
   app.route('/v1/attachments', attachments);
   app.route('/v1/plans', plans);
   app.route('/v1/lists', lists);

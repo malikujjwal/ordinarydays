@@ -191,6 +191,26 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
     mutates: true,
   },
+  /**
+   * The two activity-scoped rows (P3-22). `mutates: true` on the confirm: it writes the
+   * `ATT#` row and consumes the pending record, and although the operation is already
+   * idempotent on its own id, the key is what saves a replay from re-running a `HeadObject`,
+   * a copy and a transaction to reach an answer it already has.
+   *
+   * The `DELETE` takes none. It is idempotent by its own shape, and a repeat is `404` — which
+   * for the caller means "already gone", the outcome it wanted.
+   */
+  {
+    method: 'POST',
+    pattern: '/v1/activities/:id/attachments',
+    auth: 'authenticated',
+    mutates: true,
+  },
+  {
+    method: 'DELETE',
+    pattern: '/v1/activities/:id/attachments/:attachmentId',
+    auth: 'authenticated',
+  },
 
   // §2.2a Plans
   { method: 'GET', pattern: '/v1/plans', auth: 'authenticated' },

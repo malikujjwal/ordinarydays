@@ -78,11 +78,28 @@ const reminderOf = (userId: keyof typeof REMINDER_OF, offsetMinutes: number) => 
 const seed = (
   partition: Record<string, unknown>[],
   updates: Record<string, unknown>[] = [],
+  attachments: Record<string, unknown>[] = [],
 ) => {
+  /**
+   * Routed by sort-key prefix, because the endpoint issues four Queries and they are not
+   * interchangeable: the partition, the feed's own page (P3-19), the caller's bounded
+   * pending-upload drain and the attachment collection (P3-22). A fixture that answered all
+   * four with the partition would hand `ATT#` rows to a parser expecting attachments — which
+   * is what a real `begins_with` Query can never do, so the mock has to be as specific as
+   * DynamoDB is.
+   */
   ddbMock.on(QueryCommand).callsFake((input) => {
     const values = (input.ExpressionAttributeValues ?? {}) as Record<string, unknown>;
-    const isFeed = values[':skPrefix'] === 'UPD#';
-    return { Items: (isFeed ? updates : partition) as never };
+    switch (values[':skPrefix']) {
+      case 'UPD#':
+        return { Items: updates as never };
+      case 'ATT#':
+        return { Items: attachments as never };
+      case 'UPLOAD#':
+        return { Items: [] as never };
+      default:
+        return { Items: partition as never };
+    }
   });
 };
 
@@ -142,10 +159,12 @@ describe('reading an activity you own', () => {
 
     /**
      * The whole point of the envelope: each collection is **added** as its phase lands, so a
-     * client written against Phase 1 keeps working. `updates` is P3-19's addition.
+     * client written against Phase 1 keeps working. `updates` is P3-19's addition and
+     * `attachments` is P3-22's.
      */
     expect(Object.keys(body.data).sort()).toEqual([
       'activity',
+      'attachments',
       'capabilities',
       'completedOccurrenceCount',
       'reminders',
@@ -169,12 +188,14 @@ describe('reading an activity you own', () => {
 
     expect(body.data.completedOccurrenceCount).toBe(1);
     /**
-     * **Two Queries, and no more**: the authoritative partition snapshot, plus the feed's
-     * bounded newest-first page (P3-19). It was one until the feed was embedded; §2.3 has
-     * always specified bounded prefix Queries — plural — assembling the named sections, and
-     * the property worth pinning is that neither read is per-row and neither is unbounded.
+     * **Four Queries, and no more**: the authoritative partition snapshot, the feed's bounded
+     * newest-first page (P3-19), the caller's bounded pending-upload drain and the bounded
+     * attachment collection (P3-22). It was one until the feed was embedded; §2.3 has always
+     * specified bounded prefix Queries — plural — assembling the named sections, and the
+     * property worth pinning is that **none is per-row and none is unbounded**. A count that
+     * grew with the number of attachments, or a read per attachment, is what this catches.
      */
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(2);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(4);
   });
 
   it('returns an empty reminders array when there are none', async () => {
@@ -217,7 +238,7 @@ describe('reading an activity you own', () => {
     await get(createApp());
 
     expect(ddbMock.commandCalls(GetCommand)).toHaveLength(0);
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(2);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(4);
     expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0].input.ConsistentRead).toBe(
       true,
     );
@@ -270,7 +291,7 @@ describe('an explicitly targeted recurring occurrence', () => {
       status: 'scheduled',
       isSnoozed: false,
     });
-    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(2);
+    expect(ddbMock.commandCalls(QueryCommand)).toHaveLength(4);
   });
 
   it('projects a moved occurrence from its nominal identity', async () => {

@@ -59,11 +59,18 @@ import {
   StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
 import { listActivityUpdates } from '../repositories/activityUpdateRepository.js';
+import { listAttachments } from '../repositories/attachmentRepository.js';
 import {
   clearSourceActivity,
   findViewerLinksTo,
 } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
+import {
+  assertAttachmentsConfirmable,
+  assertCoverIsLinked,
+  confirmAttachments,
+  drainPendingUploads,
+} from './attachmentService.js';
 import {
   assertActivityAccess,
   assertActivityReadAccessFromPartition,
@@ -461,6 +468,14 @@ export async function createActivity(
     ]);
   }
 
+  /**
+   * Refused **before** anything is written (P3-22 rule 5). Every way an id fails to be
+   * confirmable is knowable without a write, so a create carrying one leaves no Activity
+   * behind — see {@link assertAttachmentsConfirmable} for what this deliberately does not
+   * try to roll back.
+   */
+  await assertAttachmentsConfirmable(userId, input.attachmentIds ?? []);
+
   const parent =
     input.parentActivityId === undefined
       ? undefined
@@ -550,6 +565,18 @@ export async function createActivity(
       throw await parentRejected(input.parentActivityId);
     }
     throw error;
+  }
+
+  /**
+   * The confirm-and-link path, once per id, **after** the Activity exists — an attachment row
+   * is keyed by the activity it belongs to, so there is no earlier moment it could run.
+   *
+   * The prechecked ids are the reason this is not a rollback point: everything a client can
+   * get wrong was refused above, and what is left is infrastructure failing mid-way, which
+   * leaves `confirming` records the drain completes against the Activity that now exists.
+   */
+  if ((input.attachmentIds?.length ?? 0) > 0) {
+    await confirmAttachments(userId, activity.activityId, input.attachmentIds ?? [], now);
   }
 
   return result;
@@ -880,6 +907,18 @@ export async function patchActivity(
   const current = access.activity;
   if (current.updatedAt !== ifMatch) throw staleEdit(String(current.updatedAt));
 
+  /**
+   * `Set as cover` (P3-22). Validated **against this activity's own rows** before anything is
+   * merged, because the shape is all the schema can check: a client could otherwise point the
+   * hero at an id it invented, or at a real attachment on somebody else's plan, and the hero
+   * renders as a request for exactly that key — which is the whole of the access control on
+   * media (ADR-023).
+   *
+   * After the `If-Match` check, so a stale edit is still reported as a stale edit rather than
+   * as whatever its cover happened to name.
+   */
+  await assertCoverIsLinked(activityId, patch.primaryAttachmentId);
+
   const correctionDate = sameDayCorrectionDate(current, patch, now);
   const change = applyKindChange(current, patch, log);
   const next = merge(current, patch, change, now);
@@ -1191,7 +1230,13 @@ function merge(
       ? {}
       : { details: withRetainedProvenance(current.details, patch.details) }),
     ...(recurrenceUpdate == null ? {} : { recurrence: recurrenceUpdate }),
-    ...nullable(patch, 'location', 'sourceUrl', 'parentActivityId'),
+    ...nullable(
+      patch,
+      'location',
+      'sourceUrl',
+      'parentActivityId',
+      'primaryAttachmentId',
+    ),
     ...(activeSchedule === undefined ? {} : { schedule: activeSchedule }),
     /**
      * Re-derived rather than carried, because clearing a date is a scheduling-state change:
@@ -1204,7 +1249,12 @@ function merge(
   };
 
   if (recurrenceUpdate === null) delete next.recurrence;
-  for (const field of ['location', 'sourceUrl', 'parentActivityId'] as const) {
+  for (const field of [
+    'location',
+    'sourceUrl',
+    'parentActivityId',
+    'primaryAttachmentId',
+  ] as const) {
     if (patch[field] === null) delete next[field];
   }
 
@@ -1792,6 +1842,12 @@ async function releaseChildren(
 export async function getActivityDetail(
   userId: string,
   target: ActivityDetailTarget,
+  /**
+   * The request's instant, read at the edge. `coding-standards.md` §4.3 bans an implicit
+   * clock in anything that has to be testable, and the drain below compares every pending
+   * record against it.
+   */
+  now: string,
 ): Promise<ActivityDetail> {
   const partition = await getActivityPartitionStrong(target.activityId);
   const access = await assertActivityReadAccessFromPartition(userId, partition);
@@ -1813,6 +1869,23 @@ export async function getActivityDetail(
    */
   const feed = await listActivityUpdates(target.activityId);
 
+  /**
+   * The caller's bounded pending-upload drain, **before** the attachments are projected
+   * (§2.3, access pattern 4, P3-22).
+   *
+   * Opening a plan is the moment a confirmation interrupted between the object store and the
+   * database is most likely to be noticed, and this is what finishes it: a verified copy
+   * becomes the linked row the same read then returns, so the image appears rather than
+   * silently not existing. It is bounded at twenty rows, which is what the cap buys.
+   *
+   * It runs for the **caller**, not for the activity's owner: pending records are keyed by
+   * uploader, and a participant opening somebody else's plan has no business repairing their
+   * uploads — nor could it, since the records are not in a partition it can read.
+   */
+  await drainPendingUploads(userId, Date.parse(now));
+
+  const attachments = await listAttachments(target.activityId);
+
   return {
     ...projectDetail(partition, userId, target, {
       complete: mayAct,
@@ -1821,6 +1894,7 @@ export async function getActivityDetail(
     }),
     updates: feed.updates,
     ...(feed.cursor === undefined ? {} : { updatesCursor: feed.cursor }),
+    attachments,
   };
 }
 

@@ -193,7 +193,7 @@ export const activities = new Hono<AppEnv>()
    * activity for you" — into two different statuses.
    */
   .get(GET_ACTIVITY_PATH, validateDetailQuery, (c) =>
-    getActivityHandler(c, c.req.valid('query')),
+    getActivityHandler(c, c.req.valid('query'), new Date().toISOString()),
   )
   .patch(PATCH_ACTIVITY_PATH, validatePatch, (c) =>
     patchActivityHandler(c, c.req.valid('json'), new Date().toISOString()),

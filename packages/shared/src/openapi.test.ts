@@ -90,6 +90,8 @@ describe('the generated document', () => {
       '/v1/activities/{id}/updates/{updateId}',
       '/v1/plans',
       '/v1/attachments/upload-url',
+      '/v1/activities/{id}/attachments',
+      '/v1/activities/{id}/attachments/{attachmentId}',
     ]);
   });
 
@@ -128,6 +130,7 @@ describe('the generated document', () => {
       'AddedIngredient',
       'AgendaData',
       'AgendaItem',
+      'Attachment',
       'BulkCreateListItemsInput',
       'CaptureExtractInput',
       'CaptureLinkInput',
@@ -135,11 +138,13 @@ describe('the generated document', () => {
       'ChangeListBehaviourInput',
       'CompleteActivityInput',
       'CompletionFollowUp',
+      'ConfirmAttachmentInput',
       'ConvertRecurrenceInput',
       'CreateActivityInput',
       'CreateListInput',
       'CreateListItemInput',
       'DeletedActivity',
+      'DeletedAttachment',
       'DeletedDevice',
       'DeletedList',
       'DeletedReminder',
@@ -207,6 +212,7 @@ describe('the generated document', () => {
 
     expect(Object.keys(detail.properties ?? {}).sort()).toEqual([
       'activity',
+      'attachments',
       'capabilities',
       'completedOccurrenceCount',
       'occurrence',

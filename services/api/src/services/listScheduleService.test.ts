@@ -23,10 +23,20 @@ vi.mock('../repositories/listRepository.js', () => ({
   getListItem: vi.fn(),
 }));
 vi.mock('./authz.js', () => ({ assertListAccess: vi.fn() }));
+/**
+ * The bridge runs P3-22's confirm-and-link path. Mocked here rather than exercised: what this
+ * file is about is what the bridge does with the *result*, and the state machine itself is
+ * unit-tested beside its own service and end-to-end against MinIO.
+ */
+vi.mock('./attachmentService.js', () => ({
+  assertAttachmentsConfirmable: vi.fn(),
+  confirmAttachments: vi.fn(async () => []),
+}));
 
 const activityRepository = await import('../repositories/activityRepository.js');
 const listRepository = await import('../repositories/listRepository.js');
 const authz = await import('./authz.js');
+const attachmentService = await import('./attachmentService.js');
 
 const USER = 'usr_local_dev';
 const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
@@ -68,6 +78,10 @@ beforeEach(() => {
   vi.mocked(activityRepository.createActivity).mockResolvedValue(undefined);
   vi.mocked(activityRepository.getActivityPartitionStrong).mockReset();
   vi.mocked(activityRepository.activityFromPartition).mockReset();
+  vi.mocked(attachmentService.assertAttachmentsConfirmable).mockReset();
+  vi.mocked(attachmentService.assertAttachmentsConfirmable).mockResolvedValue(undefined);
+  vi.mocked(attachmentService.confirmAttachments).mockReset();
+  vi.mocked(attachmentService.confirmAttachments).mockResolvedValue([]);
 });
 
 describe('what the bridge writes', () => {
@@ -231,8 +245,17 @@ describe('what the bridge refuses, before it writes anything', () => {
     expect(vi.mocked(activityRepository.createActivity)).not.toHaveBeenCalled();
   });
 
-  /** Temporary, and removed by P3-22. Dropping them silently is the failure being avoided. */
-  it('refuses a non-empty attachmentIds and writes nothing', async () => {
+  /**
+   * **P3-13's temporary rejection is gone** (P3-22): the bridge now runs the same
+   * confirm-and-link path `POST /v1/activities` does. What survives is the shape of the
+   * guard — an id that cannot be confirmed is refused **before** any write, so a bridge call
+   * carrying one leaves no Plan behind.
+   */
+  it('refuses an unconfirmable attachmentId before it writes a Plan', async () => {
+    vi.mocked(attachmentService.assertAttachmentsConfirmable).mockRejectedValueOnce(
+      new AppError('validation_failed', 'That upload is no longer available.'),
+    );
+
     await expect(
       scheduleListItem(
         USER,
@@ -241,9 +264,33 @@ describe('what the bridge refuses, before it writes anything', () => {
         withInput({ attachmentIds: ['att_01J8XKQ2M4N5P6R7S8T9V0W1X6'] }),
         NOW,
       ),
-    ).rejects.toThrow('Attachments are coming soon.');
+    ).rejects.toThrow('That upload is no longer available.');
 
+    expect(vi.mocked(listRepository.getListItem)).not.toHaveBeenCalled();
     expect(vi.mocked(activityRepository.createActivity)).not.toHaveBeenCalled();
+  });
+
+  /** The link runs **after** the Plan exists — an attachment row is keyed by its activity. */
+  it('links a confirmable attachmentId onto the Plan it just created', async () => {
+    const attachmentId = 'att_01J8XKQ2M4N5P6R7S8T9V0W1X6';
+
+    const result = await scheduleListItem(
+      USER,
+      LIST,
+      ITEM,
+      withInput({ attachmentIds: [attachmentId] }),
+      NOW,
+    );
+
+    expect(
+      vi.mocked(attachmentService.assertAttachmentsConfirmable),
+    ).toHaveBeenCalledWith(USER, [attachmentId]);
+    expect(vi.mocked(attachmentService.confirmAttachments)).toHaveBeenCalledWith(
+      USER,
+      result.activity.activityId,
+      [attachmentId],
+      NOW,
+    );
   });
 
   it('accepts an empty attachmentIds, which asks for nothing', async () => {
