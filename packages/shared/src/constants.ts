@@ -157,3 +157,14 @@ export const MAX_LEXO_RANK_LENGTH = 64;
  * and are served by pagination, which is why the Lists-tab cursor is not optional.
  */
 export const MAX_OWNED_LISTS = 100;
+
+/**
+ * Prep tasks on one Plan (`plans-and-lists.md` §3, amended 2026-08-23; `data-model.md` §5
+ * pattern 16).
+ *
+ * The cap is what makes the PREP section's complete set and its exact `3 of 5 done` ratio
+ * affordable: one bounded child-pointer `Query` with this as its `Limit` **is** the whole
+ * collection, so plan detail never pages and never counts with a second read. The nesting cap
+ * of 2 is the independent structural limit and neither implies the other.
+ */
+export const MAX_PREP_TASKS_PER_PLAN = 50;

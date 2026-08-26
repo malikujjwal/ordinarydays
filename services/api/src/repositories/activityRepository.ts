@@ -1,4 +1,8 @@
-import { assertNever, MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
+import {
+  assertNever,
+  MAX_AUTOMATIC_INTENT_AGE_DAYS,
+  MAX_PREP_TASKS_PER_PLAN,
+} from '@od/shared';
 import { deriveGsi1Bucket } from '@od/shared/activity';
 import { activity as activitySchema } from '@od/shared/schemas';
 import { TABLE } from '@od/shared/table';
@@ -117,6 +121,23 @@ export class ActivityIdUnavailableError extends Error {
   constructor() {
     super('That id is not available.');
     this.name = 'ActivityIdUnavailableError';
+  }
+}
+
+/**
+ * A parent plan would not take another prep task — it is full, or it is no longer there.
+ *
+ * Thrown from the **transaction**, not from a precheck, which is the whole point: a service
+ * that has read `childCount` and found room can still lose to a create that commits between
+ * the read and the write, and only a condition on the parent's own counter closes that
+ * window (the lesson P3-05's precheck-only list cap is still carrying). The service turns it
+ * into caller-facing copy after re-reading the parent, because the two causes deserve
+ * different answers and this layer decides nothing.
+ */
+export class ParentUnavailableError extends Error {
+  constructor() {
+    super('The parent plan would not accept this prep task.');
+    this.name = 'ParentUnavailableError';
   }
 }
 
@@ -324,6 +345,69 @@ export interface CreateOptions {
 }
 
 /**
+ * The parent's thin pointer to one prep task (`data-model.md` §3.1).
+ *
+ * It mirrors `title`, `status` and `isRecurring` so plan detail renders the PREP section from
+ * one bounded prefix `Query` with no child lookup, and so the completion follow-up can count
+ * and act on incomplete **one-off** children without inferring an occurrence for a recurring
+ * one. Every writer of those three fields writes this row in the same transaction; the child
+ * Activity stays the source of truth.
+ */
+function childPointerPut(
+  parentActivityId: string,
+  activity: Activity,
+  rank?: string,
+): TransactItem {
+  return {
+    Put: {
+      Item: stamp(ENTITY.childPointer, activity, {
+        ...childPointer(parentActivityId, activity.activityId),
+        childActivityId: activity.activityId,
+        title: activity.title,
+        status: activity.status,
+        rank: rank ?? activity.createdAt,
+        isRecurring: activity.recurrence !== undefined,
+      }),
+    },
+  };
+}
+
+/**
+ * Moves a parent's denormalised `childCount` by one, in the transaction that adds or removes
+ * the pointer it counts.
+ *
+ * **`ADD`, and it does not touch the parent's `updatedAt`.** The counter is a denormalised
+ * count of other rows rather than an edit to the plan: bumping the plan's concurrency token
+ * because somebody added a prep task would `409` an unrelated `If-Match` edit of the plan
+ * itself, and `IndexProjection` carries no `childCount`, so no index entry needs rewriting
+ * either. `ADD` also means two concurrent children each apply their own delta rather than one
+ * overwriting the other's read-modify-write.
+ *
+ * The conditions are what make it a **cap** rather than a hopeful check. `attribute_exists`
+ * keeps an `ADD` against a deleted parent from conjuring a stub item at that key — an
+ * `UpdateItem` creates the row it cannot find — and the upper bound refuses the 51st child at
+ * the only point where the count is authoritative. Going below zero is refused for the
+ * mirror-image reason: a replayed decrement must not invent debt.
+ */
+function childCountDelta(parentActivityId: string, delta: 1 | -1): TransactItem {
+  return {
+    Update: {
+      Key: activityMeta(parentActivityId),
+      UpdateExpression: 'ADD #childCount :delta',
+      ConditionExpression:
+        delta === 1
+          ? 'attribute_exists(pk) AND #childCount < :cap'
+          : 'attribute_exists(pk) AND #childCount > :zero',
+      ExpressionAttributeNames: { '#childCount': 'childCount' },
+      ExpressionAttributeValues:
+        delta === 1
+          ? { ':delta': 1, ':cap': MAX_PREP_TASKS_PER_PLAN }
+          : { ':delta': -1, ':zero': 0 },
+    },
+  };
+}
+
+/**
  * Creates an activity and everything that must exist with it, in **one transaction**
  * (`data-model.md` §7).
  *
@@ -397,18 +481,13 @@ export async function createActivity(
     });
   }
 
+  const parentCounterIndex =
+    activity.parentActivityId === undefined ? undefined : items.length + 1;
   if (activity.parentActivityId !== undefined) {
-    items.push({
-      Put: {
-        Item: stamp(ENTITY.childPointer, activity, {
-          ...childPointer(activity.parentActivityId, activity.activityId),
-          childActivityId: activity.activityId,
-          title: activity.title,
-          status: activity.status,
-          rank: options.childPointerRank ?? activity.createdAt,
-        }),
-      },
-    });
+    items.push(
+      childPointerPut(activity.parentActivityId, activity, options.childPointerRank),
+      childCountDelta(activity.parentActivityId, 1),
+    );
   }
 
   const builder = new TransactionBuilder(
@@ -430,6 +509,7 @@ export async function createActivity(
      */
     onConditionFailed: (index) => {
       if (index === 0 || index === 1) return new ActivityIdUnavailableError();
+      if (index === parentCounterIndex) return new ParentUnavailableError();
       return options.idempotencyReceipt !== undefined && index === receiptIndex
         ? new IdempotencyRaceError()
         : undefined;
@@ -542,7 +622,14 @@ export interface PatchOptions extends CreateOptions {
   readonly previous: Activity;
   /** Owner plus every participating app user. Phase 6 supplies more than one. */
   readonly indexedUserIds?: readonly string[];
-  /** Keep the parent's denormalised `SUB#` title/status in the same transaction. */
+  /**
+   * Keep the parent side of a prep task in step with this write, in the same transaction.
+   *
+   * Two shapes, chosen from `previous.parentActivityId` versus `next.parentActivityId` rather
+   * than from a second flag, because they are the same obligation: **the pointer never
+   * disagrees with the child.** Same parent refreshes the denormalised title, status and
+   * recurrence bit; a changed parent moves the pointer and both counters.
+   */
   readonly updateChildPointer?: boolean;
   /** A same-day recurrence correction is valid only while that date has no stored history. */
   readonly requireMissingOccurrenceDate?: string;
@@ -633,25 +720,57 @@ export async function patchActivity(
     items.push({ Put: { Item: indexItem(indexedUserId, next, options.taskSubtitle) } });
   }
 
-  if (options.updateChildPointer === true && next.parentActivityId !== undefined) {
-    items.push({
-      Update: {
-        Key: childPointer(next.parentActivityId, next.activityId),
-        UpdateExpression:
-          'SET #title = :title, #status = :status, #updatedAt = :updatedAt',
-        ConditionExpression: 'attribute_exists(pk)',
-        ExpressionAttributeNames: {
-          '#title': 'title',
-          '#status': 'status',
-          '#updatedAt': 'updatedAt',
-        },
-        ExpressionAttributeValues: {
-          ':title': next.title,
-          ':status': next.status,
-          ':updatedAt': next.updatedAt,
-        },
-      },
-    });
+  const counterIndices = new Set<number>();
+  if (options.updateChildPointer === true) {
+    const before = options.previous.parentActivityId;
+    const after = next.parentActivityId;
+
+    if (before === after) {
+      if (after !== undefined) {
+        items.push({
+          Update: {
+            Key: childPointer(after, next.activityId),
+            UpdateExpression:
+              'SET #title = :title, #status = :status, #isRecurring = :isRecurring, #updatedAt = :updatedAt',
+            ConditionExpression: 'attribute_exists(pk)',
+            ExpressionAttributeNames: {
+              '#title': 'title',
+              '#status': 'status',
+              '#isRecurring': 'isRecurring',
+              '#updatedAt': 'updatedAt',
+            },
+            ExpressionAttributeValues: {
+              ':title': next.title,
+              ':status': next.status,
+              ':isRecurring': next.recurrence !== undefined,
+              ':updatedAt': next.updatedAt,
+            },
+          },
+        });
+      }
+    } else {
+      /**
+       * Detaching and attaching are one atomic pair, so a re-parent cannot leave the task on
+       * two plans or on none. Both deletes are conditional on the pointer still being there:
+       * a decrement whose pointer had already gone would take the count below what the
+       * collection holds, and the count is what plan detail renders.
+       */
+      if (before !== undefined) {
+        items.push({
+          Delete: {
+            Key: childPointer(before, next.activityId),
+            ConditionExpression: 'attribute_exists(pk)',
+          },
+        });
+        counterIndices.add(items.length);
+        items.push(childCountDelta(before, -1));
+      }
+      if (after !== undefined) {
+        items.push(childPointerPut(after, next));
+        counterIndices.add(items.length);
+        items.push(childCountDelta(after, 1));
+      }
+    }
   }
 
   const occurrenceGuardIndex =
@@ -698,6 +817,7 @@ export async function patchActivity(
     operation: 'patchActivity',
     onConditionFailed: (index) => {
       if (viewerLinkIndices.has(index)) return new StaleViewerLinkError();
+      if (counterIndices.has(index)) return new ParentUnavailableError();
       if (index === occurrenceGuardIndex) {
         return new AppError(
           'validation_failed',
@@ -758,6 +878,14 @@ export async function writeSchedule(
       Update: {
         Key: childPointer(next.parentActivityId, next.activityId),
         UpdateExpression: 'SET #status = :status, #updatedAt = :updatedAt',
+        /**
+         * The same guard the patch path carries, added in P3-18. An `UpdateItem` **creates**
+         * the row it cannot find, so an unconditional status write against a missing pointer
+         * would conjure a stub carrying a status and nothing else — a child in the plan's
+         * count with no id, no title and no recurrence bit, which the bounded collection read
+         * would then hand to plan detail.
+         */
+        ConditionExpression: 'attribute_exists(pk)',
         ExpressionAttributeNames: { '#status': 'status', '#updatedAt': 'updatedAt' },
         ExpressionAttributeValues: {
           ':status': next.status,
@@ -1051,10 +1179,118 @@ export async function listOverdueTaskCandidates(
   );
 }
 
-/** A plan's prep-task pointers (pattern 16). */
+/**
+ * Every row of a plan's prep-task prefix, unbounded — the **delete cascade's** reader.
+ *
+ * `queryAll` is legitimate here and nowhere else on this prefix: the cascade must clear
+ * `parentActivityId` on every child that exists, including the ones a legacy or
+ * partially-migrated partition holds beyond today's cap, and missing one would leave a task
+ * pointing at an activity that no longer exists. The **detail** path is
+ * {@link listPrepTaskPointers}, which is bounded by the model cap and is the complete
+ * collection by construction (pattern 16).
+ */
 export async function listChildPointers(activityId: string): Promise<StoredItem[]> {
   const prefix = childPointerPrefix(activityId);
   return queryAll<StoredItem>({ pk: prefix.pk }, { skPrefix: prefix.skPrefix });
+}
+
+/**
+ * One prep task, as its parent's pointer projects it.
+ *
+ * Parsed rather than cast, like every other stored row this file returns. A pointer that has
+ * lost a field it has carried since P1-09 is a denormalisation bug, and the read that feeds
+ * `3 of 5 done` is the wrong place to paper over one with a default — the number would be
+ * wrong and nothing would say so. `isRecurring` is the one exception, and a documented one:
+ * rows written before P3-18 do not carry it, and absent means `false`.
+ */
+const prepTaskPointerRow = z.object({
+  childActivityId: z.string(),
+  title: z.string(),
+  status: z.enum(['saved', 'scheduled', 'completed', 'skipped', 'cancelled']),
+  rank: z.string(),
+  isRecurring: z.boolean().optional(),
+});
+
+export interface PrepTaskPointer {
+  readonly childActivityId: string;
+  readonly title: string;
+  readonly status: Activity['status'];
+  readonly rank: string;
+  readonly isRecurring: boolean;
+}
+
+/**
+ * A plan's complete prep-task collection, in **one bounded `Query`** (pattern 16).
+ *
+ * `Limit` is the model cap, and that is the whole design: creation refuses the 51st child, so
+ * a single page **is** the collection and there is no cursor, no second read and no
+ * `queryAll` on a prefix the detail path touches. The data model names a GSI alternative and
+ * rejects it; do not reach for it here.
+ *
+ * **Strongly consistent**, because both named consumers act on what they read. Plan detail's
+ * `3 of 5 done` is composed inside an authoritative read (pattern 4), and the completion
+ * follow-up (P3-43) counts children immediately after a write that may have changed one of
+ * these very pointers. An eventually consistent page would show the user a ratio that
+ * disagrees with the rows underneath it.
+ *
+ * `isRecurring` reads **absent as `false`**: pointers written before P3-18 carry no such
+ * attribute, and a missing bit means the child was never given recurrence through a writer
+ * that maintains it. Treating absence as `true` would silently drop a real one-off child out
+ * of the follow-up's count.
+ */
+export async function listPrepTaskPointers(
+  activityId: string,
+): Promise<PrepTaskPointer[]> {
+  const prefix = childPointerPrefix(activityId);
+  const page = await query<StoredItem>(
+    { pk: prefix.pk },
+    {
+      skPrefix: prefix.skPrefix,
+      limit: MAX_PREP_TASKS_PER_PLAN,
+      consistentRead: true,
+    },
+  );
+
+  return page.items.map((row) => {
+    const pointer = prepTaskPointerRow.parse(row);
+    return { ...pointer, isRecurring: pointer.isRecurring ?? false };
+  });
+}
+
+/**
+ * Removes one prep task from its parent — the pointer and the count, **together**.
+ *
+ * The pair is a transaction because a count that outlives its pointer is a plan claiming a
+ * prep task that plan detail cannot show, and the ratio it renders is the number a user is
+ * expected to trust. This is the half of the delete cascade that lives in the *parent's*
+ * partition, which is why P1-14's own removal — which deletes the child's partition and its
+ * index rows — never saw it and left both behind.
+ *
+ * A condition failure means the pointer has already gone: a retry of an interrupted delete,
+ * or a parent removed in between. Swallowed rather than raised, so the retry that finishes
+ * the cascade is not blocked by the step that already succeeded, and so the decrement can
+ * never be applied twice for one pointer.
+ */
+export async function detachChildFromParent(
+  parentActivityId: string,
+  childActivityId: string,
+): Promise<void> {
+  try {
+    await transactWrite(
+      [
+        {
+          Delete: {
+            Key: childPointer(parentActivityId, childActivityId),
+            ConditionExpression: 'attribute_exists(pk)',
+          },
+        },
+        childCountDelta(parentActivityId, -1),
+      ],
+      { operation: 'detachChildFromParent' },
+    );
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'conflict') throw error;
+  }
 }
 
 /** One resolved source row: where it sits now, and the id that must still be there. */

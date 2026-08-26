@@ -5,7 +5,7 @@ import {
   type ChangeTarget,
   changeActivityKind,
 } from '@od/shared';
-import { MAX_TITLE_LEN } from '@od/shared/constants';
+import { MAX_PREP_TASKS_PER_PLAN, MAX_TITLE_LEN } from '@od/shared/constants';
 import { expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
 import type {
   ActivityListQuery,
@@ -43,13 +43,17 @@ import type { Logger } from '../lib/logger.js';
 import {
   ActivityIdUnavailableError,
   deleteActivity as deleteActivityRows,
+  detachChildFromParent,
   getActivityMeta,
   getActivityPartition,
   getActivityPartitionStrong,
   listByBucket as listBucket,
   listParticipants,
+  listPrepTaskPointers,
   newActivityId,
   newReminderId,
+  ParentUnavailableError,
+  type PrepTaskPointer,
   createActivity as putActivity,
   patchActivity as putPatch,
   StaleViewerLinkError,
@@ -88,6 +92,29 @@ export const SHARING_SOON = 'Sharing is coming soon.';
  */
 const NESTING_CAP =
   'A prep task cannot have its own prep task. Add it to the plan instead.';
+
+/**
+ * A Plan holds at most {@link MAX_PREP_TASKS_PER_PLAN} prep tasks
+ * (`plans-and-lists.md` §3, amended 2026-08-23).
+ *
+ * The bound is not tidiness: it is what lets plan detail read the complete PREP section and
+ * its exact done/open counts in one page, so the `3 of 5 done` a user taps is a real ratio
+ * rather than the first fifty of an unknown number.
+ */
+const PREP_TASKS_FULL = 'Plan has too many prep tasks.';
+
+/** A task that already has prep tasks cannot become one — that is the third level again. */
+const NESTING_CAP_HAS_CHILDREN =
+  'This task has its own prep tasks. Move them first, or add it to the plan directly.';
+
+/** An activity cannot be its own prep task. */
+const SELF_PARENT = 'A task cannot be its own prep task.';
+
+function parentFailure(message: string): AppError {
+  return new AppError('validation_failed', message, [
+    { path: 'parentActivityId', message },
+  ]);
+}
 
 /**
  * The status a write produces (rule 1).
@@ -191,18 +218,65 @@ export function toSchedule(schedule: WallClockSchedule): ActivitySchedule {
  * difference until participants exist, and the shared-checklist reading is the consistent
  * one, but it should be confirmed rather than inherited from this comment.
  */
-async function assertCanParent(userId: string, parentActivityId: string): Promise<void> {
+async function assertCanParent(
+  userId: string,
+  parentActivityId: string,
+  options: {
+    /** The activity being attached, when it already exists. Absent on create. */
+    readonly child?: Activity;
+    /**
+     * Leave the 50-cap refusal to the transaction (create only).
+     *
+     * A **client-minted** create can be a replay of one that already committed, and at a full
+     * plan the two are indistinguishable from `childCount` alone: both see fifty children,
+     * but one of them *is* the fiftieth. Refusing here would answer a replay "the plan is
+     * full" and send the client away from the recovery its own id would have given it. The
+     * transaction tells them apart in the right order — a taken id fails first and answers
+     * `conflict`, a genuine 51st reaches the counter condition and answers with
+     * {@link PREP_TASKS_FULL} — so the cap is deferred, never dropped.
+     */
+    readonly capOnly?: 'transaction';
+  } = {},
+): Promise<Activity> {
+  if (options.child?.activityId === parentActivityId) throw parentFailure(SELF_PARENT);
+
   const { activity: parent } = await assertActivityAccess(
     userId,
     parentActivityId,
     'write',
   );
 
-  if (parent.parentActivityId !== undefined) {
-    throw new AppError('validation_failed', NESTING_CAP, [
-      { path: 'parentActivityId', message: NESTING_CAP },
-    ]);
+  if (parent.parentActivityId !== undefined) throw parentFailure(NESTING_CAP);
+
+  /**
+   * The other way to reach a third level, and the only one a `POST` cannot: attaching a task
+   * that is *already* somebody's parent. A create has no children yet, so this can only come
+   * from a `PATCH` — which is exactly why the cap has to be checked on both sides of the
+   * relationship rather than once, at creation.
+   */
+  if ((options.child?.childCount ?? 0) > 0) throw parentFailure(NESTING_CAP_HAS_CHILDREN);
+
+  if (options.capOnly !== 'transaction' && parent.childCount >= MAX_PREP_TASKS_PER_PLAN) {
+    throw parentFailure(PREP_TASKS_FULL);
   }
+
+  return parent;
+}
+
+/**
+ * The answer when the parent's counter condition cancelled the write.
+ *
+ * One extra `GetItem`, on a path that is a genuine race rather than an ordinary request: the
+ * count was under the cap when it was read and is not any more, or the plan was deleted
+ * between the two. Re-reading is what keeps the copy honest — "the plan is full" and "the
+ * plan is gone" are different things to a client, and the transaction can only report that
+ * one condition failed.
+ */
+async function parentRejected(parentActivityId: string): Promise<AppError> {
+  const parent = await getActivityMeta(parentActivityId);
+  return parent === undefined
+    ? new AppError('not_found', 'Activity not found.')
+    : parentFailure(PREP_TASKS_FULL);
 }
 
 export interface CreateResult {
@@ -312,9 +386,12 @@ export async function createActivity(
     ]);
   }
 
-  if (input.parentActivityId !== undefined) {
-    await assertCanParent(userId, input.parentActivityId);
-  }
+  const parent =
+    input.parentActivityId === undefined
+      ? undefined
+      : await assertCanParent(userId, input.parentActivityId, {
+          ...(input.activityId === undefined ? {} : { capOnly: 'transaction' }),
+        });
 
   const schedule = input.schedule === undefined ? undefined : toSchedule(input.schedule);
   const storedRecurrence = recurrenceForCreate(input.recurrence, schedule);
@@ -382,10 +459,20 @@ export async function createActivity(
         reminderId: row.reminderId,
         offsetMinutes: row.offsetMinutes,
       })),
+      /**
+       * A prep task renders on Today under its parent plan's title (`today-and-tasks.md`
+       * §5.5), and the index projection is where that subtitle lives. The parent is already
+       * in hand from the nesting check, so the row is complete from its first write and no
+       * agenda read has to go and find it.
+       */
+      ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
       ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(result) }),
     });
   } catch (error) {
     if (error instanceof ActivityIdUnavailableError) throw idUnavailable();
+    if (error instanceof ParentUnavailableError && input.parentActivityId !== undefined) {
+      throw await parentRejected(input.parentActivityId);
+    }
     throw error;
   }
 
@@ -731,14 +818,35 @@ export async function patchActivity(
     delete next.listId;
     delete next.listItemId;
   }
+  const reparents = current.parentActivityId !== next.parentActivityId;
+  /**
+   * A patch that names a **new** parent goes through the same door a create does.
+   *
+   * It was not doing so, and both halves of that mattered: without the access check a task
+   * could be attached to a stranger's activity — whose title the index projection would then
+   * render as this task's subtitle on Today — and without the structural checks a `PATCH`
+   * could assemble the third nesting level that `POST` refuses, by attaching a task that
+   * already has prep tasks of its own.
+   */
   const parent =
-    next.parentActivityId !== undefined
-      ? await getActivityMeta(next.parentActivityId)
-      : undefined;
-  const updatesExistingChildPointer =
+    next.parentActivityId === undefined
+      ? undefined
+      : reparents
+        ? await assertCanParent(userId, next.parentActivityId, { child: current })
+        : await getActivityMeta(next.parentActivityId);
+
+  /**
+   * The pointer mirrors title, status and the recurrence bit, so any of the three moving is a
+   * pointer rewrite in this same transaction — recurrence included, per
+   * `api-contract.md` §2.3, so the completion follow-up never reads a stale one. A changed
+   * parent is the other shape: the repository moves the pointer and both counters.
+   */
+  const childPointerStale =
+    !reparents &&
     current.parentActivityId !== undefined &&
-    current.parentActivityId === next.parentActivityId &&
-    current.title !== next.title;
+    (current.title !== next.title ||
+      current.status !== next.status ||
+      (current.recurrence !== undefined) !== (next.recurrence !== undefined));
 
   try {
     await putPatchWithLinkLifecycle(
@@ -751,11 +859,14 @@ export async function patchActivity(
           ? {}
           : { requireMissingOccurrenceDate: correctionDate }),
         ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
-        ...(updatesExistingChildPointer ? { updateChildPointer: true } : {}),
+        ...(reparents || childPointerStale ? { updateChildPointer: true } : {}),
       },
       convertedListLink,
     );
   } catch (error) {
+    if (error instanceof ParentUnavailableError && next.parentActivityId !== undefined) {
+      throw await parentRejected(next.parentActivityId);
+    }
     if (error instanceof AppError && error.code === 'conflict') {
       const fresh = await getActivityMeta(activityId);
       throw staleEdit(String(fresh?.updatedAt ?? current.updatedAt));
@@ -861,6 +972,17 @@ export async function convertRecurrence(
     updatedAt: now,
   } as Activity;
 
+  /**
+   * A converted prep task is still a prep task: its parent's pointer drops to
+   * `isRecurring: false` in this same transaction (`data-model.md` §7, `api-contract.md`
+   * §2.3), and its index entry is rewritten from scratch — so the parent's title has to be
+   * supplied again or the conversion would quietly strip the subtitle Today renders it with.
+   */
+  const parent =
+    next.parentActivityId === undefined
+      ? undefined
+      : await getActivityMeta(next.parentActivityId);
+
   await putPatch(userId, next, current.updatedAt, {
     previous: current,
     indexedUserIds: [
@@ -869,6 +991,8 @@ export async function convertRecurrence(
         typeof row.userId === 'string' ? [row.userId] : [],
       ),
     ],
+    ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
+    ...(next.parentActivityId === undefined ? {} : { updateChildPointer: true }),
     occurrenceGuard:
       rawOccurrence === undefined
         ? { date: input.occurrenceDate, kind: 'missing' }
@@ -1338,6 +1462,24 @@ export async function removeActivity(
    */
   const partition = await getActivityPartitionStrong(activityId);
 
+  /**
+   * Deleting a prep task is two partitions' work, and P1-14 only ever did one of them.
+   *
+   * The child's own rows and index entries go below; the pointer and the count that describe
+   * it live on the **parent**, and leaving them behind gave a plan a `4 of 5 done` whose
+   * fifth row no longer existed — a number the product promises is drillable, pointing at
+   * nothing. Before the removal, so an interrupted delete resumes from a state where the
+   * child is still authoritative rather than half-gone.
+   *
+   * This is the mirror image of the rule directly below it, and the two must not be confused:
+   * deleting a **parent** never deletes its children, while deleting a **child** must always
+   * clean up its parent's record of it.
+   */
+  const parentActivityId = partition.find((row) => row.sk === 'META')?.parentActivityId;
+  if (typeof parentActivityId === 'string') {
+    await detachChildFromParent(parentActivityId, activityId);
+  }
+
   await releaseChildren(childIdsOf(partition), now);
   // The repository removes partition children and index pointers next, then META last. That
   // leaves this access seam present until every retryable cleanup step has succeeded.
@@ -1348,6 +1490,42 @@ export async function removeActivity(
   });
 
   return activityId;
+}
+
+/** A plan's prep tasks, with the two numbers the PREP section renders. */
+export interface PrepTaskCollection {
+  /** Every prep task on the plan. Complete, not a page — see {@link getPrepTasks}. */
+  readonly prepTasks: readonly PrepTaskPointer[];
+  /** Children whose `status` is `completed`: the `3` in `3 of 5 done`. */
+  readonly doneCount: number;
+  /** Every other child. `doneCount + openCount` is the collection. */
+  readonly openCount: number;
+}
+
+/**
+ * A plan's complete prep-task collection and its **exact** done/open counts (pattern 16).
+ *
+ * Exact rather than "at least", and that is the point of the 50-cap: `3 of 5 done` is a
+ * drill-down (`today-and-tasks.md` §5.5) and the product's rule against unexplained numbers
+ * means a count the user taps has to reach the rows that produced it. One bounded page is the
+ * whole collection, so counting it here needs no second read and no aggregate to drift.
+ *
+ * `openCount` is everything not `completed`, including a skipped or cancelled child — from
+ * the section's point of view those are not done. P3-43's follow-up narrows further, to open
+ * children that are also not recurring, which is what `isRecurring` on each pointer is for;
+ * it is not this function's filter to apply.
+ *
+ * **Authorisation belongs to the caller**, as it does for `projectDetail`: both named
+ * consumers reach this only after establishing that the caller may read the plan — detail
+ * assembly through the partition it has already read (P3-36), completion through the action
+ * context it already holds (P3-43). Re-deriving it here would be a second authoritative read
+ * of a partition the caller is holding.
+ */
+export async function getPrepTasks(activityId: string): Promise<PrepTaskCollection> {
+  const prepTasks = await listPrepTaskPointers(activityId);
+  const doneCount = prepTasks.filter((row) => row.status === 'completed').length;
+
+  return { prepTasks, doneCount, openCount: prepTasks.length - doneCount };
 }
 
 /**
