@@ -98,6 +98,18 @@ export const activityUpdate = (activityId: string, isoTs: string, updateId: stri
 });
 
 /**
+ * The feed's prefix (P3-19, access pattern 4).
+ *
+ * Read **descending** — `ScanIndexForward: false` — which is the whole reason the timestamp
+ * leads the sort key: newest first is the order the section renders in, so the page boundary
+ * and the render order are the same thing and no caller re-sorts.
+ */
+export const activityUpdatePrefix = (activityId: string) => ({
+  pk: activityPk(activityId),
+  skPrefix: 'UPD#',
+});
+
+/**
  * An occurrence override. Phase 2 writes these; the key exists now because the shape does
  * (`data-model.md` §4.5).
  *
