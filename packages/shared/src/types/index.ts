@@ -72,6 +72,19 @@ export type { ListUndoResult } from './listUndoResult.js';
 export type { ListView } from './listView.js';
 export type { Occurrence, OccurrenceStatus } from './occurrence.js';
 export type {
+  NeedsDateItem,
+  PastCoverage,
+  PastPage,
+  PlansData,
+  PlansDay,
+  PlansMode,
+  PlansQuery,
+  PlansWarning,
+  RsvpGroup,
+  RsvpSummary,
+  UpcomingWindow,
+} from './plans.js';
+export type {
   MonthNumber,
   Recurrence,
   RecurrenceFreq,

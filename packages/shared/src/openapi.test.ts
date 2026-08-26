@@ -47,7 +47,9 @@ describe('the generated document', () => {
     // **P3-10 added the two bulk actions and the compensation endpoint**; **P3-13 added
     // the schedule bridge** under the templated item id; and **P3-17 added the meal
     // ingredient action**, which is a §2.7 list operation authorised by the meal, so it is
-    // registered under the activity path its `:id` names. **P3-19 added the two feed paths**
+    // registered under the activity path its `:id` names; **P3-20 added `/v1/plans`**, one
+    // path carrying all four modes because the mode is a query parameter rather than a route.
+    // **P3-19 added the two feed paths**
     // — the collection carrying `GET` and `POST`, and the templated entry id carrying the
     // author-only `DELETE`.
     expect(Object.keys(document.paths ?? {})).toEqual([
@@ -86,6 +88,7 @@ describe('the generated document', () => {
       '/v1/health',
       '/v1/activities/{id}/updates',
       '/v1/activities/{id}/updates/{updateId}',
+      '/v1/plans',
     ]);
   });
 
@@ -151,11 +154,20 @@ describe('the generated document', () => {
       'ListTemplate',
       'ListUndoResult',
       'ListView',
+      'NeedsDateItem',
       'Occurrence',
+      'PastCoverage',
+      'PastPage',
       'PatchActivityInput',
       'PatchListInput',
       'PatchListItemInput',
       'PatchUserInput',
+      'PlansData',
+      'PlansDay',
+      'PlansInitialData',
+      'PlansPastCursorData',
+      'PlansPastWindowData',
+      'PlansUpcomingWindowData',
       'PostActivityUpdateInput',
       'PostActivityUpdateResult',
       'Recurrence',
@@ -163,6 +175,7 @@ describe('the generated document', () => {
       'Reminder',
       'ReminderInput',
       'ReversibleItemMutation',
+      'RsvpSummary',
       'ScheduleActivityInput',
       'ScheduleActivityResult',
       'ScheduleListItemInput',
@@ -172,6 +185,7 @@ describe('the generated document', () => {
       'UncompleteActivityInput',
       'UndoListOperationInput',
       'UnsnoozeActivityInput',
+      'UpcomingWindow',
       'User',
     ]);
   });

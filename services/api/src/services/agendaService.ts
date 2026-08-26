@@ -72,7 +72,7 @@ export interface AgendaCandidate {
   readonly actionContext: AgendaActionContext;
 }
 
-type UnhydratedAgendaCandidate = Omit<
+export type UnhydratedAgendaCandidate = Omit<
   AgendaCandidate,
   'actionContext' | 'participantAvatars' | 'reminders'
 >;
@@ -447,7 +447,7 @@ async function overdueProjection(
   return { candidates, index, activities: hydrated };
 }
 
-interface RawCandidate {
+export interface RawCandidate {
   readonly activity: Activity;
   readonly occurrenceDate?: string;
   readonly status: AgendaCandidateStatus;
@@ -569,7 +569,19 @@ function timeForDate(activity: Activity, date: string): string | undefined {
   return active?.time ?? activity.schedule?.time;
 }
 
-function oneOffCandidate(activity: Activity, projectedTimezone: unknown): RawCandidate {
+/**
+ * Exported for P3-20, which needs the same conversion without the same query plan.
+ *
+ * Plans' Past stage reads `#S` alone — no `#R`, no expansion — so it cannot go through
+ * `assembleAgenda`, and it must not grow a second implementation of "stored wall clock in the
+ * row's own zone becomes a viewer-local date". That derivation is the whole of access pattern
+ * 1 and getting it subtly different in a second place is how two screens start disagreeing
+ * about which day something is on.
+ */
+export function oneOffCandidate(
+  activity: Activity,
+  projectedTimezone: unknown,
+): RawCandidate {
   const schedule = activity.schedule;
   if (schedule === undefined) throw new Error('Scheduled agenda row had no schedule.');
   const snooze = activity.snoozedUntil;
@@ -699,7 +711,8 @@ function occurrenceMap(rows: readonly Occurrence[]): Map<string, Occurrence> {
 
 const pairKey = (activityId: string, date: string) => `${activityId}\u0000${date}`;
 
-function toViewerCandidate(
+/** Exported alongside {@link oneOffCandidate}, and for the same reason. */
+export function toViewerCandidate(
   candidate: RawCandidate,
   viewerTimezone: string,
 ): UnhydratedAgendaCandidate {

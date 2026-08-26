@@ -50,10 +50,13 @@ describe('the registry covers the route table', () => {
   // throwing and the assertion was about nothing.
   it('rejects a route that was mounted without a registry line, naming it', () => {
     const app = createApp();
-    app.get('/v1/plans', (c) => c.json({ data: null }));
+    // A path in the contract that this build has not mounted. It was `/v1/plans` until P3-20
+    // mounted it; the property under test is that *any* unregistered mount is named, so the
+    // example simply has to be one that is genuinely absent.
+    app.get('/v1/people', (c) => c.json({ data: null }));
 
     expect(() => assertRegistryMatchesRoutes(app)).toThrowError(
-      /mounted but missing from ROUTE_REGISTRY: GET \/v1\/plans/,
+      /mounted but missing from ROUTE_REGISTRY: GET \/v1\/people/,
     );
   });
 
@@ -181,7 +184,9 @@ describe('the public/private boundary', () => {
   });
 
   it('returns 501 for a contract path this build has not mounted', async () => {
-    const res = await req('/v1/plans');
+    // `/v1/plans` served this purpose until P3-20 built it. Phase 6's People is the next
+    // contract path with no handler behind it.
+    const res = await req('/v1/people');
     expect(res.status).toBe(501);
     expect((await res.json()).error.code).toBe('not_implemented');
   });

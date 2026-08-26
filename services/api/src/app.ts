@@ -22,6 +22,7 @@ import { health } from './routes/health.js';
 import { lists } from './routes/lists.js';
 import { listTemplates } from './routes/listTemplates.js';
 import { me } from './routes/me.js';
+import { plans } from './routes/plans.js';
 import { updates } from './routes/updates.js';
 import { drainScheduleCleanup } from './services/scheduleService.js';
 
@@ -102,6 +103,7 @@ export function createApp(overrides: AppOverrides = {}): Hono<AppEnv> {
    * and Hono matches the more specific path regardless of registration order.
    */
   app.route('/v1/activities', updates);
+  app.route('/v1/plans', plans);
   app.route('/v1/lists', lists);
   app.route('/v1/list-templates', listTemplates);
   app.route('/v1/capture', capture);
