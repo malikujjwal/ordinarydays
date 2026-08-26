@@ -4341,6 +4341,10 @@
           "updatedAt": {
             "type": "string",
             "minLength": 1
+          },
+          "lastItemActivityAt": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
@@ -4358,7 +4362,8 @@
           "memberCount",
           "rankVersion",
           "archived",
-          "updatedAt"
+          "updatedAt",
+          "lastItemActivityAt"
         ]
       },
       "CreateListInput": {

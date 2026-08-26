@@ -20,6 +20,8 @@ const list = (overrides: Partial<List> = {}): List => ({
   rankVersion: 0,
   archived: false,
   updatedAt: '2026-08-24T09:00:00.000Z',
+  // Later than `updatedAt`: the list was renamed, then used (P3-46).
+  lastItemActivityAt: '2026-08-25T18:30:00.000Z',
   ...overrides,
 });
 

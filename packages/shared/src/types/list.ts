@@ -98,8 +98,24 @@ export interface List {
   /** Blocks item reads/mutations until behaviour migration commits; never serialised. */
   behaviourMigrationId?: string;
   archived: boolean;
-  /** Backs `If-Match` on list-level edits. */
+  /** Backs `If-Match` on list-level edits. Moves only when the List row itself changes. */
   updatedAt: string;
+  /**
+   * The last write to any **item** in this list. Renders the Lists index's `Updated today`
+   * line (`design-system.md` §7.2) and **backs nothing** (`data-model.md` §4.6).
+   *
+   * **Required, with no optional branch.** Nothing is deployed — there is no AWS account
+   * before Phase 4 (`00-open-decisions.md` #50) — so there are no rows without it and no
+   * absent value to read around. A developer's local table is covered by the same reset
+   * boundary `ddb:create-table` already documents: it drops and recreates a table whose
+   * schema has drifted. That is only true now; the same field after Phase 4 needs a
+   * migration, which is the reason it is added here.
+   *
+   * It must never participate in `If-Match`. An ordinary item write would otherwise bump the
+   * concurrency token every open list-settings sheet is holding — the same split ADR-039 made
+   * between an Activity's `lastActivityAt` and `updatedAt`, for the same reason.
+   */
+  lastItemActivityAt: string;
 }
 
 /**
