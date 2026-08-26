@@ -201,15 +201,14 @@ describe('one-off completion transaction and replay', () => {
       outcome: 'done',
     });
     /**
-     * The feed's `ActivityUpdate` joins the **same** transaction (P3-19): a completion that
-     * committed while its feed row failed would leave the two disagreeing, and agreeing with
-     * the plan is the feed's only job.
+     * **No feed row**, because this fixture is a Task. The feed is the plan's; Task detail has
+     * no section that could show one, so writing history here would be storage nothing can
+     * reach (P3-19 review).
      */
     expect(items.map((item) => item.Put?.Item?.entity ?? Object.keys(item)[0])).toEqual([
       'Activity',
       'ActivityIndex',
       'ActivityIndex',
-      'ActivityUpdate',
       'Idempotency',
     ]);
     expect(
@@ -217,6 +216,30 @@ describe('one-off completion transaction and replay', () => {
         .filter((item) => item.Put?.Item?.entity === 'ActivityIndex')
         .map((item) => item.Put?.Item?.status),
     ).toEqual(['completed', 'completed']);
+  });
+
+  /**
+   * The plan case: the feed's entry joins the **same** transaction. A completion that
+   * committed while its feed row failed would leave the two disagreeing, and agreeing with
+   * the plan is the feed's only job.
+   */
+  it('writes the feed entry in the completion transaction, for a plan', async () => {
+    seed({
+      activity: meta({
+        objectKind: 'plan',
+        type: 'event',
+        details: { kind: 'event' },
+      }),
+    });
+
+    expect((await post(createApp(), 'complete', {})).status).toBe(200);
+
+    const entries = transactionItems().filter(
+      (item) => item.Put?.Item?.entity === 'ActivityUpdate',
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.Put?.Item).toMatchObject({ kind: 'system' });
+    expect(entries[0]?.Put?.Item).not.toHaveProperty('authorUserId');
   });
 
   it('replays the original bytes and performs only one domain transaction', async () => {

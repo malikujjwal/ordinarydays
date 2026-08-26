@@ -409,6 +409,114 @@ describe('system entries', () => {
   });
 });
 
+/**
+ * The feed belongs to Plans (P3-19 review). Task detail has no Updates section, so a row
+ * written on a Task is history nothing can show and nobody can reach.
+ */
+describe('only a plan has a feed', () => {
+  const createTask = async () => {
+    const res = await post('/v1/activities', {
+      objectKind: 'task',
+      type: 'task',
+      title: 'Buy milk',
+      schedule: { date: '2026-09-05', timezone: 'America/New_York' },
+    });
+    expect(res.status).toBe(201);
+    return dataOf(res);
+  };
+
+  it('400s a post to a task and writes nothing', async () => {
+    const task = await createTask();
+
+    const res = await postUpdate(task.activityId, 'Note on a task.');
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.message).toBe('Only a plan has an updates feed.');
+    expect(await feedRowsOf(task.activityId)).toEqual([]);
+  });
+
+  it('400s reading a task’s feed', async () => {
+    const task = await createTask();
+    expect((await get(`/v1/activities/${task.activityId}/updates`)).status).toBe(400);
+  });
+
+  it('writes no system entry when a task is rescheduled or completed', async () => {
+    const task = await createTask();
+
+    await app().fetch(
+      new Request(`http://localhost/v1/activities/${task.activityId}/schedule`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': crypto.randomUUID(),
+        },
+        body: JSON.stringify({ date: '2026-09-09', timezone: 'America/New_York' }),
+      }),
+    );
+    await post(`/v1/activities/${task.activityId}/complete`, {});
+
+    expect(await feedRowsOf(task.activityId)).toEqual([]);
+  });
+});
+
+/**
+ * Two posts that read the same META. `updatedAt` cannot serialise them — neither moves it,
+ * which is the entire point of the split — so the write pins `lastActivityAt` too and the
+ * loser retries from fresh truth (P3-19 review).
+ */
+describe('concurrent posts', () => {
+  it('never walks lastActivityAt backwards, and keeps both entries', async () => {
+    const plan = await createPlan();
+
+    const [a, b] = await Promise.all([
+      postUpdate(plan.activityId, 'First writer'),
+      postUpdate(plan.activityId, 'Second writer'),
+    ]);
+
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+
+    const bodies = (await feedRowsOf(plan.activityId)).map((row) => row.body).sort();
+    expect(bodies).toEqual(['First writer', 'Second writer']);
+
+    // META holds the later of the two responses, and its index projection agrees.
+    const responses = await Promise.all([a.json(), b.json()]);
+    const latest = responses
+      .map((body) => body.data.lastActivityAt as string)
+      .sort()
+      .at(-1);
+    const meta = await metaOf(plan.activityId);
+    expect(meta?.lastActivityAt).toBe(latest);
+
+    const bucket = await documents.send(
+      new QueryCommand({
+        TableName: TEST_TABLE,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'gsi1pk = :pk',
+        ExpressionAttributeValues: { ':pk': 'U#usr_local_dev#P' },
+      }),
+    );
+    /**
+     * Read off `gsi1sk`, not a projected attribute: the `#P` bucket's ordering **is** the sort
+     * key `<lastActivityAt>#<activityId>`, and the index's INCLUDE list does not carry the
+     * field separately. Asserting the key is asserting the thing that actually orders Plans.
+     */
+    expect((bucket.Items ?? [])[0]?.gsi1sk).toBe(`${latest}#${plan.activityId}`);
+  });
+
+  /** Both deletes get past the read; the loser must answer 404, not the 409 §2.5 has no room for. */
+  it('answers 204 then 404 for two deletes of the same entry', async () => {
+    const plan = await createPlan();
+    const created = await dataOf(await postUpdate(plan.activityId, 'Never mind.'));
+    const path = `/v1/activities/${plan.activityId}/updates/${created.update.updateId}`;
+
+    const [first, second] = await Promise.all([del(path), del(path)]);
+
+    expect([first.status, second.status].sort()).toEqual([204, 404]);
+    expect(await feedRowsOf(plan.activityId)).toEqual([]);
+  });
+});
+
 describe('authorisation', () => {
   const asStranger = () =>
     createApp({

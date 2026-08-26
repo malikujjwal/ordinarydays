@@ -2,7 +2,10 @@ import { UPDATES_PAGE_SIZE } from '@od/shared';
 import type { Activity, ActivityUpdate } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
-import { touchLastActivity } from '../repositories/activityRepository.js';
+import {
+  getActivityMeta,
+  touchLastActivity,
+} from '../repositories/activityRepository.js';
 import {
   activityUpdatePut,
   deleteActivityUpdate,
@@ -48,6 +51,39 @@ import { assertActivityAccess } from './authz.js';
 
 const NOT_FOUND = 'Update not found.';
 
+/**
+ * How many times a post re-reads and retries before giving up.
+ *
+ * Three, matching the viewer-link write path: a genuine burst of concurrent comments on one
+ * plan is rare, and a caller that loses three consecutive races is better told so than left
+ * spinning. Each attempt costs one strongly consistent `GetItem`.
+ */
+const POST_ATTEMPTS = 3;
+
+/**
+ * The feed is the **plan's** activity feed, and only a Plan has one.
+ *
+ * `plans-and-lists.md` §2.1 row 9 puts Updates in plan detail; Task detail
+ * (`today-and-tasks.md` §5.6) has no Updates section at all and renders no placeholder for
+ * one. Writing rows on a Task therefore produces history no screen can show and nobody can
+ * reach — invisible storage that still costs a partition read and still has to be migrated.
+ * Refused on the post path and skipped by the system writers.
+ */
+const NOT_A_PLAN = 'Only a plan has an updates feed.';
+
+function assertHasFeed(activity: Activity): void {
+  if (activity.objectKind !== 'plan') {
+    throw new AppError('validation_failed', NOT_A_PLAN, [
+      { path: 'objectKind', message: NOT_A_PLAN },
+    ]);
+  }
+}
+
+/** Whether this activity has a feed at all — the system writers' guard. */
+export function hasUpdatesFeed(activity: Activity): boolean {
+  return activity.objectKind === 'plan';
+}
+
 /** Every refusal on the delete path, so none of them can be told apart from another. */
 function updateNotFound(): AppError {
   return new AppError('not_found', NOT_FOUND);
@@ -70,7 +106,8 @@ export async function listUpdates(
   activityId: string,
   cursor?: string,
 ): Promise<UpdatesPage> {
-  await assertActivityAccess(userId, activityId, 'read');
+  const { activity } = await assertActivityAccess(userId, activityId, 'read');
+  assertHasFeed(activity);
   return listActivityUpdates(activityId, {
     limit: UPDATES_PAGE_SIZE,
     ...(cursor === undefined ? {} : { cursor }),
@@ -106,6 +143,7 @@ export async function postUpdate(
   receiptFor?: (result: PostedUpdate) => IdempotencyReceipt,
 ): Promise<PostedUpdate> {
   const { activity } = await assertActivityAccess(userId, activityId, 'write');
+  assertHasFeed(activity);
 
   const update: ActivityUpdate = {
     updateId: newUpdateId(now),
@@ -117,20 +155,48 @@ export async function postUpdate(
     schemaVersion: 1,
   };
 
-  const items: TransactItem[] = [activityUpdatePut(update)];
-  const touched = touchLastActivity(activity, now, indexedUserIdsFor(activity), items);
+  /**
+   * Retried against fresh META, because the condition it commits under can legitimately lose.
+   *
+   * `touchLastActivity` pins both `updatedAt` and the `lastActivityAt` it read, so two
+   * concurrent posts serialise instead of the slower one overwriting the faster one's
+   * timestamp with an older value. The loser is not an error — nothing about the request was
+   * wrong, another comment simply landed first — so it re-reads and tries again rather than
+   * surfacing a `409` for a race the caller cannot do anything about.
+   */
+  let current = activity;
+  for (let attempt = 0; ; attempt += 1) {
+    /**
+     * **The later of the two**, never simply `now`. A concurrent post may have committed a
+     * timestamp ahead of ours — its request started later — and writing our own on top would
+     * walk the plan back down Needs a date, which is the regression the condition exists to
+     * catch. The entry keeps its own `createdAt`; only the plan's discussion marker takes the
+     * maximum.
+     */
+    const at = current.lastActivityAt > now ? current.lastActivityAt : now;
 
-  const result: PostedUpdate = { update, lastActivityAt: touched.lastActivityAt };
+    const items: TransactItem[] = [activityUpdatePut(update)];
+    const touched = touchLastActivity(current, at, indexedUserIdsFor(current), items);
+    const result: PostedUpdate = { update, lastActivityAt: touched.lastActivityAt };
 
-  const builder = new TransactionBuilder(
-    'postUpdate',
-    receiptFor === undefined ? 0 : 1,
-  ).add(...items);
-  if (receiptFor !== undefined) builder.addReserved(receiptItem(receiptFor(result)));
+    const builder = new TransactionBuilder(
+      'postUpdate',
+      receiptFor === undefined ? 0 : 1,
+    ).add(...items);
+    if (receiptFor !== undefined) builder.addReserved(receiptItem(receiptFor(result)));
 
-  await transactWrite(builder.build(), { operation: 'postUpdate' });
+    try {
+      await transactWrite(builder.build(), { operation: 'postUpdate' });
+      return result;
+    } catch (error) {
+      const lost = error instanceof AppError && error.code === 'conflict';
+      if (!lost || attempt + 1 >= POST_ATTEMPTS) throw error;
 
-  return result;
+      const fresh = await getActivityMeta(activityId, { consistentRead: true });
+      if (fresh === undefined) throw new AppError('not_found', 'Activity not found.');
+      current = fresh;
+    }
+  }
 }
 
 /**
@@ -153,7 +219,8 @@ export async function deleteUpdate(
   activityId: string,
   updateId: string,
 ): Promise<void> {
-  await assertActivityAccess(userId, activityId, 'read');
+  const { activity } = await assertActivityAccess(userId, activityId, 'read');
+  assertHasFeed(activity);
 
   const update = await getActivityUpdate(activityId, updateId);
   if (update === undefined) throw updateNotFound();
@@ -163,9 +230,19 @@ export async function deleteUpdate(
   try {
     await deleteActivityUpdate(update, userId);
   } catch (error) {
-    // The conditions lost a race: the row changed between the read and the delete, so the
-    // entry this request authorised no longer exists. Same answer as never having found it.
-    if (error instanceof AppError && error.code === 'conflict') throw updateNotFound();
+    /**
+     * The conditions lost a race: the row changed between the read and the delete, so the
+     * entry this request authorised is not there any more. Same answer as never having found
+     * it — §2.5 says anything that is not the author's own `user` entry is `404`, and a
+     * concurrent delete is one of those things.
+     *
+     * Matched on the **raw** exception name. `deleteItem` does not wrap it, so the global
+     * handler's DynamoDB map would otherwise turn it into `409 conflict` — a status this
+     * route does not have, telling a caller their delete failed when the entry is gone.
+     */
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      throw updateNotFound();
+    }
     throw error;
   }
 }

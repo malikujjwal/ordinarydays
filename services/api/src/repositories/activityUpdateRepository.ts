@@ -25,7 +25,24 @@ const ENTITY = 'ActivityUpdate';
 const SCHEMA_VERSION = 1;
 const ID_PREFIX = 'upd_';
 
-const nextUpdateUlid = monotonicFactory();
+/**
+ * One monotonic factory **per timestamp**, recreated whenever the seed changes.
+ *
+ * A single shared `monotonicFactory` cannot be used here, and the reason is the exact
+ * property it advertises: asked for an id at a timestamp **earlier** than one it has already
+ * issued, it clamps to the later one rather than going backwards. Two requests that capture
+ * `now` and then pause — for authorisation, for a retry — can easily commit out of order, and
+ * the earlier one would then be stored at `UPD#<T1>#<id>` while its id encoded `T2`. The row
+ * would be visible in the feed and permanently unreachable by {@link keyFor}: every delete
+ * of it a `404` for an entry plainly there.
+ *
+ * Recreating on a changed seed keeps both properties that matter: the encoded time is always
+ * the caller's, and ids minted inside one millisecond still increment rather than ordering on
+ * random bits. Both the read and the write are synchronous, so nothing interleaves between
+ * them.
+ */
+let seedMs: number | undefined;
+let seedFactory = monotonicFactory();
 
 /**
  * An id **seeded from the entry's own `createdAt`**, which is what makes the row addressable.
@@ -48,7 +65,26 @@ const nextUpdateUlid = monotonicFactory();
  * order them arbitrarily.
  */
 export function newUpdateId(createdAt: string): string {
-  return `${ID_PREFIX}${nextUpdateUlid(Date.parse(createdAt))}`;
+  const seed = Date.parse(createdAt);
+  if (seed !== seedMs) {
+    seedFactory = monotonicFactory();
+    seedMs = seed;
+  }
+  const updateId = `${ID_PREFIX}${seedFactory(seed)}`;
+
+  /**
+   * Checked here, not merely documented. Everything about this row's addressability rests on
+   * the id decoding back to its own `createdAt`, and the failure mode when it does not is
+   * silent: the entry commits, renders, and can never be deleted. One `decodeTime` on a write
+   * path that already does a transaction is not a cost worth trading for that.
+   */
+  if (!updateKeyRoundTrips(createdAt, updateId)) {
+    throw new Error(
+      `A minted update id does not encode its own createdAt (${createdAt}). The row would be unreachable.`,
+    );
+  }
+
+  return updateId;
 }
 
 /**
@@ -129,6 +165,13 @@ export async function listActivityUpdates(
       ascending: false,
       limit: options.limit ?? UPDATES_PAGE_SIZE,
       keyAttributes: ['pk', 'sk'],
+      /**
+       * **Strongly consistent, because a client reads its own post.** P3-39 posts optimistically
+       * and then refetches; an eventually consistent page can come back without the entry it
+       * just created, which reads as the post having failed. It is a base-table Query on one
+       * partition, so this is cheap and available — unlike on the GSI.
+       */
+      consistentRead: true,
       ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
     },
   );

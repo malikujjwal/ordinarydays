@@ -1058,9 +1058,28 @@ export function touchLastActivity(
         ...activityMeta(touched.activityId),
         ...touched,
       }),
-      ConditionExpression: '#updatedAt = :expected',
-      ExpressionAttributeNames: { '#updatedAt': 'updatedAt' },
-      ExpressionAttributeValues: { ':expected': activity.updatedAt },
+      /**
+       * **Both timestamps**, and the second one is not redundant (P3-19 review).
+       *
+       * `updatedAt` alone cannot serialise two concurrent discussion writes, because neither
+       * of them moves it — that is the whole point of the split. Two posts read the same
+       * `updatedAt`; the later one commits; the earlier one then passes an `updatedAt`
+       * condition that nothing has changed and replaces META with its **older**
+       * `lastActivityAt`. Both entries survive, but the plan walks backwards down Needs a
+       * date and the timestamp the first response called authoritative is now a lie.
+       *
+       * So the write also pins the `lastActivityAt` it read. The loser's condition fails, and
+       * its caller retries from fresh META — which is where the value it must not regress is.
+       */
+      ConditionExpression: '#updatedAt = :expected AND #lastActivityAt = :expectedLast',
+      ExpressionAttributeNames: {
+        '#updatedAt': 'updatedAt',
+        '#lastActivityAt': 'lastActivityAt',
+      },
+      ExpressionAttributeValues: {
+        ':expected': activity.updatedAt,
+        ':expectedLast': activity.lastActivityAt,
+      },
     },
   });
 

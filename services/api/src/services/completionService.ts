@@ -46,7 +46,7 @@ import * as occurrenceRepository from '../repositories/occurrenceRepository.js';
 import { TransactionBuilder, transactWrite } from '../repositories/tx.js';
 import { deriveActionCapabilities } from './actionCapabilities.js';
 import { assertListAccess } from './authz.js';
-import { writeSystemUpdate } from './updatesService.js';
+import { hasUpdatesFeed, writeSystemUpdate } from './updatesService.js';
 
 const NOT_FOUND = 'Activity not found.';
 const OWNER_ONLY = 'Only the person who created this can change it.';
@@ -161,13 +161,16 @@ export async function completeActivity(
    * transaction as the status write, so the feed cannot claim a completion that did not
    * commit — or miss one that did.
    *
+   * A **Task** gets none either: the feed is the plan's, and Task detail has no section that
+   * could ever show one.
+   *
    * Recurring occurrences never reach here: they take the `occurrenceDate` path above, which
    * writes an occurrence-override row and never the series. One occurrence being done is not
    * the plan being done, and a feed entry saying otherwise would be a lie about a series that
    * is still running.
    */
   const systemEntry =
-    status === 'completed'
+    status === 'completed' && hasUpdatesFeed(next)
       ? writeSystemUpdate(activityId, completionEntryBody(next), now)
       : undefined;
 

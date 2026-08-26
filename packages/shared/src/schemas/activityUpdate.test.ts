@@ -38,6 +38,24 @@ describe('activityUpdate', () => {
     expect(activityUpdate.safeParse(entry(overrides)).success).toBe(false);
   });
 
+  /**
+   * The author rule is a shape, not a comment (P3-19 review). Both of these parsed before it
+   * became a discriminated union: a system row with an author would have rendered a name on a
+   * record nobody wrote, and a user row without one is an entry no delete could authorise.
+   */
+  it('refuses a system entry that carries an author', () => {
+    expect(
+      activityUpdate.safeParse(entry({ kind: 'system', authorUserId: 'usr_local_dev' }))
+        .success,
+    ).toBe(false);
+  });
+
+  it('refuses a user entry with no author', () => {
+    const orphan = entry();
+    delete (orphan as Record<string, unknown>).authorUserId;
+    expect(activityUpdate.safeParse(orphan).success).toBe(false);
+  });
+
   it('accepts a body exactly at the cap', () => {
     expect(
       activityUpdate.safeParse(entry({ body: 'x'.repeat(MAX_UPDATE_BODY_LEN) })).success,

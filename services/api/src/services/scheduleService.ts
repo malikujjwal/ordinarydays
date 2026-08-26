@@ -30,7 +30,7 @@ import {
   drainActivityCleanup,
   drainCleanup,
 } from './idempotencyCleanupService.js';
-import { writeSystemUpdate } from './updatesService.js';
+import { hasUpdatesFeed, writeSystemUpdate } from './updatesService.js';
 
 type ReceiptFor = (data: unknown, cleanupRef?: CleanupRef) => IdempotencyReceipt;
 
@@ -341,9 +341,12 @@ export async function scheduleActivity(
    * the kind of thing a participant coming back to the plan needs to see.
    *
    * A write that changes nothing (`changed === false`) writes no entry: an idempotent replay
-   * must not add a row saying the date was set to what it already was.
+   * must not add a row saying the date was set to what it already was. Nor does a **Task**:
+   * the feed is the plan's, and Task detail has no section that could ever show one.
    */
-  const systemEntry = scheduleSystemEntry(previous, next, changed, now);
+  const systemEntry = hasUpdatesFeed(previous)
+    ? scheduleSystemEntry(previous, next, changed, now)
+    : undefined;
 
   await writeSchedule(next, {
     previous,
