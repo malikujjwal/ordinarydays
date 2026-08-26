@@ -131,6 +131,24 @@ describe('the table', () => {
 });
 
 describe('the media bucket', () => {
+  /**
+   * `infrastructure.md` §2.3: `od-<purpose>-<stage>-<account-id>`, because bucket names are
+   * globally unique across all of AWS and `od-media-prod` is long since taken. The account
+   * id is a `Ref`, not a literal, so the same synth works in any account.
+   *
+   * `aws-services.md` §1.5 and §1.6 write the bucket as `od-media-{env}` throughout. That is
+   * shorthand for the bucket's purpose, not a competing naming rule — §2.3 is canonical for
+   * names and is the one with the worked example.
+   */
+  it('is named od-media-<stage>-<account>', () => {
+    dev.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: { 'Fn::Join': ['', ['od-media-dev-', { Ref: 'AWS::AccountId' }]] },
+    });
+    prod.hasResourceProperties('AWS::S3::Bucket', {
+      BucketName: { 'Fn::Join': ['', ['od-media-prod-', { Ref: 'AWS::AccountId' }]] },
+    });
+  });
+
   it('blocks public access on all four settings', () => {
     dev.hasResourceProperties('AWS::S3::Bucket', {
       PublicAccessBlockConfiguration: {
@@ -271,5 +289,50 @@ describe('the media bucket', () => {
 
     const denies = statements.filter((s) => s.Effect === 'Deny');
     expect(JSON.stringify(denies)).toContain('aws:SecureTransport');
+  });
+
+  /**
+   * **`s3:GetObject`, on objects, and nothing else** (P3-23).
+   *
+   * `web-stack.test.ts` asserts the *condition* on this statement, because the reason it is
+   * an account condition rather than an exact distribution ARN is a `WebStack` fact. What
+   * nothing asserted is the grant's own width: an action list that had grown to `s3:*`, or a
+   * resource that had picked up the bucket ARN alongside the object ARN, would satisfy every
+   * condition assertion and still be a hole.
+   *
+   * Both widenings matter. `s3:*` would let CloudFront write and delete user media, and
+   * ADR-023 turns on reads being the only thing anyone but a presigned `PUT` can do. Adding
+   * the bucket ARN would permit `s3:ListBucket`, which turns the unguessable ULID key — the
+   * entire privacy mechanism in ADR-023 — into a directory listing.
+   */
+  it('grants CloudFront s3:GetObject on objects only', () => {
+    const statement = Object.values(dev.findResources('AWS::S3::BucketPolicy'))
+      .flatMap(
+        (p) =>
+          (
+            p as {
+              Properties: {
+                PolicyDocument: {
+                  Statement: Array<{
+                    Sid?: string;
+                    Action?: unknown;
+                    Resource?: unknown;
+                  }>;
+                };
+              };
+            }
+          ).Properties.PolicyDocument.Statement,
+      )
+      .find((s) => s.Sid === 'AllowCloudFrontOacRead');
+
+    expect(statement).toBeDefined();
+    // A bare string, not a one-element list: a list is how a second action arrives.
+    expect(statement?.Action).toBe('s3:GetObject');
+
+    const bucketIds = Object.keys(dev.findResources('AWS::S3::Bucket'));
+    expect(bucketIds).toHaveLength(1);
+    expect(statement?.Resource).toEqual({
+      'Fn::Join': ['', [{ 'Fn::GetAtt': [bucketIds[0], 'Arn'] }, '/*']],
+    });
   });
 });
