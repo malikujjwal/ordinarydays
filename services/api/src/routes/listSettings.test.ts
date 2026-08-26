@@ -60,6 +60,7 @@ const listMetaRow = (overrides: Record<string, unknown> = {}) => ({
   rankVersion: 0,
   archived: false,
   updatedAt: UPDATED_AT,
+  lastItemActivityAt: UPDATED_AT,
   ...overrides,
 });
 

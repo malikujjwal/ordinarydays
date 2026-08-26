@@ -76,6 +76,7 @@ async function seedList(overrides: Partial<List> = {}): Promise<List> {
     rankVersion: 0,
     archived: false,
     updatedAt: NOW,
+    lastItemActivityAt: NOW,
     ...overrides,
   };
   await repository.createList(DEV, list, { now: NOW });
@@ -886,5 +887,360 @@ describe('paging items', () => {
     );
 
     expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * **The two timestamps, and every writer that must move the right one** (P3-46).
+ *
+ * `updatedAt` backs `If-Match` and moves only when the List row itself changes.
+ * `lastItemActivityAt` moves when any **item** changes and backs nothing — the Lists index
+ * renders it (`design-system.md` §7.2).
+ *
+ * ## Why every route is covered rather than a representative few
+ *
+ * A missed writer is invisible. Nothing throws, no assertion elsewhere fails, and no user
+ * reports it: the card just quietly says `Updated 3 days ago` about a list they used this
+ * morning. The only way that surfaces is a test per write path, which is what this is —
+ * and the reason the loop below is written out per route rather than as one clever helper
+ * is that a helper is a place a route can be forgotten.
+ */
+describe('the two timestamps (P3-46)', () => {
+  /** Both stored values, read from the META row the Lists index batch-reads. */
+  const stampsOf = async (listId: string) => {
+    const meta = (await metaOf(listId)) as {
+      updatedAt: string;
+      lastItemActivityAt: string;
+    };
+    return { updatedAt: meta.updatedAt, lastItemActivityAt: meta.lastItemActivityAt };
+  };
+
+  const seedItem = async (listId: string, title = 'Milk'): Promise<ListItem> => {
+    const res = await addItem(listId, { title });
+    expect(res.status).toBe(201);
+    return (await res.json()).data as ListItem;
+  };
+
+  it('seeds lastItemActivityAt equal to createdAt on a fresh list', async () => {
+    const created = await request(app(), 'POST', '/v1/lists', {
+      title: 'Errands',
+      templateKey: 'checklist',
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()).data as {
+      listId: string;
+      updatedAt: string;
+      lastItemActivityAt: string;
+    };
+
+    // A list nobody has added to has been "last used" when it was made — and the index
+    // renders this field, so leaving it unset would give a fresh card nothing to say.
+    expect(body.lastItemActivityAt).toBe(body.updatedAt);
+    const stored = await stampsOf(body.listId);
+    expect(stored.lastItemActivityAt).toBe(stored.updatedAt);
+  });
+
+  /** It is a display value, so it has to reach the client. */
+  it('serialises on the list response', async () => {
+    const list = await seedList();
+    const res = await request(app(), 'GET', `/v1/lists/${list.listId}`);
+    const body = (await res.json()).data as { list: Record<string, unknown> };
+
+    expect(body.list.lastItemActivityAt).toBe(NOW);
+  });
+
+  /**
+   * **The canonical pair**, and the one §P3-46 names first: checking an item moves the
+   * display timestamp and leaves the concurrency token byte-identical.
+   */
+  it('checking an item moves lastItemActivityAt and leaves updatedAt byte-identical', async () => {
+    const list = await seedList();
+    const item = await seedItem(list.listId);
+    const before = await stampsOf(list.listId);
+
+    const res = await request(
+      app(),
+      'PATCH',
+      `/v1/lists/${list.listId}/items/${item.itemId}`,
+      { checked: true },
+    );
+    expect(res.status).toBe(200);
+
+    const after = await stampsOf(list.listId);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(Date.parse(after.lastItemActivityAt)).toBeGreaterThan(
+      Date.parse(before.lastItemActivityAt),
+    );
+  });
+
+  /** And the reverse, which is the half that proves the two are not the same field. */
+  it('renaming the list moves updatedAt and leaves lastItemActivityAt byte-identical', async () => {
+    const list = await seedList();
+    await seedItem(list.listId);
+    const before = await stampsOf(list.listId);
+
+    const res = await request(
+      app(),
+      'PATCH',
+      `/v1/lists/${list.listId}`,
+      { title: 'Weekend errands' },
+      { 'If-Match': before.updatedAt },
+    );
+    expect(res.status).toBe(200);
+
+    const after = await stampsOf(list.listId);
+    expect(after.lastItemActivityAt).toBe(before.lastItemActivityAt);
+    expect(Date.parse(after.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt));
+  });
+
+  /**
+   * **The regression the whole split exists to prevent.**
+   *
+   * An item write must not refresh the token an open settings sheet is holding. If it did,
+   * a stale `If-Match` would start *succeeding* after somebody checked something off — which
+   * is a lost update, and one nothing else in the suite would catch.
+   */
+  it('still fails a stale If-Match after an unrelated item write', async () => {
+    const list = await seedList();
+    const item = await seedItem(list.listId);
+    const held = (await stampsOf(list.listId)).updatedAt;
+
+    // The list is renamed by someone else, so the held token is now stale…
+    const renamed = await request(
+      app(),
+      'PATCH',
+      `/v1/lists/${list.listId}`,
+      { title: 'Renamed' },
+      { 'If-Match': held },
+    );
+    expect(renamed.status).toBe(200);
+
+    // …and an ordinary item write lands in between, which must not rehabilitate it.
+    await request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
+      checked: true,
+    });
+
+    const stale = await request(
+      app(),
+      'PATCH',
+      `/v1/lists/${list.listId}`,
+      { title: 'Renamed again' },
+      { 'If-Match': held },
+    );
+    expect(stale.status).toBe(409);
+  });
+
+  describe('every item write path moves it', () => {
+    /** Runs `write`, and answers what each timestamp did. */
+    const around = async (
+      listId: string,
+      // `app.fetch` is typed `Response | Promise<Response>`; awaiting covers both.
+      write: () => Response | Promise<Response>,
+    ): Promise<{
+      status: number;
+      itemActivityMoved: boolean;
+      updatedAtMoved: boolean;
+    }> => {
+      const before = await stampsOf(listId);
+      const res = await write();
+      const after = await stampsOf(listId);
+      return {
+        status: res.status,
+        itemActivityMoved: after.lastItemActivityAt !== before.lastItemActivityAt,
+        updatedAtMoved: after.updatedAt !== before.updatedAt,
+      };
+    };
+
+    it('create', async () => {
+      const list = await seedList();
+      const result = await around(list.listId, () =>
+        addItem(list.listId, { title: 'Eggs' }),
+      );
+
+      expect(result.status).toBe(201);
+      expect(result.itemActivityMoved).toBe(true);
+      expect(result.updatedAtMoved).toBe(false);
+    });
+
+    it('bulk create — once for the batch', async () => {
+      const list = await seedList();
+      const result = await around(list.listId, () =>
+        request(app(), 'POST', `/v1/lists/${list.listId}/items/bulk`, {
+          items: [{ title: 'Eggs' }, { title: 'Milk' }, { title: 'Bread' }],
+        }),
+      );
+
+      expect(result.status).toBe(201);
+      expect(result.itemActivityMoved).toBe(true);
+      expect(result.updatedAtMoved).toBe(false);
+    });
+
+    it('field patch', async () => {
+      const list = await seedList();
+      const item = await seedItem(list.listId);
+      const result = await around(list.listId, () =>
+        request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
+          note: 'Semi-skimmed',
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.itemActivityMoved).toBe(true);
+      expect(result.updatedAtMoved).toBe(false);
+    });
+
+    it('reorder', async () => {
+      const list = await seedList();
+      const first = await seedItem(list.listId, 'Eggs');
+      const second = await seedItem(list.listId, 'Milk');
+      const result = await around(list.listId, () =>
+        request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${first.itemId}`, {
+          afterItemId: second.itemId,
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.itemActivityMoved).toBe(true);
+      expect(result.updatedAtMoved).toBe(false);
+    });
+
+    it('delete', async () => {
+      const list = await seedList();
+      const item = await seedItem(list.listId);
+      const result = await around(list.listId, () =>
+        request(app(), 'DELETE', `/v1/lists/${list.listId}/items/${item.itemId}`),
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.itemActivityMoved).toBe(true);
+      expect(result.updatedAtMoved).toBe(false);
+    });
+
+    it('uncheck-all', async () => {
+      const list = await seedList();
+      const item = await seedItem(list.listId);
+      await request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
+        checked: true,
+      });
+
+      const result = await around(list.listId, () =>
+        request(app(), 'POST', `/v1/lists/${list.listId}/uncheck-all`, {}),
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.itemActivityMoved).toBe(true);
+      expect(result.updatedAtMoved).toBe(false);
+    });
+  });
+
+  /**
+   * **Once for the operation, not once per item** (§P3-46's edge case). Every chunk of one
+   * request writes the identical instant, so a three-item clear moves the field to exactly
+   * one value rather than to whichever chunk committed last.
+   */
+  it('clear-checked bumps once, however many items it deletes', async () => {
+    const list = await seedList();
+    for (const title of ['Eggs', 'Milk', 'Bread']) {
+      const item = await seedItem(list.listId, title);
+      await request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
+        checked: true,
+      });
+    }
+    const before = await stampsOf(list.listId);
+
+    const res = await request(
+      app(),
+      'POST',
+      `/v1/lists/${list.listId}/clear-checked`,
+      {},
+    );
+    expect(res.status).toBe(200);
+
+    const after = await stampsOf(list.listId);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.lastItemActivityAt).not.toBe(before.lastItemActivityAt);
+    // All three deletions committed under one instant — the request's, not a per-chunk one.
+    expect((await metaOf(list.listId))?.itemCount).toBe(0);
+  });
+
+  /**
+   * **Undo bumps it again**, and §P3-46 says why in one line: the list did change, twice.
+   * Restoring three deleted items is as much a change to the list as deleting them was.
+   */
+  it('undo of a bulk operation bumps it a second time', async () => {
+    const list = await seedList();
+    const item = await seedItem(list.listId);
+    await request(app(), 'PATCH', `/v1/lists/${list.listId}/items/${item.itemId}`, {
+      checked: true,
+    });
+
+    const cleared = await request(
+      app(),
+      'POST',
+      `/v1/lists/${list.listId}/clear-checked`,
+      {},
+    );
+    const { undoToken } = (await cleared.json()).data as { undoToken: string };
+    const afterClear = await stampsOf(list.listId);
+
+    const undone = await request(app(), 'POST', `/v1/lists/${list.listId}/undo`, {
+      undoToken,
+    });
+    expect(undone.status).toBe(200);
+
+    const afterUndo = await stampsOf(list.listId);
+    expect(afterUndo.updatedAt).toBe(afterClear.updatedAt);
+    expect(Date.parse(afterUndo.lastItemActivityAt)).toBeGreaterThanOrEqual(
+      Date.parse(afterClear.lastItemActivityAt),
+    );
+    expect(afterUndo.lastItemActivityAt).not.toBe(NOW);
+    expect((await metaOf(list.listId))?.itemCount).toBe(1);
+  });
+
+  /**
+   * **The list-level writes, which must move the other one.** A settings change and an
+   * archive are changes to the List row; a card should say the list was changed, and an open
+   * settings sheet holding a stale token should conflict.
+   */
+  it.each([
+    ['a capability toggle', { capabilities: { checkable: false } }],
+    ['an archive', { archived: true }],
+  ])('%s moves updatedAt and not lastItemActivityAt', async (_label, patch) => {
+    const list = await seedList();
+    await seedItem(list.listId);
+    const before = await stampsOf(list.listId);
+
+    const res = await request(app(), 'PATCH', `/v1/lists/${list.listId}`, patch, {
+      'If-Match': before.updatedAt,
+    });
+    expect(res.status).toBe(200);
+
+    const after = await stampsOf(list.listId);
+    expect(after.lastItemActivityAt).toBe(before.lastItemActivityAt);
+    expect(after.updatedAt).not.toBe(before.updatedAt);
+  });
+
+  /**
+   * A behaviour migration rewrites every item row, and still moves `updatedAt` rather than
+   * this — §P3-46 names the case. It is a change to the *list*, whatever it costs in item
+   * writes to carry out.
+   */
+  it('a behaviour migration moves updatedAt and not lastItemActivityAt', async () => {
+    const list = await seedList();
+    await seedItem(list.listId);
+    const before = await stampsOf(list.listId);
+
+    const res = await request(
+      app(),
+      'POST',
+      `/v1/lists/${list.listId}/behaviour`,
+      { behaviour: 'watch' },
+      { 'If-Match': before.updatedAt },
+    );
+    expect(res.status).toBe(200);
+
+    const after = await stampsOf(list.listId);
+    expect(after.lastItemActivityAt).toBe(before.lastItemActivityAt);
+    expect(after.updatedAt).not.toBe(before.updatedAt);
   });
 });

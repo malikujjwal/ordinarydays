@@ -83,6 +83,7 @@ async function seedList(overrides: Partial<List> = {}): Promise<List> {
     rankVersion: 0,
     archived: false,
     updatedAt: NOW,
+    lastItemActivityAt: NOW,
     ...overrides,
   };
   await repository.createList(DEV, list, { now: NOW });

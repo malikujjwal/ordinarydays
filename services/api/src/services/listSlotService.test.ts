@@ -43,6 +43,7 @@ const list = (listId: string, slot: List['slot'], archived = false): List => ({
   rankVersion: 1,
   archived,
   updatedAt: '2026-08-24T12:00:00.000Z',
+  lastItemActivityAt: '2026-08-24T12:00:00.000Z',
 });
 
 /** One page of the list index, in pointer order. */

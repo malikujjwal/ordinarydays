@@ -1905,16 +1905,18 @@ export function appendListItemCreates(
     Update: {
       Key: listMeta(listId),
       UpdateExpression:
-        'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked ADD #itemVersion :itemVersionIncrement',
+        'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked, #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
       ConditionExpression: `#rankVersion = :expectedVersion AND ${itemVersionCondition(itemVersion(basis.list))} AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
       ExpressionAttributeNames: {
         '#rankVersion': 'rankVersion',
         '#itemVersion': 'itemVersion',
         '#itemCount': 'itemCount',
         '#uncheckedCount': 'uncheckedCount',
+        '#lastItemActivityAt': 'lastItemActivityAt',
         ...GATE_NAMES,
       },
       ExpressionAttributeValues: {
+        ':lastItemActivityAt': now,
         ':expectedVersion': basis.list.rankVersion,
         ':nextVersion': basis.list.rankVersion + 1,
         ':expectedItemVersion': itemVersion(basis.list),
@@ -2142,7 +2144,7 @@ export async function createListItems(
       Update: {
         Key: listMeta(listId),
         UpdateExpression:
-          'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked ADD #itemVersion :itemVersionIncrement',
+          'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked, #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
         /**
          * **The item cap is enforced here, in the transaction**, not only by the service's
          * precheck. Two creates against a 499-item list both pass that precheck, and the
@@ -2155,9 +2157,11 @@ export async function createListItems(
           '#itemVersion': 'itemVersion',
           '#itemCount': 'itemCount',
           '#uncheckedCount': 'uncheckedCount',
+          '#lastItemActivityAt': 'lastItemActivityAt',
           ...GATE_NAMES,
         },
         ExpressionAttributeValues: {
+          ':lastItemActivityAt': options.now,
           ':expectedVersion': state.list.rankVersion,
           ':nextVersion': state.list.rankVersion + 1,
           ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
@@ -2306,16 +2310,18 @@ export async function reorderListItem(
           // way (acceptance criterion 16).
           UpdateExpression:
             uncheckedDelta === 0
-              ? 'SET #rankVersion = :nextVersion ADD #itemVersion :itemVersionIncrement'
-              : 'SET #rankVersion = :nextVersion ADD #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
+              ? 'SET #rankVersion = :nextVersion, #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement'
+              : 'SET #rankVersion = :nextVersion, #lastItemActivityAt = :lastItemActivityAt ADD #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
           ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
           ExpressionAttributeNames: {
             '#rankVersion': 'rankVersion',
             '#itemVersion': 'itemVersion',
+            '#lastItemActivityAt': 'lastItemActivityAt',
             ...(uncheckedDelta === 0 ? {} : { '#uncheckedCount': 'uncheckedCount' }),
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
+            ':lastItemActivityAt': options.now,
             ':expectedVersion': state.list.rankVersion,
             ':nextVersion': state.list.rankVersion + 1,
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
@@ -2462,14 +2468,17 @@ export async function patchListItemFields(
       builder.add({
         Update: {
           Key: listMeta(listId),
-          UpdateExpression: 'ADD #itemVersion :itemVersionIncrement',
+          UpdateExpression:
+            'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#itemVersion': 'itemVersion',
+            '#lastItemActivityAt': 'lastItemActivityAt',
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+            ':lastItemActivityAt': now,
           },
         },
       });
@@ -2478,16 +2487,18 @@ export async function patchListItemFields(
         Update: {
           Key: listMeta(listId),
           UpdateExpression:
-            'ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement',
+            'SET #lastItemActivityAt = :lastItemActivityAt ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#uncheckedCount': 'uncheckedCount',
             '#itemVersion': 'itemVersion',
+            '#lastItemActivityAt': 'lastItemActivityAt',
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
             ':delta': uncheckedDelta,
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+            ':lastItemActivityAt': now,
           },
         },
       });
@@ -2859,6 +2870,12 @@ export async function finishRankRepair(work: RankRepairWork): Promise<void> {
         {
           Update: {
             Key: listMeta(work.listId),
+            /**
+             * **No `lastItemActivityAt` here, deliberately** (P3-46). A rank repair rewrites
+             * ranks the user already asked to change: the reorder that triggered it bumped
+             * the field, and bumping again when the repair lands would move a *display*
+             * timestamp for maintenance the user never performed and cannot see.
+             */
             UpdateExpression:
               'SET #rankVersion = :nextVersion REMOVE #rankRepairId ADD #itemVersion :itemVersionIncrement',
             ConditionExpression:
@@ -3421,6 +3438,12 @@ export async function finishBehaviourMigration(
   ).add({
     Update: {
       Key: listMeta(work.listId),
+      /**
+       * **`updatedAt`, and not `lastItemActivityAt`** — §P3-46 names this case outright. A
+       * behaviour change is a change to the *list*, not to its items, however many item rows
+       * the migration rewrites on the way; the card should say the list was changed, and the
+       * settings sheet holding a stale token should conflict.
+       */
       UpdateExpression:
         'SET #behaviour = :toBehaviour, #rankVersion = :nextVersion, #updatedAt = :committedAt REMOVE #behaviourMigrationId ADD #itemVersion :itemVersionIncrement',
       ConditionExpression:
@@ -3715,15 +3738,17 @@ export async function deleteListItem(
         Update: {
           Key: listMeta(listId),
           UpdateExpression:
-            'ADD #itemCount :minusOne, #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
+            'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :minusOne, #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#itemCount': 'itemCount',
             '#uncheckedCount': 'uncheckedCount',
             '#itemVersion': 'itemVersion',
+            '#lastItemActivityAt': 'lastItemActivityAt',
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
+            ':lastItemActivityAt': options.now,
             ':minusOne': -1,
             ':uncheckedDelta': current.item.checked ? 0 : -1,
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
@@ -4144,21 +4169,31 @@ async function applyBulkChunk(
     builder.add({
       Update: {
         Key: listMeta(listId),
+        /**
+         * **One value for the whole operation, not one per chunk** (§P3-46: a bulk operation
+         * bumps this once, not once per item). `now` arrives from `runBulkCheckedOperation`'s
+         * single `options.now`, read once at the edge, so every chunk of one request writes
+         * the identical instant and the field moves exactly once however many transactions
+         * the operation needs. A *resumed* operation writes its own later instant, which is
+         * honest — the rest of the list changed then.
+         */
         UpdateExpression:
           work.kind === 'uncheck_all'
-            ? 'ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement'
-            : 'ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
+            ? 'SET #lastItemActivityAt = :lastItemActivityAt ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement'
+            : 'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
         ConditionExpression: GATES_ABSENT,
         ExpressionAttributeNames: {
           ...(work.kind === 'uncheck_all'
             ? { '#uncheckedCount': 'uncheckedCount' }
             : { '#itemCount': 'itemCount' }),
           '#itemVersion': 'itemVersion',
+          '#lastItemActivityAt': 'lastItemActivityAt',
           ...GATE_NAMES,
         },
         ExpressionAttributeValues: {
           ':delta': work.kind === 'uncheck_all' ? applied : -applied,
           ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+          ':lastItemActivityAt': now,
         },
       },
     });
@@ -4309,14 +4344,16 @@ export async function recheckListItems(
         Update: {
           Key: listMeta(listId),
           UpdateExpression:
-            'ADD #uncheckedCount :taken, #itemVersion :itemVersionIncrement',
+            'SET #lastItemActivityAt = :lastItemActivityAt ADD #uncheckedCount :taken, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#uncheckedCount': 'uncheckedCount',
             '#itemVersion': 'itemVersion',
+            '#lastItemActivityAt': 'lastItemActivityAt',
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
+            ':lastItemActivityAt': options.now,
             ':taken': -chunk.length,
             ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           },
@@ -4512,16 +4549,18 @@ export async function restoreListItems(
           Update: {
             Key: listMeta(listId),
             UpdateExpression:
-              'SET #rankVersion = :nextVersion ADD #itemCount :count, #uncheckedCount :unchecked, #itemVersion :itemVersionIncrement',
+              'SET #rankVersion = :nextVersion, #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :count, #uncheckedCount :unchecked, #itemVersion :itemVersionIncrement',
             ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
             ExpressionAttributeNames: {
               '#rankVersion': 'rankVersion',
               '#itemVersion': 'itemVersion',
               '#itemCount': 'itemCount',
               '#uncheckedCount': 'uncheckedCount',
+              '#lastItemActivityAt': 'lastItemActivityAt',
               ...GATE_NAMES,
             },
             ExpressionAttributeValues: {
+              ':lastItemActivityAt': options.now,
               ':expectedVersion': version,
               ':nextVersion': nextVersion,
               ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
