@@ -210,10 +210,10 @@ describe('the owner', () => {
     expect(repository.listParticipants).not.toHaveBeenCalled();
   });
 
-  it('passes an authoritative-read request to the META repository', async () => {
+  it('strongly reads META by default', async () => {
     vi.mocked(repository.getActivityMeta).mockResolvedValue(activity());
 
-    await assertActivityAccess(OWNER, PLAN, 'read', { consistentRead: true });
+    await assertActivityAccess(OWNER, PLAN, 'read');
 
     expect(repository.getActivityMeta).toHaveBeenCalledWith(PLAN, {
       consistentRead: true,
@@ -289,8 +289,8 @@ describe('a participant', () => {
     expect(access.viaParent).toBe(false);
   });
 
-  it('uses the same authoritative mode for the participant rows', async () => {
-    await assertActivityAccess(PARTICIPANT, PLAN, 'read', { consistentRead: true });
+  it('strongly reads the participant grant by default', async () => {
+    await assertActivityAccess(PARTICIPANT, PLAN, 'read');
 
     expect(repository.listParticipants).toHaveBeenCalledWith(PLAN, {
       consistentRead: true,
@@ -337,6 +337,25 @@ describe('a participant of the parent, acting on a prep task', () => {
 
     expect(access.viaParent).toBe(true);
     expect(access.activity.activityId).toBe(PREP);
+  });
+
+  it('strongly reads the child, parent and parent participant grant', async () => {
+    parentedBy([participantRow(PARTICIPANT)]);
+
+    await assertActivityAccess(PARTICIPANT, PREP, 'read');
+
+    expect(repository.getActivityMeta).toHaveBeenNthCalledWith(1, PREP, {
+      consistentRead: true,
+    });
+    expect(repository.getActivityMeta).toHaveBeenNthCalledWith(2, PLAN, {
+      consistentRead: true,
+    });
+    expect(repository.listParticipants).toHaveBeenNthCalledWith(1, PREP, {
+      consistentRead: true,
+    });
+    expect(repository.listParticipants).toHaveBeenNthCalledWith(2, PLAN, {
+      consistentRead: true,
+    });
   });
 
   /**
@@ -467,6 +486,19 @@ describe('readableActivities', () => {
     ] as never);
 
     expect((await readableActivities(STRANGER, ids)).size).toBe(0);
+  });
+
+  it('strongly reads participant grants for non-owned batch rows', async () => {
+    const ids = idsFor(1);
+    vi.mocked(repository.batchGetActivityMeta).mockResolvedValue([
+      { activityId: ids[0], ownerId: 'usr_somebody_else', title: 'x' },
+    ] as never);
+
+    await readableActivities(PARTICIPANT, ids);
+
+    expect(repository.listParticipants).toHaveBeenCalledWith(ids[0], {
+      consistentRead: true,
+    });
   });
 
   it('asks for each id once, however many links name it', async () => {

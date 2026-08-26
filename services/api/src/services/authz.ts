@@ -55,11 +55,6 @@ export interface ActivityAccess {
   readonly viaParent: boolean;
 }
 
-export interface ActivityAccessOptions {
-  /** Use the authority rows written in the immediately preceding request. */
-  readonly consistentRead?: boolean;
-}
-
 /** What a successful pointer-based List check resolved. */
 export interface ListAccess {
   readonly index: ListAccessGrant;
@@ -68,6 +63,7 @@ export interface ListAccess {
 
 const NOT_FOUND = 'Activity not found.';
 const LIST_NOT_FOUND = 'List not found.';
+const AUTHORITATIVE_ACTIVITY_READ = { consistentRead: true } as const;
 
 /**
  * `403`, and the only place one is produced for an activity. The caller can already see this
@@ -107,12 +103,8 @@ function belongsTo(row: StoredItem, userId: string): boolean {
   return typeof row.userId === 'string' && row.userId === userId;
 }
 
-async function isParticipant(
-  activityId: string,
-  userId: string,
-  options: ActivityAccessOptions,
-): Promise<boolean> {
-  const rows = await listParticipants(activityId, options);
+async function isParticipant(activityId: string, userId: string): Promise<boolean> {
+  const rows = await listParticipants(activityId, AUTHORITATIVE_ACTIVITY_READ);
   return rows.some((row) => belongsTo(row, userId));
 }
 
@@ -131,6 +123,12 @@ async function isParticipant(
  * `GetItem` and `Query` for the parent — three round trips, at the budget and only on the
  * path that cannot be reached until Phase 6.
  *
+ * Every one of those authority reads is strongly consistent. Participant removal is the
+ * revocation mechanism (`security-privacy.md` section 1.1); an eventually consistent read
+ * could admit a removed participant on the request immediately after removal. Consistency is
+ * an invariant of this helper rather than a caller option, so a new route cannot weaken its
+ * authorisation check by omission.
+ *
  * @throws `not_found` when the activity does not exist, or the caller has no relationship to
  * it. The two are deliberately indistinguishable.
  * @throws `forbidden` when the caller is a participant reaching for an owner-only action.
@@ -139,9 +137,8 @@ export async function assertActivityAccess(
   userId: string,
   activityId: string,
   level: AccessLevel,
-  options: ActivityAccessOptions = {},
 ): Promise<ActivityAccess> {
-  const activity = await getActivityMeta(activityId, options);
+  const activity = await getActivityMeta(activityId, AUTHORITATIVE_ACTIVITY_READ);
 
   // A missing activity and an activity belonging to a stranger produce the same answer, from
   // the same line, so the two cannot drift apart into a timing or a message difference.
@@ -151,7 +148,7 @@ export async function assertActivityAccess(
     return { activity, isOwner: true, viaParent: false };
   }
 
-  const granted = await grantFromParticipation(activity, userId, level, options);
+  const granted = await grantFromParticipation(activity, userId, level);
   if (granted !== undefined) return granted;
 
   throw new AppError('not_found', NOT_FOUND);
@@ -172,9 +169,8 @@ async function grantFromParticipation(
   activity: Activity,
   userId: string,
   level: AccessLevel,
-  options: ActivityAccessOptions = {},
 ): Promise<ActivityAccess | undefined> {
-  if (await isParticipant(activity.activityId, userId, options)) {
+  if (await isParticipant(activity.activityId, userId)) {
     return grantToParticipant(activity, level, false);
   }
 
@@ -184,13 +180,16 @@ async function grantFromParticipation(
    * task's own delete is not a shared-checklist tick.
    */
   if (activity.parentActivityId !== undefined) {
-    const parent = await getActivityMeta(activity.parentActivityId, options);
+    const parent = await getActivityMeta(
+      activity.parentActivityId,
+      AUTHORITATIVE_ACTIVITY_READ,
+    );
     if (parent !== undefined && parent.ownerId === userId) {
       return grantToParticipant(activity, level, true);
     }
     if (
       parent !== undefined &&
-      (await isParticipant(activity.parentActivityId, userId, options))
+      (await isParticipant(activity.parentActivityId, userId))
     ) {
       return grantToParticipant(activity, level, true);
     }

@@ -6251,6 +6251,618 @@
           "body"
         ],
         "additionalProperties": false
+      },
+      "PlansData": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/PlansInitialData"
+          },
+          {
+            "$ref": "#/components/schemas/PlansUpcomingWindowData"
+          },
+          {
+            "$ref": "#/components/schemas/PlansPastWindowData"
+          },
+          {
+            "$ref": "#/components/schemas/PlansPastCursorData"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "mode",
+          "mapping": {
+            "initial": "#/components/schemas/PlansInitialData",
+            "upcoming_window": "#/components/schemas/PlansUpcomingWindowData",
+            "past_window": "#/components/schemas/PlansPastWindowData",
+            "past_cursor": "#/components/schemas/PlansPastCursorData"
+          }
+        }
+      },
+      "PlansInitialData": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "initial"
+            ]
+          },
+          "needsDate": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NeedsDateItem"
+            },
+            "maxItems": 200
+          },
+          "upcoming": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlansDay"
+            }
+          },
+          "upcomingWindow": {
+            "$ref": "#/components/schemas/UpcomingWindow"
+          },
+          "past": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlansDay"
+            }
+          },
+          "pastPage": {
+            "$ref": "#/components/schemas/PastPage"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "series_limit_exceeded"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "pattern": "^duplicate_occurrence:.*$"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "needs_date_limit_exceeded"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "mode",
+          "needsDate",
+          "upcoming",
+          "upcomingWindow",
+          "past",
+          "pastPage",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "NeedsDateItem": {
+        "type": "object",
+        "properties": {
+          "activityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "occurrenceDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "parentActivityId": {
+            "type": "string",
+            "pattern": "^act_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "task",
+              "meal",
+              "watch",
+              "event",
+              "custom"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "saved",
+              "scheduled",
+              "completed",
+              "skipped",
+              "cancelled",
+              "completed_occurrence",
+              "skipped_occurrence"
+            ]
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "endTime": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "isRecurring": {
+            "type": "boolean"
+          },
+          "recurrenceDescription": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "isSnoozed": {
+            "type": "boolean"
+          },
+          "originalTime": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
+          },
+          "hasCheckbox": {
+            "type": "boolean"
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "complete": {
+                "type": "boolean"
+              },
+              "skip": {
+                "type": "boolean"
+              },
+              "snooze": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "complete",
+              "skip",
+              "snooze"
+            ],
+            "additionalProperties": false
+          },
+          "participantAvatars": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "personId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                },
+                "displayName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "avatarUrl": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "required": [
+                "personId",
+                "displayName"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "participantCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "locationLabel": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "subtitle": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "noteExcerpt": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "isPast": {
+            "type": "boolean"
+          },
+          "reminders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reminder"
+            }
+          },
+          "overdueFromDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "lastActivityAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rsvpSummary": {
+            "$ref": "#/components/schemas/RsvpSummary"
+          },
+          "suggestionCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "activityId",
+          "type",
+          "title",
+          "status",
+          "isRecurring",
+          "isSnoozed",
+          "hasCheckbox",
+          "capabilities",
+          "participantAvatars",
+          "participantCount",
+          "isPast",
+          "lastActivityAt",
+          "rsvpSummary",
+          "suggestionCount"
+        ],
+        "additionalProperties": false
+      },
+      "RsvpSummary": {
+        "type": "object",
+        "properties": {
+          "interested": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "count",
+              "names"
+            ],
+            "additionalProperties": false
+          },
+          "maybe": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "count",
+              "names"
+            ],
+            "additionalProperties": false
+          },
+          "pass": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "count",
+              "names"
+            ],
+            "additionalProperties": false
+          },
+          "pending": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "count",
+              "names"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "interested",
+          "maybe",
+          "pass",
+          "pending"
+        ],
+        "additionalProperties": false
+      },
+      "PlansDay": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgendaItem"
+            }
+          }
+        },
+        "required": [
+          "date",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "UpcomingWindow": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date"
+          },
+          "through": {
+            "type": "string",
+            "format": "date"
+          },
+          "nextFrom": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          }
+        },
+        "required": [
+          "from",
+          "through",
+          "nextFrom"
+        ],
+        "additionalProperties": false
+      },
+      "PastPage": {
+        "type": "object",
+        "properties": {
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlansUpcomingWindowData": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "upcoming_window"
+            ]
+          },
+          "upcoming": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlansDay"
+            }
+          },
+          "upcomingWindow": {
+            "$ref": "#/components/schemas/UpcomingWindow"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "series_limit_exceeded"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "pattern": "^duplicate_occurrence:.*$"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "needs_date_limit_exceeded"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "mode",
+          "upcoming",
+          "upcomingWindow",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "PlansPastWindowData": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "past_window"
+            ]
+          },
+          "past": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlansDay"
+            }
+          },
+          "pastCoverage": {
+            "$ref": "#/components/schemas/PastCoverage"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "series_limit_exceeded"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "pattern": "^duplicate_occurrence:.*$"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "needs_date_limit_exceeded"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "mode",
+          "past",
+          "pastCoverage",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "PastCoverage": {
+        "type": "object",
+        "properties": {
+          "requestedFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "requestedThrough": {
+            "type": "string",
+            "format": "date"
+          },
+          "coveredFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "coveredThrough": {
+            "type": "string",
+            "format": "date"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "requestedFrom",
+          "requestedThrough",
+          "coveredFrom",
+          "coveredThrough",
+          "complete"
+        ],
+        "additionalProperties": false
+      },
+      "PlansPastCursorData": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "past_cursor"
+            ]
+          },
+          "past": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlansDay"
+            }
+          },
+          "pastPage": {
+            "$ref": "#/components/schemas/PastPage"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "series_limit_exceeded"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "pattern": "^duplicate_occurrence:.*$"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "needs_date_limit_exceeded"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "mode",
+          "past",
+          "pastPage",
+          "warnings"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -10166,6 +10778,128 @@
           },
           "404": {
             "description": "No such activity, no caller relationship, or no caller-authored user entry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/plans": {
+      "get": {
+        "summary": "The three-stage Plans tab",
+        "description": "One request renders the screen. `mode=initial` starts four Query streams and returns Needs a date, Upcoming and Past; continuations start only the streams their stage needs and omit the others from the response. Upcoming windows may span at most `MAX_AGENDA_DAYS` (62) inclusive dates; `upcomingWindow.nextFrom` is the earliest later one-off or recurring date, so a scroll may jump an empty gap without skipping a row. `past_window` reports the interval it actually exhausted, which is not the same as the dates that returned rows: a dense grid answers `complete: false` until drained. No stage carries a count, total or badge.",
+        "tags": [
+          "activities"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "initial",
+                "upcoming_window",
+                "past_window",
+                "past_cursor"
+              ]
+            },
+            "required": true,
+            "name": "mode",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "tz",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "upcomingFrom",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "upcomingTo",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "pastFrom",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "pastBefore",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stages active for the requested mode.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PlansData"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unsupported timezone, a window past the cap, a reversed range, a field belonging to another mode, or a cursor issued for different bounds.",
             "content": {
               "application/json": {
                 "schema": {

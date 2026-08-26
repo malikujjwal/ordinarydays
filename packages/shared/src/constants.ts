@@ -180,3 +180,14 @@ export const MAX_UPDATE_BODY_LEN = 2000;
 
 /** One newest-first page of the feed (`api-contract.md` §2.5, access pattern 4). */
 export const UPDATES_PAGE_SIZE = 50;
+
+/**
+ * Needs-a-date rows in one Plans response (`api-contract.md` §2.2a, §P3-20).
+ *
+ * Capped with **no cursor**, deliberately. Beyond this the response carries a
+ * `needs_date_limit_exceeded` warning and stops, because somebody holding more than two
+ * hundred undecided plans has a problem pagination does not fix — and a stage that paged
+ * would be a backlog, which is the one thing `plans-and-lists.md` §1.3.2 says it must not
+ * become.
+ */
+export const MAX_NEEDS_DATE_ROWS = 200;

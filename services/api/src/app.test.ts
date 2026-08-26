@@ -104,7 +104,8 @@ describe('the error envelope', () => {
   // `/v1/agenda` until **P2-11 mounted that**, at which point this asserted a 501 from a
   // route that answers 200. Pick a path a later phase owns, not merely one not built yet.
   it('returns 501 for a contract path this build has not built', async () => {
-    const res = await req('/v1/plans');
+    // Was `/v1/plans` until P3-20 built it; People is the next contract path with no handler.
+    const res = await req('/v1/people');
     expect(res.status).toBe(501);
     expect((await res.json()).error.code).toBe('not_implemented');
   });

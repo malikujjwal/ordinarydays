@@ -177,6 +177,9 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
   },
 
+  // §2.2a Plans
+  { method: 'GET', pattern: '/v1/plans', auth: 'authenticated' },
+
   // §2.7 Lists
   { method: 'GET', pattern: '/v1/lists', auth: 'authenticated' },
   { method: 'POST', pattern: '/v1/lists', auth: 'authenticated', mutates: true },

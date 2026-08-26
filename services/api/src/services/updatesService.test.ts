@@ -71,8 +71,8 @@ beforeEach(() => {
   vi.mocked(tx.transactWrite).mockReset();
 });
 
-describe('authoritative feed authorization', () => {
-  it('uses a strong access read before listing history', async () => {
+describe('feed authorization', () => {
+  it('uses the shared access gate before listing history', async () => {
     vi.mocked(authz.assertActivityAccess).mockResolvedValue({
       activity: plan('task'),
       isOwner: true,
@@ -82,12 +82,10 @@ describe('authoritative feed authorization', () => {
 
     await listUpdates(USER, ACTIVITY);
 
-    expect(authz.assertActivityAccess).toHaveBeenCalledWith(USER, ACTIVITY, 'read', {
-      consistentRead: true,
-    });
+    expect(authz.assertActivityAccess).toHaveBeenCalledWith(USER, ACTIVITY, 'read');
   });
 
-  it('uses a strong access read before resolving a delete', async () => {
+  it('uses the shared access gate before resolving a delete', async () => {
     vi.mocked(authz.assertActivityAccess).mockResolvedValue({
       activity: plan('task'),
       isOwner: true,
@@ -99,9 +97,7 @@ describe('authoritative feed authorization', () => {
       code: 'not_found',
     });
 
-    expect(authz.assertActivityAccess).toHaveBeenCalledWith(USER, ACTIVITY, 'read', {
-      consistentRead: true,
-    });
+    expect(authz.assertActivityAccess).toHaveBeenCalledWith(USER, ACTIVITY, 'read');
   });
 });
 
@@ -130,7 +126,7 @@ describe('postUpdate concurrency', () => {
     });
   });
 
-  it('authorises the initial write from authoritative META', async () => {
+  it('uses the shared access gate for the initial write', async () => {
     vi.mocked(authz.assertActivityAccess).mockResolvedValue({
       activity: plan(),
       isOwner: true,
@@ -140,8 +136,6 @@ describe('postUpdate concurrency', () => {
 
     await postUpdate(USER, ACTIVITY, 'Packing list is ready.', NOW);
 
-    expect(authz.assertActivityAccess).toHaveBeenCalledWith(USER, ACTIVITY, 'write', {
-      consistentRead: true,
-    });
+    expect(authz.assertActivityAccess).toHaveBeenCalledWith(USER, ACTIVITY, 'write');
   });
 });

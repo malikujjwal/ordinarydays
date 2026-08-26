@@ -64,6 +64,7 @@ import {
   undoListOperationInput,
 } from './schemas/list.js';
 import { snoozeActivityInput, unsnoozeActivityInput } from './schemas/occurrence.js';
+import { plansData, plansMode } from './schemas/plans.js';
 import { deletedReminder, reminder, reminderInput } from './schemas/reminder.js';
 import { scheduleActivityInput, scheduleActivityResult } from './schemas/schedule.js';
 import { patchUserInput, user } from './schemas/user.js';
@@ -83,6 +84,7 @@ const deletedActivityResponse = envelope(deletedActivity);
 const reminderResponse = envelope(reminder);
 const reminderListResponse = envelope(z.array(reminder));
 const deletedReminderResponse = envelope(deletedReminder);
+const plansResponse = envelope(plansData);
 const activityUpdatePageResponse = envelope(activityUpdatePage);
 const postActivityUpdateResponse = envelope(postActivityUpdateResult);
 
@@ -1786,6 +1788,60 @@ registry.registerPath({
     404: {
       description:
         'No such activity, no caller relationship, or no caller-authored user entry.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+/**
+ * The Plans tab (§2.2a, P3-20).
+ *
+ * One route, four modes. The query and the response are both discriminated unions on `mode`,
+ * and the response's **inactive stage keys are absent rather than empty** — a continuation
+ * that read only past `#S` must not be able to answer with an `upcoming` a client would merge
+ * over the stage it already had.
+ */
+registry.registerPath({
+  method: 'get',
+  path: '/v1/plans',
+  summary: 'The three-stage Plans tab',
+  description:
+    'One request renders the screen. `mode=initial` starts four Query streams and returns ' +
+    'Needs a date, Upcoming and Past; continuations start only the streams their stage needs ' +
+    'and omit the others from the response. Upcoming windows may span at most ' +
+    '`MAX_AGENDA_DAYS` (62) inclusive dates; `upcomingWindow.nextFrom` is the earliest later ' +
+    'one-off or recurring date, so a scroll may jump an empty gap without skipping a row. ' +
+    '`past_window` reports the interval it actually exhausted, which is not the same as the ' +
+    'dates that returned rows: a dense grid answers `complete: false` until drained. No ' +
+    'stage carries a count, total or badge.',
+  tags: ['activities'],
+  /**
+   * **Flat here, a discriminated union at runtime.** OpenAPI describes query parameters as a
+   * flat set, so the arms cannot be expressed in `request.query` — the fields are listed
+   * optional and the description says which mode requires which. `plansQuery` remains the
+   * only validator, and it is strict: a field belonging to another mode is a `400`, not a
+   * parameter this document's shape quietly permits.
+   */
+  request: {
+    query: z.object({
+      mode: plansMode,
+      tz: z.string(),
+      upcomingFrom: z.string().optional(),
+      upcomingTo: z.string().optional(),
+      pastFrom: z.string().optional(),
+      pastBefore: z.string().optional(),
+      cursor: z.string().optional(),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'The stages active for the requested mode.',
+      content: { 'application/json': { schema: plansResponse } },
+    },
+    400: {
+      description:
+        'An unsupported timezone, a window past the cap, a reversed range, a field belonging ' +
+        'to another mode, or a cursor issued for different bounds.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },
