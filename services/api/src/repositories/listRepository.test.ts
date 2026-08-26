@@ -59,6 +59,7 @@ const list = (overrides: Partial<List> = {}): List => ({
   rankVersion: 0,
   archived: false,
   updatedAt: NOW,
+  lastItemActivityAt: NOW,
   ...overrides,
 });
 
@@ -374,11 +375,13 @@ describe('the bulk checked operations', () => {
         String(entry.Update.UpdateExpression).includes('itemCount'),
     )?.Update;
     expect(meta?.UpdateExpression).toBe(
-      'ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
+      'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
     );
     expect(meta?.ExpressionAttributeValues).toMatchObject({
       ':delta': -2,
       ':itemVersionIncrement': 1,
+      // The operation's own instant, one value for every chunk of it (P3-46).
+      ':lastItemActivityAt': LATER,
     });
   });
 
@@ -776,6 +779,7 @@ describe('identity and list storage', () => {
         slot: 'groceries',
         archived: true,
         updatedAt: LATER,
+        lastItemActivityAt: LATER,
       }),
     );
     await repository.patchListMeta(
@@ -1192,6 +1196,7 @@ describe('rank allocation and item mutations', () => {
     expect(items?.[3]?.Update?.ExpressionAttributeValues).toEqual({
       ':delta': -1,
       ':itemVersionIncrement': 1,
+      ':lastItemActivityAt': LATER,
     });
   });
 
@@ -1207,8 +1212,13 @@ describe('rank allocation and item mutations', () => {
     );
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
     expect(items?.[3]?.Update).toMatchObject({
-      UpdateExpression: 'ADD #itemVersion :itemVersionIncrement',
-      ExpressionAttributeValues: { ':itemVersionIncrement': 1 },
+      UpdateExpression:
+        'SET #lastItemActivityAt = :lastItemActivityAt ADD #itemVersion :itemVersionIncrement',
+      ExpressionAttributeValues: {
+        ':itemVersionIncrement': 1,
+        // Editing a note moves no counter, and still counts as using the list (P3-46).
+        ':lastItemActivityAt': LATER,
+      },
     });
   });
 });

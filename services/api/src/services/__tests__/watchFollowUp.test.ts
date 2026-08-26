@@ -134,6 +134,7 @@ const list = (): List => ({
   rankVersion: 1,
   archived: false,
   updatedAt: NOW,
+  lastItemActivityAt: NOW,
 });
 
 const item = (details?: ListItemDetails): ListItem => ({
