@@ -331,7 +331,20 @@ export async function assertActivityReadAccessFromPartition(
  * adding a restriction the contract does not name is the same class of decision as dropping
  * one it does.
  */
-const PARTICIPANT_MAY_NOT_PATCH = ['title', 'location', 'objectKind', 'type'] as const;
+/**
+ * `primaryAttachmentId` joins the list in P3-22, and it is not the "restriction the contract
+ * does not name" the note above warns against: `plans-and-lists.md` §2.1 row 8 makes adding
+ * and deleting attachments owner-only, and `Set as cover` is the third item on that same
+ * long-press menu. A participant who could not add or remove an image but could promote one
+ * to the plan's hero would be an inconsistency, not a permission.
+ */
+const PARTICIPANT_MAY_NOT_PATCH = [
+  'title',
+  'location',
+  'objectKind',
+  'type',
+  'primaryAttachmentId',
+] as const;
 
 const PARTICIPANT_REFUSED =
   'Only the person who created this plan can change its title, date or place.';

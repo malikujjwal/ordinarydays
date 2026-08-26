@@ -1,20 +1,43 @@
 import {
+  MAX_ATTACHMENTS_PER_ACTIVITY,
   MAX_UNRESOLVED_UPLOADS,
   PENDING_UPLOAD_CLEANUP_DAYS,
 } from '@od/shared/constants';
-import type { RequestUploadUrlInput, RequestUploadUrlResult } from '@od/shared/types';
+import type {
+  Attachment,
+  DeletedAttachment,
+  RequestUploadUrlInput,
+  RequestUploadUrlResult,
+} from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import type { Logger } from '../lib/logger.js';
-import { deleteObject, finalObjectKey, presignUpload, tmpObjectKey } from '../lib/s3.js';
+import {
+  copyObject,
+  deleteObject,
+  finalObjectKey,
+  headObject,
+  presignUpload,
+  tmpObjectKey,
+} from '../lib/s3.js';
+import { getActivityMeta } from '../repositories/activityRepository.js';
+import {
+  getAttachment,
+  linkAttachment,
+  listAttachments,
+  unlinkAttachment,
+} from '../repositories/attachmentRepository.js';
 import {
   attachmentUlid,
   deletePendingUpload,
+  getPendingUpload,
   listPendingUploads,
+  markPendingConfirming,
   newAttachmentId,
   type PendingUpload,
   putPendingUpload,
 } from '../repositories/pendingUploadRepository.js';
+import { assertActivityAccess } from './authz.js';
 
 /**
  * Issuing an upload URL, and draining what earlier ones left behind (P3-21).
@@ -47,6 +70,36 @@ const TOO_MANY_PENDING =
 /** A stable event code a Log Insights query can filter on (`definition-of-done.md` §8 rule 2). */
 const DRAINED = 'pending_upload_drained';
 
+/** The other two outcomes the drain can reach, each worth being able to count. */
+const REPAIRED = 'pending_upload_repaired';
+const ABANDONED = 'pending_upload_abandoned';
+const TMP_DELETE_FAILED = 'attachment_tmp_delete_failed';
+
+/**
+ * The one answer for every way an id fails to become an attachment.
+ *
+ * Deliberately says nothing about **which** way. "There is no such pending upload", "the
+ * object was never uploaded", "it arrived with the wrong type" and "the temporary object has
+ * expired" are four states a caller cannot act on differently: the recovery for all of them
+ * is to upload again. Distinguishing them in copy would also describe the caller's own
+ * storage back to them one probe at a time.
+ */
+const UNCONFIRMABLE = 'That upload is no longer available. Choose the image again.';
+
+const TOO_MANY_ATTACHMENTS =
+  `This plan already has ${MAX_ATTACHMENTS_PER_ACTIVITY} images. ` +
+  'Remove one and try again.';
+
+const COVER_NOT_LINKED = 'That image is not on this plan.';
+
+const ATTACHMENT_NOT_FOUND = 'Attachment not found.';
+
+function unconfirmable(path: string): AppError {
+  return new AppError('validation_failed', UNCONFIRMABLE, [
+    { path, message: UNCONFIRMABLE },
+  ]);
+}
+
 export interface RequestUploadUrlOptions {
   /**
    * Builds the replay receipt from the finished response.
@@ -65,9 +118,111 @@ export interface RequestUploadUrlOptions {
 }
 
 /**
+ * Completes a `confirming` record, or cleans it up (P3-22).
+ *
+ * This is the repair half of the cross-store state machine, and it is what makes "a crash
+ * after the copy cannot create an undiscoverable permanent orphan" true rather than hopeful.
+ * The record names both the permanent key and the Activity the copy was meant for, so a later
+ * request can always answer the only question that matters: **is there a home for this
+ * object?**
+ *
+ * - The `ATT#` row already exists — the transaction committed and the crash was after it.
+ *   Finish the part that was left: delete the temporary object, then the record.
+ * - The Activity still exists and the permanent object landed — complete the link exactly as
+ *   confirmation would have.
+ * - The Activity is gone, or the copy never landed — there is nowhere for this object to
+ *   belong. Delete **both** keys and only then the record, so the record outlives every
+ *   object it knows about.
+ *
+ * Returns whether the record was resolved. An unresolved one stays live and is counted
+ * against the cap, which is the safe direction: work still visible beats work deleted by
+ * something that could not finish it.
+ */
+async function resolveConfirming(
+  userId: string,
+  record: PendingUpload,
+  nowMs: number,
+  log?: Logger,
+): Promise<boolean> {
+  const activityId = record.activityId;
+  /**
+   * A `confirming` row with no Activity recorded cannot exist — {@link markPendingConfirming}
+   * writes both fields in one update — so this is a corrupt row rather than a state. Treat it
+   * as unresolvable and leave it: deleting objects on the strength of a row that contradicts
+   * its own invariant is exactly the wrong instinct.
+   */
+  if (activityId === undefined) return false;
+
+  const existing = await getAttachment(activityId, record.attachmentId);
+  if (existing !== undefined) {
+    await deleteObject(record.tmpKey);
+    await deletePendingUpload(userId, record.attachmentId);
+    log?.info(
+      { event: REPAIRED, userId, attachmentId: record.attachmentId },
+      'confirmation completed after a crash',
+    );
+    return true;
+  }
+
+  const activity = await getActivityMeta(activityId, { consistentRead: true });
+  const copied = await headObject(record.finalKey);
+
+  if (activity !== undefined && activity.ownerId === userId && copied !== undefined) {
+    await linkAttachment(
+      userId,
+      toAttachmentRow(record, activity.activityId, new Date(nowMs).toISOString()),
+    );
+    await deleteObject(record.tmpKey);
+    log?.info(
+      { event: REPAIRED, userId, attachmentId: record.attachmentId },
+      'confirmation completed after a crash',
+    );
+    return true;
+  }
+
+  /**
+   * Both keys before the record, in that order and for the same reason the expired-upload
+   * path uses it: the record is the only thing that knows these two keys exist, so removing
+   * it first would strand whichever object the next failure left behind.
+   */
+  await deleteObject(record.finalKey);
+  await deleteObject(record.tmpKey);
+  await deletePendingUpload(userId, record.attachmentId);
+  log?.info(
+    { event: ABANDONED, userId, attachmentId: record.attachmentId },
+    'confirmation had no home and both keys were removed',
+  );
+  return true;
+}
+
+/**
+ * The `Attachment` a pending record becomes once its copy is verified.
+ *
+ * `createdAt` is the **link** instant, not the record's: the attachment comes into existence
+ * when it is confirmed onto a plan, and a row stamped with the moment its upload URL was
+ * issued would claim to predate itself by up to a day. Ordering is unaffected either way —
+ * `ATT#` rows sort by a ULID that already encodes upload time.
+ */
+function toAttachmentRow(
+  record: PendingUpload,
+  activityId: string,
+  createdAt: string,
+): Attachment {
+  return {
+    attachmentId: record.attachmentId,
+    activityId,
+    key: record.finalKey,
+    contentType: record.contentType,
+    byteSize: record.byteSize,
+    createdAt,
+    schemaVersion: 1,
+  };
+}
+
+/**
  * Drains the caller's unresolved records, and answers how many are still live.
  *
- * ## What it collects, and what it deliberately leaves
+ * ## What it collects
  *
  * An **expired `awaiting_upload`** record is an upload that was offered and never completed:
  * its URL lapsed minutes after it was issued and its temporary object, if any, is now
@@ -75,14 +230,13 @@ export interface RequestUploadUrlOptions {
  * the only record of the object's existence, so removing it first would strand the object
  * until the bucket's lifecycle rule caught it.
  *
- * A **`confirming`** record is a permanent copy that may already have happened. Completing or
- * cleaning one requires reading the target Activity and finishing a transaction, which is
- * P3-22's confirm path; until that lands this function leaves the row alone and counts it as
- * live. That is the safe direction: an untouched row is work still discoverable, whereas a
- * row deleted by a function that could not finish its work would leave exactly the
- * undiscoverable permanent orphan the record exists to prevent.
+ * An **expired `confirming`** record is a permanent copy that may already have happened, and
+ * is finished or cleaned by {@link resolveConfirming}. That path is P3-22's, and it is what
+ * turns the crash window between the object store and the database from a leak into a state.
  *
- * An **unexpired `awaiting_upload`** record is a URL the client may still be uploading to.
+ * An **unexpired** record of either kind is work that may still be in flight — a URL the
+ * client is uploading to, or a confirmation running in another request — so it is left alone
+ * and counted live. Repairing a confirmation that is still running would race it.
  *
  * ## Why a request pays for this
  *
@@ -92,8 +246,7 @@ export interface RequestUploadUrlOptions {
  *
  * A failure reaching the store propagates rather than being swallowed. The alternative is to
  * delete the row anyway and let the lifecycle rule collect the object, which trades a visible
- * failure for an invisible one; and an endpoint whose entire output is a URL to that same
- * store has nothing useful to answer when it cannot be reached.
+ * failure for an invisible one.
  */
 export async function drainPendingUploads(
   userId: string,
@@ -104,8 +257,13 @@ export async function drainPendingUploads(
   let live = 0;
 
   for (const record of records) {
-    if (record.state !== 'awaiting_upload' || Date.parse(record.cleanupAfter) > nowMs) {
+    if (Date.parse(record.cleanupAfter) > nowMs) {
       live += 1;
+      continue;
+    }
+
+    if (record.state === 'confirming') {
+      if (!(await resolveConfirming(userId, record, nowMs, log))) live += 1;
       continue;
     }
 
@@ -186,4 +344,260 @@ export async function requestUploadUrl(
   await putPendingUpload(record, options.receiptFor?.(result));
 
   return result;
+}
+
+/**
+ * `POST /v1/activities/:id/attachments` — confirm an upload and link it
+ * (`api-contract.md` §2.6, P3-22).
+ *
+ * ## The state machine, in the order the contract states it
+ *
+ * 1. Resolve the caller's pending record. **The key is the tenancy check**: the record lives
+ *    in the caller's own partition, so another user's `attachmentId` resolves to nothing.
+ * 2. `HeadObject` the temporary key against the declared type and length. The presigned
+ *    `PUT` already bound both into its signature, so an object that exists there with those
+ *    values is one this service authorised — and one that does not exist means the client
+ *    never uploaded, or the one-day lifecycle rule collected it.
+ * 3. **Record the target Activity and mark the record `confirming` — before any permanent
+ *    copy.** This is the step that makes every later crash recoverable, and the reason it is
+ *    third rather than first: there is no point recording a target for an object that was
+ *    never uploaded.
+ * 4. Copy to the permanent key, then `HeadObject` the destination. Verifying the copy rather
+ *    than trusting it is what lets a retry tell "already copied" from "not copied yet".
+ * 5. One transaction: write the row and consume the pending record.
+ * 6. **Only then** delete the temporary object. It is the source of a copy that may still
+ *    have to be repeated.
+ *
+ * ## Idempotent by resumption, not by luck
+ *
+ * A repeat starts at step 1 and finds whatever the last attempt left. An already-linked id
+ * short-circuits at the top and returns the existing row — so a client that lost the
+ * response, and a client whose crash was at step 5, both get the same answer. Step 3's
+ * condition accepts a record already `confirming` **for this same Activity** and refuses one
+ * confirming toward another, which is what stops a second target abandoning the first's copy.
+ *
+ * Owner-only (`plans-and-lists.md` §2.1 row 8). A stranger's activity id is `404` from
+ * `assertActivityAccess` and never `403`.
+ */
+export interface ConfirmAttachmentOptions {
+  /**
+   * Builds the replay receipt from the finished row.
+   *
+   * Called on **both** paths, because it is what sets the response body — but its result is
+   * stored only by the write path. An already-linked id answers from the row that is already
+   * there and stores no receipt, exactly as the schedule bridge's adopt path does: a replay
+   * of the same key finds no receipt, short-circuits again, and answers identically.
+   */
+  readonly receiptFor?: (attachment: Attachment) => IdempotencyReceipt;
+  readonly log?: Logger;
+}
+
+export async function confirmAttachment(
+  userId: string,
+  activityId: string,
+  attachmentId: string,
+  now: string,
+  options: ConfirmAttachmentOptions = {},
+): Promise<Attachment> {
+  await assertActivityAccess(userId, activityId, 'owner');
+
+  /**
+   * The already-linked answer, and it comes **first**.
+   *
+   * Re-confirming is not an error and must not depend on the pending record, which the
+   * successful attempt consumed. Reading the row is also how a create carrying an
+   * `attachmentIds` list stays idempotent across its own replay.
+   */
+  const existing = await getAttachment(activityId, attachmentId);
+  if (existing !== undefined) {
+    options.receiptFor?.(existing);
+    return existing;
+  }
+
+  const record = await getPendingUpload(userId, attachmentId);
+  if (record === undefined) throw unconfirmable('attachmentId');
+
+  /**
+   * The cap is checked against the strongly consistent collection, after the already-linked
+   * short-circuit above — so re-confirming the twentieth attachment answers with it rather
+   * than refusing it as a twenty-first.
+   */
+  const linked = await listAttachments(activityId);
+  if (linked.length >= MAX_ATTACHMENTS_PER_ACTIVITY) {
+    throw new AppError('validation_failed', TOO_MANY_ATTACHMENTS, [
+      { path: 'attachmentId', message: TOO_MANY_ATTACHMENTS },
+    ]);
+  }
+
+  const uploaded = await headObject(record.tmpKey);
+  if (
+    uploaded === undefined ||
+    uploaded.contentType !== record.contentType ||
+    uploaded.byteSize !== record.byteSize
+  ) {
+    /**
+     * The temporary object is **not** deleted here and the record is left alone. The client's
+     * recovery is to upload again under a new id; this one expires into the drain, which is
+     * the single place that removes an object, and having two removers is how one of them
+     * eventually deletes something the other was still using.
+     */
+    throw unconfirmable('attachmentId');
+  }
+
+  await markPendingConfirming(userId, attachmentId, activityId);
+
+  await copyObject(record.tmpKey, record.finalKey);
+  const copied = await headObject(record.finalKey);
+  if (copied === undefined) {
+    /**
+     * A copy that reported success and left nothing. The record is `confirming` by now, so
+     * the drain owns it: it will complete the link if the object turns up, or delete both
+     * keys if it does not. Failing loudly here is right — this is not a client error — but
+     * the state is already durable either way.
+     */
+    throw new AppError('internal', 'An unexpected error occurred.');
+  }
+
+  const linkedRow = toAttachmentRow(record, activityId, now);
+  await linkAttachment(userId, linkedRow, options.receiptFor?.(linkedRow));
+
+  /**
+   * Last, and its failure is not the caller's problem: the attachment exists and is linked.
+   * A temporary object left behind is collected by the bucket's one-day lifecycle rule — the
+   * one leak the design accepts, and the harmless one, because nothing references it.
+   */
+  await deleteObject(record.tmpKey).catch((error: unknown) => {
+    options.log?.warn(
+      { event: TMP_DELETE_FAILED, userId, attachmentId },
+      error instanceof Error ? error.message : 'temporary object not removed',
+    );
+  });
+
+  return linkedRow;
+}
+
+/**
+ * `DELETE /v1/activities/:id/attachments/:attachmentId` (P3-22 rule 4).
+ *
+ * Removes the row and the object, and **when this attachment is the cover, clears
+ * `primaryAttachmentId` in the same write** — so there is no instant at which the hero points
+ * at an attachment that is gone.
+ *
+ * The row goes before the object, which is the opposite order from the drain and right for
+ * the opposite reason. Here the row is the *reference*: while it exists the image is
+ * reachable and rendered, so removing it first means the worst interruption leaves an
+ * unreferenced object for the lifecycle rule rather than a rendered hero whose bytes are
+ * missing.
+ *
+ * Owner-only. A stranger's activity is `404`; so is an id that names no attachment on it.
+ */
+export async function deleteAttachment(
+  userId: string,
+  activityId: string,
+  attachmentId: string,
+  now: string,
+): Promise<DeletedAttachment> {
+  const access = await assertActivityAccess(userId, activityId, 'owner');
+
+  const stored = await getAttachment(activityId, attachmentId);
+  if (stored === undefined) throw new AppError('not_found', ATTACHMENT_NOT_FOUND);
+
+  const isCover = access.activity.primaryAttachmentId === attachmentId;
+  await unlinkAttachment(activityId, attachmentId, isCover ? { now } : undefined);
+
+  await deleteObject(stored.key);
+
+  return { attachmentId, coverCleared: isCover };
+}
+
+/**
+ * Confirms and links several ids as part of a create (P3-22 rule 5).
+ *
+ * Used by `POST /v1/activities` and by the schedule bridge, which both accept
+ * `attachmentIds`. Sequential rather than concurrent: each call reads the same bounded
+ * collection to check the cap, and running them together would let a batch past a limit each
+ * of them individually saw room for.
+ *
+ * **An unconfirmable id is `validation_failed`.** The Activity is already written by the time
+ * this runs — it has to be, because an attachment row is keyed by the activity it belongs to
+ * — so "writes nothing" is the caller's to deliver by undoing that write. See the callers.
+ */
+export async function confirmAttachments(
+  userId: string,
+  activityId: string,
+  attachmentIds: readonly string[],
+  now: string,
+  options: { readonly log?: Logger } = {},
+): Promise<Attachment[]> {
+  const linked: Attachment[] = [];
+  for (const attachmentId of attachmentIds) {
+    linked.push(await confirmAttachment(userId, activityId, attachmentId, now, options));
+  }
+  return linked;
+}
+
+/**
+ * Validates `primaryAttachmentId` against the activity's **own** rows (P3-22, the cover rule).
+ *
+ * `null` clears and needs no check. A value must name an attachment linked to this activity:
+ * without that, a client could point the hero at an id it invented, or at a real attachment
+ * on somebody else's plan — and the hero renders as a request for that key, which is the
+ * whole of the access control on media (ADR-023).
+ */
+export async function assertCoverIsLinked(
+  activityId: string,
+  primaryAttachmentId: string | null | undefined,
+): Promise<void> {
+  if (primaryAttachmentId === undefined || primaryAttachmentId === null) return;
+
+  const existing = await getAttachment(activityId, primaryAttachmentId);
+  if (existing === undefined) {
+    throw new AppError('validation_failed', COVER_NOT_LINKED, [
+      { path: 'primaryAttachmentId', message: COVER_NOT_LINKED },
+    ]);
+  }
+}
+
+/**
+ * Refuses a create whose `attachmentIds` cannot all be confirmed — **before** the Activity is
+ * written (P3-22 rule 5).
+ *
+ * ## Why this is a separate precheck rather than a rollback
+ *
+ * An attachment row is keyed by the activity it belongs to, so linking cannot precede the
+ * create; and "a create carrying an unconfirmable id is `validation_failed` and writes
+ * nothing" is a promise about *client* errors — an id that was never uploaded, or whose
+ * temporary object has expired. Every one of those is knowable without writing anything, so
+ * this checks them all first and the create never starts.
+ *
+ * What is deliberately **not** covered by a rollback is the other failure: the copy or the
+ * transaction failing after the Activity exists. That is a `500`, not a rejected request, and
+ * it is already durable — the pending records are `confirming`, so the drain completes the
+ * links against the Activity that now exists, and the create's own replay receipt answers the
+ * client's retry with the response it lost. Compensating by deleting a just-created Activity
+ * would turn a self-healing state into a destructive one.
+ */
+export async function assertAttachmentsConfirmable(
+  userId: string,
+  attachmentIds: readonly string[],
+): Promise<void> {
+  if (attachmentIds.length === 0) return;
+
+  if (new Set(attachmentIds).size !== attachmentIds.length) {
+    throw unconfirmable('attachmentIds');
+  }
+
+  for (const attachmentId of attachmentIds) {
+    const record = await getPendingUpload(userId, attachmentId);
+    if (record === undefined) throw unconfirmable('attachmentIds');
+
+    const uploaded = await headObject(record.tmpKey);
+    if (
+      uploaded === undefined ||
+      uploaded.contentType !== record.contentType ||
+      uploaded.byteSize !== record.byteSize
+    ) {
+      throw unconfirmable('attachmentIds');
+    }
+  }
 }
