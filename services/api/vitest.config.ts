@@ -51,6 +51,18 @@ export default defineConfig({
       MEDIA_BUCKET: 'od-media-local',
       WEB_ORIGINS: 'http://localhost:8081',
       LOG_LEVEL: 'fatal',
+      /**
+       * Placeholders, stated rather than inherited (P3-21).
+       *
+       * Presigning an upload URL is pure local cryptography — no request is made — but it
+       * still needs credentials to sign **with**, and the SDK's default chain would either
+       * throw `CredentialsProviderError` on a machine that has none or sign with a
+       * developer's real profile on a machine that does. Fixing them here makes the signature
+       * a function of the test alone. They reach no network: `S3_ENDPOINT` is deliberately
+       * unset in the unit suite, so nothing here can talk to a store.
+       */
+      AWS_ACCESS_KEY_ID: 'local',
+      AWS_SECRET_ACCESS_KEY: 'localsecret',
     },
     coverage: {
       provider: 'v8',

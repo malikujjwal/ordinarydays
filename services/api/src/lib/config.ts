@@ -32,6 +32,19 @@ const envSchema = z.object({
    * local-vs-deployed branch in runtime code (`phase-00-foundations.md` P0-13).
    */
   DDB_ENDPOINT: z.string().url().optional(),
+  /**
+   * Set only on a laptop, pointing at MinIO. The **second** sanctioned local-endpoint
+   * configuration and the last one: `lib/s3.ts` reads it exactly as `lib/ddb.ts` reads
+   * `DDB_ENDPOINT`, adding `forcePathStyle` with it because MinIO serves no virtual-hosted
+   * bucket subdomains (`infrastructure.md` §6.2).
+   *
+   * Its presence changes how a client is **constructed**, never what the attachment path
+   * does. An `if (local)` in a route, service or repository is a review rejection
+   * (`phase-03-plans-and-lists.md` risk row "MinIO is treated as close enough"), which is
+   * why this is a client option and not a stage check: the deployed path is the only path,
+   * and it is the one the local tests run.
+   */
+  S3_ENDPOINT: z.string().url().optional(),
   /** Stamped at deploy time from Phase 4 onward; `local` on a laptop. */
   GIT_SHA: z.string().default('local'),
   /** Comma-separated. Empty until Phase 5 registers the domain. */
