@@ -2,7 +2,7 @@ import { MAX_UNRESOLVED_UPLOADS } from '@od/shared/constants';
 import { monotonicFactory } from 'ulid';
 import { z } from 'zod';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
-import { deleteItem, query } from './base.js';
+import { deleteItem, getItem, query, updateItem } from './base.js';
 import { receiptItem } from './idempotencyRepository.js';
 import { pendingUpload as pendingUploadKey, pendingUploadPrefix } from './keys.js';
 import type { StoredItem } from './migrate.js';
@@ -194,6 +194,59 @@ export async function listPendingUploads(userId: string): Promise<PendingUpload[
     },
   );
   return page.items.map(toPendingUpload);
+}
+
+/**
+ * One record by id, or `undefined` (P3-22).
+ *
+ * **Strongly consistent, and the tenancy check is the key itself.** The partition is the
+ * caller's, so another user's `attachmentId` addresses a row that does not exist here and
+ * confirmation answers `404` without ever comparing an owner field — there is no ownership
+ * field to compare and no way to compare the wrong one.
+ */
+export async function getPendingUpload(
+  userId: string,
+  attachmentId: string,
+): Promise<PendingUpload | undefined> {
+  const row = await getItem<StoredItem>(pendingUploadKey(userId, attachmentId), {
+    consistentRead: true,
+  });
+  return row === undefined ? undefined : toPendingUpload(row);
+}
+
+/**
+ * Records the target Activity and marks the record `confirming` — **before any permanent
+ * copy** (`api-contract.md` §2.6, P3-22).
+ *
+ * This write is the entire reason a crash after the copy is recoverable. Once it lands, the
+ * row names both the object about to be created and the Activity it was meant for, so a
+ * later drain can finish the link or delete both keys. Without it, a copy that succeeded and
+ * a transaction that did not would leave a permanent object no row has ever referred to.
+ *
+ * ## The condition, and why it accepts one `confirming` case
+ *
+ * `awaiting_upload` is the ordinary transition. A row **already** `confirming` for the *same*
+ * Activity is a retry of this same operation resuming, so it is accepted and the write is a
+ * no-op in substance. A row `confirming` for a *different* Activity is refused: the object is
+ * mid-flight toward somewhere else, and re-pointing it would abandon the first target's
+ * copy with nothing left recording where it went.
+ */
+export async function markPendingConfirming(
+  userId: string,
+  attachmentId: string,
+  activityId: string,
+): Promise<void> {
+  await updateItem(pendingUploadKey(userId, attachmentId), {
+    expression: 'SET #state = :confirming, #activityId = :activityId',
+    names: { '#state': 'state', '#activityId': 'activityId' },
+    values: {
+      ':confirming': 'confirming',
+      ':activityId': activityId,
+      ':awaiting': 'awaiting_upload',
+    },
+    condition:
+      'attribute_exists(pk) AND (#state = :awaiting OR (#state = :confirming AND #activityId = :activityId))',
+  });
 }
 
 /**
