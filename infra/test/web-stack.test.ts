@@ -95,6 +95,196 @@ describe('both distributions', () => {
   });
 });
 
+/**
+ * **The media distribution's own configuration** (P3-23).
+ *
+ * The block above asserts what the two distributions have in common — price class, HTTP
+ * version, OAC, no alias. What was unasserted until P3-23 is everything specific to the
+ * media path: the cache policy's TTLs, its compression flags and cache key, the methods, and
+ * the response headers. `infrastructure.md` §6.1 is explicit that MinIO models none of this,
+ * so these assertions are the only thing standing behind the media configuration until the
+ * stacks are deployed and exercised against the real media domain in Phase 5.
+ *
+ * ## Why the policy is resolved through the behaviour
+ *
+ * Asserting "some cache policy in this template has a 365-day default TTL" would pass on the
+ * **web** immutable policy, which also has one — the media policy could be deleted and the
+ * suite would stay green. So every assertion below starts from the media distribution's
+ * `DefaultCacheBehavior`, follows its `CachePolicyId` `Ref` to a logical id, and reads that
+ * resource. The link is the thing being tested as much as the values are.
+ */
+describe('the media distribution', () => {
+  const mediaBehaviour = () =>
+    byComment('od-media-prod')?.Properties.DistributionConfig.DefaultCacheBehavior as
+      | (Dist['Properties']['DistributionConfig']['DefaultCacheBehavior'] & {
+          AllowedMethods?: string[];
+          Compress?: boolean;
+          CachePolicyId?: { Ref?: string };
+          ResponseHeadersPolicyId?: { Ref?: string };
+        })
+      | undefined;
+
+  /** The cache policy this distribution actually points at, not merely one that exists. */
+  const mediaCachePolicy = () => {
+    const ref = mediaBehaviour()?.CachePolicyId?.Ref;
+    expect(ref).toBeDefined();
+    const policies = prod.web.findResources('AWS::CloudFront::CachePolicy') as Record<
+      string,
+      { Properties: { CachePolicyConfig: Record<string, unknown> } }
+    >;
+    const policy = policies[ref as string];
+    expect(policy, `no cache policy named ${String(ref)}`).toBeDefined();
+    return policy.Properties.CachePolicyConfig as {
+      DefaultTTL: number;
+      MinTTL: number;
+      MaxTTL: number;
+      ParametersInCacheKeyAndForwardedToOrigin: {
+        EnableAcceptEncodingGzip: boolean;
+        EnableAcceptEncodingBrotli: boolean;
+        CookiesConfig: { CookieBehavior: string };
+        HeadersConfig: { HeaderBehavior: string };
+        QueryStringsConfig: { QueryStringBehavior: string };
+      };
+    };
+  };
+
+  /**
+   * A year, and safe precisely because the objects are immutable: the key carries a ULID
+   * (ADR-023), so a changed image is a new key and there is nothing to invalidate. A short
+   * TTL here would buy nothing and cost an S3 GET per edge per expiry — and `cost-model.md`
+   * §2.5's "a cached image is zero S3 GETs" is the line this holds up.
+   */
+  it('caches for a year by default, and never longer', () => {
+    const policy = mediaCachePolicy();
+    expect(policy.DefaultTTL).toBe(365 * 24 * 60 * 60);
+    expect(policy.MaxTTL).toBe(365 * 24 * 60 * 60);
+  });
+
+  /**
+   * The floor matters as much as the ceiling. Without a `MinTTL`, an origin response
+   * carrying `Cache-Control: no-cache` would make every request a miss — and a presigned
+   * upload's stored metadata is not something this service controls tightly enough to bet
+   * the cache on.
+   */
+  it('holds a one-day floor under the cache', () => {
+    expect(mediaCachePolicy().MinTTL).toBe(24 * 60 * 60);
+  });
+
+  it('negotiates gzip and brotli', () => {
+    const parameters = mediaCachePolicy().ParametersInCacheKeyAndForwardedToOrigin;
+    expect(parameters.EnableAcceptEncodingGzip).toBe(true);
+    expect(parameters.EnableAcceptEncodingBrotli).toBe(true);
+  });
+
+  /**
+   * **The cache key is the path and nothing else.** A forwarded cookie, header or query
+   * string would fragment the cache per-viewer and turn a one-year TTL into a hit rate of
+   * roughly zero — the failure that looks like a cost problem rather than a config one.
+   */
+  it('keys the cache on the path alone', () => {
+    const parameters = mediaCachePolicy().ParametersInCacheKeyAndForwardedToOrigin;
+    expect(parameters.CookiesConfig.CookieBehavior).toBe('none');
+    expect(parameters.HeadersConfig.HeaderBehavior).toBe('none');
+    expect(parameters.QueryStringsConfig.QueryStringBehavior).toBe('none');
+  });
+
+  /** Reads only. Uploads go straight to S3 on a presigned `PUT`, never through the CDN. */
+  it('serves GET and HEAD and nothing else', () => {
+    expect(mediaBehaviour()?.AllowedMethods).toEqual(['GET', 'HEAD']);
+  });
+
+  it('compresses at the edge', () => {
+    expect(mediaBehaviour()?.Compress).toBe(true);
+  });
+
+  it('answers on IPv6', () => {
+    const cfg = byComment('od-media-prod')?.Properties.DistributionConfig as {
+      IPV6Enabled?: boolean;
+    };
+    expect(cfg.IPV6Enabled).toBe(true);
+  });
+
+  /**
+   * **`OriginAccessIdentity` is present and empty**, which is what "OAC, never OAI" looks
+   * like in a synthesized template — CloudFormation still requires the member on an
+   * `S3OriginConfig`. A distribution that had actually fallen back to the legacy mechanism
+   * would carry an identity path here, so the emptiness is the assertion.
+   */
+  it('carries no origin access identity', () => {
+    const origins =
+      byComment('od-media-prod')?.Properties.DistributionConfig.Origins ?? [];
+    expect(origins).toHaveLength(1);
+    for (const origin of origins as Array<{
+      OriginAccessControlId?: unknown;
+      S3OriginConfig?: { OriginAccessIdentity?: string };
+    }>) {
+      expect(origin.OriginAccessControlId).toBeDefined();
+      expect(origin.S3OriginConfig?.OriginAccessIdentity).toBe('');
+    }
+  });
+
+  /**
+   * The media distribution has its own response-headers policy. `aws-services.md` §1.6
+   * describes one only for the web distribution, so this is the code doing **more** than the
+   * document asks — recorded rather than trimmed, because an image served without `nosniff`
+   * is an image a browser may decide is a script.
+   */
+  it('sends HSTS and nosniff on every image', () => {
+    const ref = mediaBehaviour()?.ResponseHeadersPolicyId?.Ref;
+    expect(ref).toBeDefined();
+    const policies = prod.web.findResources(
+      'AWS::CloudFront::ResponseHeadersPolicy',
+    ) as Record<
+      string,
+      {
+        Properties: {
+          ResponseHeadersPolicyConfig: {
+            SecurityHeadersConfig?: {
+              ContentTypeOptions?: { Override: boolean };
+              StrictTransportSecurity?: {
+                AccessControlMaxAgeSec: number;
+                IncludeSubdomains: boolean;
+                Preload: boolean;
+                Override: boolean;
+              };
+            };
+          };
+        };
+      }
+    >;
+    const security =
+      policies[ref as string]?.Properties.ResponseHeadersPolicyConfig
+        .SecurityHeadersConfig;
+
+    expect(security?.ContentTypeOptions?.Override).toBe(true);
+    expect(security?.StrictTransportSecurity).toMatchObject({
+      AccessControlMaxAgeSec: 730 * 24 * 60 * 60,
+      IncludeSubdomains: true,
+      Preload: true,
+      Override: true,
+    });
+  });
+
+  /**
+   * `aws-services.md` §1.6 specifies "TLS 1.2 minimum" for both distributions, and no
+   * `MinimumProtocolVersion` is synthesized today. That is not a gap: CloudFront pins the
+   * minimum for the default `*.cloudfront.net` certificate and rejects an override, so the
+   * setting is only expressible alongside a custom certificate. The code puts all three —
+   * alias, certificate and TLS minimum — in one conditional block for that reason, and this
+   * asserts the block is off as a unit rather than partly applied.
+   */
+  it('sets no TLS minimum while it has no certificate to set one on', () => {
+    const cfg = byComment('od-media-prod')?.Properties.DistributionConfig as {
+      Aliases?: unknown;
+      ViewerCertificate?: Record<string, unknown>;
+    };
+    expect(cfg.Aliases).toBeUndefined();
+    expect(JSON.stringify(cfg.ViewerCertificate ?? {})).not.toContain(
+      'MinimumProtocolVersion',
+    );
+  });
+});
+
 describe('the web distribution', () => {
   it('serves index.html at the root', () => {
     expect(

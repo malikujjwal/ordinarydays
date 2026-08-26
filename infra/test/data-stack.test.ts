@@ -169,6 +169,75 @@ describe('the media bucket', () => {
     });
   });
 
+  /**
+   * **Three, and exactly three, and all of them on** (P3-23).
+   *
+   * `Match.arrayWith` above is a subset match, so a fourth rule — or a rule left
+   * `Status: 'Disabled'` — passes it. Both are worth catching: a disabled expiry on `tmp/`
+   * is an unbounded pile of unconfirmed uploads that nothing else in the product would
+   * notice, and `infrastructure.md` §6.1 is explicit that MinIO models none of this, so
+   * these assertions carry the rules until Phase 5 exercises them for real.
+   */
+  it('has no fourth rule, and every rule is enabled', () => {
+    const buckets = Object.values(dev.findResources('AWS::S3::Bucket')) as Array<{
+      Properties: {
+        LifecycleConfiguration?: { Rules: Array<{ Id: string; Status: string }> };
+      };
+    }>;
+    const rules = buckets.flatMap(
+      (b) => b.Properties.LifecycleConfiguration?.Rules ?? [],
+    );
+
+    expect(rules.map((rule) => rule.Id).sort()).toEqual([
+      'abort-incomplete-multipart',
+      'expire-tmp',
+      'intelligent-tiering-after-90d',
+    ]);
+    for (const rule of rules) expect(rule.Status).toBe('Enabled');
+  });
+
+  /**
+   * The `tmp/` rule **expires** rather than transitions, and it is the only prefixed rule.
+   *
+   * An unconfirmed upload is rubbish after a day (`api-contract.md` §2.6); tiering it to a
+   * cheaper class would keep it for ever at a discount, which is the opposite of what the
+   * rule is for. The other two are bucket-wide on purpose — they apply to confirmed media
+   * at `u/<userId>/…` as well.
+   */
+  it('expires tmp/ rather than tiering it, and prefixes nothing else', () => {
+    const buckets = Object.values(dev.findResources('AWS::S3::Bucket')) as Array<{
+      Properties: {
+        LifecycleConfiguration?: {
+          Rules: Array<{
+            Id: string;
+            Prefix?: string;
+            Transitions?: unknown;
+            ExpirationInDays?: number;
+          }>;
+        };
+      };
+    }>;
+    const rules = buckets.flatMap(
+      (b) => b.Properties.LifecycleConfiguration?.Rules ?? [],
+    );
+
+    const tmp = rules.find((rule) => rule.Id === 'expire-tmp');
+    expect(tmp?.Prefix).toBe('tmp/');
+    expect(tmp?.ExpirationInDays).toBe(1);
+    expect(tmp?.Transitions).toBeUndefined();
+
+    expect(rules.filter((rule) => rule.Prefix !== undefined)).toHaveLength(1);
+  });
+
+  /**
+   * Nothing here carries an hourly charge, and `cost-model.md` §2.5 prices exactly one
+   * bucket per environment. A second one appearing in this stack is a cost decision that
+   * should arrive as a doc row first.
+   */
+  it('is the only bucket DataStack creates', () => {
+    dev.resourceCountIs('AWS::S3::Bucket', 1);
+  });
+
   // An empty AllowedOrigins list is not valid CloudFormation, and no stage has a web origin
   // until Phase 5 registers the domain.
   it('omits CORS while there are no web origins', () => {
