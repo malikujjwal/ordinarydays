@@ -710,9 +710,12 @@ describe('DELETE /v1/lists/:id', () => {
       .commandCalls(UpdateCommand)
       .filter((call) => String(call.args[0].input.Key?.pk).startsWith('ACT#'));
     expect(clears).toHaveLength(1);
-    expect(clears[0]?.args[0].input.UpdateExpression).toBe('REMOVE #listId, #listItemId');
-    // The concurrency token is left alone: provenance cleanup is not a user edit.
-    expect(clears[0]?.args[0].input.UpdateExpression).not.toContain('updatedAt');
+    expect(clears[0]?.args[0].input.UpdateExpression).toBe(
+      'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
+    );
+    expect(clears[0]?.args[0].input.ExpressionAttributeValues).toHaveProperty(
+      ':updatedAt',
+    );
     // No transaction or batch item deletes the Activity itself.
     expect(
       transacted().some((entry) => String(entry.Delete?.Key?.pk).startsWith('ACT#')),

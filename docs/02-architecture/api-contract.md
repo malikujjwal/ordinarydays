@@ -314,7 +314,10 @@ Agenda warnings are successful-response diagnostics, not error codes:
 ### 2.2a Plans
 
 ```
-GET /v1/plans?upcomingFrom=YYYY-MM-DD&upcomingTo=YYYY-MM-DD&pastBefore=YYYY-MM-DD&cursor=...
+GET /v1/plans?mode=initial
+GET /v1/plans?mode=upcoming_window&upcomingFrom=YYYY-MM-DD&upcomingTo=YYYY-MM-DD
+GET /v1/plans?mode=past_window&pastFrom=YYYY-MM-DD&pastBefore=YYYY-MM-DD&cursor=...
+GET /v1/plans?mode=past_cursor&cursor=...
 ```
 
 Powers the Plans tab, which has three stages:
@@ -322,6 +325,7 @@ Powers the Plans tab, which has three stages:
 ```json
 {
   "data": {
+    "mode": "initial",
     "needsDate": [ { "…": "AgendaItem + rsvpSummary + suggestionCount, most recently discussed first" } ],
     "upcoming":  [ { "date": "2026-08-15", "items": [ ] } ],
     "past":      [ { "…": "newest first, paginated" } ],
@@ -330,32 +334,43 @@ Powers the Plans tab, which has three stages:
       "through": "2026-10-15",
       "nextFrom": "2026-10-16"
     },
+    "pastPage": { "nextCursor": "…" },
     "warnings": []
   }
 }
 ```
 
+The query and response are a discriminated union. Inactive stages are absent, not empty
+arrays, so a continuation response cannot overwrite a different stage in the client:
+
+| Mode | Query streams | Response members |
+| --- | --- | --- |
+| `initial` | `#P`, future `#S`, past `#S`, `#R` | `needsDate`, `upcoming`, `upcomingWindow`, `past`, `pastPage`, `warnings` |
+| `upcoming_window` | future `#S`, `#R` | `upcoming`, `upcomingWindow`, `warnings` |
+| `past_window` | bounded past `#S` | `past`, `pastCoverage`, `warnings` |
+| `past_cursor` | past `#S` | `past`, `pastPage`, `warnings` |
+
 | Stage | Source | Order |
 | --- | --- | --- |
 | `needsDate` | `GSI1` `gsi1pk = U#<u>#P` | `lastActivityAt` descending — the plan being discussed floats up, not the oldest |
 | `upcoming` | `GSI1` `gsi1pk = U#<u>#S`, queried with the access-pattern-1 two-day overlap, timezone-converted and filtered to the exact requested viewer window, merged with expansion of `U#<u>#R` | viewer-local date ascending |
-| `past` | the same dated-Activity bucket with a two-day overlap above the viewer-local today boundary, timezone-converted and filtered to dates before today — or before `pastBefore` when supplied | viewer-local date descending, `?pastBefore=` to land, `?cursor=` to continue |
+| `past` | the same dated-Activity bucket with a two-day overlap above the viewer-local today boundary, timezone-converted and filtered to dates before today; `past_window` additionally filters to the exact `[pastFrom, pastBefore)` viewer-local range | viewer-local date descending |
 
-The initial request may omit `upcomingFrom` and `upcomingTo`; they default to today through
-61 days later, an inclusive 62-day window. If either is supplied, both are required and the
-inclusive window may not exceed `MAX_AGENDA_DAYS` (62); a wider or reversed range is
-`validation_failed`. `upcomingWindow.nextFrom` is `WallDate | null`: the earliest scheduled
+`mode=initial` uses today through 61 days later for its inclusive 62-day Upcoming window.
+`mode=upcoming_window` requires both Upcoming bounds, and the inclusive window may not exceed
+`MAX_AGENDA_DAYS` (62); a wider or reversed range is `validation_failed`.
+`upcomingWindow.nextFrom` is `WallDate | null`: the earliest scheduled
 or recurring Activity date after `through`, so it may jump an empty gap without skipping a
 row; it is `null` only when neither source has a later item. An Upcoming scroll requests a new 62-day
-window beginning there. Each request starts four concurrent Query streams — `#P`, future
-`#S`, past `#S`, and `#R` — and pages each according to its cap. Both `#S` reads obey access
+window beginning there in `upcoming_window` mode. Only `initial` starts all four concurrent
+Query streams. Continuations launch only the streams in the table above. Both `#S` reads obey access
 pattern 1 by widening stored-key bounds two calendar days. Scheduled and recurring Tasks
 share `#S` and `#R` with Plans and remain in those streams: hydrate every candidate and pass
 every bounded recurring row to the shared expansion path. Convert effective
 timed rows from their projected stored `timezone` into the request timezone, then filter to
 the exact viewer-local stage/window. The future stream continues until it has a converted
 one-off candidate after `through` or is exhausted; `nextFrom` uses that converted date, never
-the raw key date. The Past cursor remains a raw DynamoDB continuation key, but the server
+the raw key date. The opaque Past cursor remains backed by a raw DynamoDB continuation key, but the server
 refills across boundary candidates removed by viewer-local filtering. Recurrence math finds
 each bounded series' first later occurrence, so no empty date gap is scanned to calculate
 `nextFrom`. The shared agenda expansion path expands recurring rows only inside the exact
@@ -363,18 +378,27 @@ response window. Its
 successful-response warnings, including `series_limit_exceeded` and duplicate-occurrence
 diagnostics, are returned in `warnings`. No request assumes an unbounded future response.
 
-**`pastBefore` is random access into Past; `cursor` continues from where you landed.**
-Optional, a `WallDate`, and **exclusive** — `pastBefore=2026-04-01` returns dates strictly
-before 1 April, so it is the natural expression of "show me March". It reads the same
-dated-Activity bucket the stage already uses, descending, with a different start key: no new
-index, no new access pattern, no summary projection.
+`mode=past_window` requires both `pastFrom` and exclusive `pastBefore`; its optional cursor
+must have been issued for the same mode and bounds. The response carries:
 
-`pastBefore` and `cursor` are **mutually exclusive**; sending both is `validation_failed`
-naming the conflict, rather than silently preferring one. The two answer different questions
-— `pastBefore` says *land here*, `cursor` says *continue* — and a request that says both has
-no single correct reading. A jump therefore starts a fresh Past sequence: the response
-carries a new cursor, and any cursor the client was holding is discarded rather than merged.
-`upcomingFrom`/`upcomingTo` are unaffected and keep their existing strict pairing.
+```ts
+pastCoverage: {
+  requestedFrom: WallDate;
+  requestedThrough: WallDate;
+  coveredFrom: WallDate;
+  coveredThrough: WallDate;
+  complete: boolean;
+  nextCursor?: string;
+}
+```
+
+Coverage describes the viewer-local date interval actually exhausted by the bounded query,
+not merely dates that returned rows. A dense 42-day grid may therefore return `complete:
+false`; the client repeats `past_window` with the same bounds and `nextCursor` until the grid
+is complete. Only then may the calendar interpret an unmarked date as loaded-and-empty.
+`past_cursor` is the ordinary older-history continuation and accepts only a cursor issued by
+`initial` or `past_cursor`. Supplying fields from another mode is `validation_failed` rather
+than silently launching unrelated streams.
 
 The calendar navigator (`plans-and-lists.md` §1.3) is the intended caller on both sides. It
 requests the **visible grid range** rather than the nominal month — a month grid can show up
@@ -456,7 +480,7 @@ Also:
 | --- | --- | --- |
 | `POST` | `/v1/activities` | Create a **Task or Plan chosen by the client**. Body = `CreateActivityInput`; both `objectKind` and `type` are required. When `recurrence` is present it contains **exactly one** segment; more is `validation_failed`. Stored recurrence still supports 1–20 segments, which grow only through the all-future PATCH path. Requires `Idempotency-Key`. |
 | `GET` | `/v1/activities/:id` | Full detail: activity + optional authoritative `occurrence` projection + caller-specific `capabilities` + first bounded page of participants, expenses, updates, attachments, children and related Lists + **the caller's own reminders** + date suggestions. A strongly consistent `GetItem ACT#<id>/META` establishes authoritative `404` and owner authority; bounded strongly consistent sort-key-prefix Queries then assemble the named sections. Updates are newest-first with `Limit: 50` and a cursor. Prep children are capped by `MAX_PREP_TASKS_PER_PLAN = 50`, so one `SUB#` Query with `Limit: 50` is their complete collection and supplies exact done/open counts; creating a 51st child is `validation_failed`. Every other collection observes its documented cap/page limit. The service never `queryAll`s the user-growing Activity partition. `SOURCE_LIST#` ids are hydrated with one bounded `BatchGetItem` for current List META rows, never one read per List. Parent-inherited access may strongly read the parent META separately. `?occurrenceDate=YYYY-MM-DD` explicitly targets one nominal recurring occurrence and returns its effective date, time, end time, status and snooze state after the stored override; without it the read is activity/series-only and never guesses an occurrence from agenda cache. A date the recurrence does not emit is `400 validation_failed`. Response shape is `ActivityDetail` (`packages/shared/src/types/activityDetail.ts`), an object of named paged collections so each one is **added** as its phase lands rather than changing the envelope. Phase 2 adds `completedOccurrenceCount`, the real count of stored completed Occurrence rows used by recurrence-removal and whole-series-delete confirmations. `capabilities` uses the same server-authored `{ complete, skip, snooze }` verdict as `AgendaItem`, including prep-task inheritance, so detail never re-derives ownership. Detail remains within the three-round-trip budget by running bounded independent reads concurrently; reminder reads use only the caller prefix. Stored `listId` / `listItemId` are included only when the caller also passes `assertListAccess`; a Plan participant outside the list receives no reverse link. |
-| `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. **Does not accept `schedule` or unschedule fields**; `POST .../schedule` is the single scheduling write path. A recurrence edit may additionally carry `editedFromDate?: WallDate`. When supplied, it must be a date emitted by the current stored active rule and becomes the server-written `effectiveFrom` of the one appended segment; when absent, the server uses today in the Activity's timezone. Any `effectiveFrom` values inside client-supplied segments are ignored. One founder-approved exception allows a changed last segment with the same length when that active segment starts today: the server replaces it only if the transaction proves `OCC#<today>` does not exist; otherwise history remains append-only and the request is `validation_failed`. **`recurrence: null` is always `validation_failed` on PATCH**: removing a series requires the explicit occurrence target and surviving effective schedule of `POST .../recurrence/convert`; a non-recurring no-op is not a second removal contract. **Adding a recurrence to a `completed` or `skipped` activity is rejected** with `validation_failed` on `status` (added 2026-08-13, ADR-053). A recurring activity never holds a terminal series status: `POST .../complete` and `.../skip` refuse to set one, and this is the other way in — completing a one-off and then making it repeat left `status: 'completed'` on a row that had become a series, which `agendaService` then rendered onto every un-overridden occurrence. `cancelled` is exempt; a cancelled series is legitimate and its occurrences inherit it. The guard is on the transition, not on later edits of an existing series. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
+| `PATCH` | `/v1/activities/:id` | Partial update, including the explicit Task↔Plan conversion described below. **Does not accept `schedule` or unschedule fields**; `POST .../schedule` is the single scheduling write path. A recurrence edit may additionally carry `editedFromDate?: WallDate`. When supplied, it must be a date emitted by the current stored active rule and becomes the server-written `effectiveFrom` of the one appended segment; when absent, the server uses today in the Activity's timezone. Any `effectiveFrom` values inside client-supplied segments are ignored. One founder-approved exception allows a changed last segment with the same length when that active segment starts today: the server replaces it only if the transaction proves `OCC#<today>` does not exist; otherwise history remains append-only and the request is `validation_failed`. **`recurrence: null` is always `validation_failed` on PATCH**: removing a series requires the explicit occurrence target and surviving effective schedule of `POST .../recurrence/convert`; a non-recurring no-op is not a second removal contract. **Adding a recurrence to a `completed` or `skipped` activity is rejected** with `validation_failed` on `status` (added 2026-08-13, ADR-053). A recurring activity never holds a terminal series status: `POST .../complete` and `.../skip` refuse to set one, and this is the other way in — completing a one-off and then making it repeat left `status: 'completed'` on a row that had become a series, which `agendaService` then rendered onto every un-overridden occurrence. `cancelled` is exempt; a cancelled series is legitimate and its occurrences inherit it. The guard is on the transition, not on later edits of an existing series. **A `details` replacement retains each ingredient's server-owned `addedToListId`, matched by `ingredientId`** (P3-17, corrected in review). The field is rejected on input — a client able to author it could fabricate the `Added` state for any well-formed `lst_` — so the server is the only thing that can preserve it, and without that an ordinary rename, quantity fix or reorder silently cleared every marker on the meal. An id new to the patch is a new row with nothing to inherit; a removed row takes its marker with it. Optimistic concurrency via `If-Match: <updatedAt>`; mismatch → `409 conflict`. |
 | `POST` | `/v1/activities/:id/recurrence/convert` | Atomic **Does not repeat** conversion. Body = `{ occurrenceDate }`, naming one nominal occurrence emitted by the current series. Requires `Idempotency-Key`. The server resolves that occurrence through its active segment and stored override, condition-checks the META and occurrence version/absence it read, copies the effective date/time/end time to the Activity schedule while retaining its timezone, removes `recurrence`, and rewrites every required ActivityIndex row in the same transaction. Stored Occurrence history is untouched. |
 | `DELETE` | `/v1/activities/:id` | Owner only. Returns `409 settlement_conflict` with every distinct blocking Settlement id when any child Expense has a settled obligation; the user must explicitly Undo those Settlements first. Otherwise cascades per `data-model.md` §7, clears `sourceActivityId` on Lists named by `SOURCE_LIST#` without deleting them, and deletes every child Expense locator with its row. The cascade deletes children and external pointers first and `ACT#/META` **last**, so an interrupted retry can still authorise; after META is gone, a replayed `404` is success for the client. **The settlement guard and the Expense-locator half of the cascade arrive in Phase 7 (P7-08), not Phase 1 (P1-14)** — see the note below. |
 | `POST` | `/v1/activities/:id/schedule` | The **single schedule write path**: `{ date, time?, endTime?, timezone, occurrenceDate? }`; unschedule is `{ date: null }`. Requires `Idempotency-Key`. Changing the date resets every non-declined participant's RSVP to `pending` and re-notifies; a time-only change does not. The response includes `rsvpReset: true` only when it happened. A timed → date-only transition retains reminders, coerces sub-day offsets to the nearest whole-day multiple (half-day ties choose the earlier reminder), and returns `reminderOffsetsNormalized: true` whether or not a row changed, so no participant's reminder existence is disclosed. Status is server-derived from schedule presence (unless terminal), and `icsSequence` increments once iff an exported schedule field changed. Shared `toUtcInstant` derives UTC values; the spring gap `2026-03-08 02:30 America/New_York` moves forward to `03:00`. With `occurrenceDate`, writes the nominal override and, for a cross-day move, its destination marker in one transaction while leaving META unchanged. |
@@ -686,11 +710,11 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/v1/lists?cursor=` | Pages active List pointers 50 at a time, then BatchGets that page's current `META` rows. The 100 cap applies to Lists the caller owns, not memberships received from other owners. |
+| `GET` | `/v1/lists?cursor=` | Pages all of the caller's List access pointers 50 at a time, then BatchGets that page's current `META` rows, including archived Lists. The endpoint does not filter by `archived`; active/archived presentation is client-side and a filtered-empty page may still have `nextCursor`. The 100 cap applies to Lists the caller owns, not memberships received from other owners. |
 | `POST` | `/v1/lists` | `{ listId?, title, templateKey, sourceActivityId? }`. `title` and `templateKey` are required; `templateKey` must be the template/style the user selected. Optional `listId` is the permanent client-minted `lst_<ULID>` for durable offline creation. The server copies behaviour, capabilities, icon, empty-state copy and slot from that exact catalogue entry; it never matches the title or substitutes another template. When `sourceActivityId` is present and names an owned Plan, the copied `slot` is forced to `null` and the same transaction writes an id-only `ACT#<sourceActivityId>/SOURCE_LIST#<listId>` reverse projection. Create rejects client-supplied `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy`; only explicit later settings may change their supported subset. |
 | `GET` | `/v1/lists/:id?includeItems=true` | Returns META plus the first 50 items and an opaque item cursor bound to the META `rankVersion`. The service strongly reads META, uses `ConsistentRead: true` for the item Query, then strongly rereads META; both reads must have the same version with neither `rankRepairId` nor `behaviourMigrationId`. A marker or changed fence returns `503 internal` with `Retry-After: 1` and no item rows after attempting the bounded drain. A linked row includes the caller's `viewerLink` and its trimmed `viewerPlan` together; an unlinked or unreadable row includes neither. Links belonging to other members are removed before the one bounded Activity hydration and before serialisation. It never returns the whole List partition. |
 | `PATCH` | `/v1/lists/:id` | `{ title?, capabilities?, slot?, archived? }`, under a required `If-Match` carrying the `updatedAt` the client read; omitting it is `validation_failed`, and a stale one is `409` whose `details[0]` carries the current version. See the change rules below. `capabilities` is a partial patch of the two flags, merged onto the stored pair. `slot` is nullable: absent leaves it alone, `null` clears it. Additive changes return the server-recorded settings Undo token; a rename alone returns none, because renaming a list has no undo row in `../01-product/interaction-contract.md` §4.1. A member may rename; capabilities, slot and archive are owner-only (§3). `behaviour` and `templateKey` are both rejected here — the first uses the dedicated replay-protected action below and the second is immutable — so a body carrying either is `validation_failed` naming it. |
-| `POST` | `/v1/lists/:id/behaviour` | `{ behaviour }`. Owner only. Requires `If-Match` and `Idempotency-Key`; every direction uses the gated resumable migration below, and the operation is identified by that key so a replay resumes its own work instead of starting a second migration. A destructive transition **that would actually lose something** also requires `?confirmDataLoss=true`; omitting it returns the typed `409 conflict` preview without starting a migration or writing a receipt. Confirmation is a new logical action with a newly minted key. Posting the behaviour a list already has is a no-op that answers with current truth. |
+| `POST` | `/v1/lists/:id/behaviour` | `{ behaviour, confirmation? }`. Owner only. Requires `If-Match` and `Idempotency-Key`; every direction uses the gated resumable migration below, and the operation is identified by that key so a replay resumes its own work instead of starting a second migration. A destructive transition **that would actually lose something** first returns a typed `409 conflict` with `{ confirmation: { fromBehaviour, toBehaviour, itemVersion, itemCount, fields } }` without starting a migration or writing a receipt. The confirmed action uses a newly minted key and echoes that whole object. Posting the behaviour a list already has is a no-op that answers with current truth. |
 | `DELETE` | `/v1/lists/:id` | Owner only. Writes the replay-window tombstone and removes the List's `SOURCE_LIST#` reverse projection when present before the chunked cascade removes every partition row (items, locators, members, links, Undo, repair and behaviour-migration work) plus every member pointer and `LLINK#` relationship; it does not delete owner-scoped People records. |
 | `GET` | `/v1/lists/:id/items?cursor=` | Pages 50 strongly consistent `ITEM#` rows at a time, with only the caller's readable `viewerLink` / trimmed `viewerPlan` pair for that page. The caller filter precedes the one bounded Activity hydration; another viewer's Activity is never loaded. Strong META reads before and after the Query must match the cursor/each other and contain neither repair nor behaviour-migration marker. A failed fence returns `503 internal` with `Retry-After: 1`; the client retains its committed projection and restarts from page one. No response can span a reorder, repair or behaviour migration. |
 | `GET` | `/v1/lists/:id/items/:itemId` | Authoritative exact-id read for durable-create reconciliation. Strong META reads before and after the strongly consistent locator/item reads must keep the same `rankVersion` with no repair/behaviour-migration gate, and locator/item revisions must match; a failed fence returns `503 internal` with `Retry-After: 1`, while a missing or tombstoned item is `404`. |
@@ -699,7 +723,7 @@ Images are served through CloudFront with a signed-URL or a per-object random ke
 | `PATCH` | `/v1/lists/:id/items/:itemId` | `{ title?, checked?, note?, location?, details?, afterItemId? }`. No client `If-Match`; the service conditionally advances the ranked row and locator's shared internal `itemRevision`. A conflict re-resolves the locator and reapplies only supplied fields, preserving per-field last-write-wins while preventing a stale reorder image from replacing another edit. A position and ordinary fields may arrive **together and land together**: the reorder already re-puts the whole row at its new key, so the supplied fields fold into that put and the write stays the same four domain actions (P3-08). `null` on `note` or `location` clears the field, and clearing is gated exactly as setting is — a hidden retained value cannot be removed while its capability is off. |
 | `DELETE` | `/v1/lists/:id/items/:itemId` | Removes the ranked row and identity locator, leaves the replay-window item tombstone, and returns an opaque token for the 6-second Undo window. |
 | `POST` | `/v1/lists/:id/items/:itemId/schedule` | **The optional bridge to Activities.** Body = `ScheduleListItemInput` below. Creates an explicit Plan and the permitted per-viewer link pointers; the ListItem itself is not replaced or given a global Activity id. A Watch Plan's explicitly enabled second-object action may create the item first and then call this endpoint with the reviewed Plan fields; the endpoint still requires type and audience and infers neither from the item. |
-| `POST` | `/v1/activities/:id/ingredients/add-to-list` | `{ listId, ingredients: [{ ingredientId, itemId? }] }`. Owner-only meal action. Every stored meal ingredient has a stable client-minted `ing_<ULID>` retained across edits/reorders. The server resolves the selected current ids and explicit writable collection destination, derives item titles/provenance, writes/deduplicates them, and records each source ingredient's `addedToListId` idempotently. A missing/replaced id rejects the whole action; array position is never source identity. |
+| `POST` | `/v1/activities/:id/ingredients/add-to-list` | `{ listId, ingredients: [{ ingredientId, itemId? }] }`. Owner-only meal action. Every stored meal ingredient has a stable client-minted `ing_<ULID>` retained across edits/reorders. The server resolves the selected current ids and explicit writable collection destination, derives item titles/provenance, writes/deduplicates them, and records each source ingredient's `addedToListId` idempotently. A missing/replaced id rejects the whole action, and so does the same id twice; array position is never source identity. The destination is **given, never resolved**: slot resolution is the client's (P3-12/P3-42) and the user has seen the list's name before this is called, so the server validates `listId` and never falls back to a slot. `behaviour` must be `collection` — a `watch` or `meals` list requires typed `details` an ingredient has none to give — and this check plus capacity are repeated against the exact fenced List META basis conditioned by the transaction. One canonical label is computed for the operation from activity-keyed labels other meals have already used on that list. Selections are grouped by case-insensitive trimmed title: a group uses one matching **unchecked** row or creates one new row, while a **checked** match is already bought and does not absorb the group. A replay-bound destination still answers its exact ingredient after check/rename, but it may absorb fresh selections in the group only while currently unchecked with the same normalized title. Each stored row retains ordered, storage-only `{ activityId, label }` provenance segments and renders `sourceLabel` by joining them; the service never infers ownership or replay by splitting display text, because a rule-5 segment may itself contain ` · `. The dedicated rendered bound is 4,000 characters, accepts every canonical 200-character meal-title label, never truncates, and is validated before a transaction is composed. The write-back locates each row by `ingredientId` and conditions the write on that id still occupying the index, so a concurrent reorder fails rather than flagging a neighbour, and it **advances** the meal's `updatedAt`: `addedToListId` is rendered — it is what makes an ingredient row say `Added` — and it lives inside `details`, which `PATCH` replaces wholesale under `If-Match`, so a client holding the pre-write copy would both draw stale rows and pass its next concurrency check. **The whole action is one `TransactWriteItems`** — created rows, structured/rendered label extensions, authoritative identities/aliases, List META, the meal's markers and new `updatedAt`, and the idempotency receipt — so a receipt can never be stored without the provenance it describes and a conflict leaves nothing behind. For at most 30 selections the worst case remains 94 actions: a created destination costs three; grouped/labelled selections consume aliases or one two-row extension instead of another created destination; four fixed actions cover the deletion gate, META, Activity and receipt. Every condition is tied to the read — List `rankVersion` **and storage-only `itemVersion`**, each extended row's `itemRevision`, each ingredient's position, and the meal's `updatedAt` — and a condition failure re-runs the whole read/classify/commit cycle. `rankVersion` catches structural changes; `itemVersion` also catches a rename, check, delete, restore or behaviour finalization that changes classification without moving a row. Every public item mutation advances `itemVersion` once; gated repair/migration workers advance it when their final transaction makes the rewritten rows visible. Item-page cursors remain bound only to `rankVersion`. `itemId` is optional. When omitted and creation is needed, the server mints one. When supplied, `ITEMID#<itemId>` is authoritative for ordinary locators and absorbed aliases alike. It permanently records the exact source Activity, ingredient and original outcome; only that tuple is replay, an id reused for another ingredient returns `409`, and ordinary item creation cannot take an alias id. A deleted alias target also yields `409` rather than releasing the requested identity. So does a supplied `itemId` that a retained `ITEM_TOMBSTONE#` still owns, **whether the selection would create a row under it or be absorbed into another**: only the matching Undo may reclaim a deleted item's id. Created rows carry a per-row condition for that; an absorbed one writes its alias to the same `ITEMID#` key and cannot add one without breaching the 94-action budget, so both tombstones are read in the fenced snapshot and refused before classification. Returns `AddIngredientsToListResult`: the destination, the one label, the meal's new `activityUpdatedAt`, and per ingredient whether it was `created` or `labelled`. |
 | `POST` | `/v1/lists/:id/clear-checked` | Only when `behaviour === 'collection' && capabilities.checkable`; anything else is `validation_failed`, so the hidden `checked` values a behaviour change retained cannot be reached. Deletes immediately, with **no confirmation dialog** — the single deliberate exception to `../01-product/interaction-contract.md` §1a.1, recorded in `../00-open-decisions.md` item 33 — and returns an opaque token for the 10-second bulk Undo window. Each deleted item leaves a tombstone holding its exact snapshot under **one** operation, however many transactions the delete needs. |
 | `POST` | `/v1/lists/:id/uncheck-all` | Only when `behaviour === 'collection' && capabilities.checkable`, on the same terms. Sets every currently checked item to unchecked, records **exactly the ids it changed**, and returns an opaque token for the 10-second bulk Undo window. Compensation re-checks the surviving members of that set and skips one deleted meanwhile. |
 | `POST` | `/v1/lists/:id/undo` | `{ undoToken }`, strictly — a client never sends deleted row contents back as authority. Requires its own `Idempotency-Key`. Applies the server-recorded compensation for one retained, unused single-delete, `clear-checked`, `uncheck-all`, archive, or additive settings operation. It is the only route allowed to reclaim an item id protected by `ITEM_TOMBSTONE#`; settings compensation applies only while its recorded preconditions remain true. Answers the `ListUndoResult` union below. |
@@ -729,7 +753,7 @@ store their inverse and preconditions under the same operation model. A behaviou
 inverse names the prior behaviour and only the default item fields it created; if those
 fields or affected settings have since changed, compensation returns
 `no_longer_applicable` and writes nothing. This dedicated inverse may undo an upgrade without
-`confirmDataLoss`; an ordinary behaviour downgrade may not. A slot inverse includes the
+destructive confirmation; an ordinary behaviour downgrade may not. A slot inverse includes the
 exact profile-default entry removed by the forward mutation and restores it only if no newer
 default occupies that slot.
 
@@ -848,8 +872,9 @@ list pointer. Consequently:
 The list-detail projection filters `LNK#` rows to the authenticated user **before** it looks
 up linked Activities and before it serialises the response. The Activity access check still
 runs; a stale pointer is omitted and queued for cleanup rather than producing a dead link.
-The link may remain present when its Activity is unscheduled, but a state line is displayable
-only when the hydrated Activity has `schedule.date`.
+The link may remain present when its Activity is unscheduled. A scheduled/completed state line
+requires `schedule.date`; `cancelled` is the deliberate exception and renders `Cancelled`
+without a date.
 
 **What the row carries — added in P3-15.** A row that has a `viewerLink` also has a
 `viewerPlan`: `ListItemPlanState`, the caller's linked Plan trimmed to `type`, `status` and an
@@ -862,11 +887,12 @@ scheduled Plan from an unscheduled or completed one, and state without a pointer
 the row cannot navigate to; independent optionals are what would let a server emit half a pair
 and a client believe it.
 
-**A linked Activity that is no longer a Plan is omitted, not described.** A Plan may convert
-to a Task (§2.3), which keeps `listId`/`listItemId`, so the pointer survives while `type`
-becomes `task` — a value `ListItemPlanState` does not admit. The row omits the pair and
-deletes nothing: the Activity is readable and the pointer is not stale. What *should* happen to
-the pointer on conversion is an open lifecycle question recorded in `phase-03` §P3-15.
+**Plan → Task removes the Plan-specific relationship atomically.** The conversion transaction
+deletes every `LNK#` row that still points to that Activity and writes the Task without
+`listId` / `listItemId`. A moved pointer is re-read rather than deleted. The ListItem and Task
+both survive independently, and no invisible pointer remains for a projection that can no
+longer describe it. A cancelled Activity remains a Plan: its link is retained and
+`viewerPlan.status: 'cancelled'` renders the `Cancelled` state line.
 
 It is deliberately **not** the Activity. **Three fields**, each earning its place: `type`
 selects the verb (`Planned` for an event, `Next session` for a watch session, which the list's
@@ -891,7 +917,7 @@ and the caller filter still happens first, so no other viewer's Activity is load
 | `capabilities.checkable` false → true | Applies immediately. Nothing is lost. |
 | `capabilities.checkable` true → false | Applies immediately. `checked` is retained on items, not cleared, so re-enabling restores it. |
 | `behaviour` `collection` → `watch` or `meals` | Applies immediately, initialising `details` on every item with the default status. |
-| `behaviour` `watch` or `meals` → anything | **Destructive** whenever any item carries the typed data. Requires `?confirmDataLoss=true`; without it returns `409 conflict` with a body naming the fields and the exact number of items affected, so the client can render "…will remove season, episode and watch status from 7 items." |
+| `behaviour` `watch` or `meals` → anything | **Destructive** whenever any item carries the typed data. The first call returns `409 conflict` with a typed confirmation naming the source/target behaviours, `itemVersion`, fields and exact number of items affected; the second echoes that object, so the client cannot authorize a different snapshot. |
 | `slot` | Free. Changing it does not move any items. |
 
 Every additive row, including `archived: false → true`, returns a retained settings Undo
@@ -919,32 +945,29 @@ confirmation is required and none is asked for. The count is the §1a.1 rule 2 c
 **actually carrying** the data, never the list's size. Amended in P3-09; the product doc
 outranks this one on behaviour, and the two now agree.
 
-**How the `409` preview is encoded.** The error envelope has one structured slot, so the
-preview travels in `details[]` as `{ path, message }` pairs — the encoding
-`PATCH /v1/activities/:id` already uses to return the current `updatedAt` beside a stale-edit
-`409`. The paths are exported from `packages/shared/src/schemas/list.ts` as
-`DATA_LOSS_DETAIL_PATHS`, so the service that emits them and the client that maps them back
-(P3-24) share one definition:
+**How the `409` preview is encoded.** The error envelope carries a typed top-level object:
 
-```
-{ path: 'confirmDataLoss.itemCount', message: '7' }
-{ path: 'confirmDataLoss.fields.0',  message: 'Watch status' }
-{ path: 'confirmDataLoss.fields.1',  message: 'Season' }
+```ts
+{
+  confirmation: {
+    fromBehaviour: 'watch',
+    toBehaviour: 'collection',
+    itemVersion: 42,
+    itemCount: 7,
+    fields: ['Watch status', 'Season', 'Episode']
+  }
+}
 ```
 
-Each `fields.<n>` is one user-facing label, in the order the confirmation should read them
+Each `fields` member is one user-facing label, in the order the confirmation should read them
 (§1a.1 rule 4), and only fields some item actually carries are named. The client composes the
 dialog sentence around its own list title; the server never sends a pre-joined one.
 
-**The count is re-taken under the gate before the change proceeds.** The count that decides
-the confirmation is read before the migration marker goes down, so a concurrent item write
-can change what the operation is about to destroy. The snapshot taken *under* the marker — no
-item can move while it stands — is authoritative: when the two disagree, the untouched
-install is rolled back and the caller receives a fresh `409`. **Known gap:** this binds the
-count to the request that acts on it, not to the `409` the user was shown. A write landing
-between the preview and the confirmed call that follows it is still invisible, and closing
-that needs the client to echo the preview it was shown — see the open question in P3-09's
-pull request.
+**Confirmation is bound to what the user saw.** Every item mutation advances the storage-only
+`List.itemVersion`. Migration installation conditions on the echoed version, then snapshots
+under the migration gate and verifies both `itemCount` and the ordered `fields` against the
+echoed preview. Any intervening mutation or mismatch returns a fresh `409`; no item is
+rewritten under a stale confirmation.
 
 **The Undo offer is a pair.** `undoToken` and `undoExpiresAt` are present together or absent
 together; the response schema is a union of exactly those two shapes. A token without the

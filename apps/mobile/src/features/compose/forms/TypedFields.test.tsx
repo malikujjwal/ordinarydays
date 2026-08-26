@@ -12,6 +12,17 @@ import {
 import { fieldRegions } from '@/features/compose/model/fields';
 import { TypedFields, type TypedFieldsProps } from './TypedFields';
 
+/**
+ * `expo-crypto` is a native module with no jsdom implementation, and P3-17 puts a real `ing_`
+ * ULID behind every new ingredient row ({@link newIngredient}). Deterministic bytes keep the
+ * minted ids stable so a test can assert identity rather than merely non-emptiness.
+ */
+vi.mock('expo-crypto', () => ({
+  getRandomBytes: (count: number) =>
+    Uint8Array.from({ length: count }, (_, index) => index),
+  randomUUID: () => 'idem-test-key',
+}));
+
 vi.mock('expo-image-picker', () => ({
   launchCameraAsync: vi.fn(),
   launchImageLibraryAsync: vi.fn(),

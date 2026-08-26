@@ -1,13 +1,10 @@
 import { createHash } from 'node:crypto';
 import { UNDO_OFFER_SECONDS } from '@od/shared';
-import {
-  type ChangeListBehaviourInput,
-  DATA_LOSS_DETAIL_PATHS,
-  type PatchListInput,
-} from '@od/shared/schemas';
+import type { ChangeListBehaviourInput, PatchListInput } from '@od/shared/schemas';
 import type {
   List,
   ListBehaviour,
+  ListBehaviourConfirmation,
   ListCapabilities,
   ListItem,
   ListItemDetails,
@@ -35,8 +32,8 @@ import {
   newListOperationId,
   patchListMeta,
   type RemovedListDefault,
-  readAllListItems,
   snapshotBehaviourMigration,
+  snapshotListItems,
 } from '../repositories/listRepository.js';
 import { assertListAccess, type ListAccess } from './authz.js';
 import { drainRankRepair } from './listRankRepairService.js';
@@ -214,7 +211,9 @@ const WATCH_FIELD_LABELS = [
 
 const INGREDIENTS_LABEL = 'Ingredients';
 
-interface DataLossPreview {
+type DataLossPreview = Pick<ListBehaviourConfirmation, 'fields' | 'itemCount'>;
+
+interface DataLossPreviewShape {
   readonly fields: readonly string[];
   /** Items **actually carrying** the data, never the list's size (§1a.1 rule 2). */
   readonly itemCount: number;
@@ -230,7 +229,7 @@ interface DataLossPreview {
 function previewDataLoss(
   behaviour: ListBehaviour,
   items: readonly ListItem[],
-): DataLossPreview {
+): DataLossPreviewShape {
   const fields = new Set<string>();
   let itemCount = 0;
 
@@ -264,8 +263,13 @@ function previewDataLoss(
  * migration is actually about to rewrite — rather than from an unfenced read that a
  * concurrent write can invalidate between the preview and the marker going down.
  */
-function countDataLoss(behaviour: ListBehaviour): (items: readonly ListItem[]) => number {
-  return (items) => previewDataLoss(behaviour, items).itemCount;
+function describeDataLoss(
+  behaviour: ListBehaviour,
+): (items: readonly ListItem[]) => DataLossPreview {
+  return (items) => {
+    const preview = previewDataLoss(behaviour, items);
+    return { itemCount: preview.itemCount, fields: [...preview.fields] };
+  };
 }
 
 const CONFIRM_REQUIRED =
@@ -274,18 +278,43 @@ const CONFIRM_REQUIRED =
 /**
  * The `409` an unconfirmed destructive change answers with, before anything is written.
  *
- * The preview travels in `details[]` at the paths `DATA_LOSS_DETAIL_PATHS` exports, so the
- * service that emits it and the client that maps it back (P3-24) share one definition rather
- * than two descriptions of the same encoding.
+ * The typed preview is returned at the error envelope's top-level `confirmation` field. The
+ * confirmed request must echo that whole object; no boolean can authorize a different
+ * snapshot.
  */
-function confirmationRequired(preview: DataLossPreview): AppError {
-  return new AppError('conflict', CONFIRM_REQUIRED, [
-    { path: DATA_LOSS_DETAIL_PATHS.itemCount, message: String(preview.itemCount) },
-    ...preview.fields.map((label, index) => ({
-      path: DATA_LOSS_DETAIL_PATHS.field(index),
-      message: label,
-    })),
-  ]);
+function confirmationRequired(confirmation: ListBehaviourConfirmation): AppError {
+  return new AppError('conflict', CONFIRM_REQUIRED, undefined, undefined, confirmation);
+}
+
+function sameConfirmation(
+  left: ListBehaviourConfirmation,
+  right: ListBehaviourConfirmation,
+): boolean {
+  return (
+    left.fromBehaviour === right.fromBehaviour &&
+    left.toBehaviour === right.toBehaviour &&
+    left.itemVersion === right.itemVersion &&
+    left.itemCount === right.itemCount &&
+    left.fields.length === right.fields.length &&
+    left.fields.every((field, index) => field === right.fields[index])
+  );
+}
+
+async function confirmationFor(
+  userId: string,
+  list: List,
+  toBehaviour: ListBehaviour,
+  access: ListAccessGrant,
+): Promise<ListBehaviourConfirmation> {
+  const snapshot = await snapshotListItems(userId, list.listId, access);
+  const preview = previewDataLoss(list.behaviour, snapshot.items);
+  return {
+    fromBehaviour: list.behaviour,
+    toBehaviour,
+    itemVersion: snapshot.itemVersion,
+    itemCount: preview.itemCount,
+    fields: [...preview.fields],
+  };
 }
 
 // ── Draining somebody's standing work ───────────────────────────────────────────────────
@@ -372,7 +401,7 @@ async function drainFrom(
       current = await snapshotBehaviourMigration(
         stored,
         now,
-        countDataLoss(stored.fromBehaviour),
+        describeDataLoss(stored.fromBehaviour),
       );
     } catch (error) {
       if (error instanceof BehaviourMigrationContendedError) continue;
@@ -710,6 +739,7 @@ function migratedList(list: List, work: BehaviourMigrationWork): List {
     ...list,
     behaviour: work.toBehaviour,
     rankVersion: work.rankVersion + 1,
+    itemVersion: (list.itemVersion ?? 0) + 1,
     updatedAt: work.committedAt,
   };
   delete visible.behaviourMigrationId;
@@ -789,7 +819,7 @@ export interface UndoBehaviourUpgradeOptions {
  * items under the gate and flips the behaviour last, like any other behaviour change.
  *
  * Two things make it a compensation rather than an ordinary downgrade. It carries **no
- * `confirmDataLoss` question**, because the caller has already proved the defaults are
+ * destructive confirmation**, because the caller has already proved the defaults are
  * untouched and there is nothing to lose; and it prepares **no Undo of its own**, because
  * undoing an undo is a fresh decision the user makes with a fresh upgrade.
  *
@@ -818,6 +848,7 @@ export async function undoBehaviourUpgrade(
     toBehaviour: options.toBehaviour,
     ...(options.toDetails === undefined ? {} : { toDetails: options.toDetails }),
     expectedUpdatedAt: options.expectedUpdatedAt,
+    expectedItemVersion: list.itemVersion ?? 0,
     now: options.now,
     receipt: options.receipt,
     consumesUndoOperationId: options.consumesUndoOperationId,
@@ -825,7 +856,7 @@ export async function undoBehaviourUpgrade(
      * Nothing is being lost — the caller checked that every affected item still carries the
      * default the upgrade created, which is what lets this run with no confirmation at all.
      */
-    countLoss: () => 0,
+    describeLoss: () => ({ itemCount: 0, fields: [] }),
   });
 
   if ((await drainFrom(work, options.now)) === undefined) throw fenced();
@@ -858,23 +889,17 @@ export async function undoBehaviourUpgrade(
  *
  * A departure that would lose something is refused **before** step 1, so an unconfirmed call
  * leaves no receipt, no marker and no work record — nothing at all (§P3-09). The confirmed
- * action is a new logical action under a newly minted key, which is why `confirmDataLoss` is a
- * query parameter rather than a body field: the two calls are not the same request sent twice.
- *
- * That first count is taken from an **unfenced** read, so a write landing between it and the
- * marker going down could change what the operation is about to destroy. The snapshot taken
- * under the gate is the authoritative one, and step 1 is rolled back and answered with a fresh
- * `409` if the two disagree — a confirmation is only worth something if it names what is
- * actually going. What this cannot see is a write that lands between the `409` and the
- * confirmed call that follows it; binding those together needs the client to echo the preview
- * it was shown, which is a contract change (raised in the pull request, not decided here).
+ * action is a new logical action under a newly minted key. Its body echoes the complete
+ * server-authored preview: behaviours, `itemVersion`, item count and ordered field labels.
+ * Step 1 conditions migration installation on that version, and the gated snapshot must
+ * reproduce the echoed count and fields. Any difference returns a fresh `409` before item
+ * rewriting begins.
  */
 export async function changeListBehaviour(
   userId: string,
   listId: string,
   input: ChangeListBehaviourInput,
   ifMatch: string,
-  confirmDataLoss: boolean,
   idempotencyKey: string,
   now: string,
   receiptFor: (result: ListSettingsResult) => IdempotencyReceipt,
@@ -919,13 +944,31 @@ export async function changeListBehaviour(
    * nothing at all — not a receipt, not a marker. A departure that loses nothing carries on
    * as the additive settings change it is: no confirmation, and the standard Undo below.
    */
-  const previewed = couldLose(list.behaviour, input.behaviour)
-    ? previewDataLoss(
-        list.behaviour,
-        await readAllListItems(userId, listId, access.index),
-      )
-    : { fields: [], itemCount: 0 };
-  if (previewed.itemCount > 0 && !confirmDataLoss) throw confirmationRequired(previewed);
+  let previewed: ListBehaviourConfirmation;
+  if (couldLose(list.behaviour, input.behaviour)) {
+    previewed = await confirmationFor(userId, list, input.behaviour, access.index);
+    if (input.confirmation === undefined) {
+      if (previewed.itemCount > 0) throw confirmationRequired(previewed);
+    } else if (!sameConfirmation(input.confirmation, previewed)) {
+      throw confirmationRequired(previewed);
+    }
+  } else {
+    if (input.confirmation !== undefined) {
+      throw new AppError('validation_failed', 'This change does not need confirmation.', [
+        {
+          path: 'confirmation',
+          message: 'Remove confirmation for this behaviour change.',
+        },
+      ]);
+    }
+    previewed = {
+      fromBehaviour: list.behaviour,
+      toBehaviour: input.behaviour,
+      itemVersion: list.itemVersion ?? 0,
+      itemCount: 0,
+      fields: [],
+    };
+  }
 
   const toDetails = defaultDetailsFor(input.behaviour);
   /**
@@ -940,6 +983,7 @@ export async function changeListBehaviour(
       ...list,
       behaviour: input.behaviour,
       rankVersion: list.rankVersion + 1,
+      itemVersion: (list.itemVersion ?? 0) + 1,
       updatedAt: now,
     },
     ...(undo === undefined ? {} : { undo }),
@@ -952,6 +996,7 @@ export async function changeListBehaviour(
       toBehaviour: input.behaviour,
       ...(toDetails === undefined ? {} : { toDetails }),
       expectedUpdatedAt: ifMatch,
+      expectedItemVersion: previewed.itemVersion,
       now,
       ...(undo === undefined ? {} : { undo }),
       /**
@@ -961,7 +1006,7 @@ export async function changeListBehaviour(
        * receipt and is then told its `If-Match` conflicts — by the very write it asked for.
        */
       receipt: receiptFor(optimistic),
-      countLoss: countDataLoss(list.behaviour),
+      describeLoss: describeDataLoss(list.behaviour),
     });
   } catch (error) {
     /**
@@ -984,6 +1029,17 @@ export async function changeListBehaviour(
         error instanceof BehaviourMigrationAlreadyStartedError ||
         error instanceof ListReadFenceError;
       if (!contended) throw error;
+      const fresh = await requireList(userId, listId, access.index);
+      if (
+        input.confirmation !== undefined &&
+        fresh.rankRepairId === undefined &&
+        fresh.behaviourMigrationId === undefined &&
+        fresh.behaviour === list.behaviour
+      ) {
+        throw confirmationRequired(
+          await confirmationFor(userId, fresh, input.behaviour, access.index),
+        );
+      }
       await drainListWork(userId, listId, access.index, now);
       throw fenced();
     }
@@ -996,13 +1052,17 @@ export async function changeListBehaviour(
    * the untouched install back and answer with the truth; nothing has been rewritten, so
    * there is nothing to undo, and the key is free for the caller's next attempt.
    */
-  if ((work.lossCount ?? 0) !== previewed.itemCount) {
+  const gated: ListBehaviourConfirmation = {
+    fromBehaviour: work.fromBehaviour,
+    toBehaviour: work.toBehaviour,
+    itemVersion: previewed.itemVersion,
+    itemCount: work.lossCount ?? 0,
+    fields: work.lossFields ?? [],
+  };
+  if (!sameConfirmation(gated, previewed)) {
     await abandonBehaviourMigration(work);
     throw confirmationRequired(
-      previewDataLoss(
-        list.behaviour,
-        await readAllListItems(userId, listId, access.index),
-      ),
+      await confirmationFor(userId, list, input.behaviour, access.index),
     );
   }
 

@@ -116,6 +116,16 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
     mutates: true,
   },
+  /**
+   * §2.7's meal action, mounted under Activities because the meal is what authorises it
+   * (P3-17). Creating, so it takes an `Idempotency-Key`.
+   */
+  {
+    method: 'POST',
+    pattern: '/v1/activities/:id/ingredients/add-to-list',
+    auth: 'authenticated',
+    mutates: true,
+  },
   {
     method: 'POST',
     pattern: '/v1/activities/:id/skip',

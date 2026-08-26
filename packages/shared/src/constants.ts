@@ -93,11 +93,39 @@ export const TODAY_OVERDUE_COLLAPSED_LIMIT = 3;
  */
 export const MAX_FREE_TEXT_LEN = 120;
 
+/**
+ * Rendered provenance accumulated on a ListItem.
+ *
+ * A single label can contain a full 200-character Activity title, so the generic 120-character
+ * free-text bound cannot describe this server-authored field. Extensions are never truncated:
+ * the service validates the completed label and refuses the whole action before DynamoDB when
+ * this generous item-local bound would be exceeded.
+ */
+export const MAX_SOURCE_LABEL_LEN = 4000;
+
+/** Storage-only activity-keyed segments behind one rendered `sourceLabel`. */
+export const MAX_SOURCE_PROVENANCE_SEGMENTS = 500;
+
 /** Characters in `location.address`. The label uses {@link MAX_FREE_TEXT_LEN}. */
 export const MAX_ADDRESS_LEN = 300;
 
 /** Ingredient rows on one meal (`activities.md` §4.2). */
 export const MAX_INGREDIENTS = 60;
+
+/**
+ * Ingredients one `add-to-list` action may carry (P3-17).
+ *
+ * Lower than {@link MAX_INGREDIENTS} on purpose, and the reason is arithmetic: the action
+ * commits its list rows, the List META update, the meal's provenance and its idempotency
+ * receipt in **one** DynamoDB transaction, and a transaction holds at most 100 items. Each
+ * created row costs three (the ranked row, its locator, a tombstone check), so 30 rows plus
+ * the deletion gate, META, the Activity and the receipt is 94 — and 60 would be 184.
+ *
+ * A meal may still hold 60 ingredients; adding more than 30 at once takes two taps. That is
+ * the cheaper side of the trade: the alternative is chunking, which is what made the first
+ * version of this action non-atomic (raised in review).
+ */
+export const MAX_INGREDIENTS_PER_ADD = 30;
 
 /**
  * Rule segments in one recurring series (`data-model.md` §4.2).

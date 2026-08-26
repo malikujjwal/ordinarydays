@@ -181,6 +181,55 @@ describe('the bridge links rather than duplicates', () => {
     });
   });
 
+  it('removes the Plan-specific relationship atomically when the Plan becomes a Task', async () => {
+    const { list, item } = await setUp();
+    const scheduled = (
+      await (await schedule(list.listId, item.itemId, validBody())).json()
+    ).data as { activity: { updatedAt: string } };
+
+    const converted = await request(
+      app(),
+      'PATCH',
+      `/v1/activities/${ACT}`,
+      { objectKind: 'task', type: 'task' },
+      { 'If-Match': scheduled.activity.updatedAt },
+    );
+
+    expect(converted.status).toBe(200);
+    expect(
+      (await partition(`LIST#${list.listId}`)).filter(
+        (row) => row.entity === 'ListItemActivityLink',
+      ),
+    ).toHaveLength(0);
+    expect(await rawItem(`ACT#${ACT}`, 'META')).not.toHaveProperty('listId');
+    expect(await rawItem(`ACT#${ACT}`, 'META')).not.toHaveProperty('listItemId');
+    expect(
+      await rawItem(`LIST#${list.listId}`, `ITEM#${item.rank}#${item.itemId}`),
+    ).toBeDefined();
+  });
+
+  it('keeps a cancelled Plan linked and projects its Cancelled state', async () => {
+    const { list, item } = await setUp();
+    const scheduled = (
+      await (await schedule(list.listId, item.itemId, validBody())).json()
+    ).data as { activity: { updatedAt: string } };
+
+    const cancelled = await request(
+      app(),
+      'PATCH',
+      `/v1/activities/${ACT}`,
+      { status: 'cancelled' },
+      { 'If-Match': scheduled.activity.updatedAt },
+    );
+    expect(cancelled.status).toBe(200);
+
+    const page = await request(app(), 'GET', `/v1/lists/${list.listId}/items`);
+    expect(page.status).toBe(200);
+    const row = ((await page.json()).data as Json[])[0];
+    expect(row?.viewerLink).toMatchObject({ activityId: ACT, itemId: item.itemId });
+    expect(row?.viewerPlan).toMatchObject({ status: 'cancelled', type: 'event' });
+  });
+
   it('leaks no storage attribute', async () => {
     const { list, item } = await setUp();
 

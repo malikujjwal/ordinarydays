@@ -5,8 +5,8 @@ import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
  * `toUser`'s reason: a stored row carries storage attributes, and a projection that leaks
  * by default is corrected by remembering (`agent-playbook.md` §6.11).
  *
- * `rankRepairId` and `behaviourMigrationId` are deliberately absent: they are storage-level
- * work markers that gate reads and are never serialised (`data-model.md` §4.6).
+ * `itemVersion`, `rankRepairId` and `behaviourMigrationId` are deliberately absent: they are
+ * storage-level concurrency state and never serialised (`data-model.md` §4.6).
  * `rankVersion` stays — item-page cursors are bound to it.
  */
 export function toList(list: List): Record<string, unknown> {
@@ -55,9 +55,10 @@ export function toListSettings(result: {
 }
 
 /**
- * The ListItem a response carries. `itemRevision` — the storage-only mutation fence — is
+ * The ListItem a response carries. Storage-only `itemRevision` and `sourceProvenance` are
  * deliberately absent; `rank` stays, opaque, because the shared `(rank, itemId)` comparator
- * is also the client's sort order.
+ * is also the client's sort order. The client needs the rendered `sourceLabel`, never its
+ * ownership ledger.
  */
 export function toListItem(item: ListItem): Record<string, unknown> {
   return {

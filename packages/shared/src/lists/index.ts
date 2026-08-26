@@ -13,6 +13,8 @@
  * renderer could mistake for stored-List state.
  */
 
+export { formatIngredientTitle } from './formatIngredientTitle.js';
+export { type LabelSourceMeal, provenanceLabel } from './provenanceLabel.js';
 export {
   resolveSlot,
   type SlotEligibleList,

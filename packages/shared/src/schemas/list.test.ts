@@ -1,10 +1,11 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import { MAX_LIST_ITEMS } from '../constants.js';
+import { MAX_LIST_ITEMS, MAX_SOURCE_LABEL_LEN } from '../constants.js';
 import type { DeletedList } from '../types/deletedList.js';
 import type {
   List,
   ListBehaviour,
+  ListBehaviourConfirmation,
   ListCapabilities,
   ListIndex,
   ListItem,
@@ -20,6 +21,8 @@ import type { ListSettingsMutation } from '../types/listSettingsMutation.js';
 import type { ListView } from '../types/listView.js';
 import type { ScheduledListItem } from '../types/scheduledListItem.js';
 import {
+  addIngredientsToListInput,
+  addIngredientsToListResult,
   bulkCreateListItemsInput,
   bulkCreateListItemsInputFor,
   changeListBehaviourInput,
@@ -28,10 +31,10 @@ import {
   createListInput,
   createListItemInput,
   createListItemInputFor,
-  DATA_LOSS_DETAIL_PATHS,
   type deletedList,
   list,
   listBehaviour,
+  type listBehaviourConfirmation,
   type listCapabilities,
   listDetail,
   listDetailItem,
@@ -160,6 +163,12 @@ const storedList = {
 describe('the stored List', () => {
   it('accepts a collection seeded from a template', () => {
     expect(list.safeParse(storedList).success).toBe(true);
+  });
+
+  it('accepts legacy META without itemVersion and validates the counter when present', () => {
+    expect(list.safeParse(storedList).success).toBe(true);
+    expect(list.safeParse({ ...storedList, itemVersion: 0 }).success).toBe(true);
+    expect(list.safeParse({ ...storedList, itemVersion: -1 }).success).toBe(false);
   });
 
   it('accepts an unknown templateKey — the catalogue is data and old clients must not break', () => {
@@ -313,6 +322,21 @@ describe('the stored ListItem', () => {
     ).toBe(true);
   });
 
+  it('uses the dedicated provenance bound and retains structured ownership only in storage', () => {
+    const stored = {
+      ...storedItem,
+      sourceActivityId: ACT,
+      sourceLabel: 'M'.repeat(200),
+      sourceProvenance: [{ activityId: ACT, label: 'M'.repeat(200) }],
+    };
+    expect(listItem.safeParse(stored).success).toBe(true);
+    expect(
+      listItem.safeParse({ ...stored, sourceLabel: 'M'.repeat(MAX_SOURCE_LABEL_LEN + 1) })
+        .success,
+    ).toBe(false);
+    expect(listItemView.parse(stored)).not.toHaveProperty('sourceProvenance');
+  });
+
   it('ListItemActivityLink is keyed viewer-first and names one Activity', () => {
     expect(
       listItemActivityLink.safeParse({
@@ -321,6 +345,40 @@ describe('the stored ListItem', () => {
         viewerUserId: 'usr_local_dev',
         activityId: ACT,
         linkedAt: '2026-08-23T00:00:00.000Z',
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('the ingredient-to-list contract', () => {
+  it('accepts an omitted destination item id and a supplied stable one', () => {
+    expect(
+      addIngredientsToListInput.safeParse({
+        listId: LST,
+        ingredients: [{ ingredientId: ING }],
+      }).success,
+    ).toBe(true);
+    expect(
+      addIngredientsToListInput.safeParse({
+        listId: LST,
+        ingredients: [{ ingredientId: ING, itemId: ITM }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts a maximum-length canonical source label in the response', () => {
+    expect(
+      addIngredientsToListResult.safeParse({
+        listId: LST,
+        sourceLabel: 'M'.repeat(200),
+        activityUpdatedAt: '2026-08-23T00:00:00.000Z',
+        ingredients: [
+          {
+            ingredientId: ING,
+            outcome: 'created',
+            item: { ...storedItem, sourceActivityId: ACT, sourceLabel: 'M'.repeat(200) },
+          },
+        ],
       }).success,
     ).toBe(true);
   });
@@ -625,12 +683,14 @@ describe('the response projections', () => {
     expectTypeOf<z.infer<typeof deletedList>>().toEqualTypeOf<DeletedList>();
   });
 
-  it('ListView drops the two storage-only work markers and keeps rankVersion', () => {
+  it('ListView drops itemVersion and both work markers, and keeps rankVersion', () => {
     const parsed = listView.parse({
       ...storedList,
+      itemVersion: 7,
       rankRepairId: 'op_1',
       behaviourMigrationId: 'op_2',
     });
+    expect(parsed).not.toHaveProperty('itemVersion');
     expect(parsed).not.toHaveProperty('rankRepairId');
     expect(parsed).not.toHaveProperty('behaviourMigrationId');
     expect(parsed.rankVersion).toBe(0);
@@ -792,18 +852,34 @@ describe('the list settings inputs', () => {
     },
   );
 
-  it('takes one behaviour and nothing else', () => {
+  it('takes one behaviour and an optional matching typed confirmation', () => {
     expect(changeListBehaviourInput.safeParse({ behaviour: 'meals' }).success).toBe(true);
     expect(changeListBehaviourInput.safeParse({ behaviour: 'shopping' }).success).toBe(
       false,
     );
-    // The confirmation is a query parameter on a separately keyed action, not a body field.
+    const confirmation = {
+      fromBehaviour: 'watch',
+      toBehaviour: 'meals',
+      itemVersion: 7,
+      itemCount: 2,
+      fields: ['Watch status', 'Season'],
+    } as const;
+    expect(
+      changeListBehaviourInput.safeParse({ behaviour: 'meals', confirmation }).success,
+    ).toBe(true);
+    expect(
+      changeListBehaviourInput.safeParse({
+        behaviour: 'collection',
+        confirmation,
+      }).success,
+    ).toBe(false);
     expect(
       changeListBehaviourInput.safeParse({ behaviour: 'meals', confirmDataLoss: true })
         .success,
     ).toBe(false);
+    expect(changeListBehaviourQuery.safeParse({}).success).toBe(true);
     expect(changeListBehaviourQuery.safeParse({ confirmDataLoss: 'true' }).success).toBe(
-      true,
+      false,
     );
     expect(changeListBehaviourQuery.safeParse({ confirm: 'true' }).success).toBe(false);
   });
@@ -841,15 +917,10 @@ describe('the list settings inputs', () => {
     expect(listSettingsMutation.safeParse({ list: view, ...half }).success).toBe(false);
   });
 
-  /**
-   * The `409` preview's paths are exported rather than described, so the service that emits
-   * them and the client that maps them back (P3-24) cannot drift. Pinned as literals here
-   * because changing one is a wire change, not a rename.
-   */
-  it('names the data-loss preview paths the client maps', () => {
-    expect(DATA_LOSS_DETAIL_PATHS.itemCount).toBe('confirmDataLoss.itemCount');
-    expect(DATA_LOSS_DETAIL_PATHS.field(0)).toBe('confirmDataLoss.fields.0');
-    expect(DATA_LOSS_DETAIL_PATHS.field(2)).toBe('confirmDataLoss.fields.2');
+  it('keeps the confirmation schema and domain type identical', () => {
+    expectTypeOf<
+      z.infer<typeof listBehaviourConfirmation>
+    >().toEqualTypeOf<ListBehaviourConfirmation>();
   });
 });
 

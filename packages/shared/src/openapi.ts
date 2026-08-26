@@ -33,6 +33,8 @@ import { envelope } from './schemas/envelope.js';
 import { errorResponse } from './schemas/error.js';
 import { healthResponse } from './schemas/health.js';
 import {
+  addIngredientsToListInput,
+  addIngredientsToListResult,
   bulkCreateListItemsInput,
   changeListBehaviourInput,
   changeListBehaviourQuery,
@@ -71,6 +73,7 @@ const activityResponse = envelope(activity);
 const activityDetailResponse = envelope(activityDetail);
 const scheduleActivityResponse = envelope(scheduleActivityResult);
 const activityCompletionResponse = envelope(activityCompletionResult);
+const addIngredientsToListResponse = envelope(addIngredientsToListResult);
 const deletedActivityResponse = envelope(deletedActivity);
 const reminderResponse = envelope(reminder);
 const reminderListResponse = envelope(z.array(reminder));
@@ -644,6 +647,55 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/v1/activities/{id}/ingredients/add-to-list',
+  summary: 'Send selected meal ingredients to a list the caller has chosen',
+  description:
+    'Requires an `Idempotency-Key`. Owner-only, and only on a `meal`. `listId` is required ' +
+    'and must be a `collection` the caller may write: the destination is resolved on the ' +
+    'client, from the `groceries` slot, and shown to the user before this is called — the ' +
+    'server never resolves a slot and never falls back to one. Each selected ingredient is ' +
+    'named by its stable `ing_` id and resolved against the current ingredient array, so a ' +
+    'reorder cannot redirect the action; an id that was removed or replaced rejects the ' +
+    'whole request without writing anything. Titles, `sourceActivityId` and `sourceLabel` ' +
+    'are derived server-side and are not accepted on input here or on the ordinary bulk ' +
+    'route. Selections are grouped by normalized title: each group extends one matching ' +
+    '**unchecked** row or creates one row, while a **checked** match was already bought. ' +
+    'Provenance ownership is retained as storage-only Activity-keyed segments rather than ' +
+    'inferred by splitting the rendered label. `itemId` is optional; a supplied id remains ' +
+    'durably bound to its outcome after the receipt expires, including when deduplication ' +
+    'absorbed it into an existing row.',
+  tags: ['activities'],
+  request: {
+    params: z.object({ id: activityId }),
+    body: { content: { 'application/json': { schema: addIngredientsToListInput } } },
+  },
+  responses: {
+    201: {
+      description:
+        'What happened to each selected ingredient, and the one label the operation used.',
+      content: { 'application/json': { schema: addIngredientsToListResponse } },
+    },
+    400: {
+      description:
+        'Missing idempotency key, a non-meal activity, a destination that is not a ' +
+        'writable collection, or an ingredient id the meal no longer has.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    404: {
+      description: 'No such activity or list, or no relationship to either.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description:
+        'A supplied destination id belongs to another outcome, or its permanently bound ' +
+        'target was deleted.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
   path: '/v1/activities/{id}/complete',
   summary: 'Complete an activity or recurring occurrence',
   description:
@@ -904,16 +956,16 @@ registry.registerPath({
   path: '/v1/lists',
   summary: 'The caller’s lists, a page at a time',
   description:
-    'Pages active List pointers 50 at a time, then batch-reads that page’s current META ' +
-    'rows — one Query and one BatchGetItem per page. `meta.nextCursor` is present only ' +
-    'when there is another page; a client pages until it is absent. The 100 cap applies ' +
-    'to Lists the caller owns, not memberships received from other owners, which is why ' +
-    'the cursor is not optional.',
+    'Pages all of the caller’s List access pointers 50 at a time, then batch-reads that ' +
+    'page’s current META rows — including archived Lists — with one Query and one ' +
+    'BatchGetItem per page. The endpoint does not filter by `archived`; a filtered-empty ' +
+    'page may still carry `meta.nextCursor`, and the client pages until it is absent. The ' +
+    '100 cap applies to Lists the caller owns, not memberships received from other owners.',
   tags: ['lists'],
   request: { query: listListQuery },
   responses: {
     200: {
-      description: 'One page of the caller’s Lists, in pointer order.',
+      description: 'One unfiltered page of the caller’s Lists, in pointer order.',
       content: { 'application/json': { schema: listPageResponse } },
     },
     400: {
@@ -1076,10 +1128,13 @@ registry.registerPath({
     'receipt, and clears the marker. `collection` to `watch` gives every item ' +
     '`watchStatus: "want"` and `collection` to `meals` an empty ingredient list; both ' +
     'are additive and answer with a 6-second Undo offer. Leaving `watch` or `meals` ' +
-    'for anything else \u2014 `watch` to `meals` included \u2014 is destructive and ' +
-    'needs `?confirmDataLoss=true`; without it the answer is `409` and **nothing is ' +
-    'written**, not even a receipt. A list carrying none of the data being removed ' +
-    'loses nothing, so it needs no confirmation and changes immediately.',
+    'for anything else \u2014 `watch` to `meals` included \u2014 is destructive. The first ' +
+    'call answers `409` with a typed `confirmation` containing source/target behaviours, ' +
+    '`itemVersion`, item count and field labels, and writes nothing. The confirmed action ' +
+    'echoes that complete object under a new key; migration installation and its gated ' +
+    'snapshot reject any intervening item mutation or changed loss summary with a fresh ' +
+    '`409`. A list carrying none of the data being removed loses nothing, so it needs no ' +
+    'confirmation and changes immediately.',
   tags: ['lists'],
   request: {
     params: z.object({ id: listId }),
@@ -1107,10 +1162,8 @@ registry.registerPath({
     },
     409: {
       description:
-        'Either a stale `If-Match`, or the unconfirmed data-loss preview. The preview’s ' +
-        '`details[]` carries `confirmDataLoss.itemCount` — the number of items actually ' +
-        'carrying the data — and one `confirmDataLoss.fields.<n>` entry per user-facing ' +
-        'field label, in the order the confirmation should read them.',
+        'Either a stale `If-Match`, or the data-loss preview. The preview carries the typed ' +
+        'top-level `confirmation` object that a confirmed request must echo unchanged.',
       content: { 'application/json': { schema: errorResponse } },
     },
     503: {

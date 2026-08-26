@@ -3,14 +3,17 @@ import {
   DynamoDBDocumentClient,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
 import type { Activity } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  clearListProvenance,
   createActivity,
   deleteActivity,
+  ingredientsAddedToListItem,
   listOverdueTaskCandidates,
   localDateTime,
   newActivityId,
@@ -684,5 +687,105 @@ describe('overdue task window', () => {
         ':to': '2026-08-05T23:59',
       },
     });
+  });
+});
+
+/**
+ * The `addedToListId` write-back (P3-17).
+ *
+ * DynamoDB addresses a list element by position, and position is the one thing about an
+ * ingredient array that is not stable. These assertions are about the seam that makes that
+ * safe: the caller resolves ids to indexes, and every index carries a condition that the id
+ * still sitting there is the one that was resolved.
+ */
+describe('ingredientsAddedToListItem', () => {
+  const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+  const CHICKEN = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A1';
+  const TORTILLAS = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2';
+  const READ_AT = '2026-08-25T09:00:00.000Z';
+  const NOW_AT = '2026-08-25T09:00:01.000Z';
+
+  const built = (
+    additions = [
+      { index: 0, ingredientId: CHICKEN },
+      { index: 3, ingredientId: TORTILLAS },
+    ],
+  ) => ingredientsAddedToListItem(ACT, LIST, additions, READ_AT, NOW_AT).Update;
+
+  it('sets the flag at each resolved index', () => {
+    expect(built()?.UpdateExpression).toContain(
+      '#details.#ingredients[0].#addedToListId = :listId',
+    );
+    expect(built()?.UpdateExpression).toContain(
+      '#details.#ingredients[3].#addedToListId = :listId',
+    );
+    expect(built()?.ExpressionAttributeValues).toMatchObject({ ':listId': LIST });
+  });
+
+  /** A reorder between the read and the commit must fail, not mark a neighbour. */
+  it('conditions every index on the id that was resolved there', () => {
+    expect(built()?.ConditionExpression).toContain(
+      '#details.#ingredients[0].#ingredientId = :id0',
+    );
+    expect(built()?.ConditionExpression).toContain(
+      '#details.#ingredients[3].#ingredientId = :id3',
+    );
+    expect(built()?.ExpressionAttributeValues).toMatchObject({
+      ':id0': CHICKEN,
+      ':id3': TORTILLAS,
+    });
+  });
+
+  /**
+   * The `updatedAt` correction (raised in review). `addedToListId` is rendered — it is what
+   * makes an ingredient row say `Added` — and it lives inside `details`, which `PATCH`
+   * replaces wholesale under `If-Match`. A field that changes what the user sees, on a
+   * versioned object, has to move the version.
+   */
+  it('advances updatedAt', () => {
+    expect(built()?.UpdateExpression).toContain('#updatedAt = :updatedAt');
+    expect(built()?.ExpressionAttributeValues).toMatchObject({ ':updatedAt': NOW_AT });
+  });
+
+  /** And conditions on the version it read, so a patch landing in between wins. */
+  it('conditions on the version the caller read', () => {
+    expect(built()?.ConditionExpression).toContain('#updatedAt = :expectedUpdatedAt');
+    expect(built()?.ExpressionAttributeValues).toMatchObject({
+      ':expectedUpdatedAt': READ_AT,
+    });
+  });
+
+  it('requires the activity to still exist', () => {
+    expect(built()?.ConditionExpression).toContain('attribute_exists(pk)');
+  });
+});
+
+describe('clearListProvenance', () => {
+  const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+  const CLEARED_AT = '2026-08-25T09:00:02.000Z';
+
+  it('removes only matching provenance and advances the Activity version', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+
+    await clearListProvenance(ACT, LIST, CLEARED_AT);
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: 'META' },
+      UpdateExpression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
+      ConditionExpression: 'attribute_exists(pk) AND #listId = :listId',
+      ExpressionAttributeValues: {
+        ':listId': LIST,
+        ':updatedAt': CLEARED_AT,
+      },
+    });
+  });
+
+  it('remains idempotent when the Activity no longer points at that list', async () => {
+    const stale = Object.assign(new Error('stale provenance'), {
+      name: 'ConditionalCheckFailedException',
+    });
+    ddbMock.on(UpdateCommand).rejects(stale);
+
+    await expect(clearListProvenance(ACT, LIST, CLEARED_AT)).resolves.toBeUndefined();
   });
 });

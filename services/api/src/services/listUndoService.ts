@@ -123,7 +123,7 @@ async function applySettings(
  * Undoes a behaviour upgrade through the migration protocol that made it (§P3-09).
  *
  * Not an ordinary downgrade, and the difference is the whole point: this one restores
- * `collection` **without** `confirmDataLoss`, because it is not asking the user to agree to a
+ * `collection` **without** destructive confirmation, because it is not asking the user to agree to a
  * loss — it is taking back defaults nobody has touched. The preconditions above are what earn
  * that exemption, so they are checked before the migration starts rather than being folded
  * into it.

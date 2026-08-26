@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ERROR_CODES } from '../errors.js';
+import { listBehaviourConfirmation } from './list.js';
 
 /**
  * The error envelope, as a schema (`api-contract.md` §1).
@@ -43,6 +44,11 @@ export const errorBody = z.object({
  * generator reads it identically (its README: "you could even generate a schema without
  * using `extendZodWithOpenApi` … and only rely on `.meta`").
  */
-export const errorResponse = z.object({ error: errorBody }).meta({ id: 'ErrorResponse' });
+export const errorResponse = z
+  .object({
+    error: errorBody,
+    confirmation: listBehaviourConfirmation.optional(),
+  })
+  .meta({ id: 'ErrorResponse' });
 
 export type ErrorResponse = z.infer<typeof errorResponse>;

@@ -118,6 +118,7 @@ const ENTITY = {
   index: 'ListIndex',
   item: 'ListItem',
   locator: 'ListItemLocator',
+  ingredientDestinationBinding: 'IngredientDestinationBinding',
   itemTombstone: 'ListItemTombstone',
   /** The one spelling lives beside the row builder both repositories share (P3-13). */
   link: LIST_ITEM_ACTIVITY_LINK_ENTITY,
@@ -142,6 +143,23 @@ const GATE_NAMES = {
 } as const;
 const GATES_ABSENT =
   'attribute_not_exists(#rankRepairId) AND attribute_not_exists(#behaviourMigrationId)';
+const ITEM_VERSION_INCREMENT = 1;
+
+/**
+ * META rows created before P3-17 have no `itemVersion`. Absence is version zero; DynamoDB's
+ * numeric `ADD` installs version one on their first item mutation, so no table scan or
+ * stop-the-world migration is required.
+ */
+function itemVersion(list: List): number {
+  return list.itemVersion ?? 0;
+}
+
+/** Exact snapshot condition, including the one compatible legacy state. */
+function itemVersionCondition(expected: number): string {
+  return expected === 0
+    ? '(attribute_not_exists(#itemVersion) OR #itemVersion = :expectedItemVersion)'
+    : '#itemVersion = :expectedItemVersion';
+}
 
 function listDeletionGate(listId: string) {
   return {
@@ -159,11 +177,21 @@ const locatorSchema = z.object({
   itemRevision: z.number().int().nonnegative(),
 });
 
+const ingredientDestinationBindingSchema = z.object({
+  listId: z.string().min(1),
+  requestedItemId: z.string().min(1),
+  itemId: z.string().min(1),
+  sourceActivityId: z.string().min(1),
+  ingredientId: z.string().min(1),
+  outcome: z.enum(['created', 'labelled']),
+});
+
 const itemTombstoneSchema = z.object({
   listId: z.string(),
   itemId: z.string(),
   operationId: z.string().min(1),
   snapshot: listItemSchema,
+  ingredientIdentity: ingredientDestinationBindingSchema.optional(),
   viewerLinks: z.array(listItemActivityLinkSchema).default([]),
   activityProvenance: z
     .array(
@@ -178,6 +206,9 @@ const itemTombstoneSchema = z.object({
 
 type Locator = z.infer<typeof locatorSchema>;
 type ItemTombstone = z.infer<typeof itemTombstoneSchema>;
+export type IngredientDestinationBinding = z.infer<
+  typeof ingredientDestinationBindingSchema
+>;
 
 const LIST_ACCESS_GRANT = Symbol('ListAccessGrant');
 const issuedListAccessGrants = new WeakSet<ListAccessGrant>();
@@ -297,6 +328,19 @@ class StaleProfileDefaultError extends Error {
   }
 }
 
+/**
+ * The list's rank or item generation moved between a deciding read and allocation.
+ *
+ * Exported, unlike its retryable sibling, because the caller has to do more than retry the
+ * write: whatever it decided from the old snapshot has to be decided again (P3-17).
+ */
+export class ListSnapshotStaleError extends Error {
+  constructor() {
+    super('The list changed after it was read.');
+    this.name = 'ListSnapshotStaleError';
+  }
+}
+
 class RetryableListMutationConflictError extends Error {
   constructor() {
     super('Retry the list mutation against current storage state.');
@@ -377,6 +421,12 @@ function assertSameFence(before: List, after: List): void {
     throw new ListReadFenceError();
   }
   assertFenceOpen(after);
+}
+
+/** P3-17 decides from fields as well as ranks, so its snapshot binds both generations. */
+function assertSameItemSnapshot(before: List, after: List): void {
+  assertSameFence(before, after);
+  if (itemVersion(after) !== itemVersion(before)) throw new ListReadFenceError();
 }
 
 function ttlFor(now: string): number {
@@ -771,6 +821,7 @@ interface ResolvedItem {
   readonly item: ListItem;
   readonly locator: Locator;
   readonly row: StoredItem;
+  readonly ingredientIdentity?: IngredientDestinationBinding;
 }
 
 async function resolveItemStrong(
@@ -781,7 +832,11 @@ async function resolveItemStrong(
     consistentRead: true,
   });
   if (locatorRow === undefined) return undefined;
-  const locator = locatorSchema.parse(locatorRow);
+  const parsedLocator = locatorSchema.safeParse(locatorRow);
+  // An absorbed ingredient destination occupies the authoritative ITEMID namespace but is
+  // not itself an addressable ListItem. Exact item routes therefore treat the alias as absent.
+  if (!parsedLocator.success) return undefined;
+  const locator = parsedLocator.data;
   const row = await getItem<StoredItem>(listItemKey(listId, locator.rank, itemId), {
     consistentRead: true,
   });
@@ -794,7 +849,15 @@ async function resolveItemStrong(
   ) {
     throw new ListReadFenceError();
   }
-  return { item, locator, row };
+  const ingredientIdentity = ingredientDestinationBindingSchema.safeParse(locatorRow);
+  return {
+    item,
+    locator,
+    row,
+    ...(ingredientIdentity.success
+      ? { ingredientIdentity: ingredientIdentity.data }
+      : {}),
+  };
 }
 
 /** Pattern 8d: locator-following exact read within the same strong META fence. */
@@ -902,6 +965,112 @@ export async function readAllListItems(
   if (list === undefined) throw new ListNotFoundError();
   assertFenceOpen(list);
   return readAllItemsUnfenced(listId);
+}
+
+/** Every item on one list, and both generations they were read under (P3-17). */
+export interface ListItemSnapshot {
+  readonly items: ListItem[];
+  readonly ingredientDestinationBindings: ReadonlyMap<
+    string,
+    IngredientDestinationBinding
+  >;
+  /**
+   * Requested destination ids that a retained `ITEM_TOMBSTONE#` still owns.
+   *
+   * A deleted item keeps its id reserved for the replay window so its own Undo can put the
+   * row back, and **only that Undo may reclaim it** (§P3-10, §P3-17). The create path has
+   * always enforced this with a per-row `ConditionCheck`; the binding path writes to the same
+   * `ITEMID#` key and could not, so this read is where the rule is applied for both.
+   */
+  readonly tombstonedDestinationIds: ReadonlySet<string>;
+  readonly rankVersion: number;
+  readonly itemVersion: number;
+}
+
+/**
+ * Pattern 8e's read, with the pre/post fence that lets the caller **decide** from it.
+ *
+ * ## Why this is not {@link readAllListItems}
+ *
+ * That one answers "what is on this list", which is all its three callers need — a data-loss
+ * count and an Undo filter, both of which only report. P3-17 does something else with the
+ * same rows: it classifies each ingredient against them, and then **writes** on the strength
+ * of that classification. A read that only reports may be a moment stale; a read that decides
+ * may not.
+ *
+ * So this returns both `rankVersion` and the storage-only `itemVersion`, and requires both
+ * unchanged across the item query. Those are then the generations the caller's transaction
+ * must commit under, which makes both "no matching row exists" and "no row was renamed into
+ * this title" claims the transaction can actually enforce.
+ *
+ * **This closes a real hole** (raised in review). The service used to snapshot here and read
+ * `rankVersion` again inside rank allocation, so a concurrent create landing between the two
+ * was adopted by the later read. Binding rank generation closed that hole; `itemVersion`
+ * closes the corresponding field-only rename/check/delete hole without invalidating ordinary
+ * item-page cursors on every checkbox tap.
+ *
+ * Left as a separate function rather than folded into `readAllListItems` because the stricter
+ * fence would newly reject the other three callers' reads on an unrelated concurrent create,
+ * and making a *count* fail because someone else added a row is not an improvement.
+ */
+export async function snapshotListItems(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  requestedIngredientDestinationIds: readonly string[] = [],
+): Promise<ListItemSnapshot> {
+  assertListAccessGrant(userId, listId, access);
+  const before = await getLiveListMetaStrong(listId);
+  if (before === undefined) throw new ListNotFoundError();
+  assertFenceOpen(before);
+
+  const requestedIds = [...new Set(requestedIngredientDestinationIds)];
+  /**
+   * Both rows a requested destination id can already be spoken for by, read under the same
+   * fence as the items: the locator (a live row, or an absorbed binding) and the tombstone
+   * (a deleted row's reserved id). Two keys per id, so the 30-ingredient cap keeps this at
+   * 60 — inside `BatchGetItem`'s hundred.
+   */
+  const tombstoneKeys = new Map(
+    requestedIds.map((requestedItemId) => [
+      requestedItemId,
+      listItemTombstone(listId, requestedItemId),
+    ]),
+  );
+  const [items, requestedRows] = await Promise.all([
+    readAllItemsUnfenced(listId),
+    batchGetItems<StoredItem>(
+      requestedIds.flatMap((requestedItemId) => [
+        listItemLocator(listId, requestedItemId),
+        listItemTombstone(listId, requestedItemId),
+      ]),
+      { consistentRead: true },
+    ),
+  ]);
+
+  const after = await getLiveListMetaStrong(listId);
+  if (after === undefined) throw new ListNotFoundError();
+  assertSameItemSnapshot(before, after);
+  return {
+    items,
+    ingredientDestinationBindings: new Map(
+      requestedRows.flatMap((row) => {
+        const binding = ingredientDestinationBindingSchema.safeParse(row);
+        return binding.success
+          ? ([[binding.data.requestedItemId, binding.data]] as const)
+          : [];
+      }),
+    ),
+    tombstonedDestinationIds: new Set(
+      [...tombstoneKeys].flatMap(([requestedItemId, key]) =>
+        requestedRows.some((row) => row.pk === key.pk && row.sk === key.sk)
+          ? [requestedItemId]
+          : [],
+      ),
+    ),
+    rankVersion: after.rankVersion,
+    itemVersion: itemVersion(after),
+  };
 }
 
 export interface ListMetaPatch {
@@ -1382,13 +1551,25 @@ function storedListItem(item: ListItem, now: string): StoredItem {
   });
 }
 
-function storedLocator(item: ListItem, now: string): StoredItem {
+function storedLocator(
+  item: ListItem,
+  now: string,
+  ingredientIdentity?: IngredientDestinationBinding,
+): StoredItem {
+  if (
+    ingredientIdentity !== undefined &&
+    (ingredientIdentity.requestedItemId !== item.itemId ||
+      ingredientIdentity.itemId !== item.itemId)
+  ) {
+    throw new Error('A created item locator may carry only its own ingredient identity.');
+  }
   return stamp(ENTITY.locator, now, now, {
     ...listItemLocator(item.listId, item.itemId),
     listId: item.listId,
     itemId: item.itemId,
     rank: item.rank,
     itemRevision: item.itemRevision,
+    ...ingredientIdentity,
   });
 }
 
@@ -1580,7 +1761,12 @@ export async function resolveExistingItems(
     uniqueIds.map((itemId) => listItemLocator(listId, itemId)),
     { consistentRead: true },
   );
-  const locators = locatorRows.map((row) => locatorSchema.parse(row));
+  // Absorbed ingredient aliases deliberately occupy ITEMID too. They block an ordinary
+  // create but do not masquerade as an ordinary bulk replay of a differently identified row.
+  const locators = locatorRows.flatMap((row) => {
+    const parsed = locatorSchema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
   if (locators.length === 0) return new Map();
 
   const itemRows = await batchGetItems<StoredItem>(
@@ -1610,6 +1796,294 @@ export async function createListItem(
 }
 
 /** One ordered bulk chunk: all ranks come from one META version and advance it once. */
+/**
+ * What a composed multi-item list write needs to know before it can build its transaction:
+ * the fenced List, and ranks allocated from neighbours read under that fence.
+ */
+export interface ListWriteBasis {
+  readonly list: List;
+  readonly ranks: readonly string[];
+}
+
+/**
+ * Allocates ranks for `count` new rows under the current fence, without writing.
+ *
+ * Split out of {@link createListItems} so a caller that must commit list rows **and** rows in
+ * another partition in one transaction can still get its ranks from exactly the same
+ * neighbours-under-a-version read (P3-17). The alternative was a second rank allocator, which
+ * is how two callers eventually disagree about what a valid rank is.
+ *
+ * ## Expected snapshot generations, and why they are not optional in spirit
+ *
+ * This function reads the META generations used by the caller's transaction. A caller that
+ * **decided something** from an earlier read — P3-17 classifies each ingredient against a
+ * {@link snapshotListItems} snapshot — must commit under *those* generations, not whatever
+ * this read happens to find. `rankVersion` covers structural writes; storage-only
+ * `itemVersion` covers field patches and deletes without making public page cursors churn.
+ *
+ * A caller with a snapshot passes both and gets {@link ListSnapshotStaleError} if either has
+ * moved. Callers with nothing to preserve omit them and take current truth, as before.
+ */
+export async function planListItemWrites(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  count: number,
+  options: {
+    readonly afterItemId?: string | null;
+    readonly expectedRankVersion?: number;
+    readonly expectedItemVersion?: number;
+  } = {},
+): Promise<ListWriteBasis> {
+  assertListAccessGrant(userId, listId, access);
+  const state = await readMutationState(userId, listId, access);
+  if (
+    (options.expectedRankVersion !== undefined &&
+      state.list.rankVersion !== options.expectedRankVersion) ||
+    (options.expectedItemVersion !== undefined &&
+      itemVersion(state.list) !== options.expectedItemVersion)
+  ) {
+    throw new ListSnapshotStaleError();
+  }
+  const neighbours = await readNeighbours(listId, options.afterItemId);
+  return { list: state.list, ranks: count === 0 ? [] : allocateRanks(neighbours, count) };
+}
+
+/** Where each class of condition failure sits, so a caller can name the right error. */
+export interface ListItemCreateSpans {
+  readonly deletionGate: number;
+  /** Item/locator/tombstone conditions occupy `[deletionGate + 1, meta)`. */
+  readonly meta: number;
+}
+
+/**
+ * Appends the create half of a list-item write to a caller-owned transaction.
+ *
+ * The conditions are {@link createListItems}' own, unchanged: `attribute_not_exists` on both
+ * the ranked row and its locator, a tombstone absence check per item, and the META update
+ * that advances `rankVersion` and `itemVersion`, moves the counters and **enforces the cap in
+ * transaction** — a service precheck is never a cap, because the retry re-reads
+ * `rankVersion` and learns nothing about capacity.
+ */
+export function appendListItemCreates(
+  builder: TransactionBuilder,
+  listId: string,
+  created: readonly ListItem[],
+  basis: ListWriteBasis,
+  now: string,
+  ingredientIdentities: ReadonlyMap<string, IngredientDestinationBinding> = new Map(),
+): ListItemCreateSpans {
+  const deletionGate = builder.length;
+  builder.add(listDeletionGate(listId));
+  for (const item of created) {
+    builder.add(
+      {
+        Put: {
+          Item: storedListItem(item, now),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+      {
+        Put: {
+          Item: storedLocator(item, now, ingredientIdentities.get(item.itemId)),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+      {
+        ConditionCheck: {
+          Key: listItemTombstone(listId, item.itemId),
+          ConditionExpression: 'attribute_not_exists(pk)',
+        },
+      },
+    );
+  }
+
+  const meta = builder.length;
+  const unchecked = created.filter((item) => !item.checked).length;
+  builder.add({
+    Update: {
+      Key: listMeta(listId),
+      UpdateExpression:
+        'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked ADD #itemVersion :itemVersionIncrement',
+      ConditionExpression: `#rankVersion = :expectedVersion AND ${itemVersionCondition(itemVersion(basis.list))} AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
+      ExpressionAttributeNames: {
+        '#rankVersion': 'rankVersion',
+        '#itemVersion': 'itemVersion',
+        '#itemCount': 'itemCount',
+        '#uncheckedCount': 'uncheckedCount',
+        ...GATE_NAMES,
+      },
+      ExpressionAttributeValues: {
+        ':expectedVersion': basis.list.rankVersion,
+        ':nextVersion': basis.list.rankVersion + 1,
+        ':expectedItemVersion': itemVersion(basis.list),
+        ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+        ':count': created.length,
+        ':unchecked': unchecked,
+        ':maxBefore': MAX_LIST_ITEMS - created.length,
+      },
+    },
+  });
+  return { deletionGate, meta };
+}
+
+/**
+ * Appends a `sourceLabel` extension for one already-read row (P3-17).
+ *
+ * The P3-17 caller composes these writes with the one META/version update, creates, source
+ * markers and receipt. Conditioned on the `itemRevision` the caller read, which is what makes
+ * the *unchecked* classification behind the extension safe: the revision moves when `checked`
+ * does, so a row checked in between fails here rather than being extended when §7.3 says it
+ * should have become a new row.
+ */
+export function appendSourceLabelExtension(
+  builder: TransactionBuilder,
+  listId: string,
+  current: ListItem,
+  next: ListItem,
+  now: string,
+  ingredientIdentity?: IngredientDestinationBinding,
+): void {
+  if (
+    next.sourceActivityId === undefined ||
+    next.sourceLabel === undefined ||
+    next.sourceProvenance === undefined
+  ) {
+    throw new Error(
+      'A provenance extension must carry its rendered and structured forms.',
+    );
+  }
+  if (
+    ingredientIdentity !== undefined &&
+    (ingredientIdentity.requestedItemId !== current.itemId ||
+      ingredientIdentity.itemId !== current.itemId)
+  ) {
+    throw new Error('A locator extension may carry only its own ingredient identity.');
+  }
+  builder.add(
+    {
+      Update: {
+        Key: listItemKey(listId, current.rank, current.itemId),
+        UpdateExpression:
+          'SET #sourceActivityId = :sourceActivityId, #sourceLabel = :sourceLabel, #sourceProvenance = :sourceProvenance, #itemRevision = :nextRevision, #updatedAt = :updatedAt',
+        ConditionExpression: '#itemRevision = :expectedRevision',
+        ExpressionAttributeNames: {
+          '#sourceActivityId': 'sourceActivityId',
+          '#sourceLabel': 'sourceLabel',
+          '#sourceProvenance': 'sourceProvenance',
+          '#itemRevision': 'itemRevision',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':sourceActivityId': next.sourceActivityId,
+          ':sourceLabel': next.sourceLabel,
+          ':sourceProvenance': next.sourceProvenance,
+          ':expectedRevision': current.itemRevision,
+          ':nextRevision': current.itemRevision + 1,
+          ':updatedAt': now,
+        },
+      },
+    },
+    {
+      Update: {
+        Key: listItemLocator(listId, current.itemId),
+        UpdateExpression:
+          ingredientIdentity === undefined
+            ? 'SET #itemRevision = :nextRevision, #updatedAt = :updatedAt'
+            : 'SET #itemRevision = :nextRevision, #updatedAt = :updatedAt, #requestedItemId = :requestedItemId, #sourceActivityId = :sourceActivityId, #ingredientId = :ingredientId, #outcome = :outcome',
+        ConditionExpression:
+          ingredientIdentity === undefined
+            ? '#rank = :rank AND #itemRevision = :expectedRevision'
+            : '#rank = :rank AND #itemRevision = :expectedRevision AND attribute_not_exists(#ingredientId)',
+        ExpressionAttributeNames: {
+          '#rank': 'rank',
+          '#itemRevision': 'itemRevision',
+          '#updatedAt': 'updatedAt',
+          ...(ingredientIdentity === undefined
+            ? {}
+            : {
+                '#requestedItemId': 'requestedItemId',
+                '#sourceActivityId': 'sourceActivityId',
+                '#ingredientId': 'ingredientId',
+                '#outcome': 'outcome',
+              }),
+        },
+        ExpressionAttributeValues: {
+          ':rank': current.rank,
+          ':expectedRevision': current.itemRevision,
+          ':nextRevision': current.itemRevision + 1,
+          ':updatedAt': now,
+          ...(ingredientIdentity === undefined
+            ? {}
+            : {
+                ':requestedItemId': ingredientIdentity.requestedItemId,
+                ':sourceActivityId': ingredientIdentity.sourceActivityId,
+                ':ingredientId': ingredientIdentity.ingredientId,
+                ':outcome': ingredientIdentity.outcome,
+              }),
+        },
+      },
+    },
+  );
+}
+
+/**
+ * Permanently occupies a supplied destination identity that deduplicated into another row.
+ *
+ * Created rows need no alias because their ordinary `ITEMID#` locator is the durable
+ * identity. An absorbed outcome does: without this row, receipt expiry followed by a check,
+ * rename or delete of the target lets the old request create its formerly unused id.
+ */
+export function appendIngredientDestinationBinding(
+  builder: TransactionBuilder,
+  binding: IngredientDestinationBinding,
+  now: string,
+  current?: ListItem,
+): void {
+  if (binding.requestedItemId === binding.itemId) {
+    if (current === undefined || current.itemId !== binding.itemId) {
+      throw new Error('Binding an existing locator requires its current item snapshot.');
+    }
+    builder.add({
+      Update: {
+        Key: listItemLocator(binding.listId, binding.requestedItemId),
+        UpdateExpression:
+          'SET #requestedItemId = :requestedItemId, #sourceActivityId = :sourceActivityId, #ingredientId = :ingredientId, #outcome = :outcome, #updatedAt = :updatedAt',
+        ConditionExpression:
+          '#rank = :rank AND #itemRevision = :itemRevision AND attribute_not_exists(#ingredientId)',
+        ExpressionAttributeNames: {
+          '#rank': 'rank',
+          '#itemRevision': 'itemRevision',
+          '#requestedItemId': 'requestedItemId',
+          '#sourceActivityId': 'sourceActivityId',
+          '#ingredientId': 'ingredientId',
+          '#outcome': 'outcome',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':rank': current.rank,
+          ':itemRevision': current.itemRevision,
+          ':requestedItemId': binding.requestedItemId,
+          ':sourceActivityId': binding.sourceActivityId,
+          ':ingredientId': binding.ingredientId,
+          ':outcome': binding.outcome,
+          ':updatedAt': now,
+        },
+      },
+    });
+    return;
+  }
+  builder.add({
+    Put: {
+      Item: stamp(ENTITY.ingredientDestinationBinding, now, now, {
+        ...listItemLocator(binding.listId, binding.requestedItemId),
+        ...binding,
+      }),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    },
+  });
+}
+
 export async function createListItems(
   userId: string,
   listId: string,
@@ -1667,7 +2141,7 @@ export async function createListItems(
       Update: {
         Key: listMeta(listId),
         UpdateExpression:
-          'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked',
+          'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked ADD #itemVersion :itemVersionIncrement',
         /**
          * **The item cap is enforced here, in the transaction**, not only by the service's
          * precheck. Two creates against a 499-item list both pass that precheck, and the
@@ -1677,6 +2151,7 @@ export async function createListItems(
         ConditionExpression: `#rankVersion = :expectedVersion AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
         ExpressionAttributeNames: {
           '#rankVersion': 'rankVersion',
+          '#itemVersion': 'itemVersion',
           '#itemCount': 'itemCount',
           '#uncheckedCount': 'uncheckedCount',
           ...GATE_NAMES,
@@ -1684,6 +2159,7 @@ export async function createListItems(
         ExpressionAttributeValues: {
           ':expectedVersion': state.list.rankVersion,
           ':nextVersion': state.list.rankVersion + 1,
+          ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           ':count': created.length,
           ':unchecked': unchecked,
           ':maxBefore': MAX_LIST_ITEMS - created.length,
@@ -1829,17 +2305,19 @@ export async function reorderListItem(
           // way (acceptance criterion 16).
           UpdateExpression:
             uncheckedDelta === 0
-              ? 'SET #rankVersion = :nextVersion'
-              : 'SET #rankVersion = :nextVersion ADD #uncheckedCount :uncheckedDelta',
+              ? 'SET #rankVersion = :nextVersion ADD #itemVersion :itemVersionIncrement'
+              : 'SET #rankVersion = :nextVersion ADD #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
           ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
           ExpressionAttributeNames: {
             '#rankVersion': 'rankVersion',
+            '#itemVersion': 'itemVersion',
             ...(uncheckedDelta === 0 ? {} : { '#uncheckedCount': 'uncheckedCount' }),
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
             ':expectedVersion': state.list.rankVersion,
             ':nextVersion': state.list.rankVersion + 1,
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
             ...(uncheckedDelta === 0 ? {} : { ':uncheckedDelta': uncheckedDelta }),
           },
         },
@@ -1981,23 +2459,35 @@ export async function patchListItemFields(
       current.item.checked === next.checked ? 0 : next.checked ? -1 : 1;
     if (uncheckedDelta === 0) {
       builder.add({
-        ConditionCheck: {
+        Update: {
           Key: listMeta(listId),
+          UpdateExpression: 'ADD #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
-          ExpressionAttributeNames: GATE_NAMES,
+          ExpressionAttributeNames: {
+            '#itemVersion': 'itemVersion',
+            ...GATE_NAMES,
+          },
+          ExpressionAttributeValues: {
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+          },
         },
       });
     } else {
       builder.add({
         Update: {
           Key: listMeta(listId),
-          UpdateExpression: 'ADD #uncheckedCount :delta',
+          UpdateExpression:
+            'ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#uncheckedCount': 'uncheckedCount',
+            '#itemVersion': 'itemVersion',
             ...GATE_NAMES,
           },
-          ExpressionAttributeValues: { ':delta': uncheckedDelta },
+          ExpressionAttributeValues: {
+            ':delta': uncheckedDelta,
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+          },
         },
       });
     }
@@ -2368,17 +2858,20 @@ export async function finishRankRepair(work: RankRepairWork): Promise<void> {
         {
           Update: {
             Key: listMeta(work.listId),
-            UpdateExpression: 'SET #rankVersion = :nextVersion REMOVE #rankRepairId',
+            UpdateExpression:
+              'SET #rankVersion = :nextVersion REMOVE #rankRepairId ADD #itemVersion :itemVersionIncrement',
             ConditionExpression:
               '#rankRepairId = :operationId AND #rankVersion = :expectedVersion',
             ExpressionAttributeNames: {
               '#rankVersion': 'rankVersion',
               '#rankRepairId': 'rankRepairId',
+              '#itemVersion': 'itemVersion',
             },
             ExpressionAttributeValues: {
               ':operationId': work.operationId,
               ':expectedVersion': work.rankVersion,
               ':nextVersion': work.rankVersion + 1,
+              ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
             },
           },
         },
@@ -2395,6 +2888,12 @@ export interface BehaviourMigrationEntry {
   /** The rank is **not** changed by a behaviour migration; it is here to address the row. */
   readonly rank: string;
   readonly fromRevision: number;
+}
+
+/** The destructive shape computed from the gated item snapshot. */
+export interface BehaviourMigrationLoss {
+  readonly itemCount: number;
+  readonly fields: readonly string[];
 }
 
 /**
@@ -2482,6 +2981,8 @@ export interface BehaviourMigrationWork {
    * anything if it names what is actually about to go.
    */
   readonly lossCount?: number;
+  /** Ordered user-facing field labels computed from the same gated rows as `lossCount`. */
+  readonly lossFields?: string[];
 }
 
 const behaviourMigrationSchema = z.object({
@@ -2518,6 +3019,7 @@ const behaviourMigrationSchema = z.object({
     })
     .optional(),
   lossCount: z.number().int().nonnegative().optional(),
+  lossFields: z.array(z.string().min(1)).optional(),
 });
 
 /**
@@ -2559,6 +3061,8 @@ export interface BeginBehaviourMigrationOptions {
   readonly toDetails?: ListItemDetails;
   /** The `If-Match` the service already compared against its own read. */
   readonly expectedUpdatedAt: string;
+  /** Complete-item generation the deciding preview was read under. */
+  readonly expectedItemVersion: number;
   /** Also the `updatedAt` the final transaction will write. */
   readonly now: string;
   /** The prepared Undo offer. Absent when the change loses data (§4.1). */
@@ -2568,11 +3072,11 @@ export interface BeginBehaviourMigrationOptions {
   /** The response receipt the final transaction commits, whichever caller runs it. */
   readonly receipt: IdempotencyReceipt;
   /**
-   * Counts the items carrying data the change removes, over the gated snapshot. Pure, and
-   * the service's rule rather than storage's — the repository calls it while it holds the
-   * rows and stores the answer with them.
+   * Describes the data the change removes over the gated snapshot. Pure, and the service's
+   * rule rather than storage's — the repository calls it while it holds the rows and stores
+   * the count and ordered labels together.
    */
-  readonly countLoss: (items: readonly ListItem[]) => number;
+  readonly describeLoss: (items: readonly ListItem[]) => BehaviourMigrationLoss;
 }
 
 /**
@@ -2628,16 +3132,18 @@ export async function beginBehaviourMigration(
           Update: {
             Key: listMeta(listId),
             UpdateExpression: 'SET #behaviourMigrationId = :operationId',
-            ConditionExpression: `#updatedAt = :expectedUpdatedAt AND #rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
+            ConditionExpression: `#updatedAt = :expectedUpdatedAt AND #rankVersion = :expectedVersion AND ${itemVersionCondition(options.expectedItemVersion)} AND ${GATES_ABSENT}`,
             ExpressionAttributeNames: {
               '#updatedAt': 'updatedAt',
               '#rankVersion': 'rankVersion',
+              '#itemVersion': 'itemVersion',
               ...GATE_NAMES,
             },
             ExpressionAttributeValues: {
               ':operationId': options.operationId,
               ':expectedUpdatedAt': options.expectedUpdatedAt,
               ':expectedVersion': list.rankVersion,
+              ':expectedItemVersion': options.expectedItemVersion,
             },
           },
         },
@@ -2661,7 +3167,7 @@ export async function beginBehaviourMigration(
     },
   );
 
-  return snapshotBehaviourMigration(pending, options.now, options.countLoss);
+  return snapshotBehaviourMigration(pending, options.now, options.describeLoss);
 }
 
 /**
@@ -2675,7 +3181,7 @@ export async function beginBehaviourMigration(
 export async function snapshotBehaviourMigration(
   work: BehaviourMigrationWork,
   now: string,
-  countLoss: (items: readonly ListItem[]) => number,
+  describeLoss: (items: readonly ListItem[]) => BehaviourMigrationLoss,
 ): Promise<BehaviourMigrationWork> {
   if (work.state === 'rewriting') return work;
 
@@ -2690,7 +3196,7 @@ export async function snapshotBehaviourMigration(
    * exactly the rows this operation is about to rewrite. Any caller that fills a
    * `snapshotting` record computes the same number from the same rows.
    */
-  const lossCount = countLoss(items);
+  const loss = describeLoss(items);
 
   await transactWrite(
     new TransactionBuilder('snapshotBehaviourMigration')
@@ -2698,17 +3204,19 @@ export async function snapshotBehaviourMigration(
         Update: {
           Key: listBehaviourMigration(work.listId, work.operationId),
           UpdateExpression:
-            'SET #entries = :entries, #lossCount = :lossCount, #state = :rewriting, #updatedAt = :now',
+            'SET #entries = :entries, #lossCount = :lossCount, #lossFields = :lossFields, #state = :rewriting, #updatedAt = :now',
           ConditionExpression: '#state = :snapshotting',
           ExpressionAttributeNames: {
             '#entries': 'entries',
             '#lossCount': 'lossCount',
+            '#lossFields': 'lossFields',
             '#state': 'state',
             '#updatedAt': 'updatedAt',
           },
           ExpressionAttributeValues: {
             ':entries': entries,
-            ':lossCount': lossCount,
+            ':lossCount': loss.itemCount,
+            ':lossFields': [...loss.fields],
             ':rewriting': 'rewriting',
             ':snapshotting': 'snapshotting',
             ':now': now,
@@ -2724,7 +3232,13 @@ export async function snapshotBehaviourMigration(
     },
   );
 
-  return { ...work, state: 'rewriting', entries, lossCount };
+  return {
+    ...work,
+    state: 'rewriting',
+    entries,
+    lossCount: loss.itemCount,
+    lossFields: [...loss.fields],
+  };
 }
 
 /** The in-flight work for a marker, or `undefined` once the record has been cleared. */
@@ -2907,12 +3421,13 @@ export async function finishBehaviourMigration(
     Update: {
       Key: listMeta(work.listId),
       UpdateExpression:
-        'SET #behaviour = :toBehaviour, #rankVersion = :nextVersion, #updatedAt = :committedAt REMOVE #behaviourMigrationId',
+        'SET #behaviour = :toBehaviour, #rankVersion = :nextVersion, #updatedAt = :committedAt REMOVE #behaviourMigrationId ADD #itemVersion :itemVersionIncrement',
       ConditionExpression:
         '#behaviourMigrationId = :operationId AND #rankVersion = :expectedVersion AND #updatedAt = :expectedUpdatedAt',
       ExpressionAttributeNames: {
         '#behaviour': 'behaviour',
         '#rankVersion': 'rankVersion',
+        '#itemVersion': 'itemVersion',
         '#updatedAt': 'updatedAt',
         '#behaviourMigrationId': 'behaviourMigrationId',
       },
@@ -2921,6 +3436,7 @@ export async function finishBehaviourMigration(
         ':operationId': work.operationId,
         ':expectedVersion': work.rankVersion,
         ':nextVersion': work.rankVersion + 1,
+        ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
         ':expectedUpdatedAt': work.expectedUpdatedAt,
         ':committedAt': work.committedAt,
       },
@@ -3086,14 +3602,33 @@ export async function deleteListItem(
       {
         Delete: {
           Key: listItemLocator(listId, itemId),
-          ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
+          ConditionExpression:
+            current.ingredientIdentity === undefined
+              ? '#rank = :rank AND #itemRevision = :expectedRevision AND attribute_not_exists(#ingredientId)'
+              : '#rank = :rank AND #itemRevision = :expectedRevision AND #requestedItemId = :requestedItemId AND #sourceActivityId = :sourceActivityId AND #ingredientId = :ingredientId AND #outcome = :outcome',
           ExpressionAttributeNames: {
             '#rank': 'rank',
             '#itemRevision': 'itemRevision',
+            '#ingredientId': 'ingredientId',
+            ...(current.ingredientIdentity === undefined
+              ? {}
+              : {
+                  '#requestedItemId': 'requestedItemId',
+                  '#sourceActivityId': 'sourceActivityId',
+                  '#outcome': 'outcome',
+                }),
           },
           ExpressionAttributeValues: {
             ':rank': current.item.rank,
             ':expectedRevision': current.item.itemRevision,
+            ...(current.ingredientIdentity === undefined
+              ? {}
+              : {
+                  ':requestedItemId': current.ingredientIdentity.requestedItemId,
+                  ':sourceActivityId': current.ingredientIdentity.sourceActivityId,
+                  ':ingredientId': current.ingredientIdentity.ingredientId,
+                  ':outcome': current.ingredientIdentity.outcome,
+                }),
           },
         },
       },
@@ -3124,15 +3659,17 @@ export async function deleteListItem(
       builder.add({
         Update: {
           Key: activityMeta(provenance.activityId),
-          UpdateExpression: 'REMOVE #listId, #listItemId',
+          UpdateExpression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
           ConditionExpression: '#listId = :listId AND #listItemId = :listItemId',
           ExpressionAttributeNames: {
             '#listId': 'listId',
             '#listItemId': 'listItemId',
+            '#updatedAt': 'updatedAt',
           },
           ExpressionAttributeValues: {
             ':listId': provenance.listId,
             ':listItemId': provenance.listItemId,
+            ':updatedAt': options.now,
           },
         },
       });
@@ -3148,6 +3685,9 @@ export async function deleteListItem(
             deletedAt: options.now,
             ttl,
             snapshot: current.item,
+            ...(current.ingredientIdentity === undefined
+              ? {}
+              : { ingredientIdentity: current.ingredientIdentity }),
             viewerLinks: relationships.viewerLinks,
             activityProvenance: relationships.activityProvenance,
           }),
@@ -3173,16 +3713,19 @@ export async function deleteListItem(
       {
         Update: {
           Key: listMeta(listId),
-          UpdateExpression: 'ADD #itemCount :minusOne, #uncheckedCount :uncheckedDelta',
+          UpdateExpression:
+            'ADD #itemCount :minusOne, #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#itemCount': 'itemCount',
             '#uncheckedCount': 'uncheckedCount',
+            '#itemVersion': 'itemVersion',
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
             ':minusOne': -1,
             ':uncheckedDelta': current.item.checked ? 0 : -1,
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           },
         },
       },
@@ -3420,6 +3963,19 @@ async function applyBulkChunk(
   );
 
   const [chunk = []] = costedChunks(pending, (entry) => entry.cost);
+  const ingredientIdentities = new Map(
+    (
+      await batchGetItems<StoredItem>(
+        chunk.flatMap((entry) =>
+          entry.item === undefined ? [] : [listItemLocator(listId, entry.item.itemId)],
+        ),
+        { consistentRead: true },
+      )
+    ).flatMap((row) => {
+      const parsed = ingredientDestinationBindingSchema.safeParse(row);
+      return parsed.success ? ([[parsed.data.itemId, parsed.data]] as const) : [];
+    }),
+  );
   const builder = new TransactionBuilder('applyBulkChunk').add(listDeletionGate(listId));
   let applied = 0;
 
@@ -3431,6 +3987,7 @@ async function applyBulkChunk(
      */
     if (entry.item === undefined) continue;
     const item = entry.item;
+    const ingredientIdentity = ingredientIdentities.get(item.itemId);
     if (work.kind === 'uncheck_all') {
       if (!item.checked) continue;
       const nextRevision = item.itemRevision + 1;
@@ -3490,11 +4047,33 @@ async function applyBulkChunk(
       {
         Delete: {
           Key: listItemLocator(listId, item.itemId),
-          ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
-          ExpressionAttributeNames: { '#rank': 'rank', '#itemRevision': 'itemRevision' },
+          ConditionExpression:
+            ingredientIdentity === undefined
+              ? '#rank = :rank AND #itemRevision = :expectedRevision AND attribute_not_exists(#ingredientId)'
+              : '#rank = :rank AND #itemRevision = :expectedRevision AND #requestedItemId = :requestedItemId AND #sourceActivityId = :sourceActivityId AND #ingredientId = :ingredientId AND #outcome = :outcome',
+          ExpressionAttributeNames: {
+            '#rank': 'rank',
+            '#itemRevision': 'itemRevision',
+            '#ingredientId': 'ingredientId',
+            ...(ingredientIdentity === undefined
+              ? {}
+              : {
+                  '#requestedItemId': 'requestedItemId',
+                  '#sourceActivityId': 'sourceActivityId',
+                  '#outcome': 'outcome',
+                }),
+          },
           ExpressionAttributeValues: {
             ':rank': item.rank,
             ':expectedRevision': item.itemRevision,
+            ...(ingredientIdentity === undefined
+              ? {}
+              : {
+                  ':requestedItemId': ingredientIdentity.requestedItemId,
+                  ':sourceActivityId': ingredientIdentity.sourceActivityId,
+                  ':ingredientId': ingredientIdentity.ingredientId,
+                  ':outcome': ingredientIdentity.outcome,
+                }),
           },
         },
       },
@@ -3525,12 +4104,17 @@ async function applyBulkChunk(
       builder.add({
         Update: {
           Key: activityMeta(provenance.activityId),
-          UpdateExpression: 'REMOVE #listId, #listItemId',
+          UpdateExpression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
           ConditionExpression: '#listId = :listId AND #listItemId = :listItemId',
-          ExpressionAttributeNames: { '#listId': 'listId', '#listItemId': 'listItemId' },
+          ExpressionAttributeNames: {
+            '#listId': 'listId',
+            '#listItemId': 'listItemId',
+            '#updatedAt': 'updatedAt',
+          },
           ExpressionAttributeValues: {
             ':listId': provenance.listId,
             ':listItemId': provenance.listItemId,
+            ':updatedAt': now,
           },
         },
       });
@@ -3545,6 +4129,7 @@ async function applyBulkChunk(
           deletedAt: now,
           ttl: ttlFor(now),
           snapshot: item,
+          ...(ingredientIdentity === undefined ? {} : { ingredientIdentity }),
           viewerLinks: relationships.viewerLinks,
           activityProvenance: relationships.activityProvenance,
         }),
@@ -3560,17 +4145,19 @@ async function applyBulkChunk(
         Key: listMeta(listId),
         UpdateExpression:
           work.kind === 'uncheck_all'
-            ? 'ADD #uncheckedCount :delta'
-            : 'ADD #itemCount :delta',
+            ? 'ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement'
+            : 'ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
         ConditionExpression: GATES_ABSENT,
         ExpressionAttributeNames: {
           ...(work.kind === 'uncheck_all'
             ? { '#uncheckedCount': 'uncheckedCount' }
             : { '#itemCount': 'itemCount' }),
+          '#itemVersion': 'itemVersion',
           ...GATE_NAMES,
         },
         ExpressionAttributeValues: {
           ':delta': work.kind === 'uncheck_all' ? applied : -applied,
+          ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
         },
       },
     });
@@ -3720,13 +4307,18 @@ export async function recheckListItems(
       builder.add({
         Update: {
           Key: listMeta(listId),
-          UpdateExpression: 'ADD #uncheckedCount :taken',
+          UpdateExpression:
+            'ADD #uncheckedCount :taken, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#uncheckedCount': 'uncheckedCount',
+            '#itemVersion': 'itemVersion',
             ...GATE_NAMES,
           },
-          ExpressionAttributeValues: { ':taken': -chunk.length },
+          ExpressionAttributeValues: {
+            ':taken': -chunk.length,
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+          },
         },
       });
       // The operation is spent by the transaction that finishes it, never before.
@@ -3856,7 +4448,7 @@ export async function restoreListItems(
         ).add(listDeletionGate(listId));
         const relationshipIndexes: number[] = [];
 
-        for (const { item, relationships } of chunk) {
+        for (const { item, tombstone, relationships } of chunk) {
           builder.add(
             {
               Put: {
@@ -3866,7 +4458,7 @@ export async function restoreListItems(
             },
             {
               Put: {
-                Item: storedLocator(item, options.now),
+                Item: storedLocator(item, options.now, tombstone.ingredientIdentity),
                 ConditionExpression: 'attribute_not_exists(pk)',
               },
             },
@@ -3885,16 +4477,19 @@ export async function restoreListItems(
             builder.add({
               Update: {
                 Key: activityMeta(provenance.activityId),
-                UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
+                UpdateExpression:
+                  'SET #listId = :listId, #listItemId = :listItemId, #updatedAt = :updatedAt',
                 ConditionExpression:
                   'attribute_exists(pk) AND attribute_not_exists(#listId) AND attribute_not_exists(#listItemId)',
                 ExpressionAttributeNames: {
                   '#listId': 'listId',
                   '#listItemId': 'listItemId',
+                  '#updatedAt': 'updatedAt',
                 },
                 ExpressionAttributeValues: {
                   ':listId': provenance.listId,
                   ':listItemId': provenance.listItemId,
+                  ':updatedAt': options.now,
                 },
               },
             });
@@ -3916,10 +4511,11 @@ export async function restoreListItems(
           Update: {
             Key: listMeta(listId),
             UpdateExpression:
-              'SET #rankVersion = :nextVersion ADD #itemCount :count, #uncheckedCount :unchecked',
+              'SET #rankVersion = :nextVersion ADD #itemCount :count, #uncheckedCount :unchecked, #itemVersion :itemVersionIncrement',
             ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
             ExpressionAttributeNames: {
               '#rankVersion': 'rankVersion',
+              '#itemVersion': 'itemVersion',
               '#itemCount': 'itemCount',
               '#uncheckedCount': 'uncheckedCount',
               ...GATE_NAMES,
@@ -3927,6 +4523,7 @@ export async function restoreListItems(
             ExpressionAttributeValues: {
               ':expectedVersion': version,
               ':nextVersion': nextVersion,
+              ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
               ':count': chunk.length,
               ':unchecked': chunk.filter((entry) => !entry.item.checked).length,
             },
@@ -4219,7 +4816,7 @@ export async function deleteList(
     ),
   ];
   for (const activityId of linkedActivityIds) {
-    await clearListProvenance(activityId, listId);
+    await clearListProvenance(activityId, listId, options.now);
   }
 
   // Member rows went with their pointers above; everything else but META and the

@@ -80,11 +80,46 @@ export const activityLocation = z.strictObject({
   mapUrl: z.url().optional(),
 });
 
+/**
+ * One row of a meal's ingredient list (`data-model.md` §4.4).
+ *
+ * ## `ingredientId` is required, and is an embedded-row identity
+ *
+ * `data-model.md` §8: `ing_` is "a client-minted embedded-row identity, not an entity id".
+ * It has no endpoint and no tombstone. Its whole job is to let
+ * `POST /v1/activities/:id/ingredients/add-to-list` name the same row after the array has
+ * moved — an offline action selected before a reorder must still add what the user picked,
+ * and array position cannot say that (P3-17, `plans-and-lists.md` §7.3 step 3).
+ *
+ * It is **required**, not optional, because an optional one is not an identity: the server
+ * would need a fallback for rows without it, and the only available fallback is the index —
+ * which is precisely the thing that cannot be trusted. Removing or replacing a row makes its
+ * id stale, and a stale id rejects the whole action rather than resolving to a neighbour.
+ *
+ * ## `addedToListId` is on the stored shape and **not** on the input one
+ *
+ * It records that the authorised add-to-list action ran, so a client able to set it would be
+ * fabricating that for any well-formed `lst_` id — the `Added` state on a meal would stop
+ * meaning anything was added. The stored shape carries it because the server writes and reads
+ * it back; {@link mealIngredientInput} omits and rejects it, and that is the shape create and
+ * patch validate against.
+ *
+ * This is exactly the split `listItemDetailsInput` has made on the list side since P3-01, for
+ * the same reason and in the same words. **An earlier version of this comment claimed the
+ * activity side did not need it** — that `activityDetails` was "reached only through routes
+ * that never let a client author it" — which was simply false: `activityDetails` *is* the
+ * create and patch body, and a `POST /v1/activities` carrying a forged `addedToListId` stored
+ * it. Raised in review of P3-17.
+ */
 export const mealIngredient = z.strictObject({
+  ingredientId: ulidId('ing'),
   name: freeText.min(1),
   quantity: freeText.optional(),
   addedToListId: ulidId('lst').optional(),
 });
+
+/** What a client may say about an ingredient. `addedToListId` is deliberately absent. */
+export const mealIngredientInput = mealIngredient.omit({ addedToListId: true });
 
 export const eventReservation = z.strictObject({
   name: freeText.optional(),
@@ -105,34 +140,48 @@ export const eventReservation = z.strictObject({
  * list schemas already took this position for the same reason — a nested object carries no
  * `pk`/`sk`, so there is nothing legitimate to strip — and the two sides now agree.
  */
-export const activityDetails = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('task') }),
-  z.strictObject({
-    kind: z.literal('meal'),
-    mealSlot: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).optional(),
-    ingredients: z.array(mealIngredient).max(MAX_INGREDIENTS).optional(),
-    recipeUrl: z.url().optional(),
-  }),
-  z.strictObject({
-    kind: z.literal('watch'),
-    mediaTitle: title,
-    mediaKind: watchMediaKind.optional(),
-    season: watchSeason.optional(),
-    episode: watchEpisode.optional(),
-    episodeTitle: freeText.optional(),
-    service: freeText.optional(),
-  }),
-  z.strictObject({
-    kind: z.literal('event'),
-    description: z.string().trim().max(MAX_NOTES_LEN).optional(),
-    priceCents: cents.nonnegative('A price cannot be negative').optional(),
-    currency: z.string().length(3).optional(),
-    ticketUrl: z.url().optional(),
-    organiser: freeText.optional(),
-    reservation: eventReservation.optional(),
-  }),
-  z.strictObject({ kind: z.literal('custom'), shortcutId: ulidId('sct').optional() }),
-]);
+function detailsUnion<T extends z.ZodTypeAny>(ingredient: T) {
+  return z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('task') }),
+    z.strictObject({
+      kind: z.literal('meal'),
+      mealSlot: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).optional(),
+      ingredients: z.array(ingredient).max(MAX_INGREDIENTS).optional(),
+      recipeUrl: z.url().optional(),
+    }),
+    z.strictObject({
+      kind: z.literal('watch'),
+      mediaTitle: title,
+      mediaKind: watchMediaKind.optional(),
+      season: watchSeason.optional(),
+      episode: watchEpisode.optional(),
+      episodeTitle: freeText.optional(),
+      service: freeText.optional(),
+    }),
+    z.strictObject({
+      kind: z.literal('event'),
+      description: z.string().trim().max(MAX_NOTES_LEN).optional(),
+      priceCents: cents.nonnegative('A price cannot be negative').optional(),
+      currency: z.string().length(3).optional(),
+      ticketUrl: z.url().optional(),
+      organiser: freeText.optional(),
+      reservation: eventReservation.optional(),
+    }),
+    z.strictObject({ kind: z.literal('custom'), shortcutId: ulidId('sct').optional() }),
+  ]);
+}
+
+/** The stored shape, including the server-owned `addedToListId`. */
+export const activityDetails = detailsUnion(mealIngredient);
+
+/**
+ * The shape a **create or patch body** may carry.
+ *
+ * Identical to the stored union except that the meal arm's ingredients omit and reject
+ * `addedToListId` (see {@link mealIngredient}). Every other arm is the same object, so this
+ * is one union with one ingredient difference rather than a second copy that can drift.
+ */
+export const activityDetailsInput = detailsUnion(mealIngredientInput);
 
 /**
  * `time` requires `date`; `endTime` requires `time` and must be after it
@@ -301,7 +350,8 @@ const createFieldsShape = {
    */
   reminders: z.array(reminderInput).max(MAX_REMINDERS_PER_USER_PER_ACTIVITY).optional(),
   location: activityLocation.optional(),
-  details: activityDetails.optional(),
+  /** The input union: server-owned `addedToListId` is rejected, not dropped. */
+  details: activityDetailsInput.optional(),
   parentActivityId: ulidId('act').optional(),
   attachmentIds: z.array(ulidId('att')).max(20).optional(),
   sourceUrl: z.url().optional(),
@@ -469,7 +519,8 @@ export const patchActivityInput = z
     recurrence: recurrence.nullable().optional(),
     editedFromDate: isoDate.optional(),
     location: activityLocation.nullable().optional(),
-    details: activityDetails.optional(),
+    /** The input union: server-owned `addedToListId` is rejected, not dropped. */
+    details: activityDetailsInput.optional(),
     sourceUrl: z.url().nullable().optional(),
     parentActivityId: ulidId('act').nullable().optional(),
     /** The only status a client may set. The rest are derived. */

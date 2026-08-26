@@ -1,4 +1,4 @@
-import { MAX_LEXO_RANK_LENGTH } from '@od/shared';
+import { MAX_LEXO_RANK_LENGTH, MAX_LIST_ITEMS } from '@od/shared';
 import type {
   Activity,
   List,
@@ -9,6 +9,7 @@ import type {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import { encodeCursor, encodeFencedCursor } from './cursor.js';
+import type { IngredientDestinationBinding } from './listRepository.js';
 
 vi.mock('./base.js', () => ({
   batchGetItems: vi.fn(),
@@ -372,8 +373,13 @@ describe('the bulk checked operations', () => {
         entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk &&
         String(entry.Update.UpdateExpression).includes('itemCount'),
     )?.Update;
-    expect(meta?.UpdateExpression).toBe('ADD #itemCount :delta');
-    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':delta': -2 });
+    expect(meta?.UpdateExpression).toBe(
+      'ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
+    );
+    expect(meta?.ExpressionAttributeValues).toMatchObject({
+      ':delta': -2,
+      ':itemVersionIncrement': 1,
+    });
   });
 
   it('records an empty operation when nothing is checked', async () => {
@@ -448,6 +454,11 @@ describe('the bulk checked operations', () => {
     );
     expect(updated).toHaveLength(1);
     expect(String(updated[0]?.Update?.Key?.sk)).toContain(SURVIVOR);
+    expect(
+      transacted().find((entry) =>
+        String(entry.Update?.UpdateExpression ?? '').includes('#itemVersion'),
+      )?.Update?.ExpressionAttributeValues,
+    ).toMatchObject({ ':itemVersionIncrement': 1 });
     expect(
       transacted().some((entry) =>
         String(entry.Update?.UpdateExpression ?? '').includes('#consumed = :true'),
@@ -1045,6 +1056,7 @@ describe('rank allocation and item mutations', () => {
     expect(items?.[7]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':count': 2,
       ':unchecked': 1,
+      ':itemVersionIncrement': 1,
     });
     await expect(
       repository.createListItems(ALICE, LIST_ID, access, [], { now: NOW }),
@@ -1135,6 +1147,9 @@ describe('rank allocation and item mutations', () => {
       'Update',
       'Update',
     ]);
+    expect(items?.[4]?.Update?.ExpressionAttributeValues).toMatchObject({
+      ':itemVersionIncrement': 1,
+    });
   });
 
   it('returns a reorder no-op without writing', async () => {
@@ -1174,10 +1189,13 @@ describe('rank allocation and item mutations', () => {
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
     expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
     expect(items?.[1]?.Update?.UpdateExpression).toContain('REMOVE');
-    expect(items?.[3]?.Update?.ExpressionAttributeValues).toEqual({ ':delta': -1 });
+    expect(items?.[3]?.Update?.ExpressionAttributeValues).toEqual({
+      ':delta': -1,
+      ':itemVersionIncrement': 1,
+    });
   });
 
-  it('uses a gate condition-check when a field patch does not change checked', async () => {
+  it('advances itemVersion under the gates when a field patch does not change checked', async () => {
     mockResolvedItem();
     await repository.patchListItemFields(
       ALICE,
@@ -1188,7 +1206,10 @@ describe('rank allocation and item mutations', () => {
       LATER,
     );
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items?.[3]?.ConditionCheck).toBeDefined();
+    expect(items?.[3]?.Update).toMatchObject({
+      UpdateExpression: 'ADD #itemVersion :itemVersionIncrement',
+      ExpressionAttributeValues: { ':itemVersionIncrement': 1 },
+    });
   });
 });
 
@@ -1225,6 +1246,7 @@ describe('delete, restore and cascade', () => {
     expect(items?.[6]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':minusOne': -1,
       ':uncheckedDelta': -1,
+      ':itemVersionIncrement': 1,
     });
   });
 
@@ -1251,7 +1273,8 @@ describe('delete, restore and cascade', () => {
     });
     expect(items?.[4]?.Update).toMatchObject({
       Key: keys.activityMeta(ACTIVITY_ID),
-      UpdateExpression: 'REMOVE #listId, #listItemId',
+      UpdateExpression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
+      ExpressionAttributeValues: expect.objectContaining({ ':updatedAt': NOW }),
     });
     expect(items?.[5]?.Put?.Item).toMatchObject({
       snapshot: item(),
@@ -1362,12 +1385,15 @@ describe('delete, restore and cascade', () => {
     expect(items?.[3]?.Put?.Item).toMatchObject(viewerLink());
     expect(items?.[4]?.Update).toMatchObject({
       Key: keys.activityMeta(ACTIVITY_ID),
-      UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
+      UpdateExpression:
+        'SET #listId = :listId, #listItemId = :listItemId, #updatedAt = :updatedAt',
+      ExpressionAttributeValues: expect.objectContaining({ ':updatedAt': LATER }),
     });
     expect(items?.[5]?.Delete?.Key).toEqual(keys.listItemTombstone(LIST_ID, ITEM_A));
     expect(items?.[7]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':expectedVersion': 3,
       ':nextVersion': 4,
+      ':itemVersionIncrement': 1,
     });
   });
 
@@ -1440,5 +1466,290 @@ describe('delete, restore and cascade', () => {
       keys.listPointer(ALICE, LIST_ID),
       keys.listMeta(LIST_ID),
     ]);
+  });
+});
+
+/**
+ * `sourceLabel` extension (P3-17), which is deliberately not reachable through
+ * {@link ListItemFieldPatch}: every field on that shape is one a client may author, and
+ * provenance that a `PATCH` could set records nothing (`plans-and-lists.md` §6.5).
+ */
+
+/**
+ * The builder-level halves of a list write, extracted so a caller that must commit list rows
+ * **and** rows in another partition can do it in one transaction (P3-17).
+ *
+ * `createListItems` is these two plus its own commit, so the conditions asserted here are the
+ * conditions every create path uses — which is the point of the extraction. A second rank
+ * allocator or a second set of conditions is how two callers start disagreeing about what a
+ * valid write is.
+ */
+describe('the composable list-write primitives', () => {
+  type Composed = {
+    Put?: { Item?: Record<string, unknown>; ConditionExpression?: string };
+    Update?: {
+      Key?: Record<string, unknown>;
+      ConditionExpression?: string;
+      ExpressionAttributeValues?: Record<string, unknown>;
+    };
+    ConditionCheck?: { Key?: Record<string, unknown>; ConditionExpression?: string };
+  };
+
+  const builderItems = (builder: { build: () => readonly unknown[] }): Composed[] =>
+    builder.build() as Composed[];
+
+  describe('planListItemWrites', () => {
+    it('returns the fenced list and one rank per requested row', async () => {
+      vi.mocked(base.getItem).mockImplementation((key) =>
+        key.sk === 'META' ? Promise.resolve(listRow()) : Promise.resolve(undefined),
+      );
+      vi.mocked(base.query).mockResolvedValue({ items: [] } as never);
+
+      const basis = await repository.planListItemWrites(ALICE, LIST_ID, access, 3);
+
+      expect(basis.list.rankVersion).toBe(0);
+      expect(basis.ranks).toHaveLength(3);
+      expect(new Set(basis.ranks).size).toBe(3);
+    });
+
+    it('allocates nothing when no row is being created', async () => {
+      vi.mocked(base.getItem).mockImplementation((key) =>
+        key.sk === 'META' ? Promise.resolve(listRow()) : Promise.resolve(undefined),
+      );
+      vi.mocked(base.query).mockResolvedValue({ items: [] } as never);
+
+      const basis = await repository.planListItemWrites(ALICE, LIST_ID, access, 0);
+
+      expect(basis.ranks).toEqual([]);
+    });
+
+    it('rejects a deciding snapshot when either item generation has moved', async () => {
+      vi.mocked(base.getItem).mockImplementation((key) =>
+        key.sk === 'META'
+          ? Promise.resolve(listRow({ rankVersion: 4, itemVersion: 9 }))
+          : Promise.resolve(undefined),
+      );
+
+      await expect(
+        repository.planListItemWrites(ALICE, LIST_ID, access, 1, {
+          expectedRankVersion: 4,
+          expectedItemVersion: 8,
+        }),
+      ).rejects.toBeInstanceOf(repository.ListSnapshotStaleError);
+      expect(base.query).not.toHaveBeenCalled();
+    });
+
+    it('refuses a grant issued for another list', async () => {
+      await expect(
+        repository.planListItemWrites(ALICE, 'lst_01J8XKQ2M4N5P6R7S8T9V0W1Y9', access, 1),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('appendListItemCreates', () => {
+    const appended = (
+      items: ListItem[] = [item()],
+      identities: ReadonlyMap<string, IngredientDestinationBinding> = new Map(),
+    ) => {
+      const builder = new tx.TransactionBuilder('test');
+      const spans = repository.appendListItemCreates(
+        builder,
+        LIST_ID,
+        items,
+        { list: list(), ranks: items.map((row) => row.rank) },
+        NOW,
+        identities,
+      );
+      return { spans, items: builderItems(builder) };
+    };
+
+    it('writes the ranked row, its locator and a tombstone check per item', () => {
+      const { items } = appended([item(), item({ itemId: ITEM_B, rank: 'W' })]);
+
+      // The deletion gate, then three per row, then META.
+      expect(items).toHaveLength(1 + 3 * 2 + 1);
+      expect(items[1]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
+      expect(items[2]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
+      expect(items[3]?.ConditionCheck?.Key).toEqual(
+        keys.listItemTombstone(LIST_ID, ITEM_A),
+      );
+    });
+
+    it('stores the exact ingredient outcome on a created item locator', () => {
+      const binding: IngredientDestinationBinding = {
+        listId: LIST_ID,
+        requestedItemId: ITEM_A,
+        itemId: ITEM_A,
+        sourceActivityId: ACTIVITY_ID,
+        ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X5',
+        outcome: 'created',
+      };
+
+      const { items } = appended([item()], new Map([[ITEM_A, binding]]));
+
+      expect(items[2]?.Put?.Item).toMatchObject({
+        ...keys.listItemLocator(LIST_ID, ITEM_A),
+        ...binding,
+        rank: item().rank,
+        itemRevision: item().itemRevision,
+      });
+    });
+
+    /**
+     * The item cap lives **in the transaction**, not only in the service precheck: two
+     * creates against a 499-item list both pass that precheck, and the loser retries against
+     * a refreshed `rankVersion` that carries no capacity information.
+     */
+    it('advances both versions and enforces the cap in the META condition', () => {
+      const { spans, items } = appended();
+      const meta = items[spans.meta]?.Update;
+
+      expect(meta?.ConditionExpression).toContain('#rankVersion = :expectedVersion');
+      expect(meta?.ConditionExpression).toContain('attribute_not_exists(#itemVersion)');
+      expect(meta?.ConditionExpression).toContain('#itemCount <= :maxBefore');
+      expect(meta?.ExpressionAttributeValues).toMatchObject({
+        ':expectedVersion': 0,
+        ':nextVersion': 1,
+        ':expectedItemVersion': 0,
+        ':itemVersionIncrement': 1,
+        ':count': 1,
+        ':maxBefore': MAX_LIST_ITEMS - 1,
+      });
+    });
+
+    it('keeps the write off a list mid-repair or mid-migration', () => {
+      const { spans, items } = appended();
+
+      expect(items[spans.meta]?.Update?.ConditionExpression).toContain('rankRepairId');
+      expect(items[spans.meta]?.Update?.ConditionExpression).toContain(
+        'behaviourMigrationId',
+      );
+    });
+
+    it('counts only unchecked rows toward uncheckedCount', () => {
+      const { spans, items } = appended([
+        item(),
+        item({ itemId: ITEM_B, rank: 'W', checked: true }),
+      ]);
+
+      expect(items[spans.meta]?.Update?.ExpressionAttributeValues).toMatchObject({
+        ':count': 2,
+        ':unchecked': 1,
+      });
+    });
+
+    it('reports the spans a caller needs to name its condition failures', () => {
+      const { spans, items } = appended();
+
+      expect(items[spans.deletionGate]?.ConditionCheck).toBeDefined();
+      expect(items[spans.meta]?.Update?.Key).toEqual(keys.listMeta(LIST_ID));
+    });
+  });
+
+  describe('appendSourceLabelExtension', () => {
+    const appended = (value: ListItem, segment = 'Sunday dinner') => {
+      const builder = new tx.TransactionBuilder('test');
+      repository.appendSourceLabelExtension(
+        builder,
+        LIST_ID,
+        value,
+        {
+          ...value,
+          sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA',
+          sourceLabel: segment,
+          sourceProvenance: [
+            {
+              activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA',
+              label: segment,
+            },
+          ],
+          itemRevision: value.itemRevision + 1,
+        },
+        LATER,
+      );
+      return builderItems(builder);
+    };
+
+    it('sets the label on the ranked row and moves both revisions', () => {
+      const target = item({ itemRevision: 4 });
+      const items = appended(target);
+
+      expect(items[0]?.Update?.ExpressionAttributeValues).toMatchObject({
+        ':sourceLabel': 'Sunday dinner',
+        ':expectedRevision': 4,
+        ':nextRevision': 5,
+      });
+      expect(items[1]?.Update?.Key).toEqual(keys.listItemLocator(LIST_ID, ITEM_A));
+      expect(items[1]?.Update?.ExpressionAttributeValues).toMatchObject({
+        ':rank': target.rank,
+        ':expectedRevision': 4,
+        ':nextRevision': 5,
+      });
+    });
+
+    /**
+     * The classification behind an extension is "this row is **unchecked**", and
+     * `itemRevision` moves when `checked` does — so this condition is what stops a row
+     * checked in between being extended when §7.3 says it should have become a new row.
+     */
+    it('conditions both rows on the revision the caller read', () => {
+      const items = appended(item({ itemRevision: 9 }));
+
+      expect(items[0]?.Update?.ConditionExpression).toBe(
+        '#itemRevision = :expectedRevision',
+      );
+      expect(items[1]?.Update?.ConditionExpression).toContain(
+        '#itemRevision = :expectedRevision',
+      );
+    });
+
+    it('adds exactly two items, leaving the transaction to its caller', () => {
+      expect(appended(item())).toHaveLength(2);
+    });
+  });
+
+  describe('appendIngredientDestinationBinding', () => {
+    const binding = (
+      overrides: Partial<IngredientDestinationBinding> = {},
+    ): IngredientDestinationBinding => ({
+      listId: LIST_ID,
+      requestedItemId: ITEM_B,
+      itemId: ITEM_A,
+      sourceActivityId: ACTIVITY_ID,
+      ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X5',
+      outcome: 'labelled',
+      ...overrides,
+    });
+
+    it('occupies the ordinary ITEMID namespace for an absorbed alias', () => {
+      const builder = new tx.TransactionBuilder('test');
+
+      repository.appendIngredientDestinationBinding(builder, binding(), NOW);
+
+      const stored = builderItems(builder)[0]?.Put?.Item;
+      expect(stored).toMatchObject({
+        ...keys.listItemLocator(LIST_ID, ITEM_B),
+        ...binding(),
+      });
+      expect(stored).not.toHaveProperty('ttl');
+    });
+
+    it('binds an existing exact locator only while it has no ingredient owner', () => {
+      const builder = new tx.TransactionBuilder('test');
+      const exact = binding({ requestedItemId: ITEM_A });
+
+      repository.appendIngredientDestinationBinding(builder, exact, NOW, item());
+
+      const update = builderItems(builder)[0]?.Update;
+      expect(update?.Key).toEqual(keys.listItemLocator(LIST_ID, ITEM_A));
+      expect(update?.ConditionExpression).toContain(
+        'attribute_not_exists(#ingredientId)',
+      );
+      expect(update?.ExpressionAttributeValues).toMatchObject({
+        ':rank': item().rank,
+        ':itemRevision': item().itemRevision,
+        ':ingredientId': exact.ingredientId,
+      });
+    });
   });
 });

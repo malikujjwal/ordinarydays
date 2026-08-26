@@ -21,6 +21,7 @@ import {
 import type {
   Activity,
   ActivityDetail,
+  ActivityDetails,
   ActivityDetailTarget,
   ActivityFilter,
   ActivityListItem,
@@ -28,6 +29,7 @@ import type {
   ActivityStatus,
   Gsi1Bucket,
   ListItemActivityLink,
+  MealIngredient,
   Occurrence,
   OccurrenceDetailProjection,
   Recurrence,
@@ -50,6 +52,7 @@ import {
   newReminderId,
   createActivity as putActivity,
   patchActivity as putPatch,
+  StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
 import { findViewerLinksTo } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
@@ -717,6 +720,17 @@ export async function patchActivity(
   const correctionDate = sameDayCorrectionDate(current, patch, now);
   const change = applyKindChange(current, patch, log);
   const next = merge(current, patch, change, now);
+  const convertedListLink =
+    current.objectKind === 'plan' &&
+    next.objectKind === 'task' &&
+    current.listId !== undefined &&
+    current.listItemId !== undefined
+      ? { listId: current.listId, itemId: current.listItemId }
+      : undefined;
+  if (current.objectKind === 'plan' && next.objectKind === 'task') {
+    delete next.listId;
+    delete next.listItemId;
+  }
   const parent =
     next.parentActivityId !== undefined
       ? await getActivityMeta(next.parentActivityId)
@@ -727,14 +741,20 @@ export async function patchActivity(
     current.title !== next.title;
 
   try {
-    await putPatch(userId, next, ifMatch, {
-      previous: current,
-      ...(correctionDate === undefined
-        ? {}
-        : { requireMissingOccurrenceDate: correctionDate }),
-      ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
-      ...(updatesExistingChildPointer ? { updateChildPointer: true } : {}),
-    });
+    await putPatchWithLinkLifecycle(
+      userId,
+      next,
+      ifMatch,
+      {
+        previous: current,
+        ...(correctionDate === undefined
+          ? {}
+          : { requireMissingOccurrenceDate: correctionDate }),
+        ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
+        ...(updatesExistingChildPointer ? { updateChildPointer: true } : {}),
+      },
+      convertedListLink,
+    );
   } catch (error) {
     if (error instanceof AppError && error.code === 'conflict') {
       const fresh = await getActivityMeta(activityId);
@@ -756,6 +776,46 @@ export async function patchActivity(
    * Caught by a route test asserting the body has no `pk`, which the first version failed.
    */
   return toActivity(next as unknown as StoredItem);
+}
+
+const VIEWER_LINK_WRITE_ATTEMPTS = 3;
+
+/**
+ * A Plan → Task conversion ends the Plan-specific relationship to its source ListItem.
+ * Clearing Activity provenance and the matching viewer pointer is part of the same
+ * conditional transaction as the conversion, so neither half can survive by itself.
+ *
+ * Pointer deletes are conditional: a viewer may have planned the item again after our read.
+ * Re-reading on that condition failure preserves the newer pointer while still committing
+ * the conversion. Three consecutive races surface an honest conflict with no partial write.
+ */
+async function putPatchWithLinkLifecycle(
+  userId: string,
+  next: Activity,
+  expectedUpdatedAt: string,
+  options: Parameters<typeof putPatch>[3],
+  convertedListLink?: { readonly listId: string; readonly itemId: string },
+): Promise<void> {
+  if (convertedListLink === undefined) {
+    await putPatch(userId, next, expectedUpdatedAt, options);
+    return;
+  }
+
+  for (let attempt = 0; attempt < VIEWER_LINK_WRITE_ATTEMPTS; attempt += 1) {
+    const clearViewerLinks = await findViewerLinksTo(
+      convertedListLink.listId,
+      convertedListLink.itemId,
+      next.activityId,
+    );
+    try {
+      await putPatch(userId, next, expectedUpdatedAt, { ...options, clearViewerLinks });
+      return;
+    } catch (error) {
+      if (!(error instanceof StaleViewerLinkError)) throw error;
+    }
+  }
+
+  throw new AppError('conflict', 'This changed while you were editing it. Try again.');
 }
 
 /**
@@ -890,6 +950,9 @@ function merge(
   const next: Record<string, unknown> = {
     ...base,
     ...pick(patch, 'title', 'notes', 'details'),
+    ...(patch.details === undefined
+      ? {}
+      : { details: withRetainedProvenance(current.details, patch.details) }),
     ...(recurrenceUpdate == null ? {} : { recurrence: recurrenceUpdate }),
     ...nullable(patch, 'location', 'sourceUrl', 'parentActivityId'),
     ...(activeSchedule === undefined ? {} : { schedule: activeSchedule }),
@@ -934,6 +997,60 @@ function targetOf(change: ChangeResult) {
 }
 
 /** Present, non-null keys only — so an absent optional never lands as an explicit undefined. */
+/**
+ * Carries each ingredient's server-owned `addedToListId` across a `details` replacement
+ * (P3-17, raised in review).
+ *
+ * `PATCH /v1/activities/:id` replaces `details` wholesale, and the client cannot send this
+ * field back — `mealIngredientInput` rejects it, because a client able to author it could
+ * fabricate the `Added` state for any well-formed `lst_` id. Both halves of that are right,
+ * and together they mean **the server has to be the one that preserves it**: without this,
+ * renaming an ingredient, fixing a quantity or reordering a row silently cleared every marker
+ * on the meal, and the user was then offered ingredients they had already added.
+ *
+ * Matched by `ingredientId`, never by position — the same rule the add-to-list action
+ * follows, and for the same reason. An id new to this patch is a genuinely new row with no
+ * marker to inherit; a row that was removed takes its marker with it.
+ */
+type PatchedDetails = NonNullable<PatchActivityInput['details']>;
+
+function withRetainedProvenance(
+  current: ActivityDetails | undefined,
+  next: PatchedDetails,
+): PatchedDetails | ActivityDetails {
+  if (next.kind !== 'meal' || next.ingredients === undefined) return next;
+  if (current?.kind !== 'meal') return next;
+
+  const addedToListIdById = new Map(
+    (current.ingredients ?? []).flatMap((ingredient) =>
+      ingredient.addedToListId === undefined
+        ? []
+        : [[ingredient.ingredientId, ingredient.addedToListId] as const],
+    ),
+  );
+  if (addedToListIdById.size === 0) return next;
+
+  // Rebuilt field by field rather than spread: the input ingredient's optionals are
+  // `T | undefined` while the stored shape uses absence, so a spread would carry explicit
+  // `undefined`s into a row `exactOptionalPropertyTypes` says must simply not have them.
+  const ingredients: MealIngredient[] = next.ingredients.map((ingredient) => {
+    const addedToListId = addedToListIdById.get(ingredient.ingredientId);
+    return {
+      ingredientId: ingredient.ingredientId,
+      name: ingredient.name,
+      ...(ingredient.quantity === undefined ? {} : { quantity: ingredient.quantity }),
+      ...(addedToListId === undefined ? {} : { addedToListId }),
+    };
+  });
+
+  return {
+    kind: 'meal',
+    ...(next.mealSlot === undefined ? {} : { mealSlot: next.mealSlot }),
+    ingredients,
+    ...(next.recipeUrl === undefined ? {} : { recipeUrl: next.recipeUrl }),
+  };
+}
+
 function pick<K extends keyof PatchActivityInput>(
   patch: PatchActivityInput,
   ...fields: K[]

@@ -357,7 +357,7 @@ there is one is §1a.1.
 | Toggle a list capability (`Show checkboxes`, `Add a place to items`) | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Additive both ways (§1a.1) |
 | Change a list's default-destination slot | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the settings-operation token. Restore a removed profile default only when no newer choice occupies that slot |
 | Upgrade a list's behaviour to `watch` or `meals` | No | Yes | 6 s | `POST /v1/lists/:id/undo` with the upgrade-operation token. The compensation restores the previous behaviour and removes only unchanged defaults created by that operation; an intervening edit makes it no longer applicable |
-| Downgrade a list's behaviour to `collection`, where items carry the typed fields | **Yes**, naming the fields and the item count (§1a.1) | No | — | Repeat `POST /v1/lists/:id/behaviour` with `?confirmDataLoss=true` |
+| Downgrade a list's behaviour to `collection`, where items carry the typed fields | **Yes**, naming the fields and the item count (§1a.1) | No | — | Repeat `POST /v1/lists/:id/behaviour` with the complete server-authored confirmation object echoed in the body |
 | Downgrade a list's behaviour where **no** item carries them | No | Yes | 6 s | Additive by §1a.1 rule 3, so it takes the row above it: `POST /v1/lists/:id/undo` with the settings-operation token |
 | Accept a follow-up suggestion (§1a.2) | No | Yes | 6 s | `PATCH` back. Independent of the action that offered it |
 | Remove a participant | **Yes** | No | — | Revokes their token; re-adding sends a new invitation |
@@ -461,7 +461,8 @@ Section-level empty states on Today are specified in
 | Screen-level refresh failure (cached data present) | Cached content stays. A dismissible banner: `Couldn't refresh.` | `Try again` |
 | Mutation failure | The optimistic change reverts; error toast naming what failed: `Couldn't complete "Gym."` | `Retry` |
 | `409 conflict` on a shared plan | `This plan changed while you were editing.` Client refetches; non-overlapping edits are re-applied, overlapping ones are dropped and named. | `Review` |
-| `409 conflict` on a list behaviour change | Not an error toast: the §1a.1 confirmation dialog, composed from the response's field list and item count. The server sends the labels and the count; the surface supplies the list's own title | `Turn into a plain list` re-sends the change with `?confirmDataLoss=true` under a new key |
+| `409 conflict` on a list behaviour change | Not an error toast: the §1a.1 confirmation dialog, composed from the response's typed `confirmation`. The server sends the source/target behaviours, `itemVersion`, labels and count; the surface supplies the list's own title | `Turn into a plain list` re-sends the change under a new key and echoes the complete `confirmation` object |
+| Adding ingredients whose source rows have changed | Toast: `Some of those ingredients have changed. Reopen the meal and try again.` The whole action is refused rather than partly applied, so the list is exactly as it was ([`plans-and-lists.md`](plans-and-lists.md) §7.3) | `Reopen` returns to the meal |
 | `403 forbidden` | `Only the person who made this plan can change that.` | — |
 | `404 not_found` | `This isn't here any more.` Navigate back. | — |
 | `422 participant_limit_exceeded` | Inline in the picker: `You can add up to 50 people to a plan.` | — |

@@ -179,7 +179,9 @@ describe('nothing but a tap may choose a style', () => {
     const barrel = await import('../index.js');
     expect(Object.keys(barrel).sort()).toEqual([
       'LIST_TEMPLATES',
+      'formatIngredientTitle',
       'listTemplateChoices',
+      'provenanceLabel',
       'resolveSlot',
     ]);
     for (const key of Object.keys(barrel)) {

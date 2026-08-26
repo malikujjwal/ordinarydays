@@ -1,12 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import type { ActivityDetails } from '@od/shared/types';
+import { describe, expect, it, vi } from 'vitest';
 import {
   centsToDraft,
   draftCents,
   draftInteger,
   EMPTY_DETAILS,
   fromActivityDetails,
+  newIngredient,
   toActivityDetails,
 } from './draft';
+
+/**
+ * `expo-crypto` is a native module with no jsdom implementation, and P3-17 puts a real `ing_`
+ * ULID behind every new ingredient row ({@link newIngredient}). Deterministic bytes keep the
+ * minted ids stable so a test can assert identity rather than merely non-emptiness.
+ */
+vi.mock('expo-crypto', () => ({
+  getRandomBytes: (count: number) =>
+    Uint8Array.from({ length: count }, (_, index) => index),
+  randomUUID: () => 'idem-test-key',
+}));
 
 /**
  * The draft ↔ `ActivityDetails` conversions (P1-25).
@@ -85,8 +98,39 @@ describe('toActivityDetails', () => {
 
     expect(toActivityDetails('meal', details, 'Tacos')).toEqual({
       kind: 'meal',
-      ingredients: [{ name: 'Chicken', quantity: '1 kg' }, { name: 'Salt' }],
+      ingredients: [
+        { ingredientId: 'a', name: 'Chicken', quantity: '1 kg' },
+        { ingredientId: 'c', name: 'Salt' },
+      ],
     });
+  });
+
+  /**
+   * The row's draft id **is** its `ing_` identity (P3-17), so a round trip through the
+   * server shape must return the same ids — a re-mint on open would make every stored id
+   * stale the moment a meal was edited, and an offline add-to-list would then resolve to
+   * nothing.
+   */
+  it('carries stored ingredient ids back into the draft rather than re-minting', () => {
+    const stored: ActivityDetails = {
+      kind: 'meal',
+      ingredients: [
+        { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X2', name: 'Chicken' },
+        { ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X3', name: 'Salt' },
+      ],
+    };
+
+    const draft = fromActivityDetails(stored);
+
+    expect(draft.ingredients.map((row) => row.id)).toEqual([
+      'ing_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+      'ing_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+    ]);
+    expect(toActivityDetails('meal', draft, 'Tacos')).toEqual(stored);
+  });
+
+  it('mints a real ing_ id for a genuinely new row', () => {
+    expect(newIngredient().id).toMatch(/^ing_[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
   });
 
   it('sends numeric Watch fields as numbers, and omits the ones still empty', () => {

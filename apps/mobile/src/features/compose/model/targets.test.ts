@@ -1,6 +1,6 @@
 import { createActivityInput } from '@od/shared/schemas';
 import type { Recurrence } from '@od/shared/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_DETAILS, EMPTY_LOCATION, EMPTY_SCHEDULE } from './draft';
 import {
   canSave,
@@ -13,6 +13,17 @@ import {
   targetHeading,
   toCreateActivityInput,
 } from './targets';
+
+/**
+ * `expo-crypto` is a native module with no jsdom implementation, and P3-17 puts a real `ing_`
+ * ULID behind every new ingredient row ({@link newIngredient}). Deterministic bytes keep the
+ * minted ids stable so a test can assert identity rather than merely non-emptiness.
+ */
+vi.mock('expo-crypto', () => ({
+  getRandomBytes: (count: number) =>
+    Uint8Array.from({ length: count }, (_, index) => index),
+  randomUUID: () => 'idem-test-key',
+}));
 
 /**
  * The chooser vocabulary and its mapping onto a request body (P1-24).

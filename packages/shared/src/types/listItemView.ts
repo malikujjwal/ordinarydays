@@ -5,4 +5,4 @@ import type { ListItem } from './list.js';
  * storage-only mutation fence the identity locator mirrors (`data-model.md` §3.3). `rank`
  * stays — it is opaque to the client but drives the shared `(rank, itemId)` sort order.
  */
-export type ListItemView = Omit<ListItem, 'itemRevision'>;
+export type ListItemView = Omit<ListItem, 'itemRevision' | 'sourceProvenance'>;
