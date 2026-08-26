@@ -195,6 +195,16 @@ bootstrap bucket serves this purpose and we do not create our own.
   this app where an S3 object should be world-readable directly.
 - Bucket policy grants `s3:GetObject` to `cloudfront.amazonaws.com` conditioned on the
   distribution ARN (Origin Access Control). No OAI — that is the legacy mechanism.
+  **`od-media-{env}` is the one exception, and a deliberate one:** its distribution lives in
+  `WebStack` while its bucket lives in `DataStack`, so an exact-ARN condition would make the
+  two stacks depend on each other and CloudFormation rejects the cycle. That grant is
+  conditioned on `aws:SourceAccount` plus a wildcard distribution ARN instead, which closes
+  the confused-deputy case completely and gives up only the distinction between distributions
+  inside this single-tenant account. The reasoning and the trade are written out in
+  [`infrastructure.md`](infrastructure.md) §1.1; `od-web-{env}` keeps the exact-ARN condition,
+  and `infra/test/web-stack.test.ts` asserts both so the asymmetry stays visible.
+  *Cross-reference added 2026-08-27 (P3-23), which found this bullet stating the ARN
+  condition as absolute while the media bucket had not followed it since P0-16.*
 - Encryption: SSE-S3 (`AES256`). SSE-KMS would add per-request KMS charges for no
   meaningful gain given the bucket is already private and single-tenant.
 - Versioning: on for `od-web-{env}` (so a bad web deploy can be rolled back by
