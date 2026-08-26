@@ -21,6 +21,7 @@ import {
   SHARING_SOON,
   toSchedule,
 } from './activityService.js';
+import { assertAttachmentsConfirmable, confirmAttachments } from './attachmentService.js';
 import { assertListAccess } from './authz.js';
 
 /**
@@ -62,9 +63,6 @@ export interface ScheduleListItemResult {
   readonly viewerLink: ListItemActivityLink;
 }
 
-/** Until P3-22 lands the confirm-and-link path, an attachment cannot be honoured. */
-const ATTACHMENTS_SOON = 'Attachments are coming soon.';
-
 const ITEM_NOT_FOUND = 'List item not found.';
 
 export async function scheduleListItem(
@@ -95,16 +93,13 @@ export async function scheduleListItem(
   }
 
   /**
-   * A temporary guard on an accepted field, exactly like the participants one above, and
-   * removed by P3-22. The schema takes `attachmentIds` so the contract and the client are
-   * stable, but there is no confirm-and-link path yet — writing the Plan and dropping the
-   * attachments would be the silent partial success the strict schemas exist to prevent.
+   * P3-13's temporary rejection of a non-empty `attachmentIds` is **gone** (P3-22): the
+   * confirm-and-link path exists now, and the bridge runs the same one `POST /v1/activities`
+   * does. Refused here, before the item read and before any write, for the same reason the
+   * participants guard above is — every way an id fails to be confirmable is knowable without
+   * writing anything, so a bridge call carrying one leaves no Plan behind.
    */
-  if ((input.attachmentIds?.length ?? 0) > 0) {
-    throw new AppError('validation_failed', ATTACHMENTS_SOON, [
-      { path: 'attachmentIds', message: ATTACHMENTS_SOON },
-    ]);
-  }
+  await assertAttachmentsConfirmable(userId, input.attachmentIds ?? []);
 
   /**
    * The exact-item read from P3-04/P3-08. A missing or tombstoned item is `404`; a rank
@@ -209,6 +204,18 @@ export async function scheduleListItem(
       return adopted;
     }
     throw error;
+  }
+
+  /**
+   * The same confirm-and-link path `POST /v1/activities` runs, once per id and **after** the
+   * Plan exists — an attachment row is keyed by the activity it belongs to (P3-22 rule 5).
+   *
+   * It is deliberately outside the adopt branch above: an adopted Plan is one an earlier
+   * request already created, and re-confirming against it would attach this request's images
+   * to somebody's existing Plan on the strength of an id collision.
+   */
+  if ((input.attachmentIds?.length ?? 0) > 0) {
+    await confirmAttachments(userId, activity.activityId, input.attachmentIds ?? [], now);
   }
 
   return result;

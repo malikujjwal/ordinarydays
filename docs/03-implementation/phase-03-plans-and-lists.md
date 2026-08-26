@@ -1602,12 +1602,14 @@ is this task's).
    DynamoDB Stream or scheduled worker is introduced in this phase.
    Therefore every crash point is discoverable—after copy but before DynamoDB is a tracked
    `confirming` operation, not an unowned permanent object.
-2. The `Attachment` row carries `attachmentId`, `key`, `contentType`, `byteSize`,
-   `createdAt`, `schemaVersion`. The entity is named in the data model's key table but has
-   no §4 shape; add it to
-   [`../02-architecture/data-model.md#4-entity-shapes`](../02-architecture/data-model.md#4-entity-shapes)
-   in the same PR. Never store or return a URL: media is served by unguessable key
-   (ADR-023) and the API returns keys only for images the caller may see.
+2. The `Attachment` row carries `attachmentId`, `activityId`, `key`, `contentType`,
+   `byteSize`, `createdAt`, `schemaVersion`. **Corrected 2026-08-27 (P3-22):** this task used
+   to say the entity had no §4 shape and to add one.
+   [`../02-architecture/data-model.md#43c-attachment-and-pending-upload`](../02-architecture/data-model.md#43c-attachment-and-pending-upload)
+   has defined both `Attachment` and `PendingUpload` since P3-21, so the Zod schema is a
+   **transcription** of that section — adding a second definition beside it is exactly the
+   drift the one-shape rule exists to prevent. Never store or return a URL: media is served
+   by unguessable key (ADR-023) and the API returns keys only for images the caller may see.
 3. Owner-only add and delete
    ([`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §2.1 row 8).
    Confirm is idempotent: re-confirming an already linked id returns the existing row.

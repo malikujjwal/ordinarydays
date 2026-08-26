@@ -50,6 +50,9 @@ export type {
 } from './agenda.js';
 export { assertNever } from './assert.js';
 export type {
+  Attachment,
+  ConfirmAttachmentInput,
+  DeletedAttachment,
   RequestUploadUrlInput,
   RequestUploadUrlResult,
   UploadContentType,

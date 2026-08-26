@@ -34,13 +34,14 @@ export const GET_ACTIVITY_PATH = '/:id';
 export async function getActivityHandler(
   c: Context<AppEnv, typeof GET_ACTIVITY_PATH>,
   query: ActivityDetailQuery,
+  now: string,
 ): Promise<Response> {
   const activityId = c.req.param('id');
   const target: ActivityDetailTarget =
     query.occurrenceDate === undefined
       ? { kind: 'activity', activityId }
       : { kind: 'occurrence', activityId, date: query.occurrenceDate };
-  const detail = await getActivityDetail(requireUserId(c), target);
+  const detail = await getActivityDetail(requireUserId(c), target, now);
 
   return c.json({
     data: detail,

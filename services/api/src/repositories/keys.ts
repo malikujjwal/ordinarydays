@@ -134,10 +134,21 @@ export const occurrenceMoveMarker = (activityId: string, date: string) => ({
   sk: `MOVE#${date}`,
 });
 
-/** Phase 3. */
+/** Phase 3. One linked image on one activity. */
 export const attachment = (activityId: string, attachmentId: string) => ({
   pk: activityPk(activityId),
   sk: `ATT#${attachmentId}`,
+});
+
+/**
+ * Every attachment on one activity (P3-22, access pattern 4).
+ *
+ * Bounded by `MAX_ATTACHMENTS_PER_ACTIVITY`, so its reader takes the whole collection in one
+ * page and needs no cursor.
+ */
+export const attachmentPrefix = (activityId: string) => ({
+  pk: activityPk(activityId),
+  skPrefix: 'ATT#',
 });
 
 /** A thin prep-task pointer, so plan detail renders children from the same `Query`. */

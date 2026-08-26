@@ -1,4 +1,11 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  CopyObjectCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+  S3ServiceException,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from './config.js';
 
@@ -165,4 +172,67 @@ export async function presignUpload(request: PresignedPut): Promise<string> {
  */
 export async function deleteObject(key: string): Promise<void> {
   await client.send(new DeleteObjectCommand({ Bucket: MEDIA_BUCKET, Key: key }));
+}
+
+/** What a stored object actually is, as opposed to what somebody declared it would be. */
+export interface StoredObject {
+  readonly contentType?: string;
+  readonly byteSize?: number;
+}
+
+/**
+ * The object's type and length, or `undefined` when there is no such object (P3-22).
+ *
+ * The confirmation state machine calls this twice and for different reasons. On the
+ * temporary key it is the **proof that the upload happened and matched its declaration** —
+ * the signature bound the type and length, so an object that exists at that key with those
+ * two values is one this service authorised; an absent object means the client never
+ * uploaded, or the one-day lifecycle rule has already collected it. On the permanent key it
+ * is the proof the copy landed, which is what lets a retry after a crash tell "already
+ * copied" from "not copied yet" without trusting its own memory.
+ *
+ * A missing object is `undefined` rather than a throw, because both callers treat absence as
+ * a state to act on rather than as a failure. Anything else — a refused connection, a denied
+ * request — propagates, because those are not evidence of anything.
+ */
+export async function headObject(key: string): Promise<StoredObject | undefined> {
+  try {
+    const result = await client.send(
+      new HeadObjectCommand({ Bucket: MEDIA_BUCKET, Key: key }),
+    );
+    return {
+      ...(result.ContentType === undefined ? {} : { contentType: result.ContentType }),
+      ...(result.ContentLength === undefined ? {} : { byteSize: result.ContentLength }),
+    };
+  } catch (error) {
+    if (error instanceof S3ServiceException && error.$metadata.httpStatusCode === 404) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Server-side copy from the temporary key to the permanent one.
+ *
+ * **Server-side, so the bytes never move through this process** — the same rule the presigned
+ * `PUT` exists for. A copy that downloaded and re-uploaded would burn the duration and the
+ * memory that the whole design avoids, on the one code path where the image is largest.
+ *
+ * Idempotent by nature: copying the same source to the same destination twice leaves one
+ * object, which is what makes a retried confirmation safe without a preceding existence check.
+ *
+ * `CopySource` is `bucket/key` and must be URI-encoded — an unencoded key containing a
+ * character S3 treats specially resolves to a different source or to none. The keys this
+ * service mints are ULIDs and user ids, so nothing here needs it today; it is encoded anyway,
+ * because the day a key format changes is not the day to discover this.
+ */
+export async function copyObject(fromKey: string, toKey: string): Promise<void> {
+  await client.send(
+    new CopyObjectCommand({
+      Bucket: MEDIA_BUCKET,
+      CopySource: encodeURI(`${MEDIA_BUCKET}/${fromKey}`),
+      Key: toKey,
+    }),
+  );
 }

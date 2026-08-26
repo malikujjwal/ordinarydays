@@ -25,6 +25,16 @@ export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const MAX_UNRESOLVED_UPLOADS = 20;
 
 /**
+ * Attachments linked to one Activity (`phase-03-plans-and-lists.md` §P3-22, where the
+ * decision is recorded).
+ *
+ * It is what keeps plan detail's attachment section a **bounded** read: twenty rows is one
+ * page under any limit, so the section never needs a cursor and the detail response never
+ * grows without bound. The 21st confirm is `validation_failed`.
+ */
+export const MAX_ATTACHMENTS_PER_ACTIVITY = 20;
+
+/**
  * How long a pending upload record and its temporary object survive.
  *
  * **One day, and the two halves must agree.** The deployed bucket's lifecycle rule expires

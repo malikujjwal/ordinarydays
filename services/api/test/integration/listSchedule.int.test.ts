@@ -361,8 +361,13 @@ describe('what it refuses, and writes nothing for', () => {
     await noPlanWritten(list.listId);
   });
 
-  /** Temporary, removed by P3-22. Writing the Plan and dropping them would be worse. */
-  it('400s a non-empty attachmentIds', async () => {
+  /**
+   * **P3-13's temporary rejection is gone** (P3-22): the bridge runs the same
+   * confirm-and-link path a create does. What survives is its shape — an id that cannot be
+   * confirmed is refused before any write, so no Plan is left behind. The linking half is
+   * proved against MinIO in `attachmentConfirm.int.test.ts`; this file has no object store.
+   */
+  it('400s an unconfirmable attachmentId and writes no Plan', async () => {
     const { list, item } = await setUp();
 
     const res = await schedule(
@@ -372,7 +377,7 @@ describe('what it refuses, and writes nothing for', () => {
     );
 
     expect(res.status).toBe(400);
-    expect((await res.json()).error.message).toBe('Attachments are coming soon.');
+    expect((await res.json()).error.code).toBe('validation_failed');
     await noPlanWritten(list.listId);
   });
 

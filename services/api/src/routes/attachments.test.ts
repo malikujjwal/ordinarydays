@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  QueryCommand,
+  TransactWriteCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { MAX_UPLOAD_BYTES } from '@od/shared/constants';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +26,20 @@ import type { createApp as CreateApp } from '../app.js';
  * store is `test/integration/attachments.int.test.ts`'s, because a presigner asserting its
  * own output proves nothing about whether a store honours it.
  */
+/**
+ * The object store, mocked **only where a route reaches it**.
+ *
+ * `presignUpload` stays real: signing is pure local cryptography, it makes no request, and it
+ * is the thing `upload-url`'s tests are about. `deleteObject` is the one call a route makes
+ * that needs a network, and a route test is the wrong layer to prove what a store does with
+ * it — `test/integration/attachments.int.test.ts` is.
+ */
+const deleteObject = vi.fn<(key: string) => Promise<void>>();
+vi.mock('../lib/s3.js', async () => {
+  const actual = await vi.importActual<typeof import('../lib/s3.js')>('../lib/s3.js');
+  return { ...actual, deleteObject: (key: string) => deleteObject(key) };
+});
+
 const ddbMock = mockClient(DynamoDBDocumentClient);
 
 let createApp: typeof CreateApp;
@@ -67,6 +86,8 @@ beforeEach(async () => {
   ddbMock.on(TransactWriteCommand).resolves({});
   // The drain runs first on every request and reads the caller's unresolved set.
   ddbMock.resolves({ Items: [] });
+  deleteObject.mockReset();
+  deleteObject.mockResolvedValue();
   vi.resetModules();
   createApp = (await import('../app.js')).createApp;
 });
@@ -203,5 +224,219 @@ describe('POST /v1/attachments/upload-url', () => {
     expect(
       withRecord?.some((item) => String(item.Put?.Item?.pk).startsWith('IDEM#')),
     ).toBe(true);
+  });
+});
+
+/**
+ * The two activity-scoped routes (P3-22).
+ *
+ * Endpoint-level only: the envelope, the statuses, the required key, and that a refusal
+ * writes nothing. The state machine itself is proved beside its service and end-to-end
+ * against MinIO — a route test that mocked S3 would be asserting its own mock.
+ */
+describe('the activity-scoped attachment routes', () => {
+  const ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1XA';
+  const ATT = 'att_01J8XKQ2M4N5P6R7S8T9V0W1XB';
+  const CONFIRM = `http://localhost/v1/activities/${ACT}/attachments`;
+  const ONE = `${CONFIRM}/${ATT}`;
+
+  const attachmentRow = {
+    pk: `ACT#${ACT}`,
+    sk: `ATT#${ATT}`,
+    entity: 'Attachment',
+    attachmentId: ATT,
+    activityId: ACT,
+    key: `u/${DEV}/01J8XKQ2M4N5P6R7S8T9V0W1XB.jpg`,
+    contentType: 'image/jpeg',
+    byteSize: 2048,
+    createdAt: '2026-08-26T12:00:00.000Z',
+    schemaVersion: 1,
+  };
+
+  const meta = (overrides: Record<string, unknown> = {}) => ({
+    pk: `ACT#${ACT}`,
+    sk: 'META',
+    entity: 'Activity',
+    activityId: ACT,
+    ownerId: DEV,
+    objectKind: 'plan',
+    type: 'event',
+    status: 'saved',
+    title: 'New York Trip',
+    details: { kind: 'event' },
+    participantCount: 0,
+    childCount: 0,
+    expenseTotalCents: 0,
+    visibility: 'private',
+    icsSequence: 0,
+    createdAt: '2026-08-26T09:00:00.000Z',
+    lastActivityAt: '2026-08-26T09:00:00.000Z',
+    updatedAt: '2026-08-26T09:00:00.000Z',
+    schemaVersion: 1,
+    ...overrides,
+  });
+
+  const attachmentDeletes = () =>
+    ddbMock
+      .commandCalls(TransactWriteCommand)
+      .flatMap((call) => call.args[0].input.TransactItems ?? [])
+      .filter((item) => String(item.Delete?.Key?.sk).startsWith('ATT#'));
+
+  beforeEach(() => {
+    // The activity exists and the caller owns it; the attachment is already linked, which is
+    // the one path that needs no object store at all.
+    ddbMock.on(GetCommand).resolves({ Item: meta() });
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+  });
+
+  describe('POST /v1/activities/:id/attachments', () => {
+    const confirm = async (body: unknown, extra?: Record<string, string>) =>
+      createApp().fetch(
+        new Request(CONFIRM, {
+          method: 'POST',
+          headers: headers(extra),
+          body: JSON.stringify(body),
+        }),
+      );
+
+    /**
+     * Re-confirming is the one branch reachable without a store, and it is the branch worth
+     * pinning at this layer: a client that lost its response gets `201` and the row that is
+     * already there, not a different status for its retry.
+     */
+    it('answers 201 with the existing row when the id is already linked', async () => {
+      ddbMock.on(GetCommand).callsFake((input) => ({
+        Item: String(input.Key?.sk).startsWith('ATT#') ? attachmentRow : meta(),
+      }));
+
+      const response = await confirm({ attachmentId: ATT });
+      const body = (await response.json()) as {
+        data: Record<string, unknown>;
+        meta: { requestId: string };
+      };
+
+      expect(response.status).toBe(201);
+      expect(body.data.attachmentId).toBe(ATT);
+      expect(body.data.key).toBe(`u/${DEV}/01J8XKQ2M4N5P6R7S8T9V0W1XB.jpg`);
+      expect(body.meta.requestId).toBeTruthy();
+    });
+
+    /** Storage keys never leave the repository layer, and a key is never a URL (ADR-023). */
+    it('exposes no pk, sk or entity, and no URL', async () => {
+      ddbMock.on(GetCommand).callsFake((input) => ({
+        Item: String(input.Key?.sk).startsWith('ATT#') ? attachmentRow : meta(),
+      }));
+
+      const { data } = (await (await confirm({ attachmentId: ATT })).json()) as {
+        data: Record<string, unknown>;
+      };
+
+      expect(Object.keys(data).sort()).toEqual([
+        'activityId',
+        'attachmentId',
+        'byteSize',
+        'contentType',
+        'createdAt',
+        'key',
+        'schemaVersion',
+      ]);
+      expect(JSON.stringify(data)).not.toContain('://');
+    });
+
+    it.each([
+      ['a missing attachmentId', {}],
+      ['a malformed attachmentId', { attachmentId: 'att_nope' }],
+      ['a caller-chosen key', { attachmentId: ATT, key: 'u/x.jpg' }],
+      ['a caller-chosen contentType', { attachmentId: ATT, contentType: 'image/png' }],
+    ])('%s is a 400 in the contract envelope, writing nothing', async (_name, body) => {
+      const response = await confirm(body);
+      const parsed = (await response.json()) as {
+        error: { code: string; requestId: string };
+      };
+
+      expect(response.status).toBe(400);
+      expect(parsed.error.code).toBe('validation_failed');
+      expect(parsed.error.requestId).toBeTruthy();
+      expect(attachmentDeletes()).toEqual([]);
+    });
+
+    /** A stranger's activity is `404`, never `403` (`definition-of-done.md` §7 rule 5). */
+    it('404s an activity the caller does not own', async () => {
+      ddbMock.on(GetCommand).resolves({ Item: meta({ ownerId: 'usr_someone_else' }) });
+
+      const response = await confirm({ attachmentId: ATT });
+
+      expect(response.status).toBe(404);
+    });
+
+    it('requires an Idempotency-Key', async () => {
+      const response = await createApp().fetch(
+        new Request(CONFIRM, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ attachmentId: ATT }),
+        }),
+      );
+
+      expect(response.status).toBe(400);
+    });
+  });
+
+  describe('DELETE /v1/activities/:id/attachments/:attachmentId', () => {
+    const remove = async () =>
+      createApp().fetch(new Request(ONE, { method: 'DELETE', headers: headers() }));
+
+    beforeEach(() => {
+      ddbMock.on(GetCommand).callsFake((input) => ({
+        Item: String(input.Key?.sk).startsWith('ATT#') ? attachmentRow : meta(),
+      }));
+    });
+
+    it('answers 200 with the id and whether the cover was cleared', async () => {
+      const response = await remove();
+      const body = (await response.json()) as { data: Record<string, unknown> };
+
+      expect(response.status).toBe(200);
+      expect(body.data).toEqual({ attachmentId: ATT, coverCleared: false });
+      expect(attachmentDeletes()).toHaveLength(1);
+    });
+
+    it('reports the cover cleared when the deleted attachment was the hero', async () => {
+      ddbMock.on(GetCommand).callsFake((input) => ({
+        Item: String(input.Key?.sk).startsWith('ATT#')
+          ? attachmentRow
+          : meta({ primaryAttachmentId: ATT }),
+      }));
+
+      const { data } = (await (await remove()).json()) as {
+        data: Record<string, unknown>;
+      };
+
+      expect(data).toEqual({ attachmentId: ATT, coverCleared: true });
+    });
+
+    /** A repeat is `404`, which for the caller means "already gone". */
+    it('404s an id that names no attachment on this activity', async () => {
+      ddbMock.on(GetCommand).callsFake((input) => ({
+        Item: String(input.Key?.sk).startsWith('ATT#') ? undefined : meta(),
+      }));
+
+      const response = await remove();
+
+      expect(response.status).toBe(404);
+      expect(attachmentDeletes()).toEqual([]);
+    });
+
+    /** No `Idempotency-Key`: `DELETE` is idempotent by its own shape. */
+    it('takes no Idempotency-Key', async () => {
+      const response = await createApp().fetch(
+        new Request(ONE, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+    });
   });
 });

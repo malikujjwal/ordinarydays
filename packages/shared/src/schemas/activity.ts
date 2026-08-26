@@ -9,6 +9,7 @@ import {
   MAX_TITLE_LEN,
 } from '../constants.js';
 import { activityUpdate } from './activityUpdate.js';
+import { attachment } from './attachment.js';
 import { activityActionCapabilities } from './capabilities.js';
 import {
   cents,
@@ -493,6 +494,11 @@ export const activityDetail = z
      */
     updates: z.array(activityUpdate).optional(),
     updatesCursor: z.string().min(1).optional(),
+    /**
+     * Every image linked to this activity (P3-22), capped at
+     * `MAX_ATTACHMENTS_PER_ACTIVITY`. Bounded by the model, so there is no cursor beside it.
+     */
+    attachments: z.array(attachment).optional(),
   })
   .meta({ id: 'ActivityDetail' });
 
@@ -535,6 +541,16 @@ export const patchActivityInput = z
     status: z.literal('cancelled').optional(),
     objectKind: z.enum(['task', 'plan']).optional(),
     type: activityType.optional(),
+    /**
+     * `Set as cover` (P3-22). Nullable: `null` clears the hero, absent leaves it alone.
+     *
+     * The shape is all this schema can check. **Whether the id names an attachment on
+     * *this* activity is the server's**, validated against the activity's own rows before
+     * the write — a client could otherwise point the hero at an id it invented, or at a real
+     * attachment belonging to somebody else's plan, and the field would render as an image
+     * request for a key the caller was never allowed to see.
+     */
+    primaryAttachmentId: ulidId('att').nullable().optional(),
   })
   .superRefine((value, ctx) => {
     if ((value.objectKind === undefined) !== (value.type === undefined)) {
