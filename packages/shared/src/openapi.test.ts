@@ -136,6 +136,7 @@ describe('the generated document', () => {
       'Device',
       'ErrorResponse',
       'HealthResponse',
+      'ListBehaviourConfirmation',
       'ListDetail',
       'ListDetailItem',
       'ListItemPlanState',

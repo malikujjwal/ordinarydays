@@ -1223,23 +1223,41 @@ non-meal activity, or an inaccessible destination is rejected without partial wr
    meal title: `Sunday dinner · Chicken tacos`.
 
 The label is **computed once and stored, never recomputed**, so it stays truthful after the
-meal is rescheduled or deleted. A manually added item has no label and renders no dash.
+meal is rescheduled or deleted. A manually added item has no label and renders no dash. A
+single canonical segment may contain a full 200-character meal title. The rendered field
+therefore has its own `MAX_SOURCE_LABEL_LEN` (4,000), not the generic 120-character free-text
+bound. Extensions are never truncated: the service validates the completed rendered value
+before composing the transaction and rejects the whole action if the bound would be crossed.
 
 **Duplicate handling.** If an item with the same case-insensitive, trimmed title already
 exists **unchecked** on the target list, no second row is created — the existing row's
 `sourceLabel` is extended (`Sunday dinner · Thursday lunch`). If the existing row is
-**checked**, a new row is created: the previous one was already bought.
+**checked**, a new row is created: the previous one was already bought. Selections in one
+request are classified by normalized-title group, so two selected ingredients with the same
+title use the same existing unchecked row or create one new row. Storage also retains
+activity-keyed provenance segments; ownership is never reconstructed by splitting the
+rendered label, because a rule-5 segment can itself contain ` · `.
 
 Classification and persistence are one optimistic unit. A strong, bounded item snapshot
 returns both `META.rankVersion` and storage-only `META.itemVersion`; the single
 `TransactWriteItems` conditions its META update on those exact generations, then advances both
 while writing every created row, extended label, source marker, the meal's new `updatedAt` and
-the idempotency receipt. `rankVersion` catches a concurrent create or reorder; `itemVersion`
+the idempotency receipt. The service also revalidates `behaviour = collection` and capacity
+from that exact transaction basis; a successful behaviour migration between the earlier
+preflight and this read cannot authorize a bare row in a typed list. `rankVersion` catches a concurrent create or reorder; `itemVersion`
 also catches a title patch, check, delete or restore that could change the duplicate decision
 without changing rank. A failed condition discards the classification and repeats the entire
 read/classify/commit cycle. The request is capped at 30 selected ingredients so its worst case
-(94 transaction items) remains under DynamoDB's 100-item limit, and each destination `itemId`
-is required so replay safety survives receipt expiry.
+(94 transaction items) remains under DynamoDB's 100-item limit. A destination `itemId` is
+optional: the server mints one only if creation is needed. When the client supplies one, a
+single `ITEMID#<itemId>` namespace is authoritative for both ordinary locators and permanent
+aliases created by a labelled outcome. The identity stores the exact source Activity,
+ingredient and original outcome; replay must match all three, and ordinary item creation
+cannot claim an alias id. A created locator/tombstone or absorbed alias therefore keeps that
+identity from becoming a different row after the receipt expires. A bound target answers its
+own replay even after check/rename, but absorbs a fresh same-title selection only while it is
+still unchecked and its current normalized title matches. A binding whose target was later
+deleted returns conflict; it never permits the requested id to create a replacement.
 
 **Edge cases.** Nothing in this flow happens automatically. Creating a meal with ingredients
 writes zero grocery items until the user taps the button. Provenance is **not** linkage
@@ -1251,7 +1269,8 @@ back-link.
 `formatIngredientTitle` tests no quantity, an exact-boundary quantity and the 120 + 120
 maximum; the last preserves all 120 name characters, has one ellipsis, and is exactly
 `MAX_TITLE_LEN` characters. Integration for the duplicate rule in all three states (absent, present-unchecked,
-present-checked). A test asserting the label is unchanged after the source meal is
+present-checked), same-title selections in one request, a 200-character unscheduled title,
+and a repeated extension that would exceed the rendered provenance bound. A test asserting the label is unchanged after the source meal is
 rescheduled and after it is deleted. An integration test asserting that creating a meal with
 four ingredients and never tapping the button leaves the destination list empty. Plus:
 with two lists holding `slot: 'groceries'` and no default, the client presents the choice and
@@ -1263,7 +1282,9 @@ adds the originally selected ids; deleting one selected row before replay reject
 action and writes nothing. Deterministic injected-race tests add and rename a destination row
 after classification; both invalidate the snapshot, retry from current truth and avoid a
 duplicate. A same-key concurrent replay creates every row once, and the no-partial-write test
-asserts the exact receipt key is absent when provenance cannot commit.
+asserts the exact receipt key is absent when provenance cannot commit. A deduplicated supplied
+id is replayed after its target is checked/renamed and after deletion: the former still
+resolves that target, while the latter conflicts without creating a row.
 
 ---
 

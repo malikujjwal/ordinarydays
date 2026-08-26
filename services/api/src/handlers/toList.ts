@@ -55,9 +55,10 @@ export function toListSettings(result: {
 }
 
 /**
- * The ListItem a response carries. `itemRevision` — the storage-only mutation fence — is
+ * The ListItem a response carries. Storage-only `itemRevision` and `sourceProvenance` are
  * deliberately absent; `rank` stays, opaque, because the shared `(rank, itemId)` comparator
- * is also the client's sort order.
+ * is also the client's sort order. The client needs the rendered `sourceLabel`, never its
+ * ownership ledger.
  */
 export function toListItem(item: ListItem): Record<string, unknown> {
   return {

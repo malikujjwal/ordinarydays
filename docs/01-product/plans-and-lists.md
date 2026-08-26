@@ -1516,7 +1516,13 @@ The flow, exactly:
 6. Duplicate handling: if an item with the same case-insensitive, trimmed title already
    exists **unchecked** on the target list, no second row is created; the existing row's
    `sourceLabel` is extended (`Sunday dinner · Thursday lunch`). If the existing row is
-   **checked**, a new row is created — the previous one was already bought.
+   **checked**, a new row is created — the previous one was already bought. Ingredients in
+   the same confirmed action are grouped by that normalized title, so the group uses one
+   existing unchecked row or creates exactly one new row. A client-supplied destination id
+   is permanently owned by the exact meal/ingredient outcome that first committed it; it
+   cannot later name another ingredient or an ordinary item. Replaying that bound ingredient
+   still returns its original row after check/rename, but the old row absorbs a newly selected
+   same-title ingredient only if it is still unchecked and still has that title.
 
 Nothing in this flow happens automatically. Creating a meal with ingredients writes zero
 grocery items until step 3.
@@ -1557,7 +1563,12 @@ Groceries
 >    meal, the meal title is appended: `Sunday dinner · Chicken tacos`.
 >
 > Storing rather than recomputing means the label stays truthful after the meal is
-> rescheduled or deleted. A manually added item has no label and renders no dash.
+> rescheduled or deleted. A manually added item has no label and renders no dash. Internally,
+> the row retains ordered `{ activityId, label }` segments and renders `sourceLabel` by joining
+> them. Ownership is never inferred by splitting display text: a rule-5 label legitimately
+> contains ` · `. A canonical segment may contain the complete 200-character meal title;
+> rendered provenance has a dedicated 4,000-character bound and is never truncated. An
+> extension that would exceed it rejects the whole action before any write.
 
 The label is not a link in v1; it is text. Tapping the item opens item detail, which shows
 `From Chicken tacos` as a navigable row when `sourceActivityId` still resolves.

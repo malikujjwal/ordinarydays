@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
-import { MAX_LIST_ITEMS } from '../constants.js';
+import { MAX_LIST_ITEMS, MAX_SOURCE_LABEL_LEN } from '../constants.js';
 import type { DeletedList } from '../types/deletedList.js';
 import type {
   List,
@@ -21,6 +21,8 @@ import type { ListSettingsMutation } from '../types/listSettingsMutation.js';
 import type { ListView } from '../types/listView.js';
 import type { ScheduledListItem } from '../types/scheduledListItem.js';
 import {
+  addIngredientsToListInput,
+  addIngredientsToListResult,
   bulkCreateListItemsInput,
   bulkCreateListItemsInputFor,
   changeListBehaviourInput,
@@ -320,6 +322,21 @@ describe('the stored ListItem', () => {
     ).toBe(true);
   });
 
+  it('uses the dedicated provenance bound and retains structured ownership only in storage', () => {
+    const stored = {
+      ...storedItem,
+      sourceActivityId: ACT,
+      sourceLabel: 'M'.repeat(200),
+      sourceProvenance: [{ activityId: ACT, label: 'M'.repeat(200) }],
+    };
+    expect(listItem.safeParse(stored).success).toBe(true);
+    expect(
+      listItem.safeParse({ ...stored, sourceLabel: 'M'.repeat(MAX_SOURCE_LABEL_LEN + 1) })
+        .success,
+    ).toBe(false);
+    expect(listItemView.parse(stored)).not.toHaveProperty('sourceProvenance');
+  });
+
   it('ListItemActivityLink is keyed viewer-first and names one Activity', () => {
     expect(
       listItemActivityLink.safeParse({
@@ -328,6 +345,40 @@ describe('the stored ListItem', () => {
         viewerUserId: 'usr_local_dev',
         activityId: ACT,
         linkedAt: '2026-08-23T00:00:00.000Z',
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('the ingredient-to-list contract', () => {
+  it('accepts an omitted destination item id and a supplied stable one', () => {
+    expect(
+      addIngredientsToListInput.safeParse({
+        listId: LST,
+        ingredients: [{ ingredientId: ING }],
+      }).success,
+    ).toBe(true);
+    expect(
+      addIngredientsToListInput.safeParse({
+        listId: LST,
+        ingredients: [{ ingredientId: ING, itemId: ITM }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts a maximum-length canonical source label in the response', () => {
+    expect(
+      addIngredientsToListResult.safeParse({
+        listId: LST,
+        sourceLabel: 'M'.repeat(200),
+        activityUpdatedAt: '2026-08-23T00:00:00.000Z',
+        ingredients: [
+          {
+            ingredientId: ING,
+            outcome: 'created',
+            item: { ...storedItem, sourceActivityId: ACT, sourceLabel: 'M'.repeat(200) },
+          },
+        ],
       }).success,
     ).toBe(true);
   });

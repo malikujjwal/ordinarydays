@@ -158,10 +158,10 @@ const addItem = async (listId: string, title: string, checked?: boolean) => {
 };
 
 /**
- * Destination item ids are **required** (tightened in review): they are the replay protection
- * that outlives the 24-hour receipt. Derived from the ingredient id so a test replaying the
- * same selection sends the same ids, exactly as an offline client re-sending its queued
- * payload would.
+ * Supplied destination item ids are the replay protection that outlives the 24-hour receipt.
+ * Derived from the ingredient id so a test replaying the same selection sends the same ids,
+ * exactly as an offline client re-sending its queued payload would. The contract also permits
+ * omission; that server-minted path is tested separately.
  */
 const destinationItemId = (ingredientId: string) =>
   `itm_${ingredientId.slice('ing_'.length)}`;
@@ -230,7 +230,22 @@ describe('the confirmed action', () => {
     for (const row of rows) {
       expect(row.sourceActivityId).toBe(MEAL);
       expect(row.sourceLabel).toBe('Sunday dinner');
+      expect(row.sourceProvenance).toEqual([
+        { activityId: MEAL, label: 'Sunday dinner' },
+      ]);
     }
+
+    const chickenLocator = await rawItem(
+      `LIST#${list.listId}`,
+      `ITEMID#${destinationItemId(CHICKEN)}`,
+    );
+    expect(chickenLocator).toMatchObject({
+      requestedItemId: destinationItemId(CHICKEN),
+      itemId: destinationItemId(CHICKEN),
+      sourceActivityId: MEAL,
+      ingredientId: CHICKEN,
+      outcome: 'created',
+    });
   });
 
   it('leaves the unselected ingredient off the list and unmarked', async () => {
@@ -359,11 +374,45 @@ describe('the duplicate rule, in all three states', () => {
     );
 
     await addToList(list.listId, [CHICKEN], {}, OTHER_MEAL);
-    await addToList(list.listId, [CHICKEN]);
+    const extended = await request(
+      'POST',
+      `/v1/activities/${MEAL}/ingredients/add-to-list`,
+      { listId: list.listId, ingredients: [{ ingredientId: CHICKEN }] },
+    );
+    expect(extended.status).toBe(201);
 
     const rows = await itemRows(list.listId);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.sourceLabel).toBe('Sunday lunch · Sunday dinner');
+    expect(rows[0]?.sourceProvenance).toEqual([
+      { activityId: OTHER_MEAL, label: 'Sunday lunch' },
+      { activityId: MEAL, label: 'Sunday dinner' },
+    ]);
+
+    const later = await addToList(list.listId, [TOMATOES]);
+    expect(((await later.json()).data as Json).sourceLabel).toBe('Sunday dinner');
+  });
+
+  it('groups same-title selections into one new unchecked row', async () => {
+    await createMeal({
+      details: {
+        kind: 'meal',
+        mealSlot: 'dinner',
+        ingredients: [
+          { ingredientId: CHICKEN, name: 'Chicken' },
+          { ingredientId: TORTILLAS, name: 'chicken' },
+        ],
+      },
+    });
+    const list = await createList();
+
+    const res = await addToList(list.listId, [CHICKEN, TORTILLAS]);
+
+    expect(res.status).toBe(201);
+    const outcomes = ((await res.json()).data as { ingredients: Json[] }).ingredients;
+    expect(outcomes.map((row) => row.outcome)).toEqual(['created', 'labelled']);
+    expect(new Set(outcomes.map((row) => (row.item as Json).itemId)).size).toBe(1);
+    expect(await itemRows(list.listId)).toHaveLength(1);
   });
 
   /** Acceptance criterion 14, second half: it was already bought. */
@@ -535,13 +584,9 @@ describe('replay adds nothing twice', () => {
   });
 
   /**
-   * After the receipt expires the request runs again for real, and replay protection falls to
-   * the stable `itm_` ids the client minted — the same trade `createItemsBulk` documents.
-   */
-  /**
    * Two genuinely concurrent requests under one key. Both the middleware's in-flight marker
-   * and the receipt's conditional put inside the transaction guard this, and the required
-   * client-minted `itemId` guards it a third time — so the assertion worth making is about
+   * and the receipt's conditional put inside the transaction guard this, and the supplied
+   * stable `itemId` guards created destinations after receipt expiry — so the assertion is about
    * storage: one row per ingredient, and one answer.
    */
   it('creates each item once when the same key arrives twice at the same moment', async () => {
@@ -585,6 +630,196 @@ describe('replay adds nothing twice', () => {
       'Sunday dinner',
       'Sunday dinner',
     ]);
+  });
+
+  it('keeps a deduplicated destination bound after the target is checked and renamed', async () => {
+    const { list } = await setUp();
+    const target = await addItem(list.listId, 'Chicken');
+    expect((await addToList(list.listId, [CHICKEN])).status).toBe(201);
+
+    const changed = await request(
+      'PATCH',
+      `/v1/lists/${list.listId}/items/${target.itemId}`,
+      { title: 'Bought chicken', checked: true },
+    );
+    expect(changed.status).toBe(200);
+
+    const replay = await addToList(list.listId, [CHICKEN]);
+    expect(replay.status).toBe(201);
+    const result = ((await replay.json()).data as { ingredients: Json[] }).ingredients[0];
+    expect(result).toBeDefined();
+    const resultItem = (result as Json).item as Json;
+    expect(resultItem.itemId).toBe(target.itemId);
+    expect(resultItem.title).toBe('Bought chicken');
+    expect(await itemRows(list.listId)).toHaveLength(1);
+    const binding = await rawItem(
+      `LIST#${list.listId}`,
+      `ITEMID#${destinationItemId(CHICKEN)}`,
+    );
+    expect(binding).toMatchObject({ itemId: target.itemId, ingredientId: CHICKEN });
+    expect(binding).not.toHaveProperty('ttl');
+  });
+
+  it('refuses to reuse a deduplicated destination after the target is deleted', async () => {
+    const { list } = await setUp();
+    const target = await addItem(list.listId, 'Chicken');
+    expect((await addToList(list.listId, [CHICKEN])).status).toBe(201);
+    expect(
+      (await request('DELETE', `/v1/lists/${list.listId}/items/${target.itemId}`)).status,
+    ).toBe(200);
+
+    const replay = await addToList(list.listId, [CHICKEN]);
+
+    expect(replay.status).toBe(409);
+    expect(await itemRows(list.listId)).toHaveLength(0);
+  });
+
+  it('rejects reuse of a created destination id for another ingredient', async () => {
+    const { list } = await setUp();
+    const destination = destinationItemId(CHICKEN);
+    expect((await addToList(list.listId, [CHICKEN])).status).toBe(201);
+
+    const reused = await request(
+      'POST',
+      `/v1/activities/${MEAL}/ingredients/add-to-list`,
+      {
+        listId: list.listId,
+        ingredients: [{ ingredientId: TOMATOES, itemId: destination }],
+      },
+    );
+
+    expect(reused.status).toBe(409);
+    expect((await itemRows(list.listId)).map((row) => row.title)).toEqual(['Chicken']);
+    const byId = new Map(
+      (await storedIngredients()).map((row) => [row.ingredientId, row.addedToListId]),
+    );
+    expect(byId.get(CHICKEN)).toBe(list.listId);
+    expect(byId.get(TOMATOES)).toBeUndefined();
+  });
+
+  it('keeps a created destination bound through delete and Undo', async () => {
+    const { list } = await setUp();
+    const destination = destinationItemId(CHICKEN);
+    expect((await addToList(list.listId, [CHICKEN])).status).toBe(201);
+
+    const removed = await request(
+      'DELETE',
+      `/v1/lists/${list.listId}/items/${destination}`,
+    );
+    expect(removed.status).toBe(200);
+    const undoToken = ((await removed.json()).data as Json).undoToken;
+    const restored = await request('POST', `/v1/lists/${list.listId}/undo`, {
+      undoToken,
+    });
+    expect(restored.status).toBe(200);
+
+    const reused = await request(
+      'POST',
+      `/v1/activities/${MEAL}/ingredients/add-to-list`,
+      {
+        listId: list.listId,
+        ingredients: [{ ingredientId: TOMATOES, itemId: destination }],
+      },
+    );
+
+    expect(reused.status).toBe(409);
+    expect(await rawItem(`LIST#${list.listId}`, `ITEMID#${destination}`)).toMatchObject({
+      sourceActivityId: MEAL,
+      ingredientId: CHICKEN,
+      outcome: 'created',
+    });
+  });
+
+  it('keeps a created destination bound through clear-checked and Undo', async () => {
+    const { list } = await setUp();
+    const destination = destinationItemId(CHICKEN);
+    expect((await addToList(list.listId, [CHICKEN])).status).toBe(201);
+    expect(
+      (
+        await request('PATCH', `/v1/lists/${list.listId}/items/${destination}`, {
+          checked: true,
+        })
+      ).status,
+    ).toBe(200);
+
+    const cleared = await request('POST', `/v1/lists/${list.listId}/clear-checked`);
+    expect(cleared.status).toBe(200);
+    const undoToken = ((await cleared.json()).data as Json).undoToken;
+    const restored = await request('POST', `/v1/lists/${list.listId}/undo`, {
+      undoToken,
+    });
+    expect(restored.status).toBe(200);
+
+    const reused = await request(
+      'POST',
+      `/v1/activities/${MEAL}/ingredients/add-to-list`,
+      {
+        listId: list.listId,
+        ingredients: [{ ingredientId: TOMATOES, itemId: destination }],
+      },
+    );
+
+    expect(reused.status).toBe(409);
+    expect(await rawItem(`LIST#${list.listId}`, `ITEMID#${destination}`)).toMatchObject({
+      sourceActivityId: MEAL,
+      ingredientId: CHICKEN,
+      outcome: 'created',
+    });
+  });
+
+  it('blocks ordinary item creation with an absorbed destination id', async () => {
+    const { list } = await setUp();
+    await addItem(list.listId, 'Chicken');
+    expect((await addToList(list.listId, [CHICKEN])).status).toBe(201);
+
+    const ordinary = await request('POST', `/v1/lists/${list.listId}/items`, {
+      itemId: destinationItemId(CHICKEN),
+      title: 'A different item',
+    });
+
+    expect(ordinary.status).toBe(409);
+    expect(await itemRows(list.listId)).toHaveLength(1);
+  });
+
+  it('creates a fresh row beside a checked and renamed replay target', async () => {
+    await createMeal({
+      details: {
+        kind: 'meal',
+        mealSlot: 'dinner',
+        ingredients: [
+          { ingredientId: CHICKEN, name: 'Chicken' },
+          { ingredientId: TORTILLAS, name: 'chicken' },
+        ],
+      },
+    });
+    const list = await createList();
+    expect((await addToList(list.listId, [CHICKEN])).status).toBe(201);
+    const targetId = destinationItemId(CHICKEN);
+    expect(
+      (
+        await request('PATCH', `/v1/lists/${list.listId}/items/${targetId}`, {
+          title: 'Bought chicken',
+          checked: true,
+        })
+      ).status,
+    ).toBe(200);
+
+    const replayAndFresh = await addToList(list.listId, [CHICKEN, TORTILLAS]);
+
+    expect(replayAndFresh.status).toBe(201);
+    const outcomes = ((await replayAndFresh.json()).data as { ingredients: Json[] })
+      .ingredients;
+    expect(outcomes).toMatchObject([
+      { ingredientId: CHICKEN, item: { itemId: targetId, checked: true } },
+      {
+        ingredientId: TORTILLAS,
+        outcome: 'created',
+        item: { itemId: destinationItemId(TORTILLAS), checked: false },
+      },
+    ]);
+    const rows = await itemRows(list.listId);
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((row) => row.checked === false)).toHaveLength(1);
   });
 });
 
@@ -867,7 +1102,24 @@ describe('one commit, or none', () => {
     expect(await itemRows(list.listId)).toHaveLength(0);
   });
 
-  it('400s a request with no destination item id', async () => {
+  it('commits the exact 30-selection maximum within one DynamoDB transaction', async () => {
+    const ingredients = Array.from({ length: MAX_INGREDIENTS_PER_ADD }, (_, index) => ({
+      ingredientId: `ing_01J8XKQ2M4N5P6R7S8T9V0W${String(index).padStart(3, '0')}`,
+      name: `Ingredient ${String(index)}`,
+    }));
+    await createMeal({ details: { kind: 'meal', ingredients } });
+    const list = await createList();
+
+    const res = await addToList(
+      list.listId,
+      ingredients.map((ingredient) => ingredient.ingredientId),
+    );
+
+    expect(res.status).toBe(201);
+    expect(await itemRows(list.listId)).toHaveLength(MAX_INGREDIENTS_PER_ADD);
+  });
+
+  it('accepts a request with no destination item id and mints one on creation', async () => {
     const { list } = await setUp();
 
     const res = await request('POST', `/v1/activities/${MEAL}/ingredients/add-to-list`, {
@@ -875,8 +1127,23 @@ describe('one commit, or none', () => {
       ingredients: [{ ingredientId: CHICKEN }],
     });
 
-    expect(res.status).toBe(400);
-    expect(await itemRows(list.listId)).toHaveLength(0);
+    expect(res.status).toBe(201);
+    const body = (await res.json()).data as { ingredients: Json[] };
+    expect(body.ingredients[0]).toBeDefined();
+    const created = (body.ingredients[0] as Json).item as Json;
+    expect(String(created.itemId)).toMatch(/^itm_/);
+    expect(await itemRows(list.listId)).toHaveLength(1);
+  });
+
+  it('stores and returns a 200-character unscheduled meal title as provenance', async () => {
+    await createMeal({ title: 'M'.repeat(200), schedule: undefined });
+    const list = await createList();
+
+    const res = await addToList(list.listId, [CHICKEN]);
+
+    expect(res.status).toBe(201);
+    expect(((await res.json()).data as Json).sourceLabel).toBe('M'.repeat(200));
+    expect((await itemRows(list.listId))[0]?.sourceLabel).toBe('M'.repeat(200));
   });
 });
 
@@ -912,8 +1179,45 @@ describe('a change landing between the read and the commit', () => {
       });
   };
 
+  /** Runs `injected` after the preflight List read but before the fenced snapshot. */
+  const injectBeforeSnapshot = async (injected: () => Promise<unknown>) => {
+    const listRepository = await import('../../src/repositories/listRepository.js');
+    const original = listRepository.snapshotListItems;
+    let fired = false;
+    return vi
+      .spyOn(listRepository, 'snapshotListItems')
+      .mockImplementation(async (...args) => {
+        if (!fired) {
+          fired = true;
+          await injected();
+        }
+        return original(...args);
+      });
+  };
+
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('refuses a collection that becomes watch before the fenced snapshot', async () => {
+    const { list } = await setUp();
+    const spy = await injectBeforeSnapshot(async () => {
+      const meta = (await rawItem(`LIST#${list.listId}`, 'META')) as Json;
+      const changed = await request(
+        'POST',
+        `/v1/lists/${list.listId}/behaviour`,
+        { behaviour: 'watch' },
+        { 'If-Match': String(meta.updatedAt) },
+      );
+      expect(changed.status).toBe(200);
+    });
+
+    const res = await addToList(list.listId, [CHICKEN]);
+
+    expect(spy).toHaveBeenCalled();
+    expect(res.status).toBe(400);
+    expect(await itemRows(list.listId)).toHaveLength(0);
+    expect((await rawItem(`LIST#${list.listId}`, 'META'))?.behaviour).toBe('watch');
   });
 
   /**

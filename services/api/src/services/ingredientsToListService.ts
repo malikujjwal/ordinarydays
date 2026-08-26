@@ -1,6 +1,6 @@
-import { MAX_LIST_ITEMS } from '@od/shared';
+import { MAX_LIST_ITEMS, MAX_SOURCE_PROVENANCE_SEGMENTS } from '@od/shared';
 import { formatIngredientTitle, provenanceLabel } from '@od/shared/lists';
-import type { AddIngredientsToListInput } from '@od/shared/schemas';
+import { type AddIngredientsToListInput, listItemSourceLabel } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import type { Activity, List, ListItem, MealIngredient } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
@@ -11,14 +11,17 @@ import {
 } from '../repositories/activityRepository.js';
 import { loadReceipt, receiptItem } from '../repositories/idempotencyRepository.js';
 import {
+  appendIngredientDestinationBinding,
   appendListItemCreates,
   appendSourceLabelExtension,
   getListMeta,
+  type IngredientDestinationBinding,
   type ListAccessGrant,
   ListNotFoundError,
   ListRankRepairRequiredError,
   ListReadFenceError,
   ListSnapshotStaleError,
+  newItemId,
   planListItemWrites,
   snapshotListItems,
 } from '../repositories/listRepository.js';
@@ -55,8 +58,9 @@ import { repairListRanks } from './listRankRepairService.js';
  *
  * ## One transaction, and why it had to become one
  *
- * Everything this action writes — created rows, extended labels, the List META counters, the
- * meal's `addedToListId` markers and its new version, and the idempotency receipt — commits
+ * Everything this action writes — created rows, structured/rendered label extensions,
+ * permanent bindings for supplied ids absorbed by deduplication, the List META counters,
+ * the meal's `addedToListId` markers and new version, and the idempotency receipt — commits
  * in a single `TransactWriteItems`.
  *
  * The first version did not. It ran three ordered steps and argued that making every step
@@ -88,6 +92,7 @@ const STALE_INGREDIENT =
   'Some of those ingredients have changed. Reopen the meal and try again.';
 const BUSY = 'That list is busy. Try again.';
 const LIST_FULL = 'List is full.';
+const PROVENANCE_FULL = 'This item has too many source labels.';
 
 /**
  * How many times the read/classify/commit cycle re-runs before giving up.
@@ -106,7 +111,7 @@ interface ResolvedIngredient {
   readonly index: number;
   readonly ingredient: MealIngredient;
   readonly title: string;
-  readonly itemId: string;
+  readonly itemId?: string;
 }
 
 /**
@@ -202,7 +207,7 @@ async function attemptAdd(
   const { activity } = await assertActivityAccess(userId, activityId, 'owner');
   if (activity.type !== 'meal') refuse('activityId', NOT_A_MEAL);
 
-  const list = await mapped(() => loadCollection(userId, input.listId, access, now));
+  await mapped(() => loadCollection(userId, input.listId, access, now));
   const selected = resolveSelected(activity, input);
   /**
    * The snapshot everything below is decided from — and the version it was taken under, which
@@ -213,7 +218,13 @@ async function attemptAdd(
       userId,
       input.listId,
       access,
-      () => snapshotListItems(userId, input.listId, access),
+      () =>
+        snapshotListItems(
+          userId,
+          input.listId,
+          access,
+          selected.flatMap((row) => (row.itemId === undefined ? [] : [row.itemId])),
+        ),
       now,
     ),
   );
@@ -224,10 +235,16 @@ async function attemptAdd(
     labelsFromOtherMeals(existing, activityId),
     today(activity, now),
   );
+  assertRenderedSourceLabel(sourceLabel);
 
-  const plan = classify(selected, existing, sourceLabel);
-  assertCapacity(list, plan.creates.length);
-
+  const plan = classify(
+    selected,
+    existing,
+    snapshot.ingredientDestinationBindings,
+    input.listId,
+    activityId,
+    sourceLabel,
+  );
   const basis = await planWrites(
     userId,
     input.listId,
@@ -237,41 +254,57 @@ async function attemptAdd(
     snapshot.itemVersion,
     now,
   );
+  assertCollection(basis.list);
+  assertCapacity(basis.list, plan.creates.length);
 
-  const created: ListItem[] = plan.creates.map((resolved, index) => ({
-    itemId: resolved.itemId,
+  const created: ListItem[] = plan.creates.map((row, index) => ({
+    itemId: row.itemId,
     listId: input.listId,
     rank: basis.ranks[index] as string,
     itemRevision: 0,
-    title: resolved.title,
+    title: row.title,
     checked: false,
     sourceActivityId: activityId,
     sourceLabel,
+    sourceProvenance: [{ activityId, label: sourceLabel }],
   }));
 
-  const labelled: ListItem[] = plan.extended.map((row) => ({
-    ...row.match,
-    sourceLabel:
-      row.match.sourceLabel === undefined || row.match.sourceLabel === ''
-        ? sourceLabel
-        : `${row.match.sourceLabel} · ${sourceLabel}`,
-    itemRevision: row.match.itemRevision + 1,
-  }));
-
-  const result = assemble(input.listId, sourceLabel, now, plan, labelled, created);
+  const result = assemble(input.listId, sourceLabel, now, plan, created);
 
   const builder = new TransactionBuilder(
     'addIngredientsToList',
     receiptFor === undefined ? 0 : 1,
   );
-  const spans = appendListItemCreates(builder, input.listId, created, basis, now);
-  for (const [index, row] of plan.extended.entries()) {
+  const spans = appendListItemCreates(
+    builder,
+    input.listId,
+    created,
+    basis,
+    now,
+    new Map(
+      plan.creates.flatMap((row) =>
+        row.ingredientIdentity === undefined
+          ? []
+          : [[row.itemId, row.ingredientIdentity] as const],
+      ),
+    ),
+  );
+  for (const extension of plan.extensions) {
     appendSourceLabelExtension(
       builder,
       input.listId,
-      row.match,
-      labelled[index]?.sourceLabel ?? sourceLabel,
+      extension.current,
+      extension.next,
       now,
+      extension.ingredientIdentity,
+    );
+  }
+  for (const binding of plan.bindings) {
+    appendIngredientDestinationBinding(
+      builder,
+      binding.ingredientIdentity,
+      now,
+      binding.current,
     );
   }
 
@@ -474,10 +507,10 @@ function resolveSelected(
      * same key twice, which DynamoDB refuses as a malformed request rather than a condition
      * failure. Caught here so it reads as the client mistake it is.
      */
-    if (seenItemIds.has(selection.itemId)) {
+    if (selection.itemId !== undefined && seenItemIds.has(selection.itemId)) {
       refuse(`ingredients.${String(position)}.itemId`, STALE_INGREDIENT);
     }
-    seenItemIds.add(selection.itemId);
+    if (selection.itemId !== undefined) seenItemIds.add(selection.itemId);
 
     const found = byId.get(selection.ingredientId);
     if (found === undefined) refuse(path, STALE_INGREDIENT);
@@ -487,18 +520,43 @@ function resolveSelected(
       index: found.index,
       ingredient: found.ingredient,
       title: formatIngredientTitle(found.ingredient.name, found.ingredient.quantity),
-      itemId: selection.itemId,
+      ...(selection.itemId === undefined ? {} : { itemId: selection.itemId }),
     };
   });
 }
 
+interface PlannedCreate {
+  readonly itemId: string;
+  readonly title: string;
+  readonly ingredientIdentity?: IngredientDestinationBinding;
+}
+
+interface PlannedExtension {
+  readonly current: ListItem;
+  readonly next: ListItem;
+  readonly ingredientIdentity?: IngredientDestinationBinding;
+}
+
+interface PlannedBinding {
+  readonly ingredientIdentity: IngredientDestinationBinding;
+  /** Present when the requested identity is the target's existing locator itself. */
+  readonly current?: ListItem;
+}
+
+interface PlannedOutcome {
+  readonly ingredientId: string;
+  readonly outcome: 'created' | 'labelled';
+  readonly itemId: string;
+}
+
 interface Plan {
-  readonly creates: ResolvedIngredient[];
-  readonly extended: { resolved: ResolvedIngredient; match: ListItem }[];
-  /** Selections whose row already carries this label: nothing to write, nothing to create. */
-  readonly unchanged: { resolved: ResolvedIngredient; match: ListItem }[];
+  readonly creates: PlannedCreate[];
+  readonly extensions: PlannedExtension[];
+  readonly bindings: PlannedBinding[];
+  /** Final forms of targets that already existed before this operation. */
+  readonly existingTargets: ReadonlyMap<string, ListItem>;
   /** The request's order, so the response reads as the user's selection did. */
-  readonly order: readonly string[];
+  readonly outcomes: readonly PlannedOutcome[];
 }
 
 /**
@@ -508,73 +566,264 @@ interface Plan {
  * is still on the shopping list, so a second line is noise. Present and **checked** → create,
  * because a checked row means it was already bought and the user needs it again.
  *
- * A fourth case falls out of replay: an unchecked match that **already carries this exact
- * label** needs no write at all. That keeps a re-tap after a lost response from turning
- * `Sunday dinner` into `Sunday dinner · Sunday dinner`, which is not an extension but the
- * same fact twice. Segments are compared whole, so `Sunday` does not match inside
- * `Sunday dinner`.
+ * A fourth case falls out of replay: a target that already carries provenance owned by this
+ * Activity needs no write at all. Ownership is read from `sourceProvenance`, never recovered
+ * by splitting the rendered label; a valid label may itself contain ` · `.
  *
- * The match is on a case-insensitive, trimmed title. Two ingredients in one request that
- * normalise to the same title are handled the same way: the first claims the match, and the
- * second finds no unchecked row left to join and creates one — the same answer the two taps
- * would have got as separate requests.
+ * Classification is by normalized-title **group**. Every selection in a group resolves to
+ * the same existing unchecked row, or to the one row this operation creates. That is the
+ * result the same selections would get if the first committed before the second classified.
+ * Supplied ids occupy the same authoritative identity namespace whether they create or are
+ * absorbed by grouping, so receipt expiry cannot turn them into new rows later. Replay is
+ * the exact stored Activity/ingredient tuple, never merely a row carrying the same meal's
+ * display provenance.
  */
 function classify(
   selected: readonly ResolvedIngredient[],
   existing: readonly ListItem[],
+  storedBindings: ReadonlyMap<string, IngredientDestinationBinding>,
+  listId: string,
+  activityId: string,
   sourceLabel: string,
 ): Plan {
-  const unchecked = new Map<string, ListItem>();
+  const byId = new Map(existing.map((item) => [item.itemId, item] as const));
+  const uncheckedByTitle = new Map<string, ListItem>();
   for (const item of existing) {
     if (item.checked) continue;
     const key = normalise(item.title);
-    if (!unchecked.has(key)) unchecked.set(key, item);
+    if (!uncheckedByTitle.has(key)) uncheckedByTitle.set(key, item);
   }
 
-  const creates: ResolvedIngredient[] = [];
-  const extended: { resolved: ResolvedIngredient; match: ListItem }[] = [];
-  const unchanged: { resolved: ResolvedIngredient; match: ListItem }[] = [];
-  for (const resolved of selected) {
-    const key = normalise(resolved.title);
-    const match = unchecked.get(key);
-    if (match === undefined) {
-      creates.push(resolved);
+  const groups = new Map<string, ResolvedIngredient[]>();
+  for (const row of selected) {
+    const key = normalise(row.title);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [row]);
+    else group.push(row);
+  }
+
+  const creates: PlannedCreate[] = [];
+  const extensions: PlannedExtension[] = [];
+  const bindings: PlannedBinding[] = [];
+  const existingTargets = new Map<string, ListItem>();
+  const outcomeByIngredient = new Map<string, PlannedOutcome>();
+
+  for (const [titleKey, group] of groups) {
+    const unresolved: ResolvedIngredient[] = [];
+    let replayTarget: ListItem | undefined;
+    let directTarget: ListItem | undefined;
+
+    for (const resolved of group) {
+      const requestedItemId = resolved.itemId;
+      const binding =
+        requestedItemId === undefined ? undefined : storedBindings.get(requestedItemId);
+      if (binding !== undefined) {
+        if (
+          binding.listId !== listId ||
+          binding.sourceActivityId !== activityId ||
+          binding.ingredientId !== resolved.ingredientId
+        ) {
+          destinationUnavailable();
+        }
+        const target = byId.get(binding.itemId);
+        if (target === undefined) destinationUnavailable();
+        replayTarget ??= target;
+        existingTargets.set(target.itemId, target);
+        outcomeByIngredient.set(resolved.ingredientId, {
+          ingredientId: resolved.ingredientId,
+          outcome: binding.outcome,
+          itemId: target.itemId,
+        });
+        continue;
+      }
+
+      const direct =
+        requestedItemId === undefined ? undefined : byId.get(requestedItemId);
+      if (
+        direct !== undefined &&
+        (direct.checked || normalise(direct.title) !== titleKey)
+      ) {
+        destinationUnavailable();
+      }
+      if (
+        direct !== undefined &&
+        directTarget !== undefined &&
+        directTarget.itemId !== direct.itemId
+      ) {
+        destinationUnavailable();
+      }
+      directTarget ??= direct;
+      unresolved.push(resolved);
+    }
+
+    if (unresolved.length === 0) continue;
+
+    const eligibleReplayTarget =
+      replayTarget !== undefined &&
+      !replayTarget.checked &&
+      normalise(replayTarget.title) === titleKey
+        ? replayTarget
+        : undefined;
+    const match = directTarget ?? eligibleReplayTarget ?? uncheckedByTitle.get(titleKey);
+    if (match !== undefined) {
+      const next = extendProvenance(match, activityId, sourceLabel);
+      const requestedIdentities = unresolved.flatMap((resolved) =>
+        resolved.itemId === undefined
+          ? []
+          : [
+              {
+                listId,
+                requestedItemId: resolved.itemId,
+                itemId: match.itemId,
+                sourceActivityId: activityId,
+                ingredientId: resolved.ingredientId,
+                outcome: 'labelled' as const,
+              },
+            ],
+      );
+      const locatorIdentity = requestedIdentities.find(
+        (binding) => binding.requestedItemId === match.itemId,
+      );
+      if (next !== match) {
+        extensions.push({
+          current: match,
+          next,
+          ...(locatorIdentity === undefined
+            ? {}
+            : { ingredientIdentity: locatorIdentity }),
+        });
+      } else if (locatorIdentity !== undefined) {
+        bindings.push({ ingredientIdentity: locatorIdentity, current: match });
+      }
+      existingTargets.set(match.itemId, next);
+      for (const resolved of unresolved) {
+        outcomeByIngredient.set(resolved.ingredientId, {
+          ingredientId: resolved.ingredientId,
+          outcome: 'labelled',
+          itemId: match.itemId,
+        });
+      }
+      for (const binding of requestedIdentities) {
+        if (binding.requestedItemId !== match.itemId) {
+          bindings.push({ ingredientIdentity: binding });
+        }
+      }
       continue;
     }
-    unchecked.delete(key);
-    if (alreadyLabelled(match, sourceLabel)) unchanged.push({ resolved, match });
-    else extended.push({ resolved, match });
+
+    const primary = unresolved[0];
+    if (primary === undefined) {
+      throw new Error('A non-empty title group lost every unresolved selection.');
+    }
+    const createdItemId = primary.itemId ?? newItemId();
+    const ingredientIdentity: IngredientDestinationBinding | undefined =
+      primary.itemId === undefined
+        ? undefined
+        : {
+            listId,
+            requestedItemId: createdItemId,
+            itemId: createdItemId,
+            sourceActivityId: activityId,
+            ingredientId: primary.ingredientId,
+            outcome: 'created',
+          };
+    creates.push({
+      itemId: createdItemId,
+      title: primary.title,
+      ...(ingredientIdentity === undefined ? {} : { ingredientIdentity }),
+    });
+    for (const [index, resolved] of unresolved.entries()) {
+      const outcome = index === 0 ? 'created' : 'labelled';
+      outcomeByIngredient.set(resolved.ingredientId, {
+        ingredientId: resolved.ingredientId,
+        outcome,
+        itemId: createdItemId,
+      });
+      if (resolved.itemId !== undefined && resolved.itemId !== createdItemId) {
+        bindings.push({
+          ingredientIdentity: {
+            listId,
+            requestedItemId: resolved.itemId,
+            itemId: createdItemId,
+            sourceActivityId: activityId,
+            ingredientId: resolved.ingredientId,
+            outcome,
+          },
+        });
+      }
+    }
   }
-  return { creates, extended, unchanged, order: selected.map((row) => row.ingredientId) };
+
+  return {
+    creates,
+    extensions,
+    bindings,
+    existingTargets,
+    outcomes: selected.flatMap((row) => {
+      const outcome = outcomeByIngredient.get(row.ingredientId);
+      return outcome === undefined ? [] : [outcome];
+    }),
+  };
 }
 
 function normalise(title: string): string {
   return title.trim().toLowerCase();
 }
 
-function alreadyLabelled(item: ListItem, label: string): boolean {
-  if (item.sourceLabel === undefined) return false;
-  return item.sourceLabel.split(' · ').includes(label);
+function provenanceOf(
+  item: ListItem,
+): readonly { readonly activityId: string; readonly label: string }[] {
+  if (item.sourceProvenance !== undefined && item.sourceProvenance.length > 0) {
+    return item.sourceProvenance;
+  }
+  if (item.sourceActivityId === undefined || item.sourceLabel === undefined) return [];
+  // Legacy P3-17 rows had only these two fields. The entire rendered value belongs to the
+  // recorded Activity; splitting it would corrupt a valid rule-5 label containing ` · `.
+  return [{ activityId: item.sourceActivityId, label: item.sourceLabel }];
+}
+
+function extendProvenance(item: ListItem, activityId: string, label: string): ListItem {
+  const existing = provenanceOf(item);
+  if (existing.some((segment) => segment.activityId === activityId)) return item;
+  if (existing.length >= MAX_SOURCE_PROVENANCE_SEGMENTS) {
+    refuse('ingredients', PROVENANCE_FULL);
+  }
+  const sourceProvenance = [...existing, { activityId, label }];
+  const sourceLabel = sourceProvenance.map((segment) => segment.label).join(' · ');
+  assertRenderedSourceLabel(sourceLabel);
+  return {
+    ...item,
+    sourceActivityId: item.sourceActivityId ?? activityId,
+    sourceLabel,
+    sourceProvenance,
+    itemRevision: item.itemRevision + 1,
+  };
 }
 
 /**
  * The labels on this list that belong to **other** meals (§7.5 rule 5).
  *
- * Rule 5 disambiguates two meals that produced the same words. A row this meal wrote is not
- * another meal, and a row with no `sourceActivityId` was added by hand and has no label at
- * all, so neither can trigger it. Each row's label is split back into its segments, because
- * an extended row carries several and any one of them may be the collision.
+ * Rule 5 disambiguates two meals that produced the same words. Structured segments retain
+ * their Activity owner, so labels containing the display delimiter remain one label. Legacy
+ * rows are treated as one whole segment owned by their original `sourceActivityId`.
  */
 function labelsFromOtherMeals(items: readonly ListItem[], activityId: string): string[] {
   const labels = new Set<string>();
   for (const item of items) {
-    if (item.sourceActivityId === undefined || item.sourceActivityId === activityId) {
-      continue;
+    for (const segment of provenanceOf(item)) {
+      if (segment.activityId !== activityId) labels.add(segment.label);
     }
-    if (item.sourceLabel === undefined) continue;
-    for (const segment of item.sourceLabel.split(' · ')) labels.add(segment);
   }
   return [...labels];
+}
+
+function assertRenderedSourceLabel(value: string): void {
+  if (listItemSourceLabel.safeParse(value).success) return;
+  refuse('ingredients', PROVENANCE_FULL);
+}
+
+function destinationUnavailable(): never {
+  throw new AppError('conflict', ID_UNAVAILABLE);
 }
 
 /**
@@ -598,35 +847,20 @@ function assemble(
   sourceLabel: string,
   activityUpdatedAt: string,
   plan: Plan,
-  labelled: readonly ListItem[],
   created: readonly ListItem[],
 ): AddedIngredients {
-  const outcomes = new Map<string, { outcome: 'created' | 'labelled'; item: ListItem }>();
-  for (const [index, row] of plan.extended.entries()) {
-    const item = labelled[index];
-    if (item !== undefined) {
-      outcomes.set(row.resolved.ingredientId, { outcome: 'labelled', item });
-    }
-  }
-  /** Already carried this label, so it reports as `labelled` with the row untouched. */
-  for (const row of plan.unchanged) {
-    outcomes.set(row.resolved.ingredientId, { outcome: 'labelled', item: row.match });
-  }
-  for (const [index, resolved] of plan.creates.entries()) {
-    const item = created[index];
-    if (item !== undefined) {
-      outcomes.set(resolved.ingredientId, { outcome: 'created', item });
-    }
-  }
+  const targets = new Map(plan.existingTargets);
+  for (const item of created) targets.set(item.itemId, item);
   return {
     listId,
     sourceLabel,
     activityUpdatedAt,
-    ingredients: plan.order.flatMap((ingredientId) => {
-      const row = outcomes.get(ingredientId);
-      return row === undefined
-        ? []
-        : [{ ingredientId, outcome: row.outcome, item: row.item }];
+    ingredients: plan.outcomes.map((row) => {
+      const item = targets.get(row.itemId);
+      if (item === undefined) {
+        throw new Error('An ingredient outcome has no destination item.');
+      }
+      return { ingredientId: row.ingredientId, outcome: row.outcome, item };
     }),
   };
 }
@@ -656,8 +890,12 @@ async function loadCollection(
     },
     now,
   );
-  if (list.behaviour !== 'collection') refuse('listId', NOT_A_COLLECTION);
+  assertCollection(list);
   return list;
+}
+
+function assertCollection(list: List): void {
+  if (list.behaviour !== 'collection') refuse('listId', NOT_A_COLLECTION);
 }
 
 /** Same precheck, same caveat: the transaction's own META condition is the enforcement. */

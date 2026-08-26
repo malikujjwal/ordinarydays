@@ -8,6 +8,8 @@ import {
   MAX_NOTES_LEN,
   MAX_PARTICIPANTS,
   MAX_REMINDERS_PER_USER_PER_ACTIVITY,
+  MAX_SOURCE_LABEL_LEN,
+  MAX_SOURCE_PROVENANCE_SEGMENTS,
   MAX_TITLE_LEN,
 } from '../constants.js';
 import {
@@ -55,6 +57,15 @@ import { defaultSlot } from './user.js';
  */
 
 const freeText = z.string().trim().max(MAX_FREE_TEXT_LEN);
+export const listItemSourceLabel = z.string().trim().max(MAX_SOURCE_LABEL_LEN);
+const listItemSourceProvenance = z
+  .array(
+    z.strictObject({
+      activityId: ulidId('act'),
+      label: z.string().trim().min(1).max(MAX_SOURCE_LABEL_LEN),
+    }),
+  )
+  .max(MAX_SOURCE_PROVENANCE_SEGMENTS);
 const title = z
   .string()
   .trim()
@@ -207,7 +218,8 @@ export const listItem = z
     checked: z.boolean(),
     location: listItemLocation.optional(),
     sourceActivityId: ulidId('act').optional(),
-    sourceLabel: freeText.optional(),
+    sourceLabel: listItemSourceLabel.optional(),
+    sourceProvenance: listItemSourceProvenance.optional(),
     details: listItemDetails.optional(),
   })
   .meta({ id: 'ListItem' });
@@ -439,7 +451,7 @@ export const listView = list
 
 /** The ListItem a response carries: the stored shape minus its storage-only revision fence. */
 export const listItemView = listItem
-  .omit({ itemRevision: true })
+  .omit({ itemRevision: true, sourceProvenance: true })
   .meta({ id: 'ListItemView' });
 
 /**
@@ -847,12 +859,13 @@ export const scheduledListItem = z
  * ingredients still adds what they picked. A missing id — the row was deleted or replaced —
  * rejects the whole request rather than resolving to whatever now sits at that position.
  *
- * `itemId` is the client-minted `itm_` for the row this ingredient would create, and it is
- * **required** (tightened in review). It is the replay protection that outlives the 24-hour
- * receipt: a second attempt under a new key writes the same ids, and the conditional put
- * refuses the duplicate. Letting the server mint one instead would make that second attempt
- * create a parallel set of rows, so the field a client may omit is the field that makes
- * replay unsafe. It is per ingredient because each one may become its own row.
+ * `itemId` is an optional client-minted `itm_` for the destination. When it is supplied, its
+ * authoritative `ITEMID#` identity (a locator for a create, an alias for a deduplicated
+ * outcome) keeps a replay from becoming a different row after the receipt expires and binds
+ * the id to this exact Activity/ingredient outcome. When it is omitted and a
+ * row must be created, the server mints the id; that convenience cannot promise durable
+ * replay under a new idempotency key. It is per ingredient because selections may resolve
+ * to different destination rows.
  *
  * Capped at {@link MAX_INGREDIENTS_PER_ADD}, not {@link MAX_INGREDIENTS}: the whole action is
  * one DynamoDB transaction, and that is what fits. See the constant for the arithmetic.
@@ -864,7 +877,7 @@ export const addIngredientsToListInput = z
       .array(
         z.strictObject({
           ingredientId: ulidId('ing'),
-          itemId: ulidId('itm'),
+          itemId: ulidId('itm').optional(),
         }),
       )
       .min(1)
@@ -903,7 +916,7 @@ export const addedIngredient = z
 export const addIngredientsToListResult = z
   .object({
     listId: ulidId('lst'),
-    sourceLabel: freeText,
+    sourceLabel: listItemSourceLabel,
     ingredients: z.array(addedIngredient),
     /**
      * The meal's new version, because the action advances it (raised in review): the markers

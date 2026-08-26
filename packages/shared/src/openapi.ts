@@ -658,8 +658,12 @@ registry.registerPath({
     'reorder cannot redirect the action; an id that was removed or replaced rejects the ' +
     'whole request without writing anything. Titles, `sourceActivityId` and `sourceLabel` ' +
     'are derived server-side and are not accepted on input here or on the ordinary bulk ' +
-    'route. An ingredient whose title already exists **unchecked** on the list extends that ' +
-    "row's label instead of creating a second one; a **checked** match creates a new row.",
+    'route. Selections are grouped by normalized title: each group extends one matching ' +
+    '**unchecked** row or creates one row, while a **checked** match was already bought. ' +
+    'Provenance ownership is retained as storage-only Activity-keyed segments rather than ' +
+    'inferred by splitting the rendered label. `itemId` is optional; a supplied id remains ' +
+    'durably bound to its outcome after the receipt expires, including when deduplication ' +
+    'absorbed it into an existing row.',
   tags: ['activities'],
   request: {
     params: z.object({ id: activityId }),
@@ -679,6 +683,12 @@ registry.registerPath({
     },
     404: {
       description: 'No such activity or list, or no relationship to either.',
+      content: { 'application/json': { schema: errorResponse } },
+    },
+    409: {
+      description:
+        'A supplied destination id belongs to another outcome, or its permanently bound ' +
+        'target was deleted.',
       content: { 'application/json': { schema: errorResponse } },
     },
   },

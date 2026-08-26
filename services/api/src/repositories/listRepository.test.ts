@@ -9,6 +9,7 @@ import type {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import { encodeCursor, encodeFencedCursor } from './cursor.js';
+import type { IngredientDestinationBinding } from './listRepository.js';
 
 vi.mock('./base.js', () => ({
   batchGetItems: vi.fn(),
@@ -1546,7 +1547,10 @@ describe('the composable list-write primitives', () => {
   });
 
   describe('appendListItemCreates', () => {
-    const appended = (items: ListItem[] = [item()]) => {
+    const appended = (
+      items: ListItem[] = [item()],
+      identities: ReadonlyMap<string, IngredientDestinationBinding> = new Map(),
+    ) => {
       const builder = new tx.TransactionBuilder('test');
       const spans = repository.appendListItemCreates(
         builder,
@@ -1554,6 +1558,7 @@ describe('the composable list-write primitives', () => {
         items,
         { list: list(), ranks: items.map((row) => row.rank) },
         NOW,
+        identities,
       );
       return { spans, items: builderItems(builder) };
     };
@@ -1568,6 +1573,26 @@ describe('the composable list-write primitives', () => {
       expect(items[3]?.ConditionCheck?.Key).toEqual(
         keys.listItemTombstone(LIST_ID, ITEM_A),
       );
+    });
+
+    it('stores the exact ingredient outcome on a created item locator', () => {
+      const binding: IngredientDestinationBinding = {
+        listId: LIST_ID,
+        requestedItemId: ITEM_A,
+        itemId: ITEM_A,
+        sourceActivityId: ACTIVITY_ID,
+        ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X5',
+        outcome: 'created',
+      };
+
+      const { items } = appended([item()], new Map([[ITEM_A, binding]]));
+
+      expect(items[2]?.Put?.Item).toMatchObject({
+        ...keys.listItemLocator(LIST_ID, ITEM_A),
+        ...binding,
+        rank: item().rank,
+        itemRevision: item().itemRevision,
+      });
     });
 
     /**
@@ -1624,7 +1649,24 @@ describe('the composable list-write primitives', () => {
   describe('appendSourceLabelExtension', () => {
     const appended = (value: ListItem, segment = 'Sunday dinner') => {
       const builder = new tx.TransactionBuilder('test');
-      repository.appendSourceLabelExtension(builder, LIST_ID, value, segment, LATER);
+      repository.appendSourceLabelExtension(
+        builder,
+        LIST_ID,
+        value,
+        {
+          ...value,
+          sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA',
+          sourceLabel: segment,
+          sourceProvenance: [
+            {
+              activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1AA',
+              label: segment,
+            },
+          ],
+          itemRevision: value.itemRevision + 1,
+        },
+        LATER,
+      );
       return builderItems(builder);
     };
 
@@ -1663,6 +1705,51 @@ describe('the composable list-write primitives', () => {
 
     it('adds exactly two items, leaving the transaction to its caller', () => {
       expect(appended(item())).toHaveLength(2);
+    });
+  });
+
+  describe('appendIngredientDestinationBinding', () => {
+    const binding = (
+      overrides: Partial<IngredientDestinationBinding> = {},
+    ): IngredientDestinationBinding => ({
+      listId: LIST_ID,
+      requestedItemId: ITEM_B,
+      itemId: ITEM_A,
+      sourceActivityId: ACTIVITY_ID,
+      ingredientId: 'ing_01J8XKQ2M4N5P6R7S8T9V0W1X5',
+      outcome: 'labelled',
+      ...overrides,
+    });
+
+    it('occupies the ordinary ITEMID namespace for an absorbed alias', () => {
+      const builder = new tx.TransactionBuilder('test');
+
+      repository.appendIngredientDestinationBinding(builder, binding(), NOW);
+
+      const stored = builderItems(builder)[0]?.Put?.Item;
+      expect(stored).toMatchObject({
+        ...keys.listItemLocator(LIST_ID, ITEM_B),
+        ...binding(),
+      });
+      expect(stored).not.toHaveProperty('ttl');
+    });
+
+    it('binds an existing exact locator only while it has no ingredient owner', () => {
+      const builder = new tx.TransactionBuilder('test');
+      const exact = binding({ requestedItemId: ITEM_A });
+
+      repository.appendIngredientDestinationBinding(builder, exact, NOW, item());
+
+      const update = builderItems(builder)[0]?.Update;
+      expect(update?.Key).toEqual(keys.listItemLocator(LIST_ID, ITEM_A));
+      expect(update?.ConditionExpression).toContain(
+        'attribute_not_exists(#ingredientId)',
+      );
+      expect(update?.ExpressionAttributeValues).toMatchObject({
+        ':rank': item().rank,
+        ':itemRevision': item().itemRevision,
+        ':ingredientId': exact.ingredientId,
+      });
     });
   });
 });

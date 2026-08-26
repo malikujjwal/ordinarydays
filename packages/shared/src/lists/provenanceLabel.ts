@@ -48,9 +48,9 @@ export interface LabelSourceMeal {
  * date is the honest label, and `23 Aug` reads correctly whichever side of today it falls.
  *
  * @param existingLabels Labels already on the destination list **from other meals only**.
- * Filtering to "other" is the caller's, because provenance lives on the item's
- * `sourceActivityId` and this function is given strings. Passing this meal's own labels in
- * would make it disambiguate itself from itself.
+ * Filtering to "other" is the caller's, because ownership lives in the item's storage-only
+ * activity-keyed provenance segments and this pure function is given strings. Passing this
+ * meal's own labels in would make it disambiguate itself from itself.
  */
 export function provenanceLabel(
   meal: LabelSourceMeal,

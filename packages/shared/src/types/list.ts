@@ -182,8 +182,15 @@ export interface ListItem {
   location?: { label: string; address?: string; lat?: number; lng?: number };
   /** "Chicken — Sunday dinner" */
   sourceActivityId?: string;
-  /** Frozen at creation; never recomputed. */
+  /** Joined display of immutable canonical segments; extensions append but never recompute. */
   sourceLabel?: string;
+  /**
+   * Storage-only ownership of each rendered provenance segment.
+   *
+   * `sourceLabel` is the joined display value; decisions use this structure so a label that
+   * itself contains ` · ` is never split and attributed to the wrong meal.
+   */
+  sourceProvenance?: { activityId: string; label: string }[];
   /** Present only for `watch` and `meals` behaviours. */
   details?: ListItemDetails;
 }

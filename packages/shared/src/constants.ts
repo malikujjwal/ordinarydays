@@ -93,6 +93,19 @@ export const TODAY_OVERDUE_COLLAPSED_LIMIT = 3;
  */
 export const MAX_FREE_TEXT_LEN = 120;
 
+/**
+ * Rendered provenance accumulated on a ListItem.
+ *
+ * A single label can contain a full 200-character Activity title, so the generic 120-character
+ * free-text bound cannot describe this server-authored field. Extensions are never truncated:
+ * the service validates the completed label and refuses the whole action before DynamoDB when
+ * this generous item-local bound would be exceeded.
+ */
+export const MAX_SOURCE_LABEL_LEN = 4000;
+
+/** Storage-only activity-keyed segments behind one rendered `sourceLabel`. */
+export const MAX_SOURCE_PROVENANCE_SEGMENTS = 500;
+
 /** Characters in `location.address`. The label uses {@link MAX_FREE_TEXT_LEN}. */
 export const MAX_ADDRESS_LEN = 300;
 

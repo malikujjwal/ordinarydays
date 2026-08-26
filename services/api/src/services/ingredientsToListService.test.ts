@@ -30,14 +30,18 @@ vi.mock('../repositories/listRepository.js', () => ({
     builder.add({ Update: { Key: { meta: true } } });
     return { deletionGate, meta };
   }),
-  appendSourceLabelExtension: vi.fn((builder, _listId, item, sourceLabel) => {
-    builder.add({ Update: { Key: { itemId: item.itemId }, sourceLabel } });
+  appendIngredientDestinationBinding: vi.fn((builder, binding) => {
+    builder.add({ Put: { Item: binding } });
+  }),
+  appendSourceLabelExtension: vi.fn((builder, _listId, current, next) => {
+    builder.add({ Update: { Key: { itemId: current.itemId }, next } });
   }),
   getListMeta: vi.fn(),
   ListNotFoundError: class extends Error {},
   ListRankRepairRequiredError: class extends Error {},
   ListReadFenceError: class extends Error {},
   ListSnapshotStaleError: class extends Error {},
+  newItemId: vi.fn(() => 'itm_01J8XKQ2M4N5P6R7S8T9V0W1ZZ'),
   planListItemWrites: vi.fn(),
   snapshotListItems: vi.fn(),
 }));
@@ -134,7 +138,7 @@ const existingItem = (overrides: Partial<ListItem> = {}): ListItem => ({
 });
 
 const input = (
-  selections: readonly { ingredientId: string; itemId: string }[] = [
+  selections: readonly { ingredientId: string; itemId?: string }[] = [
     { ingredientId: CHICKEN, itemId: ITEM_ONE },
   ],
 ) => ({ listId: LIST, ingredients: selections }) as never;
@@ -145,11 +149,16 @@ const run = (activity = meal(), selections?: Parameters<typeof input>[0]) => {
 };
 
 /** Seeds the fenced snapshot the classification is decided from. */
-const snapshot = (items: ListItem[], rankVersion = 1) => {
+const snapshot = (
+  items: ListItem[],
+  rankVersion = 1,
+  ingredientDestinationBindings = new Map(),
+) => {
   vi.mocked(listRepository.snapshotListItems).mockResolvedValue({
     items,
     rankVersion,
     itemVersion: 1,
+    ingredientDestinationBindings,
   });
 };
 
@@ -221,9 +230,22 @@ describe('what it refuses, before it writes anything', () => {
   });
 
   it('refuses to overflow the list, before attempting the write', async () => {
-    vi.mocked(listRepository.getListMeta).mockResolvedValue(list({ itemCount: 500 }));
+    vi.mocked(listRepository.planListItemWrites).mockResolvedValue({
+      list: list({ itemCount: 500 }),
+      ranks: ['n0'],
+    });
 
     await expect(run()).rejects.toThrow(AppError);
+    expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+
+  it('validates collection behaviour on the exact transaction basis', async () => {
+    vi.mocked(listRepository.planListItemWrites).mockResolvedValue({
+      list: list({ behaviour: 'watch' }),
+      ranks: ['n0'],
+    });
+
+    await expect(run()).rejects.toMatchObject({ code: 'validation_failed' });
     expect(tx.transactWrite).not.toHaveBeenCalled();
   });
 
@@ -307,6 +329,7 @@ describe('a stale read re-runs the whole cycle', () => {
         items: [existingItem({ checked: attempt > 1 })],
         rankVersion: 1,
         itemVersion: attempt,
+        ingredientDestinationBindings: new Map(),
       }) as never;
     });
     vi.mocked(tx.transactWrite).mockImplementationOnce((_items, options) => {
@@ -348,6 +371,7 @@ describe('a stale read re-runs the whole cycle', () => {
       items: [],
       rankVersion: 7,
       itemVersion: 11,
+      ingredientDestinationBindings: new Map(),
     });
 
     await run();
@@ -442,8 +466,45 @@ describe('what it derives, and what it refuses to be told', () => {
   it('uses the client-minted item id rather than minting its own', async () => {
     await run();
 
-    const created = vi.mocked(listRepository.appendListItemCreates).mock.calls[0]?.[2];
+    const call = vi.mocked(listRepository.appendListItemCreates).mock.calls[0];
+    const created = call?.[2];
     expect(created?.[0]?.itemId).toBe(ITEM_ONE);
+    expect(call?.[5]?.get(ITEM_ONE)).toEqual({
+      listId: LIST,
+      requestedItemId: ITEM_ONE,
+      itemId: ITEM_ONE,
+      sourceActivityId: MEAL,
+      ingredientId: CHICKEN,
+      outcome: 'created',
+    });
+  });
+
+  it('accepts an omitted item id and mints only when it creates a row', async () => {
+    const result = await run(meal(), [{ ingredientId: CHICKEN }]);
+
+    expect(result.ingredients[0]?.item.itemId).toBe('itm_01J8XKQ2M4N5P6R7S8T9V0W1ZZ');
+    expect(listRepository.newItemId).toHaveBeenCalledOnce();
+    expect(listRepository.appendIngredientDestinationBinding).not.toHaveBeenCalled();
+  });
+
+  it('needs no id at all when an unchecked row absorbs the selection', async () => {
+    snapshot([existingItem()]);
+
+    const result = await run(meal(), [{ ingredientId: CHICKEN }]);
+
+    expect(result.ingredients[0]?.item.itemId).toBe(existingItem().itemId);
+    expect(listRepository.newItemId).not.toHaveBeenCalled();
+    expect(listRepository.appendIngredientDestinationBinding).not.toHaveBeenCalled();
+  });
+
+  it('stores a full 200-character unscheduled meal title as provenance', async () => {
+    const undated = meal({ title: 'M'.repeat(200) });
+    delete (undated as { schedule?: unknown }).schedule;
+
+    const result = await run(undated);
+
+    expect(result.sourceLabel).toHaveLength(200);
+    expect(result.ingredients[0]?.item.sourceLabel).toHaveLength(200);
   });
 
   it('appends the meal title when another meal already used the label', async () => {
@@ -458,6 +519,24 @@ describe('what it derives, and what it refuses to be told', () => {
     const result = await run();
 
     expect(result.sourceLabel).toBe('Sunday dinner · Chicken tacos');
+  });
+
+  it('does not split a rule-5 label when checking collisions', async () => {
+    snapshot([
+      existingItem({
+        title: 'Potatoes',
+        sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
+        sourceLabel: 'Sunday dinner · Other meal',
+        sourceProvenance: [
+          {
+            activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y9',
+            label: 'Sunday dinner · Other meal',
+          },
+        ],
+      }),
+    ]);
+
+    expect((await run()).sourceLabel).toBe('Sunday dinner');
   });
 
   it('ignores its own earlier rows when deciding whether the label collides', async () => {
@@ -532,6 +611,13 @@ describe('the duplicate rule chooses which row is written', () => {
     expect(result.ingredients[0]?.item.sourceLabel).toBe(
       'Thursday lunch · Sunday dinner',
     );
+    expect(result.ingredients[0]?.item.sourceProvenance).toEqual([
+      {
+        activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+        label: 'Thursday lunch',
+      },
+      { activityId: MEAL, label: 'Sunday dinner' },
+    ]);
   });
 
   /** A re-tap after a lost response must not read `Sunday dinner · Sunday dinner`. */
@@ -547,6 +633,39 @@ describe('the duplicate rule chooses which row is written', () => {
     ).toHaveLength(0);
   });
 
+  it('recognises this meal on a row originally owned by another meal', async () => {
+    snapshot([
+      existingItem({
+        sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+        sourceLabel: 'Sunday dinner · Sunday dinner · Chicken tacos',
+        sourceProvenance: [
+          {
+            activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+            label: 'Sunday dinner',
+          },
+          { activityId: MEAL, label: 'Sunday dinner · Chicken tacos' },
+        ],
+      }),
+    ]);
+
+    const result = await run();
+
+    expect(result.sourceLabel).toBe('Sunday dinner · Chicken tacos');
+    expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
+  });
+
+  it('rejects an extension whose completed rendered label exceeds its bound', async () => {
+    snapshot([
+      existingItem({
+        sourceActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1Y8',
+        sourceLabel: 'x'.repeat(3990),
+      }),
+    ]);
+
+    await expect(run()).rejects.toMatchObject({ code: 'validation_failed' });
+    expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+
   it('compares whole segments, so a prefix is not a match', async () => {
     snapshot([
       existingItem({
@@ -560,7 +679,7 @@ describe('the duplicate rule chooses which row is written', () => {
     expect(listRepository.appendSourceLabelExtension).toHaveBeenCalledOnce();
   });
 
-  it('lets only the first of two identical titles claim the one matching row', async () => {
+  it('groups two identical titles onto the one matching row', async () => {
     snapshot([existingItem()]);
     const twoChickens = meal({
       details: {
@@ -578,7 +697,194 @@ describe('the duplicate rule chooses which row is written', () => {
       { ingredientId: TORTILLAS, itemId: ITEM_TWO },
     ]);
 
-    expect(result.ingredients.map((row) => row.outcome)).toEqual(['labelled', 'created']);
+    expect(result.ingredients.map((row) => row.outcome)).toEqual([
+      'labelled',
+      'labelled',
+    ]);
+    expect(new Set(result.ingredients.map((row) => row.item.itemId))).toEqual(
+      new Set([existingItem().itemId]),
+    );
+    expect(listRepository.appendSourceLabelExtension).toHaveBeenCalledOnce();
+  });
+
+  it('creates one row for two identical titles when neither exists', async () => {
+    const twoChickens = meal({
+      details: {
+        kind: 'meal',
+        mealSlot: 'dinner',
+        ingredients: [
+          { ingredientId: CHICKEN, name: 'Chicken' },
+          { ingredientId: TORTILLAS, name: 'chicken' },
+        ],
+      },
+    });
+
+    const result = await run(twoChickens, [
+      { ingredientId: CHICKEN, itemId: ITEM_ONE },
+      { ingredientId: TORTILLAS, itemId: ITEM_TWO },
+    ]);
+
+    expect(result.ingredients.map((row) => row.outcome)).toEqual(['created', 'labelled']);
+    expect(new Set(result.ingredients.map((row) => row.item.itemId))).toEqual(
+      new Set([ITEM_ONE]),
+    );
+    expect(
+      vi.mocked(listRepository.appendListItemCreates).mock.calls[0]?.[2],
+    ).toHaveLength(1);
+    expect(listRepository.appendIngredientDestinationBinding).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        requestedItemId: ITEM_TWO,
+        itemId: ITEM_ONE,
+        ingredientId: TORTILLAS,
+      }),
+      NOW,
+      undefined,
+    );
+  });
+
+  it('persists a supplied destination id absorbed by an existing row', async () => {
+    snapshot([existingItem()]);
+
+    await run();
+
+    expect(listRepository.appendIngredientDestinationBinding).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        requestedItemId: ITEM_ONE,
+        itemId: existingItem().itemId,
+        ingredientId: CHICKEN,
+        outcome: 'labelled',
+      }),
+      NOW,
+      undefined,
+    );
+  });
+
+  it('rejects reuse of a created destination id for another ingredient', async () => {
+    const target = existingItem({ itemId: ITEM_ONE });
+    snapshot(
+      [target],
+      1,
+      new Map([
+        [
+          ITEM_ONE,
+          {
+            listId: LIST,
+            requestedItemId: ITEM_ONE,
+            itemId: ITEM_ONE,
+            sourceActivityId: MEAL,
+            ingredientId: CHICKEN,
+            outcome: 'created' as const,
+          },
+        ],
+      ]),
+    );
+
+    await expect(
+      run(meal(), [{ ingredientId: TORTILLAS, itemId: ITEM_ONE }]),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+
+  it('consults a durable binding after its target is checked and renamed', async () => {
+    const target = existingItem({ title: 'Bought chicken', checked: true });
+    snapshot(
+      [target],
+      1,
+      new Map([
+        [
+          ITEM_ONE,
+          {
+            listId: LIST,
+            requestedItemId: ITEM_ONE,
+            itemId: target.itemId,
+            sourceActivityId: MEAL,
+            ingredientId: CHICKEN,
+            outcome: 'labelled' as const,
+          },
+        ],
+      ]),
+    );
+
+    const result = await run();
+
+    expect(result.ingredients[0]).toMatchObject({
+      outcome: 'labelled',
+      item: { itemId: target.itemId, title: 'Bought chicken', checked: true },
+    });
+    expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(listRepository.appendListItemCreates).mock.calls[0]?.[2],
+    ).toHaveLength(0);
+  });
+
+  it('never reuses a bound id after its target was deleted', async () => {
+    snapshot(
+      [],
+      1,
+      new Map([
+        [
+          ITEM_ONE,
+          {
+            listId: LIST,
+            requestedItemId: ITEM_ONE,
+            itemId: existingItem().itemId,
+            sourceActivityId: MEAL,
+            ingredientId: CHICKEN,
+            outcome: 'labelled' as const,
+          },
+        ],
+      ]),
+    );
+
+    await expect(run()).rejects.toMatchObject({ code: 'conflict' });
+    expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+
+  it('does not let a checked replay target absorb a fresh same-title ingredient', async () => {
+    const target = existingItem({ title: 'Bought chicken', checked: true });
+    const twoChickens = meal({
+      details: {
+        kind: 'meal',
+        mealSlot: 'dinner',
+        ingredients: [
+          { ingredientId: CHICKEN, name: 'Chicken' },
+          { ingredientId: TORTILLAS, name: 'chicken' },
+        ],
+      },
+    });
+    snapshot(
+      [target],
+      1,
+      new Map([
+        [
+          ITEM_ONE,
+          {
+            listId: LIST,
+            requestedItemId: ITEM_ONE,
+            itemId: target.itemId,
+            sourceActivityId: MEAL,
+            ingredientId: CHICKEN,
+            outcome: 'labelled' as const,
+          },
+        ],
+      ]),
+    );
+
+    const result = await run(twoChickens, [
+      { ingredientId: CHICKEN, itemId: ITEM_ONE },
+      { ingredientId: TORTILLAS, itemId: ITEM_TWO },
+    ]);
+
+    expect(result.ingredients).toMatchObject([
+      { ingredientId: CHICKEN, item: { itemId: target.itemId, checked: true } },
+      { ingredientId: TORTILLAS, outcome: 'created', item: { itemId: ITEM_TWO } },
+    ]);
+    expect(vi.mocked(listRepository.appendListItemCreates).mock.calls[0]?.[2]).toEqual([
+      expect.objectContaining({ itemId: ITEM_TWO, checked: false }),
+    ]);
+    expect(listRepository.appendSourceLabelExtension).not.toHaveBeenCalled();
   });
 });
 

@@ -118,6 +118,7 @@ const ENTITY = {
   index: 'ListIndex',
   item: 'ListItem',
   locator: 'ListItemLocator',
+  ingredientDestinationBinding: 'IngredientDestinationBinding',
   itemTombstone: 'ListItemTombstone',
   /** The one spelling lives beside the row builder both repositories share (P3-13). */
   link: LIST_ITEM_ACTIVITY_LINK_ENTITY,
@@ -176,11 +177,21 @@ const locatorSchema = z.object({
   itemRevision: z.number().int().nonnegative(),
 });
 
+const ingredientDestinationBindingSchema = z.object({
+  listId: z.string().min(1),
+  requestedItemId: z.string().min(1),
+  itemId: z.string().min(1),
+  sourceActivityId: z.string().min(1),
+  ingredientId: z.string().min(1),
+  outcome: z.enum(['created', 'labelled']),
+});
+
 const itemTombstoneSchema = z.object({
   listId: z.string(),
   itemId: z.string(),
   operationId: z.string().min(1),
   snapshot: listItemSchema,
+  ingredientIdentity: ingredientDestinationBindingSchema.optional(),
   viewerLinks: z.array(listItemActivityLinkSchema).default([]),
   activityProvenance: z
     .array(
@@ -195,6 +206,9 @@ const itemTombstoneSchema = z.object({
 
 type Locator = z.infer<typeof locatorSchema>;
 type ItemTombstone = z.infer<typeof itemTombstoneSchema>;
+export type IngredientDestinationBinding = z.infer<
+  typeof ingredientDestinationBindingSchema
+>;
 
 const LIST_ACCESS_GRANT = Symbol('ListAccessGrant');
 const issuedListAccessGrants = new WeakSet<ListAccessGrant>();
@@ -807,6 +821,7 @@ interface ResolvedItem {
   readonly item: ListItem;
   readonly locator: Locator;
   readonly row: StoredItem;
+  readonly ingredientIdentity?: IngredientDestinationBinding;
 }
 
 async function resolveItemStrong(
@@ -817,7 +832,11 @@ async function resolveItemStrong(
     consistentRead: true,
   });
   if (locatorRow === undefined) return undefined;
-  const locator = locatorSchema.parse(locatorRow);
+  const parsedLocator = locatorSchema.safeParse(locatorRow);
+  // An absorbed ingredient destination occupies the authoritative ITEMID namespace but is
+  // not itself an addressable ListItem. Exact item routes therefore treat the alias as absent.
+  if (!parsedLocator.success) return undefined;
+  const locator = parsedLocator.data;
   const row = await getItem<StoredItem>(listItemKey(listId, locator.rank, itemId), {
     consistentRead: true,
   });
@@ -830,7 +849,15 @@ async function resolveItemStrong(
   ) {
     throw new ListReadFenceError();
   }
-  return { item, locator, row };
+  const ingredientIdentity = ingredientDestinationBindingSchema.safeParse(locatorRow);
+  return {
+    item,
+    locator,
+    row,
+    ...(ingredientIdentity.success
+      ? { ingredientIdentity: ingredientIdentity.data }
+      : {}),
+  };
 }
 
 /** Pattern 8d: locator-following exact read within the same strong META fence. */
@@ -943,6 +970,10 @@ export async function readAllListItems(
 /** Every item on one list, and both generations they were read under (P3-17). */
 export interface ListItemSnapshot {
   readonly items: ListItem[];
+  readonly ingredientDestinationBindings: ReadonlyMap<
+    string,
+    IngredientDestinationBinding
+  >;
   readonly rankVersion: number;
   readonly itemVersion: number;
 }
@@ -977,19 +1008,35 @@ export async function snapshotListItems(
   userId: string,
   listId: string,
   access: ListAccessGrant,
+  requestedIngredientDestinationIds: readonly string[] = [],
 ): Promise<ListItemSnapshot> {
   assertListAccessGrant(userId, listId, access);
   const before = await getLiveListMetaStrong(listId);
   if (before === undefined) throw new ListNotFoundError();
   assertFenceOpen(before);
 
-  const items = await readAllItemsUnfenced(listId);
+  const requestedIds = [...new Set(requestedIngredientDestinationIds)];
+  const [items, bindingRows] = await Promise.all([
+    readAllItemsUnfenced(listId),
+    batchGetItems<StoredItem>(
+      requestedIds.map((requestedItemId) => listItemLocator(listId, requestedItemId)),
+      { consistentRead: true },
+    ),
+  ]);
 
   const after = await getLiveListMetaStrong(listId);
   if (after === undefined) throw new ListNotFoundError();
   assertSameItemSnapshot(before, after);
   return {
     items,
+    ingredientDestinationBindings: new Map(
+      bindingRows.flatMap((row) => {
+        const binding = ingredientDestinationBindingSchema.safeParse(row);
+        return binding.success
+          ? ([[binding.data.requestedItemId, binding.data]] as const)
+          : [];
+      }),
+    ),
     rankVersion: after.rankVersion,
     itemVersion: itemVersion(after),
   };
@@ -1473,13 +1520,25 @@ function storedListItem(item: ListItem, now: string): StoredItem {
   });
 }
 
-function storedLocator(item: ListItem, now: string): StoredItem {
+function storedLocator(
+  item: ListItem,
+  now: string,
+  ingredientIdentity?: IngredientDestinationBinding,
+): StoredItem {
+  if (
+    ingredientIdentity !== undefined &&
+    (ingredientIdentity.requestedItemId !== item.itemId ||
+      ingredientIdentity.itemId !== item.itemId)
+  ) {
+    throw new Error('A created item locator may carry only its own ingredient identity.');
+  }
   return stamp(ENTITY.locator, now, now, {
     ...listItemLocator(item.listId, item.itemId),
     listId: item.listId,
     itemId: item.itemId,
     rank: item.rank,
     itemRevision: item.itemRevision,
+    ...ingredientIdentity,
   });
 }
 
@@ -1671,7 +1730,12 @@ export async function resolveExistingItems(
     uniqueIds.map((itemId) => listItemLocator(listId, itemId)),
     { consistentRead: true },
   );
-  const locators = locatorRows.map((row) => locatorSchema.parse(row));
+  // Absorbed ingredient aliases deliberately occupy ITEMID too. They block an ordinary
+  // create but do not masquerade as an ordinary bulk replay of a differently identified row.
+  const locators = locatorRows.flatMap((row) => {
+    const parsed = locatorSchema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
   if (locators.length === 0) return new Map();
 
   const itemRows = await batchGetItems<StoredItem>(
@@ -1776,6 +1840,7 @@ export function appendListItemCreates(
   created: readonly ListItem[],
   basis: ListWriteBasis,
   now: string,
+  ingredientIdentities: ReadonlyMap<string, IngredientDestinationBinding> = new Map(),
 ): ListItemCreateSpans {
   const deletionGate = builder.length;
   builder.add(listDeletionGate(listId));
@@ -1789,7 +1854,7 @@ export function appendListItemCreates(
       },
       {
         Put: {
-          Item: storedLocator(item, now),
+          Item: storedLocator(item, now, ingredientIdentities.get(item.itemId)),
           ConditionExpression: 'attribute_not_exists(pk)',
         },
       },
@@ -1843,49 +1908,149 @@ export function appendListItemCreates(
 export function appendSourceLabelExtension(
   builder: TransactionBuilder,
   listId: string,
-  item: ListItem,
-  sourceLabel: string,
+  current: ListItem,
+  next: ListItem,
   now: string,
+  ingredientIdentity?: IngredientDestinationBinding,
 ): void {
+  if (
+    next.sourceActivityId === undefined ||
+    next.sourceLabel === undefined ||
+    next.sourceProvenance === undefined
+  ) {
+    throw new Error(
+      'A provenance extension must carry its rendered and structured forms.',
+    );
+  }
+  if (
+    ingredientIdentity !== undefined &&
+    (ingredientIdentity.requestedItemId !== current.itemId ||
+      ingredientIdentity.itemId !== current.itemId)
+  ) {
+    throw new Error('A locator extension may carry only its own ingredient identity.');
+  }
   builder.add(
     {
       Update: {
-        Key: listItemKey(listId, item.rank, item.itemId),
+        Key: listItemKey(listId, current.rank, current.itemId),
         UpdateExpression:
-          'SET #sourceLabel = :sourceLabel, #itemRevision = :nextRevision, #updatedAt = :updatedAt',
+          'SET #sourceActivityId = :sourceActivityId, #sourceLabel = :sourceLabel, #sourceProvenance = :sourceProvenance, #itemRevision = :nextRevision, #updatedAt = :updatedAt',
         ConditionExpression: '#itemRevision = :expectedRevision',
         ExpressionAttributeNames: {
+          '#sourceActivityId': 'sourceActivityId',
           '#sourceLabel': 'sourceLabel',
+          '#sourceProvenance': 'sourceProvenance',
           '#itemRevision': 'itemRevision',
           '#updatedAt': 'updatedAt',
         },
         ExpressionAttributeValues: {
-          ':sourceLabel': sourceLabel,
-          ':expectedRevision': item.itemRevision,
-          ':nextRevision': item.itemRevision + 1,
+          ':sourceActivityId': next.sourceActivityId,
+          ':sourceLabel': next.sourceLabel,
+          ':sourceProvenance': next.sourceProvenance,
+          ':expectedRevision': current.itemRevision,
+          ':nextRevision': current.itemRevision + 1,
           ':updatedAt': now,
         },
       },
     },
     {
       Update: {
-        Key: listItemLocator(listId, item.itemId),
-        UpdateExpression: 'SET #itemRevision = :nextRevision, #updatedAt = :updatedAt',
-        ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
+        Key: listItemLocator(listId, current.itemId),
+        UpdateExpression:
+          ingredientIdentity === undefined
+            ? 'SET #itemRevision = :nextRevision, #updatedAt = :updatedAt'
+            : 'SET #itemRevision = :nextRevision, #updatedAt = :updatedAt, #requestedItemId = :requestedItemId, #sourceActivityId = :sourceActivityId, #ingredientId = :ingredientId, #outcome = :outcome',
+        ConditionExpression:
+          ingredientIdentity === undefined
+            ? '#rank = :rank AND #itemRevision = :expectedRevision'
+            : '#rank = :rank AND #itemRevision = :expectedRevision AND attribute_not_exists(#ingredientId)',
         ExpressionAttributeNames: {
           '#rank': 'rank',
           '#itemRevision': 'itemRevision',
           '#updatedAt': 'updatedAt',
+          ...(ingredientIdentity === undefined
+            ? {}
+            : {
+                '#requestedItemId': 'requestedItemId',
+                '#sourceActivityId': 'sourceActivityId',
+                '#ingredientId': 'ingredientId',
+                '#outcome': 'outcome',
+              }),
         },
         ExpressionAttributeValues: {
-          ':rank': item.rank,
-          ':expectedRevision': item.itemRevision,
-          ':nextRevision': item.itemRevision + 1,
+          ':rank': current.rank,
+          ':expectedRevision': current.itemRevision,
+          ':nextRevision': current.itemRevision + 1,
           ':updatedAt': now,
+          ...(ingredientIdentity === undefined
+            ? {}
+            : {
+                ':requestedItemId': ingredientIdentity.requestedItemId,
+                ':sourceActivityId': ingredientIdentity.sourceActivityId,
+                ':ingredientId': ingredientIdentity.ingredientId,
+                ':outcome': ingredientIdentity.outcome,
+              }),
         },
       },
     },
   );
+}
+
+/**
+ * Permanently occupies a supplied destination identity that deduplicated into another row.
+ *
+ * Created rows need no alias because their ordinary `ITEMID#` locator is the durable
+ * identity. An absorbed outcome does: without this row, receipt expiry followed by a check,
+ * rename or delete of the target lets the old request create its formerly unused id.
+ */
+export function appendIngredientDestinationBinding(
+  builder: TransactionBuilder,
+  binding: IngredientDestinationBinding,
+  now: string,
+  current?: ListItem,
+): void {
+  if (binding.requestedItemId === binding.itemId) {
+    if (current === undefined || current.itemId !== binding.itemId) {
+      throw new Error('Binding an existing locator requires its current item snapshot.');
+    }
+    builder.add({
+      Update: {
+        Key: listItemLocator(binding.listId, binding.requestedItemId),
+        UpdateExpression:
+          'SET #requestedItemId = :requestedItemId, #sourceActivityId = :sourceActivityId, #ingredientId = :ingredientId, #outcome = :outcome, #updatedAt = :updatedAt',
+        ConditionExpression:
+          '#rank = :rank AND #itemRevision = :itemRevision AND attribute_not_exists(#ingredientId)',
+        ExpressionAttributeNames: {
+          '#rank': 'rank',
+          '#itemRevision': 'itemRevision',
+          '#requestedItemId': 'requestedItemId',
+          '#sourceActivityId': 'sourceActivityId',
+          '#ingredientId': 'ingredientId',
+          '#outcome': 'outcome',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':rank': current.rank,
+          ':itemRevision': current.itemRevision,
+          ':requestedItemId': binding.requestedItemId,
+          ':sourceActivityId': binding.sourceActivityId,
+          ':ingredientId': binding.ingredientId,
+          ':outcome': binding.outcome,
+          ':updatedAt': now,
+        },
+      },
+    });
+    return;
+  }
+  builder.add({
+    Put: {
+      Item: stamp(ENTITY.ingredientDestinationBinding, now, now, {
+        ...listItemLocator(binding.listId, binding.requestedItemId),
+        ...binding,
+      }),
+      ConditionExpression: 'attribute_not_exists(pk)',
+    },
+  });
 }
 
 export async function createListItems(
@@ -3406,14 +3571,33 @@ export async function deleteListItem(
       {
         Delete: {
           Key: listItemLocator(listId, itemId),
-          ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
+          ConditionExpression:
+            current.ingredientIdentity === undefined
+              ? '#rank = :rank AND #itemRevision = :expectedRevision AND attribute_not_exists(#ingredientId)'
+              : '#rank = :rank AND #itemRevision = :expectedRevision AND #requestedItemId = :requestedItemId AND #sourceActivityId = :sourceActivityId AND #ingredientId = :ingredientId AND #outcome = :outcome',
           ExpressionAttributeNames: {
             '#rank': 'rank',
             '#itemRevision': 'itemRevision',
+            '#ingredientId': 'ingredientId',
+            ...(current.ingredientIdentity === undefined
+              ? {}
+              : {
+                  '#requestedItemId': 'requestedItemId',
+                  '#sourceActivityId': 'sourceActivityId',
+                  '#outcome': 'outcome',
+                }),
           },
           ExpressionAttributeValues: {
             ':rank': current.item.rank,
             ':expectedRevision': current.item.itemRevision,
+            ...(current.ingredientIdentity === undefined
+              ? {}
+              : {
+                  ':requestedItemId': current.ingredientIdentity.requestedItemId,
+                  ':sourceActivityId': current.ingredientIdentity.sourceActivityId,
+                  ':ingredientId': current.ingredientIdentity.ingredientId,
+                  ':outcome': current.ingredientIdentity.outcome,
+                }),
           },
         },
       },
@@ -3470,6 +3654,9 @@ export async function deleteListItem(
             deletedAt: options.now,
             ttl,
             snapshot: current.item,
+            ...(current.ingredientIdentity === undefined
+              ? {}
+              : { ingredientIdentity: current.ingredientIdentity }),
             viewerLinks: relationships.viewerLinks,
             activityProvenance: relationships.activityProvenance,
           }),
@@ -3745,6 +3932,19 @@ async function applyBulkChunk(
   );
 
   const [chunk = []] = costedChunks(pending, (entry) => entry.cost);
+  const ingredientIdentities = new Map(
+    (
+      await batchGetItems<StoredItem>(
+        chunk.flatMap((entry) =>
+          entry.item === undefined ? [] : [listItemLocator(listId, entry.item.itemId)],
+        ),
+        { consistentRead: true },
+      )
+    ).flatMap((row) => {
+      const parsed = ingredientDestinationBindingSchema.safeParse(row);
+      return parsed.success ? ([[parsed.data.itemId, parsed.data]] as const) : [];
+    }),
+  );
   const builder = new TransactionBuilder('applyBulkChunk').add(listDeletionGate(listId));
   let applied = 0;
 
@@ -3756,6 +3956,7 @@ async function applyBulkChunk(
      */
     if (entry.item === undefined) continue;
     const item = entry.item;
+    const ingredientIdentity = ingredientIdentities.get(item.itemId);
     if (work.kind === 'uncheck_all') {
       if (!item.checked) continue;
       const nextRevision = item.itemRevision + 1;
@@ -3815,11 +4016,33 @@ async function applyBulkChunk(
       {
         Delete: {
           Key: listItemLocator(listId, item.itemId),
-          ConditionExpression: '#rank = :rank AND #itemRevision = :expectedRevision',
-          ExpressionAttributeNames: { '#rank': 'rank', '#itemRevision': 'itemRevision' },
+          ConditionExpression:
+            ingredientIdentity === undefined
+              ? '#rank = :rank AND #itemRevision = :expectedRevision AND attribute_not_exists(#ingredientId)'
+              : '#rank = :rank AND #itemRevision = :expectedRevision AND #requestedItemId = :requestedItemId AND #sourceActivityId = :sourceActivityId AND #ingredientId = :ingredientId AND #outcome = :outcome',
+          ExpressionAttributeNames: {
+            '#rank': 'rank',
+            '#itemRevision': 'itemRevision',
+            '#ingredientId': 'ingredientId',
+            ...(ingredientIdentity === undefined
+              ? {}
+              : {
+                  '#requestedItemId': 'requestedItemId',
+                  '#sourceActivityId': 'sourceActivityId',
+                  '#outcome': 'outcome',
+                }),
+          },
           ExpressionAttributeValues: {
             ':rank': item.rank,
             ':expectedRevision': item.itemRevision,
+            ...(ingredientIdentity === undefined
+              ? {}
+              : {
+                  ':requestedItemId': ingredientIdentity.requestedItemId,
+                  ':sourceActivityId': ingredientIdentity.sourceActivityId,
+                  ':ingredientId': ingredientIdentity.ingredientId,
+                  ':outcome': ingredientIdentity.outcome,
+                }),
           },
         },
       },
@@ -3875,6 +4098,7 @@ async function applyBulkChunk(
           deletedAt: now,
           ttl: ttlFor(now),
           snapshot: item,
+          ...(ingredientIdentity === undefined ? {} : { ingredientIdentity }),
           viewerLinks: relationships.viewerLinks,
           activityProvenance: relationships.activityProvenance,
         }),
@@ -4193,7 +4417,7 @@ export async function restoreListItems(
         ).add(listDeletionGate(listId));
         const relationshipIndexes: number[] = [];
 
-        for (const { item, relationships } of chunk) {
+        for (const { item, tombstone, relationships } of chunk) {
           builder.add(
             {
               Put: {
@@ -4203,7 +4427,7 @@ export async function restoreListItems(
             },
             {
               Put: {
-                Item: storedLocator(item, options.now),
+                Item: storedLocator(item, options.now, tombstone.ingredientIdentity),
                 ConditionExpression: 'attribute_not_exists(pk)',
               },
             },
