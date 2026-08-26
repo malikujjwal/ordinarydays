@@ -247,6 +247,173 @@ export const ListLines = ({ size, color }: IconProps) => (
   </Frame>
 );
 
+// ── The List template catalogue (P3-45) ─────────────────────────────────────────────────
+
+/**
+ * The eleven glyphs `LIST_TEMPLATES` names and this registry did not have.
+ *
+ * P3-02 shipped a seventeen-entry catalogue naming fifteen icons; four existed. Nothing
+ * surfaced it because no screen renders a list card yet, and P3-25 is the first that would
+ * have — failing on eleven of the seventeen. Founder approval for new glyphs was given
+ * 2026-08-25, which `plans-and-lists.md` §5.3 requires precisely so that adding a template
+ * does not quietly become a design task.
+ *
+ * **Every one is distinct.** The catalogue's entries have to be tellable apart at a glance in
+ * the style chooser, so none of them borrows another's shape to save drawing one — and the
+ * three that carry things are separated by silhouette rather than by detail: the cart has
+ * wheels, the bag is taller than it is wide under a round handle, and the suitcase is wider
+ * than it is tall under a squared one. `templateIconSignatures` in the tests asserts it.
+ */
+
+/** `simple-list`. Plain lines — **not** {@link ListLines}, which is the Lists tab. */
+export const List = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path d="M4.5 6.5h15M4.5 12h15M4.5 17.5h10" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/**
+ * `groceries`. A trolley: basket, handle and wheels.
+ *
+ * The wheels are what make it a cart rather than a bag at 24 px, which is the size the style
+ * chooser renders it at.
+ */
+export const Cart = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path d="M2.5 4.5h2.3l2.6 10.4h9.8l2.3-7.6H6.3" stroke={color} {...stroke} />
+    <Circle cx={9.5} cy={19.3} r={1.4} stroke={color} {...stroke} />
+    <Circle cx={17} cy={19.3} r={1.4} stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** `shopping`. A tote: tall tapered body under a round handle. */
+export const Bag = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M6.4 8h11.2l1 11.1a1.6 1.6 0 0 1-1.6 1.8H7a1.6 1.6 0 0 1-1.6-1.8z"
+      stroke={color}
+      {...stroke}
+    />
+    <Path d="M9 8V6.4a3 3 0 0 1 6 0V8" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** `packing`. Luggage: wide body, squared handle, two straps. */
+export const Suitcase = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Rect x={2.5} y={7} width={19} height={13} rx={2.5} stroke={color} {...stroke} />
+    <Path
+      d="M9 7V5.6A1.6 1.6 0 0 1 10.6 4h2.8A1.6 1.6 0 0 1 15 5.6V7"
+      stroke={color}
+      {...stroke}
+    />
+    <Path d="M8.2 7v13M15.8 7v13" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** `bars-to-try`. A stemmed cocktail glass — nothing else in the set has a foot. */
+export const Glass = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path d="M4.2 4.5h15.6L12 13.2z" stroke={color} {...stroke} />
+    <Path d="M12 13.2v6.3M8.2 19.5h7.6" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/**
+ * `coffee-shops`. A takeaway cup: lid, tapered body, sleeve.
+ *
+ * Deliberately **not** a steaming vessel. {@link Bowl} is already a rounded container with
+ * two wisps above it, and a second one would be two catalogue entries a user cannot tell
+ * apart — which is the failure §P3-45's edge case names.
+ */
+export const Cup = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Rect x={5} y={4.2} width={14} height={3.3} rx={1.2} stroke={color} {...stroke} />
+    <Path
+      d="M6.4 7.5l1.2 10.9a1.6 1.6 0 0 0 1.6 1.4h5.6a1.6 1.6 0 0 0 1.6-1.4l1.2-10.9"
+      stroke={color}
+      {...stroke}
+    />
+    <Path d="M7.3 13.2h9.4" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** `date-ideas`. */
+export const Heart = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M12 20.4l-1.7-1.6C5.2 14.2 2.8 11.9 2.8 9.1A5.3 5.3 0 0 1 8.1 3.8c1.6 0 3.1.8 4 2a4.8 4.8 0 0 1 3.9-2 5.3 5.3 0 0 1 5.2 5.3c0 2.8-2.4 5.1-7.5 9.7z"
+      stroke={color}
+      {...stroke}
+    />
+  </Frame>
+);
+
+/** `favourite-restaurants`. Five points — {@link Diamond} is the four-point rhombus. */
+export const Star = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M12 3.3l2.7 5.5 6 .9-4.35 4.25 1.03 6L12 17.1l-5.38 2.85 1.03-6L3.3 9.7l6-.9z"
+      stroke={color}
+      {...stroke}
+    />
+  </Frame>
+);
+
+/** `books-to-read`. Open, so the silhouette is not another rounded rectangle. */
+export const Book = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Path
+      d="M12 6.6C10.2 5.2 7.7 4.7 4.3 5.1v12.5c3.4-.4 5.9.1 7.7 1.5"
+      stroke={color}
+      {...stroke}
+    />
+    <Path
+      d="M12 6.6c1.8-1.4 4.3-1.9 7.7-1.5v12.5c-3.4-.4-5.9.1-7.7 1.5"
+      stroke={color}
+      {...stroke}
+    />
+    <Path d="M12 6.6v12.5" stroke={color} {...stroke} />
+  </Frame>
+);
+
+/** `gift-ideas`. Lid, box, ribbon and bow. */
+export const Gift = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Rect x={3} y={7.6} width={18} height={4} rx={1.2} stroke={color} {...stroke} />
+    <Path
+      d="M4.6 11.6v7.4A1.9 1.9 0 0 0 6.5 20.9h11A1.9 1.9 0 0 0 19.4 19v-7.4"
+      stroke={color}
+      {...stroke}
+    />
+    <Path d="M12 7.6v13.3" stroke={color} {...stroke} />
+    <Path
+      d="M12 7.6c-1.6 0-3.6-.6-3.6-2.2A1.9 1.9 0 0 1 12 4.8a1.9 1.9 0 0 1 3.6.6c0 1.6-2 2.2-3.6 2.2z"
+      stroke={color}
+      {...stroke}
+    />
+  </Frame>
+);
+
+/**
+ * `movies-to-watch`. A film strip: side rails and perforations.
+ *
+ * A **taller** frame than {@link PlayRect}'s deliberately, so the two do not share a
+ * silhouette — `watchlist` and `tv-shows` already use `play-rect`, and this sits beside them
+ * in the chooser.
+ */
+export const Film = ({ size, color }: IconProps) => (
+  <Frame size={size}>
+    <Rect x={2.5} y={3.5} width={19} height={17} rx={2} stroke={color} {...stroke} />
+    <Path d="M7.6 3.5v17M16.4 3.5v17" stroke={color} {...stroke} />
+    <Path
+      d="M2.5 8.2h5.1M2.5 15.8h5.1M16.4 8.2h5.1M16.4 15.8h5.1"
+      stroke={color}
+      {...stroke}
+    />
+  </Frame>
+);
+
 /** The three nouns, in tab order. Keyed by route name so the layout does not switch on it. */
 export const navIcons = {
   index: Sun,
@@ -261,4 +428,37 @@ export const typeIcons = {
   watch: PlayRect,
   event: MapPin,
   custom: Diamond,
+} as const;
+
+/**
+ * The List template catalogue's markers, keyed by the exact `icon` string
+ * `LIST_TEMPLATES` stores (P3-45).
+ *
+ * A map rather than a naming convention, for the reason `navIcons` and `typeIcons` are maps:
+ * a renderer looks a value up instead of switching on it, and a template whose icon has no
+ * glyph fails **here**, in one place, rather than as a blank square on a card. It is what
+ * `apps/mobile`'s catalogue test asserts against — the assertion that would have caught this
+ * gap at P3-02.
+ *
+ * Keyed by plain strings and not by a shared type: `packages/ui` may import no workspace
+ * package (`repo-structure.md` §2.2), so the catalogue's own type cannot reach this file.
+ * That is exactly why the test that pins the two together lives in `apps/mobile`, which can
+ * see both.
+ */
+export const templateIcons = {
+  bag: Bag,
+  book: Book,
+  bowl: Bowl,
+  cart: Cart,
+  'check-square': CheckSquare,
+  cup: Cup,
+  film: Film,
+  gift: Gift,
+  glass: Glass,
+  heart: Heart,
+  list: List,
+  'map-pin': MapPin,
+  'play-rect': PlayRect,
+  star: Star,
+  suitcase: Suitcase,
 } as const;
