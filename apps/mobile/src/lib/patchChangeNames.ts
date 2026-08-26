@@ -9,6 +9,8 @@ const PATCH_LABELS: Record<keyof PatchActivityInput, string> = {
   details: 'Details',
   sourceUrl: 'Link',
   parentActivityId: 'Prep task',
+  /** `Set as cover` (P3-22). Named for what the user sees change, not for the field. */
+  primaryAttachmentId: 'Cover image',
   status: 'Status',
   objectKind: 'Plan type',
   type: 'Plan type',

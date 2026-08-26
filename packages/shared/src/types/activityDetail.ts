@@ -1,6 +1,7 @@
 import type { Activity } from './activity.js';
 import type { ActivityUpdate } from './activityUpdate.js';
 import type { AgendaCapabilities, AgendaItemStatus } from './agenda.js';
+import type { Attachment } from './attachment.js';
 import type { Reminder } from './reminder.js';
 
 /** An activity read is either the stored series/one-off or one named virtual occurrence. */
@@ -76,4 +77,14 @@ export interface ActivityDetail {
    */
   updates?: ActivityUpdate[];
   updatesCursor?: string;
+  /**
+   * Every image linked to this activity, capped at
+   * `MAX_ATTACHMENTS_PER_ACTIVITY` by the confirm path (P3-22).
+   *
+   * Bounded by the model rather than by a page size, which is why there is no cursor beside
+   * it: twenty rows is the whole collection, and a client that receives them has them all.
+   * Each carries a **key**, never a URL — media is served by unguessable key (ADR-023), and
+   * the API returns a key only for an image this caller may already see.
+   */
+  attachments?: Attachment[];
 }

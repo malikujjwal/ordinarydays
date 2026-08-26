@@ -5,10 +5,11 @@ import { ulidId } from './common.js';
 /**
  * The upload half of attachments (`api-contract.md` §2.6, P3-21).
  *
- * **`Attachment` itself is not here.** The stored row and its response shape belong to
- * P3-22, which is what writes one. Nor is `PendingUpload`: that record is internal
- * cross-store confirmation state (`data-model.md` §4.3c), the client never sees it, and a
- * shared schema for it would publish an implementation detail as a contract.
+ * **`PendingUpload` is deliberately absent.** That record is internal cross-store
+ * confirmation state (`data-model.md` §4.3c), the client never sees a `tmpKey`, a
+ * `finalKey` or a `state`, and a shared schema for it would publish an implementation
+ * detail as a contract the next change to the state machine breaks. `Attachment` — what a
+ * caller does see — is here, transcribed from that same section.
  */
 
 export const attachmentId = ulidId('att');
@@ -76,3 +77,62 @@ export const requestUploadUrlResult = z
 export type UploadContentType = z.infer<typeof uploadContentType>;
 export type RequestUploadUrlInput = z.infer<typeof requestUploadUrlInput>;
 export type RequestUploadUrlResult = z.infer<typeof requestUploadUrlResult>;
+
+/**
+ * The linked attachment (`data-model.md` §4.3c), written by confirmation and read by plan
+ * detail.
+ *
+ * **Transcribed, not designed.** §4.3c already defines this shape; `phase-03`'s P3-22 still
+ * says the entity "has no §4 shape; add it", which was true when that task was written and
+ * is not now. The stale line is noted in the pull request rather than acted on — adding a
+ * second definition beside the existing one is exactly the drift the one-shape rule exists
+ * to prevent.
+ *
+ * **`key`, never a URL, and the distinction is the security model.** Media is served by
+ * unguessable key through CloudFront with the bucket private (ADR-023); a URL in a stored
+ * row or a response would be a second place the host lives, would outlive a distribution
+ * change, and would turn a field the API hands out into something that resolves on its own.
+ * The API returns a key only for an image the caller may already see.
+ */
+export const attachment = z
+  .object({
+    attachmentId,
+    activityId: ulidId('act'),
+    /** The **permanent** key, `u/<userId>/<ulid>.<ext>`. Never the `tmp/` one. */
+    key: z.string().min(1),
+    contentType: uploadContentType,
+    byteSize: z.number().int().positive(),
+    createdAt: z.string().min(1),
+    schemaVersion: z.literal(1),
+  })
+  .meta({ id: 'Attachment' });
+
+/**
+ * `POST /v1/activities/:id/attachments` — confirm an upload and link it.
+ *
+ * One field, and **strict**, because everything else about the attachment is already fixed:
+ * the type, the size and both keys were decided when the URL was issued and are recorded on
+ * the caller's pending record. A body offering `key`, `contentType` or `byteSize` would be
+ * offering to contradict the declaration the store already enforced, so it is a named `400`
+ * rather than a field quietly ignored.
+ */
+export const confirmAttachmentInput = z
+  .strictObject({ attachmentId })
+  .meta({ id: 'ConfirmAttachmentInput' });
+
+/**
+ * What a `DELETE` acknowledges: the id that is now gone, and — when it was the cover — that
+ * the hero was cleared by the same write.
+ *
+ * A body rather than a `204`, for the reason `deletedDevice` records: every response carries
+ * the `{ data, meta }` envelope and a `204` has none to carry it in. `coverCleared` is here
+ * so a client can drop its hero without a refetch, and so the guarantee that the hero can
+ * never point at nothing is observable in the response rather than only in the table.
+ */
+export const deletedAttachment = z
+  .object({ attachmentId, coverCleared: z.boolean() })
+  .meta({ id: 'DeletedAttachment' });
+
+export type Attachment = z.infer<typeof attachment>;
+export type ConfirmAttachmentInput = z.infer<typeof confirmAttachmentInput>;
+export type DeletedAttachment = z.infer<typeof deletedAttachment>;
