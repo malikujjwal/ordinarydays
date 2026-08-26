@@ -694,6 +694,15 @@ export interface PatchOptions extends CreateOptions {
    * depends on it; every other patch leaves it absent and is unaffected.
    */
   readonly expectedChildCount?: number;
+  /**
+   * Items the caller needs committed **with** this patch (P3-19).
+   *
+   * The feed's system entry for a completion uses it, for the same reason the schedule path
+   * does: a completion that committed while its feed row failed would leave the two
+   * disagreeing, and the feed's only job is to agree with the plan. Opaque here by design —
+   * the repository composes what it is handed and never learns the feed's row shape.
+   */
+  readonly extraItems?: readonly TransactItem[];
 }
 
 /**
@@ -829,6 +838,8 @@ export async function patchActivity(
     }
   }
 
+  items.push(...(options.extraItems ?? []));
+
   const occurrenceGuardIndex =
     options.requireMissingOccurrenceDate === undefined ? undefined : items.length;
   if (options.requireMissingOccurrenceDate !== undefined) {
@@ -895,6 +906,19 @@ export async function patchActivity(
 
 export interface ScheduleWriteOptions {
   readonly previous: Activity;
+  /**
+   * Items the caller needs committed **with** the schedule change (P3-19).
+   *
+   * The feed's system entry uses this: a schedule write that succeeded while its "Date set to
+   * Saturday" row failed would leave a feed that disagrees with the plan, and agreeing with
+   * the plan is the feed's only job. They join the same transaction rather than following it,
+   * so there is no window in which one exists without the other.
+   *
+   * Deliberately opaque here. The repository does not know what a system entry is and must
+   * not — it composes items it is handed, which is what stops this becoming a second place
+   * that knows the feed's row shape.
+   */
+  readonly extraItems?: readonly TransactItem[];
   readonly indexedUserIds: readonly string[];
   readonly participantRows?: readonly StoredItem[];
   readonly taskSubtitle?: string;
@@ -929,6 +953,7 @@ export async function writeSchedule(
   for (const row of options.participantRows ?? []) {
     items.push({ Put: { Item: { ...row, updatedAt: next.updatedAt } } });
   }
+  items.push(...(options.extraItems ?? []));
   if (next.parentActivityId !== undefined && next.status !== options.previous.status) {
     items.push({
       Update: {

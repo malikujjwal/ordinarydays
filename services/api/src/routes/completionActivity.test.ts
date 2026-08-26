@@ -200,10 +200,16 @@ describe('one-off completion transaction and replay', () => {
       status: 'completed',
       outcome: 'done',
     });
+    /**
+     * The feed's `ActivityUpdate` joins the **same** transaction (P3-19): a completion that
+     * committed while its feed row failed would leave the two disagreeing, and agreeing with
+     * the plan is the feed's only job.
+     */
     expect(items.map((item) => item.Put?.Item?.entity ?? Object.keys(item)[0])).toEqual([
       'Activity',
       'ActivityIndex',
       'ActivityIndex',
+      'ActivityUpdate',
       'Idempotency',
     ]);
     expect(

@@ -345,12 +345,19 @@ describe('reading one activity back', () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
+    /**
+     * Each collection is **added** as its phase lands rather than changing the envelope —
+     * `updates` is P3-19's. An activity with no feed still carries the key, as an empty array,
+     * so a client never has to tell "no entries" from "this server does not have the feed".
+     */
     expect(Object.keys(body.data).sort()).toEqual([
       'activity',
       'capabilities',
       'completedOccurrenceCount',
       'reminders',
+      'updates',
     ]);
+    expect(body.data.updates).toEqual([]);
     expect(body.data.completedOccurrenceCount).toBe(0);
     expect(body.data.activity).toMatchObject({
       activityId: data.activityId,

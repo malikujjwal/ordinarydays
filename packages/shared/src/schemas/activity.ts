@@ -8,6 +8,7 @@ import {
   MAX_REMINDERS_PER_USER_PER_ACTIVITY,
   MAX_TITLE_LEN,
 } from '../constants.js';
+import { activityUpdate } from './activityUpdate.js';
 import { activityActionCapabilities } from './capabilities.js';
 import {
   cents,
@@ -485,6 +486,13 @@ export const activityDetail = z
     occurrence: occurrenceDetailProjection.optional(),
     /** Additive Phase 2 projection; absent only in an older cached response. */
     completedOccurrenceCount: z.number().int().nonnegative().optional(),
+    /**
+     * The newest page of the plan's feed, embedded so opening a plan is one request
+     * (§2.3, P3-19). `updatesCursor` continues it through `GET .../updates?cursor=`; its
+     * absence means the feed ends here, not that paging is unavailable.
+     */
+    updates: z.array(activityUpdate).optional(),
+    updatesCursor: z.string().min(1).optional(),
   })
   .meta({ id: 'ActivityDetail' });
 
