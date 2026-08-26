@@ -10,11 +10,14 @@
     "test:int": "vitest run --config vitest.int.config.ts",
     "dev": "tsx watch --env-file-if-exists=.env.local src/local.ts",
     "ddb:create-table": "tsx --env-file-if-exists=.env.local scripts/create-local-table.ts",
+    "s3:create-bucket": "tsx --env-file-if-exists=.env.local scripts/create-local-bucket.ts",
     "seed:local": "tsx --env-file-if-exists=.env.local scripts/seed-local.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.1106.0",
+    "@aws-sdk/client-s3": "3.1106.0",
     "@aws-sdk/lib-dynamodb": "3.1106.0",
+    "@aws-sdk/s3-request-presigner": "3.1106.0",
     "@hono/zod-validator": "0.7.4",
     "@od/shared": "workspace:*",
     "date-fns": "4.1.0",
