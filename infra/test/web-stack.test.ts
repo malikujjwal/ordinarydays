@@ -204,6 +204,91 @@ describe('the media distribution', () => {
     expect(cfg.IPV6Enabled).toBe(true);
   });
 
+  /** The one origin, typed for the three assertions that read its wiring. */
+  const mediaOrigin = () =>
+    (byComment('od-media-prod')?.Properties.DistributionConfig.Origins ?? [])[0] as
+      | {
+          DomainName?: { 'Fn::ImportValue'?: string };
+          OriginAccessControlId?: { 'Fn::GetAtt'?: [string, string] };
+        }
+      | undefined;
+
+  /**
+   * **It reads the media bucket, and the media bucket is in the other stack.**
+   *
+   * Everything else in this block would pass on a media distribution pointed at the *web*
+   * bucket by a copy-paste: the price class, the TTLs, the methods and the OAC are all
+   * properties of this distribution, not of what sits behind it. The result would serve the
+   * static site at `media.ordinarydays.app` and no images at all.
+   *
+   * The assertion follows the wire rather than matching a name. `DataStack` owns the bucket
+   * (`infrastructure.md` §1.1), so a correct origin is a cross-stack `Fn::ImportValue` — a
+   * local `Fn::GetAtt`, which is what the web origin uses, would mean the bucket had moved
+   * into this stack. That import is then resolved against `DataStack`'s own exports and must
+   * land on the `RegionalDomainName` of the one bucket that stack creates. Reading the
+   * logical id out of the template instead of writing it down keeps this indifferent to
+   * CDK's construct-path hashes.
+   */
+  it('takes its origin from DataStack’s media bucket, not the web bucket', () => {
+    const importName = mediaOrigin()?.DomainName?.['Fn::ImportValue'];
+    expect(importName, 'the origin is not a cross-stack import').toBeDefined();
+    expect(importName).toMatch(/^od-data-prod:/);
+
+    const bucketIds = Object.keys(prod.data.findResources('AWS::S3::Bucket'));
+    expect(bucketIds).toHaveLength(1);
+
+    const exported = Object.values(prod.data.findOutputs('*')).find(
+      (o) => (o as { Export?: { Name?: string } }).Export?.Name === importName,
+    ) as { Value?: unknown } | undefined;
+
+    expect(exported, `DataStack exports no ${String(importName)}`).toBeDefined();
+    expect(exported?.Value).toEqual({
+      'Fn::GetAtt': [bucketIds[0], 'RegionalDomainName'],
+    });
+  });
+
+  /**
+   * **The OAC signs, and signs with SigV4.**
+   *
+   * `OriginAccessControlId` being present — which is all "reads S3 through OAC" above
+   * checks — says only that a control is attached. A control configured `SigningBehavior:
+   * 'never'` is attached and does nothing: CloudFront would forward the viewer's unsigned
+   * request, `DataStack.allowCloudFrontRead()`'s `aws:SourceAccount` condition would have
+   * no signature to match against, and every image would 403 with the template still
+   * looking correct. This is the half of "OAC, never OAI" that has teeth.
+   */
+  it('signs every origin request to S3 with SigV4', () => {
+    const oacId = mediaOrigin()?.OriginAccessControlId?.['Fn::GetAtt']?.[0];
+    expect(oacId).toBeDefined();
+
+    const controls = prod.web.findResources(
+      'AWS::CloudFront::OriginAccessControl',
+    ) as Record<string, { Properties: { OriginAccessControlConfig: unknown } }>;
+
+    expect(controls[oacId as string]?.Properties.OriginAccessControlConfig).toMatchObject(
+      {
+        OriginAccessControlOriginType: 's3',
+        SigningBehavior: 'always',
+        SigningProtocol: 'sigv4',
+      },
+    );
+  });
+
+  /**
+   * **One behaviour, so the policy above governs every path.**
+   *
+   * Every assertion in this block reads `DefaultCacheBehavior`. An added behaviour carries
+   * its own cache policy and its own allowed methods, so a second one would be a path that
+   * escapes the year-long TTL and the GET/HEAD restriction while every test here still
+   * passed. The web distribution has a second behaviour on purpose (`/_expo/static/*`);
+   * media has no such split, because a ULID key is already immutable.
+   */
+  it('has no second behaviour to escape the year-long policy', () => {
+    expect(
+      byComment('od-media-prod')?.Properties.DistributionConfig.CacheBehaviors,
+    ).toBeUndefined();
+  });
+
   /**
    * **`OriginAccessIdentity` is present and empty**, which is what "OAC, never OAI" looks
    * like in a synthesized template — CloudFormation still requires the member on an

@@ -723,6 +723,12 @@ allowed to see. Presigned URLs are issued for `PUT` only, never `GET`.
 - Direct S3 egress is impossible: the bucket policy grants `s3:GetObject` only to
   `cloudfront.amazonaws.com` conditioned on the distribution ARN. This also keeps all image
   traffic inside CloudFront's 1 TB free egress rather than paying S3 egress rates.
+  *(Amended 2026-08-26 by P3-23: on the **media** bucket the condition is
+  `aws:SourceAccount` plus a wildcard distribution ARN, not the exact ARN. Its distribution
+  is in `WebStack` and its bucket in `DataStack`, so an exact-ARN condition is a
+  CloudFormation dependency cycle — `infrastructure.md` §1.1 has the reasoning. The
+  consequence above is unchanged: the principal is still only `cloudfront.amazonaws.com`,
+  so direct S3 egress remains impossible and the decision stands as accepted.)*
 - **Signed URLs are the Phase 7 hardening step** if media ever becomes sensitive enough to
   justify the key management. Listed as an open question below.
 
