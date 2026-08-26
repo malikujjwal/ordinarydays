@@ -974,6 +974,15 @@ export interface ListItemSnapshot {
     string,
     IngredientDestinationBinding
   >;
+  /**
+   * Requested destination ids that a retained `ITEM_TOMBSTONE#` still owns.
+   *
+   * A deleted item keeps its id reserved for the replay window so its own Undo can put the
+   * row back, and **only that Undo may reclaim it** (§P3-10, §P3-17). The create path has
+   * always enforced this with a per-row `ConditionCheck`; the binding path writes to the same
+   * `ITEMID#` key and could not, so this read is where the rule is applied for both.
+   */
+  readonly tombstonedDestinationIds: ReadonlySet<string>;
   readonly rankVersion: number;
   readonly itemVersion: number;
 }
@@ -1016,10 +1025,25 @@ export async function snapshotListItems(
   assertFenceOpen(before);
 
   const requestedIds = [...new Set(requestedIngredientDestinationIds)];
-  const [items, bindingRows] = await Promise.all([
+  /**
+   * Both rows a requested destination id can already be spoken for by, read under the same
+   * fence as the items: the locator (a live row, or an absorbed binding) and the tombstone
+   * (a deleted row's reserved id). Two keys per id, so the 30-ingredient cap keeps this at
+   * 60 — inside `BatchGetItem`'s hundred.
+   */
+  const tombstoneKeys = new Map(
+    requestedIds.map((requestedItemId) => [
+      requestedItemId,
+      listItemTombstone(listId, requestedItemId),
+    ]),
+  );
+  const [items, requestedRows] = await Promise.all([
     readAllItemsUnfenced(listId),
     batchGetItems<StoredItem>(
-      requestedIds.map((requestedItemId) => listItemLocator(listId, requestedItemId)),
+      requestedIds.flatMap((requestedItemId) => [
+        listItemLocator(listId, requestedItemId),
+        listItemTombstone(listId, requestedItemId),
+      ]),
       { consistentRead: true },
     ),
   ]);
@@ -1030,12 +1054,19 @@ export async function snapshotListItems(
   return {
     items,
     ingredientDestinationBindings: new Map(
-      bindingRows.flatMap((row) => {
+      requestedRows.flatMap((row) => {
         const binding = ingredientDestinationBindingSchema.safeParse(row);
         return binding.success
           ? ([[binding.data.requestedItemId, binding.data]] as const)
           : [];
       }),
+    ),
+    tombstonedDestinationIds: new Set(
+      [...tombstoneKeys].flatMap(([requestedItemId, key]) =>
+        requestedRows.some((row) => row.pk === key.pk && row.sk === key.sk)
+          ? [requestedItemId]
+          : [],
+      ),
     ),
     rankVersion: after.rankVersion,
     itemVersion: itemVersion(after),

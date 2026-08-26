@@ -229,6 +229,7 @@ async function attemptAdd(
     ),
   );
   const existing = snapshot.items;
+  assertDestinationsNotTombstoned(selected, snapshot.tombstonedDestinationIds);
 
   const sourceLabel = provenanceLabel(
     labelSource(activity),
@@ -896,6 +897,42 @@ async function loadCollection(
 
 function assertCollection(list: List): void {
   if (list.behaviour !== 'collection') refuse('listId', NOT_A_COLLECTION);
+}
+
+/**
+ * Refuses a destination id a retained `ITEM_TOMBSTONE#` still owns.
+ *
+ * A deleted item keeps its id reserved for the replay window so that its **own** Undo can put
+ * the row back, and §P3-10 and §P3-17 both say only that Undo may reclaim it. Created rows
+ * have always obeyed this, through the per-row `ConditionCheck` in `appendListItemCreates`.
+ *
+ * An **absorbed** one had no such guard and needed one, because it writes to the same key
+ * (raised in review). When a supplied destination id deduplicates into another row, the
+ * binding is written at that id's `ITEMID#` locator to occupy it permanently — and its only
+ * condition was that the locator be absent, which a delete makes true. So an ordinary add
+ * could take a tombstoned id, and the delete's Undo then had nowhere to put the item back:
+ * its own locator `Put` failed against the binding sitting there.
+ *
+ * Checked here, from the fenced snapshot, rather than as another `ConditionCheck`: a request
+ * absorbing all thirty ingredients already builds ninety-four transaction items, and one more
+ * check per binding would put it over the hundred-item ceiling. The snapshot reads the
+ * tombstones under the same `itemVersion` the transaction commits under, so a delete landing
+ * afterwards fails that fence and the retry re-reads and refuses here.
+ *
+ * `conflict` rather than `validation_failed`, matching what an ordinary create answers for a
+ * taken id: the request was well-formed, and it is the world that says no.
+ */
+function assertDestinationsNotTombstoned(
+  selected: readonly ResolvedIngredient[],
+  tombstoned: ReadonlySet<string>,
+): void {
+  if (tombstoned.size === 0) return;
+  for (const [position, resolved] of selected.entries()) {
+    if (resolved.itemId === undefined || !tombstoned.has(resolved.itemId)) continue;
+    throw new AppError('conflict', ID_UNAVAILABLE, [
+      { path: `ingredients.${String(position)}.itemId`, message: ID_UNAVAILABLE },
+    ]);
+  }
 }
 
 /** Same precheck, same caveat: the transaction's own META condition is the enforcement. */

@@ -173,6 +173,7 @@ beforeEach(() => {
     rankVersion: 3,
     itemVersion: 0,
     ingredientDestinationBindings: new Map(),
+    tombstonedDestinationIds: new Set<string>(),
   });
   vi.mocked(repair.drainRankRepair).mockResolvedValue(true);
 });
@@ -419,6 +420,7 @@ describe('binding the confirmation to what is actually there', () => {
       rankVersion: 3,
       itemVersion: 0,
       ingredientDestinationBindings: new Map(),
+      tombstonedDestinationIds: new Set<string>(),
     });
     vi.mocked(repository.beginBehaviourMigration).mockResolvedValue(
       work({ fromBehaviour: 'watch', toBehaviour: 'collection', lossCount: 1 }),
@@ -445,6 +447,7 @@ describe('binding the confirmation to what is actually there', () => {
       rankVersion: 3,
       itemVersion: 0,
       ingredientDestinationBindings: new Map(),
+      tombstonedDestinationIds: new Set<string>(),
     });
     vi.mocked(repository.beginBehaviourMigration).mockResolvedValue(
       work({ fromBehaviour: 'watch', toBehaviour: 'collection', lossCount: 5 }),
@@ -465,6 +468,7 @@ describe('binding the confirmation to what is actually there', () => {
       rankVersion: 3,
       itemVersion: 0,
       ingredientDestinationBindings: new Map(),
+      tombstonedDestinationIds: new Set<string>(),
     });
     installReturns(
       work({
@@ -493,6 +497,7 @@ describe('binding the confirmation to what is actually there', () => {
       rankVersion: 3,
       itemVersion: 0,
       ingredientDestinationBindings: new Map(),
+      tombstonedDestinationIds: new Set<string>(),
     });
     const lossy = withoutUndo({
       fromBehaviour: 'watch',
@@ -551,6 +556,7 @@ describe('the checks before anything is installed', () => {
       rankVersion: 3,
       itemVersion: 0,
       ingredientDestinationBindings: new Map(),
+      tombstonedDestinationIds: new Set<string>(),
     });
 
     await expect(change()).resolves.toMatchObject({ list: { behaviour: 'watch' } });

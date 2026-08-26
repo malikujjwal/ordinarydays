@@ -1351,3 +1351,101 @@ describe('a change landing between the read and the commit', () => {
     expect(await receiptFor(key)).toBeUndefined();
   });
 });
+
+/**
+ * A tombstoned id belongs to its retained Undo, and to nothing else (§P3-10, §P3-17's
+ * "only the matching retained Undo may reclaim an item id protected by `ITEM_TOMBSTONE#`").
+ *
+ * The create path has always honoured that: every created row carries a tombstone
+ * `ConditionCheck`. The **binding** path did not, and it writes to the same `ITEMID#` key —
+ * so an ingredient whose supplied destination id happened to be tombstoned could occupy that
+ * id by being absorbed into a different row, and the delete's Undo then had nowhere to put
+ * the item back (raised in review).
+ */
+describe('a tombstoned destination id', () => {
+  /** Adds an item under an id the caller chooses, so the test can tombstone that exact id. */
+  const addItemWithId = async (listId: string, itemId: string, title: string) => {
+    const res = await request('POST', `/v1/lists/${listId}/items`, { itemId, title });
+    expect(res.status).toBe(201);
+    return (await res.json()).data as ListItem;
+  };
+
+  const deleteItem = async (listId: string, itemId: string) => {
+    const res = await request('DELETE', `/v1/lists/${listId}/items/${itemId}`);
+    expect(res.status).toBe(200);
+    return (await res.json()).data as { undoToken: string };
+  };
+
+  const undo = (listId: string, undoToken: string) =>
+    request('POST', `/v1/lists/${listId}/undo`, { undoToken });
+
+  const setUpTombstoned = async () => {
+    await createMeal();
+    const list = await createList();
+    // The row the ingredient will be absorbed into: same title, unchecked.
+    const absorbing = await addItem(list.listId, 'Chicken');
+    // The row whose id is about to become tombstoned — and which the request will supply.
+    const doomed = await addItemWithId(
+      list.listId,
+      destinationItemId(CHICKEN),
+      'Something else',
+    );
+    const { undoToken } = await deleteItem(list.listId, doomed.itemId);
+    return { list, absorbing, doomed, undoToken };
+  };
+
+  it('is refused, and the absorbing row is left byte-identical', async () => {
+    const { list, doomed } = await setUpTombstoned();
+    const before = await itemRows(list.listId);
+    const key = crypto.randomUUID();
+
+    const res = await addToList(list.listId, [CHICKEN], { 'Idempotency-Key': key });
+
+    expect(res.status).toBe(409);
+    expect(await itemRows(list.listId)).toEqual(before);
+    expect(
+      await rawItem(`LIST#${list.listId}`, `ITEMID#${doomed.itemId}`),
+    ).toBeUndefined();
+    expect(await receiptFor(key)).toBeUndefined();
+    for (const ingredient of await storedIngredients()) {
+      expect(ingredient).not.toHaveProperty('addedToListId');
+    }
+  });
+
+  /** The point of refusing: the Undo that owns that id still works. */
+  it('leaves the retained Undo able to restore the deleted item', async () => {
+    const { list, doomed, undoToken } = await setUpTombstoned();
+
+    await addToList(list.listId, [CHICKEN]);
+    const restored = await undo(list.listId, undoToken);
+
+    expect(restored.status).toBe(200);
+    const rows = await itemRows(list.listId);
+    expect(rows.map((row) => row.itemId).sort()).toEqual(
+      [
+        doomed.itemId,
+        ...rows.map((row) => row.itemId).filter((id) => id !== doomed.itemId),
+      ].sort(),
+    );
+    expect(rows.some((row) => row.itemId === doomed.itemId)).toBe(true);
+    expect(rows.find((row) => row.itemId === doomed.itemId)?.title).toBe(
+      'Something else',
+    );
+  });
+
+  /**
+   * The same id, once its Undo has been spent, is still not free — the tombstone is retained
+   * for the replay window. This is the create path's rule, asserted for the binding path.
+   */
+  it('stays refused for a destination whose Undo has already been used', async () => {
+    const { list, undoToken } = await setUpTombstoned();
+    expect((await undo(list.listId, undoToken)).status).toBe(200);
+    // Undo restored the row, so the id is live again rather than tombstoned; deleting it a
+    // second time re-tombstones it and the refusal must hold.
+    await deleteItem(list.listId, destinationItemId(CHICKEN));
+
+    const res = await addToList(list.listId, [CHICKEN]);
+
+    expect(res.status).toBe(409);
+  });
+});

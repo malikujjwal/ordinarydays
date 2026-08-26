@@ -153,12 +153,14 @@ const snapshot = (
   items: ListItem[],
   rankVersion = 1,
   ingredientDestinationBindings = new Map(),
+  tombstonedDestinationIds = new Set<string>(),
 ) => {
   vi.mocked(listRepository.snapshotListItems).mockResolvedValue({
     items,
     rankVersion,
     itemVersion: 1,
     ingredientDestinationBindings,
+    tombstonedDestinationIds,
   });
 };
 
@@ -227,6 +229,25 @@ describe('what it refuses, before it writes anything', () => {
       ]),
     ).rejects.toThrow(AppError);
     expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A deleted item's id stays reserved for its own Undo (§P3-10). Created rows have always
+   * honoured that through a `ConditionCheck`; an **absorbed** one writes its binding to the
+   * same `ITEMID#` key and had no guard, so an ordinary add could take the id and leave the
+   * delete's Undo with nowhere to put the row back (raised in review).
+   */
+  it('refuses a destination id a tombstone still owns, before classifying', async () => {
+    snapshot([existingItem()], 1, new Map(), new Set([ITEM_ONE]));
+
+    await expect(run()).rejects.toMatchObject({ code: 'conflict' });
+    expect(tx.transactWrite).not.toHaveBeenCalled();
+  });
+
+  it('ignores a tombstone on an id this request did not ask for', async () => {
+    snapshot([], 1, new Map(), new Set(['itm_01J8XKQ2M4N5P6R7S8T9V0W1D9']));
+
+    await expect(run()).resolves.toBeDefined();
   });
 
   it('refuses to overflow the list, before attempting the write', async () => {
@@ -330,6 +351,7 @@ describe('a stale read re-runs the whole cycle', () => {
         rankVersion: 1,
         itemVersion: attempt,
         ingredientDestinationBindings: new Map(),
+        tombstonedDestinationIds: new Set<string>(),
       }) as never;
     });
     vi.mocked(tx.transactWrite).mockImplementationOnce((_items, options) => {
@@ -372,6 +394,7 @@ describe('a stale read re-runs the whole cycle', () => {
       rankVersion: 7,
       itemVersion: 11,
       ingredientDestinationBindings: new Map(),
+      tombstonedDestinationIds: new Set<string>(),
     });
 
     await run();
