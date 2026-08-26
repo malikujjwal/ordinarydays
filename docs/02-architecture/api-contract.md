@@ -496,6 +496,31 @@ Whenever a prep task gains, edits or removes recurrence, the same transaction re
 parent `SUB#` projection's `isRecurring`. Completion follow-ups use that stored discriminator
 to exclude recurring children; they never infer or invent an `occurrenceDate`.
 
+**`parentActivityId` is subject to the same rules on `PATCH` as on `POST`** (P3-18). Setting
+it requires write access to the named parent — a caller with no relationship gets `404`, the
+same answer as for an activity that does not exist — and both structural limits are checked
+from both ends: the target may not itself be a prep task, and a task that already has prep
+tasks of its own may not become one, which is the only way a `PATCH` could assemble the third
+level a `POST` refuses. An activity may not be its own parent. **Only a Task may carry
+`parentActivityId`**: a `POST` creating a Plan with a parent and a `PATCH` converting an
+already-attached prep task into a Plan both answer `validation_failed` with
+`Only a task can be a prep task.` and write nothing. The check is on the state the write
+produces, because the conversion changes no parent and so is invisible to every check that
+fires when the relationship moves. **The parent must be a Plan**: a `parentActivityId` naming
+a Task is `validation_failed` with `A prep task belongs to a plan.`
+
+The attach and the Plan → Task conversion each condition on what the other changes, because
+`childCount` moves by `ADD` and deliberately does not advance `updatedAt`. The conversion —
+legal only at `childCount === 0` — pins the count it validated, and the attach pins the
+parent's `objectKind`. Exactly one of a concurrent pair commits; without both, a stale
+conversion `Put` would satisfy its `updatedAt` condition and reinstate `childCount: 0` on a
+parent that had just gained a child, stranding that child and its `SUB#` pointer on a Task. A plan already holding
+`MAX_PREP_TASKS_PER_PLAN` prep tasks refuses the next one — on `POST` and on `PATCH` alike —
+with `validation_failed` on `parentActivityId` and the exact message
+`Plan has too many prep tasks.`, writing nothing. Setting, clearing or changing the field
+moves the parent's pointer and both plans' `childCount` values in the same transaction as the
+child, so no plan ever renders a prep-task count it cannot produce the rows behind.
+
 For a non-owner detail read, META alone is not authority: the service strongly reads the exact
 `USER#<caller>/IDX#<activityId>` access grant, or the documented parent grant, before
 projecting sections. It never scans participants to discover whether the caller is allowed.

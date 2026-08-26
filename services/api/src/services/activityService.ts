@@ -5,7 +5,7 @@ import {
   type ChangeTarget,
   changeActivityKind,
 } from '@od/shared';
-import { MAX_TITLE_LEN } from '@od/shared/constants';
+import { MAX_PREP_TASKS_PER_PLAN, MAX_TITLE_LEN } from '@od/shared/constants';
 import { expandRecurrence, toUtcInstant } from '@od/shared/recurrence';
 import type {
   ActivityListQuery,
@@ -43,13 +43,17 @@ import type { Logger } from '../lib/logger.js';
 import {
   ActivityIdUnavailableError,
   deleteActivity as deleteActivityRows,
+  detachChildFromParent,
   getActivityMeta,
   getActivityPartition,
   getActivityPartitionStrong,
   listByBucket as listBucket,
   listParticipants,
+  listPrepTaskPointers,
   newActivityId,
   newReminderId,
+  ParentUnavailableError,
+  type PrepTaskPointer,
   createActivity as putActivity,
   patchActivity as putPatch,
   StaleViewerLinkError,
@@ -88,6 +92,74 @@ export const SHARING_SOON = 'Sharing is coming soon.';
  */
 const NESTING_CAP =
   'A prep task cannot have its own prep task. Add it to the plan instead.';
+
+/**
+ * A prep task is a **task** — the first line of `plans-and-lists.md` §3 and of §P3-18.
+ *
+ * Not a stylistic preference about what belongs under a plan. `parentActivityId` sits on the
+ * shape shared by both `objectKind` arms, so nothing in the schema stopped a Plan being
+ * created with a parent, and such a row is a contradiction the rest of the model then acts
+ * on: it takes a `SUB#` pointer and a slot against the 50-cap, renders in a PREP section that
+ * `plans-and-lists.md` §3 describes as tasks, and would be offered to P3-43's `Complete all`
+ * — which completes children in bulk while plan completion is owner-only and global
+ * (`activities.md` §5.1). Phase 6 makes it worse rather than better: prep authority is
+ * inherited from the parent's participants, so an attached Plan would hand a participant
+ * completion rights over a Plan that is not theirs.
+ */
+const CHILD_MUST_BE_TASK = 'Only a task can be a prep task.';
+
+/**
+ * The other end of the same relationship: a prep task hangs off a **Plan**.
+ *
+ * `plans-and-lists.md` §3 opens with "`parentActivityId` set to the plan" and caps the count
+ * "per Plan"; §P3-18 says "A Plan has at most 50 prep tasks". A Task parent contradicts all
+ * three, and produces a row no screen can render: the PREP section belongs to plan detail
+ * (§P3-37), and Task detail (`today-and-tasks.md` §5.6) has no PREP section at all — it shows
+ * a `Related plan` row and nothing else. So a child under a Task is invisible, uncountable
+ * against a per-Plan cap, and unreachable by the drill-down that `3 of 5 done` promises.
+ *
+ * See the PR description for the one sentence in §3 that reads the other way; it is amended
+ * in the same change rather than silently outvoted.
+ */
+const PARENT_MUST_BE_PLAN = 'A prep task belongs to a plan.';
+
+/**
+ * The prep-task kind rule, on whatever write is producing the attached state.
+ *
+ * Separate from {@link assertCanParent} because the two do not fire together. Attaching is a
+ * *relationship* change and is checked when the parent moves; this is a check on the
+ * **child**, and a `PATCH` that converts an already-attached task into a Plan changes no
+ * parent at all — it reaches the attached-Plan state by the one door a reparenting check
+ * never opens.
+ */
+function assertChildMayBeAttached(kind: Pick<Activity, 'objectKind' | 'type'>): void {
+  if (kind.objectKind !== 'task' || kind.type !== 'task') {
+    throw parentFailure(CHILD_MUST_BE_TASK);
+  }
+}
+
+/**
+ * A Plan holds at most {@link MAX_PREP_TASKS_PER_PLAN} prep tasks
+ * (`plans-and-lists.md` §3, amended 2026-08-23).
+ *
+ * The bound is not tidiness: it is what lets plan detail read the complete PREP section and
+ * its exact done/open counts in one page, so the `3 of 5 done` a user taps is a real ratio
+ * rather than the first fifty of an unknown number.
+ */
+const PREP_TASKS_FULL = 'Plan has too many prep tasks.';
+
+/** A task that already has prep tasks cannot become one — that is the third level again. */
+const NESTING_CAP_HAS_CHILDREN =
+  'This task has its own prep tasks. Move them first, or add it to the plan directly.';
+
+/** An activity cannot be its own prep task. */
+const SELF_PARENT = 'A task cannot be its own prep task.';
+
+function parentFailure(message: string): AppError {
+  return new AppError('validation_failed', message, [
+    { path: 'parentActivityId', message },
+  ]);
+}
 
 /**
  * The status a write produces (rule 1).
@@ -191,18 +263,91 @@ export function toSchedule(schedule: WallClockSchedule): ActivitySchedule {
  * difference until participants exist, and the shared-checklist reading is the consistent
  * one, but it should be confirmed rather than inherited from this comment.
  */
-async function assertCanParent(userId: string, parentActivityId: string): Promise<void> {
+async function assertCanParent(
+  userId: string,
+  parentActivityId: string,
+  options: {
+    /**
+     * The kind the child will have once this write lands.
+     *
+     * Required rather than optional, and taken from the **resulting** state rather than the
+     * stored one, so a `PATCH` that converts a prep task to a Plan and one that attaches a
+     * Plan to a parent are refused by the same check. A caller that cannot say what it is
+     * attaching has no business attaching it.
+     */
+    readonly childKind: Pick<Activity, 'objectKind' | 'type'>;
+    /** The activity being attached, when it already exists. Absent on create. */
+    readonly child?: Activity;
+    /**
+     * Leave the 50-cap refusal to the transaction (create only).
+     *
+     * A **client-minted** create can be a replay of one that already committed, and at a full
+     * plan the two are indistinguishable from `childCount` alone: both see fifty children,
+     * but one of them *is* the fiftieth. Refusing here would answer a replay "the plan is
+     * full" and send the client away from the recovery its own id would have given it. The
+     * transaction tells them apart in the right order — a taken id fails first and answers
+     * `conflict`, a genuine 51st reaches the counter condition and answers with
+     * {@link PREP_TASKS_FULL} — so the cap is deferred, never dropped.
+     */
+    readonly capOnly?: 'transaction';
+  },
+): Promise<Activity> {
+  assertChildMayBeAttached(options.childKind);
+
+  if (options.child?.activityId === parentActivityId) throw parentFailure(SELF_PARENT);
+
   const { activity: parent } = await assertActivityAccess(
     userId,
     parentActivityId,
     'write',
   );
 
-  if (parent.parentActivityId !== undefined) {
-    throw new AppError('validation_failed', NESTING_CAP, [
-      { path: 'parentActivityId', message: NESTING_CAP },
-    ]);
+  if (parent.objectKind !== 'plan') throw parentFailure(PARENT_MUST_BE_PLAN);
+
+  if (parent.parentActivityId !== undefined) throw parentFailure(NESTING_CAP);
+
+  /**
+   * The other way to reach a third level, and the only one a `POST` cannot: attaching a task
+   * that is *already* somebody's parent. A create has no children yet, so this can only come
+   * from a `PATCH` — which is exactly why the cap has to be checked on both sides of the
+   * relationship rather than once, at creation.
+   */
+  if ((options.child?.childCount ?? 0) > 0) throw parentFailure(NESTING_CAP_HAS_CHILDREN);
+
+  if (options.capOnly !== 'transaction' && parent.childCount >= MAX_PREP_TASKS_PER_PLAN) {
+    throw parentFailure(PREP_TASKS_FULL);
   }
+
+  return parent;
+}
+
+/**
+ * The answer when the parent's attach condition cancelled the write.
+ *
+ * One extra `GetItem`, on a path that is a genuine race rather than an ordinary request. The
+ * transaction can only report *that* a condition failed, and this attach carries **three** of
+ * them, so the re-read is what turns one cancellation into the right sentence:
+ *
+ * | Re-read finds | Which condition lost | Answer |
+ * | --- | --- | --- |
+ * | nothing | `attribute_exists(pk)` | `not_found` — the plan was deleted between the two |
+ * | an activity that is not a Plan | `objectKind = plan` | {@link PARENT_MUST_BE_PLAN} — it was converted out from under us |
+ * | a Plan | `childCount < cap` | {@link PREP_TASKS_FULL} |
+ *
+ * The middle row is the conversion race's losing side, and reporting it as "the plan is full"
+ * — which this did before the `objectKind` condition existed to lose — sends the user to
+ * delete prep tasks from a plan that has none and is no longer a plan.
+ */
+async function parentRejected(parentActivityId: string): Promise<AppError> {
+  /**
+   * **Strongly consistent, because what it finds is the answer.** A default-consistency
+   * `GetItem` that has not caught up reports a deletion that never happened, or reads a
+   * pre-conversion Plan and blames a cap that was never the problem.
+   */
+  const parent = await getActivityMeta(parentActivityId, { consistentRead: true });
+  if (parent === undefined) return new AppError('not_found', 'Activity not found.');
+  if (parent.objectKind !== 'plan') return parentFailure(PARENT_MUST_BE_PLAN);
+  return parentFailure(PREP_TASKS_FULL);
 }
 
 export interface CreateResult {
@@ -312,9 +457,13 @@ export async function createActivity(
     ]);
   }
 
-  if (input.parentActivityId !== undefined) {
-    await assertCanParent(userId, input.parentActivityId);
-  }
+  const parent =
+    input.parentActivityId === undefined
+      ? undefined
+      : await assertCanParent(userId, input.parentActivityId, {
+          childKind: { objectKind: input.objectKind, type: input.type },
+          ...(input.activityId === undefined ? {} : { capOnly: 'transaction' }),
+        });
 
   const schedule = input.schedule === undefined ? undefined : toSchedule(input.schedule);
   const storedRecurrence = recurrenceForCreate(input.recurrence, schedule);
@@ -382,10 +531,20 @@ export async function createActivity(
         reminderId: row.reminderId,
         offsetMinutes: row.offsetMinutes,
       })),
+      /**
+       * A prep task renders on Today under its parent plan's title (`today-and-tasks.md`
+       * §5.5), and the index projection is where that subtitle lives. The parent is already
+       * in hand from the nesting check, so the row is complete from its first write and no
+       * agenda read has to go and find it.
+       */
+      ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
       ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(result) }),
     });
   } catch (error) {
     if (error instanceof ActivityIdUnavailableError) throw idUnavailable();
+    if (error instanceof ParentUnavailableError && input.parentActivityId !== undefined) {
+      throw await parentRejected(input.parentActivityId);
+    }
     throw error;
   }
 
@@ -731,14 +890,44 @@ export async function patchActivity(
     delete next.listId;
     delete next.listItemId;
   }
+  const reparents = current.parentActivityId !== next.parentActivityId;
+  /**
+   * A patch that names a **new** parent goes through the same door a create does.
+   *
+   * It was not doing so, and both halves of that mattered: without the access check a task
+   * could be attached to a stranger's activity — whose title the index projection would then
+   * render as this task's subtitle on Today — and without the structural checks a `PATCH`
+   * could assemble the third nesting level that `POST` refuses, by attaching a task that
+   * already has prep tasks of its own.
+   */
+  /**
+   * The kind check is **outside** that door, because it has to fire when no parent moved:
+   * converting an already-attached prep task into a Plan reaches the same forbidden state
+   * without touching the relationship at all.
+   */
+  if (next.parentActivityId !== undefined) assertChildMayBeAttached(next);
   const parent =
-    next.parentActivityId !== undefined
-      ? await getActivityMeta(next.parentActivityId)
-      : undefined;
-  const updatesExistingChildPointer =
+    next.parentActivityId === undefined
+      ? undefined
+      : reparents
+        ? await assertCanParent(userId, next.parentActivityId, {
+            childKind: next,
+            child: current,
+          })
+        : await getActivityMeta(next.parentActivityId);
+
+  /**
+   * The pointer mirrors title, status and the recurrence bit, so any of the three moving is a
+   * pointer rewrite in this same transaction — recurrence included, per
+   * `api-contract.md` §2.3, so the completion follow-up never reads a stale one. A changed
+   * parent is the other shape: the repository moves the pointer and both counters.
+   */
+  const childPointerStale =
+    !reparents &&
     current.parentActivityId !== undefined &&
-    current.parentActivityId === next.parentActivityId &&
-    current.title !== next.title;
+    (current.title !== next.title ||
+      current.status !== next.status ||
+      (current.recurrence !== undefined) !== (next.recurrence !== undefined));
 
   try {
     await putPatchWithLinkLifecycle(
@@ -751,13 +940,44 @@ export async function patchActivity(
           ? {}
           : { requireMissingOccurrenceDate: correctionDate }),
         ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
-        ...(updatesExistingChildPointer ? { updateChildPointer: true } : {}),
+        ...(reparents || childPointerStale ? { updateChildPointer: true } : {}),
+        /**
+         * A Plan → Task conversion is legal only at `childCount === 0`, and
+         * {@link applyKindChange} has already refused it otherwise from the row we read.
+         * That decision is about a counter `updatedAt` does not track, so it is pinned into
+         * the write as well: an attach landing in between must lose here rather than have
+         * its parent silently converted out from under it, leaving the child and its `SUB#`
+         * pointer hanging off a Task with a `childCount` of zero.
+         */
+        ...(current.objectKind === 'plan' && next.objectKind === 'task'
+          ? { expectedChildCount: current.childCount }
+          : {}),
       },
       convertedListLink,
     );
   } catch (error) {
+    if (error instanceof ParentUnavailableError && next.parentActivityId !== undefined) {
+      throw await parentRejected(next.parentActivityId);
+    }
     if (error instanceof AppError && error.code === 'conflict') {
-      const fresh = await getActivityMeta(activityId);
+      /**
+       * **Strongly consistent, and read for two different reasons.** A cancelled patch has
+       * two shapes now, and `updatedAt` alone cannot tell them apart — because the second
+       * shape is precisely the one `updatedAt` does not track.
+       *
+       * - The **version moved**: an ordinary stale edit. Report the current value so the
+       *   client can refetch and re-apply.
+       * - The version is **unchanged**: then `updatedAt` cannot have failed, so the pinned
+       *   `childCount` did. Answering "this changed while you were editing it" alongside the
+       *   very token the caller just sent is both false and un-actionable — retrying with it
+       *   hits the same wall for ever. Re-run the kind change against the fresh row and
+       *   answer with the blocker it actually produces: `Remove 1 prep task before changing
+       *   this to a Task.`
+       */
+      const fresh = await getActivityMeta(activityId, { consistentRead: true });
+      if (fresh !== undefined && fresh.updatedAt === ifMatch) {
+        applyKindChange(fresh, patch, log);
+      }
       throw staleEdit(String(fresh?.updatedAt ?? current.updatedAt));
     }
     throw error;
@@ -861,6 +1081,17 @@ export async function convertRecurrence(
     updatedAt: now,
   } as Activity;
 
+  /**
+   * A converted prep task is still a prep task: its parent's pointer drops to
+   * `isRecurring: false` in this same transaction (`data-model.md` §7, `api-contract.md`
+   * §2.3), and its index entry is rewritten from scratch — so the parent's title has to be
+   * supplied again or the conversion would quietly strip the subtitle Today renders it with.
+   */
+  const parent =
+    next.parentActivityId === undefined
+      ? undefined
+      : await getActivityMeta(next.parentActivityId);
+
   await putPatch(userId, next, current.updatedAt, {
     previous: current,
     indexedUserIds: [
@@ -869,6 +1100,8 @@ export async function convertRecurrence(
         typeof row.userId === 'string' ? [row.userId] : [],
       ),
     ],
+    ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
+    ...(next.parentActivityId === undefined ? {} : { updateChildPointer: true }),
     occurrenceGuard:
       rawOccurrence === undefined
         ? { date: input.occurrenceDate, kind: 'missing' }
@@ -1311,13 +1544,27 @@ export async function duplicateActivity(
  * delete; a transaction that can never succeed is not (P1-14). That is why this is safe to
  * call twice — the second call finds nothing and answers `404`.
  *
- * ## What this phase cannot cascade yet
+ * ## What this cascade does not reach
  *
- * List links (Phase 3), Expense locators (Phase 7) and EventBridge schedules (Phase 5) have
- * no rows to delete, because nothing writes them yet. **There is no settlement guard here**
- * and `settlement_conflict` is deliberately not in the error union: a guard over rows no
- * schema defines reads as an implemented control and is none. P7-08 owns it, and nothing
- * before P7-08 writes an Expense (P1-14's decision note).
+ * This list was written when none of these rows existed and has been corrected as they
+ * arrived; read it as a statement about today, not about Phase 1.
+ *
+ * - **Viewer-link rows are cleared**, by {@link viewerLinksToClear} below — P3-15 added them
+ *   and this cascade handles them.
+ * - **`SOURCE_LIST#` reverse projections are deleted with the partition, but the
+ *   `List.sourceActivityId` they point back from is NOT cleared.** P3-05 ships the write
+ *   (`CreateListInput.sourceActivityId`), so those rows exist in real tables now and the
+ *   sentence that used to stand here — "nothing writes them yet" — is false. The result is a
+ *   surviving List whose provenance link names a deleted Plan, with the reverse pointer that
+ *   would have found it deleted in the same pass. `data-model.md` §7 *Delete activity* and
+ *   `api-contract.md` §2.3 both require the clear; §P3-38 owns the implementation and its
+ *   test. **Raised in P3-18 review and open** — it is named here rather than left for the
+ *   next reader to rediscover from a comment that told them there was nothing to do.
+ * - Expense locators (Phase 7) and EventBridge schedules (Phase 5) genuinely have no rows to
+ *   delete, because nothing writes them yet. **There is no settlement guard here** and
+ *   `settlement_conflict` is deliberately not in the error union: a guard over rows no schema
+ *   defines reads as an implemented control and is none. P7-08 owns it, and nothing before
+ *   P7-08 writes an Expense (P1-14's decision note).
  */
 export async function removeActivity(
   userId: string,
@@ -1338,7 +1585,25 @@ export async function removeActivity(
    */
   const partition = await getActivityPartitionStrong(activityId);
 
-  await releaseChildren(childIdsOf(partition), now);
+  /**
+   * Deleting a prep task is two partitions' work, and P1-14 only ever did one of them.
+   *
+   * The child's own rows and index entries go below; the pointer and the count that describe
+   * it live on the **parent**, and leaving them behind gave a plan a `4 of 5 done` whose
+   * fifth row no longer existed — a number the product promises is drillable, pointing at
+   * nothing. Before the removal, so an interrupted delete resumes from a state where the
+   * child is still authoritative rather than half-gone.
+   *
+   * This is the mirror image of the rule directly below it, and the two must not be confused:
+   * deleting a **parent** never deletes its children, while deleting a **child** must always
+   * clean up its parent's record of it.
+   */
+  const parentActivityId = partition.find((row) => row.sk === 'META')?.parentActivityId;
+  if (typeof parentActivityId === 'string') {
+    await detachChildFromParent(parentActivityId, activityId);
+  }
+
+  await releaseChildren(activityId, childIdsOf(partition), now);
   // The repository removes partition children and index pointers next, then META last. That
   // leaves this access seam present until every retryable cleanup step has succeeded.
   await deleteActivityRows(userId, activityId, {
@@ -1348,6 +1613,42 @@ export async function removeActivity(
   });
 
   return activityId;
+}
+
+/** A plan's prep tasks, with the two numbers the PREP section renders. */
+export interface PrepTaskCollection {
+  /** Every prep task on the plan. Complete, not a page — see {@link getPrepTasks}. */
+  readonly prepTasks: readonly PrepTaskPointer[];
+  /** Children whose `status` is `completed`: the `3` in `3 of 5 done`. */
+  readonly doneCount: number;
+  /** Every other child. `doneCount + openCount` is the collection. */
+  readonly openCount: number;
+}
+
+/**
+ * A plan's complete prep-task collection and its **exact** done/open counts (pattern 16).
+ *
+ * Exact rather than "at least", and that is the point of the 50-cap: `3 of 5 done` is a
+ * drill-down (`today-and-tasks.md` §5.5) and the product's rule against unexplained numbers
+ * means a count the user taps has to reach the rows that produced it. One bounded page is the
+ * whole collection, so counting it here needs no second read and no aggregate to drift.
+ *
+ * `openCount` is everything not `completed`, including a skipped or cancelled child — from
+ * the section's point of view those are not done. P3-43's follow-up narrows further, to open
+ * children that are also not recurring, which is what `isRecurring` on each pointer is for;
+ * it is not this function's filter to apply.
+ *
+ * **Authorisation belongs to the caller**, as it does for `projectDetail`: both named
+ * consumers reach this only after establishing that the caller may read the plan — detail
+ * assembly through the partition it has already read (P3-36), completion through the action
+ * context it already holds (P3-43). Re-deriving it here would be a second authoritative read
+ * of a partition the caller is holding.
+ */
+export async function getPrepTasks(activityId: string): Promise<PrepTaskCollection> {
+  const prepTasks = await listPrepTaskPointers(activityId);
+  const doneCount = prepTasks.filter((row) => row.status === 'completed').length;
+
+  return { prepTasks, doneCount, openCount: prepTasks.length - doneCount };
 }
 
 /**
@@ -1402,14 +1703,33 @@ function childIdsOf(partition: readonly StoredItem[]): string[] {
  * is skipped rather than treated as a failure: the pointer is a denormalised copy and this
  * runs on a retry path, so finding it stale is expected rather than exceptional.
  *
+ * **Skipped only on authoritative absence, and only for a child that still names us.** Both
+ * halves were wrong and both were destructive in the same direction — towards a child left
+ * holding a `parentActivityId` that resolves to nothing:
+ *
+ * - the read is strongly consistent, because the pointer was committed in the *same
+ *   transaction* as the child. A partition Query strong enough to see the pointer followed by
+ *   a `GetItem` weak enough to miss the child is not a contradiction, it is the ordinary
+ *   behaviour of a replica — and the miss was being read as "already gone" by a pass whose
+ *   next act is to delete the only row that could have repaired it.
+ * - a child that has since been re-parented onto **another** plan is left alone. Clearing it
+ *   would silently undo that move and, worse, leave the new parent's pointer and `childCount`
+ *   describing a child that no longer names it. The pointer says what was true when it was
+ *   written; the child is the source of truth about who its parent is now (`data-model.md`
+ *   §3.1).
+ *
  * Rewriting the child through `patchActivity` also rebuilds its index entry, which is what
  * drops the **subtitle** — a prep task renders with its parent's title under it on Today, and
  * that title is about to stop existing.
  */
-async function releaseChildren(childIds: readonly string[], now: string): Promise<void> {
+async function releaseChildren(
+  parentActivityId: string,
+  childIds: readonly string[],
+  now: string,
+): Promise<void> {
   for (const childId of childIds) {
-    const child = await getActivityMeta(childId);
-    if (child === undefined || child.parentActivityId === undefined) continue;
+    const child = await getActivityMeta(childId, { consistentRead: true });
+    if (child === undefined || child.parentActivityId !== parentActivityId) continue;
 
     const { parentActivityId: _dropped, ...released } = child as Activity &
       Record<string, unknown>;

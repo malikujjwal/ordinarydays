@@ -1,12 +1,15 @@
 import type { CreateActivityInput } from '@od/shared/schemas';
 import type { Activity } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AppError } from '../lib/errors.js';
+import type { PrepTaskPointer } from '../repositories/activityRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import {
   convertRecurrence,
   createActivity,
   deriveScheduleInstants,
   deriveStatus,
+  getPrepTasks,
   patchActivity,
   projectDetail,
   removeActivity,
@@ -29,8 +32,12 @@ vi.mock('../repositories/activityRepository.js', () => ({
   getActivityPartition: vi.fn(),
   getActivityPartitionStrong: vi.fn(),
   listParticipants: vi.fn(() => Promise.resolve([])),
+  listPrepTaskPointers: vi.fn(() => Promise.resolve([])),
   deleteActivity: vi.fn(() => Promise.resolve()),
+  detachChildFromParent: vi.fn(() => Promise.resolve()),
   StaleViewerLinkError: class extends Error {},
+  ParentUnavailableError: class extends Error {},
+  ActivityIdUnavailableError: class extends Error {},
 }));
 
 vi.mock('../repositories/listRepository.js', () => ({
@@ -64,6 +71,10 @@ beforeEach(() => {
   vi.mocked(repository.listParticipants).mockResolvedValue([]);
   vi.mocked(repository.deleteActivity).mockReset();
   vi.mocked(repository.deleteActivity).mockResolvedValue(undefined);
+  vi.mocked(repository.detachChildFromParent).mockReset();
+  vi.mocked(repository.detachChildFromParent).mockResolvedValue(undefined);
+  vi.mocked(repository.listPrepTaskPointers).mockReset();
+  vi.mocked(repository.listPrepTaskPointers).mockResolvedValue([]);
   vi.mocked(listRepository.findViewerLinksTo).mockReset();
   vi.mocked(listRepository.findViewerLinksTo).mockResolvedValue([]);
 });
@@ -639,6 +650,68 @@ describe('removeActivity replay recovery', () => {
     });
     expect(repository.deleteActivity).toHaveBeenCalledTimes(2);
   });
+
+  /**
+   * The orphaning pass reads each child to clear its `parentActivityId`, and both things it
+   * can learn from that read were being over-trusted.
+   */
+  describe('what the orphaning read is allowed to conclude', () => {
+    const pointerRow = {
+      pk: `ACT#${PLAN}`,
+      sk: `SUB#${child.activityId}`,
+      entity: 'ChildPointer',
+      childActivityId: child.activityId,
+      schemaVersion: 1,
+    } as StoredItem;
+
+    beforeEach(() => {
+      vi.mocked(repository.patchActivity).mockClear();
+      vi.mocked(repository.deleteActivity).mockReset();
+      vi.mocked(repository.deleteActivity).mockResolvedValue(undefined);
+      vi.mocked(repository.getActivityPartitionStrong).mockResolvedValue([
+        meta,
+        pointerRow,
+      ]);
+    });
+
+    /**
+     * The pointer and the child commit in **one** transaction, so a strong Query that sees
+     * the pointer proves the child exists. Reading the child weakly and taking the miss as
+     * "already gone" would skip the one write that could have repaired it, and the very next
+     * step deletes the parent — leaving a task whose `parentActivityId` resolves to nothing.
+     */
+    it('reads the child strongly, so a replica miss cannot pass for absence', async () => {
+      vi.mocked(repository.getActivityMeta)
+        .mockResolvedValueOnce(meta as never)
+        .mockResolvedValueOnce(child);
+
+      await removeActivity(USER, PLAN, NOW);
+
+      expect(repository.getActivityMeta).toHaveBeenCalledWith(child.activityId, {
+        consistentRead: true,
+      });
+      expect(repository.patchActivity).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * A child re-parented onto another plan after the snapshot is **not** ours to release.
+     * Clearing it would undo the move and strand the new parent's pointer and `childCount`
+     * describing a child that no longer names it.
+     */
+    it('leaves a child that has since been re-parented elsewhere', async () => {
+      vi.mocked(repository.getActivityMeta)
+        .mockResolvedValueOnce(meta as never)
+        .mockResolvedValueOnce({
+          ...child,
+          parentActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XZ',
+        });
+
+      await removeActivity(USER, PLAN, NOW);
+
+      expect(repository.patchActivity).not.toHaveBeenCalled();
+      expect(repository.deleteActivity).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 /**
@@ -996,6 +1069,54 @@ describe('patchActivity', () => {
     vi.mocked(repository.patchActivity).mockClear();
     vi.mocked(repository.patchActivity).mockResolvedValue(undefined);
   };
+
+  /**
+   * The Plan → Task conversion losing its pinned `childCount`, which is only reachable as a
+   * race: the 409 guard refuses an already-populated plan from the row it reads, so the
+   * transaction condition can only fail when a child attached *after* that read. Mocked
+   * rather than raced, because the window cannot be forced against a real table.
+   */
+  describe('when the pinned childCount loses', () => {
+    it('names the prep-task blocker rather than handing back the caller’s own token', async () => {
+      // Read: an empty plan, so the 409 guard lets the conversion through.
+      vi.mocked(repository.getActivityMeta).mockResolvedValueOnce(stored() as never);
+      vi.mocked(repository.listParticipants).mockResolvedValue([]);
+      // The write is cancelled, and the re-read shows why: a child arrived, and `updatedAt`
+      // did not move — because the counter is an `ADD` that deliberately leaves it alone.
+      vi.mocked(repository.patchActivity).mockRejectedValueOnce(
+        new AppError('conflict', 'cancelled'),
+      );
+      vi.mocked(repository.getActivityMeta).mockResolvedValueOnce(
+        stored({ childCount: 1 }) as never,
+      );
+
+      await expect(
+        patchActivity(USER, PLAN, { objectKind: 'task', type: 'task' }, VERSION, LATER),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        message: 'Remove 1 prep task before changing this to a Task.',
+      });
+    });
+
+    /** A version that genuinely moved is still an ordinary stale edit, reported as one. */
+    it('still reports a real stale edit when the version moved', async () => {
+      vi.mocked(repository.getActivityMeta).mockResolvedValueOnce(stored() as never);
+      vi.mocked(repository.listParticipants).mockResolvedValue([]);
+      vi.mocked(repository.patchActivity).mockRejectedValueOnce(
+        new AppError('conflict', 'cancelled'),
+      );
+      vi.mocked(repository.getActivityMeta).mockResolvedValueOnce(
+        stored({ updatedAt: LATER }) as never,
+      );
+
+      await expect(
+        patchActivity(USER, PLAN, { objectKind: 'task', type: 'task' }, VERSION, LATER),
+      ).rejects.toMatchObject({
+        code: 'conflict',
+        details: [{ path: 'updatedAt', message: LATER }],
+      });
+    });
+  });
 
   /**
    * §6.3 point 7: the dropped payload is logged so a support request can recover it from the
@@ -1604,5 +1725,442 @@ describe('convertRecurrence', () => {
         },
       }),
     );
+  });
+});
+
+/**
+ * The 50-prep-task cap and the pointer obligations that come with it (P3-18).
+ *
+ * The cap is not decoration: it is the reason plan detail may read the complete PREP section
+ * in one bounded page and render an exact `3 of 5 done`. So the refusal has to be exact, and
+ * it has to write nothing.
+ */
+describe('the prep-task cap', () => {
+  const PARENT_TITLE = 'Poconos trip';
+
+  const plan = (overrides: Partial<Activity> = {}): Activity =>
+    ({
+      activityId: PLAN,
+      ownerId: USER,
+      status: 'saved',
+      objectKind: 'plan',
+      type: 'event',
+      title: PARENT_TITLE,
+      details: { kind: 'event' },
+      participantCount: 0,
+      childCount: 0,
+      expenseTotalCents: 0,
+      visibility: 'private',
+      icsSequence: 0,
+      createdAt: NOW,
+      lastActivityAt: NOW,
+      updatedAt: NOW,
+      schemaVersion: 1,
+      ...overrides,
+    }) as Activity;
+
+  it('refuses the 51st with the exact copy, and writes nothing', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(plan({ childCount: 50 }));
+
+    await expect(
+      createActivity(USER, task({ parentActivityId: PLAN }), NOW),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: 'Plan has too many prep tasks.',
+      details: [{ path: 'parentActivityId', message: 'Plan has too many prep tasks.' }],
+    });
+
+    expect(repository.createActivity).not.toHaveBeenCalled();
+  });
+
+  it('accepts the 50th', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(plan({ childCount: 49 }));
+
+    await expect(
+      createActivity(USER, task({ parentActivityId: PLAN }), NOW),
+    ).resolves.toMatchObject({ activity: { parentActivityId: PLAN } });
+  });
+
+  /**
+   * A client-minted id at a full plan is ambiguous from `childCount` alone — the fiftieth
+   * child is itself one of the fifty. Refusing here would answer a replay "the plan is full"
+   * and steer the client away from reading its own id, so the ordered transaction decides:
+   * a taken id fails first as a conflict, a genuine 51st reaches the counter condition.
+   */
+  it('defers a full plan to the transaction when the client minted the id', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(plan({ childCount: 50 }));
+
+    await createActivity(
+      USER,
+      task({ parentActivityId: PLAN, activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XC' }),
+      NOW,
+    );
+
+    expect(repository.createActivity).toHaveBeenCalled();
+  });
+
+  /** The counter condition losing a race is still the cap, reported after a fresh read. */
+  it('turns a lost counter race into the same refusal', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(plan({ childCount: 50 }));
+    vi.mocked(repository.createActivity).mockRejectedValueOnce(
+      new repository.ParentUnavailableError(),
+    );
+
+    await expect(
+      createActivity(
+        USER,
+        task({ parentActivityId: PLAN, activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XC' }),
+        NOW,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: 'Plan has too many prep tasks.',
+    });
+  });
+
+  /**
+   * The attach's three conditions, and which sentence each one earns.
+   *
+   * These are only reachable as a **race** — the preflight refuses a non-Plan parent and a
+   * full plan outright — so they are driven here with the repository mocked rather than in
+   * DynamoDB Local, where the interleaving cannot be forced. The first read is the preflight,
+   * the second is `parentRejected`'s strong re-read after the transaction cancelled.
+   */
+  it('reports a parent converted mid-write as not a plan, not as a full one', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(plan())
+      .mockResolvedValueOnce(
+        plan({ objectKind: 'task', type: 'task', details: { kind: 'task' } } as never),
+      );
+    vi.mocked(repository.createActivity).mockRejectedValueOnce(
+      new repository.ParentUnavailableError(),
+    );
+
+    await expect(
+      createActivity(
+        USER,
+        task({ parentActivityId: PLAN, activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XC' }),
+        NOW,
+      ),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: 'A prep task belongs to a plan.',
+    });
+  });
+
+  it('reports a parent deleted mid-write as not_found rather than as a full plan', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(plan())
+      .mockResolvedValueOnce(undefined);
+    vi.mocked(repository.createActivity).mockRejectedValueOnce(
+      new repository.ParentUnavailableError(),
+    );
+
+    await expect(
+      createActivity(
+        USER,
+        task({ parentActivityId: PLAN, activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XC' }),
+        NOW,
+      ),
+    ).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  /**
+   * Acceptance criterion 20's storage half: the subtitle a prep task renders with on Today is
+   * its parent plan's title, projected onto the index entry at the moment it is created.
+   */
+  it('carries the parent plan title onto the child’s index entry', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(plan());
+
+    await createActivity(USER, task({ parentActivityId: PLAN }), NOW);
+
+    expect(written()?.[2]).toMatchObject({ taskSubtitle: PARENT_TITLE });
+  });
+
+  /**
+   * A prep task is a **task** (`plans-and-lists.md` §3). `parentActivityId` sits on the shape
+   * both `objectKind` arms share, so nothing in the schema refused an attached Plan — and the
+   * row it produced would take a `SUB#` pointer, a slot against the 50-cap, and a place in
+   * P3-43's bulk `Complete all` while plan completion is owner-only and global.
+   */
+  describe('the child of a plan is itself a task', () => {
+    it('refuses a Plan created with a parent, and writes nothing', async () => {
+      vi.mocked(repository.getActivityMeta).mockResolvedValue(plan());
+
+      await expect(
+        createActivity(
+          USER,
+          task({
+            objectKind: 'plan',
+            type: 'event',
+            details: { kind: 'event' },
+            parentActivityId: PLAN,
+          }),
+          NOW,
+        ),
+      ).rejects.toMatchObject({
+        code: 'validation_failed',
+        message: 'Only a task can be a prep task.',
+        details: [
+          { path: 'parentActivityId', message: 'Only a task can be a prep task.' },
+        ],
+      });
+
+      expect(repository.createActivity).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The refusal is on the **child's kind**, before the parent is loaded — so it costs no
+     * read and cannot be reached by a caller probing for a parent's existence.
+     */
+    it('refuses before loading the parent', async () => {
+      await expect(
+        createActivity(
+          USER,
+          task({
+            objectKind: 'plan',
+            type: 'meal',
+            details: { kind: 'meal' },
+            parentActivityId: PLAN,
+          }),
+          NOW,
+        ),
+      ).rejects.toMatchObject({ message: 'Only a task can be a prep task.' });
+
+      expect(repository.getActivityMeta).not.toHaveBeenCalled();
+    });
+
+    it('still accepts an ordinary task', async () => {
+      vi.mocked(repository.getActivityMeta).mockResolvedValue(plan());
+
+      await expect(
+        createActivity(USER, task({ parentActivityId: PLAN }), NOW),
+      ).resolves.toMatchObject({ activity: { parentActivityId: PLAN } });
+    });
+  });
+});
+
+/**
+ * The counts behind `3 of 5 done` (pattern 16).
+ *
+ * Exact, because the number is a drill-down: tapping it opens the list it counts, and a
+ * figure the user can reach the rows behind must be the figure those rows produce.
+ */
+describe('getPrepTasks', () => {
+  const pointer = (overrides: Partial<PrepTaskPointer> = {}): PrepTaskPointer => ({
+    childActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB',
+    title: 'Book hotel',
+    status: 'saved',
+    rank: NOW,
+    isRecurring: false,
+    ...overrides,
+  });
+
+  it('returns the whole collection with its exact done and open counts', async () => {
+    vi.mocked(repository.listPrepTaskPointers).mockResolvedValue([
+      pointer({ childActivityId: 'act_1', status: 'completed' }),
+      pointer({ childActivityId: 'act_2', status: 'completed' }),
+      pointer({ childActivityId: 'act_3' }),
+      pointer({ childActivityId: 'act_4', status: 'scheduled' }),
+      pointer({ childActivityId: 'act_5', isRecurring: true }),
+    ]);
+
+    const collection = await getPrepTasks(PLAN);
+
+    expect(collection.prepTasks).toHaveLength(5);
+    expect(collection.doneCount).toBe(2);
+    expect(collection.openCount).toBe(3);
+  });
+
+  /** A skipped child is not done. The section counts what is finished, not what is settled. */
+  it('counts a skipped child as open', async () => {
+    vi.mocked(repository.listPrepTaskPointers).mockResolvedValue([
+      pointer({ status: 'skipped' }),
+    ]);
+
+    await expect(getPrepTasks(PLAN)).resolves.toMatchObject({
+      doneCount: 0,
+      openCount: 1,
+    });
+  });
+
+  it('is zero and zero on a plan with no prep tasks', async () => {
+    await expect(getPrepTasks(PLAN)).resolves.toEqual({
+      prepTasks: [],
+      doneCount: 0,
+      openCount: 0,
+    });
+  });
+});
+
+/**
+ * Re-parenting through `PATCH` (P3-18).
+ *
+ * The path the nesting cap could be walked around: `POST` refuses a third level, but until
+ * this task a patch could attach a task that already had prep tasks of its own — or attach it
+ * to a stranger's activity, whose title the index entry would then render as a subtitle.
+ */
+describe('changing a task’s parent', () => {
+  const CHILD = 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB';
+  const OTHER_PLAN = 'act_01J8XKQ2M4N5P6R7S8T9V0W1XD';
+
+  const stored = (overrides: Partial<Activity> = {}): Activity =>
+    ({
+      activityId: CHILD,
+      ownerId: USER,
+      status: 'saved',
+      objectKind: 'task',
+      type: 'task',
+      title: 'Book hotel',
+      details: { kind: 'task' },
+      participantCount: 0,
+      childCount: 0,
+      expenseTotalCents: 0,
+      visibility: 'private',
+      icsSequence: 0,
+      createdAt: NOW,
+      lastActivityAt: NOW,
+      updatedAt: NOW,
+      schemaVersion: 1,
+      ...overrides,
+    }) as Activity;
+
+  const plan = (overrides: Partial<Activity> = {}): Activity =>
+    stored({
+      activityId: PLAN,
+      objectKind: 'plan',
+      type: 'event',
+      title: 'Poconos trip',
+      details: { kind: 'event' },
+      ...overrides,
+    } as Partial<Activity>);
+
+  const patchOptions = () => vi.mocked(repository.patchActivity).mock.calls.at(-1)?.[3];
+
+  beforeEach(() => {
+    vi.mocked(repository.patchActivity).mockClear();
+    vi.mocked(repository.patchActivity).mockResolvedValue(undefined);
+  });
+
+  it('asks the repository to move the pointer and both counters', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(stored({ parentActivityId: PLAN }))
+      .mockResolvedValueOnce(plan({ activityId: OTHER_PLAN, title: 'Ski trip' }));
+
+    await patchActivity(USER, CHILD, { parentActivityId: OTHER_PLAN }, NOW, NOW);
+
+    expect(patchOptions()).toMatchObject({
+      updateChildPointer: true,
+      taskSubtitle: 'Ski trip',
+    });
+  });
+
+  it('moves the pointer when the parent is cleared', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(
+      stored({ parentActivityId: PLAN }),
+    );
+
+    await patchActivity(USER, CHILD, { parentActivityId: null }, NOW, NOW);
+
+    expect(patchOptions()).toMatchObject({ updateChildPointer: true });
+    expect(patchOptions()).not.toHaveProperty('taskSubtitle');
+  });
+
+  it('refuses a parent that is itself a prep task', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(stored())
+      .mockResolvedValueOnce(stored({ activityId: OTHER_PLAN, parentActivityId: PLAN }));
+
+    await expect(
+      patchActivity(USER, CHILD, { parentActivityId: OTHER_PLAN }, NOW, NOW),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+
+    expect(repository.patchActivity).not.toHaveBeenCalled();
+  });
+
+  /** The third level assembled from the other end, which only a patch can reach. */
+  it('refuses to attach a task that already has prep tasks of its own', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(stored({ childCount: 2 }))
+      .mockResolvedValueOnce(plan());
+
+    await expect(
+      patchActivity(USER, CHILD, { parentActivityId: PLAN }, NOW, NOW),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+
+    expect(repository.patchActivity).not.toHaveBeenCalled();
+  });
+
+  it('refuses to make a task its own prep task', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(stored());
+
+    await expect(
+      patchActivity(USER, CHILD, { parentActivityId: CHILD }, NOW, NOW),
+    ).rejects.toMatchObject({ code: 'validation_failed' });
+  });
+
+  /** A stranger's activity is not a parent, and a `404` does not confirm it exists. */
+  it('refuses a parent the caller has no relationship to', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(stored())
+      .mockResolvedValueOnce(plan({ ownerId: 'usr_someone_else' }));
+
+    await expect(
+      patchActivity(USER, CHILD, { parentActivityId: PLAN }, NOW, NOW),
+    ).rejects.toMatchObject({ code: 'not_found' });
+
+    expect(repository.patchActivity).not.toHaveBeenCalled();
+  });
+
+  it('refuses a plan that is already full', async () => {
+    vi.mocked(repository.getActivityMeta)
+      .mockResolvedValueOnce(stored())
+      .mockResolvedValueOnce(plan({ childCount: 50 }));
+
+    await expect(
+      patchActivity(USER, CHILD, { parentActivityId: PLAN }, NOW, NOW),
+    ).rejects.toMatchObject({ message: 'Plan has too many prep tasks.' });
+  });
+
+  /**
+   * The pointer mirrors title, status and the recurrence bit, so any of the three moving is a
+   * pointer rewrite in the same transaction (`api-contract.md` §2.3). Before this, only a
+   * title change asked for one, and a prep task that gained recurrence left the follow-up
+   * counting it as a one-off.
+   */
+  it('refreshes the pointer when a prep task gains recurrence', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(
+      stored({
+        parentActivityId: PLAN,
+        status: 'scheduled',
+        schedule: {
+          date: '2026-08-20',
+          timezone: 'America/New_York',
+          scheduledAtUtc: '2026-08-20T04:00:00.000Z',
+        },
+      } as Partial<Activity>),
+    );
+
+    await patchActivity(
+      USER,
+      CHILD,
+      {
+        recurrence: { mode: 'fixed', segments: [{ freq: 'weekly', byWeekday: [4] }] },
+      } as never,
+      NOW,
+      NOW,
+    );
+
+    expect(patchOptions()).toMatchObject({ updateChildPointer: true });
+  });
+
+  it('leaves the pointer alone when nothing it mirrors changed', async () => {
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(
+      stored({ parentActivityId: PLAN }),
+    );
+
+    await patchActivity(USER, CHILD, { notes: 'Ask about parking' }, NOW, NOW);
+
+    expect(patchOptions()).not.toHaveProperty('updateChildPointer');
   });
 });

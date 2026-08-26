@@ -1,3 +1,4 @@
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   BatchWriteCommand,
   DynamoDBDocumentClient,
@@ -5,7 +6,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
+import { MAX_AUTOMATIC_INTENT_AGE_DAYS, MAX_PREP_TASKS_PER_PLAN } from '@od/shared';
 import type { Activity } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -13,8 +14,10 @@ import {
   clearListProvenance,
   createActivity,
   deleteActivity,
+  detachChildFromParent,
   ingredientsAddedToListItem,
   listOverdueTaskCandidates,
+  listPrepTaskPointers,
   localDateTime,
   newActivityId,
   newReminderId,
@@ -787,5 +790,250 @@ describe('clearListProvenance', () => {
     ddbMock.on(UpdateCommand).rejects(stale);
 
     await expect(clearListProvenance(ACT, LIST, CLEARED_AT)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The parent side of a prep task (P3-18).
+ *
+ * Everything here is about one invariant: **the pointer, the count and the child never
+ * disagree**, because the plan's `3 of 5 done` is a number the user is invited to tap. So the
+ * pointer moves in the same transaction as the child, the count moves with the pointer, and
+ * the cap is a condition on the count rather than a hope about it.
+ */
+describe('prep-task pointer and parent counter', () => {
+  const PARENT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+  const OTHER_PARENT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X4';
+
+  /** Typed as transact items, so conditions and expressions are reachable, not just keys. */
+  const items = () =>
+    (ddbMock.commandCalls(TransactWriteCommand).at(-1)?.args[0]?.input.TransactItems ??
+      []) as TransactItem[];
+
+  const counterFor = (parentActivityId: string) =>
+    items().find(
+      (entry) =>
+        entry.Update?.Key?.pk === `ACT#${parentActivityId}` &&
+        entry.Update?.Key?.sk === 'META',
+    )?.Update;
+
+  const pointerPutFor = (parentActivityId: string) =>
+    items().find((entry) => entry.Put?.Item?.pk === `ACT#${parentActivityId}`)?.Put?.Item;
+
+  it('writes the pointer and increments the parent, in the create transaction', async () => {
+    await createActivity(ALICE, activity({ parentActivityId: PARENT }));
+
+    expect(pointerPutFor(PARENT)).toMatchObject({
+      sk: `SUB#${ACT}`,
+      entity: 'ChildPointer',
+      childActivityId: ACT,
+      title: 'Buy milk',
+      status: 'saved',
+      isRecurring: false,
+    });
+    expect(counterFor(PARENT)).toMatchObject({
+      UpdateExpression: 'ADD #childCount :delta',
+      ExpressionAttributeValues: { ':delta': 1, ':cap': 50 },
+    });
+  });
+
+  /**
+   * The cap is enforced **here**, not only in the service that read `childCount` first. A
+   * precheck cannot see the create that commits between its read and its write; a condition
+   * on the counter itself refuses the 51st whatever else is in flight.
+   */
+  it('conditions the increment on the parent existing and being under the cap', async () => {
+    await createActivity(ALICE, activity({ parentActivityId: PARENT }));
+
+    expect(counterFor(PARENT)?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND #childCount < :cap AND #objectKind = :plan',
+    );
+  });
+
+  /**
+   * The kind term is half of a pair: the Plan → Task conversion pins the `childCount` it
+   * validated, and this pins the `objectKind` it read. `updatedAt` cannot mediate between
+   * them, because the counter moves by `ADD` and deliberately does not advance it.
+   */
+  it('conditions the increment on the parent still being a plan', async () => {
+    await createActivity(ALICE, activity({ parentActivityId: PARENT }));
+
+    const counter = counterFor(PARENT);
+    expect(counter?.ExpressionAttributeValues).toMatchObject({ ':plan': 'plan' });
+    expect(counter?.ExpressionAttributeNames).toMatchObject({
+      '#objectKind': 'objectKind',
+    });
+  });
+
+  /** A child must always be able to clean up after itself, whatever the parent became. */
+  it('does not gate the decrement on the parent being a plan', async () => {
+    await detachChildFromParent(PARENT, 'act_01J8XKQ2M4N5P6R7S8T9V0W1XB');
+
+    expect(counterFor(PARENT)?.ConditionExpression).toBe(
+      'attribute_exists(pk) AND #childCount > :zero',
+    );
+  });
+
+  /**
+   * A denormalised count of other rows is not an edit to the plan. Bumping `updatedAt` would
+   * conflict an unrelated `If-Match` edit of the plan itself every time somebody added a prep
+   * task, and `IndexProjection` carries no `childCount`, so no index entry moves either.
+   */
+  it('leaves the parent updatedAt alone — the counter is not an edit', async () => {
+    await createActivity(ALICE, activity({ parentActivityId: PARENT }));
+
+    const counter = counterFor(PARENT);
+    expect(counter?.UpdateExpression).not.toContain('updatedAt');
+    expect(counter?.ExpressionAttributeNames).not.toHaveProperty('#updatedAt');
+  });
+
+  /** The bit P3-43 counts by, so a follow-up never has to guess a child's occurrence. */
+  it('records a recurring child on the pointer at create', async () => {
+    await createActivity(
+      ALICE,
+      activity({ parentActivityId: PARENT, schedule, recurrence: series }),
+    );
+
+    expect(pointerPutFor(PARENT)).toMatchObject({ isRecurring: true });
+  });
+
+  it('refreshes title, status and the recurrence bit on the unchanged parent', async () => {
+    const previous = activity({ parentActivityId: PARENT, schedule, recurrence: series });
+    await patchActivity(
+      ALICE,
+      activity({ parentActivityId: PARENT, schedule, title: 'Buy oat milk' }),
+      previous.updatedAt,
+      { previous, taskSubtitle: 'Trip', updateChildPointer: true },
+    );
+
+    expect(counterFor(PARENT)).toBeUndefined();
+    expect(items().at(-1)?.Update).toMatchObject({
+      Key: { pk: `ACT#${PARENT}`, sk: `SUB#${ACT}` },
+      ConditionExpression: 'attribute_exists(pk)',
+      ExpressionAttributeValues: {
+        ':title': 'Buy oat milk',
+        ':status': 'saved',
+        ':isRecurring': false,
+      },
+    });
+  });
+
+  it('moves the pointer and both counters when the parent changes', async () => {
+    const previous = activity({ parentActivityId: PARENT });
+    await patchActivity(
+      ALICE,
+      activity({ parentActivityId: OTHER_PARENT }),
+      previous.updatedAt,
+      { previous, taskSubtitle: 'Other trip', updateChildPointer: true },
+    );
+
+    expect(
+      items().find((entry) => entry.Delete?.Key?.pk === `ACT#${PARENT}`)?.Delete,
+    ).toMatchObject({
+      Key: { sk: `SUB#${ACT}` },
+      ConditionExpression: 'attribute_exists(pk)',
+    });
+    expect(counterFor(PARENT)?.ExpressionAttributeValues).toMatchObject({ ':delta': -1 });
+    expect(pointerPutFor(OTHER_PARENT)).toMatchObject({ sk: `SUB#${ACT}` });
+    expect(counterFor(OTHER_PARENT)?.ExpressionAttributeValues).toMatchObject({
+      ':delta': 1,
+    });
+  });
+
+  it('removes the pointer and decrements when the parent is cleared', async () => {
+    const previous = activity({ parentActivityId: PARENT });
+    await patchActivity(ALICE, activity(), previous.updatedAt, {
+      previous,
+      updateChildPointer: true,
+    });
+
+    expect(items().some((entry) => entry.Delete?.Key?.pk === `ACT#${PARENT}`)).toBe(true);
+    expect(counterFor(PARENT)).toMatchObject({
+      ConditionExpression: 'attribute_exists(pk) AND #childCount > :zero',
+      ExpressionAttributeValues: { ':delta': -1, ':zero': 0 },
+    });
+  });
+
+  /** The half of the delete cascade that lives in the *parent's* partition. */
+  it('detaches a deleted child by removing the pointer and the count together', async () => {
+    await detachChildFromParent(PARENT, ACT);
+
+    expect(verbs()).toEqual(['Delete', 'Update']);
+    expect(items()[0]?.Delete).toMatchObject({
+      Key: { pk: `ACT#${PARENT}`, sk: `SUB#${ACT}` },
+      ConditionExpression: 'attribute_exists(pk)',
+    });
+    expect(counterFor(PARENT)?.ExpressionAttributeValues).toMatchObject({ ':delta': -1 });
+  });
+
+  /**
+   * A pointer that has already gone means the step already ran, or the parent went with it.
+   * Raising would block the retry that finishes an interrupted cascade, and applying the
+   * decrement twice would leave the plan claiming fewer children than it has.
+   */
+  it('treats an already-removed pointer as done rather than as a failure', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        $metadata: {},
+        message: 'cancelled',
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+      }),
+    );
+
+    await expect(detachChildFromParent(PARENT, ACT)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Access pattern 16, and the reason it can be one page: creation refuses the 51st child, so
+ * `Limit` at the model cap **is** the complete collection — no cursor, no second read, and
+ * never the GSI alternative the data model names and rejects.
+ */
+describe('listPrepTaskPointers', () => {
+  const PARENT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+
+  it('reads one bounded, strongly consistent page of the child prefix', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
+
+    await listPrepTaskPointers(PARENT);
+
+    expect(ddbMock.commandCalls(QueryCommand)[0]?.args[0]?.input).toMatchObject({
+      KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :skPrefix)',
+      ExpressionAttributeValues: { ':pk': `ACT#${PARENT}`, ':skPrefix': 'SUB#' },
+      Limit: MAX_PREP_TASKS_PER_PLAN,
+      ConsistentRead: true,
+    });
+  });
+
+  /**
+   * Pointers written before this task carry no `isRecurring`. Absent has to read as `false`:
+   * treating it as `true` would drop a real one-off child out of the follow-up's count and
+   * out of its bulk actions.
+   */
+  it('projects the pointer, reading an absent recurrence bit as false', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        {
+          pk: `ACT#${PARENT}`,
+          sk: `SUB#${ACT}`,
+          entity: 'ChildPointer',
+          childActivityId: ACT,
+          title: 'Book hotel',
+          status: 'completed',
+          rank: '2026-08-08T10:00:00.000Z',
+          schemaVersion: 1,
+        },
+      ],
+    });
+
+    await expect(listPrepTaskPointers(PARENT)).resolves.toEqual([
+      {
+        childActivityId: ACT,
+        title: 'Book hotel',
+        status: 'completed',
+        rank: '2026-08-08T10:00:00.000Z',
+        isRecurring: false,
+      },
+    ]);
   });
 });
