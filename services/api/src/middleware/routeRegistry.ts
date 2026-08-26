@@ -177,6 +177,21 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
   },
 
+  /**
+   * §2.6 Attachments. The other two rows in that section are activity-scoped and arrive with
+   * P3-22; this one has no Activity yet, which is the whole reason it is its own step.
+   *
+   * `mutates: true`: it writes the caller's durable pending-upload record, so a retry whose
+   * response was lost must replay rather than mint a second record, a second id and a second
+   * object key. The replayed body carries the URL that was originally issued.
+   */
+  {
+    method: 'POST',
+    pattern: '/v1/attachments/upload-url',
+    auth: 'authenticated',
+    mutates: true,
+  },
+
   // §2.2a Plans
   { method: 'GET', pattern: '/v1/plans', auth: 'authenticated' },
 

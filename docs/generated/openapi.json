@@ -6863,6 +6863,52 @@
           "warnings"
         ],
         "additionalProperties": false
+      },
+      "RequestUploadUrlResult": {
+        "type": "object",
+        "properties": {
+          "attachmentId": {
+            "type": "string",
+            "pattern": "^att_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          },
+          "uploadUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "attachmentId",
+          "uploadUrl",
+          "key"
+        ]
+      },
+      "RequestUploadUrlInput": {
+        "type": "object",
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/heic",
+              "image/webp"
+            ]
+          },
+          "byteSize": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 10485760
+          }
+        },
+        "required": [
+          "contentType",
+          "byteSize"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -10900,6 +10946,83 @@
           },
           "400": {
             "description": "An unsupported timezone, a window past the cap, a reversed range, a field belonging to another mode, or a cursor issued for different bounds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/attachments/upload-url": {
+      "post": {
+        "summary": "Request a presigned URL to upload an image",
+        "description": "Records the caller’s durable pending upload and returns a presigned S3 `PUT`. The bytes never pass through the API: the client uploads to the returned URL directly. The URL expires in five minutes and its signature covers **both** the declared `Content-Type` and the declared `Content-Length`, so an upload that differs from what was declared is refused by the store rather than by this service. Image types only, up to `MAX_UPLOAD_BYTES` (10 MB). Before issuing a URL the request drains the caller’s expired unresolved records and refuses once `MAX_UNRESOLVED_UPLOADS` (20) are still live. Creating, so an `Idempotency-Key` is required — and a replay answers with the URL originally issued, which may by then have expired; a client in that position requests a fresh one. `key` is the temporary key this URL writes to; confirmation copies it to the permanent one. Neither is ever a URL: media is served by unguessable key.",
+        "tags": [
+          "attachments"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestUploadUrlInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pending record is written and the URL is signed. `attachmentId` is what the confirmation step addresses this upload by.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/RequestUploadUrlResult"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A content type outside the four image types, a `byteSize` over the cap or not a positive integer, a field outside the accepted set — the body is strict — or twenty unresolved uploads already live after the drain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over the 60-per-hour limit for this route. Carries `Retry-After`.",
             "content": {
               "application/json": {
                 "schema": {

@@ -89,6 +89,7 @@ describe('the generated document', () => {
       '/v1/activities/{id}/updates',
       '/v1/activities/{id}/updates/{updateId}',
       '/v1/plans',
+      '/v1/attachments/upload-url',
     ]);
   });
 
@@ -174,6 +175,8 @@ describe('the generated document', () => {
       'RegisterDeviceInput',
       'Reminder',
       'ReminderInput',
+      'RequestUploadUrlInput',
+      'RequestUploadUrlResult',
       'ReversibleItemMutation',
       'RsvpSummary',
       'ScheduleActivityInput',
