@@ -94,6 +94,36 @@ const NESTING_CAP =
   'A prep task cannot have its own prep task. Add it to the plan instead.';
 
 /**
+ * A prep task is a **task** — the first line of `plans-and-lists.md` §3 and of §P3-18.
+ *
+ * Not a stylistic preference about what belongs under a plan. `parentActivityId` sits on the
+ * shape shared by both `objectKind` arms, so nothing in the schema stopped a Plan being
+ * created with a parent, and such a row is a contradiction the rest of the model then acts
+ * on: it takes a `SUB#` pointer and a slot against the 50-cap, renders in a PREP section that
+ * `plans-and-lists.md` §3 describes as tasks, and would be offered to P3-43's `Complete all`
+ * — which completes children in bulk while plan completion is owner-only and global
+ * (`activities.md` §5.1). Phase 6 makes it worse rather than better: prep authority is
+ * inherited from the parent's participants, so an attached Plan would hand a participant
+ * completion rights over a Plan that is not theirs.
+ */
+const CHILD_MUST_BE_TASK = 'Only a task can be a prep task.';
+
+/**
+ * The prep-task kind rule, on whatever write is producing the attached state.
+ *
+ * Separate from {@link assertCanParent} because the two do not fire together. Attaching is a
+ * *relationship* change and is checked when the parent moves; this is a check on the
+ * **child**, and a `PATCH` that converts an already-attached task into a Plan changes no
+ * parent at all — it reaches the attached-Plan state by the one door a reparenting check
+ * never opens.
+ */
+function assertChildMayBeAttached(kind: Pick<Activity, 'objectKind' | 'type'>): void {
+  if (kind.objectKind !== 'task' || kind.type !== 'task') {
+    throw parentFailure(CHILD_MUST_BE_TASK);
+  }
+}
+
+/**
  * A Plan holds at most {@link MAX_PREP_TASKS_PER_PLAN} prep tasks
  * (`plans-and-lists.md` §3, amended 2026-08-23).
  *
@@ -222,6 +252,15 @@ async function assertCanParent(
   userId: string,
   parentActivityId: string,
   options: {
+    /**
+     * The kind the child will have once this write lands.
+     *
+     * Required rather than optional, and taken from the **resulting** state rather than the
+     * stored one, so a `PATCH` that converts a prep task to a Plan and one that attaches a
+     * Plan to a parent are refused by the same check. A caller that cannot say what it is
+     * attaching has no business attaching it.
+     */
+    readonly childKind: Pick<Activity, 'objectKind' | 'type'>;
     /** The activity being attached, when it already exists. Absent on create. */
     readonly child?: Activity;
     /**
@@ -236,8 +275,10 @@ async function assertCanParent(
      * {@link PREP_TASKS_FULL} — so the cap is deferred, never dropped.
      */
     readonly capOnly?: 'transaction';
-  } = {},
+  },
 ): Promise<Activity> {
+  assertChildMayBeAttached(options.childKind);
+
   if (options.child?.activityId === parentActivityId) throw parentFailure(SELF_PARENT);
 
   const { activity: parent } = await assertActivityAccess(
@@ -273,7 +314,13 @@ async function assertCanParent(
  * one condition failed.
  */
 async function parentRejected(parentActivityId: string): Promise<AppError> {
-  const parent = await getActivityMeta(parentActivityId);
+  /**
+   * **Strongly consistent, because the miss is the answer.** This read exists to tell
+   * "the plan is gone" from "the plan is full", and a default-consistency `GetItem` that
+   * has not caught up reports the first about a plan that is merely the second — sending
+   * a client to recover from a deletion that never happened.
+   */
+  const parent = await getActivityMeta(parentActivityId, { consistentRead: true });
   return parent === undefined
     ? new AppError('not_found', 'Activity not found.')
     : parentFailure(PREP_TASKS_FULL);
@@ -390,6 +437,7 @@ export async function createActivity(
     input.parentActivityId === undefined
       ? undefined
       : await assertCanParent(userId, input.parentActivityId, {
+          childKind: { objectKind: input.objectKind, type: input.type },
           ...(input.activityId === undefined ? {} : { capOnly: 'transaction' }),
         });
 
@@ -828,11 +876,20 @@ export async function patchActivity(
    * could assemble the third nesting level that `POST` refuses, by attaching a task that
    * already has prep tasks of its own.
    */
+  /**
+   * The kind check is **outside** that door, because it has to fire when no parent moved:
+   * converting an already-attached prep task into a Plan reaches the same forbidden state
+   * without touching the relationship at all.
+   */
+  if (next.parentActivityId !== undefined) assertChildMayBeAttached(next);
   const parent =
     next.parentActivityId === undefined
       ? undefined
       : reparents
-        ? await assertCanParent(userId, next.parentActivityId, { child: current })
+        ? await assertCanParent(userId, next.parentActivityId, {
+            childKind: next,
+            child: current,
+          })
         : await getActivityMeta(next.parentActivityId);
 
   /**
@@ -1435,13 +1492,27 @@ export async function duplicateActivity(
  * delete; a transaction that can never succeed is not (P1-14). That is why this is safe to
  * call twice — the second call finds nothing and answers `404`.
  *
- * ## What this phase cannot cascade yet
+ * ## What this cascade does not reach
  *
- * List links (Phase 3), Expense locators (Phase 7) and EventBridge schedules (Phase 5) have
- * no rows to delete, because nothing writes them yet. **There is no settlement guard here**
- * and `settlement_conflict` is deliberately not in the error union: a guard over rows no
- * schema defines reads as an implemented control and is none. P7-08 owns it, and nothing
- * before P7-08 writes an Expense (P1-14's decision note).
+ * This list was written when none of these rows existed and has been corrected as they
+ * arrived; read it as a statement about today, not about Phase 1.
+ *
+ * - **Viewer links (`LNK#`) are cleared**, by {@link viewerLinksToClear} below — P3-15 added
+ *   them and this cascade handles them.
+ * - **`SOURCE_LIST#` reverse projections are deleted with the partition, but the
+ *   `List.sourceActivityId` they point back from is NOT cleared.** P3-05 ships the write
+ *   (`CreateListInput.sourceActivityId`), so those rows exist in real tables now and the
+ *   sentence that used to stand here — "nothing writes them yet" — is false. The result is a
+ *   surviving List whose provenance link names a deleted Plan, with the reverse pointer that
+ *   would have found it deleted in the same pass. `data-model.md` §7 *Delete activity* and
+ *   `api-contract.md` §2.3 both require the clear; §P3-38 owns the implementation and its
+ *   test. **Raised in P3-18 review and open** — it is named here rather than left for the
+ *   next reader to rediscover from a comment that told them there was nothing to do.
+ * - Expense locators (Phase 7) and EventBridge schedules (Phase 5) genuinely have no rows to
+ *   delete, because nothing writes them yet. **There is no settlement guard here** and
+ *   `settlement_conflict` is deliberately not in the error union: a guard over rows no schema
+ *   defines reads as an implemented control and is none. P7-08 owns it, and nothing before
+ *   P7-08 writes an Expense (P1-14's decision note).
  */
 export async function removeActivity(
   userId: string,
@@ -1480,7 +1551,7 @@ export async function removeActivity(
     await detachChildFromParent(parentActivityId, activityId);
   }
 
-  await releaseChildren(childIdsOf(partition), now);
+  await releaseChildren(activityId, childIdsOf(partition), now);
   // The repository removes partition children and index pointers next, then META last. That
   // leaves this access seam present until every retryable cleanup step has succeeded.
   await deleteActivityRows(userId, activityId, {
@@ -1580,14 +1651,33 @@ function childIdsOf(partition: readonly StoredItem[]): string[] {
  * is skipped rather than treated as a failure: the pointer is a denormalised copy and this
  * runs on a retry path, so finding it stale is expected rather than exceptional.
  *
+ * **Skipped only on authoritative absence, and only for a child that still names us.** Both
+ * halves were wrong and both were destructive in the same direction — towards a child left
+ * holding a `parentActivityId` that resolves to nothing:
+ *
+ * - the read is strongly consistent, because the pointer was committed in the *same
+ *   transaction* as the child. A partition Query strong enough to see the pointer followed by
+ *   a `GetItem` weak enough to miss the child is not a contradiction, it is the ordinary
+ *   behaviour of a replica — and the miss was being read as "already gone" by a pass whose
+ *   next act is to delete the only row that could have repaired it.
+ * - a child that has since been re-parented onto **another** plan is left alone. Clearing it
+ *   would silently undo that move and, worse, leave the new parent's pointer and `childCount`
+ *   describing a child that no longer names it. The pointer says what was true when it was
+ *   written; the child is the source of truth about who its parent is now (`data-model.md`
+ *   §3.1).
+ *
  * Rewriting the child through `patchActivity` also rebuilds its index entry, which is what
  * drops the **subtitle** — a prep task renders with its parent's title under it on Today, and
  * that title is about to stop existing.
  */
-async function releaseChildren(childIds: readonly string[], now: string): Promise<void> {
+async function releaseChildren(
+  parentActivityId: string,
+  childIds: readonly string[],
+  now: string,
+): Promise<void> {
   for (const childId of childIds) {
-    const child = await getActivityMeta(childId);
-    if (child === undefined || child.parentActivityId === undefined) continue;
+    const child = await getActivityMeta(childId, { consistentRead: true });
+    if (child === undefined || child.parentActivityId !== parentActivityId) continue;
 
     const { parentActivityId: _dropped, ...released } = child as Activity &
       Record<string, unknown>;

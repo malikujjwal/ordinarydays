@@ -562,6 +562,17 @@ type Activity = ActivityBase & (
 - `objectKind: 'task'` requires `type: 'task'` and no direct participants. A prep task may
   still be visible to the parent Plan's participants through the parent-authorisation rule
   without carrying its own participant rows.
+- **`parentActivityId` requires `objectKind: 'task'` and `type: 'task'`** (added in P3-18).
+  The field sits on the shape both arms share, so nothing structural refused an attached
+  Plan — but a Plan with a parent takes a `SUB#` pointer and a slot against
+  `MAX_PREP_TASKS_PER_PLAN`, renders in a PREP section
+  [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §3 defines as tasks,
+  and would be swept up by P3-43's `Complete all` while Plan completion is owner-only and
+  global ([`../01-product/activities.md`](../01-product/activities.md) §5.1). The rule is
+  enforced on the **resulting** state of any write, so both `POST` with a parent and the
+  `PATCH` that converts an already-attached task are refused; the pairing with §7's
+  *Create activity* and *Patch a prep task* rows is what keeps the pointer and counter
+  describing tasks alone.
 - `objectKind: 'plan'` requires `PlanType`: `custom` (the visible **General** kind), `meal`,
   `watch`, `event`. It may have zero participants; private Plans are first-class
   Plans. There is no hidden task-flavoured Plan. Adding or removing participants changes
@@ -1440,6 +1451,7 @@ before writing the code.
 | 14b | Find every guest record for a verified email (account linking) | `Query` `pk = GUESTEMAIL#<e>` |
 | 15 | Push devices for a user | `Query` `pk = USER#<u>`, `sk begins_with DEVICE#` |
 | 16 | Child / prep tasks of a plan | `Query pk = ACT#<parent>, sk begins_with SUB#`, `Limit: MAX_PREP_TASKS_PER_PLAN` (50), **strongly consistent** — both consumers act on what they read, since plan detail composes `3 of 5 done` inside pattern 4's authoritative read and the completion follow-up counts children straight after a write that may have changed one of these pointers. Creation rejects a 51st child, so this bounded page is the complete collection and may compute exact done/open counts. Never use the GSI alternative or `queryAll`. |
+| 16a | Resolve one prep task while its parent is being deleted (P3-18) | `GetItem ACT#<child>/META`, **strongly consistent**. The pointer and the child commit in one transaction, so a strong `SUB#` page that sees the pointer proves the child exists; a default-consistency miss here would be read as "already gone" by the orphaning pass, which then deletes the only row that could repair it. The child is released only when its `parentActivityId` still names the activity being deleted — one moved to another plan is left alone, pointer and counter intact. |
 
 No `Scan` anywhere in application code. A `Scan` in a PR is an automatic rejection outside
 of one-off migration scripts under `infra/scripts/`.

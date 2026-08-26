@@ -501,7 +501,12 @@ it requires write access to the named parent — a caller with no relationship g
 same answer as for an activity that does not exist — and both structural limits are checked
 from both ends: the target may not itself be a prep task, and a task that already has prep
 tasks of its own may not become one, which is the only way a `PATCH` could assemble the third
-level a `POST` refuses. An activity may not be its own parent. A plan already holding
+level a `POST` refuses. An activity may not be its own parent. **Only a Task may carry
+`parentActivityId`**: a `POST` creating a Plan with a parent and a `PATCH` converting an
+already-attached prep task into a Plan both answer `validation_failed` with
+`Only a task can be a prep task.` and write nothing. The check is on the state the write
+produces, because the conversion changes no parent and so is invisible to every check that
+fires when the relationship moves. A plan already holding
 `MAX_PREP_TASKS_PER_PLAN` prep tasks refuses the next one — on `POST` and on `PATCH` alike —
 with `validation_failed` on `parentActivityId` and the exact message
 `Plan has too many prep tasks.`, writing nothing. Setting, clearing or changing the field

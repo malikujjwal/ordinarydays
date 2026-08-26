@@ -545,9 +545,22 @@ export function activityFromPartition(
   return meta === undefined ? undefined : parseActivity(meta);
 }
 
-/** The `META` row alone, for the paths that do not need the whole partition. */
-export async function getActivityMeta(activityId: string): Promise<Activity | undefined> {
-  return getItem<Activity & StoredItem>(activityMeta(activityId));
+/**
+ * The `META` row alone, for the paths that do not need the whole partition.
+ *
+ * `consistentRead` is not decoration on the two paths that pass it. A default-consistency
+ * `GetItem` may miss a row that was committed moments ago, and a caller that treats the miss
+ * as **absence** then acts on it: the orphaning pass would skip a child it could not see and
+ * delete its parent anyway, leaving a `parentActivityId` pointing at nothing, and the
+ * counter-conflict classifier would tell a client the plan was deleted when it is merely
+ * full. Where a miss decides something destructive or user-visible, the read has to be
+ * authoritative (`data-model.md` §5).
+ */
+export async function getActivityMeta(
+  activityId: string,
+  options: { readonly consistentRead?: boolean } = {},
+): Promise<Activity | undefined> {
+  return getItem<Activity & StoredItem>(activityMeta(activityId), options);
 }
 
 /** Adds a META-only Activity replacement to an action transaction. */

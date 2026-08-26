@@ -594,7 +594,9 @@ and from its lists, all of which are on their own dates.
 ## 3. Prep tasks
 
 Prep tasks are ordinary Activities of type `task` with `parentActivityId` set to the plan.
-They are not a sub-entity and have no reduced capability.
+They are not a sub-entity and have no reduced capability. The converse is enforced too: only
+a Task may be attached to a plan, so neither a create nor a kind-change patch can leave a Plan
+sitting in another plan's PREP section (`validation_failed`, P3-18).
 
 | Property | Behaviour |
 | --- | --- |

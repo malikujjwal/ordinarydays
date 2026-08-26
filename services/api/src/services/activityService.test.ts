@@ -649,6 +649,68 @@ describe('removeActivity replay recovery', () => {
     });
     expect(repository.deleteActivity).toHaveBeenCalledTimes(2);
   });
+
+  /**
+   * The orphaning pass reads each child to clear its `parentActivityId`, and both things it
+   * can learn from that read were being over-trusted.
+   */
+  describe('what the orphaning read is allowed to conclude', () => {
+    const pointerRow = {
+      pk: `ACT#${PLAN}`,
+      sk: `SUB#${child.activityId}`,
+      entity: 'ChildPointer',
+      childActivityId: child.activityId,
+      schemaVersion: 1,
+    } as StoredItem;
+
+    beforeEach(() => {
+      vi.mocked(repository.patchActivity).mockClear();
+      vi.mocked(repository.deleteActivity).mockReset();
+      vi.mocked(repository.deleteActivity).mockResolvedValue(undefined);
+      vi.mocked(repository.getActivityPartitionStrong).mockResolvedValue([
+        meta,
+        pointerRow,
+      ]);
+    });
+
+    /**
+     * The pointer and the child commit in **one** transaction, so a strong Query that sees
+     * the pointer proves the child exists. Reading the child weakly and taking the miss as
+     * "already gone" would skip the one write that could have repaired it, and the very next
+     * step deletes the parent — leaving a task whose `parentActivityId` resolves to nothing.
+     */
+    it('reads the child strongly, so a replica miss cannot pass for absence', async () => {
+      vi.mocked(repository.getActivityMeta)
+        .mockResolvedValueOnce(meta as never)
+        .mockResolvedValueOnce(child);
+
+      await removeActivity(USER, PLAN, NOW);
+
+      expect(repository.getActivityMeta).toHaveBeenCalledWith(child.activityId, {
+        consistentRead: true,
+      });
+      expect(repository.patchActivity).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * A child re-parented onto another plan after the snapshot is **not** ours to release.
+     * Clearing it would undo the move and strand the new parent's pointer and `childCount`
+     * describing a child that no longer names it.
+     */
+    it('leaves a child that has since been re-parented elsewhere', async () => {
+      vi.mocked(repository.getActivityMeta)
+        .mockResolvedValueOnce(meta as never)
+        .mockResolvedValueOnce({
+          ...child,
+          parentActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1XZ',
+        });
+
+      await removeActivity(USER, PLAN, NOW);
+
+      expect(repository.patchActivity).not.toHaveBeenCalled();
+      expect(repository.deleteActivity).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 /**
@@ -1734,6 +1796,68 @@ describe('the prep-task cap', () => {
     await createActivity(USER, task({ parentActivityId: PLAN }), NOW);
 
     expect(written()?.[2]).toMatchObject({ taskSubtitle: PARENT_TITLE });
+  });
+
+  /**
+   * A prep task is a **task** (`plans-and-lists.md` §3). `parentActivityId` sits on the shape
+   * both `objectKind` arms share, so nothing in the schema refused an attached Plan — and the
+   * row it produced would take a `SUB#` pointer, a slot against the 50-cap, and a place in
+   * P3-43's bulk `Complete all` while plan completion is owner-only and global.
+   */
+  describe('the child of a plan is itself a task', () => {
+    it('refuses a Plan created with a parent, and writes nothing', async () => {
+      vi.mocked(repository.getActivityMeta).mockResolvedValue(plan());
+
+      await expect(
+        createActivity(
+          USER,
+          task({
+            objectKind: 'plan',
+            type: 'event',
+            details: { kind: 'event' },
+            parentActivityId: PLAN,
+          }),
+          NOW,
+        ),
+      ).rejects.toMatchObject({
+        code: 'validation_failed',
+        message: 'Only a task can be a prep task.',
+        details: [
+          { path: 'parentActivityId', message: 'Only a task can be a prep task.' },
+        ],
+      });
+
+      expect(repository.createActivity).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The refusal is on the **child's kind**, before the parent is loaded — so it costs no
+     * read and cannot be reached by a caller probing for a parent's existence.
+     */
+    it('refuses before loading the parent', async () => {
+      await expect(
+        createActivity(
+          USER,
+          task({
+            objectKind: 'plan',
+            type: 'meal',
+            details: { kind: 'meal' },
+            parentActivityId: PLAN,
+          }),
+          NOW,
+        ),
+      ).rejects.toMatchObject({ message: 'Only a task can be a prep task.' });
+
+      expect(repository.getActivityMeta).not.toHaveBeenCalled();
+    });
+
+    it('still accepts an ordinary task', async () => {
+      vi.mocked(repository.getActivityMeta).mockResolvedValue(plan());
+
+      await expect(
+        createActivity(USER, task({ parentActivityId: PLAN }), NOW),
+      ).resolves.toMatchObject({ activity: { parentActivityId: PLAN } });
+    });
   });
 });
 

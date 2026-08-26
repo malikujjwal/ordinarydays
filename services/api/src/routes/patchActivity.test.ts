@@ -390,6 +390,27 @@ describe('changing the object or Plan kind', () => {
     );
   });
 
+  /**
+   * The route into an attached **Plan** that a reparenting check never sees.
+   *
+   * `assertCanParent` fires when the *parent* moves. This patch moves no parent at all — it
+   * converts a task that is already somebody's prep task — so the rule has to be checked on
+   * the state the write produces, not on the relationship it changes.
+   */
+  it('400s converting an attached prep task into a Plan, and writes nothing', async () => {
+    seed(meta({ parentActivityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X9' }));
+
+    const res = await patch(createApp(), {
+      objectKind: 'plan',
+      type: 'event',
+      details: { kind: 'event' },
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.message).toBe('Only a task can be a prep task.');
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
   /** `objectKind` alone never lets the server choose a type. */
   it.each([
     ['objectKind alone', { objectKind: 'plan' }],

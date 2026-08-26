@@ -406,6 +406,49 @@ describe('nesting stays two levels deep', () => {
   });
 });
 
+describe('a prep task is a task', () => {
+  /**
+   * `parentActivityId` lives on the shape both `objectKind` arms share, so the schema alone
+   * never refused an attached Plan — and the row it produced took a `SUB#` pointer and a slot
+   * against the 50-cap while sitting in a PREP section the product describes as tasks.
+   */
+  it('refuses a Plan created with a parent, and touches neither pointer nor counter', async () => {
+    const plan = await createPlan();
+
+    const res = await post('/v1/activities', {
+      objectKind: 'plan',
+      type: 'meal',
+      title: 'Dinner on the way',
+      parentActivityId: plan.activityId,
+    });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.message).toBe('Only a task can be a prep task.');
+    expect(await childCountOf(plan.activityId)).toBe(0);
+    expect(await repo.listChildPointers(plan.activityId)).toEqual([]);
+  });
+
+  /** The other door: converting a task that is *already* attached, changing no parent. */
+  it('refuses converting an attached prep task into a Plan', async () => {
+    const plan = await createPlan();
+    const child = await dataOf(await createChild(plan.activityId));
+
+    const res = await patch(
+      child.activityId,
+      { objectKind: 'plan', type: 'event', details: { kind: 'event' } },
+      child.updatedAt,
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.message).toBe('Only a task can be a prep task.');
+
+    const unchanged = await repo.getActivityMeta(child.activityId);
+    expect(unchanged?.objectKind).toBe('task');
+    expect(unchanged?.updatedAt).toBe(child.updatedAt);
+    expect(await childCountOf(plan.activityId)).toBe(1);
+  });
+});
+
 describe('deleting the plan', () => {
   /**
    * The rule that differs from every other cascade, and is therefore the easiest to get wrong
@@ -432,6 +475,30 @@ describe('deleting the plan', () => {
       timezone: TIMEZONE,
     });
   });
+
+  /**
+   * A child moved to another plan is not this delete's to release. The pointer records what
+   * was true when it was written; the child is the authority on who its parent is now, and
+   * clearing it would undo the move *and* leave the new plan's pointer and `childCount`
+   * describing a child that no longer names it.
+   */
+  it('leaves a child that has been re-parented onto another plan', async () => {
+    const from = await createPlan('Poconos trip');
+    const to = await createPlan('Catskills trip');
+    const child = await dataOf(await createChild(from.activityId));
+
+    const moved = await dataOf(
+      await patch(child.activityId, { parentActivityId: to.activityId }, child.updatedAt),
+    );
+    expect(moved.parentActivityId).toBe(to.activityId);
+
+    expect((await remove(from.activityId)).status).toBe(200);
+
+    const survivor = await repo.getActivityMeta(child.activityId);
+    expect(survivor?.parentActivityId).toBe(to.activityId);
+    expect(await childCountOf(to.activityId)).toBe(1);
+    expect(await repo.listChildPointers(to.activityId)).toHaveLength(1);
+  });
 });
 
 describe('a prep task on Today', () => {
@@ -444,11 +511,18 @@ describe('a prep task on Today', () => {
     });
 
     const body = await (await agenda()).json();
+    /**
+     * **All three of Today's sections**, because which one holds a 09:00 task depends on what
+     * time the suite runs: before it, `schedule`; after it, `earlier`. The criterion is that
+     * the prep task appears on Today under its parent's title, not which band of the day it
+     * lands in, so pinning the assertion to one section made it a clock-dependent test.
+     */
     const rows = body.data.days.flatMap(
       (day: {
         schedule: { title: string; subtitle?: string }[];
         anytime: { title: string; subtitle?: string }[];
-      }) => [...day.schedule, ...day.anytime],
+        earlier: { title: string; subtitle?: string }[];
+      }) => [...day.schedule, ...day.anytime, ...day.earlier],
     );
 
     expect(rows).toContainEqual(
