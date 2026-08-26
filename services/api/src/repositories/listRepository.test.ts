@@ -1753,3 +1753,70 @@ describe('the composable list-write primitives', () => {
     });
   });
 });
+
+/**
+ * The Plan-side half of the source-List link (P3-49).
+ *
+ * The integration suite proves the cascade clears the right Lists. What belongs here is the
+ * shape of the one write it issues: which condition it carries, and what it deliberately does
+ * not touch.
+ */
+describe('clearSourceActivity', () => {
+  beforeEach(() => {
+    vi.mocked(base.updateItem).mockReset();
+    vi.mocked(base.updateItem).mockResolvedValue(undefined as never);
+  });
+
+  const optionsOf = () => vi.mocked(base.updateItem).mock.calls[0]?.[1];
+
+  it('addresses the List META and names the Plan being deleted', async () => {
+    await repository.clearSourceActivity(LIST_ID, ACTIVITY_ID);
+
+    expect(vi.mocked(base.updateItem).mock.calls[0]?.[0]).toEqual(keys.listMeta(LIST_ID));
+    expect(optionsOf()?.condition).toBe(
+      'attribute_exists(pk) AND #sourceActivityId = :sourceActivityId',
+    );
+    expect(optionsOf()?.values).toEqual({ ':sourceActivityId': ACTIVITY_ID });
+  });
+
+  /**
+   * Advancing the version would fail the behaviour-migration finisher's pinned
+   * `expectedUpdatedAt` **permanently**, stranding the marker and gating the list into `503`.
+   * The attribute leaves; nothing else moves.
+   */
+  it('removes only the attribute, moving no version', async () => {
+    await repository.clearSourceActivity(LIST_ID, ACTIVITY_ID);
+
+    expect(optionsOf()?.expression).toBe('REMOVE #sourceActivityId');
+    expect(optionsOf()?.expression).not.toContain('updatedAt');
+    expect(optionsOf()?.expression).not.toContain('rankVersion');
+    expect(optionsOf()?.expression).not.toContain('itemVersion');
+  });
+
+  /** Not gated: a running migration must not be able to block a Plan deletion. */
+  it('does not condition on the migration or repair markers', async () => {
+    await repository.clearSourceActivity(LIST_ID, ACTIVITY_ID);
+
+    expect(optionsOf()?.condition).not.toContain('behaviourMigrationId');
+    expect(optionsOf()?.condition).not.toContain('rankRepairId');
+  });
+
+  /** Already cleared, deleted, or re-sourced: all three are correct outcomes for a retry. */
+  it('swallows a condition failure so the cascade stays idempotent', async () => {
+    const failure = new Error('nope');
+    failure.name = 'ConditionalCheckFailedException';
+    vi.mocked(base.updateItem).mockRejectedValueOnce(failure);
+
+    await expect(
+      repository.clearSourceActivity(LIST_ID, ACTIVITY_ID),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rethrows anything else, so a real failure fails the delete', async () => {
+    vi.mocked(base.updateItem).mockRejectedValueOnce(new Error('throttled'));
+
+    await expect(repository.clearSourceActivity(LIST_ID, ACTIVITY_ID)).rejects.toThrow(
+      'throttled',
+    );
+  });
+});

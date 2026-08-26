@@ -449,8 +449,8 @@ sizings did not support; those are corrected here.
 | 2 — Today and tasks | 48 (40 plus P2-41…P2-47 and P2-51 — 2026-08-12 and 2026-08-13) | 6 / 27 / 15 | **120** | ~6.0 weeks |
 | 2.5 — Recurrence stabilization | 5 (P2-52…P2-55 — 2026-08-14; plus P2-56 — 2026-08-15) | 0 / 2 / 3 | **16** | ~0.8 weeks |
 | 2.6 — Sync hardening | 8 (P2-48…P2-50, P2-57, P2-59 and P2-61…P2-63; P2-58 parked and P2-60 historical, uncounted) | 0 / 1 / 7 | **30** | ~1.5 weeks |
-| 3 — Plans and lists | 47 (44 minus P3-11, cut 2026-08-07; plus P3-45…P3-48 — 2026-08-25) | 5 / 27 / 15 | **119** | ~6.0 weeks |
-| **0–3 subtotal (local, $0 AWS)** | **169** | **24 / 92 / 53** | **420** | **~21.0 weeks** |
+| 3 — Plans and lists | 48 (44 minus P3-11, cut 2026-08-07; plus P3-45…P3-48 — 2026-08-25; plus P3-49 — 2026-08-26) | 6 / 27 / 15 | **121** | ~6.1 weeks |
+| **0–3 subtotal (local, $0 AWS)** | **170** | **25 / 92 / 53** | **422** | **~21.1 weeks** |
 | 4 — Deploy and identity | 33 | 6 / 21 / 6 | **72** | ~3.5 weeks |
 | 5 — Ship v1 | 37 | 6 / 24 / 7 | **82** | ~4 weeks |
 | **0–5 subtotal (shipped to TestFlight)** | **239** | **36 / 137 / 66** | **574** | **~28.7 weeks** |
@@ -515,6 +515,17 @@ mobile tasks started, added **P3-45** (the eleven catalogue icons P3-02 named bu
 M), **P3-46** (`List.lastItemActivityAt` and its writers, M), **P3-47** (the Upcoming/Past
 calendar navigator, L) and **P3-48** (per-type row markers in `RowLeading`, S). Net **+4 tasks
 and +9 AWU**, giving **388 tasks and 949 AWU**. Two of the four are consequences of tasks that
+had already shipped, the same as the note below.
+
+The **P3-18 review on 2026-08-26** added **P3-49** (clear `List.sourceActivityId` when its
+source Plan is deleted, S). Net **+1 task and +2 AWU**, giving **389 tasks and 951 AWU**. It is
+the same pattern one more time: `data-model.md` §7 and `api-contract.md` §2.3 both already
+required the clear, P3-05 had shipped the write that makes the dangling link reachable, and
+the only task describing the cleanup was **P3-38, a `mobile` task** — so no backend task owned
+it and nothing would have until a client task ran. Found by reading the contract against the
+cascade, not scope growth. P3-49 now gates P3-38.
+
+The 2026-08-25 additions, continued. Two of the four are consequences of tasks that
 had already shipped — P3-02 named icons that do not exist, and the four writers that must bump
 `lastItemActivityAt` are all on `main` — which is the same lesson as the fourteenth correction:
 unowned work found by reading the plan against the code, not scope growth. The other two are

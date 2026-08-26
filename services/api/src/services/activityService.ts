@@ -58,7 +58,10 @@ import {
   patchActivity as putPatch,
   StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
-import { findViewerLinksTo } from '../repositories/listRepository.js';
+import {
+  clearSourceActivity,
+  findViewerLinksTo,
+} from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import {
   assertActivityAccess,
@@ -1604,6 +1607,7 @@ export async function removeActivity(
   }
 
   await releaseChildren(activityId, childIdsOf(partition), now);
+  await clearSourcedListBacklinks(activityId, partition);
   // The repository removes partition children and index pointers next, then META last. That
   // leaves this access seam present until every retryable cleanup step has succeeded.
   await deleteActivityRows(userId, activityId, {
@@ -1613,6 +1617,36 @@ export async function removeActivity(
   });
 
   return activityId;
+}
+
+/**
+ * Clears the `sourceActivityId` on every List this Plan sourced (P3-49).
+ *
+ * **Before the cascade, and that ordering is the whole design.** The `SOURCE_LIST#` rows are
+ * the only record of which Lists point back here, and the cascade deletes them along with the
+ * rest of the partition. Clearing first means an interrupted delete re-reads those rows and
+ * finishes the job; clearing after would mean the ids are already gone and every List that
+ * still needed clearing is unreachable — a dangling link nothing could ever find again, which
+ * is exactly the state this exists to prevent.
+ *
+ * One conditional write per List rather than one transaction. They live in their own
+ * partitions, `MAX_OWNED_LISTS` of them exceeds a transaction's limit, and a single re-sourced
+ * List must not cancel the clear of all the others. The same shape the viewer-pointer clears
+ * in `deleteActivity` already use, and bounded by the same cap, so no cursor is needed.
+ *
+ * Read off the partition the caller already holds: a Plan that sourced nothing does no extra
+ * work and issues no writes.
+ */
+async function clearSourcedListBacklinks(
+  activityId: string,
+  partition: readonly StoredItem[],
+): Promise<void> {
+  for (const row of partition) {
+    if (row.entity !== 'SourceList') continue;
+    const listId = row.listId;
+    if (typeof listId !== 'string') continue;
+    await clearSourceActivity(listId, activityId);
+  }
 }
 
 /** A plan's prep tasks, with the two numbers the PREP section renders. */
