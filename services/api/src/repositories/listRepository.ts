@@ -41,6 +41,7 @@ import {
   query,
   queryAll,
   queryCount,
+  updateItem,
 } from './base.js';
 import {
   decodeCursor,
@@ -4870,5 +4871,57 @@ export async function deleteList(
       }
       throw error;
     }
+  }
+}
+
+/**
+ * Clears one List's `sourceActivityId` back-link when its source Plan is deleted (P3-49).
+ *
+ * The mirror of the projection delete in {@link beginDeleteList}: that direction is a List
+ * going away and taking its `SOURCE_LIST#` row with it, this one is the **Plan** going away
+ * and taking the row that pointed at the List. Both halves have to exist, or one side of a
+ * two-way link outlives the other — and until this shipped it was the Plan side that did,
+ * leaving a List whose header named an activity that no longer existed.
+ *
+ * ## Conditional, and a failure is success
+ *
+ * `sourceActivityId = :sourceActivityId` is the whole idempotency story. A List already
+ * cleared by an earlier attempt, deleted since, or re-sourced to a different Plan all fail the
+ * condition, and all three are correct outcomes for a cascade that may run twice. Swallowing
+ * it is what lets the caller retry a partially finished delete without a cursor.
+ *
+ * ## It does not advance `updatedAt`, and that is not an oversight
+ *
+ * The behaviour-migration finisher pins `expectedUpdatedAt` in its durable work record and
+ * condition-checks it (P3-09). Moving the version underneath an in-flight migration fails that
+ * condition **permanently** — the retry re-reads the same stored value and fails again —
+ * stranding `behaviourMigrationId` on the List and gating every item read and mutation into
+ * `503` for ever. Freshening a concurrency token is not worth bricking a list.
+ *
+ * It is safe to leave alone because {@link patchListMeta} is `SET` over named fields and never
+ * a whole-item `Put`, so no client holding a pre-clear copy can write the attribute back. The
+ * worst case is one stale render of a link that has gone, corrected by the next read.
+ *
+ * For the same reason the write is **not** gated on the migration or repair markers: removing
+ * an unrelated META attribute leaves `updatedAt`, `rankVersion` and `behaviourMigrationId`
+ * untouched, so every in-flight condition still holds — while gating it would let a running
+ * migration block a Plan deletion and leave behind the dangling link this exists to remove.
+ */
+export async function clearSourceActivity(
+  listId: string,
+  sourceActivityId: string,
+): Promise<void> {
+  try {
+    await updateItem(listMeta(listId), {
+      expression: 'REMOVE #sourceActivityId',
+      names: { '#sourceActivityId': 'sourceActivityId' },
+      values: { ':sourceActivityId': sourceActivityId },
+      condition: 'attribute_exists(pk) AND #sourceActivityId = :sourceActivityId',
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return;
+    }
+    throw error;
   }
 }

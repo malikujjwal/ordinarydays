@@ -147,7 +147,7 @@ Today's Anytime list and is not a backlog with a counter on it.
 | P3-35 | The Plans tab: three stages | mobile | P3-20, P3-24, P2-32 | no | L |
 | P3-36 | Plan detail screen: full anatomy | mobile | P1-26, P3-24 | no | L |
 | P3-37 | Prep section inside a plan | mobile | P3-36, P3-18 | no | M |
-| P3-38 | Lists section and the `Add list` catalogue sheet | mobile | P3-36, P3-05, P3-26 | no | M |
+| P3-38 | Lists section and the `Add list` catalogue sheet | mobile | P3-36, P3-05, P3-26, P3-49 | no | M |
 | P3-39 | Updates section | mobile | P3-36, P3-19 | yes | M |
 | P3-40 | Image picker, upload, and progress | mobile | P3-21, P3-22 | no | L |
 | P3-41 | Attachment viewer and hero image | mobile | P3-40 | no | M |
@@ -158,6 +158,13 @@ Today's Anytime list and is not a backlog with a counter on it.
 | P3-46 | `List.lastItemActivityAt` and every writer that must bump it | shared/api | P3-04, P3-05, P3-08, P3-10 | no | M |
 | P3-47 | The Upcoming/Past calendar navigator | mobile | P3-35, P3-20, P3-24 | no | L |
 | P3-48 | Per-type row markers in `RowLeading` | mobile | P2-44 | yes | S |
+| P3-49 | Clear `List.sourceActivityId` when its source Plan is deleted | api | P3-05, P1-14 | yes | S |
+
+> **Added 2026-08-26 (founder).** **P3-49** carries the backend half of a cleanup that
+> §P3-38's edge cases described but no shipped task owned. P3-05 already writes
+> `sourceActivityId` and its `SOURCE_LIST#` reverse projection, so the dangling link is
+> reachable today; P3-38 is a `mobile` task and cannot be what closes it. Raised in the P3-18
+> review, and **it gates P3-38**, which keeps the section's UI and its own catalogue tests.
 
 > **Added 2026-08-25 (founder).** P3-45 to P3-48 came out of the design pass on the Plans and
 > Lists screens. Two of them are consequences of tasks that have **already shipped**, so they
@@ -2346,8 +2353,9 @@ silently produce three lists.
 **Edge cases.** `List.sourceActivityId` is the **only domain link**. Its id-only
 `ACT#<activityId>` / `SOURCE_LIST#<listId>` row is a reverse access projection, not a second
 source of truth. Detaching or deleting the List clears `sourceActivityId` and removes that row
-in the same transaction. Deleting the plan enumerates those rows, clears the matching
-back-links in bounded idempotent chunks, and leaves every List and item intact; completing a
+in the same transaction. **Deleting the plan is §P3-49's**, not this task's — it enumerates
+those rows, clears the matching back-links and leaves every List and item intact. This task
+depends on it and asserts the outcome; it does not implement it. Completing a
 plan does not archive its lists. A list of things you own is not owned by the trip. A list
 created this way forces `slot: null` regardless of the selected template, so one Plan's list
 never becomes a standing destination without a later explicit settings change.
@@ -2356,7 +2364,8 @@ never becomes a standing destination without a later explicit settings change.
 same full unselected catalogue as general `New list`; explicitly choosing and confirming `Packing`
 writes exactly one with `sourceActivityId` set, `behaviour: 'collection'`, `slot: null` and one
 matching `SOURCE_LIST#` projection; deleting the plan leaves the list with its items and
-`sourceActivityId` cleared and removes the projection. A test runs
+`sourceActivityId` cleared and removes the projection (the clear itself is §P3-49's; this
+asserts the sourced List this task creates is one it correctly reaches). A test runs
 every Plan type through the entry point and asserts catalogue order and selection are identical.
 
 ---
@@ -2803,6 +2812,64 @@ a control. §5.2's prose was corrected in the same pass — its table was always
 `custom` is the only diamond. A test that a non-completable task still renders a checkbox
 rather than a marker. Snapshot both Today and Plans, since both consume this component.
 
+---
+
+### P3-49 — Clear `List.sourceActivityId` when its source Plan is deleted
+
+**Files.** `services/api/src/repositories/listRepository.ts`,
+`services/api/src/services/activityService.ts`,
+`services/api/test/integration/planDeleteSourcedLists.int.test.ts`.
+
+**What to build.** The Activity half of a two-way cleanup whose List half already ships.
+Deleting a List removes its `ACT#<a>/SOURCE_LIST#<l>` projection (P3-05); deleting the **Plan**
+does not clear the `List.sourceActivityId` pointing back at it. The Plan's cascade deletes the
+whole Activity partition, projections included, so the surviving List keeps a provenance link
+naming an activity that no longer exists — and the reverse pointer that could have found it is
+destroyed in the same pass. Required by
+[`../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items`](../02-architecture/data-model.md#7-write-paths-that-touch-multiple-items)
+*Delete activity* and
+[`../02-architecture/api-contract.md#23-activities`](../02-architecture/api-contract.md#23-activities)
+`DELETE`, both of which already say the clear happens.
+
+**Approach.** In `removeActivity`, **before** the cascade removes the projections and META,
+read the `SOURCE_LIST#` ids out of the partition already held and clear each matching
+back-link. Each clear is a single conditional `UpdateItem` on that List's `META`, conditional
+on `sourceActivityId` still naming **this** Plan, and a condition failure is swallowed: a List
+already cleared, deleted, or re-sourced is not this delete's business. That makes the pass
+idempotent and resumable, which is the property the ordering exists for — while the
+projections survive, an interrupted delete re-reads them and finishes; once they are gone, so
+is every List that still needed clearing.
+
+Bounded by `MAX_OWNED_LISTS`, so the loop needs no cursor. One conditional write per List
+rather than one transaction: the Lists live in their own partitions, a hundred of them exceed
+a transaction, and one re-sourced List must not cancel the other ninety-nine.
+
+**Edge cases.**
+
+- **The clear does not advance `List.updatedAt`, and that is load-bearing.** The
+  behaviour-migration finisher pins `expectedUpdatedAt` in its durable work record and
+  condition-checks it (P3-09). Advancing the version underneath an in-flight migration fails
+  that condition **permanently** — a retry re-reads the same stored value — leaving
+  `behaviourMigrationId` installed and every item read and mutation gated into `503` for ever.
+  Bricking a list to freshen a version is the wrong trade. It is safe because
+  `patchListMeta` is `SET` over named fields and never a whole-item `Put`, so no client holding
+  a stale copy can write the attribute back; the worst case is one stale render until refetch.
+- **The clear is not gated on the migration or repair markers.** Removing an unrelated META
+  attribute leaves `updatedAt`, `rankVersion` and `behaviourMigrationId` untouched, so every
+  in-flight condition still holds. Gating it would let a running migration block a Plan
+  deletion and leave behind exactly the dangling link this task exists to remove.
+- A Plan with no sourced Lists does no extra reads and issues no writes.
+- Deleting the **List** is unchanged: it already removes the projection (§P3-05) and this task
+  adds nothing to that direction.
+
+**Tests.** Integration: delete a Plan whose sourced List holds items, and assert the List and
+every item survive, `sourceActivityId` is absent, and the projection is gone; a Plan sourcing
+two Lists clears both; a List re-sourced to another Plan keeps its pointer when the first Plan
+is deleted; a Plan with no sourced Lists writes nothing extra; the clear leaves
+`List.updatedAt`, `rankVersion` and `itemVersion` byte-identical; a delete interrupted after
+the clears and retried still completes. Unit: the conditional expression names the Plan being
+deleted, and a condition failure is swallowed rather than raised.
+
 ## Acceptance criteria
 
 1. A list created from the `bars-to-try` template, filled with three items and never
@@ -2908,7 +2975,8 @@ rather than a marker. Snapshot both Today and Plans, since both consume this com
 22. Creating an `event` writes zero lists; confirming `Packing` in the suggestion
     sheet writes exactly one, with `behaviour: 'collection'`, `slot: null` and an id-only
     `SOURCE_LIST#` projection; deleting the plan removes that projection and leaves the list
-    and its items with `sourceActivityId` cleared.
+    and its items with `sourceActivityId` cleared (the creation half is §P3-38, the deletion
+    half §P3-49).
 23. A presigned upload URL rejects a different `Content-Type` than declared, rejects a body
     over the declared length, and is unusable after five minutes.
 24. An uploaded image round-trips through the local store: the presigned `PUT` succeeds, the

@@ -41,7 +41,12 @@ import { createLocalTable } from '../../scripts/create-local-table.js';
  * wrong about the rest.
  */
 
-const ENDPOINT = process.env.DDB_ENDPOINT ?? 'http://localhost:8000';
+const ENDPOINT = process.env.DDB_ENDPOINT;
+if (ENDPOINT === undefined || ENDPOINT === '') {
+  throw new Error(
+    'vitest.int.config.ts must provide DDB_ENDPOINT for the integration suite.',
+  );
+}
 
 /**
  * The calling test file's name, kebab-cased: `activityRepository.int.test.ts` becomes
@@ -79,11 +84,10 @@ export const TEST_TABLE = tableName(`test-${currentFileSlug()}`);
  * `beforeAll` — reads this table.
  *
  * The constant half of the environment (`STAGE`, `AUTH_MODE`, `MEDIA_BUCKET`, `WEB_ORIGINS`,
- * `LOG_LEVEL`) lives in `vitest.int.config.ts`, where a value that changes for every file at
- * once belongs. Only the per-file table name and the local endpoint are set here.
+ * `LOG_LEVEL`, `DDB_ENDPOINT`) lives in `vitest.int.config.ts`, where a value that changes
+ * for every file at once belongs. Only the per-file table name is set here.
  */
 process.env.TABLE_NAME = TEST_TABLE;
-process.env.DDB_ENDPOINT = ENDPOINT;
 process.env.AWS_REGION ??= 'us-east-1';
 // DynamoDB Local requires credentials to be present, not valid.
 process.env.AWS_ACCESS_KEY_ID ??= 'local';

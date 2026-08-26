@@ -8,8 +8,7 @@ import { defineConfig } from 'vitest/config';
  * ignore red, and it is the reason `turbo.json` gives `test:int` its own task with
  * `cache: false`.
  *
- *   docker compose up -d
- *   pnpm --filter @od/api test:int
+ *   pnpm test:int
  *
  * `ddb:create-table` is not a prerequisite. Every file builds and drops its own table through
  * `test/integration/harness.ts`; the script is for the dev server, and this suite never touches
@@ -31,12 +30,12 @@ export default defineConfig({
      * table". That was a correctness constraint, and P1-28's table-per-file removed it: eight
      * files on eight tables cannot interfere, and the suite passes either way.
      *
-     * It stays off because parallel is **measurably slower here**. Measured on this suite:
-     * serial 54 s wall for 51 s of test time; parallel 69 s wall for 238 s of test time. Eight
-     * workers get 3.4x the concurrency out of one DynamoDB Local container and pay 4.6x per
-     * request for it, because the container is the bottleneck and it is one process. Turn this
-     * on if the suite ever gets a database it can actually saturate; do not turn it on for the
-     * reason the old comment ruled out, which no longer applies.
+     * It stays off because the current suite is not reliable under database contention. On
+     * 2026-08-26, against the in-memory test service, 25 files / 502 tests ran serially in
+     * 122 s and passed; eight workers finished in 38 s but four tests failed under that load.
+     * That replaces the stale eight-file measurement: parallel is now faster, but not yet a
+     * truthful gate. Diagnose those failures before enabling it. Do not turn it on or
+     * leave it off for the old table-interference reason, which no longer applies.
      */
     fileParallelism: false,
     /**
@@ -48,10 +47,11 @@ export default defineConfig({
      * `pnpm test`, which does not run this suite. Setting it here rather than at the top of
      * each file is what stops the next required variable doing the same thing.
      *
-     * Everything here is the same for every file. The two values that are not — the per-file
-     * `TABLE_NAME` and the local `DDB_ENDPOINT` — are set by `test/integration/harness.ts`
-     * when it is imported, which is why no test file sets an environment variable of its own
-     * any more (P1-28).
+     * Everything here is the same for every file. `DDB_ENDPOINT` defaults to the disposable
+     * in-memory service on port 8002, while an explicit value can still point the suite at an
+     * externally managed DynamoDB Local. Only the per-file `TABLE_NAME` is set by
+     * `test/integration/harness.ts` when it is imported, which is why no test file sets an
+     * environment variable of its own any more (P1-28).
      */
     env: {
       STAGE: 'local',
@@ -59,6 +59,7 @@ export default defineConfig({
       MEDIA_BUCKET: 'od-media-local',
       WEB_ORIGINS: 'http://localhost:8081',
       LOG_LEVEL: 'fatal',
+      DDB_ENDPOINT: process.env.DDB_ENDPOINT ?? 'http://127.0.0.1:8002',
     },
   },
 });

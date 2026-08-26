@@ -348,8 +348,8 @@ until this merges.
 ```
 Pick up task P1-05. Follow the start-of-task protocol and data-model.md §3 (keys,
 GSI1), §5 (access patterns), §7 (transactions). No Scan, ever; no DynamoDB call will
-exist outside this layer. Branch feat/P1-05-repo-base. Integration tests run against
-DynamoDB Local (docker compose up -d).
+exist outside this layer. Branch feat/P1-05-repo-base. Run integration tests with
+`pnpm test:int`; it starts the test-only DynamoDB Local service.
 ```
 
 **P1-09 / P1-10 — ActivityRepository and service** *(L each — plan mode)*

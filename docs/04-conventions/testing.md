@@ -122,8 +122,10 @@ against real DynamoDB in Docker, never against mocks — a mock cannot tell you 
 
 ### 3.1 Setup
 
-`docker-compose.yml` at the repo root already defines DynamoDB Local
-(`infrastructure.md` §6.1). Tests bring their own table.
+`docker-compose.yml` at the repo root defines a test-only DynamoDB Local service
+(`infrastructure.md` §6.1). It is isolated from the persistent development database, runs
+in memory on host port 8002 and is enabled only through the `test` Compose profile. Tests
+bring their own table.
 
 `services/api/test/integration/harness.ts` owns the whole lifecycle. A file claims a table by
 importing it and calling `useTestTable()` once, at module scope:
@@ -144,15 +146,17 @@ and a harness that silently put two files on one table would reintroduce exactly
 interference it exists to remove.
 
 Table-per-file is what makes `fileParallelism` a **performance** question rather than a
-correctness one. It is currently off, and the reason is measured rather than assumed: against
-one DynamoDB Local container, serial runs this suite in 54 s and parallel in 69 s, because the
-container is a single process and eight workers queue on it. See the comment in
-`vitest.int.config.ts` before changing it.
+correctness-of-test-data one. It is currently off because the current suite is not reliable
+under database contention. The 2026-08-26 measurement against the in-memory service was
+25 files / 502 tests: serial passed in 122 s; eight workers finished in 38 s but failed four
+tests under that load. Parallel is now faster, unlike the stale eight-file measurement, but it
+is not yet a truthful gate. Diagnose those failures before enabling it; see the comment in
+`vitest.int.config.ts`.
 
-Importing the harness is also the whole of a file's environment setup. It sets `TABLE_NAME` and
-`DDB_ENDPOINT` at module scope, before `lib/config.ts` parses them; everything constant across
-files lives in `vitest.int.config.ts`'s `env` block. No integration test sets an environment
-variable of its own.
+Importing the harness is also the whole of a file's per-file environment setup. It sets
+`TABLE_NAME` at module scope, before `lib/config.ts` parses it; everything constant across
+files, including `DDB_ENDPOINT`, lives in `vitest.int.config.ts`'s `env` block. No integration
+test sets an environment variable of its own.
 
 The table is created by `scripts/create-local-table.ts`, which reads the same `TABLE` definition
 `DataStack` uses (`repo-structure.md` §3), so the local table and the deployed table cannot
@@ -208,32 +212,18 @@ await seed(TABLE_NAME, [alice, bob, plan]);
 ### 3.4 Running them
 
 ```bash
-docker compose up -d
-pnpm --filter @od/api run test:int          # vitest --config vitest.int.config.ts
+pnpm test:int   # starts and health-checks dynamodb-test, then runs the integration task
 ```
 
-In CI, DynamoDB Local runs as a **service container** in `ci.yml`, not via
-`docker compose`, so the runner manages its lifecycle and health check:
+CI uses the same root command. The service stays outside ordinary `docker compose up -d` and
+`pnpm dev`, so it neither creates a test table in the persistent development database nor
+adds an idle container to the normal development stack. A caller that already manages an
+ephemeral DynamoDB Local may instead run the filtered package command with an explicit
+`DDB_ENDPOINT`.
 
-```yaml
-  integration:
-    runs-on: ubuntu-latest
-    services:
-      dynamodb:
-        image: amazon/dynamodb-local:latest
-        ports: ['8000:8000']
-        options: >-
-          --health-cmd "curl -f http://localhost:8000 || exit 1"
-          --health-interval 5s --health-retries 10
-    steps:
-      # … checkout, pnpm, node …
-      - run: pnpm turbo run test:int
-        env: { DDB_ENDPOINT: 'http://localhost:8000' }
-```
-
-Integration tests are a **required status check** on `main` (`git-workflow.md` §3.4). They add
-about 90 seconds; the alternative is discovering a key-design error after it has written
-production data.
+Integration tests are a **required status check** on `main` (`git-workflow.md` §3.4). The
+current 25-file suite adds about two minutes; the alternative is discovering a key-design
+error after it has written production data.
 
 ---
 

@@ -58,7 +58,10 @@ import {
   patchActivity as putPatch,
   StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
-import { findViewerLinksTo } from '../repositories/listRepository.js';
+import {
+  clearSourceActivity,
+  findViewerLinksTo,
+} from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
 import {
   assertActivityAccess,
@@ -1551,15 +1554,12 @@ export async function duplicateActivity(
  *
  * - **Viewer-link rows are cleared**, by {@link viewerLinksToClear} below — P3-15 added them
  *   and this cascade handles them.
- * - **`SOURCE_LIST#` reverse projections are deleted with the partition, but the
- *   `List.sourceActivityId` they point back from is NOT cleared.** P3-05 ships the write
- *   (`CreateListInput.sourceActivityId`), so those rows exist in real tables now and the
- *   sentence that used to stand here — "nothing writes them yet" — is false. The result is a
- *   surviving List whose provenance link names a deleted Plan, with the reverse pointer that
- *   would have found it deleted in the same pass. `data-model.md` §7 *Delete activity* and
- *   `api-contract.md` §2.3 both require the clear; §P3-38 owns the implementation and its
- *   test. **Raised in P3-18 review and open** — it is named here rather than left for the
- *   next reader to rediscover from a comment that told them there was nothing to do.
+ * - **`SOURCE_LIST#` back-links are cleared**, by {@link clearSourcedListBacklinks} below
+ *   (§P3-49) — and **before** the cascade removes the projections, because those rows are the
+ *   only record of which Lists point here. `data-model.md` §7 *Delete activity* and
+ *   `api-contract.md` §2.3 both require the clear. This bullet twice said the opposite: first
+ *   that nothing wrote these rows, then that the clear was somebody else's open work. Both
+ *   were true when written and neither is now.
  * - Expense locators (Phase 7) and EventBridge schedules (Phase 5) genuinely have no rows to
  *   delete, because nothing writes them yet. **There is no settlement guard here** and
  *   `settlement_conflict` is deliberately not in the error union: a guard over rows no schema
@@ -1604,6 +1604,7 @@ export async function removeActivity(
   }
 
   await releaseChildren(activityId, childIdsOf(partition), now);
+  await clearSourcedListBacklinks(activityId, partition);
   // The repository removes partition children and index pointers next, then META last. That
   // leaves this access seam present until every retryable cleanup step has succeeded.
   await deleteActivityRows(userId, activityId, {
@@ -1613,6 +1614,36 @@ export async function removeActivity(
   });
 
   return activityId;
+}
+
+/**
+ * Clears the `sourceActivityId` on every List this Plan sourced (P3-49).
+ *
+ * **Before the cascade, and that ordering is the whole design.** The `SOURCE_LIST#` rows are
+ * the only record of which Lists point back here, and the cascade deletes them along with the
+ * rest of the partition. Clearing first means an interrupted delete re-reads those rows and
+ * finishes the job; clearing after would mean the ids are already gone and every List that
+ * still needed clearing is unreachable — a dangling link nothing could ever find again, which
+ * is exactly the state this exists to prevent.
+ *
+ * One conditional write per List rather than one transaction. They live in their own
+ * partitions, `MAX_OWNED_LISTS` of them exceeds a transaction's limit, and a single re-sourced
+ * List must not cancel the clear of all the others. The same shape the viewer-pointer clears
+ * in `deleteActivity` already use, and bounded by the same cap, so no cursor is needed.
+ *
+ * Read off the partition the caller already holds: a Plan that sourced nothing does no extra
+ * work and issues no writes.
+ */
+async function clearSourcedListBacklinks(
+  activityId: string,
+  partition: readonly StoredItem[],
+): Promise<void> {
+  for (const row of partition) {
+    if (row.entity !== 'SourceList') continue;
+    const listId = row.listId;
+    if (typeof listId !== 'string') continue;
+    await clearSourceActivity(listId, activityId);
+  }
 }
 
 /** A plan's prep tasks, with the two numbers the PREP section renders. */
