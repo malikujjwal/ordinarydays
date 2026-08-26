@@ -212,17 +212,25 @@ await seed(TABLE_NAME, [alice, bob, plan]);
 ### 3.4 Running them
 
 ```bash
-pnpm test:int   # starts and health-checks dynamodb-test, then runs the integration task
+pnpm test:int   # starts and health-checks dynamodb-test and minio, then runs the task
 ```
 
-CI uses the same root command. The service stays outside ordinary `docker compose up -d` and
-`pnpm dev`, so it neither creates a test table in the persistent development database nor
+CI uses the same root command. `dynamodb-test` stays outside ordinary `docker compose up -d`
+and `pnpm dev`, so it neither creates a test table in the persistent development database nor
 adds an idle container to the normal development stack. A caller that already manages an
 ephemeral DynamoDB Local may instead run the filtered package command with an explicit
 `DDB_ENDPOINT`.
 
+`minio` is different, and deliberately so (P3-21): it is the **same** service `pnpm dev`
+starts, named explicitly on the command rather than hidden behind the `test` profile, and the
+attachment suite uses the same `od-media-local` bucket. Object keys carry a fresh ULID, so
+files cannot collide the way they could on a shared table — and the whole reason the local
+store is MinIO rather than a mock is that there is no test-only shape of it. `S3_ENDPOINT` is
+overridable like `DDB_ENDPOINT`; the credentials are not, because MinIO checks the signature
+against its root user while DynamoDB Local accepts any value.
+
 Integration tests are a **required status check** on `main` (`git-workflow.md` §3.4). The
-current 25-file suite adds about two minutes; the alternative is discovering a key-design
+current 28-file suite adds about two minutes; the alternative is discovering a key-design
 error after it has written production data.
 
 ---
