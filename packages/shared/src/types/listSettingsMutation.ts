@@ -16,9 +16,9 @@ import type { ListView } from './listView.js';
  *
  * The offer's absence carries meaning. A rename has no undo row in
  * `interaction-contract.md` §4.1, a patch that changes nothing has nothing to take back, and
- * a behaviour change that **lost** data was confirmed rather than offered — its only path
- * back is a fresh `?confirmDataLoss=true` call. A change that lost nothing, in either
- * direction, is an ordinary additive settings change and does carry an offer.
+ * a behaviour change that **lost** data was confirmed rather than offered — returning needs
+ * another preview-and-confirm action. A change that lost nothing, in either direction, is an
+ * ordinary additive settings change and does carry an offer.
  *
  * `undoExpiresAt` is the presentation deadline on the same terms as
  * {@link ReversibleItemMutation}: stop offering at that instant, while an inverse the user

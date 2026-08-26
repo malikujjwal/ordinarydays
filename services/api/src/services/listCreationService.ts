@@ -111,6 +111,7 @@ export async function createListFromTemplate(
     uncheckedCount: 0,
     memberCount: 1,
     rankVersion: 0,
+    itemVersion: 0,
     archived: false,
     updatedAt: now,
   };

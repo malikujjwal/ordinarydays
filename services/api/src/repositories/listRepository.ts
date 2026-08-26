@@ -142,6 +142,23 @@ const GATE_NAMES = {
 } as const;
 const GATES_ABSENT =
   'attribute_not_exists(#rankRepairId) AND attribute_not_exists(#behaviourMigrationId)';
+const ITEM_VERSION_INCREMENT = 1;
+
+/**
+ * META rows created before P3-17 have no `itemVersion`. Absence is version zero; DynamoDB's
+ * numeric `ADD` installs version one on their first item mutation, so no table scan or
+ * stop-the-world migration is required.
+ */
+function itemVersion(list: List): number {
+  return list.itemVersion ?? 0;
+}
+
+/** Exact snapshot condition, including the one compatible legacy state. */
+function itemVersionCondition(expected: number): string {
+  return expected === 0
+    ? '(attribute_not_exists(#itemVersion) OR #itemVersion = :expectedItemVersion)'
+    : '#itemVersion = :expectedItemVersion';
+}
 
 function listDeletionGate(listId: string) {
   return {
@@ -298,7 +315,7 @@ class StaleProfileDefaultError extends Error {
 }
 
 /**
- * The list moved between a caller's deciding read and its rank allocation.
+ * The list's rank or item generation moved between a deciding read and allocation.
  *
  * Exported, unlike its retryable sibling, because the caller has to do more than retry the
  * write: whatever it decided from the old snapshot has to be decided again (P3-17).
@@ -390,6 +407,12 @@ function assertSameFence(before: List, after: List): void {
     throw new ListReadFenceError();
   }
   assertFenceOpen(after);
+}
+
+/** P3-17 decides from fields as well as ranks, so its snapshot binds both generations. */
+function assertSameItemSnapshot(before: List, after: List): void {
+  assertSameFence(before, after);
+  if (itemVersion(after) !== itemVersion(before)) throw new ListReadFenceError();
 }
 
 function ttlFor(now: string): number {
@@ -917,10 +940,11 @@ export async function readAllListItems(
   return readAllItemsUnfenced(listId);
 }
 
-/** Every item on one list, **and the version they were read under** (P3-17). */
+/** Every item on one list, and both generations they were read under (P3-17). */
 export interface ListItemSnapshot {
   readonly items: ListItem[];
   readonly rankVersion: number;
+  readonly itemVersion: number;
 }
 
 /**
@@ -934,15 +958,16 @@ export interface ListItemSnapshot {
  * of that classification. A read that only reports may be a moment stale; a read that decides
  * may not.
  *
- * So this returns the `rankVersion` as well, and requires it unchanged across the item query
- * — the same pre/post fence `getListItem` uses. That version is then the one the caller's
- * transaction must commit under, which is what makes "no matching row exists, so create one"
- * a claim the transaction can actually enforce.
+ * So this returns both `rankVersion` and the storage-only `itemVersion`, and requires both
+ * unchanged across the item query. Those are then the generations the caller's transaction
+ * must commit under, which makes both "no matching row exists" and "no row was renamed into
+ * this title" claims the transaction can actually enforce.
  *
  * **This closes a real hole** (raised in review). The service used to snapshot here and read
  * `rankVersion` again inside rank allocation, so a concurrent create landing between the two
- * was adopted by the later read: the condition passed, and the duplicate the classification
- * was supposed to prevent was written anyway. Two reads of one version is one read too many.
+ * was adopted by the later read. Binding rank generation closed that hole; `itemVersion`
+ * closes the corresponding field-only rename/check/delete hole without invalidating ordinary
+ * item-page cursors on every checkbox tap.
  *
  * Left as a separate function rather than folded into `readAllListItems` because the stricter
  * fence would newly reject the other three callers' reads on an unrelated concurrent create,
@@ -962,8 +987,12 @@ export async function snapshotListItems(
 
   const after = await getLiveListMetaStrong(listId);
   if (after === undefined) throw new ListNotFoundError();
-  assertSameFence(before, after);
-  return { items, rankVersion: after.rankVersion };
+  assertSameItemSnapshot(before, after);
+  return {
+    items,
+    rankVersion: after.rankVersion,
+    itemVersion: itemVersion(after),
+  };
 }
 
 export interface ListMetaPatch {
@@ -1689,18 +1718,16 @@ export interface ListWriteBasis {
  * neighbours-under-a-version read (P3-17). The alternative was a second rank allocator, which
  * is how two callers eventually disagree about what a valid rank is.
  *
- * ## `expectedRankVersion`, and why it is not optional in spirit
+ * ## Expected snapshot generations, and why they are not optional in spirit
  *
- * This function reads `rankVersion` to build the condition the caller's transaction commits
- * under. A caller that **decided something** from an earlier read of the same list — P3-17
- * classifies each ingredient against a {@link snapshotListItems} snapshot — must commit under
- * *that* version, not under whatever this read happens to find. Adopting a newer one silently
- * launders a stale decision into a passing condition: a create that landed in between is
- * accepted by the condition and the duplicate is written (raised in review).
+ * This function reads the META generations used by the caller's transaction. A caller that
+ * **decided something** from an earlier read — P3-17 classifies each ingredient against a
+ * {@link snapshotListItems} snapshot — must commit under *those* generations, not whatever
+ * this read happens to find. `rankVersion` covers structural writes; storage-only
+ * `itemVersion` covers field patches and deletes without making public page cursors churn.
  *
- * So a caller with a snapshot passes its version and gets {@link ListSnapshotStaleError} if
- * the list has moved since. Callers with nothing to preserve — an ordinary create, which
- * decides nothing from a prior read — omit it and take the current version, as before.
+ * A caller with a snapshot passes both and gets {@link ListSnapshotStaleError} if either has
+ * moved. Callers with nothing to preserve omit them and take current truth, as before.
  */
 export async function planListItemWrites(
   userId: string,
@@ -1710,13 +1737,16 @@ export async function planListItemWrites(
   options: {
     readonly afterItemId?: string | null;
     readonly expectedRankVersion?: number;
+    readonly expectedItemVersion?: number;
   } = {},
 ): Promise<ListWriteBasis> {
   assertListAccessGrant(userId, listId, access);
   const state = await readMutationState(userId, listId, access);
   if (
-    options.expectedRankVersion !== undefined &&
-    state.list.rankVersion !== options.expectedRankVersion
+    (options.expectedRankVersion !== undefined &&
+      state.list.rankVersion !== options.expectedRankVersion) ||
+    (options.expectedItemVersion !== undefined &&
+      itemVersion(state.list) !== options.expectedItemVersion)
   ) {
     throw new ListSnapshotStaleError();
   }
@@ -1736,7 +1766,7 @@ export interface ListItemCreateSpans {
  *
  * The conditions are {@link createListItems}' own, unchanged: `attribute_not_exists` on both
  * the ranked row and its locator, a tombstone absence check per item, and the META update
- * that advances `rankVersion`, moves the counters and **enforces the item cap inside the
+ * that advances `rankVersion` and `itemVersion`, moves the counters and **enforces the cap in
  * transaction** — a service precheck is never a cap, because the retry re-reads
  * `rankVersion` and learns nothing about capacity.
  */
@@ -1778,10 +1808,11 @@ export function appendListItemCreates(
     Update: {
       Key: listMeta(listId),
       UpdateExpression:
-        'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked',
-      ConditionExpression: `#rankVersion = :expectedVersion AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
+        'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked ADD #itemVersion :itemVersionIncrement',
+      ConditionExpression: `#rankVersion = :expectedVersion AND ${itemVersionCondition(itemVersion(basis.list))} AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
       ExpressionAttributeNames: {
         '#rankVersion': 'rankVersion',
+        '#itemVersion': 'itemVersion',
         '#itemCount': 'itemCount',
         '#uncheckedCount': 'uncheckedCount',
         ...GATE_NAMES,
@@ -1789,6 +1820,8 @@ export function appendListItemCreates(
       ExpressionAttributeValues: {
         ':expectedVersion': basis.list.rankVersion,
         ':nextVersion': basis.list.rankVersion + 1,
+        ':expectedItemVersion': itemVersion(basis.list),
+        ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
         ':count': created.length,
         ':unchecked': unchecked,
         ':maxBefore': MAX_LIST_ITEMS - created.length,
@@ -1801,11 +1834,11 @@ export function appendListItemCreates(
 /**
  * Appends a `sourceLabel` extension for one already-read row (P3-17).
  *
- * The standalone {@link extendItemSourceLabel} is this plus its own transaction; a composed
- * caller needs the items without the commit. Conditioned on the `itemRevision` the caller
- * read, which is what makes the *unchecked* classification behind the extension safe: the
- * revision moves when `checked` does, so a row checked in between fails here rather than
- * being extended when §7.3 says it should have become a new row.
+ * The P3-17 caller composes these writes with the one META/version update, creates, source
+ * markers and receipt. Conditioned on the `itemRevision` the caller read, which is what makes
+ * the *unchecked* classification behind the extension safe: the revision moves when `checked`
+ * does, so a row checked in between fails here rather than being extended when §7.3 says it
+ * should have become a new row.
  */
 export function appendSourceLabelExtension(
   builder: TransactionBuilder,
@@ -1912,7 +1945,7 @@ export async function createListItems(
       Update: {
         Key: listMeta(listId),
         UpdateExpression:
-          'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked',
+          'SET #rankVersion = :nextVersion, #itemCount = #itemCount + :count, #uncheckedCount = #uncheckedCount + :unchecked ADD #itemVersion :itemVersionIncrement',
         /**
          * **The item cap is enforced here, in the transaction**, not only by the service's
          * precheck. Two creates against a 499-item list both pass that precheck, and the
@@ -1922,6 +1955,7 @@ export async function createListItems(
         ConditionExpression: `#rankVersion = :expectedVersion AND #itemCount <= :maxBefore AND ${GATES_ABSENT}`,
         ExpressionAttributeNames: {
           '#rankVersion': 'rankVersion',
+          '#itemVersion': 'itemVersion',
           '#itemCount': 'itemCount',
           '#uncheckedCount': 'uncheckedCount',
           ...GATE_NAMES,
@@ -1929,6 +1963,7 @@ export async function createListItems(
         ExpressionAttributeValues: {
           ':expectedVersion': state.list.rankVersion,
           ':nextVersion': state.list.rankVersion + 1,
+          ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           ':count': created.length,
           ':unchecked': unchecked,
           ':maxBefore': MAX_LIST_ITEMS - created.length,
@@ -2074,17 +2109,19 @@ export async function reorderListItem(
           // way (acceptance criterion 16).
           UpdateExpression:
             uncheckedDelta === 0
-              ? 'SET #rankVersion = :nextVersion'
-              : 'SET #rankVersion = :nextVersion ADD #uncheckedCount :uncheckedDelta',
+              ? 'SET #rankVersion = :nextVersion ADD #itemVersion :itemVersionIncrement'
+              : 'SET #rankVersion = :nextVersion ADD #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
           ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
           ExpressionAttributeNames: {
             '#rankVersion': 'rankVersion',
+            '#itemVersion': 'itemVersion',
             ...(uncheckedDelta === 0 ? {} : { '#uncheckedCount': 'uncheckedCount' }),
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
             ':expectedVersion': state.list.rankVersion,
             ':nextVersion': state.list.rankVersion + 1,
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
             ...(uncheckedDelta === 0 ? {} : { ':uncheckedDelta': uncheckedDelta }),
           },
         },
@@ -2226,23 +2263,35 @@ export async function patchListItemFields(
       current.item.checked === next.checked ? 0 : next.checked ? -1 : 1;
     if (uncheckedDelta === 0) {
       builder.add({
-        ConditionCheck: {
+        Update: {
           Key: listMeta(listId),
+          UpdateExpression: 'ADD #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
-          ExpressionAttributeNames: GATE_NAMES,
+          ExpressionAttributeNames: {
+            '#itemVersion': 'itemVersion',
+            ...GATE_NAMES,
+          },
+          ExpressionAttributeValues: {
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+          },
         },
       });
     } else {
       builder.add({
         Update: {
           Key: listMeta(listId),
-          UpdateExpression: 'ADD #uncheckedCount :delta',
+          UpdateExpression:
+            'ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#uncheckedCount': 'uncheckedCount',
+            '#itemVersion': 'itemVersion',
             ...GATE_NAMES,
           },
-          ExpressionAttributeValues: { ':delta': uncheckedDelta },
+          ExpressionAttributeValues: {
+            ':delta': uncheckedDelta,
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+          },
         },
       });
     }
@@ -2613,17 +2662,20 @@ export async function finishRankRepair(work: RankRepairWork): Promise<void> {
         {
           Update: {
             Key: listMeta(work.listId),
-            UpdateExpression: 'SET #rankVersion = :nextVersion REMOVE #rankRepairId',
+            UpdateExpression:
+              'SET #rankVersion = :nextVersion REMOVE #rankRepairId ADD #itemVersion :itemVersionIncrement',
             ConditionExpression:
               '#rankRepairId = :operationId AND #rankVersion = :expectedVersion',
             ExpressionAttributeNames: {
               '#rankVersion': 'rankVersion',
               '#rankRepairId': 'rankRepairId',
+              '#itemVersion': 'itemVersion',
             },
             ExpressionAttributeValues: {
               ':operationId': work.operationId,
               ':expectedVersion': work.rankVersion,
               ':nextVersion': work.rankVersion + 1,
+              ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
             },
           },
         },
@@ -2640,6 +2692,12 @@ export interface BehaviourMigrationEntry {
   /** The rank is **not** changed by a behaviour migration; it is here to address the row. */
   readonly rank: string;
   readonly fromRevision: number;
+}
+
+/** The destructive shape computed from the gated item snapshot. */
+export interface BehaviourMigrationLoss {
+  readonly itemCount: number;
+  readonly fields: readonly string[];
 }
 
 /**
@@ -2727,6 +2785,8 @@ export interface BehaviourMigrationWork {
    * anything if it names what is actually about to go.
    */
   readonly lossCount?: number;
+  /** Ordered user-facing field labels computed from the same gated rows as `lossCount`. */
+  readonly lossFields?: string[];
 }
 
 const behaviourMigrationSchema = z.object({
@@ -2763,6 +2823,7 @@ const behaviourMigrationSchema = z.object({
     })
     .optional(),
   lossCount: z.number().int().nonnegative().optional(),
+  lossFields: z.array(z.string().min(1)).optional(),
 });
 
 /**
@@ -2804,6 +2865,8 @@ export interface BeginBehaviourMigrationOptions {
   readonly toDetails?: ListItemDetails;
   /** The `If-Match` the service already compared against its own read. */
   readonly expectedUpdatedAt: string;
+  /** Complete-item generation the deciding preview was read under. */
+  readonly expectedItemVersion: number;
   /** Also the `updatedAt` the final transaction will write. */
   readonly now: string;
   /** The prepared Undo offer. Absent when the change loses data (§4.1). */
@@ -2813,11 +2876,11 @@ export interface BeginBehaviourMigrationOptions {
   /** The response receipt the final transaction commits, whichever caller runs it. */
   readonly receipt: IdempotencyReceipt;
   /**
-   * Counts the items carrying data the change removes, over the gated snapshot. Pure, and
-   * the service's rule rather than storage's — the repository calls it while it holds the
-   * rows and stores the answer with them.
+   * Describes the data the change removes over the gated snapshot. Pure, and the service's
+   * rule rather than storage's — the repository calls it while it holds the rows and stores
+   * the count and ordered labels together.
    */
-  readonly countLoss: (items: readonly ListItem[]) => number;
+  readonly describeLoss: (items: readonly ListItem[]) => BehaviourMigrationLoss;
 }
 
 /**
@@ -2873,16 +2936,18 @@ export async function beginBehaviourMigration(
           Update: {
             Key: listMeta(listId),
             UpdateExpression: 'SET #behaviourMigrationId = :operationId',
-            ConditionExpression: `#updatedAt = :expectedUpdatedAt AND #rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
+            ConditionExpression: `#updatedAt = :expectedUpdatedAt AND #rankVersion = :expectedVersion AND ${itemVersionCondition(options.expectedItemVersion)} AND ${GATES_ABSENT}`,
             ExpressionAttributeNames: {
               '#updatedAt': 'updatedAt',
               '#rankVersion': 'rankVersion',
+              '#itemVersion': 'itemVersion',
               ...GATE_NAMES,
             },
             ExpressionAttributeValues: {
               ':operationId': options.operationId,
               ':expectedUpdatedAt': options.expectedUpdatedAt,
               ':expectedVersion': list.rankVersion,
+              ':expectedItemVersion': options.expectedItemVersion,
             },
           },
         },
@@ -2906,7 +2971,7 @@ export async function beginBehaviourMigration(
     },
   );
 
-  return snapshotBehaviourMigration(pending, options.now, options.countLoss);
+  return snapshotBehaviourMigration(pending, options.now, options.describeLoss);
 }
 
 /**
@@ -2920,7 +2985,7 @@ export async function beginBehaviourMigration(
 export async function snapshotBehaviourMigration(
   work: BehaviourMigrationWork,
   now: string,
-  countLoss: (items: readonly ListItem[]) => number,
+  describeLoss: (items: readonly ListItem[]) => BehaviourMigrationLoss,
 ): Promise<BehaviourMigrationWork> {
   if (work.state === 'rewriting') return work;
 
@@ -2935,7 +3000,7 @@ export async function snapshotBehaviourMigration(
    * exactly the rows this operation is about to rewrite. Any caller that fills a
    * `snapshotting` record computes the same number from the same rows.
    */
-  const lossCount = countLoss(items);
+  const loss = describeLoss(items);
 
   await transactWrite(
     new TransactionBuilder('snapshotBehaviourMigration')
@@ -2943,17 +3008,19 @@ export async function snapshotBehaviourMigration(
         Update: {
           Key: listBehaviourMigration(work.listId, work.operationId),
           UpdateExpression:
-            'SET #entries = :entries, #lossCount = :lossCount, #state = :rewriting, #updatedAt = :now',
+            'SET #entries = :entries, #lossCount = :lossCount, #lossFields = :lossFields, #state = :rewriting, #updatedAt = :now',
           ConditionExpression: '#state = :snapshotting',
           ExpressionAttributeNames: {
             '#entries': 'entries',
             '#lossCount': 'lossCount',
+            '#lossFields': 'lossFields',
             '#state': 'state',
             '#updatedAt': 'updatedAt',
           },
           ExpressionAttributeValues: {
             ':entries': entries,
-            ':lossCount': lossCount,
+            ':lossCount': loss.itemCount,
+            ':lossFields': [...loss.fields],
             ':rewriting': 'rewriting',
             ':snapshotting': 'snapshotting',
             ':now': now,
@@ -2969,7 +3036,13 @@ export async function snapshotBehaviourMigration(
     },
   );
 
-  return { ...work, state: 'rewriting', entries, lossCount };
+  return {
+    ...work,
+    state: 'rewriting',
+    entries,
+    lossCount: loss.itemCount,
+    lossFields: [...loss.fields],
+  };
 }
 
 /** The in-flight work for a marker, or `undefined` once the record has been cleared. */
@@ -3152,12 +3225,13 @@ export async function finishBehaviourMigration(
     Update: {
       Key: listMeta(work.listId),
       UpdateExpression:
-        'SET #behaviour = :toBehaviour, #rankVersion = :nextVersion, #updatedAt = :committedAt REMOVE #behaviourMigrationId',
+        'SET #behaviour = :toBehaviour, #rankVersion = :nextVersion, #updatedAt = :committedAt REMOVE #behaviourMigrationId ADD #itemVersion :itemVersionIncrement',
       ConditionExpression:
         '#behaviourMigrationId = :operationId AND #rankVersion = :expectedVersion AND #updatedAt = :expectedUpdatedAt',
       ExpressionAttributeNames: {
         '#behaviour': 'behaviour',
         '#rankVersion': 'rankVersion',
+        '#itemVersion': 'itemVersion',
         '#updatedAt': 'updatedAt',
         '#behaviourMigrationId': 'behaviourMigrationId',
       },
@@ -3166,6 +3240,7 @@ export async function finishBehaviourMigration(
         ':operationId': work.operationId,
         ':expectedVersion': work.rankVersion,
         ':nextVersion': work.rankVersion + 1,
+        ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
         ':expectedUpdatedAt': work.expectedUpdatedAt,
         ':committedAt': work.committedAt,
       },
@@ -3369,15 +3444,17 @@ export async function deleteListItem(
       builder.add({
         Update: {
           Key: activityMeta(provenance.activityId),
-          UpdateExpression: 'REMOVE #listId, #listItemId',
+          UpdateExpression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
           ConditionExpression: '#listId = :listId AND #listItemId = :listItemId',
           ExpressionAttributeNames: {
             '#listId': 'listId',
             '#listItemId': 'listItemId',
+            '#updatedAt': 'updatedAt',
           },
           ExpressionAttributeValues: {
             ':listId': provenance.listId,
             ':listItemId': provenance.listItemId,
+            ':updatedAt': options.now,
           },
         },
       });
@@ -3418,16 +3495,19 @@ export async function deleteListItem(
       {
         Update: {
           Key: listMeta(listId),
-          UpdateExpression: 'ADD #itemCount :minusOne, #uncheckedCount :uncheckedDelta',
+          UpdateExpression:
+            'ADD #itemCount :minusOne, #uncheckedCount :uncheckedDelta, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#itemCount': 'itemCount',
             '#uncheckedCount': 'uncheckedCount',
+            '#itemVersion': 'itemVersion',
             ...GATE_NAMES,
           },
           ExpressionAttributeValues: {
             ':minusOne': -1,
             ':uncheckedDelta': current.item.checked ? 0 : -1,
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
           },
         },
       },
@@ -3770,12 +3850,17 @@ async function applyBulkChunk(
       builder.add({
         Update: {
           Key: activityMeta(provenance.activityId),
-          UpdateExpression: 'REMOVE #listId, #listItemId',
+          UpdateExpression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
           ConditionExpression: '#listId = :listId AND #listItemId = :listItemId',
-          ExpressionAttributeNames: { '#listId': 'listId', '#listItemId': 'listItemId' },
+          ExpressionAttributeNames: {
+            '#listId': 'listId',
+            '#listItemId': 'listItemId',
+            '#updatedAt': 'updatedAt',
+          },
           ExpressionAttributeValues: {
             ':listId': provenance.listId,
             ':listItemId': provenance.listItemId,
+            ':updatedAt': now,
           },
         },
       });
@@ -3805,17 +3890,19 @@ async function applyBulkChunk(
         Key: listMeta(listId),
         UpdateExpression:
           work.kind === 'uncheck_all'
-            ? 'ADD #uncheckedCount :delta'
-            : 'ADD #itemCount :delta',
+            ? 'ADD #uncheckedCount :delta, #itemVersion :itemVersionIncrement'
+            : 'ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
         ConditionExpression: GATES_ABSENT,
         ExpressionAttributeNames: {
           ...(work.kind === 'uncheck_all'
             ? { '#uncheckedCount': 'uncheckedCount' }
             : { '#itemCount': 'itemCount' }),
+          '#itemVersion': 'itemVersion',
           ...GATE_NAMES,
         },
         ExpressionAttributeValues: {
           ':delta': work.kind === 'uncheck_all' ? applied : -applied,
+          ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
         },
       },
     });
@@ -3965,13 +4052,18 @@ export async function recheckListItems(
       builder.add({
         Update: {
           Key: listMeta(listId),
-          UpdateExpression: 'ADD #uncheckedCount :taken',
+          UpdateExpression:
+            'ADD #uncheckedCount :taken, #itemVersion :itemVersionIncrement',
           ConditionExpression: GATES_ABSENT,
           ExpressionAttributeNames: {
             '#uncheckedCount': 'uncheckedCount',
+            '#itemVersion': 'itemVersion',
             ...GATE_NAMES,
           },
-          ExpressionAttributeValues: { ':taken': -chunk.length },
+          ExpressionAttributeValues: {
+            ':taken': -chunk.length,
+            ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
+          },
         },
       });
       // The operation is spent by the transaction that finishes it, never before.
@@ -4130,16 +4222,19 @@ export async function restoreListItems(
             builder.add({
               Update: {
                 Key: activityMeta(provenance.activityId),
-                UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
+                UpdateExpression:
+                  'SET #listId = :listId, #listItemId = :listItemId, #updatedAt = :updatedAt',
                 ConditionExpression:
                   'attribute_exists(pk) AND attribute_not_exists(#listId) AND attribute_not_exists(#listItemId)',
                 ExpressionAttributeNames: {
                   '#listId': 'listId',
                   '#listItemId': 'listItemId',
+                  '#updatedAt': 'updatedAt',
                 },
                 ExpressionAttributeValues: {
                   ':listId': provenance.listId,
                   ':listItemId': provenance.listItemId,
+                  ':updatedAt': options.now,
                 },
               },
             });
@@ -4161,10 +4256,11 @@ export async function restoreListItems(
           Update: {
             Key: listMeta(listId),
             UpdateExpression:
-              'SET #rankVersion = :nextVersion ADD #itemCount :count, #uncheckedCount :unchecked',
+              'SET #rankVersion = :nextVersion ADD #itemCount :count, #uncheckedCount :unchecked, #itemVersion :itemVersionIncrement',
             ConditionExpression: `#rankVersion = :expectedVersion AND ${GATES_ABSENT}`,
             ExpressionAttributeNames: {
               '#rankVersion': 'rankVersion',
+              '#itemVersion': 'itemVersion',
               '#itemCount': 'itemCount',
               '#uncheckedCount': 'uncheckedCount',
               ...GATE_NAMES,
@@ -4172,6 +4268,7 @@ export async function restoreListItems(
             ExpressionAttributeValues: {
               ':expectedVersion': version,
               ':nextVersion': nextVersion,
+              ':itemVersionIncrement': ITEM_VERSION_INCREMENT,
               ':count': chunk.length,
               ':unchecked': chunk.filter((entry) => !entry.item.checked).length,
             },
@@ -4464,7 +4561,7 @@ export async function deleteList(
     ),
   ];
   for (const activityId of linkedActivityIds) {
-    await clearListProvenance(activityId, listId);
+    await clearListProvenance(activityId, listId, options.now);
   }
 
   // Member rows went with their pointers above; everything else but META and the

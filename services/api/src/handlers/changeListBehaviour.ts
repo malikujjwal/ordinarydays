@@ -17,10 +17,8 @@ import { toListSettings } from './toList.js';
  * carries `mutates: true`, so the existing middleware owns receipt lookup, response replay
  * and races — there is no second, `PATCH`-shaped receipt path.
  *
- * `?confirmDataLoss=true` is a **query parameter** rather than a body field on purpose. The
- * confirmed call is a new logical action under a newly minted key: it is not the refused
- * request sent again with one more flag, and giving the two the same body would invite a
- * client to reuse the key and have the middleware replay the `409` it already got.
+ * A destructive retry echoes the typed `confirmation` object returned by the refused call.
+ * Its `itemVersion`, count and field list bind the write to exactly what the user saw.
  */
 export const LIST_BEHAVIOUR_PATH = '/:id/behaviour';
 
@@ -29,7 +27,6 @@ const MISSING = 'This change needs an If-Match header carrying the version you l
 export async function changeListBehaviourHandler(
   c: Context<AppEnv, typeof LIST_BEHAVIOUR_PATH>,
   input: ChangeListBehaviourInput,
-  query: { confirmDataLoss?: string | undefined },
   now: string,
 ): Promise<Response> {
   const header = c.req.header('If-Match');
@@ -46,7 +43,6 @@ export async function changeListBehaviourHandler(
       listId,
       input,
       entityTag(header.trim()),
-      query.confirmDataLoss === 'true',
       key,
       now,
       (result) => receiptFor(toListSettings(result)),

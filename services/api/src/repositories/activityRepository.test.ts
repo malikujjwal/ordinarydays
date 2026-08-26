@@ -3,12 +3,14 @@ import {
   DynamoDBDocumentClient,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
 import type { Activity } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  clearListProvenance,
   createActivity,
   deleteActivity,
   ingredientsAddedToListItem,
@@ -755,5 +757,35 @@ describe('ingredientsAddedToListItem', () => {
 
   it('requires the activity to still exist', () => {
     expect(built()?.ConditionExpression).toContain('attribute_exists(pk)');
+  });
+});
+
+describe('clearListProvenance', () => {
+  const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X3';
+  const CLEARED_AT = '2026-08-25T09:00:02.000Z';
+
+  it('removes only matching provenance and advances the Activity version', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+
+    await clearListProvenance(ACT, LIST, CLEARED_AT);
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: 'META' },
+      UpdateExpression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
+      ConditionExpression: 'attribute_exists(pk) AND #listId = :listId',
+      ExpressionAttributeValues: {
+        ':listId': LIST,
+        ':updatedAt': CLEARED_AT,
+      },
+    });
+  });
+
+  it('remains idempotent when the Activity no longer points at that list', async () => {
+    const stale = Object.assign(new Error('stale provenance'), {
+      name: 'ConditionalCheckFailedException',
+    });
+    ddbMock.on(UpdateCommand).rejects(stale);
+
+    await expect(clearListProvenance(ACT, LIST, CLEARED_AT)).resolves.toBeUndefined();
   });
 });

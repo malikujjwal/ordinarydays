@@ -170,12 +170,7 @@ export const lists = new Hono<AppEnv>()
    * already prefers the static one.
    */
   .post(LIST_BEHAVIOUR_PATH, validateBehaviour, validateBehaviourQuery, (c) =>
-    changeListBehaviourHandler(
-      c,
-      c.req.valid('json'),
-      c.req.valid('query'),
-      new Date().toISOString(),
-    ),
+    changeListBehaviourHandler(c, c.req.valid('json'), new Date().toISOString()),
   )
   .post(CLEAR_CHECKED_PATH, (c) => clearCheckedHandler(c, new Date().toISOString()))
   .post(UNCHECK_ALL_PATH, (c) => uncheckAllHandler(c, new Date().toISOString()))

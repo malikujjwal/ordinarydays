@@ -62,7 +62,7 @@ Today's Anytime list and is not a backlog with a counter on it.
       by item-delete undo.
 - [ ] `PATCH /v1/lists/:id` capability changes and replay-protected
       `POST /v1/lists/:id/behaviour` transitions, with additive changes applying immediately
-      and destructive ones gated behind `?confirmDataLoss=true`.
+      and destructive ones gated by echoing the complete server-authored preview.
 - [ ] `User.defaultLists` and the four-step slot resolution shared by every "add to X" flow.
 - [ ] `POST /v1/lists/:id/items/:itemId/schedule` — the optional bridge to Activities — with
       a required client-minted `activityId`, required `creationTarget` and `audience`, no type
@@ -95,8 +95,9 @@ Today's Anytime list and is not a backlog with a counter on it.
       `LIST_TEMPLATES` icon resolves to an exported component.
 - [ ] `List.lastItemActivityAt`, bumped by every item writer and by neither `If-Match` nor a
       list-level edit, backing the Lists index's `Updated today`.
-- [ ] `pastBefore` on `GET /v1/plans` — exclusive, mutually exclusive with `cursor` — so a
-      historical month is random access rather than N sequential cursor pages.
+- [ ] Discriminated `GET /v1/plans` modes. Initial loading launches all four streams;
+      Upcoming and Past continuations launch only their own streams, and bounded Past windows
+      expose exact completion metadata before the calendar may claim an empty date.
 - [ ] The Plans stages behind a `SegmentedControl` with no counts on it, and the calendar
       navigator beneath it on Upcoming and Past: one day cell, collapsed as a rolling seven
       days and expanded as a month, eligibility from the stage rather than the displayed
@@ -412,7 +413,7 @@ right way round before writing a line:
 
 | Item | Holds | Written when |
 | --- | --- | --- |
-| `LIST#<l>` / `META` | The whole `List`: title, behaviour, capabilities, slot, counts, `rankVersion`, optional repair/migration gates, `archived`, `updatedAt` | Creation, every list-level edit, and conditional rank allocation — **one write, whoever made it** |
+| `LIST#<l>` / `META` | The whole `List`: title, behaviour, capabilities, slot, counts, `rankVersion`, storage-only `itemVersion`, optional repair/migration gates, `archived`, `updatedAt` | Creation, every list-level edit, every public item mutation, and a gated worker's final commit — **one write, whoever made it** |
 | `USER#<u>` / `LIST#<l>` | `ListIndex`: `role` and `addedAt`, and nothing else | Creation for the owner; membership changes in Phase 6 |
 | `LIST#<l>` / `ITEM#<rank>#<itemId>` | The item plus storage-only `itemRevision` | Item writes |
 | `LIST#<l>` / `ITEMID#<itemId>` | Stable identity locator containing the current `rank` and matching `itemRevision` | Every item mutation; never serialised |
@@ -467,8 +468,12 @@ data. See P3-03.
   row only if that revision still matches, put the freshly read row at the new key with the
   next revision, conditionally move the locator from the same old rank/revision, and
   conditionally increment `META.rankVersion` in one transaction. A field PATCH likewise
-  updates only supplied fields and advances both copies of `itemRevision` conditionally. A
-  race therefore makes one operation retry against the current row instead of allowing a
+  updates only supplied fields and advances both copies of `itemRevision` conditionally. Every
+  public item mutation also atomically increments storage-only `META.itemVersion` once; a gated
+  repair/migration worker increments it when its final transaction exposes the rewritten rows.
+  Its absence on a legacy META row means zero. Whole-list decisions fence on both generations,
+  while page cursors use only `rankVersion` so an unrelated checkbox tap does not restart
+  pagination. The race therefore makes one operation retry against the current row instead of allowing a
   stale reorder image to overwrite a title, note, checked state or typed detail. Item create
   uses the same META version condition. A condition conflict re-reads and retries. An Undo-restored or
   legacy equal-rank run
@@ -718,7 +723,7 @@ implemented exactly. This is where the product's additive/destructive rule meets
 | `capabilities.checkable` true → false | Applies immediately. `checked` is **retained** on items so re-enabling restores it. |
 | `capabilities.supportsLocation` true → false | Applies immediately. Stored `location` is retained and hidden. |
 | `behaviour` `collection` → `watch` or `meals` | Applies immediately, initialising `details` on every item — `watchStatus: 'want'` for `watch`, an empty `ingredients` array for `meals`. |
-| `behaviour` `watch` or `meals` → anything else | **Destructive.** Requires `?confirmDataLoss=true`. Without it, `409 conflict`. |
+| `behaviour` `watch` or `meals` → anything else | **Destructive.** The first call returns a typed `409` preview; the confirmed call echoes that complete preview. |
 | `slot` | Free. Changes no items. |
 | `templateKey` | Immutable. A `PATCH` containing it is `validation_failed`. |
 
@@ -771,7 +776,7 @@ inverse for `POST /v1/lists/:id/undo`. A behaviour-upgrade inverse records the p
 behaviour and the exact default fields that operation created. It is applicable only while
 those fields and the affected list settings are unchanged; otherwise Undo returns the typed
 `no_longer_applicable` result and writes nothing. This dedicated compensation may restore
-`collection` without `confirmDataLoss`; an ordinary downgrade still follows the destructive
+`collection` without destructive confirmation; an ordinary downgrade still follows the destructive
 rule above. A slot inverse also records the exact `defaultLists[oldSlot]` entry removed by
 the forward change. It restores that entry only if the slot is still absent there; a newer
 destination choice makes the whole inverse no longer applicable.
@@ -797,9 +802,10 @@ the retryable `503`, META still exposes `collection`, and replay completes to on
 `watch` generation. A pre-migration cursor receives `503` after the final version advance;
 its returned Undo restores `collection` and removes only the defaults that upgrade created;
 editing one of those fields before Undo returns `no_longer_applicable` and loses nothing;
-`watch → collection` POST without `confirmDataLoss` returns `409` and writes **nothing**, and
-the body names the affected field list and the item count; a new replay-protected call with
-`?confirmDataLoss=true` succeeds and drops `details`; `checkable` true → false → true
+`watch → collection` POST without `confirmation` returns `409` and writes **nothing**, and
+the body names the behaviours, `itemVersion`, affected field list and item count; a new
+replay-protected call echoing that exact confirmation succeeds and drops `details`; an item
+mutation between preview and confirmation returns a fresh `409`; `checkable` true → false → true
 restores the original `checked` values; slot Undo restores the exact removed default when it
 is still absent and returns `no_longer_applicable` after a newer choice; a `PATCH` carrying
 `templateKey` `400`s. A registry test classifies the behaviour action as a mutating POST, and
@@ -1094,6 +1100,8 @@ the product", so it gets its own task and its own test file.
 | --- | --- |
 | Plan completed / un-completed / rescheduled | Keep the `LNK#` pointer. Derive the caller-only state line from the Activity. **Never** check, uncheck, delete or rewrite the ListItem. |
 | Plan unscheduled | Keep the `LNK#` pointer but remove the state line until the Plan is scheduled again. The item remains byte-identical. |
+| Plan cancelled | Keep the `LNK#` pointer and render `Cancelled`. The Plan and item remain independent. |
+| Plan converted to Task | Delete matching `LNK#` rows and clear `Activity.listId` / `.listItemId` in the same conditional transaction as the conversion. The Task and item both survive. |
 | Non-occurrence Plan skipped / `didnt_happen` | Remove the state line and clear the matching viewer pointers. The Plan and item both survive independently. An occurrence-only skip writes `OCC#` and does not clear the recurring series pointer. |
 | Plan deleted | Delete only `LNK#` rows that still point to it. **The item survives.** |
 | ListItem deleted | Delete its current `LNK#` rows and clear `Activity.listItemId` / `.listId` on those Plans. **Every Plan survives.** |
@@ -1102,15 +1110,11 @@ the product", so it gets its own task and its own test file.
 
 Neither side ever cascade-deletes the other.
 
-**Two transitions the table does not cover, raised in P3-15 and deliberately not decided
-there.** A linked Plan may legitimately **convert to a Task** — permitted by
-`api-contract.md` §2.3 when it has no participants, prep tasks or expenses — and it may be
-**cancelled** through an ordinary `PATCH`. Neither clears the pointer today, and neither has
-a row here. A Task is not a Plan, so the read side cannot describe one: the projection omits
-the link/plan pair for a converted Task rather than emitting a shape its own schema rejects,
-and deletes nothing, because the Activity is readable and the pointer is not stale. That is
-interim behaviour, not a decision. The decision — clear the pointer on conversion, or keep it
-and give P3-34 a Task and a cancelled line to render — belongs to the founder (§8).
+**The formerly open transitions are settled.** A link is Plan-specific, so Plan → Task
+deletes it and clears the Activity provenance in the conversion transaction; retaining an
+unrenderable pointer would create permanent hidden state. Cancellation is different: the
+Activity remains a Plan and the cancellation itself is useful context, so the pointer stays
+and P3-34 renders `Cancelled`.
 
 **What the read side must carry.** Rows 1 and 2 both turn on the client seeing the Plan's
 current state, so the projection returns `viewerPlan` — `ListItemPlanState`, the caller's
@@ -1128,7 +1132,7 @@ and a later reschedule makes that same pointer visible again. A recurring occurr
 leaves its series pointer byte-identical. Plus a test that deletes an
 Activity and asserts the item is byte-identical. Completing a Plan linked from a checkable
 list leaves `checked` byte-identical. Projection tests distinguish scheduled, unscheduled,
-completed and rescheduled versions of one linked Plan; each linked row carries matching
+completed, cancelled and rescheduled versions of one linked Plan; each linked row carries matching
 `viewerLink` and `viewerPlan`, while an unlinked or unreadable row carries neither. A fixture
 with links for two viewers returns only the caller's pair and never attempts to load the other
 viewer's Activity. A route test proves both list read endpoints serialise the pair rather than
@@ -1226,6 +1230,17 @@ exists **unchecked** on the target list, no second row is created — the existi
 `sourceLabel` is extended (`Sunday dinner · Thursday lunch`). If the existing row is
 **checked**, a new row is created: the previous one was already bought.
 
+Classification and persistence are one optimistic unit. A strong, bounded item snapshot
+returns both `META.rankVersion` and storage-only `META.itemVersion`; the single
+`TransactWriteItems` conditions its META update on those exact generations, then advances both
+while writing every created row, extended label, source marker, the meal's new `updatedAt` and
+the idempotency receipt. `rankVersion` catches a concurrent create or reorder; `itemVersion`
+also catches a title patch, check, delete or restore that could change the duplicate decision
+without changing rank. A failed condition discards the classification and repeats the entire
+read/classify/commit cycle. The request is capped at 30 selected ingredients so its worst case
+(94 transaction items) remains under DynamoDB's 100-item limit, and each destination `itemId`
+is required so replay safety survives receipt expiry.
+
 **Edge cases.** Nothing in this flow happens automatically. Creating a meal with ingredients
 writes zero grocery items until the user taps the button. Provenance is **not** linkage
 (§6.5): checking `Chicken` does not affect the meal, completing the meal does not delete
@@ -1245,7 +1260,10 @@ is unchanged. A contract test proves the ordinary bulk schema rejects provenance
 while the activity action derives them from the meal and updates the selected ingredient
 ids idempotently. An offline request selected before two ingredient rows are reordered still
 adds the originally selected ids; deleting one selected row before replay rejects the whole
-action and writes nothing.
+action and writes nothing. Deterministic injected-race tests add and rename a destination row
+after classification; both invalidate the snapshot, retry from current truth and avoid a
+duplicate. A same-key concurrent replay creates every row once, and the no-partial-write test
+asserts the exact receipt key is absent when provenance cannot commit.
 
 ---
 
@@ -1359,16 +1377,12 @@ delete `404`s; the schedule path writes exactly one system entry per date change
 
 ### P3-20 — `GET /v1/plans` — the three-stage Plans endpoint
 
-> **Amended 2026-08-25 (founder) — add `pastBefore`.** Past was reachable only by walking the
-> cursor, so landing on a month six back meant N sequential round trips, each gated on the
-> last. `pastBefore` is an optional exclusive `WallDate` on this endpoint: it reads the same
-> dated-Activity bucket descending with a different start key — no new index, no new access
-> pattern, no summary projection. It is **mutually exclusive with `cursor`**; both together is
-> `validation_failed` naming the conflict, and a jump starts a fresh Past sequence whose
-> response carries a new cursor. Contract in `api-contract.md` §2.2a; the calendar navigator
-> (P3-47) is the caller. Tests: `pastBefore` is exclusive of its bound date; `pastBefore` plus
-> `cursor` is rejected rather than silently preferring one; a jump followed by ordinary cursor
-> paging continues backward without re-serving the landing page.
+> **Amended 2026-08-25 (review) — discriminate initial loads and continuations.** The original
+> contract launched `#P`, future `#S`, past `#S` and `#R` on every request, so scrolling one
+> stage paid for all three. `mode` now selects one strict query/response arm: `initial`,
+> `upcoming_window`, `past_window` or `past_cursor`. Past calendar navigation supplies both
+> visible bounds, and dense windows continue under the same bounds until their returned
+> coverage is complete. Contract in `api-contract.md` §2.2a; P3-47 is the caller.
 
 **Files.** `services/api/src/routes/plans.ts`,
 `services/api/src/services/plansService.ts`,
@@ -1377,7 +1391,8 @@ delete `404`s; the schedule path writes exactly one system entry per date change
 **What to build.** The endpoint behind the Plans tab, exactly as specified in
 [`../02-architecture/api-contract.md#22a-plans`](../02-architecture/api-contract.md#22a-plans).
 One initial request, three stages, and no second call to render the screen. Later Upcoming
-scrolls request another bounded date window from the same endpoint.
+and Past requests use response arms that omit inactive stages, so merging a continuation
+cannot replace another stage with an empty array.
 
 | Stage | Query | Order |
 | --- | --- | --- |
@@ -1388,15 +1403,19 @@ scrolls request another bounded date window from the same endpoint.
 
 **Approach.**
 
-1. Four logical `Query` streams, started concurrently: `#P`, the timezone-widened future slice
-   of `#S`, the cursor-paged and boundary-widened past slice of `#S`, and `#R`. `needsDate` is
-   capped as below. The initial
-   request defaults `upcomingFrom` to today and `upcomingTo` to 61 days later; explicit
+1. `mode=initial` starts four logical `Query` streams concurrently: `#P`, the
+   timezone-widened future slice of `#S`, the cursor-paged and boundary-widened past slice of
+   `#S`, and `#R`. `mode=upcoming_window` starts only future `#S` and `#R`;
+   `mode=past_window` and `mode=past_cursor` start only past `#S`. `needsDate` is capped as
+   below. The initial request defaults `upcomingFrom` to today and `upcomingTo` to 61 days later; explicit
    windows may contain at most `MAX_AGENDA_DAYS` (62) inclusive calendar dates. The response
    returns `{ from, through, nextFrom }`, where `nextFrom` is the earliest one-off or recurring
    date after `through`, or `null` when neither source has one. It may jump an empty gap but
-   never skips a row. Scrolling requests the next 62-day window from that date. `past` remains
-   cursor-paginated per §Pagination of the API contract. `#S` and `#R` are shared Activity
+   never skips a row. Scrolling requests the next 62-day window from that date. Ordinary
+   older `past` remains cursor-paginated through `past_cursor`. A calendar landing uses
+   `past_window` with required `pastFrom` and exclusive `pastBefore`; a cursor is scoped to
+   those same bounds and repeated until `pastCoverage` says the entire visible range is
+   complete. `#S` and `#R` are shared Activity
    buckets: scheduled and recurring Tasks live there too and remain visible in Plans. Follow
    access pattern 1: hydrate every widened Activity candidate,
    convert timed rows from their projected stored `timezone` into the request timezone, and
@@ -1451,15 +1470,20 @@ asserted on the immediately following read;
 a `#N` activity appears in no stage; dated and recurring `type: 'task'` rows at the timezone
 and page boundaries in `#S` and `#R` appear exactly once in the correct stage/window; a
 recurring Plan series contributes one row per date in
-`upcoming` inside the first 62-day window; requesting its returned `nextFrom` produces the
-next non-overlapping window; a 63-day request is `validation_failed`; `past` paginates and
+`upcoming` inside the first 62-day window; requesting its returned `nextFrom` in
+`upcoming_window` mode produces the next non-overlapping window; a 63-day request is
+`validation_failed`; `past` paginates and
 the cursor is opaque and user-scoped. Boundary fixtures stored in timezones on both sides of
 the request timezone cross `upcomingFrom`, `upcomingTo`, and today after conversion; each
 appears in exactly one viewer-local stage/window, and `nextFrom` is its converted date rather
 than its raw key date. A schema test permits `rsvpSummary.*.count` and
 `suggestionCount` but proves the response has no stage-level `count`, `total`, `unread` or
-`badge`. A repository spy proves Phase 3 starts only the four bucket/range streams above,
-pages them according to their documented caps, and performs no participant read, while
+`badge`. Repository spies prove `initial` starts the four bucket/range streams above,
+Upcoming continuation never reads Needs Date or Past, and either Past continuation never
+reads Needs Date, Upcoming or Recurrence. A dense 42-day `past_window` reports partial
+coverage and a cursor until the exact requested range is complete. Schema tests prove the
+response union omits inactive stage keys, so client replacement cannot erase them. The
+service pages streams according to their documented caps and performs no participant read, while
 `series_limit_exceeded` propagates from the shared expansion path. A far-future one-off after
 an empty gap becomes `nextFrom`, and the next window includes it.
 
@@ -1598,9 +1622,10 @@ these contract points are not:
 
 - `patchList` accepts `title`, capabilities, slot and `archived`, but not `behaviour`.
   `changeListBehaviour` calls replay-protected `POST /v1/lists/:id/behaviour`, requires
-  `If-Match`, takes `confirmDataLoss?: boolean`, and surfaces the destructive `409` as a typed
-  value carrying the server's field list and affected-item count, so P3-32 can render it
-  verbatim instead of re-deriving a count from a paginated cache.
+  `If-Match`, takes `confirmation?: ListBehaviourConfirmation`, and surfaces the destructive
+  `409` as a typed value carrying the server's behaviours, item version, field list and
+  affected-item count, so P3-32 can render and echo it instead of re-deriving state from a
+  paginated cache.
 - `scheduleListItem` sends `ScheduleListItemInput` exactly. No convenience overload defaults
   `activityId`, `creationTarget` or `audience`; an omitted field fails at the schema, loudly.
 - `undoListOperation` sends only the opaque token returned by an item, bulk, archive or
@@ -1671,7 +1696,14 @@ header `⋯` holding `Show archived`
   raise the doc conflict in the PR rather than resolving it silently.
 - Archived lists are filtered out of the main render on `archived` and shown by
   `Show archived` as a separate de-emphasised group with one-tap restore — a client-side
-  filter over the same response, not a second endpoint.
+  filter over the same response, not a second endpoint. `GET /v1/lists` pages all access
+  pointers and may return a page containing only archived META rows.
+- **Auto-drain filtered pages.** Continue while the active filtered collection cannot fill
+  the viewport and `nextCursor` exists. An empty filtered page is not completion, and
+  `No lists yet` is legal only after the cursor is exhausted. Opening `Show archived` first
+  uses materialized pages, then continues draining if that view still cannot fill. Bound the
+  synchronous work per render cycle and schedule further pages asynchronously so a long run
+  of filtered rows cannot monopolise rendering.
 - Empty state, verbatim from §5.9: `No lists yet` /
   `Keep things you want to remember, track, or organise together.` / `New list`.
 - Pagination at 50 pointers per page, auto-fetch at 80 % scroll depth. Native pages are
@@ -1682,7 +1714,9 @@ header `⋯` holding `Show archived`
 the stored icon and copy; a watch list retaining `checkable: true` and checked rows renders no
 checked count; an archived list is absent until `Show archived`; the empty state
 matches §5.9 exactly; rows render in response order for a deliberately shuffled fixture —
-no client sort; a grep test that the feature directory imports no `LIST_TEMPLATES`;
+  no client sort; the first 50 pointers archived and page two active neither shows `No lists
+  yet` nor requires scrolling an invisible collection; opening `Show archived` reuses those
+  first-page rows and continues draining when needed; a grep test that the feature directory imports no `LIST_TEMPLATES`;
 navigation test that tapping a row opens list detail and issues no mutation.
 
 ---
@@ -1755,16 +1789,20 @@ The initial detail response contains at most 50 items and an opaque cursor. Fetc
 pages at 80% scroll depth through `GET /v1/lists/:id/items?cursor=` and merge by `itemId` in
 authoritative `(rank, itemId)` order. `itemCount` comes from META; no empty-state decision or
 bulk operation mistakes an unloaded page for the whole list.
-If an item-page request receives P3-03's repair/version `409`, retain the current committed
-projection, discard its page cursors, and restart from page one. Replace the projection only
-after that page succeeds; never merge a post-repair page into pre-repair pages.
+If an item-page request crosses rank repair, behaviour migration, or a version fence, the
+implemented contract is `503 internal` with `Retry-After: 1` and no rows. Retain the current
+committed projection, discard every item cursor, wait for `Retry-After`, and restart from page
+one. Replace the projection only after page one succeeds; never merge a post-repair page into
+pre-repair pages. This retry is projection recovery, not a `409` edit conflict.
 
 **Tests.** Enter `Try Zahav` through global `List item`, assert no form or capture call exists
 before selecting `Restaurants to try`, and assert `Add to Restaurants to try` writes one item
 there. Enter the same words through `+ Add an item` inside another list and assert they stay in
 that list. A recent/default list is seeded and proved not to pre-select either route. Mutate
 the selected catalogue record after creating an empty List and assert detail still renders
-the stored guidance with `Nothing here`.
+the stored guidance with `Nothing here`. A `503` item page with `Retry-After: 1` keeps the
+committed rows visible, clears every cursor, waits, restarts at page one, and installs no new
+projection until that first page succeeds.
 
 ---
 
@@ -1978,12 +2016,12 @@ and no dialog. Only destructive behaviour changes go through a confirmation in t
   "Items will gain a watch status, season and episode" — applies optimistically on selection,
   enqueues `changeListBehaviour` with one stable idempotency key, and offers Undo instead of
   confirmation.
-- Downgrading (`watch` or `meals` → anything) sends the behaviour `POST` **without**
-  `confirmDataLoss`, receives the `409`, and renders the server's field list and item count
+- Downgrading (`watch` or `meals` → anything) sends the behaviour `POST` **without** a
+  `confirmation`, receives the `409`, and renders the server's field list and item count
   verbatim: "This will remove season, episode and watch status from 7 items. This cannot be
   undone." That direct online preview carries its own key but is not accepted into the outbox.
-  Only on confirm does the client enqueue a new replay-protected call with
-  `?confirmDataLoss=true` and its own stable idempotency key.
+  Only on confirm does the client enqueue a new replay-protected call with the complete
+  `confirmation` object echoed in its body and its own stable idempotency key.
 
 > **Decision:** the client asks the server what would be lost rather than computing it
 > locally. A count computed from a paginated cache would be wrong for a long list, and being
@@ -2049,8 +2087,9 @@ while choosing `General`; the result is `custom`, proving the list never chooses
 ### P3-34 — The caller-scoped Plan state line on a list item
 
 **Approach.** The item stays in its list, in place. When the list-detail response includes the
-caller's `viewerLink` **and its `viewerPlan` carries `schedule.date`**, that caller alone sees
-a state line. `viewerPlan` is `ListItemPlanState` — `type`, `status` and an optional
+caller's `viewerLink` and its `viewerPlan` either carries `schedule.date` or has
+`status: 'cancelled'`, that caller alone sees a state line. `viewerPlan` is
+`ListItemPlanState` — `type`, `status` and an optional
 `schedule` — supplied by P3-15; the client derives the line from it and never fetches
 Activities per row, and takes the line's tap target from `viewerLink.activityId`:
 
@@ -2064,13 +2103,11 @@ Rules that are easy to get wrong:
 
 - The state line shows the caller-linked Activity's date and time in the relative format used
   elsewhere: weekday name within 7 days, otherwise `d MMM`.
-- **`viewerPlan.status` selects the line, and two of its five values have no copy yet.**
+- **`viewerPlan.status` selects the line.**
   `scheduled` renders `Planned …` (or `Next session …` for a `watch` Plan) and `completed`
-  renders `Done …`. `saved` has no date and so renders nothing. **`cancelled` and `skipped`
-  are open**: a skip clears the pointer, so a skipped Plan should not normally reach a row at
-  all, but cancellation is an ordinary `PATCH` that clears nothing — a cancelled Plan with a
-  date is currently reachable and has no defined line. Deciding that is a §8 trigger, not an
-  implementation choice; until it is decided, do not invent a line for either.
+  renders `Done …`. `cancelled` renders `Cancelled`, with no date suffix. `saved` has no date
+  and so renders nothing. A skip clears the pointer, so `skipped` should not normally reach a
+  row and renders nothing defensively if a stale projection does.
 - Unscheduling retains `viewerLink` but hides the line; rescheduling the same Activity makes
   it visible again. Link presence alone is never display eligibility.
 - **Tapping the state line opens the Activity. Tapping the title opens the item detail.**
@@ -2085,7 +2122,8 @@ Rules that are easy to get wrong:
 [`../01-product/interaction-contract.md`](../01-product/interaction-contract.md) §6.2.
 Playwright asserting each tap target navigates to the correct screen. A projection test seeds
 two viewers with different pointers and proves each response and render contains only that
-viewer's Plan; a third member sees the ordinary item with no state line. Completing the Plan
+viewer's Plan; a third member sees the ordinary item with no state line. A cancelled fixture
+renders `Cancelled` while retaining the same tap target. Completing the Plan
 from both a checked and unchecked source fixture leaves the ListItem byte-identical.
 
 ---
@@ -2155,9 +2193,11 @@ avoid.
   as a `(3)` after it. The heading is two words. RSVP prose and a future row's
   `2 dates suggested` are content, never stage chrome. §1.3.2 lists five rules a reviewer
   checks and every one of them is a test here.
-- `Past` paginates on scroll with the response's cursor. `needsDate` does not paginate.
-  `Upcoming` loads one bounded 62-day date window initially and requests the next window from
-  `upcomingWindow.nextFrom` only when the user reaches its end. A zero-row window with a
+- `Past` paginates on scroll through `mode=past_cursor`; `needsDate` does not paginate.
+  `Upcoming` loads one bounded 62-day date window initially and requests the next window with
+  `mode=upcoming_window` from `upcomingWindow.nextFrom` only when the user reaches its end.
+  Continuation responses contain only their active stage and may not replace inactive client
+  stages. A zero-row window with a
   non-null `nextFrom` retains that end sentinel, so the far-future row remains reachable; a
   null value renders the ordinary final empty line and issues no further request.
 - A Needs-a-date row never ages into an archive, greys out or re-sorts merely because it has
@@ -2683,8 +2723,10 @@ a date has no dates to navigate. It resolves `00-open-decisions.md` #52.
 - **Navigation selects a window; it is not a second pagination model.** A fetch is issued only
   when the visible grid leaves the loaded range, and it requests the **visible grid range**
   (up to 42 days, inside `MAX_AGENDA_DAYS`), not the nominal month. Forward uses
-  `upcomingFrom`/`upcomingTo`; backward uses `pastBefore` (P3-20). Ordinary cursor and window
-  paging continue from the landing point.
+  `mode=upcoming_window` with `upcomingFrom`/`upcomingTo`; backward uses `mode=past_window`
+  with both `pastFrom` and exclusive `pastBefore` (P3-20). A dense Past grid follows the
+  returned cursor under the same bounds until coverage is complete. Ordinary older-history
+  paging remains the separate `past_cursor` mode.
 - **Expanding never fetches.** Collapsed and expanded are the same projection over the same
   data. Expanded-or-collapsed is remembered **locally** per platform — view state, not profile
   data, so no `User` field.
@@ -2701,15 +2743,17 @@ a date has no dates to navigate. It resolves `00-open-decisions.md` #52.
 - Past shows presence, never load. **No dot means no claim**, which requires tracking which
   ranges have actually been fetched — without it the dots are whatever survives cache
   eviction. No "which months contain history" endpoint: that is a second projection able to
-  disagree with the list.
+  disagree with the list. The client may mark a date loaded-and-empty only inside completed
+  `pastCoverage`; a partial dense response carries no negative claims below `coveredFrom`.
 
 **Tests.** Unit over `deriveCalendarCells`: for both stages, every cell's live/spill/inert
 state is rebuilt independently from the stage rule and compared, including the today boundary
 and both spillover directions; spillover cells carry density. A test that the function is
 never handed a network payload — its signature admits none. A render test that expanding
-issues zero requests. A gesture test that three fast month changes issue one request for the
-settled month and cancel the rest. An offline test that a month with no loaded range renders
-the shell and no false dots. A grep test that the feature directory constructs no `Date`.
+  issues zero requests. A gesture test that three fast month changes issue one request for the
+  settled month and cancel the rest. A dense 42-day Past grid test drains partial coverage
+  before marking empty dates. An offline test that a month with no loaded range renders the
+  shell and no false dots. A grep test that the feature directory constructs no `Date`.
 
 ---
 
@@ -2759,8 +2803,9 @@ rather than a marker. Snapshot both Today and Plans, since both consume this com
    transaction advances `rankVersion`, so old item cursors receive `503`. Undo uses the
    dedicated compensation endpoint and restores only unchanged upgrade defaults; it does not
    attempt an ordinary destructive transition. Posting a `watch` list back to `collection`
-   **without** `?confirmDataLoss=true` returns `409`, writes nothing, and
-   names both the fields lost and the exact number of items affected; with the flag it succeeds.
+   **without** `confirmation` returns `409`, writes nothing, and names the behaviours,
+   `itemVersion`, fields lost and exact number of items affected; echoing that complete object
+   succeeds only while the shown snapshot is still current.
 5. Slot resolution behaves correctly in all four cases: one eligible list is used silently
    but still shown; several with a default use the default; several with none ask once and
    store the answer; none offers creation and writes nothing until confirmed. **Opening a
@@ -2864,15 +2909,18 @@ rather than a marker. Snapshot both Today and Plans, since both consume this com
 29. Two items stored with an identical `lexoRank` and different `itemId`s render in the same
     order on two independently seeded clients, and `compareListItems` returns the same result
     for both input orderings. No comparator in the codebase sorts list items on `rank` alone.
-30. `GET /v1/plans` returns three stages in one initial request. `needsDate` is the `#P` bucket
+30. `GET /v1/plans?mode=initial` returns three stages in one request. `needsDate` is the `#P` bucket
     ordered by `lastActivityAt` descending; touching the oldest plan's `lastActivityAt` moves
     it to the head after GSI convergence, while the mutation response's authoritative value
     moves the client row immediately and a stale reconciliation cannot roll it back. Upcoming
     and the Past boundary query `#S` with the access-pattern-1
     two-day timezone overlap, convert before exact viewer-window filtering, merge Upcoming
     with all-Activity `#R` expansion inside a 62-day window, and supply `nextFrom` from
-    converted Activity dates. Undated Tasks appear in no stage because `#N` is not queried;
-    dated and recurring Tasks appear exactly once under the same boundaries as Plans.
+    converted Activity dates. Upcoming continuation reads only future `#S` and `#R`; Past
+    window/cursor modes read only past `#S`. A bounded dense Past grid reports partial
+    coverage until fully drained, and response unions omit inactive stages. Undated Tasks
+    appear in no stage because `#N` is not queried; dated and recurring Tasks appear exactly
+    once under the same boundaries as Plans.
 31. The Plans tab renders all three stage headings when every stage is empty, renders no
     backlog badge or stage count, and renders `needsDate` in the server's order without
     re-sorting. Past rows are de-emphasised; Needs-a-date rows are not de-emphasised merely

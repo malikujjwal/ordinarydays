@@ -24,6 +24,21 @@ import type { DefaultSlot } from './user.js';
 export type ListBehaviour = 'collection' | 'watch' | 'meals';
 
 /**
+ * The exact destructive behaviour-change preview a client saw and must echo to confirm.
+ *
+ * `itemVersion` binds the human decision to the complete item generation, while the count
+ * and ordered field labels bind it to the words rendered in the confirmation dialog.
+ */
+export interface ListBehaviourConfirmation {
+  fromBehaviour: ListBehaviour;
+  toBehaviour: ListBehaviour;
+  itemVersion: number;
+  /** Items actually carrying data that would be removed, not the List's total item count. */
+  itemCount: number;
+  fields: string[];
+}
+
+/**
  * What a `collection` can do, stored on the row and user-editable.
  *
  * Meaningful only on `collection`: `watch` uses `watchStatus` instead of a checkbox. On a
@@ -44,9 +59,9 @@ export interface ListCapabilities {
  *
  * `behaviour`, `capabilities`, `slot`, `icon` and `emptyStateCopy` are **copied** from the
  * selected template at creation and never re-resolved; `templateKey` is provenance only.
- * `rankVersion`, `rankRepairId` and `behaviourMigrationId` are storage-level concurrency
- * state that no client authors and the last two are never serialised — the route tasks
- * project them away.
+ * `rankVersion`, `itemVersion`, `rankRepairId` and `behaviourMigrationId` are storage-level
+ * concurrency state that no client authors. `itemVersion` and the two work markers are never
+ * serialised — the route tasks project them away.
  */
 export interface List {
   listId: string;
@@ -71,6 +86,13 @@ export interface List {
   memberCount: number;
   /** Serialises server rank allocation; never client-authored. */
   rankVersion: number;
+  /**
+   * Serialises decisions made from the complete item set; never client-authored or serialised.
+   *
+   * Optional only while META rows written before P3-17 are lazily adopted. Readers treat an
+   * absent value as zero and the first item mutation writes one.
+   */
+  itemVersion?: number;
   /** Blocks rank mutations and item-page reads until repair completes; never serialised. */
   rankRepairId?: string;
   /** Blocks item reads/mutations until behaviour migration commits; never serialised. */

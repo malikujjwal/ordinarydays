@@ -395,7 +395,7 @@ describe('deleting a list', () => {
     expect(profile?.defaultLists?.groceries).toBe('lst_01J8XKQ2M4N5P6R7S8T9V0W1X9');
   });
 
-  it('clears Activity provenance from LNK rows without deleting the Activity or bumping updatedAt', async () => {
+  it('clears Activity provenance from LNK rows without deleting the Activity, and bumps updatedAt', async () => {
     const created = await createListVia(app(), {});
     const plan = await createPlanVia(app());
     const itemId = repository.newItemId();
@@ -433,8 +433,8 @@ describe('deleting a list', () => {
     expect(after).toBeDefined();
     expect(after).not.toHaveProperty('listId');
     expect(after).not.toHaveProperty('listItemId');
-    // Provenance cleanup is not a user edit: the concurrency token is untouched.
-    expect(after?.updatedAt).toBe(before?.updatedAt);
+    // The reverse link is versioned Activity state, even though its projection is access-filtered.
+    expect(after?.updatedAt).not.toBe(before?.updatedAt);
     // The pointer went with the partition.
     expect(
       await rawItem(`LIST#${created.listId}`, `LNK#${DEV}#${itemId}`),

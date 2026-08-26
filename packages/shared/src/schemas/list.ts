@@ -83,9 +83,10 @@ export const listCapabilities = z.object({
  * The stored List — the `META` row of its own partition (`data-model.md` §3.3).
  *
  * **Not strict, deliberately**, like `activity`: a row read back from DynamoDB carries
- * `pk`, `sk` and `entity` alongside these fields. `rankVersion`, `rankRepairId` and
- * `behaviourMigrationId` are storage-level state that the route tasks project away before a
- * response; they are here because this describes what storage holds.
+ * `pk`, `sk` and `entity` alongside these fields. `rankVersion`, `itemVersion`,
+ * `rankRepairId` and `behaviourMigrationId` are storage-level state that the route tasks
+ * project away before a response (except `rankVersion`, which binds page cursors); they are
+ * here because this describes what storage holds.
  */
 export const list = z
   .object({
@@ -103,6 +104,8 @@ export const list = z
     uncheckedCount: z.number().int().nonnegative(),
     memberCount: z.number().int().positive(),
     rankVersion: z.number().int().nonnegative(),
+    /** Legacy META rows predate this counter; repositories treat absence as version zero. */
+    itemVersion: z.number().int().nonnegative().optional(),
     rankRepairId: z.string().min(1).optional(),
     behaviourMigrationId: z.string().min(1).optional(),
     archived: z.boolean(),
@@ -322,48 +325,49 @@ export type PatchListInput = z.infer<typeof patchListInput>;
 /**
  * `POST /v1/lists/:id/behaviour` (`api-contract.md` §2.7, P3-09).
  *
- * One target behaviour and nothing else. Strict, so a body that also tried to carry
- * `capabilities` or a `confirmDataLoss` flag is a `400` naming it: the confirmation is a
- * **query parameter** on a deliberately separate, newly keyed logical action, not a field a
- * client can set in the same body it would have sent unconfirmed.
+ * One target behaviour plus, for a destructive transition, the exact server-authored
+ * preview the user confirmed. Strict, so a body that also tries to carry `capabilities` or
+ * the removed `confirmDataLoss` boolean is a named `400` rather than an ambient permission
+ * to destroy whatever happens to exist when the request arrives.
  */
+export const listBehaviourConfirmation = z
+  .strictObject({
+    fromBehaviour: listBehaviour,
+    toBehaviour: listBehaviour,
+    itemVersion: z.number().int().nonnegative(),
+    itemCount: z.number().int().nonnegative(),
+    fields: z.array(freeText.min(1)),
+  })
+  .meta({ id: 'ListBehaviourConfirmation' });
+
 export const changeListBehaviourInput = z
-  .strictObject({ behaviour: listBehaviour })
+  .strictObject({
+    behaviour: listBehaviour,
+    confirmation: listBehaviourConfirmation.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.confirmation !== undefined &&
+      value.confirmation.toBehaviour !== value.behaviour
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['confirmation', 'toBehaviour'],
+        message: 'confirmation.toBehaviour must match behaviour',
+      });
+    }
+  })
   .meta({ id: 'ChangeListBehaviourInput' });
 
 export type ChangeListBehaviourInput = z.infer<typeof changeListBehaviourInput>;
 
-/** `POST /v1/lists/:id/behaviour` query. Strict, so a misspelled flag is a named `400`. */
-export const changeListBehaviourQuery = z
-  .strictObject({ confirmDataLoss: z.enum(['true', 'false']).optional() })
-  .meta({ id: 'ChangeListBehaviourQuery' });
-
 /**
- * Where the `409 conflict` preview for an unconfirmed destructive behaviour change puts its
- * two structured facts.
- *
- * The envelope's `details[]` is its only structured slot, so the preview travels there as
- * `{ path, message }` pairs — the same encoding `PATCH /v1/activities/:id` uses to return
- * the current `updatedAt` alongside a stale-edit `409` (P1-13). The paths are **exported
- * rather than described**, so the client that maps them back into a typed shape (P3-24) and
- * the service that emits them cannot drift:
- *
- * ```
- * { path: 'confirmDataLoss.itemCount', message: '7' }
- * { path: 'confirmDataLoss.fields.0',  message: 'Watch status' }
- * { path: 'confirmDataLoss.fields.1',  message: 'Season' }
- * ```
- *
- * `itemCount` is the number of items **actually carrying** the data being removed, never the
- * list's size (`interaction-contract.md` §1a.1 rule 2), and each `fields.<n>` entry is one
- * user-facing label in the order the confirmation should read them (rule 4). The client
- * composes the dialog sentence; the server never sends a pre-joined one, because the copy
- * around the list's own title belongs to the surface that knows it.
+ * The route has no query contract. Keeping a strict empty schema makes the removed
+ * `?confirmDataLoss=true` flag a named `400` instead of silently treating it as confirmation.
  */
-export const DATA_LOSS_DETAIL_PATHS = {
-  itemCount: 'confirmDataLoss.itemCount',
-  field: (index: number) => `confirmDataLoss.fields.${String(index)}`,
-} as const;
+export const changeListBehaviourQuery = z
+  .strictObject({})
+  .meta({ id: 'ChangeListBehaviourQuery' });
 
 /**
  * One item of `POST /v1/lists/:id/items`, and one member of `bulk`.
@@ -425,13 +429,12 @@ export function bulkCreateListItemsInputFor(behaviour: z.infer<typeof listBehavi
 /**
  * The List an API response carries (`api-contract.md` §2.7, P3-05).
  *
- * The stored shape minus the two storage-only work markers: `rankRepairId` and
- * `behaviourMigrationId` gate reads while repair or migration runs and are **never
- * serialised** (`data-model.md` §4.6). `rankVersion` stays — item-page cursors are bound to
- * it, and the client hands it back opaquely inside them.
+ * The stored shape minus storage-only `itemVersion` and the two work markers. `rankVersion`
+ * stays — item-page cursors are bound to it, and the client hands it back opaquely inside
+ * them.
  */
 export const listView = list
-  .omit({ rankRepairId: true, behaviourMigrationId: true })
+  .omit({ itemVersion: true, rankRepairId: true, behaviourMigrationId: true })
   .meta({ id: 'ListView' });
 
 /** The ListItem a response carries: the stored shape minus its storage-only revision fence. */
@@ -458,10 +461,11 @@ export const listItemView = listItem
  * - `type` — the verb differs by kind: an event is `Planned`, a watch session is
  *   `Next session`. Inferring it from the list's behaviour would be wrong for a `custom` Plan
  *   made from a `watch` list, which the bridge explicitly allows.
- * - `status` — `Done Saturday` versus `Planned Saturday`, and the un-complete that reverts it.
- * - `schedule` — the date and time the line renders, and **the display gate**: a line shows
- *   only when the hydrated Activity has `schedule.date`, so an unscheduled Plan keeps its
- *   pointer and loses its line (`plans-and-lists.md` §6.2).
+ * - `status` — `Done Saturday` versus `Planned Saturday`, the un-complete that reverts it,
+ *   and the date-independent `Cancelled` line.
+ * - `schedule` — the date and time a scheduled/completed line renders. Its absence hides a
+ *   saved Plan but not a cancelled one, whose status is useful context on its own
+ *   (`plans-and-lists.md` §6.2).
  *
  * What is absent is as deliberate. No `title`: the row shows the **item's** title, and the two
  * are independent after the one-time seed (P3-14). No watch progress: `Watching · S2 E4` comes
@@ -651,8 +655,8 @@ export const reversibleItemMutation = z
  * The offer's absence is meaningful rather than incidental: a rename records no inverse
  * (`interaction-contract.md` §4.1 has no undo row for it), a patch that changes nothing has
  * nothing to take back, and a behaviour change that **lost** data was confirmed rather than
- * offered — repeating the call with `?confirmDataLoss=true` is its only path, so a token there
- * would promise a restore the server cannot make.
+ * offered — returning requires another preview-and-confirm action, so a token there would
+ * promise a restore the server cannot make.
  *
  * `undoExpiresAt` is the UI offer deadline on the same terms as {@link reversibleItemMutation}:
  * stop offering at that instant, while an inverse the user already accepted stays valid

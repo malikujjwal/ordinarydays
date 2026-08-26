@@ -47,6 +47,7 @@ export type { Device, DevicePlatform, RegisterDeviceInput } from './device.js';
 export type {
   List,
   ListBehaviour,
+  ListBehaviourConfirmation,
   ListCapabilities,
   ListIndex,
   ListItem,

@@ -946,16 +946,16 @@ registry.registerPath({
   path: '/v1/lists',
   summary: 'The caller’s lists, a page at a time',
   description:
-    'Pages active List pointers 50 at a time, then batch-reads that page’s current META ' +
-    'rows — one Query and one BatchGetItem per page. `meta.nextCursor` is present only ' +
-    'when there is another page; a client pages until it is absent. The 100 cap applies ' +
-    'to Lists the caller owns, not memberships received from other owners, which is why ' +
-    'the cursor is not optional.',
+    'Pages all of the caller’s List access pointers 50 at a time, then batch-reads that ' +
+    'page’s current META rows — including archived Lists — with one Query and one ' +
+    'BatchGetItem per page. The endpoint does not filter by `archived`; a filtered-empty ' +
+    'page may still carry `meta.nextCursor`, and the client pages until it is absent. The ' +
+    '100 cap applies to Lists the caller owns, not memberships received from other owners.',
   tags: ['lists'],
   request: { query: listListQuery },
   responses: {
     200: {
-      description: 'One page of the caller’s Lists, in pointer order.',
+      description: 'One unfiltered page of the caller’s Lists, in pointer order.',
       content: { 'application/json': { schema: listPageResponse } },
     },
     400: {
@@ -1118,10 +1118,13 @@ registry.registerPath({
     'receipt, and clears the marker. `collection` to `watch` gives every item ' +
     '`watchStatus: "want"` and `collection` to `meals` an empty ingredient list; both ' +
     'are additive and answer with a 6-second Undo offer. Leaving `watch` or `meals` ' +
-    'for anything else \u2014 `watch` to `meals` included \u2014 is destructive and ' +
-    'needs `?confirmDataLoss=true`; without it the answer is `409` and **nothing is ' +
-    'written**, not even a receipt. A list carrying none of the data being removed ' +
-    'loses nothing, so it needs no confirmation and changes immediately.',
+    'for anything else \u2014 `watch` to `meals` included \u2014 is destructive. The first ' +
+    'call answers `409` with a typed `confirmation` containing source/target behaviours, ' +
+    '`itemVersion`, item count and field labels, and writes nothing. The confirmed action ' +
+    'echoes that complete object under a new key; migration installation and its gated ' +
+    'snapshot reject any intervening item mutation or changed loss summary with a fresh ' +
+    '`409`. A list carrying none of the data being removed loses nothing, so it needs no ' +
+    'confirmation and changes immediately.',
   tags: ['lists'],
   request: {
     params: z.object({ id: listId }),
@@ -1149,10 +1152,8 @@ registry.registerPath({
     },
     409: {
       description:
-        'Either a stale `If-Match`, or the unconfirmed data-loss preview. The preview’s ' +
-        '`details[]` carries `confirmDataLoss.itemCount` — the number of items actually ' +
-        'carrying the data — and one `confirmDataLoss.fields.<n>` entry per user-facing ' +
-        'field label, in the order the confirmation should read them.',
+        'Either a stale `If-Match`, or the data-loss preview. The preview carries the typed ' +
+        'top-level `confirmation` object that a confirmed request must echo unchanged.',
       content: { 'application/json': { schema: errorResponse } },
     },
     503: {

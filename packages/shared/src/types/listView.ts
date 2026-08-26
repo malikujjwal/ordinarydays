@@ -8,4 +8,7 @@ import type { List } from './list.js';
  * Derived rather than re-declared so a field added to {@link List} cannot silently fork the
  * two shapes; the schema twin is `listView` in `../schemas/list.ts`.
  */
-export type ListView = Omit<List, 'rankRepairId' | 'behaviourMigrationId'>;
+export type ListView = Omit<
+  List,
+  'itemVersion' | 'rankRepairId' | 'behaviourMigrationId'
+>;

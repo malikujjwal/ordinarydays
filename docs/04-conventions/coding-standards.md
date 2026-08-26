@@ -1092,6 +1092,12 @@ Operational notes:
   same row/locator revision. A race retries against current truth, so a stale reorder image
   cannot replace a concurrent edit. No client `If-Match` is exposed and no other ListItem is
   rewritten during a normal drag.
+- Every public transaction that changes one or more ListItems atomically increments
+  storage-only `META.itemVersion` once (per bounded chunk). A worker whose repair/migration
+  marker gates every public deciding read increments it in the final transaction that removes
+  the marker. A whole-list decision such as P3-17 fences its read and commit on both
+  `rankVersion` and `itemVersion`; ordinary page cursors remain bound only to `rankVersion`, so
+  a checkbox tap does not restart pagination.
 - All readers sort by `(rank, itemId)`, not rank alone. This is defensive for Undo-restored,
   legacy or seeded duplicate ranks within one committed generation; it is not the allocation
   strategy. If equal-rank neighbours prevent a valid between-rank calculation, run the

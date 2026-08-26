@@ -234,6 +234,7 @@ async function attemptAdd(
     access,
     plan.creates.length,
     snapshot.rankVersion,
+    snapshot.itemVersion,
     now,
   );
 
@@ -307,12 +308,11 @@ async function attemptAdd(
 }
 
 /**
- * Allocates ranks under the snapshot's own version, repairing once if the gap is exhausted.
+ * Allocates ranks under both snapshot generations, repairing once if the gap is exhausted.
  *
- * `expectedRankVersion` is the whole point: the classification above decided what to create
- * from rows read at that version, so committing under a **later** one would accept a create
- * that landed in between and write the duplicate the classification was meant to prevent.
- * A moved version is not a retry of this plan — it is a reason to make a new one.
+ * The classification above decided what to create from rows read under both versions.
+ * `rankVersion` catches structural writes and `itemVersion` catches field-only writes; moving
+ * either is not a retry of this plan, but a reason to make a new one.
  */
 async function planWrites(
   userId: string,
@@ -320,11 +320,13 @@ async function planWrites(
   access: ListAccessGrant,
   count: number,
   expectedRankVersion: number,
+  expectedItemVersion: number,
   now: string,
 ) {
   try {
     return await planListItemWrites(userId, listId, access, count, {
       expectedRankVersion,
+      expectedItemVersion,
     });
   } catch (error) {
     if (error instanceof ListSnapshotStaleError) throw new ReclassifyError();

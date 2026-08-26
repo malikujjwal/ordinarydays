@@ -531,7 +531,7 @@ describe('POST /v1/lists/:id/behaviour — the destructive confirmation', () => 
    * Here two of three items carry watch state and only one of them has a season, so the
    * confirmation says two items and does not offer to remove an episode nobody set.
    */
-  it('409s without ?confirmDataLoss=true, naming the fields and the exact count', async () => {
+  it('409s with the exact confirmation object the client must echo', async () => {
     watchList();
     seedItems([
       itemRow(ITM, 'a0', { behaviour: 'watch', watchStatus: 'watching', season: 2 }),
@@ -544,11 +544,13 @@ describe('POST /v1/lists/:id/behaviour — the destructive confirmation', () => 
 
     expect(res.status).toBe(409);
     expect(body.error.code).toBe('conflict');
-    expect(body.error.details).toEqual([
-      { path: 'confirmDataLoss.itemCount', message: '2' },
-      { path: 'confirmDataLoss.fields.0', message: 'Watch status' },
-      { path: 'confirmDataLoss.fields.1', message: 'Season' },
-    ]);
+    expect(body.confirmation).toEqual({
+      fromBehaviour: 'watch',
+      toBehaviour: 'collection',
+      itemVersion: 0,
+      itemCount: 2,
+      fields: ['Watch status', 'Season'],
+    });
   });
 
   it('writes nothing at all — no receipt, no marker, no work record', async () => {
@@ -602,29 +604,35 @@ describe('POST /v1/lists/:id/behaviour — the destructive confirmation', () => 
     const res = await postBehaviour(createApp(), { behaviour: 'collection' });
 
     expect(await res.json()).toMatchObject({
-      error: {
-        details: [
-          { path: 'confirmDataLoss.itemCount', message: '1' },
-          { path: 'confirmDataLoss.fields.0', message: 'Ingredients' },
-        ],
+      confirmation: {
+        fromBehaviour: 'meals',
+        toBehaviour: 'collection',
+        itemVersion: 0,
+        itemCount: 1,
+        fields: ['Ingredients'],
       },
     });
   });
 
   /**
-   * The confirmed call is a **new logical action** under a newly minted key, which is why the
-   * flag is a query parameter: the two requests are not the same one sent twice, and a client
-   * reusing its key would otherwise have the middleware replay the `409` it already got.
+   * The confirmed call is a **new logical action** under a newly minted key and echoes the
+   * exact preview object. The body is different by construction, and the echoed generation
+   * is what the META install conditions on.
    */
-  it('starts the migration once the flag is present', async () => {
+  it('starts the migration once the exact preview is echoed', async () => {
     watchList();
     seedItems([itemRow(ITM, 'a0', { behaviour: 'watch', watchStatus: 'want' })]);
 
-    const res = await postBehaviour(
-      createApp(),
-      { behaviour: 'collection' },
-      { query: '?confirmDataLoss=true' },
-    );
+    const res = await postBehaviour(createApp(), {
+      behaviour: 'collection',
+      confirmation: {
+        fromBehaviour: 'watch',
+        toBehaviour: 'collection',
+        itemVersion: 0,
+        itemCount: 1,
+        fields: ['Watch status'],
+      },
+    });
 
     expect(res.status).not.toBe(409);
     const work = transacted().find(
@@ -638,10 +646,43 @@ describe('POST /v1/lists/:id/behaviour — the destructive confirmation', () => 
     });
     // A downgrade is confirmed, not undone: no Undo offer is prepared for it (§4.1).
     expect(work?.undo).toBeUndefined();
+    expect(metaUpdate()?.ConditionExpression).toContain(
+      'attribute_not_exists(#itemVersion)',
+    );
     // Public behaviour is untouched by the install; only the final transaction flips it.
     expect(metaUpdate()?.UpdateExpression).toBe(
       'SET #behaviourMigrationId = :operationId',
     );
+  });
+
+  it('returns a fresh preview when a field edit changes itemVersion but not itemCount', async () => {
+    watchList();
+    seedItems([itemRow(ITM, 'a0', { behaviour: 'watch', watchStatus: 'want' })]);
+    const first = await postBehaviour(createApp(), { behaviour: 'collection' });
+    const shown = (await first.json()).confirmation;
+
+    seedGets([
+      pointerRow(),
+      listMetaRow({ behaviour: 'watch', itemCount: 3, itemVersion: 1 }),
+    ]);
+    seedItems([
+      itemRow(ITM, 'a0', { behaviour: 'watch', watchStatus: 'watching', season: 2 }),
+    ]);
+    const confirmed = await postBehaviour(createApp(), {
+      behaviour: 'collection',
+      confirmation: shown,
+    });
+    const body = await confirmed.json();
+
+    expect(confirmed.status).toBe(409);
+    expect(body.confirmation).toEqual({
+      fromBehaviour: 'watch',
+      toBehaviour: 'collection',
+      itemVersion: 1,
+      itemCount: 1,
+      fields: ['Watch status', 'Season'],
+    });
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
   });
 });
 

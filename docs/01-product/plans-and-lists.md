@@ -301,8 +301,10 @@ month are dimmed; in Past the forward arrow is. Nothing silently does nothing.
    one the list renders, including optimistic local writes, never a raw network payload. A
    reschedule that moves a row to Friday must move its density with it in the same frame.
 2. **The calendar chooses the query window; it never becomes a second pagination or data
-   model.** It is random access — *land here* — after which the ordinary cursor and window
-   paging continue from that point
+   model.** Upcoming requests its exact visible window. Past requests both visible bounds and
+   follows the window's cursor until coverage is complete; only completed coverage can make
+   an unmarked date mean loaded-and-empty. Older-list scrolling uses its separate ordinary
+   Past cursor
    ([`../02-architecture/api-contract.md#22a-plans`](../02-architecture/api-contract.md#22a-plans)).
 
 Dates here are viewer-local `WallDate`s throughout — cell, grouping, request bounds and the
@@ -990,6 +992,12 @@ Two more rules:
 (Moving an item between lists is not in v1 — copy the text into the other list and delete
 the original.)
 
+The Lists index pages access pointers that may resolve to active or archived Lists. Filtering
+is not pagination completion: if a page contributes no visible active rows but has a cursor,
+the client keeps loading until it can fill the viewport or exhausts the cursor. `No lists yet`
+is shown only after that exhaustion. `Show archived` reuses already materialized pages and
+continues the same bounded drain when more archived rows are needed.
+
 > **Decision:** `Uncheck all` is offered on every checkable `collection`, not on a hand-picked pair
 > of templates. The old rule named `packing` and `groceries`, which only made sense while
 > those were kinds. Reuse across trips and shops is a property of having checkboxes.
@@ -1386,6 +1394,8 @@ Rules:
 - The state line shows the current viewer's linked Activity date and time in the same relative format used
   elsewhere: weekday name within 7 days, otherwise `d MMM`.
 - Link presence is not enough: an unscheduled Activity renders no line until it is rescheduled.
+- A retained cancelled Plan renders `Cancelled`. Cancellation is useful Plan context and does
+  not dissolve the relationship merely because it has no future date to show.
 - Tapping the state line opens the **Activity**, not the item detail. Tapping the title
   opens the item detail. Both targets are ≥ 44 pt.
 - For another list member with no pointer, the same item has no Plan state line. There is no
@@ -1404,6 +1414,8 @@ Rules:
 | Skipped / `didnt_happen` | The state line is removed and pointer(s) to that Plan are cleared. The ListItem is untouched. |
 | Rescheduled | The state line updates. |
 | Unscheduled (`date: null`) | The state line is removed. The `LNK#` pointer is **kept** — the Plan still exists in Needs a date. |
+| Cancelled | Keep the pointer and render `Cancelled`. The Activity remains a Plan and the cancellation is useful context. |
+| Plan converted to Task | Delete the viewer pointer and clear `Activity.listId` / `listItemId` in the same transaction as the conversion. The relationship was Plan-specific; the ListItem and Task both survive independently. |
 | Plan deleted | Pointers to it are deleted. **The ListItem survives byte-identical.** |
 | ListItem deleted | Its per-viewer pointers are deleted. **Every Plan survives.** |
 

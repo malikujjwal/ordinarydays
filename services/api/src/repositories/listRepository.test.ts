@@ -372,8 +372,13 @@ describe('the bulk checked operations', () => {
         entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk &&
         String(entry.Update.UpdateExpression).includes('itemCount'),
     )?.Update;
-    expect(meta?.UpdateExpression).toBe('ADD #itemCount :delta');
-    expect(meta?.ExpressionAttributeValues).toMatchObject({ ':delta': -2 });
+    expect(meta?.UpdateExpression).toBe(
+      'ADD #itemCount :delta, #itemVersion :itemVersionIncrement',
+    );
+    expect(meta?.ExpressionAttributeValues).toMatchObject({
+      ':delta': -2,
+      ':itemVersionIncrement': 1,
+    });
   });
 
   it('records an empty operation when nothing is checked', async () => {
@@ -448,6 +453,11 @@ describe('the bulk checked operations', () => {
     );
     expect(updated).toHaveLength(1);
     expect(String(updated[0]?.Update?.Key?.sk)).toContain(SURVIVOR);
+    expect(
+      transacted().find((entry) =>
+        String(entry.Update?.UpdateExpression ?? '').includes('#itemVersion'),
+      )?.Update?.ExpressionAttributeValues,
+    ).toMatchObject({ ':itemVersionIncrement': 1 });
     expect(
       transacted().some((entry) =>
         String(entry.Update?.UpdateExpression ?? '').includes('#consumed = :true'),
@@ -1045,6 +1055,7 @@ describe('rank allocation and item mutations', () => {
     expect(items?.[7]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':count': 2,
       ':unchecked': 1,
+      ':itemVersionIncrement': 1,
     });
     await expect(
       repository.createListItems(ALICE, LIST_ID, access, [], { now: NOW }),
@@ -1135,6 +1146,9 @@ describe('rank allocation and item mutations', () => {
       'Update',
       'Update',
     ]);
+    expect(items?.[4]?.Update?.ExpressionAttributeValues).toMatchObject({
+      ':itemVersionIncrement': 1,
+    });
   });
 
   it('returns a reorder no-op without writing', async () => {
@@ -1174,10 +1188,13 @@ describe('rank allocation and item mutations', () => {
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
     expect(items?.[0]?.ConditionCheck?.Key).toEqual(keys.listTombstone(LIST_ID));
     expect(items?.[1]?.Update?.UpdateExpression).toContain('REMOVE');
-    expect(items?.[3]?.Update?.ExpressionAttributeValues).toEqual({ ':delta': -1 });
+    expect(items?.[3]?.Update?.ExpressionAttributeValues).toEqual({
+      ':delta': -1,
+      ':itemVersionIncrement': 1,
+    });
   });
 
-  it('uses a gate condition-check when a field patch does not change checked', async () => {
+  it('advances itemVersion under the gates when a field patch does not change checked', async () => {
     mockResolvedItem();
     await repository.patchListItemFields(
       ALICE,
@@ -1188,7 +1205,10 @@ describe('rank allocation and item mutations', () => {
       LATER,
     );
     const [items] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
-    expect(items?.[3]?.ConditionCheck).toBeDefined();
+    expect(items?.[3]?.Update).toMatchObject({
+      UpdateExpression: 'ADD #itemVersion :itemVersionIncrement',
+      ExpressionAttributeValues: { ':itemVersionIncrement': 1 },
+    });
   });
 });
 
@@ -1225,6 +1245,7 @@ describe('delete, restore and cascade', () => {
     expect(items?.[6]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':minusOne': -1,
       ':uncheckedDelta': -1,
+      ':itemVersionIncrement': 1,
     });
   });
 
@@ -1251,7 +1272,8 @@ describe('delete, restore and cascade', () => {
     });
     expect(items?.[4]?.Update).toMatchObject({
       Key: keys.activityMeta(ACTIVITY_ID),
-      UpdateExpression: 'REMOVE #listId, #listItemId',
+      UpdateExpression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
+      ExpressionAttributeValues: expect.objectContaining({ ':updatedAt': NOW }),
     });
     expect(items?.[5]?.Put?.Item).toMatchObject({
       snapshot: item(),
@@ -1362,12 +1384,15 @@ describe('delete, restore and cascade', () => {
     expect(items?.[3]?.Put?.Item).toMatchObject(viewerLink());
     expect(items?.[4]?.Update).toMatchObject({
       Key: keys.activityMeta(ACTIVITY_ID),
-      UpdateExpression: 'SET #listId = :listId, #listItemId = :listItemId',
+      UpdateExpression:
+        'SET #listId = :listId, #listItemId = :listItemId, #updatedAt = :updatedAt',
+      ExpressionAttributeValues: expect.objectContaining({ ':updatedAt': LATER }),
     });
     expect(items?.[5]?.Delete?.Key).toEqual(keys.listItemTombstone(LIST_ID, ITEM_A));
     expect(items?.[7]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':expectedVersion': 3,
       ':nextVersion': 4,
+      ':itemVersionIncrement': 1,
     });
   });
 
@@ -1497,6 +1522,22 @@ describe('the composable list-write primitives', () => {
       expect(basis.ranks).toEqual([]);
     });
 
+    it('rejects a deciding snapshot when either item generation has moved', async () => {
+      vi.mocked(base.getItem).mockImplementation((key) =>
+        key.sk === 'META'
+          ? Promise.resolve(listRow({ rankVersion: 4, itemVersion: 9 }))
+          : Promise.resolve(undefined),
+      );
+
+      await expect(
+        repository.planListItemWrites(ALICE, LIST_ID, access, 1, {
+          expectedRankVersion: 4,
+          expectedItemVersion: 8,
+        }),
+      ).rejects.toBeInstanceOf(repository.ListSnapshotStaleError);
+      expect(base.query).not.toHaveBeenCalled();
+    });
+
     it('refuses a grant issued for another list', async () => {
       await expect(
         repository.planListItemWrites(ALICE, 'lst_01J8XKQ2M4N5P6R7S8T9V0W1Y9', access, 1),
@@ -1534,15 +1575,18 @@ describe('the composable list-write primitives', () => {
      * creates against a 499-item list both pass that precheck, and the loser retries against
      * a refreshed `rankVersion` that carries no capacity information.
      */
-    it('advances rankVersion and enforces the cap in the META condition', () => {
+    it('advances both versions and enforces the cap in the META condition', () => {
       const { spans, items } = appended();
       const meta = items[spans.meta]?.Update;
 
       expect(meta?.ConditionExpression).toContain('#rankVersion = :expectedVersion');
+      expect(meta?.ConditionExpression).toContain('attribute_not_exists(#itemVersion)');
       expect(meta?.ConditionExpression).toContain('#itemCount <= :maxBefore');
       expect(meta?.ExpressionAttributeValues).toMatchObject({
         ':expectedVersion': 0,
         ':nextVersion': 1,
+        ':expectedItemVersion': 0,
+        ':itemVersionIncrement': 1,
         ':count': 1,
         ':maxBefore': MAX_LIST_ITEMS - 1,
       });

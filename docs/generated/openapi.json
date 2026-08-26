@@ -203,11 +203,59 @@
               "message",
               "requestId"
             ]
+          },
+          "confirmation": {
+            "$ref": "#/components/schemas/ListBehaviourConfirmation"
           }
         },
         "required": [
           "error"
         ]
+      },
+      "ListBehaviourConfirmation": {
+        "type": "object",
+        "properties": {
+          "fromBehaviour": {
+            "type": "string",
+            "enum": [
+              "collection",
+              "watch",
+              "meals"
+            ]
+          },
+          "toBehaviour": {
+            "type": "string",
+            "enum": [
+              "collection",
+              "watch",
+              "meals"
+            ]
+          },
+          "itemVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "itemCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          }
+        },
+        "required": [
+          "fromBehaviour",
+          "toBehaviour",
+          "itemVersion",
+          "itemCount",
+          "fields"
+        ],
+        "additionalProperties": false
       },
       "PatchUserInput": {
         "type": "object",
@@ -4462,6 +4510,9 @@
               "watch",
               "meals"
             ]
+          },
+          "confirmation": {
+            "$ref": "#/components/schemas/ListBehaviourConfirmation"
           }
         },
         "required": [
@@ -8187,7 +8238,7 @@
     "/v1/lists": {
       "get": {
         "summary": "The caller’s lists, a page at a time",
-        "description": "Pages active List pointers 50 at a time, then batch-reads that page’s current META rows — one Query and one BatchGetItem per page. `meta.nextCursor` is present only when there is another page; a client pages until it is absent. The 100 cap applies to Lists the caller owns, not memberships received from other owners, which is why the cursor is not optional.",
+        "description": "Pages all of the caller’s List access pointers 50 at a time, then batch-reads that page’s current META rows — including archived Lists — with one Query and one BatchGetItem per page. The endpoint does not filter by `archived`; a filtered-empty page may still carry `meta.nextCursor`, and the client pages until it is absent. The 100 cap applies to Lists the caller owns, not memberships received from other owners.",
         "tags": [
           "lists"
         ],
@@ -8206,7 +8257,7 @@
         ],
         "responses": {
           "200": {
-            "description": "One page of the caller’s Lists, in pointer order.",
+            "description": "One unfiltered page of the caller’s Lists, in pointer order.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8610,7 +8661,7 @@
     "/v1/lists/{id}/behaviour": {
       "post": {
         "summary": "Change a list’s behaviour, through its gated migration",
-        "description": "Owner only, and the only route that changes `behaviour`. Requires both `If-Match` and an `Idempotency-Key`: it starts a bounded, resumable item migration that a retried request must join rather than duplicate, and the operation is identified by that key. The first transaction leaves public behaviour, `updatedAt` and every item unchanged and only installs the migration marker; while it stands, every item read and mutation attempts a bounded drain and otherwise answers `503 internal` with `Retry-After: 1`. The final transaction alone flips the behaviour, advances `rankVersion` — so item cursors issued before the migration are rejected rather than resumed — records the Undo inverse and the receipt, and clears the marker. `collection` to `watch` gives every item `watchStatus: \"want\"` and `collection` to `meals` an empty ingredient list; both are additive and answer with a 6-second Undo offer. Leaving `watch` or `meals` for anything else — `watch` to `meals` included — is destructive and needs `?confirmDataLoss=true`; without it the answer is `409` and **nothing is written**, not even a receipt. A list carrying none of the data being removed loses nothing, so it needs no confirmation and changes immediately.",
+        "description": "Owner only, and the only route that changes `behaviour`. Requires both `If-Match` and an `Idempotency-Key`: it starts a bounded, resumable item migration that a retried request must join rather than duplicate, and the operation is identified by that key. The first transaction leaves public behaviour, `updatedAt` and every item unchanged and only installs the migration marker; while it stands, every item read and mutation attempts a bounded drain and otherwise answers `503 internal` with `Retry-After: 1`. The final transaction alone flips the behaviour, advances `rankVersion` — so item cursors issued before the migration are rejected rather than resumed — records the Undo inverse and the receipt, and clears the marker. `collection` to `watch` gives every item `watchStatus: \"want\"` and `collection` to `meals` an empty ingredient list; both are additive and answer with a 6-second Undo offer. Leaving `watch` or `meals` for anything else — `watch` to `meals` included — is destructive. The first call answers `409` with a typed `confirmation` containing source/target behaviours, `itemVersion`, item count and field labels, and writes nothing. The confirmed action echoes that complete object under a new key; migration installation and its gated snapshot reject any intervening item mutation or changed loss summary with a fresh `409`. A list carrying none of the data being removed loses nothing, so it needs no confirmation and changes immediately.",
         "tags": [
           "lists"
         ],
@@ -8623,18 +8674,6 @@
             "required": true,
             "name": "id",
             "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "enum": [
-                "true",
-                "false"
-              ]
-            },
-            "required": false,
-            "name": "confirmDataLoss",
-            "in": "query"
           }
         ],
         "requestBody": {
@@ -8715,7 +8754,7 @@
             }
           },
           "409": {
-            "description": "Either a stale `If-Match`, or the unconfirmed data-loss preview. The preview’s `details[]` carries `confirmDataLoss.itemCount` — the number of items actually carrying the data — and one `confirmDataLoss.fields.<n>` entry per user-facing field label, in the order the confirmation should read them.",
+            "description": "Either a stale `If-Match`, or the data-loss preview. The preview carries the typed top-level `confirmation` object that a confirmed request must echo unchanged.",
             "content": {
               "application/json": {
                 "schema": {

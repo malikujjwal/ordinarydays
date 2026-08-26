@@ -941,6 +941,38 @@ describe('a change landing between the read and the commit', () => {
   });
 
   /**
+   * `rankVersion` does not move for a field PATCH. `itemVersion` is the second fence that
+   * makes a rename into a title classified as absent force a new classification.
+   */
+  it('does not duplicate a title another writer renamed after classification', async () => {
+    const { list } = await setUp();
+    const existing = await addItem(list.listId, 'Milk');
+
+    const spy = await injectOnce(async () => {
+      const before = (await rawItem(`LIST#${list.listId}`, 'META')) as Json;
+      const patched = await request(
+        'PATCH',
+        `/v1/lists/${list.listId}/items/${existing.itemId}`,
+        { title: 'Chicken' },
+      );
+      expect(patched.status).toBe(200);
+      const after = (await rawItem(`LIST#${list.listId}`, 'META')) as Json;
+      expect(after.rankVersion).toBe(before.rankVersion);
+      expect(after.itemVersion).toBe(Number(before.itemVersion) + 1);
+    });
+    const res = await addToList(list.listId, [CHICKEN]);
+
+    expect(spy).toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    const chicken = (await itemRows(list.listId)).filter(
+      (row) => String(row.title).toLowerCase() === 'chicken',
+    );
+    expect(chicken).toHaveLength(1);
+    expect(chicken[0]?.itemId).toBe(existing.itemId);
+    expect(chicken[0]?.sourceLabel).toBe('Sunday dinner');
+  });
+
+  /**
    * The meal's own version moves in the window. The transaction's condition on the read
    * `updatedAt` fails, the whole attempt rolls back, and the retry re-reads and commits — so
    * the observable outcome is success with exactly one row, not two.

@@ -146,7 +146,11 @@ const run = (activity = meal(), selections?: Parameters<typeof input>[0]) => {
 
 /** Seeds the fenced snapshot the classification is decided from. */
 const snapshot = (items: ListItem[], rankVersion = 1) => {
-  vi.mocked(listRepository.snapshotListItems).mockResolvedValue({ items, rankVersion });
+  vi.mocked(listRepository.snapshotListItems).mockResolvedValue({
+    items,
+    rankVersion,
+    itemVersion: 1,
+  });
 };
 
 /** Every item the one transaction was built from. */
@@ -302,6 +306,7 @@ describe('a stale read re-runs the whole cycle', () => {
       return Promise.resolve({
         items: [existingItem({ checked: attempt > 1 })],
         rankVersion: 1,
+        itemVersion: attempt,
       }) as never;
     });
     vi.mocked(tx.transactWrite).mockImplementationOnce((_items, options) => {
@@ -339,13 +344,18 @@ describe('a stale read re-runs the whole cycle', () => {
   });
 
   it('asks rank allocation to commit under the exact version it snapshotted', async () => {
-    snapshot([], 7);
+    vi.mocked(listRepository.snapshotListItems).mockResolvedValue({
+      items: [],
+      rankVersion: 7,
+      itemVersion: 11,
+    });
 
     await run();
 
     expect(vi.mocked(listRepository.planListItemWrites).mock.calls[0]?.[4]).toMatchObject(
       {
         expectedRankVersion: 7,
+        expectedItemVersion: 11,
       },
     );
   });

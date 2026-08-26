@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { List, ListItem } from '@od/shared/types';
+import type { List, ListBehaviourConfirmation, ListItem } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { BehaviourMigrationWork } from '../../src/repositories/listRepository.js';
 import { useTestTable } from './harness.js';
@@ -161,16 +161,29 @@ const changeBehaviour = async (
   list: List,
   behaviour: string,
   options: { confirm?: boolean; ifMatch?: string; key?: string } = {},
-) =>
-  request(
+) => {
+  const ifMatch = options.ifMatch ?? list.updatedAt;
+  let confirmation: ListBehaviourConfirmation | undefined;
+  if (options.confirm === true) {
+    const preview = await request(
+      'POST',
+      `/v1/lists/${list.listId}/behaviour`,
+      { behaviour },
+      { 'If-Match': ifMatch },
+    );
+    const body = await preview.json();
+    confirmation = body.confirmation as ListBehaviourConfirmation;
+  }
+  return request(
     'POST',
-    `/v1/lists/${list.listId}/behaviour${options.confirm === true ? '?confirmDataLoss=true' : ''}`,
-    { behaviour },
+    `/v1/lists/${list.listId}/behaviour`,
+    { behaviour, ...(confirmation === undefined ? {} : { confirmation }) },
     {
-      'If-Match': options.ifMatch ?? list.updatedAt,
+      'If-Match': ifMatch,
       ...(options.key === undefined ? {} : { 'Idempotency-Key': options.key }),
     },
   );
+};
 
 describe('collection → watch', () => {
   it('initialises every item and leaves titles and ranks untouched', async () => {
@@ -312,11 +325,12 @@ describe('a paused migration', () => {
       toBehaviour: 'watch',
       toDetails: { behaviour: 'watch', watchStatus: 'want' },
       expectedUpdatedAt: String(meta.updatedAt),
+      expectedItemVersion: Number(meta.itemVersion ?? 0),
       now: NOW,
       undo: { token: 'tok_paused', expiresAt: '2026-08-24T09:00:06.000Z' },
       receipt: preparedReceipt(),
       // Nothing on a `collection` carries typed fields, so this snapshot loses nothing.
-      countLoss: () => 0,
+      describeLoss: () => ({ itemCount: 0, fields: [] }),
     });
   }
 
@@ -630,7 +644,7 @@ describe('the destructive direction', () => {
     return rows.filter((row) => row.entity === 'ListUndo').length;
   };
 
-  it('409s without the flag, writes nothing, and names the fields and the count', async () => {
+  it('409s without an echo, writes nothing, and returns the exact preview', async () => {
     const list = await watchList();
     const partitionBefore = await storedItems(list.listId);
 
@@ -638,10 +652,13 @@ describe('the destructive direction', () => {
     const body = await res.json();
 
     expect(res.status).toBe(409);
-    expect(body.error.details).toEqual([
-      { path: 'confirmDataLoss.itemCount', message: '2' },
-      { path: 'confirmDataLoss.fields.0', message: 'Watch status' },
-    ]);
+    expect(body.confirmation).toEqual({
+      fromBehaviour: 'watch',
+      toBehaviour: 'collection',
+      itemVersion: expect.any(Number),
+      itemCount: 2,
+      fields: ['Watch status'],
+    });
 
     const meta = await storedMeta(list.listId);
     expect(meta.behaviour).toBe('watch');
@@ -656,7 +673,7 @@ describe('the destructive direction', () => {
     expect(rows.filter((row) => row.entity === 'ListBehaviourMigration')).toHaveLength(0);
   });
 
-  it('drops details, and offers no Undo, once the flag is present', async () => {
+  it('drops details, and offers no Undo, once the preview is echoed', async () => {
     const list = await watchList();
     // The upgrade that built the fixture left one; a downgrade must add none.
     const before = await undoCount(list.listId);
@@ -672,6 +689,39 @@ describe('the destructive direction', () => {
       undefined,
     ]);
     expect(await undoCount(list.listId)).toBe(before);
+  });
+
+  it('re-previews after a field edit even when the affected item count is unchanged', async () => {
+    const list = await watchList();
+    const first = await changeBehaviour(list, 'collection');
+    const shown = (await first.json()).confirmation as ListBehaviourConfirmation;
+    const [item] = await storedItems(list.listId);
+    if (item === undefined) throw new Error('Expected a watch item.');
+
+    const patched = await request(
+      'PATCH',
+      `/v1/lists/${list.listId}/items/${item.itemId}`,
+      { title: 'Renamed after preview' },
+    );
+    expect(patched.status).toBe(200);
+
+    const confirmed = await request(
+      'POST',
+      `/v1/lists/${list.listId}/behaviour`,
+      { behaviour: 'collection', confirmation: shown },
+      { 'If-Match': list.updatedAt },
+    );
+    const body = await confirmed.json();
+
+    expect(confirmed.status).toBe(409);
+    expect(body.confirmation).toMatchObject({
+      fromBehaviour: 'watch',
+      toBehaviour: 'collection',
+      itemCount: shown.itemCount,
+      fields: shown.fields,
+      itemVersion: shown.itemVersion + 1,
+    });
+    expect((await storedMeta(list.listId)).behaviour).toBe('watch');
   });
 
   /**
@@ -719,10 +769,11 @@ describe('the destructive direction', () => {
         toBehaviour: 'watch',
         toDetails: { behaviour: 'watch', watchStatus: 'want' },
         expectedUpdatedAt: String(before.updatedAt),
+        expectedItemVersion: Number(before.itemVersion ?? 0),
         now: NOW,
         receipt: preparedReceipt(),
         // Stands in for a concurrent write: the gated snapshot says more than the preview did.
-        countLoss: () => 3,
+        describeLoss: () => ({ itemCount: 3, fields: ['Watch status'] }),
       },
     );
     expect(work.lossCount).toBe(3);
@@ -753,9 +804,10 @@ describe('the destructive direction', () => {
         toBehaviour: 'watch',
         toDetails: { behaviour: 'watch', watchStatus: 'want' },
         expectedUpdatedAt: String((await storedMeta(list.listId)).updatedAt),
+        expectedItemVersion: Number((await storedMeta(list.listId)).itemVersion ?? 0),
         now: NOW,
         receipt: preparedReceipt(),
-        countLoss: () => 0,
+        describeLoss: () => ({ itemCount: 0, fields: [] }),
       },
     );
     const advanced = await repository.applyBehaviourMigrationChunk(second);
@@ -946,10 +998,11 @@ describe('the additive settings around it', () => {
         toBehaviour: 'watch',
         toDetails: { behaviour: 'watch', watchStatus: 'want' },
         expectedUpdatedAt: String(meta.updatedAt),
+        expectedItemVersion: Number(meta.itemVersion ?? 0),
         now: NOW,
         undo: { token: 'tok_delete', expiresAt: '2026-08-24T09:00:06.000Z' },
         receipt: preparedReceipt(),
-        countLoss: () => 0,
+        describeLoss: () => ({ itemCount: 0, fields: [] }),
       },
     );
 

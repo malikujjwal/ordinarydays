@@ -267,7 +267,7 @@ describe('the behaviour-upgrade inverse', () => {
     ] as never;
 
   /**
-   * §P3-09's dedicated compensation: it restores `collection` **without** `confirmDataLoss`,
+   * §P3-09's dedicated compensation: it restores `collection` **without** destructive confirmation,
    * because it is taking back defaults nobody has touched rather than asking the user to agree
    * to a loss. The precondition check above is what earns that exemption.
    */

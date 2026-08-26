@@ -409,19 +409,29 @@ describe('what silently offers nothing', () => {
         list: { updatedAt: string };
       }
     ).list.updatedAt;
-    const changed = await app().fetch(
-      new Request(
-        `http://localhost/v1/lists/${list.listId}/behaviour?confirmDataLoss=true`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Idempotency-Key': crypto.randomUUID(),
-            'If-Match': version,
-          },
-          body: JSON.stringify({ behaviour: 'collection' }),
+    const preview = await app().fetch(
+      new Request(`http://localhost/v1/lists/${list.listId}/behaviour`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': crypto.randomUUID(),
+          'If-Match': version,
         },
-      ),
+        body: JSON.stringify({ behaviour: 'collection' }),
+      }),
+    );
+    expect(preview.status).toBe(409);
+    const confirmation = (await preview.json()).confirmation;
+    const changed = await app().fetch(
+      new Request(`http://localhost/v1/lists/${list.listId}/behaviour`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': crypto.randomUUID(),
+          'If-Match': version,
+        },
+        body: JSON.stringify({ behaviour: 'collection', confirmation }),
+      }),
     );
     expect(changed.status).toBe(200);
 

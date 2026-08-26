@@ -553,11 +553,11 @@ export interface PatchOptions extends CreateOptions {
   /**
    * Viewer pointers to clear **in this transaction** (P3-15).
    *
-   * Only a non-occurrence transition to `skipped` supplies any: the lifecycle table clears
-   * pointers when a Plan is skipped and keeps them on complete, uncomplete and reschedule.
-   * Atomic with the status write because the two are one user-visible event — a status that
-   * committed without its pointer clearing would leave a state line pointing at a Plan the
-   * user has just said did not happen.
+   * A non-occurrence transition to `skipped` and Plan → Task conversion supply these. The
+   * lifecycle table clears pointers when a Plan is skipped, and a conversion removes the
+   * Plan-specific relationship and Activity provenance. Atomic with the Activity write
+   * because either transition committed without its pointer clearing would leave hidden or
+   * misleading List state.
    *
    * Each delete is conditional on the pointer still naming this Activity, so a viewer who
    * planned the item again in the meantime keeps the newer pointer.
@@ -1057,18 +1057,6 @@ export async function listChildPointers(activityId: string): Promise<StoredItem[
   return queryAll<StoredItem>({ pk: prefix.pk }, { skPrefix: prefix.skPrefix });
 }
 
-/**
- * Removes `listId` and `listItemId` from one Activity when they still name the given List.
- *
- * The narrow provenance-cleanup helper the list delete cascade uses (`data-model.md` §7
- * "Delete shared list", P3-05): it `REMOVE`s exactly the two back-pointer attributes and
- * deliberately leaves `updatedAt` alone — provenance cleanup is not a user edit, and bumping
- * the concurrency token would fail an unrelated open `If-Match` sheet on another device.
- *
- * The condition re-asserts that the Activity still names this List, so one that is gone or
- * has since been repointed at a different list is **skipped**, never clobbered. This runs on
- * a retryable cascade, so finding the pointer stale is expected rather than exceptional.
- */
 /** One resolved source row: where it sits now, and the id that must still be there. */
 export interface IngredientAddition {
   readonly index: number;
@@ -1090,9 +1078,9 @@ export interface IngredientAddition {
  *
  * ## It advances `updatedAt`, and that was a correction
  *
- * The first version deliberately did not, mirroring {@link clearListProvenance} on the
- * grounds that this is bookkeeping about a different object. Review pushed back and was
- * right for a reason the original argument missed: `addedToListId` is **rendered** — it is
+ * The first version deliberately did not, treating provenance as bookkeeping about a
+ * different object. Review pushed back and was right for a reason the original argument
+ * missed: `addedToListId` is **rendered** — it is
  * what makes a meal's ingredient row say `Added` — and it lives inside `details`, which
  * `PATCH` replaces wholesale under `If-Match`. A field that changes what the user sees, on a
  * versioned object, has to move the version, or a client holding the pre-write copy both
@@ -1145,15 +1133,31 @@ export function ingredientsAddedToListItem(
   };
 }
 
+/**
+ * Removes one List back-pointer and advances the Activity version.
+ *
+ * `listId` / `listItemId` are part of the versioned Activity even though projection is
+ * access-filtered. Removing them without moving `updatedAt` lets a client holding the old
+ * version pass its next `If-Match`; the cleanup and every transactional item-delete path
+ * therefore advance the same concurrency token.
+ *
+ * The provenance condition keeps the list-delete cascade idempotent: a missing, deleted or
+ * repointed Activity is skipped, never clobbered.
+ */
 export async function clearListProvenance(
   activityId: string,
   listId: string,
+  updatedAt: string,
 ): Promise<void> {
   try {
     await updateItem(activityMeta(activityId), {
-      expression: 'REMOVE #listId, #listItemId',
-      names: { '#listId': 'listId', '#listItemId': 'listItemId' },
-      values: { ':listId': listId },
+      expression: 'SET #updatedAt = :updatedAt REMOVE #listId, #listItemId',
+      names: {
+        '#updatedAt': 'updatedAt',
+        '#listId': 'listId',
+        '#listItemId': 'listItemId',
+      },
+      values: { ':listId': listId, ':updatedAt': updatedAt },
       condition: 'attribute_exists(pk) AND #listId = :listId',
     });
   } catch (error) {

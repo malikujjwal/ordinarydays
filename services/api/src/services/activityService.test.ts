@@ -30,9 +30,15 @@ vi.mock('../repositories/activityRepository.js', () => ({
   getActivityPartitionStrong: vi.fn(),
   listParticipants: vi.fn(() => Promise.resolve([])),
   deleteActivity: vi.fn(() => Promise.resolve()),
+  StaleViewerLinkError: class extends Error {},
+}));
+
+vi.mock('../repositories/listRepository.js', () => ({
+  findViewerLinksTo: vi.fn(() => Promise.resolve([])),
 }));
 
 const repository = await import('../repositories/activityRepository.js');
+const listRepository = await import('../repositories/listRepository.js');
 
 const USER = 'usr_local_dev';
 const NOW = '2026-08-09T12:00:00.000Z';
@@ -58,6 +64,8 @@ beforeEach(() => {
   vi.mocked(repository.listParticipants).mockResolvedValue([]);
   vi.mocked(repository.deleteActivity).mockReset();
   vi.mocked(repository.deleteActivity).mockResolvedValue(undefined);
+  vi.mocked(listRepository.findViewerLinksTo).mockReset();
+  vi.mocked(listRepository.findViewerLinksTo).mockResolvedValue([]);
 });
 
 /**
@@ -1033,6 +1041,41 @@ describe('patchActivity', () => {
     );
 
     expect(info).not.toHaveBeenCalled();
+  });
+
+  it('atomically clears the Plan-specific link and provenance on Plan → Task', async () => {
+    const listId = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X4';
+    const itemId = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X5';
+    const viewerLink = {
+      listId,
+      itemId,
+      viewerUserId: USER,
+      activityId: PLAN,
+      linkedAt: VERSION,
+    };
+    seed(stored({ listId, listItemId: itemId }));
+    vi.mocked(listRepository.findViewerLinksTo).mockResolvedValue([viewerLink]);
+
+    await patchActivity(USER, PLAN, { objectKind: 'task', type: 'task' }, VERSION, LATER);
+
+    expect(listRepository.findViewerLinksTo).toHaveBeenCalledWith(listId, itemId, PLAN);
+    const [, written, , options] =
+      vi.mocked(repository.patchActivity).mock.calls[0] ?? [];
+    expect(written).not.toHaveProperty('listId');
+    expect(written).not.toHaveProperty('listItemId');
+    expect(options?.clearViewerLinks).toEqual([viewerLink]);
+  });
+
+  it('retains the link and provenance when a Plan is cancelled', async () => {
+    const listId = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X4';
+    const itemId = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X5';
+    seed(stored({ listId, listItemId: itemId }));
+
+    await patchActivity(USER, PLAN, { status: 'cancelled' }, VERSION, LATER);
+
+    const written = vi.mocked(repository.patchActivity).mock.calls[0]?.[1];
+    expect(written).toMatchObject({ status: 'cancelled', listId, listItemId: itemId });
+    expect(listRepository.findViewerLinksTo).not.toHaveBeenCalled();
   });
 
   /**

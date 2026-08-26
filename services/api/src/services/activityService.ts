@@ -52,6 +52,7 @@ import {
   newReminderId,
   createActivity as putActivity,
   patchActivity as putPatch,
+  StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
 import { findViewerLinksTo } from '../repositories/listRepository.js';
 import type { StoredItem } from '../repositories/migrate.js';
@@ -719,6 +720,17 @@ export async function patchActivity(
   const correctionDate = sameDayCorrectionDate(current, patch, now);
   const change = applyKindChange(current, patch, log);
   const next = merge(current, patch, change, now);
+  const convertedListLink =
+    current.objectKind === 'plan' &&
+    next.objectKind === 'task' &&
+    current.listId !== undefined &&
+    current.listItemId !== undefined
+      ? { listId: current.listId, itemId: current.listItemId }
+      : undefined;
+  if (current.objectKind === 'plan' && next.objectKind === 'task') {
+    delete next.listId;
+    delete next.listItemId;
+  }
   const parent =
     next.parentActivityId !== undefined
       ? await getActivityMeta(next.parentActivityId)
@@ -729,14 +741,20 @@ export async function patchActivity(
     current.title !== next.title;
 
   try {
-    await putPatch(userId, next, ifMatch, {
-      previous: current,
-      ...(correctionDate === undefined
-        ? {}
-        : { requireMissingOccurrenceDate: correctionDate }),
-      ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
-      ...(updatesExistingChildPointer ? { updateChildPointer: true } : {}),
-    });
+    await putPatchWithLinkLifecycle(
+      userId,
+      next,
+      ifMatch,
+      {
+        previous: current,
+        ...(correctionDate === undefined
+          ? {}
+          : { requireMissingOccurrenceDate: correctionDate }),
+        ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
+        ...(updatesExistingChildPointer ? { updateChildPointer: true } : {}),
+      },
+      convertedListLink,
+    );
   } catch (error) {
     if (error instanceof AppError && error.code === 'conflict') {
       const fresh = await getActivityMeta(activityId);
@@ -758,6 +776,46 @@ export async function patchActivity(
    * Caught by a route test asserting the body has no `pk`, which the first version failed.
    */
   return toActivity(next as unknown as StoredItem);
+}
+
+const VIEWER_LINK_WRITE_ATTEMPTS = 3;
+
+/**
+ * A Plan → Task conversion ends the Plan-specific relationship to its source ListItem.
+ * Clearing Activity provenance and the matching viewer pointer is part of the same
+ * conditional transaction as the conversion, so neither half can survive by itself.
+ *
+ * Pointer deletes are conditional: a viewer may have planned the item again after our read.
+ * Re-reading on that condition failure preserves the newer pointer while still committing
+ * the conversion. Three consecutive races surface an honest conflict with no partial write.
+ */
+async function putPatchWithLinkLifecycle(
+  userId: string,
+  next: Activity,
+  expectedUpdatedAt: string,
+  options: Parameters<typeof putPatch>[3],
+  convertedListLink?: { readonly listId: string; readonly itemId: string },
+): Promise<void> {
+  if (convertedListLink === undefined) {
+    await putPatch(userId, next, expectedUpdatedAt, options);
+    return;
+  }
+
+  for (let attempt = 0; attempt < VIEWER_LINK_WRITE_ATTEMPTS; attempt += 1) {
+    const clearViewerLinks = await findViewerLinksTo(
+      convertedListLink.listId,
+      convertedListLink.itemId,
+      next.activityId,
+    );
+    try {
+      await putPatch(userId, next, expectedUpdatedAt, { ...options, clearViewerLinks });
+      return;
+    } catch (error) {
+      if (!(error instanceof StaleViewerLinkError)) throw error;
+    }
+  }
+
+  throw new AppError('conflict', 'This changed while you were editing it. Try again.');
 }
 
 /**

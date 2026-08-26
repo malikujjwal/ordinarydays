@@ -5,8 +5,8 @@ import type { List, ListItem, ListItemActivityLink } from '@od/shared/types';
  * `toUser`'s reason: a stored row carries storage attributes, and a projection that leaks
  * by default is corrected by remembering (`agent-playbook.md` §6.11).
  *
- * `rankRepairId` and `behaviourMigrationId` are deliberately absent: they are storage-level
- * work markers that gate reads and are never serialised (`data-model.md` §4.6).
+ * `itemVersion`, `rankRepairId` and `behaviourMigrationId` are deliberately absent: they are
+ * storage-level concurrency state and never serialised (`data-model.md` §4.6).
  * `rankVersion` stays — item-page cursors are bound to it.
  */
 export function toList(list: List): Record<string, unknown> {

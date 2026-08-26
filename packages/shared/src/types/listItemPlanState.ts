@@ -17,10 +17,11 @@ import type { ActivityStatus, PlanType } from './vocabulary.js';
  * - `type` — the verb differs by kind: an event is `Planned`, a watch session is
  *   `Next session`. Inferring it from the list's behaviour would be wrong for a `custom` Plan
  *   made from a `watch` list, which the bridge explicitly allows.
- * - `status` — `Done Saturday` versus `Planned Saturday`, and the un-complete that reverts it.
- * - `schedule` — the date and time the line renders, and **the display gate**: a line shows
- *   only when the hydrated Activity has `schedule.date`, so an unscheduled Plan keeps its
- *   pointer and loses its line (`plans-and-lists.md` §6.2).
+ * - `status` — `Done Saturday` versus `Planned Saturday`, the un-complete that reverts it,
+ *   and the date-independent `Cancelled` line.
+ * - `schedule` — the date and time a scheduled/completed line renders. Its absence hides a
+ *   saved Plan but not a cancelled one, whose status is useful context on its own
+ *   (`plans-and-lists.md` §6.2).
  *
  * What is absent is as deliberate. No `title`: the row shows the **item's** title, and the two
  * are independent after the one-time seed (P3-14). No watch progress: `Watching · S2 E4` comes
