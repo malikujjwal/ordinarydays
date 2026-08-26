@@ -114,7 +114,7 @@ pnpm dev                    # api (local Hono) + expo dev server
 pnpm typecheck              # tsc across all packages
 pnpm lint                   # Biome
 pnpm test                   # Vitest, all packages
-pnpm test:integration       # requires DynamoDB Local: docker compose up -d
+pnpm test:int               # starts the test-only in-memory DynamoDB Local service
 pnpm e2e:web                # Playwright
 pnpm gen:openapi            # regenerate docs/generated/openapi.json — must be committed
 pnpm --filter @od/infra cdk diff 'od-*-dev'   # stage comes from the stack name, never -c

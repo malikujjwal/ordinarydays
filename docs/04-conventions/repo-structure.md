@@ -702,7 +702,7 @@ agent uses.
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "test:int": "docker compose up -d && turbo run test:int",
+    "test:int": "docker compose --profile test up -d --wait dynamodb-test && turbo run test:int",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "depcruise": "depcruise --config .dependency-cruiser.cjs apps packages services infra",

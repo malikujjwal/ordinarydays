@@ -8,6 +8,19 @@ services:
     ports: ["8000:8000"]
     volumes: ["./.dynamodb-data:/home/dynamodblocal/data"]
     working_dir: /home/dynamodblocal
+  # Disposable integration-test database. The profile keeps it out of `pnpm dev`; tests do
+  # not need persistence, and -inMemory avoids SQLite writes over Docker Desktop's bind mount.
+  dynamodb-test:
+    profiles: ["test"]
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports: ["8002:8000"]
+    healthcheck:
+      # An unsigned request returns 400; curl success still proves the listener is ready.
+      test: ["CMD", "curl", "--silent", "--output", "/dev/null", "http://localhost:8000"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
   dynamodb-admin:
     image: aaronshaf/dynamodb-admin
     ports: ["8001:8001"]

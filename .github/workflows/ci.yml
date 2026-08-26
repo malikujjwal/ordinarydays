@@ -164,15 +164,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      # The same preflight `pnpm dev` runs (P0-23): starts the containers, waits for :8000,
-      # builds `@od/shared`, creates the table from the shared definition and copies
-      # `.env.example`. Reusing it means CI exercises the path a new developer takes, and
-      # the wait-for-ready logic has one home.
-      - name: Start DynamoDB Local and create the table
-        run: node scripts/dev-preflight.mjs
-
       - name: Integration tests
-        run: pnpm --filter @od/api test:int
+        # Starts the profiled in-memory DynamoDB Local service and waits for its health check.
+        # Every integration file creates and drops its own table; no dev table is needed.
+        run: pnpm test:int
 
   # The Playwright flow, against the local stack (P1-29). Its own job for the same reason
   # `integration` is: a browser failure should report as `e2e`, not as step eleven of

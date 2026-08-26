@@ -957,6 +957,18 @@ services:
     ports: ["8000:8000"]
     volumes: ["./.dynamodb-data:/home/dynamodblocal/data"]
     working_dir: /home/dynamodblocal
+  # Started only by `pnpm test:int`; integration files create and drop their own tables.
+  dynamodb-test:
+    profiles: ["test"]
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    ports: ["8002:8000"]
+    healthcheck:
+      # An unsigned request returns 400; curl success still proves the listener is ready.
+      test: ["CMD", "curl", "--silent", "--output", "/dev/null", "http://localhost:8000"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
   dynamodb-admin:
     image: aaronshaf/dynamodb-admin
     ports: ["8001:8001"]
@@ -980,9 +992,18 @@ docker compose up -d
 pnpm --filter @od/api ddb:create-table   # scripts/create-local-table.ts, same schema as CDK
 pnpm --filter @od/api ddb:seed           # a founder-sized fixture set
 pnpm --filter @od/api s3:create-bucket   # creates od-media-local in MinIO, idempotent
+pnpm test:int                             # isolated in-memory DynamoDB Local on :8002
 open http://localhost:8001               # browse items
 open http://localhost:9001               # browse objects
 ```
+
+The development and integration databases deliberately have different lifecycles. `dynamodb`
+persists `od-main-local` in `.dynamodb-data`, because rows a developer is inspecting must
+survive a container restart. `dynamodb-test` is behind the `test` Compose profile and uses
+`-inMemory`: every integration file creates and drops its own table, so persisting SQLite
+pages would add Windows-to-Linux bind-mount writes without preserving anything useful.
+`vitest.int.config.ts` defaults `DDB_ENDPOINT` to `http://127.0.0.1:8002`; an explicit
+environment value may still select an externally managed DynamoDB Local instance.
 
 `ddb:create-table` must produce the **same** key schema and GSI as `DataStack`. It reads
 the definitions from a shared module that `DataStack` also imports, so the two cannot
@@ -1239,7 +1260,7 @@ there. That is correct — an untrusted PR should not be able to read the accoun
 > | --- | --- |
 > | `validate` | `check-node-versions.mjs`, `biome ci .`, `turbo run typecheck`, `typecheck:e2e`, `turbo run test -- --coverage`, `gen:openapi:check`, `check:bundle-size`, `expo-doctor`, gitleaks, coverage upload |
 > | `depcruise` | `pnpm depcruise`, then each of the four forbidden-pattern checks as its own step |
-> | `integration` | `scripts/dev-preflight.mjs`, then `pnpm --filter @od/api test:int` |
+> | `integration` | `pnpm test:int`, which starts and health-checks the profiled in-memory database before Turbo runs the suite |
 > | `e2e` | **P1-29.** `playwright install --with-deps chromium`, `scripts/dev-preflight.mjs`, then `pnpm run e2e:web` (which builds the web export first). Uploads `playwright-report/` on failure. `testing.md` §6.1 describes running this against the deployed dev site; that is Phase 4, and `E2E_BASE_URL` re-aims it then without the job changing shape. |
 > | `synth` | `cdk synth 'od-*-dev' --quiet`, **no credentials, no `id-token: write`** |
 >
@@ -1255,9 +1276,10 @@ there. That is correct — an untrusted PR should not be able to read the accoun
 > PR. It is still a build check: `NodeLambda` runs esbuild at synth time, so a runtime-invalid
 > import that `tsc` accepted fails here.
 >
-> `integration` reuses P0-23's `dev-preflight.mjs` rather than restating
-> `docker compose up -d` plus a wait loop. One home for the wait-for-ready logic, and CI
-> exercises the same path a new developer takes.
+> **Amended 2026-08-26:** `integration` no longer runs the development preflight. The root
+> `pnpm test:int` command starts only `dynamodb-test` through its Compose profile and waits on
+> that service's health check. The suite owns disposable per-file tables, so CI does not need
+> the persistent development database, `od-main-local`, or `.env.local`.
 >
 > Two details that cost time to find rather than to fix: `expo-doctor` is not on the
 > workspace PATH and must be run through `npx` from `apps/mobile` (P0-22), and the checkout
