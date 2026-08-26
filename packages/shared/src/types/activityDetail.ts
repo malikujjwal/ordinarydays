@@ -1,4 +1,5 @@
 import type { Activity } from './activity.js';
+import type { ActivityUpdate } from './activityUpdate.js';
 import type { AgendaCapabilities, AgendaItemStatus } from './agenda.js';
 import type { Reminder } from './reminder.js';
 
@@ -67,4 +68,12 @@ export interface ActivityDetail {
   occurrence?: OccurrenceDetailProjection;
   /** Real stored completed-occurrence rows used by destructive recurrence confirmations. */
   completedOccurrenceCount?: number;
+  /**
+   * The newest page of the plan's feed, embedded so opening a plan is **one** request
+   * (§2.3, P3-36's one-request rule). `updatesCursor` continues it through P3-19's
+   * `GET .../updates?cursor=`; its absence means the feed ends here rather than that paging
+   * is unavailable.
+   */
+  updates?: ActivityUpdate[];
+  updatesCursor?: string;
 }

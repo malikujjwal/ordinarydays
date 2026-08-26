@@ -29,6 +29,13 @@ export type {
   OccurrenceDetailProjection,
 } from './activityDetail.js';
 export type {
+  ActivityUpdate,
+  ActivityUpdateKind,
+  ActivityUpdatePage,
+  PostActivityUpdateInput,
+  PostActivityUpdateResult,
+} from './activityUpdate.js';
+export type {
   ActivityAgendaData,
   ActivityAgendaRow,
   AgendaCapabilities,

@@ -163,6 +163,20 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
     auth: 'authenticated',
   },
 
+  // §2.5 Updates (the plan's activity feed)
+  { method: 'GET', pattern: '/v1/activities/:id/updates', auth: 'authenticated' },
+  {
+    method: 'POST',
+    pattern: '/v1/activities/:id/updates',
+    auth: 'authenticated',
+    mutates: true,
+  },
+  {
+    method: 'DELETE',
+    pattern: '/v1/activities/:id/updates/:updateId',
+    auth: 'authenticated',
+  },
+
   // §2.7 Lists
   { method: 'GET', pattern: '/v1/lists', auth: 'authenticated' },
   { method: 'POST', pattern: '/v1/lists', auth: 'authenticated', mutates: true },
