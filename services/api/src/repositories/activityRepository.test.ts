@@ -220,7 +220,7 @@ describe('touchLastActivity transaction composition', () => {
       const tx: TransactItem[] = [];
 
       const touched = touchLastActivity(subject, touchedAt, [ALICE], tx);
-      const meta = tx[0]?.Put?.Item;
+      const meta = tx[0]?.Update;
       const index = tx[1]?.Put?.Item;
 
       expect(touched).toMatchObject({
@@ -228,9 +228,14 @@ describe('touchLastActivity transaction composition', () => {
         updatedAt: subject.updatedAt,
       });
       expect(meta).toMatchObject({
-        entity: 'Activity',
-        lastActivityAt: touchedAt,
-        updatedAt: subject.updatedAt,
+        Key: { pk: `ACT#${ACT}`, sk: 'META' },
+        UpdateExpression: 'SET #lastActivityAt = :at',
+        ConditionExpression: '#updatedAt = :expected AND #lastActivityAt = :expectedLast',
+        ExpressionAttributeValues: {
+          ':at': touchedAt,
+          ':expected': subject.updatedAt,
+          ':expectedLast': subject.lastActivityAt,
+        },
       });
       expect(index).toMatchObject({
         entity: 'ActivityIndex',
@@ -468,15 +473,22 @@ describe('create composes one transaction', () => {
 });
 
 describe('patch', () => {
-  it('is conditional on the updatedAt the caller read', async () => {
+  it('pins the edit token and independently maintained META fields', async () => {
     const previous = activity();
     await patchActivity(ALICE, activity({ title: 'Buy oat milk' }), previous.updatedAt, {
       previous,
     });
 
     expect(sentItems()[0]?.Put).toMatchObject({
-      ConditionExpression: '#updatedAt = :expected',
-      ExpressionAttributeValues: { ':expected': previous.updatedAt },
+      ConditionExpression:
+        '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents',
+      ExpressionAttributeValues: {
+        ':expected': previous.updatedAt,
+        ':expectedLastActivityAt': previous.lastActivityAt,
+        ':expectedParticipantCount': previous.participantCount,
+        ':expectedChildCount': previous.childCount,
+        ':expectedExpenseTotalCents': previous.expenseTotalCents,
+      },
     });
   });
 

@@ -61,13 +61,15 @@ const NOT_FOUND = 'Update not found.';
 const POST_ATTEMPTS = 3;
 
 /**
- * The feed is the **plan's** activity feed, and only a Plan has one.
+ * Only a Plan accepts new feed entries.
  *
  * `plans-and-lists.md` §2.1 row 9 puts Updates in plan detail; Task detail
  * (`today-and-tasks.md` §5.6) has no Updates section at all and renders no placeholder for
  * one. Writing rows on a Task therefore produces history no screen can show and nobody can
  * reach — invisible storage that still costs a partition read and still has to be migrated.
- * Refused on the post path and skipped by the system writers.
+ * Refused on the post path and skipped by the system writers. Existing rows survive a
+ * Plan-to-Task conversion as read-only history: conversion must not silently delete user
+ * content, and authors may still delete their own user entries from that history.
  */
 const NOT_A_PLAN = 'Only a plan has an updates feed.';
 
@@ -79,7 +81,7 @@ function assertHasFeed(activity: Activity): void {
   }
 }
 
-/** Whether this activity has a feed at all — the system writers' guard. */
+/** Whether this activity accepts new feed entries — the system writers' guard. */
 export function hasUpdatesFeed(activity: Activity): boolean {
   return activity.objectKind === 'plan';
 }
@@ -106,8 +108,7 @@ export async function listUpdates(
   activityId: string,
   cursor?: string,
 ): Promise<UpdatesPage> {
-  const { activity } = await assertActivityAccess(userId, activityId, 'read');
-  assertHasFeed(activity);
+  await assertActivityAccess(userId, activityId, 'read', { consistentRead: true });
   return listActivityUpdates(activityId, {
     limit: UPDATES_PAGE_SIZE,
     ...(cursor === undefined ? {} : { cursor }),
@@ -142,7 +143,9 @@ export async function postUpdate(
   now: string,
   receiptFor?: (result: PostedUpdate) => IdempotencyReceipt,
 ): Promise<PostedUpdate> {
-  const { activity } = await assertActivityAccess(userId, activityId, 'write');
+  const { activity } = await assertActivityAccess(userId, activityId, 'write', {
+    consistentRead: true,
+  });
   assertHasFeed(activity);
 
   const update: ActivityUpdate = {
@@ -194,6 +197,7 @@ export async function postUpdate(
 
       const fresh = await getActivityMeta(activityId, { consistentRead: true });
       if (fresh === undefined) throw new AppError('not_found', 'Activity not found.');
+      assertHasFeed(fresh);
       current = fresh;
     }
   }
@@ -219,8 +223,7 @@ export async function deleteUpdate(
   activityId: string,
   updateId: string,
 ): Promise<void> {
-  const { activity } = await assertActivityAccess(userId, activityId, 'read');
-  assertHasFeed(activity);
+  await assertActivityAccess(userId, activityId, 'read', { consistentRead: true });
 
   const update = await getActivityUpdate(activityId, updateId);
   if (update === undefined) throw updateNotFound();

@@ -564,7 +564,7 @@ describe('P2-14 skip', () => {
     expect((await noKey.json()).error.details[0].path).toBe('Idempotency-Key');
   });
 
-  it('leaves all projected state unchanged when the transaction is cancelled', async () => {
+  it('returns conflict and leaves all projected state unchanged when META moved', async () => {
     const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
     const original = meta();
     const state = seed({
@@ -580,7 +580,7 @@ describe('P2-14 skip', () => {
 
     const response = await post(createApp(), 'skip', {});
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     expect(state.currentActivity()).toEqual(original);
   });
 });

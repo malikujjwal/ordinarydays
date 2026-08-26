@@ -1446,6 +1446,10 @@ interface ActivityUpdate {
   P3-19 and open to correction.
 - A `system` entry is written in the **same transaction** as the change it records, so the
   feed cannot disagree with the plan in either direction.
+- Plan → Task conversion retains every existing `ActivityUpdate`. The Task accepts no new
+  user or system entries, but the existing rows remain readable as conversion history and
+  an author may still delete their own `user` entry. Conversion is not permission to erase
+  discussion content as an undocumented side effect.
 - Neither kind increments `icsSequence` (§4.1) — nothing here appears in an exported calendar
   event.
 

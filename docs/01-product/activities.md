@@ -655,6 +655,10 @@ The user-facing contract:
    loss preview below. Reminders are separate per-user items, not a
    field on the Activity
    ([`../02-architecture/data-model.md#43-reminder`](../02-architecture/data-model.md#43-reminder)).
+   Existing updates-feed entries are also preserved as read-only conversion history. A Task
+   cannot receive new user or system entries, but conversion never silently erases or makes
+   the Plan's discussion unreachable; authors retain the ability to delete their own user
+   entries.
 5. Fields on `details` are mapped where a same-meaning field exists, and otherwise dropped.
    The mapping table is exhaustive:
 

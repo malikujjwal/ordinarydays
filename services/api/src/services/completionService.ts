@@ -181,6 +181,7 @@ export async function completeActivity(
     ...(activity.parentActivityId === undefined ? {} : { updateChildPointer: true }),
     ...(systemEntry === undefined ? {} : { extraItems: [systemEntry] }),
     idempotencyReceipt: receiptFor(result),
+    idempotencyReceiptFor: () => receiptFor(result),
   });
   return result;
 }
@@ -257,6 +258,7 @@ export async function uncompleteActivity(
     ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
     ...(activity.parentActivityId === undefined ? {} : { updateChildPointer: true }),
     idempotencyReceipt: receiptFor(result),
+    idempotencyReceiptFor: () => receiptFor(result),
   });
   return result;
 }
@@ -321,6 +323,7 @@ export async function skipActivity(
     ...(context.parent === undefined ? {} : { taskSubtitle: context.parent.title }),
     ...(activity.parentActivityId === undefined ? {} : { updateChildPointer: true }),
     idempotencyReceipt: receiptFor(result),
+    idempotencyReceiptFor: () => receiptFor(result),
   });
   return result;
 }

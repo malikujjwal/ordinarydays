@@ -312,7 +312,7 @@ export async function scheduleActivity(
     changedParticipants.length > 45 || (clearDate && participants.length > 45);
   if (deferredParticipants) kinds.push('reset_rsvp');
 
-  const result: ScheduleActivityResult = {
+  let result: ScheduleActivityResult = {
     activity: projectActivity(next),
     ...(rsvpReset ? { rsvpReset: true } : {}),
     ...(normalised ? { reminderOffsetsNormalized: true } : {}),
@@ -356,6 +356,10 @@ export async function scheduleActivity(
       ? { participantRows: changedParticipants }
       : {}),
     idempotencyReceipt: receipt,
+    idempotencyReceiptFor: (committed) => {
+      result = { ...result, activity: projectActivity(committed) };
+      return receiptFor(result, work === undefined ? undefined : ref);
+    },
     ...(work === undefined ? {} : { cleanupWork: work }),
     ...(deferredParticipants ? { rsvpResetPending: true } : {}),
   });

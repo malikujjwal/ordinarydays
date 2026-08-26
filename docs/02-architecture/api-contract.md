@@ -704,9 +704,9 @@ deleted once the activity is scheduled. Guests cannot suggest; they read and RSV
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| `GET` | `/v1/activities/:id/updates?cursor=` | Newest first, 50 per page. The first page and cursor are embedded in Activity detail. |
-| `POST` | `/v1/activities/:id/updates` | `{ body }` → `{ update, lastActivityAt }`. System entries ("Alice is going", "Time changed to 8 PM") are written server-side with `kind: 'system'`. The returned timestamp is authoritative while the GSI projection converges. |
-| `DELETE` | `/v1/activities/:id/updates/:updateId` | Author only, and only on `kind: 'user'` entries — a system entry is the record of what happened and is undeletable. Anything else → `404`. Matches phase-03 P3-19. |
+| `GET` | `/v1/activities/:id/updates?cursor=` | Newest first, 50 per page. The first page and cursor are embedded in Activity detail. A Plan converted to a Task retains its existing entries as read-only history, so this route continues to page them. |
+| `POST` | `/v1/activities/:id/updates` | Plan-only. `{ body }` → `{ update, lastActivityAt }`. System entries ("Alice is going", "Time changed to 8 PM") are written server-side with `kind: 'system'`. The returned timestamp is authoritative while the GSI projection converges. A Task, including a converted Plan, rejects new entries. |
+| `DELETE` | `/v1/activities/:id/updates/:updateId` | Author only, and only on `kind: 'user'` entries — including the author's retained entries after Plan → Task conversion. A system entry is the record of what happened and is undeletable. Anything else → `404`. Matches phase-03 P3-19. |
 
 ### 2.6 Attachments
 

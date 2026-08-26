@@ -15,11 +15,17 @@ useTestTable();
  */
 
 type AppModule = typeof import('../../src/app.js');
+type ActivityRepository = typeof import('../../src/repositories/activityRepository.js');
+type Tx = typeof import('../../src/repositories/tx.js');
 
 let createApp: AppModule['createApp'];
+let activityRepository: ActivityRepository;
+let tx: Tx;
 
 beforeAll(async () => {
   createApp = (await import('../../src/app.js')).createApp;
+  activityRepository = await import('../../src/repositories/activityRepository.js');
+  tx = await import('../../src/repositories/tx.js');
 });
 
 const app = () => createApp();
@@ -40,6 +46,15 @@ const get = (path: string) => app().fetch(new Request(`http://localhost${path}`)
 
 const del = (path: string) =>
   app().fetch(new Request(`http://localhost${path}`, { method: 'DELETE' }));
+
+const patch = (path: string, body: unknown, ifMatch: string) =>
+  app().fetch(
+    new Request(`http://localhost${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'If-Match': ifMatch },
+      body: JSON.stringify(body),
+    }),
+  );
 
 const dataOf = async (response: Response) => (await response.json()).data;
 
@@ -178,6 +193,37 @@ describe('which timestamp a post moves', () => {
     expect(patched.status).toBe(200);
   });
 
+  it('does not roll back a prep-task count from META captured before the attach', async () => {
+    const plan = await createPlan();
+    const before = await activityRepository.getActivityMeta(plan.activityId, {
+      consistentRead: true,
+    });
+    if (before === undefined) throw new Error('Expected the created Plan META row');
+
+    const items: Parameters<typeof activityRepository.touchLastActivity>[3] = [];
+    activityRepository.touchLastActivity(
+      before,
+      '2026-08-26T15:00:00.000Z',
+      ['usr_local_dev'],
+      items,
+    );
+
+    const child = await post('/v1/activities', {
+      objectKind: 'task',
+      type: 'task',
+      title: 'Pack chargers',
+      parentActivityId: plan.activityId,
+    });
+    expect(child.status).toBe(201);
+
+    await tx.transactWrite(items, { operation: 'staleDiscussionTouchTest' });
+
+    expect(await metaOf(plan.activityId)).toMatchObject({
+      childCount: 1,
+      lastActivityAt: '2026-08-26T15:00:00.000Z',
+    });
+  });
+
   /**
    * `#P` sorts on `lastActivityAt`, so the projection has to carry it too — otherwise the
    * Needs-a-date stage stays in the order it had before anyone said anything.
@@ -204,11 +250,22 @@ describe('which timestamp a post moves', () => {
 });
 
 describe('paging', () => {
-  it('pages a 60-entry feed at fifty and resumes exactly where it stopped', async () => {
+  it('retains and pages a 60-entry feed after Plan to Task conversion', async () => {
     const plan = await createPlan();
     for (let index = 0; index < 60; index += 1) {
       expect((await postUpdate(plan.activityId, `Entry ${index}`)).status).toBe(201);
     }
+
+    const converted = await patch(
+      `/v1/activities/${plan.activityId}`,
+      { objectKind: 'task', type: 'task' },
+      plan.updatedAt,
+    );
+    expect(converted.status).toBe(200);
+
+    const detail = await dataOf(await get(`/v1/activities/${plan.activityId}`));
+    expect(detail.updates).toHaveLength(50);
+    expect(detail.updatesCursor).toBeDefined();
 
     const first = await dataOf(await get(`/v1/activities/${plan.activityId}/updates`));
     expect(first.updates).toHaveLength(50);
@@ -229,6 +286,13 @@ describe('paging', () => {
       (entry: { updateId: string }) => entry.updateId,
     );
     expect(new Set(ids).size).toBe(60);
+
+    const refused = await postUpdate(plan.activityId, 'A new Task entry');
+    expect(refused.status).toBe(400);
+    expect((await refused.json()).error.message).toBe('Only a plan has an updates feed.');
+
+    const deleted = await del(`/v1/activities/${plan.activityId}/updates/${ids[0]}`);
+    expect(deleted.status).toBe(204);
   });
 
   it('embeds the newest page in activity detail, so opening a plan is one request', async () => {
@@ -410,8 +474,8 @@ describe('system entries', () => {
 });
 
 /**
- * The feed belongs to Plans (P3-19 review). Task detail has no Updates section, so a row
- * written on a Task is history nothing can show and nobody can reach.
+ * Only Plans accept new entries. A Task can still expose retained conversion history, so
+ * reading an ordinary Task is an empty successful page rather than a kind error.
  */
 describe('only a plan has a feed', () => {
   const createTask = async () => {
@@ -435,9 +499,19 @@ describe('only a plan has a feed', () => {
     expect(await feedRowsOf(task.activityId)).toEqual([]);
   });
 
-  it('400s reading a task’s feed', async () => {
+  it('returns an empty page when reading a task’s retained-history endpoint', async () => {
     const task = await createTask();
-    expect((await get(`/v1/activities/${task.activityId}/updates`)).status).toBe(400);
+    const res = await get(`/v1/activities/${task.activityId}/updates`);
+    expect(res.status).toBe(200);
+    expect(await dataOf(res)).toEqual({ updates: [] });
+  });
+
+  it('404s an unknown retained-history entry on a task', async () => {
+    const task = await createTask();
+    const res = await del(
+      `/v1/activities/${task.activityId}/updates/upd_01J8XKQ2M4N5P6R7S8T9V0W1X9`,
+    );
+    expect(res.status).toBe(404);
   });
 
   it('writes no system entry when a task is rescheduled or completed', async () => {

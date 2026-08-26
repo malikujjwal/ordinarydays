@@ -1393,13 +1393,19 @@ exists to page older entries and to post.
   amend `api-contract.md` §2.5 in the same PR. Raise the conflict in the PR description.
 - Updates work on a private plan; the client hides the empty section (§2.2), the endpoint
   does not.
+- A Plan → Task conversion retains existing update rows as read-only history. `GET` still
+  pages those rows and `DELETE` still permits the author's own `user` entries; `POST` and
+  every server-side system writer remain Plan-only. The conversion must not make stored
+  discussion unreachable or silently delete it.
 
 **Tests.** Integration: post then get returns newest first; a client-supplied
 `kind: 'system'` `400`s; after a post, the response carries the new `lastActivityAt`, META
 has moved and `updatedAt` is byte-identical, and the GSI projection eventually places the
 plan at the head of the `#P` bucket ordering (ties into P3-20);
 the cursor pages a 60-entry feed; the author deletes their own entry, a `system` entry
-delete `404`s; the schedule path writes exactly one system entry per date change.
+delete `404`s; a converted Plan's 60-entry history still pages without omissions or
+duplicates while new posts fail; the schedule path writes exactly one system entry per date
+change.
 
 ---
 

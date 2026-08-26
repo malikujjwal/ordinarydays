@@ -1806,6 +1806,10 @@ export async function getActivityDetail(
    * make the embedded page as large as the feed. And a page assembled in memory has no
    * cursor: `LastEvaluatedKey` comes from a Query that actually stopped at fifty, so a client
    * paging older entries needs this read to have happened.
+   *
+   * This also deliberately runs for a Task. An ordinary Task returns an empty collection; a
+   * Plan converted to a Task returns the retained, read-only discussion history that the
+   * conversion is not allowed to erase or strand.
    */
   const feed = await listActivityUpdates(target.activityId);
 
