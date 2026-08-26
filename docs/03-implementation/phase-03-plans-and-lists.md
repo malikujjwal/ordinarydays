@@ -1418,6 +1418,13 @@ change.
 > visible bounds, and dense windows continue under the same bounds until their returned
 > coverage is complete. Contract in `api-contract.md` §2.2a; P3-47 is the caller.
 
+> **Amended 2026-08-26 (founder) — close the shared Activity-authorisation consistency
+> gap alongside P3-20.** P3-19 made feed callers opt into strong reads, but the same stale
+> grant risk predates the feed and affects every route using `assertActivityAccess`. This
+> task makes strong META, participant and parent reads an invariant inside that helper, with
+> no caller opt-out, and tests the default at the shared service boundary. Endpoint shapes
+> and authorisation rules do not change.
+
 **Files.** `services/api/src/routes/plans.ts`,
 `services/api/src/services/plansService.ts`,
 `packages/shared/src/schemas/plans.ts`.

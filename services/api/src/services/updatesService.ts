@@ -108,7 +108,7 @@ export async function listUpdates(
   activityId: string,
   cursor?: string,
 ): Promise<UpdatesPage> {
-  await assertActivityAccess(userId, activityId, 'read', { consistentRead: true });
+  await assertActivityAccess(userId, activityId, 'read');
   return listActivityUpdates(activityId, {
     limit: UPDATES_PAGE_SIZE,
     ...(cursor === undefined ? {} : { cursor }),
@@ -143,9 +143,7 @@ export async function postUpdate(
   now: string,
   receiptFor?: (result: PostedUpdate) => IdempotencyReceipt,
 ): Promise<PostedUpdate> {
-  const { activity } = await assertActivityAccess(userId, activityId, 'write', {
-    consistentRead: true,
-  });
+  const { activity } = await assertActivityAccess(userId, activityId, 'write');
   assertHasFeed(activity);
 
   const update: ActivityUpdate = {
@@ -223,7 +221,7 @@ export async function deleteUpdate(
   activityId: string,
   updateId: string,
 ): Promise<void> {
-  await assertActivityAccess(userId, activityId, 'read', { consistentRead: true });
+  await assertActivityAccess(userId, activityId, 'read');
 
   const update = await getActivityUpdate(activityId, updateId);
   if (update === undefined) throw updateNotFound();
