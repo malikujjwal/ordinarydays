@@ -71,6 +71,7 @@ async function seedList(): Promise<List> {
     rankVersion: 0,
     archived: false,
     updatedAt: NOW,
+    lastItemActivityAt: NOW,
   };
   await repository.createList(DEV, list, { now: NOW });
   return list;

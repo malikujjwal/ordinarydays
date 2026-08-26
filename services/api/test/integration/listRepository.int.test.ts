@@ -66,6 +66,7 @@ const aList = (overrides: Partial<List> = {}): List => ({
   rankVersion: 0,
   archived: false,
   updatedAt: NOW,
+  lastItemActivityAt: NOW,
   ...overrides,
 });
 

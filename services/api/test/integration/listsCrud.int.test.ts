@@ -214,6 +214,7 @@ describe('template resolution at creation', () => {
         rankVersion: 0,
         archived: false,
         updatedAt: NOW,
+        lastItemActivityAt: NOW,
       };
       await repository.createList(DEV, list, { now: NOW });
     }
@@ -293,6 +294,7 @@ describe('a list created from a Plan', () => {
       rankVersion: 0,
       archived: false,
       updatedAt: NOW,
+      lastItemActivityAt: NOW,
     };
     await expect(
       repository.createList(DEV, withConvertedSource, { now: NOW }),
