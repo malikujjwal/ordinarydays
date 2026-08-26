@@ -203,8 +203,10 @@ bootstrap bucket serves this purpose and we do not create our own.
   inside this single-tenant account. The reasoning and the trade are written out in
   [`infrastructure.md`](infrastructure.md) §1.1; `od-web-{env}` keeps the exact-ARN condition,
   and `infra/test/web-stack.test.ts` asserts both so the asymmetry stays visible.
-  *Cross-reference added 2026-08-27 (P3-23), which found this bullet stating the ARN
-  condition as absolute while the media bucket had not followed it since P0-16.*
+  *Cross-reference added 2026-08-26 (P3-23), which found this bullet stating the ARN
+  condition as absolute while the media bucket had not followed it since P0-16. The same
+  absolute appears in ADR-023's consequences and in `cost-model.md` §5; both carry the same
+  note.*
 - Encryption: SSE-S3 (`AES256`). SSE-KMS would add per-request KMS charges for no
   meaningful gain given the bucket is already private and single-tenant.
 - Versioning: on for `od-web-{env}` (so a bad web deploy can be rolled back by
