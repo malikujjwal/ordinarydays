@@ -327,7 +327,7 @@ export class NativeActivityActionCoordinator {
           ) {
             const freshActivityId =
               this.activityIdFactory?.() ??
-              (await import('@/lib/activityIds')).nextActivityId();
+              (await import('@/lib/canonicalIds')).nextCanonicalId('act');
             await this.service.remapPendingCreateIdentity(
               transaction,
               current.entityId,

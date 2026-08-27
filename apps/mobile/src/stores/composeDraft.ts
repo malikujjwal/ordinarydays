@@ -16,7 +16,7 @@ import {
 } from '@/features/compose/model/draft';
 import { reconcileReminder } from '@/features/compose/model/reminders';
 import type { ObjectChoice } from '@/features/compose/model/targets';
-import { nextActivityId } from '@/lib/activityIds';
+import { nextCanonicalId } from '@/lib/canonicalIds';
 
 /**
  * The compose draft (P1-24).
@@ -418,7 +418,7 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
   takeActivityId: () => {
     const existing = get().activityId;
     if (existing !== undefined) return existing;
-    const activityId = nextActivityId();
+    const activityId = nextCanonicalId('act');
     set({ activityId });
     return activityId;
   },
