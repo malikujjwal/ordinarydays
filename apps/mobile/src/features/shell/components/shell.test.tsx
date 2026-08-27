@@ -1,9 +1,11 @@
+import { type Clock, fixedClock, type Instant } from '@od/shared/time';
 import { ThemeProvider } from '@od/ui';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ClockProvider } from '@/hooks/useClock';
 import { useToast } from '@/stores/toast';
 import { AddButton } from './AddButton';
 import { NavRail } from './NavRail';
@@ -22,6 +24,15 @@ const wrap = (ui: ReactNode) =>
   render(
     <SafeAreaProvider>
       <ThemeProvider scheme="light">{ui}</ThemeProvider>
+    </SafeAreaProvider>,
+  );
+
+const wrapWithClock = (ui: ReactNode, clock: Clock) =>
+  render(
+    <SafeAreaProvider>
+      <ClockProvider clock={clock}>
+        <ThemeProvider scheme="light">{ui}</ThemeProvider>
+      </ClockProvider>
     </SafeAreaProvider>,
   );
 
@@ -236,5 +247,50 @@ describe('ToastHost', () => {
     expect(onCommit).toHaveBeenCalledOnce();
     expect(screen.queryByRole('alert')).toBeNull();
     vi.useRealTimers();
+  });
+
+  it('commits at the absolute deadline when part of the offer window has elapsed', () => {
+    vi.useFakeTimers();
+    const onCommit = vi.fn();
+    useToast.getState().showUndo({
+      message: 'List archived',
+      duration: 6000,
+      undoExpiresAt: '2026-08-27T14:00:01.500Z' as Instant,
+      onUndo: vi.fn(),
+      onCommit,
+    });
+    wrapWithClock(<ToastHost />, fixedClock('2026-08-27T14:00:00.000Z' as Instant));
+
+    act(() => vi.advanceTimersByTime(1499));
+    expect(onCommit).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
+
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('alert')).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('refuses an Undo tap that reaches the absolute deadline', () => {
+    const onUndo = vi.fn();
+    const onCommit = vi.fn();
+    let currentClock = fixedClock('2026-08-27T14:00:00.000Z' as Instant);
+    const clock: Clock = {
+      now: () => currentClock.now(),
+      todayIn: (timezone) => currentClock.todayIn(timezone),
+    };
+    useToast.getState().showUndo({
+      message: 'List archived',
+      undoExpiresAt: '2026-08-27T14:00:01.500Z' as Instant,
+      onUndo,
+      onCommit,
+    });
+    wrapWithClock(<ToastHost />, clock);
+
+    currentClock = fixedClock('2026-08-27T14:00:01.500Z' as Instant);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+    expect(onUndo).not.toHaveBeenCalled();
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

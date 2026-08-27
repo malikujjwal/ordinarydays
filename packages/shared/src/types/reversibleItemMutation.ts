@@ -1,3 +1,5 @@
+import type { Instant } from '../time/types.js';
+
 /**
  * What a reversible item mutation returns — single delete now, and `clear-checked` /
  * `uncheck-all` when P3-10 adds them (`api-contract.md` §2.7).
@@ -15,5 +17,5 @@
 export interface ReversibleItemMutation {
   affectedCount: number;
   undoToken: string;
-  undoExpiresAt: string;
+  undoExpiresAt: Instant;
 }

@@ -1,6 +1,7 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 import {
   activityUpdatePage,
+  deletedActivityUpdate,
   postActivityUpdateResult,
 } from '../../schemas/activityUpdate.js';
 import { envelope } from '../../schemas/envelope.js';
@@ -17,25 +18,11 @@ import type { HttpClient } from '../http.js';
 
 export const activityUpdatePageResponse = envelope(activityUpdatePage);
 export const postActivityUpdateResponse = envelope(postActivityUpdateResult);
-
-/**
- * `DELETE /v1/activities/:id/updates/:updateId` answers **`204` with no body**.
- *
- * This is the one endpoint in the client that does not parse an envelope, and it is a
- * deliberate divergence from the rule the other deletes follow — `deletedDevice`,
- * `deletedAttachment` and `deletedList` all return a body precisely because `api-contract.md`
- * §1 says every response carries `{ data, meta }` and a `204` has nowhere to put one. P3-19
- * shipped the `204` anyway, reasoning that the feed's new state is a page the client already
- * has minus one row. The code is the contract, so this schema matches the code; the divergence
- * is named in the pull request rather than papered over with a shape the server never sends.
- *
- * `z.undefined()` rather than `z.void()`: the transport turns an empty body into `undefined`
- * before parsing, so this asserts the body really was empty instead of accepting anything.
- */
-const noContent = z.undefined();
+export const deletedActivityUpdateResponse = envelope(deletedActivityUpdate);
 
 export type ActivityUpdatePage = z.infer<typeof activityUpdatePage>;
 export type PostActivityUpdateResult = z.infer<typeof postActivityUpdateResult>;
+export type DeletedActivityUpdate = z.infer<typeof deletedActivityUpdate>;
 
 /**
  * `GET /v1/activities/:id/updates?cursor=` — newest first, 50 per page.
@@ -103,21 +90,20 @@ export function postActivityUpdate(
  *
  * A system entry is the record of what happened and is undeletable; so is another author's.
  * Both answer `404`, deliberately indistinguishable from a missing row, so this function
- * cannot and does not tell them apart. It returns nothing because the response carries
- * nothing.
+ * cannot and does not tell them apart. Success returns the id inside the universal envelope.
  */
 export function deleteActivityUpdate(
   client: HttpClient,
   activityId: string,
   updateId: string,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<DeletedActivityUpdate> {
   return client
     .request({
       method: 'DELETE',
       path: `/v1/activities/${activityId}/updates/${updateId}`,
-      schema: noContent,
+      schema: deletedActivityUpdateResponse,
       ...(signal === undefined ? {} : { signal }),
     })
-    .then(() => undefined);
+    .then((response) => response.data);
 }

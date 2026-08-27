@@ -4,6 +4,7 @@ import {
   cursor,
   hhmm,
   ianaTimezone,
+  instant,
   isoDate,
   timeZone,
   ulidId,
@@ -30,6 +31,16 @@ describe('isoDate', () => {
     ['empty', ''],
   ])('rejects %s', (_why, v) => {
     expect(isoDate.safeParse(v).success).toBe(false);
+  });
+});
+
+describe('instant', () => {
+  it('accepts and brands an absolute ISO-8601 moment', () => {
+    expect(instant.parse('2026-08-27T14:00:00.000Z')).toBe('2026-08-27T14:00:00.000Z');
+  });
+
+  it.each(['not-a-date', '2026-08-27', '2026-08-27T14:00:00'])('rejects %s', (value) => {
+    expect(instant.safeParse(value).success).toBe(false);
   });
 });
 

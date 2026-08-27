@@ -152,8 +152,8 @@ export interface ToastProps {
   message: string;
   action?: { label: string; onPress: () => void };
   tone?: 'neutral' | 'error';
-  /** 6 s for a normal undo, 10 s for a bulk one (`interaction-contract.md` §4). */
-  duration?: 6000 | 10000;
+  /** Normally 6 s (10 s for bulk); callers may pass a shorter server deadline. */
+  duration?: number;
   onDismiss?: () => void;
   testID?: string;
 }

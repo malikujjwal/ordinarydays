@@ -106,15 +106,19 @@ export function ListsScreen({
    * render cycle to be bounded, and a `while` here would be precisely the thing it forbids — a
    * hundred archived pointers would page the whole account inside one commit.
    *
-   * The visible count is the **active** group's, or both groups' when archived are shown,
-   * because that is what "the active filtered view" means to the person looking at it.
    */
-  const visibleCount = showArchived ? active.length + archived.length : active.length;
+  // A zero sentinel keeps Show archived draining until that group is discoverable.
+  const autoDrainVisibleCount =
+    showArchived && archived.length === 0
+      ? 0
+      : showArchived
+        ? active.length + archived.length
+        : active.length;
 
   useEffect(() => {
     if (
       shouldDrainMore({
-        visibleCount,
+        visibleCount: autoDrainVisibleCount,
         viewportRows: VIEWPORT_ROWS,
         hasMore: view.hasMore,
         isFetching: view.isLoadingMore,
@@ -122,7 +126,7 @@ export function ListsScreen({
     ) {
       view.loadMore();
     }
-  }, [visibleCount, view.hasMore, view.isLoadingMore, view.loadMore]);
+  }, [autoDrainVisibleCount, view.hasMore, view.isLoadingMore, view.loadMore]);
 
   const onScroll = useCallback(
     (event: {

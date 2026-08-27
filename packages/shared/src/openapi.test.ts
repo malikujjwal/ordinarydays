@@ -144,6 +144,7 @@ describe('the generated document', () => {
       'CreateListInput',
       'CreateListItemInput',
       'DeletedActivity',
+      'DeletedActivityUpdate',
       'DeletedAttachment',
       'DeletedDevice',
       'DeletedList',
@@ -261,6 +262,14 @@ describe('the generated document', () => {
     expect(responses?.[500]?.content?.['application/json']?.schema).toEqual({
       $ref: '#/components/schemas/ErrorResponse',
     });
+  });
+
+  it('publishes update deletion as an enveloped 200 response', () => {
+    const responses =
+      document.paths?.['/v1/activities/{id}/updates/{updateId}']?.delete?.responses;
+
+    expect(responses?.[204]).toBeUndefined();
+    expect(responses?.[200]?.content?.['application/json']?.schema).toBeDefined();
   });
 
   it('publishes both required List settings guards as header parameters', () => {

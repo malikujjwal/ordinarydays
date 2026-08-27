@@ -571,6 +571,45 @@ export interface ConfirmAttachmentOptions {
   readonly log?: Logger;
 }
 
+async function finishPendingConfirmation(
+  userId: string,
+  record: PendingUpload,
+  activityId: string,
+  now: string,
+  options: ConfirmAttachmentOptions,
+): Promise<Attachment> {
+  const linkedRow = toAttachmentRow(record, activityId, now);
+  const prospectiveReceipt = options.receiptFor?.(linkedRow);
+  const linked = await linkPendingAttachment(
+    userId,
+    record,
+    linkedRow,
+    prospectiveReceipt,
+  );
+
+  // A concurrent confirm can win after this request has precomputed its response receipt.
+  // The loser adopts that canonical row and records its own response against it; this matters
+  // when the two logical requests used distinct idempotency keys.
+  if (linked !== linkedRow) {
+    const receipt = options.receiptFor?.(linked);
+    if (receipt !== undefined) await recordLinkedAttachmentReceipt(linked, receipt);
+  }
+
+  /**
+   * Last, and its failure is not the caller's problem: the attachment exists and is linked.
+   * A temporary object left behind is collected by the bucket's one-day lifecycle rule — the
+   * one leak the design accepts, and the harmless one, because nothing references it.
+   */
+  await deleteObject(record.tmpKey).catch((error: unknown) => {
+    options.log?.warn(
+      { event: TMP_DELETE_FAILED, userId, attachmentId: record.attachmentId },
+      error instanceof Error ? error.message : 'temporary object not removed',
+    );
+  });
+
+  return linked;
+}
+
 export async function confirmAttachment(
   userId: string,
   activityId: string,
@@ -596,6 +635,18 @@ export async function confirmAttachment(
 
   const record = await getPendingUpload(userId, attachmentId);
   if (record === undefined) throw unconfirmable('attachmentId');
+
+  if (record.state === 'confirming') {
+    if (record.activityId !== activityId) throw unconfirmable('attachmentId');
+    const copied = await headObject(record.finalKey);
+    if (
+      copied !== undefined &&
+      copied.contentType === record.contentType &&
+      copied.byteSize === record.byteSize
+    ) {
+      return finishPendingConfirmation(userId, record, activityId, now, options);
+    }
+  }
 
   // Fast refusal avoids copying bytes when the bounded collection is already full. The
   // quota-slot Put in linkPendingAttachment remains the atomic authority for races.
@@ -634,36 +685,7 @@ export async function confirmAttachment(
     throw new AppError('internal', 'An unexpected error occurred.');
   }
 
-  const linkedRow = toAttachmentRow(record, activityId, now);
-  const prospectiveReceipt = options.receiptFor?.(linkedRow);
-  const linked = await linkPendingAttachment(
-    userId,
-    record,
-    linkedRow,
-    prospectiveReceipt,
-  );
-
-  // A concurrent confirm can win after this request has precomputed its response receipt.
-  // The loser adopts that canonical row and records its own response against it; this matters
-  // when the two logical requests used distinct idempotency keys.
-  if (linked !== linkedRow) {
-    const receipt = options.receiptFor?.(linked);
-    if (receipt !== undefined) await recordLinkedAttachmentReceipt(linked, receipt);
-  }
-
-  /**
-   * Last, and its failure is not the caller's problem: the attachment exists and is linked.
-   * A temporary object left behind is collected by the bucket's one-day lifecycle rule — the
-   * one leak the design accepts, and the harmless one, because nothing references it.
-   */
-  await deleteObject(record.tmpKey).catch((error: unknown) => {
-    options.log?.warn(
-      { event: TMP_DELETE_FAILED, userId, attachmentId },
-      error instanceof Error ? error.message : 'temporary object not removed',
-    );
-  });
-
-  return linked;
+  return finishPendingConfirmation(userId, record, activityId, now, options);
 }
 
 /**

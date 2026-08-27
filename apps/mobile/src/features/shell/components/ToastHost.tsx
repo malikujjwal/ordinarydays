@@ -1,8 +1,11 @@
 import { Toast, useTheme } from '@od/ui';
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Platform, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useClock } from '@/hooks/useClock';
 import { useToast } from '@/stores/toast';
+
+const DEFAULT_TOAST_DURATION_MS = 6000;
 
 /**
  * Renders the one active toast above the tab bar.
@@ -15,9 +18,42 @@ import { useToast } from '@/stores/toast';
 export function ToastHost() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const clock = useClock();
   const current = useToast((s) => s.current);
   const dismiss = useToast((s) => s.dismiss);
   const undo = useToast((s) => s.undo);
+
+  const remainingDuration =
+    current === undefined
+      ? undefined
+      : current.kind === 'undo' && current.undoExpiresAt !== undefined
+        ? Math.min(
+            current.duration ?? DEFAULT_TOAST_DURATION_MS,
+            Date.parse(current.undoExpiresAt) - Date.parse(clock.now()),
+          )
+        : (current.duration ?? DEFAULT_TOAST_DURATION_MS);
+
+  const acceptUndo = useCallback(() => {
+    if (current?.kind !== 'undo') return;
+    if (
+      current.undoExpiresAt !== undefined &&
+      Date.parse(clock.now()) >= Date.parse(current.undoExpiresAt)
+    ) {
+      dismiss(current.id);
+      return;
+    }
+    undo(current.id);
+  }, [clock, current, dismiss, undo]);
+
+  useEffect(() => {
+    if (current === undefined || remainingDuration === undefined) return;
+    if (remainingDuration <= 0) {
+      dismiss(current.id);
+      return;
+    }
+    const timer = setTimeout(() => dismiss(current.id), remainingDuration);
+    return () => clearTimeout(timer);
+  }, [current, dismiss, remainingDuration]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || current?.kind !== 'undo') return;
@@ -25,7 +61,7 @@ export function ToastHost() {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault();
-        undo(current.id);
+        acceptUndo();
         return;
       }
       if (
@@ -44,9 +80,15 @@ export function ToastHost() {
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [current, undo]);
+  }, [acceptUndo, current]);
 
-  if (current === undefined) return null;
+  if (
+    current === undefined ||
+    remainingDuration === undefined ||
+    remainingDuration <= 0
+  ) {
+    return null;
+  }
 
   return (
     <View
@@ -63,13 +105,16 @@ export function ToastHost() {
     >
       <Toast
         message={current.message}
-        onDismiss={() => dismiss(current.id)}
-        {...(current.duration === undefined ? {} : { duration: current.duration })}
         {...(current.kind === 'message' && current.tone !== undefined
           ? { tone: current.tone }
           : {})}
         {...(current.kind === 'undo'
-          ? { action: { label: 'Undo', onPress: () => undo(current.id) } }
+          ? {
+              action: {
+                label: 'Undo',
+                onPress: acceptUndo,
+              },
+            }
           : current.action === undefined
             ? {}
             : { action: current.action })}

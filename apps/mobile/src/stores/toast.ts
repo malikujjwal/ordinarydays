@@ -1,3 +1,4 @@
+import type { Instant } from '@od/shared/time';
 import { create } from 'zustand';
 
 /**
@@ -15,12 +16,13 @@ export interface ToastMessage {
   message: string;
   tone?: 'neutral' | 'error';
   action?: { label: string; onPress: () => void };
-  duration?: 6000 | 10000;
+  duration?: number;
 }
 
 export interface UndoToastMessage {
   message: string;
-  duration?: 6000 | 10000;
+  duration?: number;
+  undoExpiresAt?: Instant;
   onUndo: () => void;
   onCommit: () => void;
 }

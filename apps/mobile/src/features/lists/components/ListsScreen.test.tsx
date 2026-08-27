@@ -173,6 +173,22 @@ describe('the archived filter', () => {
 });
 
 describe('the auto-drain rule', () => {
+  it('drains after Show archived until an archived row is discoverable', async () => {
+    const loadMore = vi.fn();
+    setView({
+      lists: Array.from({ length: 8 }, (_, index) => list(idAt(index))),
+      hasMore: true,
+      loadMore,
+    });
+    mount();
+    expect(loadMore).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show archived' }));
+
+    await waitFor(() => expect(loadMore).toHaveBeenCalledOnce());
+  });
+
   /**
    * §P3-25's named case: **fifty archived pointers on page one, active rows on page two.**
    * The filtered view is empty and a cursor remains, so the screen must neither claim the
@@ -230,9 +246,7 @@ describe('the auto-drain rule', () => {
     // The rows were already there; the toggle rendered them without another request.
     expect(screen.getByText('Old 0')).toBeTruthy();
     // Three visible rows still cannot fill the viewport, so the same drain continues.
-    await waitFor(() =>
-      expect(loadMore.mock.calls.length).toBeGreaterThanOrEqual(beforeToggle),
-    );
+    await waitFor(() => expect(loadMore.mock.calls.length).toBeGreaterThan(beforeToggle));
   });
 });
 

@@ -18,6 +18,7 @@ import {
 } from './schemas/activity.js';
 import {
   activityUpdatePage,
+  deletedActivityUpdate,
   postActivityUpdateInput,
   postActivityUpdateResult,
 } from './schemas/activityUpdate.js';
@@ -95,6 +96,7 @@ const deletedReminderResponse = envelope(deletedReminder);
 const plansResponse = envelope(plansData);
 const activityUpdatePageResponse = envelope(activityUpdatePage);
 const postActivityUpdateResponse = envelope(postActivityUpdateResult);
+const deletedActivityUpdateResponse = envelope(deletedActivityUpdate);
 const requestUploadUrlResponse = envelope(requestUploadUrlResult);
 const attachmentResponse = envelope(attachment);
 const deletedAttachmentResponse = envelope(deletedAttachment);
@@ -1812,11 +1814,15 @@ registry.registerPath({
   description:
     'Author only, and only on `kind: user` entries — a system entry is the record of ' +
     'what happened and is undeletable. A missing entry, a system entry and another author’s ' +
-    'entry all answer `404`, so the response reports nothing about a row the caller may not read.',
+    'entry all answer `404`, so the response reports nothing about a row the caller may not ' +
+    'read. Answers `200` with the universal response envelope, never `204`.',
   tags: ['activities'],
   request: { params: z.object({ id: activityId, updateId: ulidId('upd') }) },
   responses: {
-    204: { description: 'The entry is gone.' },
+    200: {
+      description: 'The entry is gone, identified by its update id.',
+      content: { 'application/json': { schema: deletedActivityUpdateResponse } },
+    },
     404: {
       description:
         'No such activity, no caller relationship, or no caller-authored user entry.',

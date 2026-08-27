@@ -8,6 +8,7 @@ export type {
   ActivityUpdate,
   ActivityUpdateKind,
   ActivityUpdatePage,
+  DeletedActivityUpdate,
   PostActivityUpdateInput,
   PostActivityUpdateResult,
 } from '../schemas/activityUpdate.js';

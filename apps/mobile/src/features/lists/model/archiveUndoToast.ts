@@ -1,4 +1,5 @@
 import { UNDO_OFFER_SECONDS } from '@od/shared';
+import type { Clock, Instant } from '@od/shared/time';
 import type { UndoToastMessage } from '@/stores/toast';
 
 /**
@@ -28,9 +29,28 @@ import type { UndoToastMessage } from '@/stores/toast';
 /** The six-second window a settings mutation gets, in the toast store's own units. */
 export const SETTINGS_UNDO_DURATION_MS = (UNDO_OFFER_SECONDS * 1000) as 6000;
 
+/**
+ * Converts the server's absolute offer deadline into the time the client can still display.
+ * The cap protects the six-second interaction contract if the device clock trails the server.
+ */
+export function remainingArchiveUndoMs(
+  undoExpiresAt: Instant,
+  clock: Clock,
+): number | undefined {
+  const remaining = Math.min(
+    SETTINGS_UNDO_DURATION_MS,
+    Date.parse(undoExpiresAt) - Date.parse(clock.now()),
+  );
+  return Number.isFinite(remaining) && remaining > 0 ? remaining : undefined;
+}
+
 export interface ArchiveUndoToastInput {
   /** Named so the toast says which list left, not merely that one did. */
   readonly title: string;
+  /** Remaining server-authoritative offer window; local/offline callers use six seconds. */
+  readonly duration?: number;
+  /** Absolute server deadline; omitted for a local/offline offer that starts now. */
+  readonly undoExpiresAt?: Instant;
   /** Fires the compensating undo call. Never a delayed commit. */
   readonly onUndo: () => void;
   /** Fires when the window closes, or when another toast replaces this one. */
@@ -46,7 +66,8 @@ export interface ArchiveUndoToastInput {
 export function archivedListToast(input: ArchiveUndoToastInput): UndoToastMessage {
   return {
     message: `${input.title} archived`,
-    duration: SETTINGS_UNDO_DURATION_MS,
+    duration: input.duration ?? SETTINGS_UNDO_DURATION_MS,
+    ...(input.undoExpiresAt === undefined ? {} : { undoExpiresAt: input.undoExpiresAt }),
     onUndo: input.onUndo,
     onCommit: input.onCommit,
   };

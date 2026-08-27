@@ -1,3 +1,4 @@
+import type { Instant } from '../time/types.js';
 import type { ListView } from './listView.js';
 
 /**
@@ -26,4 +27,4 @@ import type { ListView } from './listView.js';
  */
 export type ListSettingsMutation =
   | { list: ListView }
-  | { list: ListView; undoToken: string; undoExpiresAt: string };
+  | { list: ListView; undoToken: string; undoExpiresAt: Instant };

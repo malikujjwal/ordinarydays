@@ -5,6 +5,7 @@ import {
   bulkCreateListItemsInputFor,
   type CreateListItemInput,
   createListItemInputFor,
+  instant,
   type PatchListItemInput,
   patchListItemInputFor,
 } from '@od/shared/schemas';
@@ -562,7 +563,9 @@ export async function removeItem(
   const result: ReversibleItemMutation = {
     affectedCount: 1,
     undoToken,
-    undoExpiresAt: new Date(Date.parse(now) + UNDO_OFFER_SECONDS * 1000).toISOString(),
+    undoExpiresAt: instant.parse(
+      new Date(Date.parse(now) + UNDO_OFFER_SECONDS * 1000).toISOString(),
+    ),
   };
 
   await mapped(() =>
@@ -640,9 +643,9 @@ async function runBulkChecked(
       now,
       plan: (itemIds) => {
         const { token, tokenHash } = mintUndoToken(operationId);
-        const undoExpiresAt = new Date(
-          Date.parse(now) + BULK_UNDO_OFFER_SECONDS * 1000,
-        ).toISOString();
+        const undoExpiresAt = instant.parse(
+          new Date(Date.parse(now) + BULK_UNDO_OFFER_SECONDS * 1000).toISOString(),
+        );
         return {
           undoToken: token,
           tokenHash,
@@ -664,7 +667,7 @@ async function runBulkChecked(
   return {
     affectedCount: result.affectedCount,
     undoToken: result.undoToken,
-    undoExpiresAt: result.undoExpiresAt,
+    undoExpiresAt: instant.parse(result.undoExpiresAt),
   };
 }
 

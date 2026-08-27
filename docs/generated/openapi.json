@@ -4563,7 +4563,7 @@
               },
               "undoExpiresAt": {
                 "type": "string",
-                "minLength": 1
+                "format": "date-time"
               }
             },
             "required": [
@@ -5109,7 +5109,7 @@
           },
           "undoExpiresAt": {
             "type": "string",
-            "minLength": 1
+            "format": "date-time"
           }
         },
         "required": [
@@ -6318,6 +6318,18 @@
           "body"
         ],
         "additionalProperties": false
+      },
+      "DeletedActivityUpdate": {
+        "type": "object",
+        "properties": {
+          "updateId": {
+            "type": "string",
+            "pattern": "^upd_[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+          }
+        },
+        "required": [
+          "updateId"
+        ]
       },
       "PlansData": {
         "oneOf": [
@@ -10912,7 +10924,7 @@
     "/v1/activities/{id}/updates/{updateId}": {
       "delete": {
         "summary": "Delete one of the caller’s own feed entries",
-        "description": "Author only, and only on `kind: user` entries — a system entry is the record of what happened and is undeletable. A missing entry, a system entry and another author’s entry all answer `404`, so the response reports nothing about a row the caller may not read.",
+        "description": "Author only, and only on `kind: user` entries — a system entry is the record of what happened and is undeletable. A missing entry, a system entry and another author’s entry all answer `404`, so the response reports nothing about a row the caller may not read. Answers `200` with the universal response envelope, never `204`.",
         "tags": [
           "activities"
         ],
@@ -10937,8 +10949,42 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "The entry is gone."
+          "200": {
+            "description": "The entry is gone, identified by its update id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DeletedActivityUpdate"
+                    },
+                    "meta": {
+                      "type": "object",
+                      "properties": {
+                        "requestId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "nextCursor": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048,
+                          "pattern": "^[A-Za-z0-9_-]+={0,2}$"
+                        }
+                      },
+                      "required": [
+                        "requestId"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ]
+                }
+              }
+            }
           },
           "404": {
             "description": "No such activity, no caller relationship, or no caller-authored user entry.",

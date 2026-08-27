@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { TimeZone } from '../time/types.js';
+import type { Instant, TimeZone } from '../time/types.js';
 
 /**
  * The primitives every other schema composes. Declared once, here.
@@ -16,6 +16,9 @@ import type { TimeZone } from '../time/types.js';
  * feeds recurrence expansion, where an impossible date becomes an impossible occurrence.
  */
 export const isoDate = z.iso.date();
+
+/** An absolute ISO-8601 moment, branded only after boundary validation. */
+export const instant = z.iso.datetime().transform((value) => value as Instant);
 
 /** A wall-clock time of day, `HH:mm`, 24-hour, no seconds and no zone. */
 export const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Expected HH:mm');

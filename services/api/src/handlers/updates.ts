@@ -32,15 +32,11 @@ export async function postUpdateHandler(
   );
 }
 
-/**
- * `204`, because there is nothing meaningful to return: the entry is gone, and the feed's new
- * state is a page the client already has minus one row. Echoing the deleted id back would
- * invite a client to treat the response as confirmation of *what* it deleted, which it already
- * knew, rather than *that* it did.
- */
+/** `DELETE` keeps the universal `{ data, meta }` response envelope. */
 export async function deleteUpdateHandler(
   c: Context<AppEnv, typeof UPDATE_PATH>,
 ): Promise<Response> {
-  await deleteUpdate(requireUserId(c), c.req.param('id'), c.req.param('updateId'));
-  return c.body(null, 204);
+  const updateId = c.req.param('updateId');
+  await deleteUpdate(requireUserId(c), c.req.param('id'), updateId);
+  return c.json({ data: { updateId }, meta: { requestId: c.get('requestId') } });
 }

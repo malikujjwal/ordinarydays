@@ -25,6 +25,7 @@ import {
 } from './activity.js';
 import {
   cursor,
+  instant,
   ulidId,
   userId,
   watchEpisode,
@@ -657,7 +658,7 @@ export const reversibleItemMutation = z
   .object({
     affectedCount: z.number().int().nonnegative(),
     undoToken: z.string().min(1),
-    undoExpiresAt: z.string().min(1),
+    undoExpiresAt: instant,
   })
   .meta({ id: 'ReversibleItemMutation' });
 
@@ -686,7 +687,7 @@ export const listSettingsMutation = z
     z.strictObject({
       list: listView,
       undoToken: z.string().min(1),
-      undoExpiresAt: z.string().min(1),
+      undoExpiresAt: instant,
     }),
     z.strictObject({ list: listView }),
   ])

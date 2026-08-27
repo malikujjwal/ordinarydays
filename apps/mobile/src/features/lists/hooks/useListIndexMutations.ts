@@ -3,7 +3,11 @@ import type { List } from '@od/shared/types';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { randomUUID } from 'expo-crypto';
 import { useCallback } from 'react';
-import { archivedListToast } from '@/features/lists/model/archiveUndoToast';
+import {
+  archivedListToast,
+  remainingArchiveUndoMs,
+} from '@/features/lists/model/archiveUndoToast';
+import { useClock } from '@/hooks/useClock';
 import { apiClient } from '@/lib/apiClient';
 import { useToast } from '@/stores/toast';
 import { LISTS_KEY } from './keys';
@@ -17,8 +21,10 @@ export interface ListIndexMutations {
 /** Web keeps its online-first mutation adapter. */
 export function useListIndexMutations(): ListIndexMutations {
   const queryClient = useQueryClient();
+  const clock = useClock();
   const showUndo = useToast((state) => state.showUndo);
   const show = useToast((state) => state.show);
+  const dismissToast = useToast((state) => state.dismiss);
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: LISTS_KEY });
   }, [queryClient]);
@@ -39,15 +45,22 @@ export function useListIndexMutations(): ListIndexMutations {
 
   const onArchive = useCallback(
     (list: List) => {
+      // A new action owns the singleton confirmation slot, even if its server-side
+      // Undo offer has expired before the response arrives.
+      dismissToast();
       setArchived.mutate(
         { list, archived: true, idempotencyKey: randomUUID() },
         {
           onSuccess: (result) => {
             refresh();
             if (!('undoToken' in result)) return;
+            const duration = remainingArchiveUndoMs(result.undoExpiresAt, clock);
+            if (duration === undefined) return;
             showUndo(
               archivedListToast({
                 title: list.title,
+                duration,
+                undoExpiresAt: result.undoExpiresAt,
                 onUndo: () => {
                   void undoListOperation(
                     apiClient,
@@ -65,7 +78,7 @@ export function useListIndexMutations(): ListIndexMutations {
         },
       );
     },
-    [refresh, setArchived, show, showUndo],
+    [clock, dismissToast, refresh, setArchived, show, showUndo],
   );
 
   const onRestore = useCallback(

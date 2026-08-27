@@ -456,6 +456,22 @@ describe('confirming an upload onto a plan', () => {
       expect(await headObject(grant.key.slice('tmp/'.length))).toBeDefined();
     });
 
+    it('retrying still resumes after the temporary source has expired', async () => {
+      const grant = await crashAfterCopy();
+      const { deleteObject } = await import('../../src/lib/s3.js');
+      await deleteObject(grant.key);
+
+      const confirmed = await post(`/v1/activities/${activityId}/attachments`, {
+        attachmentId: grant.attachmentId,
+      });
+
+      expect(confirmed.status).toBe(201);
+      expect(await attachmentRows(activityId)).toHaveLength(1);
+      expect(await pendingRows()).toEqual([]);
+      expect(await headObject(grant.key)).toBeUndefined();
+      expect(await headObject(grant.key.slice('tmp/'.length))).toBeDefined();
+    });
+
     /**
      * **Repair completes it too**, without anybody retrying: the drain that runs before the
      * next upload URL finds the record, verifies the copy and finishes the link.

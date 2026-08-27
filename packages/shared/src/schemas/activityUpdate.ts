@@ -99,8 +99,14 @@ export const activityUpdatePage = z
   .object({ updates: z.array(activityUpdate), cursor: z.string().min(1).optional() })
   .meta({ id: 'ActivityUpdatePage' });
 
+/** The self-describing acknowledgement returned by the update DELETE endpoint. */
+export const deletedActivityUpdate = z
+  .object({ updateId: ulidId('upd') })
+  .meta({ id: 'DeletedActivityUpdate' });
+
 export type ActivityUpdateKind = z.infer<typeof activityUpdateKind>;
 export type ActivityUpdate = z.infer<typeof activityUpdate>;
 export type PostActivityUpdateInput = z.infer<typeof postActivityUpdateInput>;
 export type PostActivityUpdateResult = z.infer<typeof postActivityUpdateResult>;
 export type ActivityUpdatePage = z.infer<typeof activityUpdatePage>;
+export type DeletedActivityUpdate = z.infer<typeof deletedActivityUpdate>;

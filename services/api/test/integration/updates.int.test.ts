@@ -292,7 +292,7 @@ describe('paging', () => {
     expect((await refused.json()).error.message).toBe('Only a plan has an updates feed.');
 
     const deleted = await del(`/v1/activities/${plan.activityId}/updates/${ids[0]}`);
-    expect(deleted.status).toBe(204);
+    expect(deleted.status).toBe(200);
   });
 
   it('embeds the newest page in activity detail, so opening a plan is one request', async () => {
@@ -330,7 +330,8 @@ describe('deleting an entry', () => {
       `/v1/activities/${plan.activityId}/updates/${created.update.updateId}`,
     );
 
-    expect(res.status).toBe(204);
+    expect(res.status).toBe(200);
+    expect(await dataOf(res)).toEqual({ updateId: created.update.updateId });
     expect(await feedRowsOf(plan.activityId)).toEqual([]);
   });
 
@@ -579,14 +580,14 @@ describe('concurrent posts', () => {
   });
 
   /** Both deletes get past the read; the loser must answer 404, not the 409 §2.5 has no room for. */
-  it('answers 204 then 404 for two deletes of the same entry', async () => {
+  it('answers 200 then 404 for two deletes of the same entry', async () => {
     const plan = await createPlan();
     const created = await dataOf(await postUpdate(plan.activityId, 'Never mind.'));
     const path = `/v1/activities/${plan.activityId}/updates/${created.update.updateId}`;
 
     const [first, second] = await Promise.all([del(path), del(path)]);
 
-    expect([first.status, second.status].sort()).toEqual([204, 404]);
+    expect([first.status, second.status].sort()).toEqual([200, 404]);
     expect(await feedRowsOf(plan.activityId)).toEqual([]);
   });
 });

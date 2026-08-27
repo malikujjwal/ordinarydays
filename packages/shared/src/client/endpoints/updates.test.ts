@@ -125,17 +125,13 @@ describe('postActivityUpdate', () => {
 });
 
 describe('deleteActivityUpdate', () => {
-  /**
-   * The one endpoint in the client with no envelope to parse. P3-19 ships a bare `204`, which
-   * diverges from the body-not-204 convention `deletedDevice`, `deletedAttachment` and
-   * `deletedList` all follow. The code is the contract; the divergence is raised in the PR.
-   */
-  it('accepts the bare 204 the route actually returns', async () => {
-    const { client, calls } = makeClient([{ status: 204 }]);
+  it('parses the universal DELETE envelope and returns the removed id', async () => {
+    const deleted = { updateId: UPDATE_ID };
+    const { client, calls } = makeClient([ok(deleted)]);
 
-    await expect(
-      deleteActivityUpdate(client, ACTIVITY_ID, UPDATE_ID),
-    ).resolves.toBeUndefined();
+    await expect(deleteActivityUpdate(client, ACTIVITY_ID, UPDATE_ID)).resolves.toEqual(
+      deleted,
+    );
 
     expect(calls[0]?.method).toBe('DELETE');
     expect(calls[0]?.url).toBe(

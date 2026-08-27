@@ -1,9 +1,13 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { TimeZone } from '@od/shared/time';
+import { fixedClock, type Instant, type TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
-import { archivedListToast, SETTINGS_UNDO_DURATION_MS } from './archiveUndoToast';
+import {
+  archivedListToast,
+  remainingArchiveUndoMs,
+  SETTINGS_UNDO_DURATION_MS,
+} from './archiveUndoToast';
 import { deleteListConfirmation } from './deleteConfirmation';
 import { mayShowEmptyState, partitionByArchived, shouldDrainMore } from './indexDrain';
 import { behaviourTint, checkedProgress, countLine, showsCheckedCount } from './listCard';
@@ -228,6 +232,30 @@ describe('the archive undo toast', () => {
         onCommit: () => undefined,
       }),
     ).toMatchObject({ message: 'Groceries archived', duration: 6000 });
+  });
+
+  it('uses only the unelapsed part of the server offer', () => {
+    const clock = fixedClock('2026-08-27T14:00:00.000Z' as Instant);
+
+    expect(remainingArchiveUndoMs('2026-08-27T14:00:01.500Z' as Instant, clock)).toBe(
+      1500,
+    );
+  });
+
+  it('does not offer Undo after the server deadline', () => {
+    const clock = fixedClock('2026-08-27T14:00:00.000Z' as Instant);
+
+    expect(
+      remainingArchiveUndoMs('2026-08-27T13:59:59.999Z' as Instant, clock),
+    ).toBeUndefined();
+  });
+
+  it('caps a clock-skewed deadline at the six-second settings window', () => {
+    const clock = fixedClock('2026-08-27T14:00:00.000Z' as Instant);
+
+    expect(remainingArchiveUndoMs('2026-08-27T14:01:00.000Z' as Instant, clock)).toBe(
+      SETTINGS_UNDO_DURATION_MS,
+    );
   });
 });
 

@@ -32,6 +32,7 @@ export type {
   ActivityUpdate,
   ActivityUpdateKind,
   ActivityUpdatePage,
+  DeletedActivityUpdate,
   PostActivityUpdateInput,
   PostActivityUpdateResult,
 } from './activityUpdate.js';
