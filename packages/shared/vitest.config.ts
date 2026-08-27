@@ -13,6 +13,20 @@ export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
     environment: 'node',
+    /**
+     * Vitest's default is 5 s, which is right for a unit test and wrong for the handful of
+     * **module-surface guards** in this package — `templates.test.ts` and
+     * `templateChoices.test.ts` prove an absence by `await import`ing a barrel, so they pay
+     * for transforming a module graph inside the test body rather than during collection.
+     * Those two sit at roughly two seconds on their own and cross five under the parallel
+     * load `turbo run test` puts on the transform pool, which made `pnpm verify` fail on a
+     * suite where every assertion passed.
+     *
+     * Raised in P3-24, when four new test files were enough to tip it. The number is not a
+     * performance budget — nothing here asserts a duration — it is headroom so a green suite
+     * reports green. If a test ever genuinely needs twenty seconds, that is the bug.
+     */
+    testTimeout: 20_000,
     coverage: {
       provider: 'v8',
       reporter: ['text-summary', 'html', 'lcov'],
