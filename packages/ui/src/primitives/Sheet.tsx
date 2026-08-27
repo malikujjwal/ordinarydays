@@ -186,7 +186,26 @@ export function Sheet({
     <Modal
       visible={open}
       transparent
-      animationType="fade"
+      /**
+       * **`none` on web, and that is an accessibility fix rather than a taste.**
+       *
+       * React Native Web's `Modal` marks itself *active* only when its own show animation
+       * ends, and until it does it writes `aria-modal="true"` with **no** `role="dialog"` and
+       * runs no focus trap. That end event never arrives here: measured in Chromium against
+       * the built export, the container still had `role: null` two seconds after mount, which
+       * axe reports as `aria-allowed-attr` — a **critical** violation on every sheet in the
+       * product, and a modal that assistive technology is not told is modal.
+       *
+       * With no animation type, RNW completes that lifecycle synchronously on mount, so the
+       * dialog role and the focus trap both exist. The cost is the decorative opacity ramp on
+       * web, which RNW was failing to finish anyway; `interaction-contract.md` §6 and §7 —
+       * roles and web focus management — outrank `design-system.md` §4.3's motion row, and the
+       * present animation the table asks for belongs to this component rather than to a
+       * third-party modal. Raised in P3-26's PR rather than resolved here.
+       *
+       * Native keeps the fade: nothing on iOS or Android depends on the web active state.
+       */
+      animationType={Platform.OS === 'web' ? 'none' : 'fade'}
       accessibilityLabel={title ?? 'Dialog'}
       // Hardware Back on Android and Escape on web arrive here — and go through the same guard.
       onRequestClose={dismissible ? requestClose : undefined}

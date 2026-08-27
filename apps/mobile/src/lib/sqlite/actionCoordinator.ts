@@ -46,6 +46,7 @@ export class NativeActivityActionCoordinator {
     private readonly sync: NativeSyncEngine,
     private readonly activityIdFactory?: () => string,
     private readonly listService?: ListTransactionService,
+    private readonly listIdFactory?: () => string,
   ) {}
 
   create(
@@ -293,6 +294,7 @@ export class NativeActivityActionCoordinator {
       if (
         blocked?.status === 'needs_attention' &&
         blocked.mutationKey[0] === 'list' &&
+        !isAmbiguousCollision(blocked) &&
         !(await this.sync.recoverRejectedIntent(intentId))
       ) {
         throw new Error("Couldn't refresh the latest List before retrying.");
@@ -318,26 +320,39 @@ export class NativeActivityActionCoordinator {
             transaction.changed('anytime');
             return current;
           }
-          if (
-            current?.status === 'needs_attention' &&
-            current.mutationKey[0] === 'activity' &&
-            current.mutationKey[1] === 'create' &&
-            current.attention?.kind === 'parked' &&
-            current.attention.reason === 'ambiguous_collision'
-          ) {
-            const freshActivityId =
-              this.activityIdFactory?.() ??
-              (await import('@/lib/activityIds')).nextActivityId();
-            await this.service.remapPendingCreateIdentity(
-              transaction,
-              current.entityId,
-              freshActivityId,
-            );
+          if (current !== undefined && isAmbiguousCollision(current)) {
+            /*
+             * The one place a second identity is minted, and only because the user asked for
+             * it. `retryAmbiguousCreate` moves the whole dependent chain onto it inside this
+             * transaction, so nothing is left naming the id the server refused.
+             */
+            const list = current.mutationKey[0] === 'list';
+            if (list && this.listService === undefined) {
+              throw new Error('Native List retry state is not ready.');
+            }
+            const freshEntityId = list
+              ? (this.listIdFactory?.() ??
+                (await import('@/lib/canonicalIds')).nextCanonicalId('lst'))
+              : (this.activityIdFactory?.() ??
+                (await import('@/lib/canonicalIds')).nextCanonicalId('act'));
+            if (list) {
+              await this.listService?.remapPendingCreateIdentity(
+                transaction,
+                current.entityId,
+                freshEntityId,
+              );
+            } else {
+              await this.service.remapPendingCreateIdentity(
+                transaction,
+                current.entityId,
+                freshEntityId,
+              );
+            }
             const retried = await this.outbox.retryAmbiguousCreate(
               transaction.database,
               intentId,
               freshIntentId,
-              freshActivityId,
+              freshEntityId,
             );
             if (retried === undefined || retried.status !== 'queued') {
               throw new Error('This create is no longer waiting for collision recovery.');
@@ -362,7 +377,11 @@ export class NativeActivityActionCoordinator {
               intentId,
               freshIntentId,
             );
-            const projected = await this.listService.reprojectRetry(transaction, retried);
+            const projected = await this.listService.reprojectRetry(
+              transaction,
+              this.ownerUserId,
+              retried,
+            );
             transaction.changed('outbox');
             transaction.changed('anytime');
             return projected;
@@ -533,4 +552,20 @@ export class NativeActivityActionCoordinator {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
+ * A create whose minted id the server refused and whose owner this device could not read.
+ *
+ * The one recovery that re-mints, and the reason it is a named predicate: every *other*
+ * blocked List intent must refresh authoritative state before retrying, and this one must
+ * not — the `404` that parked it already established there is nothing to refresh.
+ */
+function isAmbiguousCollision(intent: OutboxIntent): boolean {
+  return (
+    intent.status === 'needs_attention' &&
+    intent.mutationKey[1] === 'create' &&
+    intent.attention?.kind === 'parked' &&
+    intent.attention.reason === 'ambiguous_collision'
+  );
 }

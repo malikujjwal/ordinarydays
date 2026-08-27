@@ -1766,7 +1766,11 @@ navigation test that tapping a row opens list detail and issues no mutation.
 
 ### P3-26 — The template-first list creation sheet
 
-**Files.** `apps/mobile/src/features/lists/NewListSheet.tsx`.
+**Files.** `apps/mobile/src/features/lists/components/NewListSheet.tsx`,
+`apps/mobile/src/features/lists/hooks/useCreateList{,.native}.ts`. The component sits under
+`components/` per [`../04-conventions/repo-structure.md`](../04-conventions/repo-structure.md)
+§7, which binds implicitly (agent-playbook §1.1a); the platform-split hook is the same rule
+that puts `useLists` beside it.
 
 **What to build.** The `+` on the Lists index. **Template/style first, title second.** The
 sheet opens on P3-07's bundled projection of `LIST_TEMPLATES`, with the full explicit

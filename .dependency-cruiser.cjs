@@ -187,8 +187,9 @@ module.exports = {
         'from `LIST_TEMPLATES[list.templateKey]` — otherwise a shipped catalogue change ' +
         'silently alters a list somebody is standing in a shop reading (phase-03 P3-02). So ' +
         'the module may be imported only by the creation service (P3-05), the ' +
-        '`GET /v1/list-templates` route (P3-06) and the creation-choice projection beside it ' +
-        '(P3-07). Repositories, renderers, `apps/mobile`, `packages/ui` and every other path ' +
+        '`GET /v1/list-templates` route (P3-06) and the two creation projections beside it — ' +
+        'the chooser fields (P3-07) and the fields a create copies (P3-26). Repositories, ' +
+        'renderers, `apps/mobile`, `packages/ui` and every other path ' +
         'are forbidden — including other helpers under `lists/`, so a stored-List utility ' +
         'cannot grow a catalogue lookup. The target is the raw module only, not the `lists/` ' +
         'directory: `apps/mobile` must still reach `templateChoices.ts` through the barrel. ' +
@@ -199,7 +200,7 @@ module.exports = {
       severity: 'error',
       from: {
         pathNot: [
-          '^packages/shared/src/lists/(index|templateChoices)\\.ts$',
+          '^packages/shared/src/lists/(index|templateChoices|creationSeed)\\.ts$',
           '^packages/shared/src/lists/__tests__/',
           '^services/api/src/services/listCreationService\\.ts$',
           '^services/api/src/routes/listTemplates\\.ts$',

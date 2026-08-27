@@ -148,14 +148,32 @@ function freshVariables(value: unknown, freshIntentId: string): unknown {
   };
 }
 
-function remapActivityVariables(
+/**
+ * The payload fields that name the entity a create is about, per domain.
+ *
+ * Spelled out rather than "rewrite every string that matches": a title or a note may
+ * legitimately contain an id, and rewriting one would edit the user's own words.
+ */
+const ENTITY_ID_KEYS = {
+  activity: ['activityId', 'parentActivityId'],
+  list: ['listId'],
+} as const satisfies Record<string, readonly string[]>;
+
+type RemappableDomain = keyof typeof ENTITY_ID_KEYS;
+
+function isRemappableDomain(value: string | undefined): value is RemappableDomain {
+  return value !== undefined && Object.hasOwn(ENTITY_ID_KEYS, value);
+}
+
+function remapEntityVariables(
   value: unknown,
-  previousActivityId: string,
-  freshActivityId: string,
+  previousEntityId: string,
+  freshEntityId: string,
+  idKeys: readonly string[],
 ): unknown {
   if (Array.isArray(value)) {
     return value.map((child) =>
-      remapActivityVariables(child, previousActivityId, freshActivityId),
+      remapEntityVariables(child, previousEntityId, freshEntityId, idKeys),
     );
   }
   const object = record(value);
@@ -163,9 +181,9 @@ function remapActivityVariables(
   return Object.fromEntries(
     Object.entries(object).map(([key, child]) => [
       key,
-      (key === 'activityId' || key === 'parentActivityId') && child === previousActivityId
-        ? freshActivityId
-        : remapActivityVariables(child, previousActivityId, freshActivityId),
+      idKeys.includes(key) && child === previousEntityId
+        ? freshEntityId
+        : remapEntityVariables(child, previousEntityId, freshEntityId, idKeys),
     ]),
   );
 }
@@ -1091,17 +1109,31 @@ export class OutboxRepository {
    * dependency references and semantic keys; the rejected create alone receives the fresh
    * mutation identity promised by Retry.
    */
+  /**
+   * Re-identifies a parked create and its whole dependent chain, in one transaction.
+   *
+   * **Explicit only.** A parked `ambiguous_collision` is a create whose id names something the
+   * caller cannot see, and re-minting it automatically would turn one confirmed create into a
+   * second entity on a schedule the user never saw (§P3-05, ADR-055). This runs when they tap
+   * Retry, and it moves the ids of every intent that named the old one — payload fields,
+   * ordering key, dependency and compensation edges — so the chain stays intact rather than
+   * being rebuilt around a stranded predecessor.
+   *
+   * Domain-agnostic since P3-26: `activity` and `list` differ only in which payload fields
+   * name the entity and what its ordering key is prefixed with.
+   */
   async retryAmbiguousCreate(
     database: SqliteExecutor,
     intentId: string,
     freshIntentId: string,
-    freshActivityId: string,
+    freshEntityId: string,
     now = Date.now(),
   ): Promise<OutboxIntent | undefined> {
     const current = await this.get(database, intentId);
     if (current?.status !== 'needs_attention') return current;
+    const domain = current.mutationKey[0];
     if (
-      current.mutationKey[0] !== 'activity' ||
+      !isRemappableDomain(domain) ||
       current.mutationKey[1] !== 'create' ||
       current.attention?.kind !== 'parked' ||
       current.attention.reason !== 'ambiguous_collision'
@@ -1109,17 +1141,17 @@ export class OutboxRepository {
       throw new OutboxInvariantError(intentId);
     }
     if (
-      freshActivityId === current.entityId ||
+      freshEntityId === current.entityId ||
       (await this.get(database, freshIntentId)) !== undefined ||
       (await database.first(
         'SELECT intent_id FROM outbox_intents WHERE entity_id = ? LIMIT 1;',
-        [freshActivityId],
+        [freshEntityId],
       )) !== undefined
     ) {
       throw new OutboxInvariantError(freshIntentId);
     }
 
-    const previousActivityId = current.entityId;
+    const previousEntityId = current.entityId;
     const previousOrderingKey = current.orderingKey;
     const rows = (
       await database.all(
@@ -1127,7 +1159,7 @@ export class OutboxRepository {
          WHERE entity_id = ? OR depends_on_intent_id = ?
            OR compensation_for_intent_id = ?
          ORDER BY seq;`,
-        [previousActivityId, intentId, intentId],
+        [previousEntityId, intentId, intentId],
       )
     ).map(intentFromRow);
 
@@ -1137,16 +1169,17 @@ export class OutboxRepository {
       const retryVariables = root
         ? freshVariables(candidate.variables, freshIntentId)
         : candidate.variables;
-      const variables = remapActivityVariables(
+      const variables = remapEntityVariables(
         retryVariables,
-        previousActivityId,
-        freshActivityId,
+        previousEntityId,
+        freshEntityId,
+        ENTITY_ID_KEYS[domain],
       );
       const entityId =
-        candidate.entityId === previousActivityId ? freshActivityId : candidate.entityId;
+        candidate.entityId === previousEntityId ? freshEntityId : candidate.entityId;
       const orderingKey =
         candidate.orderingKey === previousOrderingKey
-          ? `activity:${freshActivityId}`
+          ? `${domain}:${freshEntityId}`
           : candidate.orderingKey;
       const dependsOnIntentId =
         candidate.dependsOnIntentId === intentId
@@ -1185,6 +1218,15 @@ export class OutboxRepository {
           ...(root ? [now] : []),
           candidate.intentId,
         ],
+      );
+    }
+    if (domain === 'list') {
+      // The archive Undo table is keyed by list as well as by intent, so a create that is
+      // re-identified before any archive settles must not leave an offer pointing at an id
+      // nothing answers to.
+      await database.run(
+        'UPDATE list_archive_undo_offers SET list_id = ? WHERE list_id = ?;',
+        [freshEntityId, previousEntityId],
       );
     }
     await database.run(

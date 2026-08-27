@@ -181,6 +181,9 @@ describe('nothing but a tap may choose a style', () => {
       'LIST_TEMPLATES',
       'formatIngredientTitle',
       'listTemplateChoices',
+      // P3-26's creation seed: the other half of what a create resolves, and narrowed to the
+      // durable-create path by `check-forbidden.mjs`'s `template-seed-is-creation-only`.
+      'listTemplateSeed',
       'provenanceLabel',
       'resolveSlot',
     ]);

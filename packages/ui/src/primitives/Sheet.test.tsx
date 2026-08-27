@@ -69,6 +69,48 @@ describe('Sheet — the keyboard contract (§20)', () => {
   });
 });
 
+/**
+ * **A modal container must say it is a dialog** (`interaction-contract.md` §6,
+ * `definition-of-done.md` §5 item 11).
+ *
+ * React Native Web's `Modal` writes `aria-modal="true"` unconditionally but only adds
+ * `role="dialog"` — and only runs its focus trap — once its own show animation has ended.
+ * That event never arrives: measured in Chromium against the built export, the container
+ * still had `role: null` two seconds after mount. axe reports it as `aria-allowed-attr`, a
+ * **critical** violation on every sheet in the product.
+ *
+ * Found by P3-26's E2E flow, which is the first thing in this repository that opens a sheet
+ * on a route an accessibility scan reaches. The fix is in `Sheet` itself; this is the
+ * regression test, and it holds under jsdom precisely because jsdom fires no `animationend`
+ * either — so a change that put the role back behind that event would fail here.
+ */
+describe('Sheet — the container is a dialog (§6)', () => {
+  it('carries the dialog role beside aria-modal, and a name', () => {
+    keyboardInset.value = 0;
+    mount(sheet());
+
+    const container = document.querySelector('[aria-modal="true"]');
+    expect(container?.getAttribute('role')).toBe('dialog');
+    expect(container?.getAttribute('aria-label')).toBe('Repeat');
+  });
+
+  /** An untitled sheet is still a dialog, and still has a name to announce. */
+  it('names an untitled sheet rather than leaving the dialog anonymous', () => {
+    keyboardInset.value = 0;
+    mount(
+      <ThemeProvider scheme="light">
+        <Sheet open onClose={() => {}} testID="untitled">
+          <div>body</div>
+        </Sheet>
+      </ThemeProvider>,
+    );
+
+    const container = document.querySelector('[aria-modal="true"]');
+    expect(container?.getAttribute('role')).toBe('dialog');
+    expect(container?.getAttribute('aria-label')).toBe('Dialog');
+  });
+});
+
 describe('Sheet — the grabber is a promise (§0)', () => {
   it('renders a grabber when the sheet can be dragged', () => {
     keyboardInset.value = 0;

@@ -130,6 +130,20 @@ async function writeListRow(
   );
 }
 
+/**
+ * The ordinal a locally-created list takes until the server places it.
+ *
+ * The end of the current order, because that is the only honest answer: `position` reproduces
+ * the server's pointer order across drained pages, and this row is in no page yet. The next
+ * drain assigns the real one — `replaceCanonical` updates the ordinal of a protected row
+ * without touching the optimistic fields it is protecting.
+ */
+async function nextPosition(reader: SqliteReader): Promise<number> {
+  const row = await reader.first('SELECT MAX(position) AS last FROM list_rows;');
+  const last = row?.last;
+  return typeof last === 'number' ? last + 1 : 0;
+}
+
 export interface ListsCommittedSnapshot {
   readonly lists: readonly List[];
   readonly commitRevision: number;
@@ -255,6 +269,75 @@ export class ListsRepository {
   ): Promise<void> {
     await writeListRow(transaction.database, list, position);
     transaction.changed(this.scope);
+  }
+
+  /**
+   * The visible row for a durable create, committed in the same transaction as its intent.
+   *
+   * An upsert rather than an insert, so a user-directed Retry can re-project the same list
+   * after an authoritative rollback removed it, and so replaying an intent that is already
+   * projected is a no-op rather than a constraint failure.
+   */
+  async insertPendingCreate(transaction: TransactionContext, list: List): Promise<void> {
+    const existing = await this.getLocal(transaction.database, list.listId);
+    await writeListRow(
+      transaction.database,
+      list,
+      existing === undefined
+        ? await nextPosition(transaction.database)
+        : /*
+           * Keep the ordinal it already has. A re-projection is the same row appearing again,
+           * and moving it to the end would make a Retry look like the list had been recreated
+           * somewhere else in the index.
+           */
+          await this.positionOf(transaction.database, list.listId),
+    );
+    transaction.changed(this.scope);
+  }
+
+  /**
+   * Replaces the optimistic row with the server's canonical List once the create is acked.
+   *
+   * The whole row, not the settings subset: creation is the one write where the server owns
+   * fields the local projection could only guess at — `ownerId`, the real timestamps, and the
+   * behaviour/capabilities/icon/empty-state copy it resolved from the catalogue itself. The
+   * ordinal is kept, because the row is already sitting somewhere in the user's index and the
+   * next drain is what moves it.
+   */
+  async acceptCreated(transaction: TransactionContext, list: List): Promise<void> {
+    await writeListRow(
+      transaction.database,
+      list,
+      await this.positionOf(transaction.database, list.listId),
+    );
+    transaction.changed(this.scope);
+  }
+
+  /**
+   * Renames one unsynced row after an explicit collision Retry (§P3-05).
+   *
+   * An `UPDATE`, not a delete and re-insert: the list keeps its ordinal, so it stays where the
+   * user last saw it instead of jumping to the end of their index for a reason they were never
+   * shown. A no-op when the row is already gone — a rollback may have removed it first.
+   */
+  async remapPendingCreate(
+    transaction: TransactionContext,
+    previousListId: string,
+    freshListId: string,
+  ): Promise<void> {
+    await transaction.database.run(
+      'UPDATE list_rows SET list_id = ? WHERE list_id = ?;',
+      [freshListId, previousListId],
+    );
+    transaction.changed(this.scope);
+  }
+
+  private async positionOf(reader: SqliteReader, listId: string): Promise<number> {
+    const row = await reader.first('SELECT position FROM list_rows WHERE list_id = ?;', [
+      listId,
+    ]);
+    const position = row?.position;
+    return typeof position === 'number' ? position : await nextPosition(reader);
   }
 
   /** Optimistic archive/restore projection committed with its outbox intent. */

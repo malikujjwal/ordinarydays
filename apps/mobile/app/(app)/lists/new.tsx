@@ -1,34 +1,20 @@
-import { EmptyState, Text, useTheme } from '@od/ui';
 import { useRouter } from 'expo-router';
-import { View } from 'react-native';
+import { NewListSheet } from '@/features/lists/components/NewListSheet';
 
 /**
- * `/lists/new` — **a stub**. P3-26 builds the template-first creation sheet here.
+ * `/lists/new` — the template-first creation sheet (P3-26).
  *
- * The route exists so P3-25's `+ New list` has somewhere real to go: a header action wired to
- * nothing is an action that looks broken, and one wired to a screen that creates something
- * would be P3-25 quietly doing P3-26's job. This screen creates nothing and mints no id.
+ * Thin by rule (`tech-stack.md` §3.2): it owns navigation and nothing else. Both exits return
+ * to the Lists index, where the list the user just made is already a row — on native because
+ * the create committed its own visible row before syncing, on web because the mutation
+ * invalidated the index query.
  *
- * When P3-26 lands, the sheet opens on P3-07's **bundled** catalogue projection with no style
- * selected and no title field, because the style is chosen before the title exists (ADR-032).
+ * The sheet itself takes `open`/`onClose`/`onCreated` rather than reaching for the router,
+ * because P3-27's no-destination flow and P3-38's `Add list` open the same component from
+ * inside their own surfaces, where there is no route to go back from.
  */
 export default function NewListRoute() {
   const router = useRouter();
-  const theme = useTheme();
 
-  return (
-    <View
-      testID="new-list-stub"
-      style={{ flex: 1, justifyContent: 'center', padding: theme.space[5] }}
-    >
-      <EmptyState
-        heading="Choosing a style comes next"
-        body="Creating a list arrives with the style chooser."
-        action={{ label: 'Back', onPress: () => router.back() }}
-      />
-      <Text variant="footnote" color="textDisabled" align="center">
-        P3-26
-      </Text>
-    </View>
-  );
+  return <NewListSheet open onClose={() => router.back()} />;
 }

@@ -132,6 +132,32 @@ const RULES = {
   },
 
   /**
+   * **The catalogue's structural fields are copied at creation and never read back**
+   * (ADR-032, phase-03 §P3-05 step 2, §P3-26).
+   *
+   * `listTemplateSeed` exists so a native create can store the row the user will look at
+   * before the server has seen it — the client doing at confirmation exactly what
+   * `listCreationService` does on the server. Every other use is the failure ADR-032 names:
+   * a template edited a year later silently changing a list somebody already has.
+   *
+   * `list-templates-are-creation-data` cannot cover this, because the seed is a *different*
+   * module and reaching it does not name `LIST_TEMPLATES`. So the caller list is pinned
+   * here, and it is the durable-create path plus the shared module's own tests.
+   */
+  'template-seed-is-creation-only': {
+    description:
+      'listTemplateSeed is named only by the shared module and the durable list create',
+    doc: 'ADR-032 and phase-03 §P3-26 — a stored List renders from its own copied row, never from the catalogue',
+    roots: ['services/api/src', 'apps', 'packages'],
+    extensions: ['.ts', '.tsx'],
+    pattern: /\blistTemplateSeed\b|\bListTemplateSeed\b/,
+    excludePath:
+      /(packages[\\/]shared[\\/]src[\\/]lists[\\/]|apps[\\/]mobile[\\/]src[\\/](features[\\/]lists[\\/]hooks[\\/]useCreateList\.native\.ts|lib[\\/](pendingList|sqlite[\\/]listTransactions)\.ts)$)/,
+    // Prose may cite the rule; only code that reaches for the seed is a violation.
+    codeOnly: true,
+  },
+
+  /**
    * **The user's tap is the only thing that picks a style** (phase-03 §P3-07, ADR-032,
    * acceptance criterion 6). There is no `suggest-template` route, matcher, match-term
    * array, fuzzy search, model call, ranking or word-based fallback anywhere in the product,

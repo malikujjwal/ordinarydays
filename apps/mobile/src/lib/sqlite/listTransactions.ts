@@ -1,7 +1,27 @@
+import type { ListTemplateSeed } from '@od/shared/lists';
+import { type CreateListInput, createListInput, listTemplate } from '@od/shared/schemas';
+import { systemClock } from '@od/shared/time';
 import type { List } from '@od/shared/types';
+import { pendingListFromInput } from '@/lib/pendingList';
 import type { ListsRepository } from '@/lib/sqlite/listsRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
+
+/**
+ * One durable create (§P3-26, §P3-05).
+ *
+ * `listId` and `intentId` are minted **before** this reaches SQLite and are reused by every
+ * transport retry: a fresh id on a retry is how one confirmed create becomes two lists. The
+ * `seed` travels with the intent rather than being re-resolved at replay, so an app update
+ * between queue and drain cannot change what the user made (ADR-032).
+ */
+export interface ListCreateVariables {
+  readonly listId: string;
+  readonly intentId: string;
+  readonly idempotencyKey: string;
+  readonly input: CreateListInput;
+  readonly seed: ListTemplateSeed;
+}
 
 export interface ListPatchVariables {
   readonly listId: string;
@@ -25,12 +45,101 @@ export interface ListUndoVariables {
   readonly undoToken?: string;
 }
 
+/**
+ * The seed as it comes back out of SQLite.
+ *
+ * **Picked from the canonical `listTemplate` schema**, never restated: the shape is owned by
+ * `packages/shared` and a second declaration here would be a copy that could disagree with the
+ * catalogue it describes.
+ */
+const persistedSeed = listTemplate.pick({
+  behaviour: true,
+  capabilities: true,
+  slot: true,
+  icon: true,
+  emptyStateCopy: true,
+});
+
+/**
+ * Reads a persisted create back into its typed variables.
+ *
+ * Both halves are parsed, not cast, because a payload written by an older build has to fail
+ * loudly here rather than be sent as something the server will reject or rebuilt as a row that
+ * renders wrongly. The messages are the ones the recovery banner shows, so they say what the
+ * person can do about it.
+ */
+function parseCreateVariables(variables: object, listId: string): ListCreateVariables {
+  const parsed = createListInput.safeParse(Reflect.get(variables, 'input'));
+  const intentId = Reflect.get(variables, 'intentId');
+  const idempotencyKey = Reflect.get(variables, 'idempotencyKey');
+  const seed = Reflect.get(variables, 'seed');
+  if (!parsed.success || parsed.data.listId !== listId) {
+    throw new Error('The saved list create is invalid. Discard it and try again.');
+  }
+  if (typeof intentId !== 'string' || typeof idempotencyKey !== 'string') {
+    throw new Error('The saved list create has no retry identity.');
+  }
+  const seedFields = persistedSeed.safeParse(seed);
+  if (!seedFields.success) {
+    throw new Error('The saved list create is missing its copied style.');
+  }
+  return {
+    listId,
+    intentId,
+    idempotencyKey,
+    input: parsed.data,
+    seed: seedFields.data,
+  };
+}
+
 /** Commits each visible List-index mutation with its durable outbox intent. */
 export class ListTransactionService {
   constructor(
     private readonly outbox: OutboxRepository,
     private readonly lists: ListsRepository,
   ) {}
+
+  /**
+   * The visible row and the queued create, in one commit.
+   *
+   * The order is the contract §P3-26 states: the id is minted, then the row and the intent are
+   * written **atomically**. A row without its intent is a list that never syncs; an intent
+   * without its row is a create the user cannot see they made. `append` is idempotent for a
+   * canonically equivalent payload, so a repeated confirmation resolves to the one intent that
+   * already exists and projects nothing twice.
+   */
+  async create(
+    transaction: TransactionContext,
+    ownerUserId: string,
+    variables: ListCreateVariables,
+    mintedAt = systemClock.now(),
+    projectExisting = false,
+  ): Promise<OutboxIntent> {
+    if (variables.input.listId !== variables.listId) {
+      throw new Error('A durable list create must carry its minted identity.');
+    }
+    const appended = await this.outbox.append(transaction.database, {
+      intentId: variables.intentId,
+      mutationKey: ['list', 'create'],
+      variables,
+      entityId: variables.listId,
+      orderingKey: `list:${variables.listId}`,
+    });
+    if (appended.kind === 'inserted' || projectExisting) {
+      await this.lists.insertPendingCreate(
+        transaction,
+        pendingListFromInput(
+          variables.input,
+          variables.seed,
+          variables.listId,
+          ownerUserId,
+          mintedAt,
+        ),
+      );
+    }
+    transaction.changed('outbox');
+    return appended.intent;
+  }
 
   async setArchived(
     transaction: TransactionContext,
@@ -169,9 +278,25 @@ export class ListTransactionService {
     transaction.changed('outbox');
   }
 
+  /**
+   * Moves the local row of a parked create onto a freshly minted identity.
+   *
+   * The row rather than a new one, so the list the user is looking at keeps its ordinal and
+   * its content and simply changes the name it will be stored under. Its dependent outbox
+   * references are re-pointed by `retryAmbiguousCreate` in the same transaction.
+   */
+  async remapPendingCreateIdentity(
+    transaction: TransactionContext,
+    previousListId: string,
+    freshListId: string,
+  ): Promise<void> {
+    await this.lists.remapPendingCreate(transaction, previousListId, freshListId);
+  }
+
   /** Re-applies a user-directed Retry after authoritative rollback restored the List index. */
   async reprojectRetry(
     transaction: TransactionContext,
+    ownerUserId: string,
     intent: OutboxIntent,
   ): Promise<OutboxIntent> {
     if (intent.mutationKey[0] !== 'list') {
@@ -183,6 +308,21 @@ export class ListTransactionService {
         : undefined;
     if (variables === undefined) throw new Error('The List retry payload is malformed.');
 
+    if (intent.mutationKey[1] === 'create') {
+      /*
+       * The rollback removed the row this create was showing, so the retry has to put it back
+       * — from the durable payload, which carries the seed frozen at confirmation rather than
+       * whatever the shipped catalogue says now.
+       */
+      await this.create(
+        transaction,
+        ownerUserId,
+        parseCreateVariables(variables, intent.entityId),
+        undefined,
+        true,
+      );
+      return intent;
+    }
     if (intent.mutationKey[1] === 'patch') {
       const input = Reflect.get(variables, 'input');
       const archived =

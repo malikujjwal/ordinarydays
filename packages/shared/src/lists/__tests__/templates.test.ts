@@ -360,6 +360,9 @@ describe('what the catalogue deliberately does not carry (ADR-031, ADR-032, crit
       'LIST_TEMPLATES',
       'formatIngredientTitle',
       'listTemplateChoices',
+      // P3-26's creation seed reads these same records, and reads them for the one thing the
+      // catalogue is for: what a create copies. It decides nothing from a title either.
+      'listTemplateSeed',
       'provenanceLabel',
       'resolveSlot',
     ]);
