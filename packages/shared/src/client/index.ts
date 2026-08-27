@@ -10,4 +10,5 @@ export * from './endpoints/agenda.js';
 export * from './endpoints/capture.js';
 export * from './endpoints/health.js';
 export * from './endpoints/me.js';
+export * from './endpoints/plans.js';
 export * from './http.js';
