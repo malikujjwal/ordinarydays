@@ -7,8 +7,13 @@
  */
 export * from './endpoints/activities.js';
 export * from './endpoints/agenda.js';
+export * from './endpoints/attachments.js';
 export * from './endpoints/capture.js';
 export * from './endpoints/health.js';
+export * from './endpoints/listItems.js';
+export * from './endpoints/lists.js';
+export * from './endpoints/listTemplates.js';
 export * from './endpoints/me.js';
 export * from './endpoints/plans.js';
+export * from './endpoints/updates.js';
 export * from './http.js';
