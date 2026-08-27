@@ -15,6 +15,7 @@ import { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
 import { LegacyImporter } from '@/lib/sqlite/legacyImporter';
 import { migrateNativeLegacyState } from '@/lib/sqlite/legacyMigration';
+import { ListItemsRepository } from '@/lib/sqlite/listItemsRepository';
 import { ListsRepository } from '@/lib/sqlite/listsRepository';
 import { ListTransactionService } from '@/lib/sqlite/listTransactions';
 import {
@@ -87,6 +88,11 @@ async function startSession(
     account.subscriptions,
     account.projections,
   );
+  const listItems = new ListItemsRepository(
+    account.database,
+    account.subscriptions,
+    account.projections,
+  );
   const outbox = new OutboxRepository(account.database);
   const importer = new LegacyImporter(
     account.transactions,
@@ -127,7 +133,7 @@ async function startSession(
   }
   await recoverAbandonedOutbox(account.transactions, outbox);
   const service = new ActivityTransactionService(outbox, activities, agenda);
-  const listService = new ListTransactionService(outbox, lists);
+  const listService = new ListTransactionService(outbox, lists, listItems);
   const sync = new SerializedNativeSyncEngine(
     account.transactions,
     outbox,
@@ -138,6 +144,8 @@ async function startSession(
     undefined,
     anytime,
     lists,
+    undefined,
+    listItems,
   );
   const coordinator = new NativeActivityActionCoordinator(
     ownerUserId,
@@ -199,6 +207,7 @@ async function startSession(
     agenda,
     anytime,
     lists,
+    listItems,
     outbox,
     outboxPresentation,
     coordinator,

@@ -47,6 +47,7 @@ export class NativeActivityActionCoordinator {
     private readonly activityIdFactory?: () => string,
     private readonly listService?: ListTransactionService,
     private readonly listIdFactory?: () => string,
+    private readonly listItemIdFactory?: () => string,
   ) {}
 
   create(
@@ -326,16 +327,53 @@ export class NativeActivityActionCoordinator {
              * it. `retryAmbiguousCreate` moves the whole dependent chain onto it inside this
              * transaction, so nothing is left naming the id the server refused.
              */
-            const list = current.mutationKey[0] === 'list';
-            if (list && this.listService === undefined) {
+            const domain =
+              current.mutationKey[0] === 'list'
+                ? current.mutationKey[1] === 'item-create'
+                  ? 'listItem'
+                  : 'list'
+                : 'activity';
+            if (domain !== 'activity' && this.listService === undefined) {
               throw new Error('Native List retry state is not ready.');
             }
-            const freshEntityId = list
-              ? (this.listIdFactory?.() ??
-                (await import('@/lib/canonicalIds')).nextCanonicalId('lst'))
-              : (this.activityIdFactory?.() ??
-                (await import('@/lib/canonicalIds')).nextCanonicalId('act'));
-            if (list) {
+            const mint = async (prefix: 'act' | 'lst' | 'itm') =>
+              (await import('@/lib/canonicalIds')).nextCanonicalId(prefix);
+            if (domain === 'listItem') {
+              const listId = Reflect.get(
+                typeof current.variables === 'object' && current.variables !== null
+                  ? current.variables
+                  : {},
+                'listId',
+              );
+              if (typeof listId !== 'string') {
+                throw new Error('This saved item no longer names a list.');
+              }
+              const freshItemId = this.listItemIdFactory?.() ?? (await mint('itm'));
+              await this.listService?.remapPendingItemCreateIdentity(
+                transaction,
+                listId,
+                current.entityId,
+                freshItemId,
+              );
+              const retriedItem = await this.outbox.retryAmbiguousCreate(
+                transaction.database,
+                intentId,
+                freshIntentId,
+                freshItemId,
+              );
+              if (retriedItem === undefined || retriedItem.status !== 'queued') {
+                throw new Error(
+                  'This create is no longer waiting for collision recovery.',
+                );
+              }
+              transaction.changed('outbox');
+              return retriedItem;
+            }
+            const freshEntityId =
+              domain === 'list'
+                ? (this.listIdFactory?.() ?? (await mint('lst')))
+                : (this.activityIdFactory?.() ?? (await mint('act')));
+            if (domain === 'list') {
               await this.listService?.remapPendingCreateIdentity(
                 transaction,
                 current.entityId,
@@ -564,7 +602,7 @@ function asError(error: unknown): Error {
 function isAmbiguousCollision(intent: OutboxIntent): boolean {
   return (
     intent.status === 'needs_attention' &&
-    intent.mutationKey[1] === 'create' &&
+    (intent.mutationKey[1] === 'create' || intent.mutationKey[1] === 'item-create') &&
     intent.attention?.kind === 'parked' &&
     intent.attention.reason === 'ambiguous_collision'
   );

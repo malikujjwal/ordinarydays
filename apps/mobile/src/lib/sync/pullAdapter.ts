@@ -2,6 +2,7 @@ import {
   getActivity,
   getAgenda,
   getList,
+  getListItems,
   getLists,
   getMe,
   listActivities,
@@ -16,6 +17,7 @@ import type {
   User,
 } from '@od/shared/types';
 import { apiClient } from '@/lib/apiClient';
+import type { ListItemRow } from '@/lib/sqlite/listItemsRepository';
 
 /** Typed reads used by the one native sync owner; returned bodies are never UI fallbacks. */
 export interface ActivityPullAdapter {
@@ -48,6 +50,26 @@ export interface ActivityPullAdapter {
    * Items are deliberately not requested. Recovery is about identity, and a create has none.
    */
   list?(listId: string): Promise<List>;
+  /**
+   * One List's META **and** its fenced first item page (P3-27).
+   *
+   * The two travel together because the page is fenced by the META `rankVersion` that issued
+   * its cursor: fetching them separately would let a repair land between the two reads and
+   * produce a projection whose rows and cursor belong to different generations — the exact
+   * thing the `503` fence exists to make impossible.
+   */
+  listDetail?(listId: string): Promise<{
+    readonly list: List;
+    readonly items: readonly ListItemRow[];
+    readonly nextCursor?: string;
+  }>;
+  /** A subsequent item page, by the cursor page one (or the page before) returned. */
+  listItemsPage?(
+    listId: string,
+    cursor: string,
+  ): Promise<{ readonly items: readonly ListItemRow[]; readonly nextCursor?: string }>;
+  /** One item by its exact id, for durable-create collision recovery (§P3-08). */
+  listItem?(listId: string, itemId: string): Promise<ListItemRow>;
 }
 
 export const sharedActivityPullAdapter: ActivityPullAdapter = {
@@ -68,6 +90,27 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
   list: async (listId) => {
     const detail = await getList(apiClient, listId);
     return detail.list as List;
+  },
+  listDetail: async (listId) => {
+    const detail = await getList(apiClient, listId, { includeItems: true });
+    return {
+      list: detail.list as List,
+      // The detail item is a union carrying the caller's link when there is one; P3-34 renders
+      // that line and owns storing it. This slice takes the item and nothing else.
+      items: (detail.items ?? []).map((entry) => entry.item as ListItemRow),
+      ...(detail.nextCursor === undefined ? {} : { nextCursor: detail.nextCursor }),
+    };
+  },
+  listItemsPage: async (listId, cursor) => {
+    const page = await getListItems(apiClient, listId, cursor);
+    return {
+      items: page.data as ListItemRow[],
+      ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),
+    };
+  },
+  listItem: async (listId, itemId) => {
+    const { getListItem } = await import('@od/shared/client');
+    return (await getListItem(apiClient, listId, itemId)) as ListItemRow;
   },
   listsPage: async (cursor) => {
     const page = await getLists(apiClient, cursor);

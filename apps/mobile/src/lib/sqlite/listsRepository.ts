@@ -296,15 +296,15 @@ export class ListsRepository {
   }
 
   /**
-   * Replaces the optimistic row with the server's canonical List once the create is acked.
+   * Installs one authoritative List row, keeping wherever it currently sits in the index.
    *
-   * The whole row, not the settings subset: creation is the one write where the server owns
-   * fields the local projection could only guess at — `ownerId`, the real timestamps, and the
-   * behaviour/capabilities/icon/empty-state copy it resolved from the catalogue itself. The
-   * ordinal is kept, because the row is already sitting somewhere in the user's index and the
-   * next drain is what moves it.
+   * The **whole** row, not the settings subset: the two callers are a create's acknowledgement
+   * — where the server owns `ownerId`, the real timestamps and the values it resolved from the
+   * catalogue itself — and a detail pull, which may be the first time this device has seen the
+   * list at all. The ordinal is kept rather than recomputed, because the row is already sitting
+   * somewhere in the user's index and only the next pointer drain may move it.
    */
-  async acceptCreated(transaction: TransactionContext, list: List): Promise<void> {
+  async installCanonicalRow(transaction: TransactionContext, list: List): Promise<void> {
     await writeListRow(
       transaction.database,
       list,

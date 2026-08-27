@@ -149,20 +149,39 @@ function freshVariables(value: unknown, freshIntentId: string): unknown {
 }
 
 /**
- * The payload fields that name the entity a create is about, per domain.
+ * How a parked create is re-identified, per mutation.
  *
- * Spelled out rather than "rewrite every string that matches": a title or a note may
- * legitimately contain an id, and rewriting one would edit the user's own words.
+ * `idKeys` are the payload fields that name the entity. Spelled out rather than "rewrite
+ * every string that matches": a title or a note may legitimately contain an id, and rewriting
+ * one would edit the user's own words.
+ *
+ * `orderingKeyPrefix` is `undefined` when the ordering key does **not** name the entity being
+ * re-minted. An item create is the case: its key names the list, so items typed in sequence
+ * reach the server in that sequence and an item create serialises behind an archive of the
+ * same list. Re-minting the item must leave that key alone, or the retried write would order
+ * itself against a list nothing else names.
  */
-const ENTITY_ID_KEYS = {
-  activity: ['activityId', 'parentActivityId'],
-  list: ['listId'],
-} as const satisfies Record<string, readonly string[]>;
+interface RemapDescriptor {
+  readonly idKeys: readonly string[];
+  readonly orderingKeyPrefix?: string;
+}
 
-type RemappableDomain = keyof typeof ENTITY_ID_KEYS;
+/** Both create mutations, named once so the guard below cannot drift from the descriptor. */
+function isCreateMutation(mutationKey: readonly string[]): boolean {
+  return mutationKey[1] === 'create' || mutationKey[1] === 'item-create';
+}
 
-function isRemappableDomain(value: string | undefined): value is RemappableDomain {
-  return value !== undefined && Object.hasOwn(ENTITY_ID_KEYS, value);
+function remapDescriptor(mutationKey: readonly string[]): RemapDescriptor | undefined {
+  const [domain, name] = mutationKey;
+  if (domain === 'activity') {
+    return { idKeys: ['activityId', 'parentActivityId'], orderingKeyPrefix: 'activity' };
+  }
+  if (domain === 'list') {
+    return name === 'item-create'
+      ? { idKeys: ['itemId'] }
+      : { idKeys: ['listId'], orderingKeyPrefix: 'list' };
+  }
+  return undefined;
 }
 
 function remapEntityVariables(
@@ -465,6 +484,8 @@ export class OutboxRepository {
     const rows = await database.all(
       `SELECT DISTINCT entity_id FROM outbox_intents
        WHERE json_extract(mutation_key_json, '$[0]') = 'list'
+         -- An item intent's entity is an item; it protects a row in a different table.
+         AND json_extract(mutation_key_json, '$[1]') NOT LIKE 'item-%'
          AND status IN ('queued', 'in_flight', 'needs_attention')
          AND NOT (
            status = 'needs_attention'
@@ -473,6 +494,38 @@ export class OutboxRepository {
              OR (attention_kind = 'parked' AND attention_reason = 'predecessor_rejected')
            )
          );`,
+    );
+    return new Set(
+      rows
+        .map((row) => stringValue(row, 'entity_id'))
+        .filter((value): value is string => value !== undefined),
+    );
+  }
+
+  /**
+   * Item rows a canonical page must not overwrite: their creates are still unresolved, so the
+   * server could not have included them and its silence is not evidence of absence.
+   *
+   * Rolled-back work is excluded on the same rule `protectedListIds` uses — a rejected create
+   * must not shield the projection that replaced it.
+   */
+  async protectedListItemIds(
+    listId: string,
+    database: SqliteReader = this.reader,
+  ): Promise<ReadonlySet<string>> {
+    const rows = await database.all(
+      `SELECT DISTINCT entity_id FROM outbox_intents
+       WHERE mutation_key_json = '["list","item-create"]'
+         AND json_extract(variables_json, '$.listId') = ?
+         AND status IN ('queued', 'in_flight', 'needs_attention')
+         AND NOT (
+           status = 'needs_attention'
+           AND (
+             attention_kind = 'rejected'
+             OR (attention_kind = 'parked' AND attention_reason = 'predecessor_rejected')
+           )
+         );`,
+      [listId],
     );
     return new Set(
       rows
@@ -1131,10 +1184,10 @@ export class OutboxRepository {
   ): Promise<OutboxIntent | undefined> {
     const current = await this.get(database, intentId);
     if (current?.status !== 'needs_attention') return current;
-    const domain = current.mutationKey[0];
+    const descriptor = remapDescriptor(current.mutationKey);
     if (
-      !isRemappableDomain(domain) ||
-      current.mutationKey[1] !== 'create' ||
+      descriptor === undefined ||
+      !isCreateMutation(current.mutationKey) ||
       current.attention?.kind !== 'parked' ||
       current.attention.reason !== 'ambiguous_collision'
     ) {
@@ -1173,13 +1226,14 @@ export class OutboxRepository {
         retryVariables,
         previousEntityId,
         freshEntityId,
-        ENTITY_ID_KEYS[domain],
+        descriptor.idKeys,
       );
       const entityId =
         candidate.entityId === previousEntityId ? freshEntityId : candidate.entityId;
       const orderingKey =
+        descriptor.orderingKeyPrefix !== undefined &&
         candidate.orderingKey === previousOrderingKey
-          ? `${domain}:${freshEntityId}`
+          ? `${descriptor.orderingKeyPrefix}:${freshEntityId}`
           : candidate.orderingKey;
       const dependsOnIntentId =
         candidate.dependsOnIntentId === intentId
@@ -1220,10 +1274,10 @@ export class OutboxRepository {
         ],
       );
     }
-    if (domain === 'list') {
-      // The archive Undo table is keyed by list as well as by intent, so a create that is
+    if (current.mutationKey[0] === 'list' && current.mutationKey[1] === 'create') {
+      // The archive Undo table is keyed by list as well as by intent, so a list create that is
       // re-identified before any archive settles must not leave an offer pointing at an id
-      // nothing answers to.
+      // nothing answers to. An item create never names a list here.
       await database.run(
         'UPDATE list_archive_undo_offers SET list_id = ? WHERE list_id = ?;',
         [freshEntityId, previousEntityId],

@@ -3,6 +3,7 @@ import {
   convertRecurrence,
   createActivity,
   createList,
+  createListItem,
   createReminder,
   deleteActivityForReplay,
   deleteListForReplay,
@@ -21,9 +22,11 @@ import {
   type CompleteActivityInput,
   type CreateActivityInput,
   type CreateListInput,
+  type CreateListItemInput,
   completeActivityInput,
   createActivityInput,
   createListInput,
+  createListItemInput,
   type PatchActivityInput,
   type PatchListInput,
   patchActivityInput,
@@ -95,6 +98,11 @@ export interface ActivityPushTransport {
 
 export interface ListPushTransport {
   create(input: CreateListInput, idempotencyKey: string): Promise<unknown>;
+  createItem(
+    listId: string,
+    input: CreateListItemInput,
+    idempotencyKey: string,
+  ): Promise<unknown>;
   patch(
     listId: string,
     input: PatchListInput,
@@ -164,6 +172,8 @@ export const sharedActivityPushTransport: ActivityPushTransport = {
 
 export const sharedListPushTransport: ListPushTransport = {
   create: (input, idempotencyKey) => createList(apiClient, input, idempotencyKey),
+  createItem: (listId, input, idempotencyKey) =>
+    createListItem(apiClient, listId, input, idempotencyKey),
   patch: (listId, input, ifMatch, idempotencyKey) =>
     patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey),
   remove: (listId) => deleteListForReplay(apiClient, listId),
@@ -314,7 +324,25 @@ export class ActivityPushAdapter {
   private executeList(intent: OutboxIntent): Promise<unknown> {
     const name = intent.mutationKey[1];
     const value = variables(intent);
-    const listId = requiredString(field(value, 'listId') ?? intent.entityId, 'listId');
+    const listId = requiredString(field(value, 'listId'), 'listId');
+    if (name === 'item-create') {
+      /*
+       * An **item** intent's entity is the item, not the list — its ordering key names the
+       * list so items land in the order they were typed, and the identity a collision Retry
+       * re-mints is the item's. So the entity check here is against `itemId`.
+       */
+      const itemId = requiredString(field(value, 'itemId'), 'itemId');
+      if (itemId !== intent.entityId) {
+        throw new DurableActivityIntentError(
+          'Durable list item intent entity identity does not match its payload.',
+        );
+      }
+      return this.listTransport.createItem(
+        listId,
+        parsePersisted(createListItemInput, field(value, 'input')),
+        requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+      );
+    }
     if (listId !== intent.entityId) {
       throw new DurableActivityIntentError(
         'Durable List intent entity identity does not match its payload.',

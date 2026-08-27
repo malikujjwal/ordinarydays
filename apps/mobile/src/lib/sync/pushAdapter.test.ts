@@ -92,6 +92,7 @@ describe('ActivityPushAdapter', () => {
   ] as const)('dispatches durable List %s intents', async (name, variables, method) => {
     const listTransport: ListPushTransport = {
       create: vi.fn(async () => ({})),
+      createItem: vi.fn(async () => ({})),
       patch: vi.fn(async () => ({})),
       remove: vi.fn(async () => ({})),
       undo: vi.fn(async () => ({})),

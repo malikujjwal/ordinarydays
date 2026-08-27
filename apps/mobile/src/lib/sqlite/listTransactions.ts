@@ -1,8 +1,16 @@
 import type { ListTemplateSeed } from '@od/shared/lists';
-import { type CreateListInput, createListInput, listTemplate } from '@od/shared/schemas';
+import {
+  type CreateListInput,
+  type CreateListItemInput,
+  createListInput,
+  createListItemInput,
+  listTemplate,
+} from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { pendingListFromInput } from '@/lib/pendingList';
+import { pendingListItemFromInput } from '@/lib/pendingListItem';
+import type { ListItemsRepository } from '@/lib/sqlite/listItemsRepository';
 import type { ListsRepository } from '@/lib/sqlite/listsRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
@@ -21,6 +29,25 @@ export interface ListCreateVariables {
   readonly idempotencyKey: string;
   readonly input: CreateListInput;
   readonly seed: ListTemplateSeed;
+}
+
+/**
+ * One durable item create (P3-27, §P3-08).
+ *
+ * `itemId` and `intentId` are minted at confirmation and reused by every replay, for the
+ * reason the List create records: a fresh id on a retry is how one create becomes two rows.
+ *
+ * `rank` is the position the device **showed** the row at, carried so a Retry after an
+ * authoritative rollback puts it back where the user last saw it rather than recomputing a
+ * position against a list that has moved on. The server still allocates the real one.
+ */
+export interface ListItemCreateVariables {
+  readonly listId: string;
+  readonly itemId: string;
+  readonly intentId: string;
+  readonly idempotencyKey: string;
+  readonly input: CreateListItemInput;
+  readonly rank: string;
 }
 
 export interface ListPatchVariables {
@@ -92,12 +119,106 @@ function parseCreateVariables(variables: object, listId: string): ListCreateVari
   };
 }
 
+function parseItemCreateVariables(
+  variables: object,
+  itemId: string,
+): ListItemCreateVariables {
+  const parsed = createListItemInput.safeParse(Reflect.get(variables, 'input'));
+  const listId = Reflect.get(variables, 'listId');
+  const intentId = Reflect.get(variables, 'intentId');
+  const idempotencyKey = Reflect.get(variables, 'idempotencyKey');
+  const rank = Reflect.get(variables, 'rank');
+  if (!parsed.success || parsed.data.itemId !== itemId) {
+    throw new Error('The saved item is invalid. Discard it and try again.');
+  }
+  if (
+    typeof listId !== 'string' ||
+    typeof intentId !== 'string' ||
+    typeof idempotencyKey !== 'string' ||
+    typeof rank !== 'string'
+  ) {
+    throw new Error('The saved item has no retry identity.');
+  }
+  return { listId, itemId, intentId, idempotencyKey, input: parsed.data, rank };
+}
+
 /** Commits each visible List-index mutation with its durable outbox intent. */
 export class ListTransactionService {
   constructor(
     private readonly outbox: OutboxRepository,
     private readonly lists: ListsRepository,
+    private readonly items?: ListItemsRepository,
   ) {}
+
+  /**
+   * The visible item and its queued create, in one commit (P3-27).
+   *
+   * The ordering key names the **list**, not the item, and that is deliberate on both counts:
+   * items typed in sequence reach the server in that sequence, and an item create serialises
+   * behind an archive or a delete of the same list rather than racing it. The identity being
+   * re-minted on a collision Retry is still the item's, which is why the remap must move the
+   * entity without touching this key.
+   */
+  async createItem(
+    transaction: TransactionContext,
+    variables: ListItemCreateVariables,
+    projectExisting = false,
+  ): Promise<OutboxIntent> {
+    const items = this.requireItems();
+    if (variables.input.itemId !== variables.itemId) {
+      throw new Error('A durable item create must carry its minted identity.');
+    }
+    const appended = await this.outbox.append(transaction.database, {
+      intentId: variables.intentId,
+      mutationKey: ['list', 'item-create'],
+      variables,
+      entityId: variables.itemId,
+      orderingKey: `list:${variables.listId}`,
+    });
+    if (appended.kind === 'inserted' || projectExisting) {
+      await items.insertPendingCreate(
+        transaction,
+        pendingListItemFromInput(
+          variables.input,
+          variables.listId,
+          variables.itemId,
+          variables.rank,
+        ),
+      );
+    }
+    transaction.changed('outbox');
+    return appended.intent;
+  }
+
+  /** Installs the server's item over the optimistic row once its create is acknowledged. */
+  async acceptCreatedItem(
+    transaction: TransactionContext,
+    item: Parameters<ListItemsRepository['acceptCreated']>[1],
+  ): Promise<void> {
+    await this.requireItems().acceptCreated(transaction, item);
+  }
+
+  /** Moves one unsynced item onto a freshly minted identity after an explicit Retry. */
+  async remapPendingItemCreateIdentity(
+    transaction: TransactionContext,
+    listId: string,
+    previousItemId: string,
+    freshItemId: string,
+  ): Promise<void> {
+    await this.requireItems().remapPendingCreate(
+      transaction,
+      listId,
+      previousItemId,
+      freshItemId,
+    );
+  }
+
+  private requireItems(): ListItemsRepository {
+    if (this.items === undefined) {
+      throw new Error('Native list item state is not ready.');
+    }
+    return this.items;
+  }
 
   /**
    * The visible row and the queued create, in one commit.
@@ -308,6 +429,18 @@ export class ListTransactionService {
         : undefined;
     if (variables === undefined) throw new Error('The List retry payload is malformed.');
 
+    if (intent.mutationKey[1] === 'item-create') {
+      /*
+       * The rollback removed the row this create was showing. Put it back from the durable
+       * payload, at the rank the user saw it at.
+       */
+      await this.createItem(
+        transaction,
+        parseItemCreateVariables(variables, intent.entityId),
+        true,
+      );
+      return intent;
+    }
     if (intent.mutationKey[1] === 'create') {
       /*
        * The rollback removed the row this create was showing, so the retry has to put it back

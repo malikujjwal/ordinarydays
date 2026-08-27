@@ -124,6 +124,11 @@ describe('native Activity/Agenda architecture boundaries', () => {
       /* P3-25. Presentation-only on the same terms: it serves the Lists index and makes no
          write decision from a snapshot — its three writers all take an explicit transaction. */
       'lib/sqlite/listsRepository.ts',
+      /* P3-27, on the same terms one level down: it serves list detail, and its snapshot
+         reads rows and page state together only so a screen sees one consistent pair. Every
+         writer takes an explicit transaction, and the `503` recovery decisions are the sync
+         engine's. */
+      'lib/sqlite/listItemsRepository.ts',
       'lib/sqlite/outboxPresentationStore.ts',
     ]);
     const callers = productionSources()

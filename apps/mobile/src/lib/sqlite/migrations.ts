@@ -437,6 +437,59 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
           ON list_archive_undo_offers (list_id, created_at);
       `),
   },
+  {
+    version: 13,
+    name: 'native-list-items',
+    /**
+     * The item slice behind list detail (P3-27, ADR-057).
+     *
+     * ## Order is `(rank, item_id)`, and the index says so
+     *
+     * There is no `position` column, and the difference from `list_rows` is the whole reason:
+     * the index reproduces a server *pointer order* it cannot compute, while items carry an
+     * authoritative lexo `rank` every client can sort by. `item_id` breaks ties because equal
+     * ranks are **expected** — two people adding at the same position produce them — and the
+     * pair is what makes the order stable on both phones
+     * (`plans-and-lists.md` §5.11.5, `compareListItems`).
+     *
+     * ## Why the page state is its own table
+     *
+     * An item page's cursor is bound to the `rank_version` that issued it. When repair or a
+     * behaviour migration moves that version the server answers `503`, and the contract is to
+     * discard **every** cursor and restart at page one, installing nothing until it succeeds
+     * (§P3-27). Keeping the cursor beside the rows would make "discard the cursor" and
+     * "keep the committed rows" the same statement, which is precisely what the contract
+     * separates. `complete` is what lets a reader distinguish a fully drained list from a
+     * prefix, so no empty-state or bulk decision ever reads a loaded page as the whole list.
+     *
+     * `item_count` is not here either: it is META's, on `list_rows`, and a second copy derived
+     * from loaded rows is the mistake criterion 36 names.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE list_items (
+          item_id TEXT PRIMARY KEY NOT NULL,
+          list_id TEXT NOT NULL,
+          rank TEXT NOT NULL,
+          title TEXT NOT NULL,
+          note TEXT,
+          checked INTEGER NOT NULL CHECK (checked IN (0, 1)),
+          location_json TEXT,
+          source_activity_id TEXT,
+          source_label TEXT,
+          details_json TEXT
+        );
+        CREATE INDEX list_items_order ON list_items (list_id, rank, item_id);
+
+        CREATE TABLE list_item_pages (
+          list_id TEXT PRIMARY KEY NOT NULL,
+          rank_version INTEGER NOT NULL,
+          next_cursor TEXT,
+          complete INTEGER NOT NULL CHECK (complete IN (0, 1)),
+          updated_at TEXT NOT NULL
+        );
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {
