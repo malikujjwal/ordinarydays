@@ -104,7 +104,8 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
   listItemsPage: async (listId, cursor) => {
     const page = await getListItems(apiClient, listId, cursor);
     return {
-      items: page.data as ListItemRow[],
+      // P3-34 renders the caller's link; this slice takes the item, as page one does.
+      items: page.data.map((entry) => entry.item as ListItemRow),
       ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),
     };
   },

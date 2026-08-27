@@ -59,8 +59,10 @@ async function itemTitles(request: APIRequestContext, listId: string): Promise<s
     headers: e2eHeaders(),
   });
   expect(response.ok(), await response.text()).toBe(true);
-  const body = (await response.json()) as { data: { title: string }[] };
-  return body.data.map((item) => item.title);
+  // `api-contract.md` §2.7: a page carries the caller's `viewerLink`/`viewerPlan` pair beside
+  // each item, so an entry is `{ item, … }` rather than a bare item.
+  const body = (await response.json()) as { data: { item: { title: string } }[] };
+  return body.data.map((entry) => entry.item.title);
 }
 
 test('a list item lands in the list the user named, from either route', async ({

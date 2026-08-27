@@ -168,6 +168,9 @@ export function useListDetail(listId: string): ListDetailView {
           if (active.current) setLoadingMore(false);
         });
     },
+    // Committed rows only: the write already landed in SQLite, and asking the network for
+    // permission to show it is what breaks adding an item on a train.
+    refresh: () => void loadCommitted(),
     refetch: () => void refetch(),
     ...(failure === undefined
       ? {}

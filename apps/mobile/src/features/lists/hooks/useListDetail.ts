@@ -33,6 +33,17 @@ export interface ListDetailView {
   readonly isLoadingMore: boolean;
   readonly isOffline: boolean;
   readonly loadMore: () => void;
+  /**
+   * Re-reads the projection after a local write.
+   *
+   * Separate from {@link refetch} because the two platforms answer it differently: native
+   * re-reads its committed SQLite rows and touches the network not at all — an item added
+   * offline is already there — while web has no local truth and must ask the server. A screen
+   * that called `refetch` after every add would put "Couldn't refresh" under a row the user
+   * had just successfully written offline.
+   */
+  readonly refresh: () => void;
+  /** The user-facing `Try again`: asks the server on both platforms. */
   readonly refetch: () => void;
   readonly message?: string;
   readonly requestId?: string;
@@ -149,7 +160,10 @@ export function useListDetail(listId: string): ListDetailView {
             ? current
             : {
                 ...current,
-                items: mergeItemPages(current.items, page.data as ListItemRow[]),
+                items: mergeItemPages(
+                  current.items,
+                  page.data.map((entry) => entry.item as ListItemRow),
+                ),
                 nextCursor: page.meta.nextCursor,
                 complete: page.meta.nextCursor === undefined,
               },
@@ -181,6 +195,8 @@ export function useListDetail(listId: string): ListDetailView {
     isLoadingMore: loadingMore,
     isOffline,
     loadMore,
+    // Web keeps no local projection, so a re-read *is* a request.
+    refresh: () => void restart(),
     refetch: () => void restart(),
     ...(failure === undefined
       ? {}

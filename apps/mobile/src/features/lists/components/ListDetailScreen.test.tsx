@@ -67,6 +67,7 @@ function setView(overrides: Partial<ListDetailView> = {}) {
     isLoadingMore: false,
     isOffline: false,
     loadMore: vi.fn(),
+    refresh: vi.fn(),
     refetch: vi.fn(),
     ...overrides,
   };
@@ -175,6 +176,8 @@ describe('the inline add row', () => {
     );
     // Still open: the next item is typed straight in.
     expect(screen.getByRole('button', { name: 'Add to Groceries' })).toBeDefined();
+    // And the projection is re-read, so the row the user just wrote is on screen.
+    expect(view.current.refresh).toHaveBeenCalled();
   });
 
   it('keeps the typed words when the write does not land', async () => {

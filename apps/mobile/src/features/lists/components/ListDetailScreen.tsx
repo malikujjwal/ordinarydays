@@ -187,7 +187,12 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
         {list === undefined ? null : (
           <AddItemRow
             listName={list.title}
-            onAdd={(title) => add.add(listId, { title })}
+            onAdd={async (title) => {
+              const itemId = await add.add(listId, { title });
+              // Re-read from wherever this platform's truth is; the hook decides which.
+              if (itemId !== undefined) view.refresh();
+              return itemId;
+            }}
             isAdding={add.isAdding}
             autoFocus={showEmpty}
             {...(add.errorMessage === undefined

@@ -428,7 +428,7 @@ describe('list items', () => {
   });
 
   it('pages items and keeps the rank-bound cursor', async () => {
-    const { client, calls } = makeClient([okPage([ITEM], 'page-2')]);
+    const { client, calls } = makeClient([okPage([{ item: ITEM }], 'page-2')]);
 
     const page = await getListItems(client, LIST_ID, 'page-1');
 
@@ -436,6 +436,8 @@ describe('list items', () => {
       `https://api.test/v1/lists/${LIST_ID}/items?cursor=page-1`,
     );
     expect(page.meta.nextCursor).toBe('page-2');
+    // The same `{ item, viewerLink?, viewerPlan? }` union the detail's first page carries.
+    expect(page.data[0]?.item).toEqual(ITEM);
   });
 
   it('answers the delete with the reversible triple', async () => {

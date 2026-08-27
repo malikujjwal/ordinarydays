@@ -3,6 +3,7 @@ import { envelope } from '../../schemas/envelope.js';
 import {
   type BulkCreateListItemsInput,
   type CreateListItemInput,
+  listDetailItem,
   listItemView,
   type PatchListItemInput,
   reversibleItemMutation,
@@ -36,8 +37,16 @@ export const listItemsResponse = envelope(listItemView.array());
 export const reversibleItemMutationResponse = envelope(reversibleItemMutation);
 export const scheduledListItemResponse = envelope(scheduledListItem);
 
-/** An item page answers with an array **and** `meta.nextCursor`; the envelope carries both. */
-export const listItemPageResponse = envelope(listItemView.array());
+/**
+ * An item page answers with an array **and** `meta.nextCursor`; the envelope carries both.
+ *
+ * Its members are `listDetailItem`, not bare items: `api-contract.md` §2.7 says a page carries
+ * "only the caller's readable `viewerLink` / trimmed `viewerPlan` pair for that page", which is
+ * the same union `GET /v1/lists/:id` uses for its first page. One shape for both, so a caller
+ * merging page two into page one is merging like with like — corrected in P3-27, where the
+ * mismatch first had a consumer.
+ */
+export const listItemPageResponse = envelope(listDetailItem.array());
 
 export type ListItemView = z.infer<typeof listItemView>;
 export type ReversibleItemMutation = z.infer<typeof reversibleItemMutation>;
