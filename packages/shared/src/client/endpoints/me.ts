@@ -85,6 +85,7 @@ export function registerDevice(
       schema: deviceResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as Device);

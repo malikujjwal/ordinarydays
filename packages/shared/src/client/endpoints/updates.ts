@@ -92,6 +92,7 @@ export function postActivityUpdate(
       schema: postActivityUpdateResponse,
       body: { body },
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);

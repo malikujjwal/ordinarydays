@@ -72,6 +72,7 @@ export function createList(
       schema: listResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -163,6 +164,7 @@ export function patchList(
       schema: listSettingsResponse,
       body: patch,
       headers: { 'If-Match': ifMatch, 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -224,6 +226,7 @@ export function changeListBehaviour(
       schema: listSettingsResponse,
       body: input,
       headers: { 'If-Match': ifMatch, 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -312,6 +315,7 @@ export function undoListOperation(
       schema: listUndoResponse,
       body: { undoToken },
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);

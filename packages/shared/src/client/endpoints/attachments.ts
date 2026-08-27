@@ -102,6 +102,7 @@ export function requestUploadUrl(
       schema: requestUploadUrlResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -163,6 +164,7 @@ export function confirmAttachment(
       schema: attachmentResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);

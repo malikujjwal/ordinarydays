@@ -67,6 +67,7 @@ export function createListItem(
       schema: listItemResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -100,6 +101,7 @@ export function bulkCreateListItems(
       schema: listItemsResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -269,6 +271,7 @@ export function scheduleListItem(
       schema: scheduledListItemResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);

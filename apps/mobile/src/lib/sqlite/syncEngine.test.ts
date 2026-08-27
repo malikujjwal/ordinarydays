@@ -3697,6 +3697,80 @@ describe('serialized native convergence guard', () => {
     recoveryEngine.stop();
   });
 
+  it('settles an already-archived retry after its unaccepted Undo offer expired', async () => {
+    if (database === undefined) throw new Error('missing List retry database');
+    const list: List = {
+      listId: 'lst_01J0000000000000000000000C',
+      ownerId: OWNER,
+      behaviour: 'collection',
+      templateKey: 'groceries',
+      title: 'Groceries',
+      icon: 'cart',
+      emptyStateCopy: 'Add something to buy.',
+      capabilities: { checkable: true, supportsLocation: false },
+      slot: null,
+      itemCount: 3,
+      uncheckedCount: 2,
+      memberCount: 1,
+      rankVersion: 0,
+      archived: false,
+      updatedAt: '2026-08-19T00:00:00.000Z',
+      lastItemActivityAt: '2026-08-19T00:00:00.000Z',
+    };
+    const acknowledged = {
+      ...list,
+      archived: true,
+      updatedAt: '2026-08-20T00:00:00.000Z',
+    };
+    const lists = new ListsRepository(database, new RepositorySubscriptions());
+    const listService = new ListTransactionService(outbox, lists);
+    await transactions.run(async (transaction) => {
+      await lists.replaceCanonical(transaction, [list]);
+      await listService.setArchived(transaction, list, true, 'expired-archive-retry');
+      // The presentation window elapsed before this retry. With no accepted inverse left,
+      // an already-archived server response legitimately carries no new Undo authority.
+      await outbox.clearListArchiveUndoOffer(
+        transaction.database,
+        'expired-archive-retry',
+        true,
+      );
+    });
+    const patch = vi.fn(async () => ({ list: acknowledged }));
+    const listPush: ListPushTransport = {
+      patch,
+      remove: async () => {
+        throw new Error('unexpected List DELETE');
+      },
+      undo: async () => {
+        throw new Error('unexpected List Undo');
+      },
+    };
+    const sync = new SerializedNativeSyncEngine(
+      transactions,
+      outbox,
+      activities,
+      agenda,
+      pushTransport(),
+      pullAdapter(),
+      targetedTransport(),
+      anytime,
+      lists,
+      listPush,
+    );
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(patch).toHaveBeenCalledWith(
+      list.listId,
+      { archived: true },
+      list.updatedAt,
+      'expired-archive-retry',
+    );
+    expect(await lists.read()).toEqual([acknowledged]);
+    expect(await outbox.all()).toEqual([]);
+  });
+
   it('settles an acknowledged archive Undo without re-entering the network lane', async () => {
     if (database === undefined) throw new Error('missing List Undo database');
     const archived: List = {

@@ -555,7 +555,8 @@ export const settlementLocator = (settlementId: string) => ({
 /**
  * **User-scoped, and that is a security requirement rather than a nicety.** A bare
  * `IDEM#<key>` partition would let one user's client-generated key return another user's
- * stored response. Carries a `ttl` of now + 24 h. P1-04 writes these.
+ * stored response. Most carry a 24-hour `ttl`; handlers whose exact response contains
+ * longer-lived authority may select the durable outbox window. P1-04 writes these.
  */
 export const idempotency = (userId: string, key: string) => ({
   pk: `IDEM#${userId}#${key}`,

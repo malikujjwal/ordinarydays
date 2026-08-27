@@ -5,6 +5,7 @@ import {
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/ddb.js';
 import { AppError } from '../lib/errors.js';
+import { IdempotencyRaceError } from '../lib/idempotency.js';
 
 /**
  * `TransactWriteItems` composition (`data-model.md` §7).
@@ -187,13 +188,21 @@ function toAppError(error: unknown, options: WriteOptions): unknown {
   if (!(error instanceof TransactionCanceledException)) return error;
 
   const reasons: CancellationReason[] = error.CancellationReasons ?? [];
-  const failedIndex = reasons.findIndex(
-    (reason) => reason.Code === 'ConditionalCheckFailed',
+  const failedIndexes = reasons.flatMap((reason, index) =>
+    reason.Code === 'ConditionalCheckFailed' ? [index] : [],
   );
 
-  if (failedIndex >= 0) {
-    const mapped = options.onConditionFailed?.(failedIndex);
-    if (mapped !== undefined) return mapped;
+  if (failedIndexes.length > 0) {
+    const mapped = failedIndexes.flatMap((index) => {
+      const failure = options.onConditionFailed?.(index);
+      return failure === undefined ? [] : [failure];
+    });
+    // A same-key winner can make both a domain condition and the later receipt put fail.
+    // The receipt is authoritative in that case: the middleware must replay its exact body
+    // instead of surfacing whichever domain conflict DynamoDB happened to list first.
+    const receiptRace = mapped.find((failure) => failure instanceof IdempotencyRaceError);
+    if (receiptRace !== undefined) return receiptRace;
+    if (mapped[0] !== undefined) return mapped[0];
     return new AppError(
       'conflict',
       'This changed while you were editing it. Review the update.',

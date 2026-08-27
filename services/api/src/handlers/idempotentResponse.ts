@@ -9,6 +9,11 @@ import {
 
 type SuccessStatus = 200 | 201 | 202 | 204;
 
+export interface IdempotentJsonOptions {
+  /** Overrides the ordinary 24-hour receipt window for a longer-lived response contract. */
+  readonly receiptTtlSeconds?: number;
+}
+
 /**
  * Precomputes the successful HTTP body before the domain transaction commits.
  *
@@ -26,6 +31,7 @@ export async function idempotentJson(
     receiptFor: (data: unknown, cleanupRef?: CleanupRef) => IdempotencyReceipt,
     key: string,
   ) => Promise<unknown>,
+  options: IdempotentJsonOptions = {},
 ): Promise<Response> {
   const key = c.get('idempotencyKey');
   const route = c.get('idempotencyRoute');
@@ -49,7 +55,8 @@ export async function idempotentJson(
       route,
       status,
       body,
-      ttl: Math.floor(nowMs / 1000) + IDEMPOTENCY_TTL_SECONDS,
+      ttl:
+        Math.floor(nowMs / 1000) + (options.receiptTtlSeconds ?? IDEMPOTENCY_TTL_SECONDS),
       createdAt: new Date(nowMs).toISOString(),
       ...(cleanupRef === undefined ? {} : { cleanupRef }),
     };

@@ -200,8 +200,10 @@ export interface RequestOptions<S extends z.ZodType> {
   /** The **envelope** schema for the endpoint, so `meta` is validated with `data`. */
   schema: S;
   body?: unknown;
-  /** `Idempotency-Key` goes here. Its presence is what makes a `POST` retryable. */
+  /** Request headers, including `Idempotency-Key` on replay-protected mutations. */
   headers?: Record<string, string>;
+  /** The server stores and replays this mutation's exact response under its required key. */
+  replayProtected?: boolean;
   signal?: AbortSignal;
 }
 
@@ -219,16 +221,23 @@ interface CachedGetResponse {
 /**
  * Whether this request may be sent twice.
  *
- * `GET` is safe by definition. A `POST` or `PATCH` is safe **only** with an
- * `Idempotency-Key`, because that key lets the server return the stored response instead of
- * applying the write again. An ordinary `PATCH` carrying only `If-Match` is not retried: its
- * second attempt would fail with a misleading `409`. A `DELETE` retried after a partial
- * failure is indistinguishable from deleting something recreated in between.
+ * `GET` is safe by definition. A mutation is safe only when its endpoint explicitly declares
+ * server-side exact-response replay and supplies the key that addresses that receipt. Header
+ * presence is not the declaration: an ordinary PATCH may carry a cross-cutting key that its
+ * route ignores, and retrying it would turn a committed write with a lost response into a
+ * misleading `409`.
  */
-function isRetryableRequest(method: string, headers: Record<string, string>): boolean {
+function isRetryableRequest(
+  method: string,
+  replayProtected: boolean,
+  headers: Record<string, string>,
+): boolean {
   if (method === 'GET') return true;
   if (method !== 'POST' && method !== 'PATCH') return false;
-  return Object.keys(headers).some((h) => h.toLowerCase() === 'idempotency-key');
+  return (
+    replayProtected &&
+    Object.keys(headers).some((header) => header.toLowerCase() === 'idempotency-key')
+  );
 }
 
 function parseRetryAfter(value: string | null): number | undefined {
@@ -420,7 +429,11 @@ export function createHttpClient(config: HttpClientConfig): HttpClient {
       // inbound `X-Request-Id` — so a retry and its original correlate in the logs rather
       // than looking like two unrelated requests.
       const requestId = newRequestId();
-      const retryable = isRetryableRequest(options.method, options.headers ?? {});
+      const retryable = isRetryableRequest(
+        options.method,
+        options.replayProtected === true,
+        options.headers ?? {},
+      );
 
       /**
        * **One token decision per request, whatever the transport does underneath.**

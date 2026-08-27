@@ -6,6 +6,7 @@ import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynam
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AppError } from '../lib/errors.js';
+import { IdempotencyRaceError } from '../lib/idempotency.js';
 import { userProfile } from './keys.js';
 import { transactWrite } from './tx.js';
 
@@ -121,6 +122,32 @@ describe('cancellation mapping', () => {
     ).rejects.toThrow('item 2 lost');
 
     expect(seen).toEqual([2]);
+  });
+
+  it('prioritises a later receipt collision when an earlier domain condition also failed', async () => {
+    ddbMock
+      .on(TransactWriteCommand)
+      .rejects(
+        cancelled([
+          { Code: 'ConditionalCheckFailed' },
+          { Code: 'ConditionalCheckFailed' },
+        ]),
+      );
+
+    const seen: number[] = [];
+    await expect(
+      transactWrite([item, item], {
+        operation: 'patchListMeta',
+        onConditionFailed: (index) => {
+          seen.push(index);
+          return index === 1
+            ? new IdempotencyRaceError()
+            : new AppError('conflict', 'The List version moved.');
+        },
+      }),
+    ).rejects.toBeInstanceOf(IdempotencyRaceError);
+
+    expect(seen).toEqual([0, 1]);
   });
 
   it('falls back to the default conflict when the mapper declines', async () => {

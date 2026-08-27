@@ -248,7 +248,7 @@ Notes on the choices that are not obvious:
 | IP address | **PII** | Rate-limit counters only, **SHA-256 hashed** | Abuse prevention on the public surface | Length of the rate-limit window (≤ 1 hour), then TTL-deleted |
 | Request logs | Operational | CloudWatch Logs | Debugging | **14 days dev, 30 days prod**, then automatic deletion |
 | Invite tokens | **Capability** | `INVITE#<token>` | Public plan access | 90 days after the plan date, then TTL + 30 days |
-| Idempotency records | Operational | `IDEM#<userId>#<key>` | Duplicate suppression | 24 hours via TTL |
+| Idempotency records | Operational | `IDEM#<userId>#<key>` | Duplicate suppression and exact-response replay | 24 hours via TTL; List settings receipts carrying durable Undo authority use `MAX_AUTOMATIC_INTENT_AGE_DAYS` |
 
 **Data we deliberately do not collect:** device location, contacts from the phone's address
 book, phone numbers of the account holder, date of birth, gender, payment details, health

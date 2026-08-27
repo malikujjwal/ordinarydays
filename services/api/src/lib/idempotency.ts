@@ -1,6 +1,11 @@
+import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
+
 /** Durable values shared by the HTTP boundary and transaction-owning repositories (P2-38). */
 
 export const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
+/** Exact responses carrying durable Undo authority must outlive every automatic replay. */
+export const DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS =
+  MAX_AUTOMATIC_INTENT_AGE_DAYS * 24 * 60 * 60;
 
 export interface CleanupRef {
   readonly activityId: string;

@@ -540,7 +540,7 @@ describe('retries', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('retries a POST that carries an Idempotency-Key', async () => {
+  it('does not infer replay safety from an Idempotency-Key header', async () => {
     const { client, calls } = makeClient([{ status: 500, body: undefined }]);
 
     await client
@@ -552,7 +552,38 @@ describe('retries', () => {
       })
       .catch(() => undefined);
 
+    expect(calls).toHaveLength(1);
+  });
+
+  it('retries a POST explicitly backed by exact-response replay', async () => {
+    const { client, calls } = makeClient([{ status: 500, body: undefined }]);
+
+    await client
+      .request({
+        ...health(),
+        method: 'POST',
+        body: { a: 1 },
+        headers: { 'Idempotency-Key': 'b0e1…' },
+        replayProtected: true,
+      })
+      .catch(() => undefined);
+
     expect(calls).toHaveLength(MAX_RETRIES + 1);
+  });
+
+  it('does not retry an explicitly marked mutation without its receipt key', async () => {
+    const { client, calls } = makeClient([{ status: 500, body: undefined }]);
+
+    await client
+      .request({
+        ...health(),
+        method: 'POST',
+        body: { a: 1 },
+        replayProtected: true,
+      })
+      .catch(() => undefined);
+
+    expect(calls).toHaveLength(1);
   });
 
   it('does not retry a PATCH, whose If-Match would fail the second time', async () => {
@@ -565,7 +596,7 @@ describe('retries', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('retries a PATCH when its receipt key makes the exact response replayable', async () => {
+  it('does not infer PATCH replay safety from its receipt-shaped headers', async () => {
     const { client, calls } = makeClient([{ status: 500, body: undefined }]);
 
     await client
@@ -574,6 +605,22 @@ describe('retries', () => {
         method: 'PATCH',
         body: { a: 1 },
         headers: { 'If-Match': 'v1', 'Idempotency-Key': 'b0e1…' },
+      })
+      .catch(() => undefined);
+
+    expect(calls).toHaveLength(1);
+  });
+
+  it('retries a PATCH explicitly backed by exact-response replay', async () => {
+    const { client, calls } = makeClient([{ status: 500, body: undefined }]);
+
+    await client
+      .request({
+        ...health(),
+        method: 'PATCH',
+        body: { a: 1 },
+        headers: { 'If-Match': 'v1', 'Idempotency-Key': 'b0e1…' },
+        replayProtected: true,
       })
       .catch(() => undefined);
 

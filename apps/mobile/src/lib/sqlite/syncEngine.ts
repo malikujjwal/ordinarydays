@@ -973,17 +973,23 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         if (later.length === 0) await lists.applySettings(transaction, canonical);
         const archived = field(field(intent.variables, 'input'), 'archived');
         if (archived === true) {
-          const undoToken = field(response, 'undoToken');
-          const undoExpiresAt = field(response, 'undoExpiresAt');
-          if (typeof undoToken !== 'string' || typeof undoExpiresAt !== 'string') {
-            throw new Error('List archive acknowledgement omitted its Undo receipt.');
-          }
-          await this.outbox.recordListArchiveUndoToken(
+          const offer = await this.outbox.listArchiveUndoOffer(
             transaction.database,
             intent.intentId,
-            undoToken,
-            undoExpiresAt,
           );
+          if (offer !== undefined) {
+            const undoToken = field(response, 'undoToken');
+            const undoExpiresAt = field(response, 'undoExpiresAt');
+            if (typeof undoToken !== 'string' || typeof undoExpiresAt !== 'string') {
+              throw new Error('List archive acknowledgement omitted its Undo receipt.');
+            }
+            await this.outbox.recordListArchiveUndoToken(
+              transaction.database,
+              intent.intentId,
+              undoToken,
+              undoExpiresAt,
+            );
+          }
         }
         await this.outbox.rebaseNextQueuedListPatch(
           transaction.database,

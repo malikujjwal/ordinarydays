@@ -5,6 +5,7 @@ import {
   QueryCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,6 +17,7 @@ process.env.WEB_ORIGINS = 'http://localhost:8081';
 process.env.LOG_LEVEL = 'fatal';
 
 import type { createApp as CreateApp } from '../app.js';
+import { idempotency } from '../repositories/keys.js';
 
 /**
  * `PATCH /v1/lists/:id` and `POST /v1/lists/:id/behaviour` (P3-09).
@@ -175,6 +177,9 @@ const metaUpdate = () =>
 const undoWrite = () =>
   transacted().find((entry) => entry.Put?.Item?.entity === 'ListUndo')?.Put?.Item;
 
+const receiptWrite = () =>
+  transacted().find((entry) => entry.Put?.Item?.entity === 'Idempotency')?.Put?.Item;
+
 const profileUpdate = () =>
   transacted().find((entry) => entry.Update?.Key?.pk === `USER#${DEV}`)?.Update;
 
@@ -204,6 +209,65 @@ describe('PATCH /v1/lists/:id — the additive settings', () => {
 
     expect(res.status).toBe(400);
     expect((await res.json()).error.details[0].path).toBe('Idempotency-Key');
+  });
+
+  it('retains the exact settings response for the durable outbox window', async () => {
+    await patch(createApp(), { archived: true });
+
+    const receipt = receiptWrite();
+    expect(receipt).toBeDefined();
+    expect(
+      Number(receipt?.ttl) - Math.floor(Date.parse(String(receipt?.createdAt)) / 1000),
+    ).toBe(MAX_AUTOMATIC_INTENT_AGE_DAYS * 24 * 60 * 60);
+  });
+
+  it('replays the winner when the List version and same-key receipt both lose', async () => {
+    const key = crypto.randomUUID();
+    const receiptKey = idempotency(DEV, key);
+    const rows = new Map(
+      [pointerRow(), listMetaRow()].map((row) => [`${row.pk}|${row.sk}`, row]),
+    );
+    let transactionAttempted = false;
+    ddbMock.on(GetCommand).callsFake((input) => {
+      if (input.Key.pk === receiptKey.pk && input.Key.sk === receiptKey.sk) {
+        return transactionAttempted
+          ? {
+              Item: {
+                ...receiptKey,
+                status: 200,
+                body: '{"data":{"source":"winner"}}',
+              },
+            }
+          : {};
+      }
+      return { Item: rows.get(`${input.Key.pk}|${input.Key.sk}`) };
+    });
+    ddbMock.on(TransactWriteCommand).callsFake(() => {
+      transactionAttempted = true;
+      throw new TransactionCanceledException({
+        message: 'Transaction cancelled',
+        $metadata: {},
+        CancellationReasons: [
+          { Code: 'None' },
+          { Code: 'ConditionalCheckFailed' },
+          { Code: 'None' },
+          { Code: 'ConditionalCheckFailed' },
+        ],
+      });
+    });
+
+    const res = await patch(
+      createApp(),
+      { archived: true },
+      {
+        'If-Match': UPDATED_AT,
+        'Idempotency-Key': key,
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ data: { source: 'winner' } });
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(1);
   });
 
   it.each([

@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { AppError } from '../lib/errors.js';
 import { entityTag } from '../lib/etag.js';
+import { DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS } from '../lib/idempotency.js';
 import { requireUserId } from '../middleware/identity.js';
 import { patchListSettings } from '../services/listMutationService.js';
 import { idempotentJson } from './idempotentResponse.js';
@@ -44,15 +45,20 @@ export async function patchListHandler(
     ]);
   }
 
-  return idempotentJson(c, 200, async (receiptFor) => {
-    const result = await patchListSettings(
-      requireUserId(c),
-      c.req.param('id'),
-      patch,
-      entityTag(header.trim()),
-      now,
-      { receiptFor: (stored) => receiptFor(toListSettings(stored)) },
-    );
-    return toListSettings(result);
-  });
+  return idempotentJson(
+    c,
+    200,
+    async (receiptFor) => {
+      const result = await patchListSettings(
+        requireUserId(c),
+        c.req.param('id'),
+        patch,
+        entityTag(header.trim()),
+        now,
+        { receiptFor: (stored) => receiptFor(toListSettings(stored)) },
+      );
+      return toListSettings(result);
+    },
+    { receiptTtlSeconds: DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS },
+  );
 }

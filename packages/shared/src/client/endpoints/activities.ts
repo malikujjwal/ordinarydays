@@ -83,6 +83,7 @@ export function createActivity(
       schema: activityResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as Activity);
@@ -145,6 +146,7 @@ export function createReminder(
       schema: reminderResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -230,6 +232,7 @@ export function convertRecurrence(
       schema: activityResponse,
       body: { occurrenceDate: selectedDate },
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as Activity);
@@ -347,6 +350,7 @@ export function scheduleActivity(
       schema: scheduleActivityResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -417,6 +421,7 @@ export function duplicateActivity(
       path: `/v1/activities/${activityId}/duplicate`,
       schema: activityResponse,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data as Activity);
@@ -442,6 +447,7 @@ export function addIngredientsToList(
       schema: addIngredientsToListResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -462,6 +468,7 @@ export function completeActivity(
       schema: activityCompletionResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -482,6 +489,7 @@ export function uncompleteActivity(
       schema: activityCompletionResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -502,6 +510,7 @@ export function skipActivity(
       schema: activityCompletionResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -522,6 +531,7 @@ export function snoozeActivity(
       schema: activityCompletionResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -542,6 +552,7 @@ export function unsnoozeActivity(
       schema: activityCompletionResponse,
       body: input,
       headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
