@@ -97,6 +97,21 @@ async function readItemRows(
   return rows.map(fromRow);
 }
 
+/**
+ * Guards the one way a page can corrupt the slice: rows that name a different list.
+ *
+ * The delete is scoped by the caller's `listId` and each insert by the row's own, so a page
+ * whose rows disagreed would clear one list and populate another — leaving rows behind that
+ * nothing ever revisits, in a table with no way to notice.
+ */
+function assertBelongsToList(items: readonly ListItemRow[], listId: string): void {
+  for (const item of items) {
+    if (item.listId !== listId) {
+      throw new Error(`Item ${item.itemId} does not belong to this list.`);
+    }
+  }
+}
+
 async function writeItemRow(database: SqliteExecutor, item: ListItemRow): Promise<void> {
   await database.run(
     `INSERT INTO list_items (
@@ -223,6 +238,7 @@ export class ListItemsRepository {
     page: ListItemPageState,
     protectedItemIds: ReadonlySet<string> = new Set(),
   ): Promise<void> {
+    assertBelongsToList(items, listId);
     const protectedIds = [...protectedItemIds];
     await transaction.database.run(
       protectedIds.length === 0
@@ -248,6 +264,7 @@ export class ListItemsRepository {
     page: ListItemPageState,
     protectedItemIds: ReadonlySet<string> = new Set(),
   ): Promise<void> {
+    assertBelongsToList(items, listId);
     for (const item of items) {
       if (!protectedItemIds.has(item.itemId))
         await writeItemRow(transaction.database, item);

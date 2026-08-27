@@ -8,6 +8,7 @@ import { createNodeSqliteFactory } from '../../../test/node-sqlite';
 import { NativeActivityActionCoordinator } from './actionCoordinator';
 import type { ActivityTransactionService } from './activityTransactions';
 import type { SqliteDatabase } from './database';
+import { ListItemsRepository } from './listItemsRepository';
 import { ListsRepository } from './listsRepository';
 import { type ListCreateVariables, ListTransactionService } from './listTransactions';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
@@ -57,10 +58,115 @@ describe('native List transactional outbox', () => {
     const subscriptions = new RepositorySubscriptions();
     const transactions = new SerializedTransactionRunner(currentDatabase, subscriptions);
     const lists = new ListsRepository(currentDatabase, subscriptions);
+    const items = new ListItemsRepository(currentDatabase, subscriptions);
     const outbox = new OutboxRepository(currentDatabase);
-    const service = new ListTransactionService(outbox, lists);
-    return { lists, outbox, service, transactions };
+    const service = new ListTransactionService(outbox, lists, items);
+    return { items, lists, outbox, service, transactions };
   }
+
+  describe('the durable item create (§P3-27, §P3-08)', () => {
+    const ITEM = {
+      listId: LIST.listId,
+      itemId: 'itm_01J000000000000000000000AA',
+      intentId: 'intent-create-item',
+      idempotencyKey: 'intent-create-item',
+      input: { itemId: 'itm_01J000000000000000000000AA', title: 'Milk' },
+      rank: 'm',
+    };
+
+    /** One commit: the row the user will look at, and the intent that will send it. */
+    it('stores the visible item and the queued create in one commit', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, outbox, service, transactions } = harness(database);
+
+      await transactions.run((transaction) => service.createItem(transaction, ITEM));
+
+      expect(await items.read(LIST.listId)).toEqual([
+        {
+          itemId: ITEM.itemId,
+          listId: LIST.listId,
+          rank: 'm',
+          title: 'Milk',
+          checked: false,
+        },
+      ]);
+      expect(await outbox.all()).toEqual([
+        expect.objectContaining({
+          intentId: 'intent-create-item',
+          mutationKey: ['list', 'item-create'],
+          entityId: ITEM.itemId,
+          // The **list**, so items typed in sequence reach the server in that sequence and a
+          // create serialises behind an archive of the same list.
+          orderingKey: `list:${LIST.listId}`,
+          status: 'queued',
+        }),
+      ]);
+    });
+
+    it('writes neither half when the transaction fails', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, outbox, service, transactions } = harness(database);
+
+      await expect(
+        transactions.run(async (transaction) => {
+          await service.createItem(transaction, ITEM);
+          throw new Error('the commit failed after both writes');
+        }),
+      ).rejects.toThrow('the commit failed after both writes');
+
+      expect(await items.read(LIST.listId)).toEqual([]);
+      expect(await outbox.all()).toEqual([]);
+    });
+
+    /** A confirmation that reaches SQLite twice is one row: both ids are the same. */
+    it('reuses the minted item and mutation ids on a repeated confirmation', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, outbox, service, transactions } = harness(database);
+
+      await transactions.run((transaction) => service.createItem(transaction, ITEM));
+      await transactions.run((transaction) => service.createItem(transaction, ITEM));
+
+      expect(await items.read(LIST.listId)).toHaveLength(1);
+      expect(await outbox.all()).toHaveLength(1);
+    });
+
+    it('refuses a payload whose body names a different item', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { outbox, service, transactions } = harness(database);
+
+      await expect(
+        transactions.run((transaction) =>
+          service.createItem(transaction, {
+            ...ITEM,
+            itemId: 'itm_01J000000000000000000000BB',
+          }),
+        ),
+      ).rejects.toThrow('must carry its minted identity');
+      expect(await outbox.all()).toEqual([]);
+    });
+
+    /** Retry after an authoritative rollback puts the row back where the user saw it. */
+    it('re-projects a rolled-back item from its own durable payload', async () => {
+      if (database === undefined) throw new Error('test database not open');
+      const { items, outbox, service, transactions } = harness(database);
+      await transactions.run((transaction) => service.createItem(transaction, ITEM));
+      const intent = await outbox.get(database, 'intent-create-item');
+      if (intent === undefined) throw new Error('missing item create intent');
+      await transactions.run((transaction) =>
+        items.removeCanonical(transaction, LIST.listId, ITEM.itemId),
+      );
+
+      await transactions.run((transaction) =>
+        service.reprojectRetry(transaction, 'usr_local_dev', intent),
+      );
+
+      expect((await items.read(LIST.listId))[0]).toMatchObject({
+        itemId: ITEM.itemId,
+        rank: 'm',
+        title: 'Milk',
+      });
+    });
+  });
 
   describe('the durable create (§P3-26)', () => {
     const CREATE = {

@@ -16,6 +16,7 @@ import { ActivityTransactionService } from './activityTransactions';
 import { AgendaRepository } from './agendaRepository';
 import { AnytimeRepository } from './anytimeRepository';
 import type { SqliteDatabase } from './database';
+import { ListItemsRepository } from './listItemsRepository';
 import { ListsRepository } from './listsRepository';
 import { ListTransactionService } from './listTransactions';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
@@ -34,6 +35,21 @@ const OTHER = 'act_01J0000000000000000000000B';
 const THIRD = 'act_01J0000000000000000000000C';
 const REMINDER = 'rem_01J0000000000000000000000A';
 const clock = { today: '2026-08-19', currentMinute: '08:00' };
+
+/**
+ * The engine as the coordinator may hold it: authoritative recovery is real, but the `request`
+ * that follows an accepted Retry or Discard is a spy.
+ *
+ * Without this the drain that wake starts outlives the test and reaches a database the next
+ * `afterEach` has already closed — an unhandled rejection attributed to whichever test happens
+ * to be running by then. The same shape the rejected-rollback test uses.
+ */
+function recoveryOnly(engine: SerializedNativeSyncEngine): SerializedNativeSyncEngine {
+  return {
+    request: vi.fn(),
+    recoverRejectedIntent: (intentId: string) => engine.recoverRejectedIntent(intentId),
+  } as unknown as SerializedNativeSyncEngine;
+}
 
 describe('serialized native convergence guard', () => {
   let directory = '';
@@ -3931,24 +3947,6 @@ describe('serialized native convergence guard', () => {
       );
     }
 
-    /**
-     * The engine as the coordinator may hold it: authoritative recovery is real, but the
-     * `request` that follows an accepted Retry or Discard is a spy.
-     *
-     * Without this the drain that wake starts outlives the test and reaches a database the
-     * next `afterEach` has already closed — an unhandled rejection attributed to whichever
-     * test happens to be running by then. The same shape the rejected-rollback test uses.
-     */
-    function recoveryOnly(
-      engine: SerializedNativeSyncEngine,
-    ): SerializedNativeSyncEngine {
-      return {
-        request: vi.fn(),
-        recoverRejectedIntent: (intentId: string) =>
-          engine.recoverRejectedIntent(intentId),
-      } as unknown as SerializedNativeSyncEngine;
-    }
-
     function listPushTransport(create: ListPushTransport['create']): ListPushTransport {
       return {
         create,
@@ -4171,6 +4169,358 @@ describe('serialized native convergence guard', () => {
 
       expect(await outbox.all()).toEqual([]);
       expect(await lists.read()).toEqual([]);
+    });
+  });
+
+  describe('the item slice and its fence (§P3-27, §P3-08)', () => {
+    const LIST_ID = 'lst_01J0000000000000000000000G';
+    const ITEM_ID = 'itm_01J000000000000000000000AA';
+
+    const listRow = (overrides: Partial<List> = {}): List => ({
+      listId: LIST_ID,
+      ownerId: OWNER,
+      behaviour: 'collection',
+      templateKey: 'groceries',
+      title: 'Groceries',
+      icon: 'cart',
+      emptyStateCopy: 'Add something to buy.',
+      capabilities: { checkable: true, supportsLocation: false },
+      slot: 'groceries',
+      itemCount: 2,
+      uncheckedCount: 2,
+      memberCount: 1,
+      rankVersion: 3,
+      archived: false,
+      updatedAt: instant.parse('2026-08-27T09:00:00.000Z'),
+      lastItemActivityAt: instant.parse('2026-08-27T09:00:00.000Z'),
+      ...overrides,
+    });
+
+    const row = (itemId: string, rank: string, title: string) => ({
+      itemId,
+      listId: LIST_ID,
+      rank,
+      title,
+      checked: false,
+    });
+
+    function itemHarness(currentDatabase: SqliteDatabase) {
+      const subscriptions = new RepositorySubscriptions();
+      const lists = new ListsRepository(currentDatabase, subscriptions);
+      const items = new ListItemsRepository(currentDatabase, subscriptions);
+      return {
+        lists,
+        items,
+        listService: new ListTransactionService(outbox, lists, items),
+      };
+    }
+
+    function itemEngine(
+      lists: ListsRepository,
+      items: ListItemsRepository,
+      pull: Partial<ActivityPullAdapter>,
+      listPush?: Partial<ListPushTransport>,
+    ) {
+      return new SerializedNativeSyncEngine(
+        transactions,
+        outbox,
+        activities,
+        agenda,
+        pushTransport(),
+        { ...pullAdapter(), ...pull },
+        targetedTransport(),
+        anytime,
+        lists,
+        {
+          create: async () => {
+            throw new Error('unexpected List POST');
+          },
+          createItem: async () => {
+            throw new Error('unexpected list item POST');
+          },
+          patch: async () => {
+            throw new Error('unexpected List PATCH');
+          },
+          remove: async () => {
+            throw new Error('unexpected List DELETE');
+          },
+          undo: async () => {
+            throw new Error('unexpected List Undo');
+          },
+          ...listPush,
+        },
+        items,
+      );
+    }
+
+    it('installs META and the fenced first page together', async () => {
+      if (database === undefined) throw new Error('missing item database');
+      const { lists, items } = itemHarness(database);
+      const sync = itemEngine(lists, items, {
+        listDetail: async () => ({
+          list: listRow(),
+          items: [
+            row(ITEM_ID, 'a', 'Milk'),
+            row('itm_01J000000000000000000000BB', 'b', 'Eggs'),
+          ],
+        }),
+      });
+
+      await sync.pullListDetail(LIST_ID);
+      sync.stop();
+
+      expect((await items.read(LIST_ID)).map((item) => item.title)).toEqual([
+        'Milk',
+        'Eggs',
+      ]);
+      expect(await items.pageState(LIST_ID)).toEqual({ rankVersion: 3, complete: true });
+      expect((await lists.read())[0]?.itemCount).toBe(2);
+    });
+
+    it('merges a later page without replacing what page one installed', async () => {
+      if (database === undefined) throw new Error('missing item page database');
+      const { lists, items } = itemHarness(database);
+      const sync = itemEngine(lists, items, {
+        listDetail: async () => ({
+          list: listRow(),
+          items: [row(ITEM_ID, 'a', 'Milk')],
+          nextCursor: 'cursor-1',
+        }),
+        listItemsPage: async (_listId, cursor) => {
+          expect(cursor).toBe('cursor-1');
+          return { items: [row('itm_01J000000000000000000000BB', 'b', 'Eggs')] };
+        },
+      });
+
+      await sync.pullListDetail(LIST_ID);
+      await sync.pullListItemPage(LIST_ID);
+      sync.stop();
+
+      expect((await items.read(LIST_ID)).map((item) => item.title)).toEqual([
+        'Milk',
+        'Eggs',
+      ]);
+      expect(await items.pageState(LIST_ID)).toEqual({ rankVersion: 3, complete: true });
+    });
+
+    /**
+     * The `503` contract, in the order it states: the committed rows stay, every cursor goes,
+     * the wait is the server's `Retry-After`, and **nothing** is installed until page one
+     * succeeds. This is projection recovery, not a `409` edit conflict.
+     */
+    it('recovers a fenced item page by restarting at page one', async () => {
+      if (database === undefined) throw new Error('missing fence database');
+      const { lists, items } = itemHarness(database);
+      let detailCalls = 0;
+      const observed: string[] = [];
+      const sync = itemEngine(lists, items, {
+        listDetail: async () => {
+          detailCalls += 1;
+          // Page one is asked for twice: once before the fence, once as the restart.
+          return {
+            list: listRow({ rankVersion: detailCalls === 1 ? 3 : 4 }),
+            items:
+              detailCalls === 1
+                ? [row(ITEM_ID, 'a', 'Milk')]
+                : [
+                    row(ITEM_ID, 'a', 'Milk'),
+                    row('itm_01J000000000000000000000CC', 'c', 'Bread'),
+                  ],
+            ...(detailCalls === 1 ? { nextCursor: 'cursor-1' } : {}),
+          };
+        },
+        listItemsPage: async () => {
+          // The rows the user is looking at while the fence is up.
+          observed.push((await items.read(LIST_ID)).map((item) => item.title).join(','));
+          throw new ApiError(
+            'internal',
+            'Try again shortly.',
+            503,
+            'req-fence',
+            undefined,
+            1,
+          );
+        },
+      });
+
+      await sync.pullListDetail(LIST_ID);
+      await sync.pullListItemPage(LIST_ID);
+      sync.stop();
+
+      // The projection was never emptied on the way through.
+      expect(observed).toEqual(['Milk']);
+      expect(detailCalls).toBe(2);
+      // Installed only after page one succeeded — and from the new generation, not spliced.
+      expect((await items.read(LIST_ID)).map((item) => item.title)).toEqual([
+        'Milk',
+        'Bread',
+      ]);
+      expect(await items.pageState(LIST_ID)).toEqual({ rankVersion: 4, complete: true });
+    });
+
+    it('replaces the optimistic item with server truth on acknowledgement', async () => {
+      if (database === undefined) throw new Error('missing item create database');
+      const { lists, items, listService } = itemHarness(database);
+      await transactions.run((transaction) =>
+        listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'create-milk',
+          idempotencyKey: 'create-milk',
+          input: { itemId: ITEM_ID, title: 'Milk' },
+          rank: 'zzz',
+        }),
+      );
+      // The server allocated its own rank under its own `rankVersion`.
+      const canonical = row(ITEM_ID, 'm', 'Milk');
+      const createItem = vi.fn(async () => canonical);
+      const sync = itemEngine(lists, items, {}, { createItem });
+
+      await sync.syncNow();
+      sync.stop();
+
+      expect(createItem).toHaveBeenCalledWith(
+        LIST_ID,
+        { itemId: ITEM_ID, title: 'Milk' },
+        'create-milk',
+      );
+      expect(await items.read(LIST_ID)).toEqual([canonical]);
+      expect(await outbox.all()).toEqual([]);
+    });
+
+    it('reuses the minted item and mutation ids across a transport retry', async () => {
+      if (database === undefined) throw new Error('missing item retry database');
+      const { lists, items, listService } = itemHarness(database);
+      await transactions.run((transaction) =>
+        listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'create-milk',
+          idempotencyKey: 'create-milk',
+          input: { itemId: ITEM_ID, title: 'Milk' },
+          rank: 'zzz',
+        }),
+      );
+      let attempts = 0;
+      const createItem = vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) throw new NetworkError('offline', undefined);
+        return row(ITEM_ID, 'm', 'Milk');
+      });
+      const sync = itemEngine(lists, items, {}, { createItem });
+
+      await expect(sync.syncNow()).rejects.toThrow();
+      await sync.syncNow();
+      sync.stop();
+
+      expect(createItem.mock.calls).toEqual([
+        [LIST_ID, { itemId: ITEM_ID, title: 'Milk' }, 'create-milk'],
+        [LIST_ID, { itemId: ITEM_ID, title: 'Milk' }, 'create-milk'],
+      ]);
+    });
+
+    it('parks an ambiguous item collision and re-mints only when Retry is tapped', async () => {
+      if (database === undefined) throw new Error('missing item collision database');
+      const { lists, items, listService } = itemHarness(database);
+      await transactions.run((transaction) =>
+        listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'create-milk',
+          idempotencyKey: 'create-milk',
+          input: { itemId: ITEM_ID, title: 'Milk' },
+          rank: 'zzz',
+        }),
+      );
+      const sync = itemEngine(
+        lists,
+        items,
+        {
+          listItem: async () => {
+            throw new ApiError('not_found', "This isn't here any more.", 404, 'req-404');
+          },
+        },
+        {
+          createItem: async () => {
+            throw new ApiError('conflict', 'That id is taken.', 409, 'req-collision');
+          },
+        },
+      );
+
+      await sync.syncNow();
+
+      expect(await outbox.get(database, 'create-milk')).toMatchObject({
+        status: 'needs_attention',
+        attention: { kind: 'parked', reason: 'ambiguous_collision' },
+      });
+      // The row the user made stays visible while they decide.
+      expect(await items.read(LIST_ID)).toHaveLength(1);
+
+      const freshItemId = 'itm_01J000000000000000000000DD';
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        recoveryOnly(sync),
+        undefined,
+        listService,
+        undefined,
+        () => freshItemId,
+      );
+
+      const retried = await coordinator.retryBlocked('create-milk', 'retry-milk', clock);
+      sync.stop();
+
+      expect(retried.kind).toBe('accepted');
+      expect(await outbox.get(database, 'retry-milk')).toMatchObject({
+        status: 'queued',
+        entityId: freshItemId,
+        // The ordering key names the list and must not move with the item.
+        orderingKey: `list:${LIST_ID}`,
+        variables: {
+          itemId: freshItemId,
+          idempotencyKey: 'retry-milk',
+          input: { itemId: freshItemId, title: 'Milk' },
+        },
+      });
+      expect((await items.read(LIST_ID)).map((item) => item.itemId)).toEqual([
+        freshItemId,
+      ]);
+    });
+
+    it('adopts the canonical item when a collision turns out to be its own', async () => {
+      if (database === undefined) throw new Error('missing item adoption database');
+      const { lists, items, listService } = itemHarness(database);
+      await transactions.run((transaction) =>
+        listService.createItem(transaction, {
+          listId: LIST_ID,
+          itemId: ITEM_ID,
+          intentId: 'create-milk',
+          idempotencyKey: 'create-milk',
+          input: { itemId: ITEM_ID, title: 'Milk' },
+          rank: 'zzz',
+        }),
+      );
+      const canonical = row(ITEM_ID, 'm', 'Milk');
+      const listItem = vi.fn(async () => canonical);
+      const sync = itemEngine(
+        lists,
+        items,
+        { listItem },
+        {
+          createItem: async () => {
+            throw new ApiError('conflict', 'That id is taken.', 409, 'req-collision');
+          },
+        },
+      );
+
+      await sync.syncNow();
+      sync.stop();
+
+      expect(listItem).toHaveBeenCalledWith(LIST_ID, ITEM_ID);
+      expect(await items.read(LIST_ID)).toEqual([canonical]);
+      expect(await outbox.all()).toEqual([]);
     });
   });
 });
