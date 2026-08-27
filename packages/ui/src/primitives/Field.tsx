@@ -30,6 +30,28 @@ export interface FieldProps {
   disabled?: boolean;
   onBlur?: () => void;
   /**
+   * Overrides the accessible name while `label` keeps drawing the visible one.
+   *
+   * Added for `plans-and-lists.md` §5.4 rule 6, which requires the list-name field to announce
+   * `List name, pre-filled with Movies to watch` — the label plus what is already in the box —
+   * while the form still shows the two words a sighted user reads. Every other primitive in
+   * this package already separates the two; this was the outlier, and the alternative was a
+   * screen re-drawing the label itself with `hideLabel`, which duplicates a style decision
+   * that belongs here.
+   *
+   * It never replaces the label with something unrelated: the visible words must remain a
+   * prefix of what is spoken, or the two audiences are being told different things.
+   */
+  accessibilityLabel?: string;
+  /**
+   * Focuses the input on mount, for a step whose whole purpose is typing into it.
+   *
+   * Used where the field is the step — the title step of the list creation sheet opens with
+   * the name selected and the keyboard up. Not for a field that merely happens to be first on
+   * a longer form, where stealing focus scrolls the screen out from under the reader.
+   */
+  autoFocus?: boolean;
+  /**
    * Keeps `label` as the accessible name but does not draw it.
    *
    * For a field that already sits under a `SectionHeader` saying the same word — the detail
@@ -53,6 +75,8 @@ export interface FieldProps {
 
 export function Field({
   label,
+  accessibilityLabel,
+  autoFocus = false,
   value,
   onChangeText,
   placeholder,
@@ -83,8 +107,8 @@ export function Field({
       )}
 
       <TextInput
-        accessibilityLabel={label}
-        aria-label={label}
+        accessibilityLabel={accessibilityLabel ?? label}
+        aria-label={accessibilityLabel ?? label}
         accessibilityState={{ disabled }}
         aria-disabled={disabled}
         /**
@@ -101,6 +125,7 @@ export function Field({
               'aria-invalid': true,
             })}
         editable={!disabled}
+        autoFocus={autoFocus}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
