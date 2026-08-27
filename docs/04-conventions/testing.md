@@ -642,6 +642,13 @@ Thresholds are per package, enforced by `@vitest/coverage-v8` in each package's 
 failed in CI. They are floors that ratchet upward, never downward — lowering a threshold
 requires a line in the PR description explaining why.
 
+The root `test:coverage` command runs five Vitest processes concurrently through Turbo. Each
+process is capped at 20% of the available workers for that aggregate run, so the processes
+share the host rather than each independently claiming almost every core. Package-local test
+commands remain uncapped: the limit addresses aggregate coverage oversubscription without
+slowing an isolated suite. Without it, CDK/esbuild work can starve Vitest's worker RPC long
+enough for every assertion to pass but the run to fail with an `onTaskUpdate` timeout.
+
 | Package / path | Statements | Branches | Functions | Lines |
 | --- | --- | --- | --- | --- |
 | `packages/shared/src/recurrence/**` | **100** | **100** | 100 | 100 |

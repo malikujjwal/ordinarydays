@@ -13,7 +13,7 @@
     "typecheck": "turbo run typecheck",
     "typecheck:e2e": "tsc -p e2e/tsconfig.json",
     "test": "turbo run test test:guards",
-    "test:coverage": "turbo run test -- --coverage",
+    "test:coverage": "turbo run test -- --coverage --maxWorkers=20%",
     "test:int": "docker compose --profile test up -d --wait dynamodb-test minio && turbo run test:int",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
