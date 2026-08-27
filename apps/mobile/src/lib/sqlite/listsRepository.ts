@@ -1,0 +1,214 @@
+import { listView } from '@od/shared/schemas';
+import type { List } from '@od/shared/types';
+import type { SqliteReader, SqliteRow } from '@/lib/sqlite/database';
+import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
+import type {
+  RepositoryInvalidationMetadata,
+  RepositorySubscriptions,
+} from '@/lib/sqlite/subscriptions';
+import type { TransactionContext } from '@/lib/sqlite/transaction';
+
+/**
+ * The SQLite-owned Lists index (P3-25, ADR-057).
+ *
+ * ## Read-side only, deliberately
+ *
+ * This repository materializes what `GET /v1/lists` returns and serves it through
+ * subscriptions. It has **no create path and no outbox involvement** — P3-26 owns creation and
+ * joins the transactional outbox there. `replaceCanonical` is the only writer, and it is the
+ * sync engine's. Saying so here rather than only in the pull request is what stops the next
+ * task adding a local insert beside it and quietly making this a second write authority.
+ *
+ * ## TanStack is not the native domain authority
+ *
+ * The native hook reads these rows and nothing else. That is the whole of ADR-057's pivot: a
+ * screen that fell back to a query cache would be reading a second copy of the truth, and the
+ * two would disagree exactly when it mattered — offline, or mid-sync.
+ */
+
+function text(row: SqliteRow, column: string): string | undefined {
+  const value = row[column];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function number(row: SqliteRow, column: string): number {
+  const value = row[column];
+  return typeof value === 'number' ? value : 0;
+}
+
+/**
+ * Parsed through `listView`, not cast.
+ *
+ * The rows came from the network once, but they came back out of SQLite, where a migration or a
+ * partial write could have changed their shape. Parsing at the boundary is what makes the
+ * repository's return type true rather than asserted — the same choice `anytimeRepository`
+ * makes, for the same reason.
+ */
+function fromRow(row: SqliteRow): List {
+  const slot = text(row, 'slot');
+  const sourceActivityId = text(row, 'source_activity_id');
+
+  return listView.parse({
+    listId: text(row, 'list_id'),
+    ownerId: text(row, 'owner_id'),
+    behaviour: text(row, 'behaviour'),
+    templateKey: text(row, 'template_key'),
+    title: text(row, 'title'),
+    icon: text(row, 'icon'),
+    emptyStateCopy: text(row, 'empty_state_copy'),
+    capabilities: {
+      checkable: number(row, 'checkable') === 1,
+      supportsLocation: number(row, 'supports_location') === 1,
+    },
+    // Nullable, not optional: `null` is a list with no slot, which is different from a column
+    // this build did not write.
+    slot: slot ?? null,
+    ...(sourceActivityId === undefined ? {} : { sourceActivityId }),
+    itemCount: number(row, 'item_count'),
+    uncheckedCount: number(row, 'unchecked_count'),
+    memberCount: number(row, 'member_count'),
+    rankVersion: number(row, 'rank_version'),
+    archived: number(row, 'archived') === 1,
+    updatedAt: text(row, 'updated_at'),
+    lastItemActivityAt: text(row, 'last_item_activity_at'),
+  }) as List;
+}
+
+/**
+ * **Server pointer order**, restored from the stored ordinal.
+ *
+ * `ORDER BY position` and nothing else. The index renders in the order the server paged its
+ * pointers and never re-sorts (ADR-042): `ListIndex` holds `role` and `addedAt` only, so a
+ * client sort would be inventing an order rather than reproducing one. `list_id` breaks ties
+ * only so the read is deterministic if two rows ever share an ordinal.
+ */
+async function readListRows(reader: SqliteReader): Promise<readonly List[]> {
+  const rows = await reader.all('SELECT * FROM list_rows ORDER BY position, list_id;');
+  return rows.map(fromRow);
+}
+
+export interface ListsCommittedSnapshot {
+  readonly lists: readonly List[];
+  readonly commitRevision: number;
+}
+
+export class ListsRepository {
+  private readonly scope = 'lists';
+
+  constructor(
+    private readonly reader: SqliteReader,
+    private readonly subscriptions: RepositorySubscriptions,
+    private readonly projections?: RevisionedProjectionReader,
+  ) {}
+
+  subscribe(listener: (metadata: RepositoryInvalidationMetadata) => void): () => void {
+    return this.subscriptions.subscribe(this.scope, listener);
+  }
+
+  async read(): Promise<readonly List[]> {
+    return readListRows(this.reader);
+  }
+
+  /** Presentation rows and their revision from one WAL snapshot, as Anytime does. */
+  async readSnapshot(): Promise<ListsCommittedSnapshot> {
+    if (this.projections === undefined) {
+      return { lists: await this.read(), commitRevision: 0 };
+    }
+    const snapshot = await this.projections.snapshot(readListRows);
+    return { lists: snapshot.data, commitRevision: snapshot.commitRevision };
+  }
+
+  /**
+   * Replaces the whole index with a fully-drained set of pages.
+   *
+   * **Whole-set replacement, not an upsert per page**, and the difference is the reason the
+   * sync engine drains every cursor before calling this. An upsert cannot express a deletion:
+   * a list removed on another device would survive for ever as a row nothing ever revisits.
+   * Replacing inside one transaction also means a subscriber never observes a half-written
+   * index — it sees the previous set or the next one.
+   *
+   * `position` is the ordinal within the drained sequence, which is the server's pointer order
+   * across every page. It is assigned here rather than sent, because it is a property of the
+   * sequence rather than of any row.
+   */
+  async replaceCanonical(
+    transaction: TransactionContext,
+    lists: readonly List[],
+  ): Promise<void> {
+    await transaction.database.run('DELETE FROM list_rows;');
+    for (const [position, list] of lists.entries()) {
+      await transaction.database.run(
+        `INSERT INTO list_rows (
+          list_id, position, owner_id, behaviour, template_key, title, icon,
+          empty_state_copy, checkable, supports_location, slot, source_activity_id,
+          item_count, unchecked_count, member_count, rank_version, archived,
+          updated_at, last_item_activity_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          list.listId,
+          position,
+          list.ownerId,
+          list.behaviour,
+          list.templateKey,
+          list.title,
+          list.icon,
+          list.emptyStateCopy,
+          list.capabilities.checkable ? 1 : 0,
+          list.capabilities.supportsLocation ? 1 : 0,
+          list.slot ?? null,
+          list.sourceActivityId ?? null,
+          list.itemCount,
+          list.uncheckedCount,
+          list.memberCount,
+          list.rankVersion,
+          list.archived ? 1 : 0,
+          list.updatedAt,
+          list.lastItemActivityAt,
+        ],
+      );
+    }
+    transaction.changed(this.scope);
+  }
+
+  /**
+   * Applies one server-confirmed settings write — the archive/restore path.
+   *
+   * Keeps the row's existing `position`, because archiving does not move a list in the server's
+   * pointer order; it changes whether the active filter shows it. Re-ordering here would make a
+   * restore land somewhere other than where it left, which reads as the list having moved.
+   *
+   * A list this device has never materialized is ignored rather than inserted: without a page
+   * it has no ordinal, and guessing one would put it at an arbitrary place in an order the
+   * server owns. The next drain places it correctly.
+   */
+  async applySettings(transaction: TransactionContext, list: List): Promise<void> {
+    await transaction.database.run(
+      `UPDATE list_rows SET
+         title = ?, checkable = ?, supports_location = ?, slot = ?,
+         item_count = ?, unchecked_count = ?, member_count = ?, rank_version = ?,
+         archived = ?, updated_at = ?, last_item_activity_at = ?
+       WHERE list_id = ?;`,
+      [
+        list.title,
+        list.capabilities.checkable ? 1 : 0,
+        list.capabilities.supportsLocation ? 1 : 0,
+        list.slot ?? null,
+        list.itemCount,
+        list.uncheckedCount,
+        list.memberCount,
+        list.rankVersion,
+        list.archived ? 1 : 0,
+        list.updatedAt,
+        list.lastItemActivityAt,
+        list.listId,
+      ],
+    );
+    transaction.changed(this.scope);
+  }
+
+  /** Removes one list the server has confirmed deleted. */
+  async removeCanonical(transaction: TransactionContext, listId: string): Promise<void> {
+    await transaction.database.run('DELETE FROM list_rows WHERE list_id = ?;', [listId]);
+    transaction.changed(this.scope);
+  }
+}

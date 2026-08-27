@@ -15,6 +15,7 @@ import { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
 import { LegacyImporter } from '@/lib/sqlite/legacyImporter';
 import { migrateNativeLegacyState } from '@/lib/sqlite/legacyMigration';
+import { ListsRepository } from '@/lib/sqlite/listsRepository';
 import {
   getActiveNativeState,
   type NativeStateSession,
@@ -79,6 +80,12 @@ async function startSession(
     account.subscriptions,
     account.projections,
   );
+  /* P3-25. Read-side only: the sync engine's drain is its one writer until P3-26. */
+  const lists = new ListsRepository(
+    account.database,
+    account.subscriptions,
+    account.projections,
+  );
   const outbox = new OutboxRepository(account.database);
   const importer = new LegacyImporter(
     account.transactions,
@@ -128,6 +135,7 @@ async function startSession(
     undefined,
     undefined,
     anytime,
+    lists,
   );
   const coordinator = new NativeActivityActionCoordinator(
     ownerUserId,
@@ -185,6 +193,7 @@ async function startSession(
     activities,
     agenda,
     anytime,
+    lists,
     outbox,
     outboxPresentation,
     coordinator,

@@ -14,6 +14,7 @@ import type {
   ActivityDetailTarget,
   ActivityListItem,
   AgendaData,
+  List,
   Occurrence,
   OccurrenceDetailProjection,
 } from '@od/shared/types';
@@ -28,6 +29,7 @@ import {
 } from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
+import type { ListsRepository } from '@/lib/sqlite/listsRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
 import {
@@ -57,6 +59,8 @@ export interface NativeSyncEngine {
   pullReminderCoverage(): Promise<void>;
   recoverRejectedIntent(intentId: string): Promise<boolean>;
   pullAnytime?(): Promise<readonly ActivityListItem[]>;
+  /** Drains every List pointer page and replaces the materialized index (P3-25). */
+  pullLists?(): Promise<readonly List[]>;
   stop(): void;
 }
 
@@ -219,6 +223,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private readonly requestedCoverages = new Map<string, AgendaQuery>();
   private cycleError: Error | undefined;
   private anytimeRunning: Promise<readonly ActivityListItem[]> | undefined;
+  private listsRunning: Promise<readonly List[]> | undefined;
   private readonly push: ActivityPushAdapter;
   private readonly reconciler: RecurrenceReconciler;
 
@@ -231,6 +236,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     private readonly pull: ActivityPullAdapter = sharedActivityPullAdapter,
     private readonly targeted: TargetedAgendaTransport = sharedTargetedAgendaTransport,
     private readonly anytime?: AnytimeRepository,
+    private readonly lists?: ListsRepository,
   ) {
     this.push = new ActivityPushAdapter(pushTransport);
     this.reconciler = new RecurrenceReconciler(
@@ -565,6 +571,58 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       anytime.replaceCanonical(transaction, items),
     );
     return anytime.read();
+  }
+
+  /**
+   * The Lists index (P3-25). Single-flighted exactly as {@link pullAnytime} is, so a focus
+   * effect and a pull-to-refresh arriving together share one drain rather than racing two.
+   */
+  async pullLists(): Promise<readonly List[]> {
+    if (this.listsRunning !== undefined) return this.listsRunning;
+    const running = this.loadLists();
+    this.listsRunning = running;
+    try {
+      return await running;
+    } finally {
+      if (this.listsRunning === running) this.listsRunning = undefined;
+    }
+  }
+
+  /**
+   * Drains **every** pointer page before writing anything.
+   *
+   * The endpoint pages access pointers without filtering by `archived`, so a partial drain
+   * cannot be materialized honestly: the index would hold a prefix of an order it presents as
+   * complete, and the screen's `No lists yet` rule — legal only after cursor exhaustion — would
+   * be deciding on a set that was still arriving. One transaction at the end also means a
+   * subscriber sees the previous index or the next one, never a half-written one.
+   */
+  private async loadLists(): Promise<readonly List[]> {
+    const lists = this.lists;
+    const pullListsPage = this.pull.listsPage;
+    if (lists === undefined || pullListsPage === undefined) {
+      throw new Error('Native Lists state is not ready.');
+    }
+    const rows: List[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const page = await this.serialNetwork(() => pullListsPage(cursor));
+      rows.push(...page.data);
+      cursor = page.nextCursor;
+      if (cursor !== undefined) {
+        // A server that repeats a cursor would page for ever; the Anytime drain guards the
+        // same way, and an unbounded loop here would hold the serialized network queue open.
+        if (seenCursors.has(cursor)) {
+          throw new Error('Lists pagination returned a repeated cursor.');
+        }
+        seenCursors.add(cursor);
+      }
+    } while (cursor !== undefined);
+    await this.transactions.run((transaction) =>
+      lists.replaceCanonical(transaction, rows),
+    );
+    return lists.read();
   }
 
   stop(): void {

@@ -3,6 +3,7 @@ import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
 import type { SqliteDatabase } from '@/lib/sqlite/database';
+import type { ListsRepository } from '@/lib/sqlite/listsRepository';
 import type { OutboxRepository } from '@/lib/sqlite/outbox';
 import type { OutboxPresentationStore } from '@/lib/sqlite/outboxPresentationStore';
 import type { RepositorySubscriptions } from '@/lib/sqlite/subscriptions';
@@ -23,6 +24,8 @@ export interface NativeActivityState {
   readonly activities: ActivityRepository;
   readonly agenda: AgendaRepository;
   readonly anytime?: AnytimeRepository;
+  /** The Lists index (P3-25). Read-side only; creation joins the outbox in P3-26. */
+  readonly lists?: ListsRepository;
   readonly outbox: OutboxRepository;
   readonly outboxPresentation: OutboxPresentationStore;
   readonly coordinator: NativeActivityActionCoordinator;

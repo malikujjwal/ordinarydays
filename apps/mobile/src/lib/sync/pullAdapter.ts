@@ -1,10 +1,17 @@
-import { getActivity, getAgenda, getMe, listActivities } from '@od/shared/client';
+import {
+  getActivity,
+  getAgenda,
+  getLists,
+  getMe,
+  listActivities,
+} from '@od/shared/client';
 import type { AgendaQuery } from '@od/shared/schemas';
 import type {
   ActivityDetail,
   ActivityDetailTarget,
   ActivityListItem,
   AgendaData,
+  List,
   User,
 } from '@od/shared/types';
 import { apiClient } from '@/lib/apiClient';
@@ -16,6 +23,17 @@ export interface ActivityPullAdapter {
   profile(): Promise<User>;
   anytimePage?(cursor?: string): Promise<{
     readonly data: readonly ActivityListItem[];
+    readonly nextCursor?: string;
+  }>;
+  /**
+   * One page of List access pointers with their `META` rows (P3-25).
+   *
+   * The endpoint does **not** filter by `archived` — active and archived pointers arrive
+   * together and the index filters client-side — so this returns the page verbatim and the
+   * caller drains every cursor before deciding anything.
+   */
+  listsPage?(cursor?: string): Promise<{
+    readonly data: readonly List[];
     readonly nextCursor?: string;
   }>;
 }
@@ -32,6 +50,13 @@ export const sharedActivityPullAdapter: ActivityPullAdapter = {
     });
     return {
       data: page.data as ActivityListItem[],
+      ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),
+    };
+  },
+  listsPage: async (cursor) => {
+    const page = await getLists(apiClient, cursor);
+    return {
+      data: page.data as List[],
       ...(page.meta.nextCursor === undefined ? {} : { nextCursor: page.meta.nextCursor }),
     };
   },

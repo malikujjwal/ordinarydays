@@ -121,6 +121,9 @@ describe('native Activity/Agenda architecture boundaries', () => {
     const allowed = new Set([
       'lib/sqlite/agendaRepository.ts',
       'lib/sqlite/anytimeRepository.ts',
+      /* P3-25. Presentation-only on the same terms: it serves the Lists index and makes no
+         write decision from a snapshot — its three writers all take an explicit transaction. */
+      'lib/sqlite/listsRepository.ts',
       'lib/sqlite/outboxPresentationStore.ts',
     ]);
     const callers = productionSources()
