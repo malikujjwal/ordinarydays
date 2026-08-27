@@ -383,10 +383,20 @@ describe('loading and failure', () => {
   });
 
   it('becomes an error screen when there is nothing to keep', () => {
-    setView({ status: 'error', lists: [], message: "Couldn't load this." });
+    setView({
+      status: 'error',
+      lists: [],
+      message: 'Something went wrong.',
+      requestId: 'req_lists_failure',
+    });
     mount();
 
     expect(screen.getByTestId('lists-error')).toBeTruthy();
+    expect(screen.getByText("Couldn't load this.")).toBeTruthy();
+    expect(screen.queryByText('Something went wrong.')).toBeNull();
+    expect(screen.getByTestId('lists-error-request-id').textContent).toBe(
+      'req_lists_failure',
+    );
     expect(screen.getByText('Try again')).toBeTruthy();
   });
 });

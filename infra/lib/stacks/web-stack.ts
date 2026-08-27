@@ -64,8 +64,9 @@ export class WebStack extends cdk.Stack {
       name: 'web',
       sourcePath: props.webSourcePath ?? 'apps/mobile/dist',
       uriRewriteCode: URI_REWRITE,
-      // Both undefined until Phase 5 registers the domain, so the distribution is reachable
-      // on its *.cloudfront.net name and carries no ACM certificate.
+      // Both are undefined in the pre-domain, synth-only phases. WebStack is first deployed
+      // in Phase 5 after these fields and the edge certificate are present; the default
+      // CloudFront certificate permits TLS 1.0 and is not a deployable product endpoint.
       ...(cfg.domain !== undefined && { domainName: cfg.domain }),
       ...(dns.edgeCertificate !== undefined && { certificate: dns.edgeCertificate }),
     });
@@ -99,6 +100,10 @@ export class WebStack extends cdk.Stack {
 
     return new cloudfront.Distribution(this, 'Media', {
       comment: `od-media-${cfg.stage}`,
+      // The default CloudFront certificate cannot be raised above TLSv1. The pre-domain
+      // template is intentionally synthable but disabled; the first enabled distribution
+      // carries the custom certificate and TLS 1.2 policy in the conditional block below.
+      enabled: cfg.mediaDomain !== undefined && dns.edgeCertificate !== undefined,
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       enableIpv6: true,

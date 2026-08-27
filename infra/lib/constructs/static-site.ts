@@ -71,6 +71,10 @@ export class StaticSite extends Construct {
 
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `od-${props.name}-${cfg.stage}`,
+      // CloudFront's default certificate is fixed to the legacy TLSv1 policy. Keep the
+      // synth-only, pre-domain definition disabled; Phase 5 enables it atomically with the
+      // custom hostname, ACM certificate and TLS 1.2 policy below.
+      enabled: props.domainName !== undefined && props.certificate !== undefined,
       defaultRootObject: 'index.html',
       // North America + Europe. Cheaper, and our users are not yet elsewhere.
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,

@@ -242,11 +242,23 @@ export function ListsScreen({
           error and offers `Try again`.
         */}
         {view.status === 'error' && view.lists.length === 0 ? (
-          <EmptyState
-            heading={view.message ?? "Couldn't load this."}
-            action={{ label: 'Try again', onPress: view.refetch }}
-            testID="lists-error"
-          />
+          <View testID="lists-error">
+            <EmptyState
+              heading="Couldn't load this."
+              action={{ label: 'Try again', onPress: view.refetch }}
+            />
+            {view.requestId === undefined ? null : (
+              <Text
+                variant="footnote"
+                color="textSecondary"
+                align="center"
+                selectable
+                testID="lists-error-request-id"
+              >
+                {view.requestId}
+              </Text>
+            )}
+          </View>
         ) : view.message === undefined ? null : (
           <Touchable
             accessibilityRole="button"

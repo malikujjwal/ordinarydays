@@ -51,7 +51,9 @@ const request = async (
       method,
       headers: {
         'Content-Type': 'application/json',
-        ...(method === 'POST' ? { 'Idempotency-Key': crypto.randomUUID() } : {}),
+        ...(method === 'POST' || (method === 'PATCH' && /^\/v1\/lists\/[^/]+$/.test(path))
+          ? { 'Idempotency-Key': crypto.randomUUID() }
+          : {}),
         ...headers,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),

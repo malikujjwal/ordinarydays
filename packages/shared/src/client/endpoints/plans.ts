@@ -420,6 +420,16 @@ export function mergePlansResponse(
 
   if (data.mode === 'initial' || data.mode === 'past_cursor') partial.push(...data.past);
 
+  // An exhaustive interval speaks for empty dates as well as returned ones. Clear every
+  // materialized date it covers before applying the response, otherwise a plan whose last
+  // row was deleted or moved remains in the store forever: the authoritative response has
+  // no day entry through which to replace it.
+  for (const date of byDate.keys()) {
+    if (authoritative.some(({ from, through }) => date >= from && date <= through)) {
+      byDate.delete(date);
+    }
+  }
+
   for (const day of exhaustive) byDate.set(day.date, [...day.items]);
 
   for (const day of partial) {

@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { describe, expect, it } from 'vitest';
 import { getConfig } from '../lib/config.js';
 import { contentSecurityPolicy } from '../lib/constructs/static-site.js';
@@ -29,12 +30,38 @@ function build(stage: 'dev' | 'prod', webSourcePath = NOT_BUILT) {
   return { web: Template.fromStack(web), data: Template.fromStack(data) };
 }
 
+function buildSecuredProd() {
+  const app = new cdk.App();
+  const cfg = {
+    ...getConfig('prod'),
+    domain: 'ordinarydays.app',
+    mediaDomain: 'media.ordinarydays.app',
+  };
+  const dns = new DnsStack(app, 'od-dns-secured-prod', { cfg });
+  const certificate = acm.Certificate.fromCertificateArn(
+    dns,
+    'EdgeCertificate',
+    'arn:aws:acm:us-east-1:111122223333:certificate/00000000-0000-0000-0000-000000000000',
+  );
+  Object.defineProperty(dns, 'edgeCertificate', { value: certificate });
+  const data = new DataStack(app, 'od-data-secured-prod', { cfg });
+  const web = new WebStack(app, 'od-web-secured-prod', {
+    cfg,
+    dns,
+    data,
+    webSourcePath: NOT_BUILT,
+  });
+  return Template.fromStack(web);
+}
+
 const prod = build('prod');
+const securedProd = buildSecuredProd();
 
 type Dist = {
   Properties: {
     DistributionConfig: {
       Comment: string;
+      Enabled: boolean;
       PriceClass: string;
       HttpVersion: string;
       DefaultRootObject?: string;
@@ -50,11 +77,13 @@ type Dist = {
   };
 };
 
-const distributions = () =>
-  Object.values(prod.web.findResources('AWS::CloudFront::Distribution')) as Dist[];
+const distributions = (template = prod.web) =>
+  Object.values(template.findResources('AWS::CloudFront::Distribution')) as Dist[];
 
-const byComment = (comment: string) =>
-  distributions().find((d) => d.Properties.DistributionConfig.Comment === comment);
+const byComment = (comment: string, template = prod.web) =>
+  distributions(template).find(
+    (d) => d.Properties.DistributionConfig.Comment === comment,
+  );
 
 describe('both distributions', () => {
   it('exist — every CloudFront distribution in the product lives in this stack', () => {
@@ -84,14 +113,33 @@ describe('both distributions', () => {
     }
   });
 
-  // No stage sets a domain until Phase 5, so both are reachable on *.cloudfront.net.
-  it.each(['od-web-prod', 'od-media-prod'])('%s has no alias or ACM certificate', (c) => {
-    const cfg = byComment(c)?.Properties.DistributionConfig;
-    expect(cfg?.Aliases).toBeUndefined();
-    expect(JSON.stringify(cfg?.ViewerCertificate ?? {})).not.toContain('acm');
-    expect(JSON.stringify(cfg?.ViewerCertificate ?? {})).not.toContain(
-      'AcmCertificateArn',
-    );
+  // Before Phase 5 this is a synth-only definition, not a deployment candidate.
+  it.each(['od-web-prod', 'od-media-prod'])(
+    '%s has no pre-domain alias or ACM certificate',
+    (c) => {
+      const cfg = byComment(c)?.Properties.DistributionConfig;
+      expect(cfg?.Enabled).toBe(false);
+      expect(cfg?.Aliases).toBeUndefined();
+      expect(JSON.stringify(cfg?.ViewerCertificate ?? {})).not.toContain('acm');
+      expect(JSON.stringify(cfg?.ViewerCertificate ?? {})).not.toContain(
+        'AcmCertificateArn',
+      );
+    },
+  );
+
+  it.each([
+    ['od-web-prod', 'ordinarydays.app'],
+    ['od-media-prod', 'media.ordinarydays.app'],
+  ])('%s pins TLS 1.2 when configured for deployment', (comment, domain) => {
+    const cfg = byComment(comment, securedProd)?.Properties.DistributionConfig;
+    expect(cfg?.Enabled).toBe(true);
+    expect(cfg?.Aliases).toEqual([domain]);
+    expect(cfg?.ViewerCertificate).toMatchObject({
+      AcmCertificateArn:
+        'arn:aws:acm:us-east-1:111122223333:certificate/00000000-0000-0000-0000-000000000000',
+      MinimumProtocolVersion: 'TLSv1.2_2021',
+      SslSupportMethod: 'sni-only',
+    });
   });
 });
 
@@ -351,12 +399,9 @@ describe('the media distribution', () => {
   });
 
   /**
-   * `aws-services.md` §1.6 specifies "TLS 1.2 minimum" for both distributions, and no
-   * `MinimumProtocolVersion` is synthesized today. That is not a gap: CloudFront pins the
-   * minimum for the default `*.cloudfront.net` certificate and rejects an override, so the
-   * setting is only expressible alongside a custom certificate. The code puts all three —
-   * alias, certificate and TLS minimum — in one conditional block for that reason, and this
-   * asserts the block is off as a unit rather than partly applied.
+   * The default CloudFront certificate uses TLSv1 and does not accept an override. This
+   * template exists only so every stack synthesises before Phase 5; the positive assertion
+   * above is the security contract for the first configuration WebStack may deploy.
    */
   it('sets no TLS minimum while it has no certificate to set one on', () => {
     const cfg = byComment('od-media-prod')?.Properties.DistributionConfig as {

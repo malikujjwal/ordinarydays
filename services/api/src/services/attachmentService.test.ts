@@ -763,13 +763,19 @@ describe('confirmAttachment', () => {
   });
 
   describe('what it refuses, and what it leaves behind', () => {
-    /**
-     * Four states with one answer, because the recovery for all of them is the same: upload
-     * again. Distinguishing them would also describe the caller's own storage back to them
-     * one probe at a time.
-     */
+    it('404s an id with no pending record in the caller partition', async () => {
+      getPendingUpload.mockResolvedValue(undefined);
+
+      const error = await rejection(confirmAttachment(USER, ACT, ATT, NOW));
+
+      expect(error.code).toBe('not_found');
+      expect(markPendingConfirming).not.toHaveBeenCalled();
+      expect(copyObject).not.toHaveBeenCalled();
+      expect(linkAttachment).not.toHaveBeenCalled();
+    });
+
+    /** An owned pending row with unusable bytes has one recovery: upload again. */
     it.each([
-      ['no pending record', () => getPendingUpload.mockResolvedValue(undefined)],
       ['nothing uploaded', () => headObject.mockResolvedValue(undefined)],
       [
         'a different type than declared',
@@ -985,8 +991,15 @@ describe('assertAttachmentsConfirmable', () => {
     await expect(assertAttachmentsConfirmable(USER, [ATT])).resolves.toBeUndefined();
   });
 
+  it('404s an id with no pending record in the caller partition', async () => {
+    getPendingUpload.mockResolvedValue(undefined);
+
+    const error = await rejection(assertAttachmentsConfirmable(USER, [ATT]));
+
+    expect(error.code).toBe('not_found');
+  });
+
   it.each([
-    ['no pending record', () => getPendingUpload.mockResolvedValue(undefined)],
     ['nothing uploaded', () => headObject.mockResolvedValue(undefined)],
     [
       'a mismatched declaration',

@@ -363,11 +363,12 @@ describe('what it refuses, and writes nothing for', () => {
 
   /**
    * **P3-13's temporary rejection is gone** (P3-22): the bridge runs the same
-   * confirm-and-link path a create does. What survives is its shape — an id that cannot be
-   * confirmed is refused before any write, so no Plan is left behind. The linking half is
-   * proved against MinIO in `attachmentConfirm.int.test.ts`; this file has no object store.
+   * confirm-and-link path a create does. An id with no pending row in the caller's partition
+   * is `not_found` and is refused before any write, so no Plan is left behind. The owned-row,
+   * missing-object `validation_failed` branch and linking half are proved against MinIO in
+   * `attachmentConfirm.int.test.ts`; this file has no object store.
    */
-  it('400s an unconfirmable attachmentId and writes no Plan', async () => {
+  it('404s an unknown attachmentId and writes no Plan', async () => {
     const { list, item } = await setUp();
 
     const res = await schedule(
@@ -376,8 +377,8 @@ describe('what it refuses, and writes nothing for', () => {
       validBody({ attachmentIds: ['att_01J8XKQ2M4N5P6R7S8T9V0W1X6'] }),
     );
 
-    expect(res.status).toBe(400);
-    expect((await res.json()).error.code).toBe('validation_failed');
+    expect(res.status).toBe(404);
+    expect((await res.json()).error.code).toBe('not_found');
     await noPlanWritten(list.listId);
   });
 

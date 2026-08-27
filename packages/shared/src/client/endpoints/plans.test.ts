@@ -357,6 +357,42 @@ describe('the date-keyed store', () => {
     expect(itemsOn(second, '2026-08-15').map((row) => row.activityId)).toEqual([ACT_A]);
   });
 
+  it('removes a covered date that an authoritative response omits entirely', () => {
+    const first = mergePlansResponse(emptyPlansStore, {
+      mode: 'upcoming_window',
+      upcoming: [{ date: '2026-08-15', items: [item(ACT_A)] }],
+      upcomingWindow: { from: '2026-08-01', through: '2026-08-31', nextFrom: null },
+      warnings: [],
+    });
+    const second = mergePlansResponse(first, {
+      mode: 'upcoming_window',
+      upcoming: [],
+      upcomingWindow: { from: '2026-08-01', through: '2026-08-31', nextFrom: null },
+      warnings: [],
+    });
+
+    expect(second.byDate.has('2026-08-15')).toBe(false);
+    expect(isRangeCovered(second, '2026-08-01', '2026-08-31')).toBe(true);
+  });
+
+  it('removes the source date when a plan moves inside an authoritative interval', () => {
+    const first = mergePlansResponse(
+      emptyPlansStore,
+      pastWindow({ from: '2026-08-01', through: '2026-08-31' }, [
+        { date: '2026-08-15', items: [item(ACT_A)] },
+      ]),
+    );
+    const moved = mergePlansResponse(
+      first,
+      pastWindow({ from: '2026-08-01', through: '2026-08-31' }, [
+        { date: '2026-08-20', items: [item(ACT_A)] },
+      ]),
+    );
+
+    expect(moved.byDate.has('2026-08-15')).toBe(false);
+    expect(itemsOn(moved, '2026-08-20').map((row) => row.activityId)).toEqual([ACT_A]);
+  });
+
   it('unions an unbounded page, so a date split across two pages keeps both halves', () => {
     const page1 = mergePlansResponse(emptyPlansStore, {
       mode: 'past_cursor',

@@ -330,19 +330,16 @@ describe('confirming an upload onto a plan', () => {
       expect((await pendingRows())[0]?.state).toBe('awaiting_upload');
     });
 
-    /**
-     * The object key is derived from the **caller's** id, so another user's `attachmentId`
-     * resolves to a record in a partition this caller cannot read — and the activity is not
-     * theirs either. Both facts point the same way.
-     */
-    it('does not let one user confirm another user’s upload', async () => {
+    /** The caller owns the activity, but the pending upload belongs to somebody else. */
+    it('404s another user’s upload without touching either side', async () => {
       const grant = await uploadedAttachment(OTHER);
 
       const confirmed = await post(`/v1/activities/${activityId}/attachments`, {
         attachmentId: grant.attachmentId,
       });
 
-      expect(confirmed.status).toBe(400);
+      expect(confirmed.status).toBe(404);
+      expect((confirmed.body.error as { code: string }).code).toBe('not_found');
       expect(await attachmentRows(activityId)).toEqual([]);
       // The other user's temporary object is untouched.
       expect(await headObject(grant.key)).toBeDefined();
@@ -761,6 +758,33 @@ describe('attachmentIds on a create', () => {
 
     // Nothing was created. Asserted against the caller's index partition rather than a list
     // response, because "no Activity exists" is a fact about storage.
+    const { QueryCommand } = await import('@aws-sdk/lib-dynamodb');
+    const index = await documents.send(
+      new QueryCommand({
+        TableName: TEST_TABLE,
+        KeyConditionExpression: '#pk = :pk AND begins_with(#sk, :sk)',
+        ExpressionAttributeNames: { '#pk': 'pk', '#sk': 'sk' },
+        ExpressionAttributeValues: { ':pk': `USER#${USER}`, ':sk': 'IDX#' },
+        ConsistentRead: true,
+      }),
+    );
+    expect(index.Items ?? []).toEqual([]);
+  });
+
+  it('404s another user’s pending id and writes no activity at all', async () => {
+    const grant = await uploadedAttachment(OTHER);
+
+    const created = await post('/v1/activities', {
+      objectKind: 'plan',
+      type: 'event',
+      title: 'New York Trip',
+      attachmentIds: [grant.attachmentId],
+    });
+
+    expect(created.status).toBe(404);
+    expect((created.body.error as { code: string }).code).toBe('not_found');
+    expect(await headObject(grant.key)).toBeDefined();
+
     const { QueryCommand } = await import('@aws-sdk/lib-dynamodb');
     const index = await documents.send(
       new QueryCommand({

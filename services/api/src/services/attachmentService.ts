@@ -533,7 +533,7 @@ export async function requestUploadUrl(
  * ## The state machine, in the order the contract states it
  *
  * 1. Resolve the caller's pending record. **The key is the tenancy check**: the record lives
- *    in the caller's own partition, so another user's `attachmentId` resolves to nothing.
+ *    in the caller's own partition, so another user's `attachmentId` resolves to `not_found`.
  * 2. `HeadObject` the temporary key against the declared type and length. The presigned
  *    `PUT` already bound both into its signature, so an object that exists there with those
  *    values is one this service authorised — and one that does not exist means the client
@@ -634,7 +634,7 @@ export async function confirmAttachment(
   }
 
   const record = await getPendingUpload(userId, attachmentId);
-  if (record === undefined) throw unconfirmable('attachmentId');
+  if (record === undefined) throw new AppError('not_found', ATTACHMENT_NOT_FOUND);
 
   if (record.state === 'confirming') {
     if (record.activityId !== activityId) throw unconfirmable('attachmentId');
@@ -829,7 +829,7 @@ export async function assertAttachmentsConfirmable(
 
   for (const attachmentId of attachmentIds) {
     const record = await getPendingUpload(userId, attachmentId);
-    if (record === undefined) throw unconfirmable('attachmentIds');
+    if (record === undefined) throw new AppError('not_found', ATTACHMENT_NOT_FOUND);
 
     const uploaded = await headObject(record.tmpKey);
     if (
