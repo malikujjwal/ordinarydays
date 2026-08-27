@@ -25,12 +25,14 @@ import {
   ActivityUnavailableForAttachmentError,
   AttachmentAlreadyLinkedError,
   AttachmentCoverChangedError,
+  type AttachmentDeletion,
   AttachmentSlotUnavailableError,
   completeAttachmentDeletion,
   getAttachment,
   getAttachmentDeletion,
   getStoredAttachment,
   linkAttachment,
+  listActivityAttachmentDeletions,
   listAttachmentDeletions,
   listStoredAttachments,
   unlinkAttachment,
@@ -192,6 +194,26 @@ export async function drainAttachmentDeletions(
   }
 }
 
+/** Completes the durable media work belonging to one Activity before its META is removed. */
+export async function drainActivityAttachmentDeletions(
+  userId: string,
+  activityId: string,
+  log?: Logger,
+): Promise<void> {
+  let work: readonly AttachmentDeletion[];
+  do {
+    work = await listActivityAttachmentDeletions(userId, activityId);
+    for (const deletion of work) {
+      await deleteObject(deletion.key);
+      await completeAttachmentDeletion(deletion);
+      log?.info(
+        { event: MEDIA_DELETE_REPAIRED, userId, attachmentId: deletion.attachmentId },
+        'activity deletion removed confirmed media',
+      );
+    }
+  } while (work.length > 0);
+}
+
 export interface RequestUploadUrlOptions {
   /**
    * Builds the replay receipt from the finished response.
@@ -267,8 +289,28 @@ async function resolveConfirming(
         uploaded.contentType === record.contentType &&
         uploaded.byteSize === record.byteSize
       ) {
-        await copyObject(record.tmpKey, record.finalKey);
-        copied = await headObject(record.finalKey);
+        try {
+          await copyObject(record.tmpKey, record.finalKey);
+        } catch (copyError) {
+          /**
+           * An active confirmation may have linked this same row and removed the temporary
+           * source after our HeadObject. Adopt that winner instead of failing the unrelated
+           * request which happened to run the repair drain.
+           */
+          const winner = await getAttachment(activityId, record.attachmentId);
+          if (winner !== undefined) {
+            await deleteObject(record.tmpKey);
+            await deletePendingUpload(userId, record.attachmentId, record.quotaSlot);
+            log?.info(
+              { event: REPAIRED, userId, attachmentId: record.attachmentId },
+              'confirmation completed while repair was copying',
+            );
+            return true;
+          }
+          copied = await headObject(record.finalKey);
+          if (copied === undefined) throw copyError;
+        }
+        copied ??= await headObject(record.finalKey);
       }
     }
 

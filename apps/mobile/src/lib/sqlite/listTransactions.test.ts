@@ -2,14 +2,17 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { List } from '@od/shared/types';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
+import { NativeActivityActionCoordinator } from './actionCoordinator';
+import type { ActivityTransactionService } from './activityTransactions';
 import type { SqliteDatabase } from './database';
 import { ListsRepository } from './listsRepository';
 import { ListTransactionService } from './listTransactions';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { OutboxRepository } from './outbox';
 import { RepositorySubscriptions } from './subscriptions';
+import type { NativeSyncEngine } from './syncEngine';
 import { SerializedTransactionRunner } from './transaction';
 
 const LIST: List = {
@@ -119,5 +122,80 @@ describe('native List transactional outbox', () => {
         status: 'queued',
       }),
     ]);
+  });
+
+  it('re-applies a blocked List patch when Retry gives it a fresh identity', async () => {
+    if (database === undefined) throw new Error('test database not open');
+    const { lists, outbox, service, transactions } = harness(database);
+    await transactions.run((transaction) => lists.replaceCanonical(transaction, [LIST]));
+    await transactions.run(async (transaction) => {
+      await service.setArchived(transaction, LIST, true, 'rejected-archive');
+      await outbox.needsAttention(
+        transaction.database,
+        'rejected-archive',
+        { kind: 'rejected', status: 422 },
+        'Rejected archive',
+      );
+      // The rejection rollback restored the server value before the user selected Retry.
+      await lists.setArchivedLocal(transaction, LIST.listId, false);
+    });
+    const sync = {
+      request: vi.fn(),
+    } as unknown as NativeSyncEngine;
+    const coordinator = new NativeActivityActionCoordinator(
+      LIST.ownerId,
+      transactions,
+      {} as ActivityTransactionService,
+      outbox,
+      sync,
+      undefined,
+      service,
+    );
+
+    const result = await coordinator.retryBlocked('rejected-archive', 'retried-archive', {
+      today: '2026-08-26',
+      currentMinute: '12:00',
+    });
+
+    expect(result).toMatchObject({
+      kind: 'accepted',
+      intent: { intentId: 'retried-archive', mutationKey: ['list', 'patch'] },
+    });
+    expect((await lists.read())[0]?.archived).toBe(true);
+    expect(sync.request).toHaveBeenCalledWith('accepted-action');
+  });
+
+  it('re-applies a blocked List deletion instead of sending it through Activity recovery', async () => {
+    if (database === undefined) throw new Error('test database not open');
+    const { lists, outbox, service, transactions } = harness(database);
+    await transactions.run((transaction) => lists.replaceCanonical(transaction, [LIST]));
+    await transactions.run(async (transaction) => {
+      await service.remove(transaction, LIST, 'rejected-delete');
+      await outbox.needsAttention(
+        transaction.database,
+        'rejected-delete',
+        { kind: 'rejected', status: 409 },
+        'Rejected delete',
+      );
+      await lists.upsertCanonical(transaction, LIST, 0);
+    });
+    const sync = { request: vi.fn() } as unknown as NativeSyncEngine;
+    const coordinator = new NativeActivityActionCoordinator(
+      LIST.ownerId,
+      transactions,
+      {} as ActivityTransactionService,
+      outbox,
+      sync,
+      undefined,
+      service,
+    );
+
+    const result = await coordinator.retryBlocked('rejected-delete', 'retried-delete', {
+      today: '2026-08-26',
+      currentMinute: '12:00',
+    });
+
+    expect(result.kind).toBe('accepted');
+    expect(await lists.read()).toEqual([]);
   });
 });

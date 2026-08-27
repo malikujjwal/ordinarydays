@@ -143,12 +143,16 @@ describe('the native Lists SQLite index', () => {
     await transactions.run((transaction) =>
       repository.replaceCanonical(
         transaction,
-        [withId('A11', { archived: false }), withId('C11')],
+        [withId('C11'), withId('A11', { archived: false })],
         new Set([protectedList.listId]),
       ),
     );
 
     const rows = await repository.read();
+    expect(rows.map((row) => row.listId)).toEqual([
+      withId('C11').listId,
+      protectedList.listId,
+    ]);
     expect(rows.find((row) => row.listId === protectedList.listId)?.archived).toBe(true);
     expect(rows.some((row) => row.listId === withId('B11').listId)).toBe(false);
     expect(rows.some((row) => row.listId === withId('C11').listId)).toBe(true);

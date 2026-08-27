@@ -12,7 +12,9 @@ import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import {
   getAttachment,
   linkAttachment,
+  listActivityAttachmentDeletions,
   listAttachments,
+  stageActivityAttachmentDeletion,
   unlinkAttachment,
 } from './attachmentRepository.js';
 
@@ -226,5 +228,54 @@ describe('unlinkAttachment', () => {
     const serialised = JSON.stringify(items());
     expect(serialised).not.toContain('lastActivityAt');
     expect(serialised).not.toContain('icsSequence');
+  });
+});
+
+describe('Activity attachment cascade staging', () => {
+  it('atomically trades the linked row and quota slot for durable object-deletion work', async () => {
+    const staged = await stageActivityAttachmentDeletion(
+      USER,
+      { ...record(), quotaSlot: 3 },
+      NOW,
+    );
+
+    expect(staged).toMatchObject({
+      userId: USER,
+      activityId: ACT,
+      attachmentId: ATT,
+      key: record().key,
+      coverCleared: false,
+    });
+    expect(items()).toHaveLength(4);
+    expect(items()[0]?.Delete?.Key).toEqual({
+      pk: `ACT#${ACT}`,
+      sk: `ATT#${ATT}`,
+    });
+    expect(items()[1]?.Delete?.Key).toEqual({
+      pk: `ACT#${ACT}`,
+      sk: 'ATT_SLOT#03',
+    });
+    expect(items()[2]?.ConditionCheck).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: 'META' },
+      ConditionExpression: '#ownerId = :userId AND attribute_exists(#deletingAt)',
+      ExpressionAttributeValues: { ':userId': USER },
+    });
+    expect(items()[3]?.Put?.Item).toMatchObject({
+      pk: `USER#${USER}`,
+      sk: `MEDIA_DELETE#${ACT}#${ATT}`,
+      entity: 'AttachmentDeletion',
+      attachmentId: ATT,
+      key: record().key,
+    });
+  });
+
+  it('queries only this Activity durable media work strongly and in bounded batches', async () => {
+    await listActivityAttachmentDeletions(USER, ACT);
+
+    const input = ddbMock.commandCalls(QueryCommand)[0]?.args[0].input;
+    expect(input?.ExpressionAttributeValues?.[':pk']).toBe(`USER#${USER}`);
+    expect(input?.ExpressionAttributeValues?.[':skPrefix']).toBe(`MEDIA_DELETE#${ACT}#`);
+    expect(input?.Limit).toBe(MAX_ATTACHMENTS_PER_ACTIVITY);
+    expect(input?.ConsistentRead).toBe(true);
   });
 });

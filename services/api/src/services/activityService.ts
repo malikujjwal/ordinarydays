@@ -62,7 +62,11 @@ import {
   StaleViewerLinkError,
 } from '../repositories/activityRepository.js';
 import { listActivityUpdates } from '../repositories/activityUpdateRepository.js';
-import { listAttachments } from '../repositories/attachmentRepository.js';
+import {
+  listAttachments,
+  stageActivityAttachmentDeletion,
+  toStoredAttachment,
+} from '../repositories/attachmentRepository.js';
 import {
   clearSourceActivity,
   findViewerLinksTo,
@@ -72,6 +76,7 @@ import {
   assertAttachmentsConfirmable,
   assertCoverIsLinked,
   confirmAttachments,
+  drainActivityAttachmentDeletions,
   drainPendingUploads,
   unconfirmableAttachments,
 } from './attachmentService.js';
@@ -1673,6 +1678,13 @@ export async function removeActivity(
 
   await releaseChildren(activityId, childIdsOf(partition), now);
   await clearSourcedListBacklinks(activityId, partition);
+  for (const row of partition) {
+    if (row.entity !== 'Attachment') continue;
+    await stageActivityAttachmentDeletion(userId, toStoredAttachment(row), now);
+  }
+  // Permanent objects must be gone before META, the retry authority, is removed. Each staged
+  // row is durable, so an interrupted S3 delete is discoverable on the next cascade attempt.
+  await drainActivityAttachmentDeletions(userId, activityId);
   // The repository removes partition children and index pointers next, then META last. That
   // leaves this access seam present until every retryable cleanup step has succeeded.
   await deleteActivityRows(userId, activityId, {

@@ -1,6 +1,6 @@
 import type { List } from '@od/shared/types';
 import type { ListsRepository } from '@/lib/sqlite/listsRepository';
-import type { OutboxRepository } from '@/lib/sqlite/outbox';
+import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { TransactionContext } from '@/lib/sqlite/transaction';
 
 export interface ListPatchVariables {
@@ -70,5 +70,45 @@ export class ListTransactionService {
       await this.lists.removeCanonical(transaction, list.listId);
     }
     transaction.changed('outbox');
+  }
+
+  /** Re-applies a user-directed Retry after authoritative rollback restored the List index. */
+  async reprojectRetry(
+    transaction: TransactionContext,
+    intent: OutboxIntent,
+  ): Promise<void> {
+    if (intent.mutationKey[0] !== 'list') {
+      throw new Error('A non-List intent reached List retry projection.');
+    }
+    const variables =
+      typeof intent.variables === 'object' && intent.variables !== null
+        ? intent.variables
+        : undefined;
+    if (variables === undefined) throw new Error('The List retry payload is malformed.');
+
+    if (intent.mutationKey[1] === 'patch') {
+      const input = Reflect.get(variables, 'input');
+      const archived =
+        typeof input === 'object' && input !== null
+          ? Reflect.get(input, 'archived')
+          : undefined;
+      if (typeof archived !== 'boolean') {
+        throw new Error('The List settings retry payload is malformed.');
+      }
+      if (
+        (await this.lists.getLocal(transaction.database, intent.entityId)) === undefined
+      ) {
+        throw new Error('The list is no longer available locally.');
+      }
+      await this.lists.setArchivedLocal(transaction, intent.entityId, archived);
+      return;
+    }
+    if (intent.mutationKey[1] === 'delete') {
+      await this.lists.removeCanonical(transaction, intent.entityId);
+      return;
+    }
+    throw new Error(
+      `Unsupported blocked List mutation: ${intent.mutationKey[1] ?? 'unknown'}.`,
+    );
   }
 }

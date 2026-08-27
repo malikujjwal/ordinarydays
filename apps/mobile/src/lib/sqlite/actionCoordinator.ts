@@ -13,6 +13,7 @@ import type {
   ProjectionClock,
   TransactionalIntentResult,
 } from '@/lib/sqlite/activityTransactions';
+import type { ListTransactionService } from '@/lib/sqlite/listTransactions';
 import { recordNativePerformanceMetric } from '@/lib/sqlite/nativePerformance';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { NativeSyncEngine } from '@/lib/sqlite/syncEngine';
@@ -44,6 +45,7 @@ export class NativeActivityActionCoordinator {
     private readonly outbox: OutboxRepository,
     private readonly sync: NativeSyncEngine,
     private readonly activityIdFactory?: () => string,
+    private readonly listService?: ListTransactionService,
   ) {}
 
   create(
@@ -341,12 +343,19 @@ export class NativeActivityActionCoordinator {
           if (retried === undefined || retried.status !== 'queued') {
             throw new Error('This change is no longer waiting for recovery.');
           }
-          await this.service.reprojectRetry(
-            transaction,
-            this.ownerUserId,
-            retried,
-            clock,
-          );
+          if (retried.mutationKey[0] === 'list') {
+            if (this.listService === undefined) {
+              throw new Error('Native List retry state is not ready.');
+            }
+            await this.listService.reprojectRetry(transaction, retried);
+          } else {
+            await this.service.reprojectRetry(
+              transaction,
+              this.ownerUserId,
+              retried,
+              clock,
+            );
+          }
           transaction.changed('outbox');
           transaction.changed('anytime');
           return retried;
@@ -364,8 +373,8 @@ export class NativeActivityActionCoordinator {
     const recovery = await this.transactions.run((transaction) =>
       this.outbox.get(transaction.database, intentId),
     );
-    if (recovery?.recoveryRequired === true) {
-      await this.sync.recoverRejectedIntent(intentId);
+    if (recovery?.mutationKey[0] === 'list' || recovery?.recoveryRequired === true) {
+      if (!(await this.sync.recoverRejectedIntent(intentId))) return false;
     }
     const discarded = await this.transactions.run(async (transaction) => {
       const intent = await this.outbox.get(transaction.database, intentId);
@@ -395,6 +404,10 @@ export class NativeActivityActionCoordinator {
       if (intent.recoveryRequired === true) return false;
       if (!(await this.outbox.discardAttention(transaction.database, intentId))) {
         return false;
+      }
+      if (intent.mutationKey[0] === 'list') {
+        transaction.changed('outbox');
+        return true;
       }
       if (
         intent.mutationKey[1] === 'create' ||

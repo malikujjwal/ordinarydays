@@ -342,9 +342,13 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     const intent = await this.transactions.run((transaction) =>
       this.outbox.get(transaction.database, intentId),
     );
-    if (intent?.status !== 'needs_attention' || intent.recoveryRequired !== true) {
+    if (intent?.status !== 'needs_attention') {
       return false;
     }
+    if (intent.mutationKey[0] === 'list') {
+      return this.recoverRejectedListIntent(intent);
+    }
+    if (intent.recoveryRequired !== true) return false;
     const occurrenceDate = occurrenceDateFromIntent(intent);
     const target: ActivityDetailTarget =
       occurrenceDate === undefined
@@ -1196,6 +1200,53 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       }
       transaction.changed('outbox');
     });
+  }
+
+  /** Restores authoritative List state before a Retry/Discard retires its recovery receipt. */
+  private async recoverRejectedListIntent(intent: OutboxIntent): Promise<boolean> {
+    try {
+      const lists = this.lists;
+      if (lists === undefined) throw new Error('Native Lists state is not ready.');
+      const rows = await this.pullAllLists();
+      return this.transactions.run(async (transaction) => {
+        const current = await this.outbox.get(transaction.database, intent.intentId);
+        if (
+          current?.status !== 'needs_attention' ||
+          current.mutationKey[0] !== 'list' ||
+          current.entityId !== intent.entityId
+        ) {
+          return false;
+        }
+        const protectedListIds = new Set(
+          await this.outbox.protectedListIds(transaction.database),
+        );
+        // This receipt is the authority to replace this one optimistic row. Other Lists may
+        // still have unrelated queued work and retain their local fields during the refresh.
+        protectedListIds.delete(intent.entityId);
+        await lists.replaceCanonical(transaction, rows, protectedListIds);
+        if (
+          current.recoveryRequired === true &&
+          !(await this.outbox.completeAuthoritativeRecovery(
+            transaction.database,
+            intent.intentId,
+          ))
+        ) {
+          throw new Error(
+            'The authoritative List recovery receipt changed during installation.',
+          );
+        }
+        transaction.changed('outbox');
+        return true;
+      });
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('native_rejected_list_recovery_failed', {
+          intentId: intent.intentId,
+          message: message(error),
+        });
+      }
+      return false;
+    }
   }
 
   private async pullKnownCoverage(): Promise<Error | undefined> {

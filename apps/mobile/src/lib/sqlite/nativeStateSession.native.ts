@@ -16,6 +16,7 @@ import { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
 import { LegacyImporter } from '@/lib/sqlite/legacyImporter';
 import { migrateNativeLegacyState } from '@/lib/sqlite/legacyMigration';
 import { ListsRepository } from '@/lib/sqlite/listsRepository';
+import { ListTransactionService } from '@/lib/sqlite/listTransactions';
 import {
   getActiveNativeState,
   type NativeStateSession,
@@ -126,6 +127,7 @@ async function startSession(
   }
   await recoverAbandonedOutbox(account.transactions, outbox);
   const service = new ActivityTransactionService(outbox, activities, agenda);
+  const listService = new ListTransactionService(outbox, lists);
   const sync = new SerializedNativeSyncEngine(
     account.transactions,
     outbox,
@@ -143,6 +145,8 @@ async function startSession(
     service,
     outbox,
     sync,
+    undefined,
+    listService,
   );
   const outboxPresentation = new OutboxPresentationStore(
     ownerUserId,

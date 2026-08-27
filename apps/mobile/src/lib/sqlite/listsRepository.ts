@@ -197,7 +197,14 @@ export class ListsRepository {
       );
     }
     for (const [position, list] of lists.entries()) {
-      if (!protectedListIds.has(list.listId)) {
+      if (protectedListIds.has(list.listId)) {
+        // The server still owns ordering while this device owns the optimistic fields. A
+        // remote insertion/deletion may shift the ordinal even though this row is protected.
+        await transaction.database.run(
+          'UPDATE list_rows SET position = ? WHERE list_id = ?;',
+          [position, list.listId],
+        );
+      } else {
         await writeListRow(transaction.database, list, position);
       }
     }

@@ -388,6 +388,12 @@ export const attachmentDeletionPrefix = (userId: string) => ({
   skPrefix: 'MEDIA_DELETE#',
 });
 
+/** Outstanding confirmed-media deletion work for one Activity. */
+export const activityAttachmentDeletionPrefix = (userId: string, activityId: string) => ({
+  pk: userPk(userId),
+  skPrefix: `MEDIA_DELETE#${activityId}#`,
+});
+
 /** Phase 9. */
 export const shortcut = (userId: string, shortcutId: string) => ({
   pk: userPk(userId),

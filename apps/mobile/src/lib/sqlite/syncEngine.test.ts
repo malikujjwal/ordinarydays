@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApiError, NetworkError } from '@od/shared/client';
 import type { CreateActivityInput } from '@od/shared/schemas';
-import type { Activity } from '@od/shared/types';
+import type { Activity, List } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
@@ -16,6 +16,8 @@ import { ActivityTransactionService } from './activityTransactions';
 import { AgendaRepository } from './agendaRepository';
 import { AnytimeRepository } from './anytimeRepository';
 import type { SqliteDatabase } from './database';
+import { ListsRepository } from './listsRepository';
+import { ListTransactionService } from './listTransactions';
 import { FOUNDATION_MIGRATIONS, runMigrations } from './migrations';
 import { OutboxRepository } from './outbox';
 import { recoverAbandonedOutbox } from './sessionRecovery';
@@ -3622,5 +3624,76 @@ describe('serialized native convergence guard', () => {
         include: 'anytime_unscheduled,overdue',
       }),
     ).toBeUndefined();
+  });
+
+  it('restores canonical List state before Discard retires a failed rollback receipt', async () => {
+    if (database === undefined) throw new Error('missing List recovery database');
+    const list: List = {
+      listId: 'lst_01J0000000000000000000000A',
+      ownerId: OWNER,
+      behaviour: 'collection',
+      templateKey: 'groceries',
+      title: 'Groceries',
+      icon: 'cart',
+      emptyStateCopy: 'Add something to buy.',
+      capabilities: { checkable: true, supportsLocation: false },
+      slot: null,
+      itemCount: 3,
+      uncheckedCount: 2,
+      memberCount: 1,
+      rankVersion: 0,
+      archived: false,
+      updatedAt: '2026-08-19T00:00:00.000Z',
+      lastItemActivityAt: '2026-08-19T00:00:00.000Z',
+    };
+    const lists = new ListsRepository(database, new RepositorySubscriptions());
+    const listService = new ListTransactionService(outbox, lists);
+    await transactions.run(async (transaction) => {
+      await lists.replaceCanonical(transaction, [list]);
+      await listService.setArchived(transaction, list, true, 'list-failed-rollback');
+      await outbox.needsAttention(
+        transaction.database,
+        'list-failed-rollback',
+        { kind: 'rejected', status: 422, recoveryRequired: true },
+        'List rollback was offline',
+      );
+    });
+    const recoveryEngine = new SerializedNativeSyncEngine(
+      transactions,
+      outbox,
+      activities,
+      agenda,
+      pushTransport(),
+      {
+        ...pullAdapter(),
+        listsPage: async () => ({ data: [list] }),
+      },
+      targetedTransport(),
+      anytime,
+      lists,
+    );
+    const sync = {
+      request: vi.fn(),
+      recoverRejectedIntent: (intentId: string) =>
+        recoveryEngine.recoverRejectedIntent(intentId),
+    } as unknown as SerializedNativeSyncEngine;
+    const coordinator = new NativeActivityActionCoordinator(
+      OWNER,
+      transactions,
+      service,
+      outbox,
+      sync,
+      undefined,
+      listService,
+    );
+
+    await expect(coordinator.discardBlocked('list-failed-rollback', clock)).resolves.toBe(
+      true,
+    );
+
+    expect(await outbox.all()).toEqual([]);
+    expect(await lists.read()).toEqual([list]);
+    expect(sync.request).toHaveBeenCalledWith('manual');
+    recoveryEngine.stop();
   });
 });

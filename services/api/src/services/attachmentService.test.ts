@@ -27,7 +27,7 @@ const listPendingUploads = vi.fn<(userId: string) => Promise<PendingUpload[]>>()
 const putPendingUpload =
   vi.fn<(record: PendingUpload, receipt?: unknown) => Promise<void>>();
 const deletePendingUpload =
-  vi.fn<(userId: string, attachmentId: string) => Promise<void>>();
+  vi.fn<(userId: string, attachmentId: string, quotaSlot?: number) => Promise<void>>();
 const getPendingUpload =
   vi.fn<(userId: string, attachmentId: string) => Promise<PendingUpload | undefined>>();
 const markPendingConfirming =
@@ -46,6 +46,8 @@ const unlinkAttachment =
     ) => Promise<AttachmentDeletion>
   >();
 const listAttachmentDeletions = vi.fn<() => Promise<AttachmentDeletion[]>>();
+const listActivityAttachmentDeletions =
+  vi.fn<(userId: string, activityId: string) => Promise<AttachmentDeletion[]>>();
 const getAttachmentDeletion = vi.fn<() => Promise<AttachmentDeletion | undefined>>();
 const completeAttachmentDeletion = vi.fn<(work: AttachmentDeletion) => Promise<void>>();
 const getActivityMeta = vi.fn<(id: string, opts?: unknown) => Promise<unknown>>();
@@ -82,6 +84,8 @@ vi.mock('../repositories/attachmentRepository.js', async () => {
       now: string,
     ) => unlinkAttachment(userId, value, clearCover, now),
     listAttachmentDeletions: () => listAttachmentDeletions(),
+    listActivityAttachmentDeletions: (userId: string, activityId: string) =>
+      listActivityAttachmentDeletions(userId, activityId),
     getAttachmentDeletion: () => getAttachmentDeletion(),
     completeAttachmentDeletion: (work: AttachmentDeletion) =>
       completeAttachmentDeletion(work),
@@ -106,8 +110,10 @@ vi.mock('../repositories/pendingUploadRepository.js', async () => {
     listPendingUploads: (userId: string) => listPendingUploads(userId),
     putPendingUpload: (record: PendingUpload, receipt?: unknown) =>
       putPendingUpload(record, receipt),
-    deletePendingUpload: (userId: string, attachmentId: string) =>
-      deletePendingUpload(userId, attachmentId),
+    deletePendingUpload: (userId: string, attachmentId: string, quotaSlot?: number) =>
+      quotaSlot === undefined
+        ? deletePendingUpload(userId, attachmentId)
+        : deletePendingUpload(userId, attachmentId, quotaSlot),
     getPendingUpload: (userId: string, attachmentId: string) =>
       getPendingUpload(userId, attachmentId),
     markPendingConfirming: (userId: string, attachmentId: string, activityId: string) =>
@@ -121,6 +127,7 @@ const {
   confirmAttachment,
   deleteAttachment,
   drainAttachmentDeletions,
+  drainActivityAttachmentDeletions,
   drainPendingUploads,
   requestUploadUrl,
 } = await import('./attachmentService.js');
@@ -192,6 +199,7 @@ beforeEach(() => {
   getAttachment.mockResolvedValue(undefined);
   listAttachments.mockResolvedValue([]);
   listAttachmentDeletions.mockResolvedValue([]);
+  listActivityAttachmentDeletions.mockResolvedValue([]);
   getAttachmentDeletion.mockResolvedValue(undefined);
   completeAttachmentDeletion.mockResolvedValue();
   linkAttachment.mockResolvedValue();
@@ -242,6 +250,37 @@ describe('drainAttachmentDeletions', () => {
       }),
       'attachment deletion completed after a crash',
     );
+  });
+});
+
+describe('drainActivityAttachmentDeletions', () => {
+  it('keeps reading bounded batches until every permanent object and work row is gone', async () => {
+    const first: AttachmentDeletion = {
+      userId: USER,
+      activityId: ACT,
+      attachmentId: ATT,
+      key: `u/${USER}/first.jpg`,
+      coverCleared: false,
+      createdAt: NOW,
+    };
+    const second: AttachmentDeletion = {
+      ...first,
+      attachmentId: 'att_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+      key: `u/${USER}/second.jpg`,
+    };
+    listActivityAttachmentDeletions
+      .mockResolvedValueOnce([first])
+      .mockResolvedValueOnce([second])
+      .mockResolvedValueOnce([]);
+
+    await drainActivityAttachmentDeletions(USER, ACT);
+
+    expect(listActivityAttachmentDeletions).toHaveBeenCalledTimes(3);
+    expect(deleteObject.mock.calls.map(([key]) => key)).toEqual([first.key, second.key]);
+    expect(completeAttachmentDeletion.mock.calls.map(([work]) => work)).toEqual([
+      first,
+      second,
+    ]);
   });
 });
 
@@ -317,6 +356,25 @@ describe('drainPendingUploads', () => {
         activityId: ACT,
       });
       expect(deleteObject).toHaveBeenCalledWith(`tmp/u/${USER}/expired_1.jpg`);
+    });
+
+    it('adopts a concurrent confirmation that removes the temporary source before repair copies', async () => {
+      const raced = { ...confirming(), quotaSlot: 4 };
+      listPendingUploads.mockResolvedValue([raced]);
+      getAttachment
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({ attachmentId: raced.attachmentId, activityId: ACT });
+      headObject
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce({ contentType: 'image/jpeg', byteSize: 2048 });
+      copyObject.mockRejectedValue(
+        Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' }),
+      );
+
+      await expect(drainPendingUploads(USER, NOW_MS)).resolves.toBe(0);
+
+      expect(linkAttachment).not.toHaveBeenCalled();
+      expect(deletePendingUpload).toHaveBeenCalledWith(USER, raced.attachmentId, 4);
     });
 
     /**

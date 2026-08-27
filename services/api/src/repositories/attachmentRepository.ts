@@ -6,6 +6,7 @@ import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotenc
 import { deleteItem, getItem, query } from './base.js';
 import { receiptItem } from './idempotencyRepository.js';
 import {
+  activityAttachmentDeletionPrefix,
   activityMeta,
   attachmentDeletion as attachmentDeletionKey,
   attachmentDeletionPrefix,
@@ -49,7 +50,7 @@ export function toAttachment(row: unknown): Attachment {
 
 export type StoredAttachment = Attachment & { readonly quotaSlot?: number };
 
-function toStoredAttachment(row: StoredItem): StoredAttachment {
+export function toStoredAttachment(row: StoredItem): StoredAttachment {
   const attachment = toAttachment(row);
   const quotaSlot = z
     .number()
@@ -294,6 +295,23 @@ export async function listAttachmentDeletions(
   return page.items.map(toAttachmentDeletion);
 }
 
+/** Outstanding media deletes for one Activity, including work from an interrupted cascade. */
+export async function listActivityAttachmentDeletions(
+  userId: string,
+  activityId: string,
+): Promise<AttachmentDeletion[]> {
+  const prefix = activityAttachmentDeletionPrefix(userId, activityId);
+  const page = await query<StoredItem>(
+    { pk: prefix.pk },
+    {
+      skPrefix: prefix.skPrefix,
+      limit: MAX_ATTACHMENTS_PER_ACTIVITY,
+      consistentRead: true,
+    },
+  );
+  return page.items.map(toAttachmentDeletion);
+}
+
 export async function completeAttachmentDeletion(
   work: Pick<AttachmentDeletion, 'userId' | 'activityId' | 'attachmentId'>,
 ): Promise<void> {
@@ -307,6 +325,76 @@ export class AttachmentCoverChangedError extends Error {
     super('The Activity cover changed while the attachment was being removed.');
     this.name = 'AttachmentCoverChangedError';
   }
+}
+
+function attachmentDeletionWork(
+  userId: string,
+  record: StoredAttachment,
+  coverCleared: boolean,
+  now: string,
+): AttachmentDeletion {
+  return {
+    userId,
+    activityId: record.activityId,
+    attachmentId: record.attachmentId,
+    key: record.key,
+    coverCleared,
+    createdAt: now,
+  };
+}
+
+function attachmentDeletionPut(work: AttachmentDeletion) {
+  return {
+    Put: {
+      Item: {
+        ...attachmentDeletionKey(work.userId, work.activityId, work.attachmentId),
+        entity: 'AttachmentDeletion',
+        ...work,
+        schemaVersion: SCHEMA_VERSION,
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    },
+  } as const;
+}
+
+/**
+ * Removes one attachment row while an Activity cascade still owns META, and leaves durable
+ * work that must delete the permanent object before META can disappear.
+ */
+export async function stageActivityAttachmentDeletion(
+  userId: string,
+  record: StoredAttachment,
+  now: string,
+): Promise<AttachmentDeletion> {
+  const { activityId, attachmentId } = record;
+  const builder = new TransactionBuilder('stageActivityAttachmentDeletion').add({
+    Delete: {
+      Key: attachmentKey(activityId, attachmentId),
+      ConditionExpression: 'attribute_exists(pk)',
+    },
+  });
+  if (record.quotaSlot !== undefined) {
+    builder.add({ Delete: { Key: attachmentQuotaSlot(activityId, record.quotaSlot) } });
+  }
+  const activityConditionIndex = builder.length;
+  builder.add({
+    ConditionCheck: {
+      Key: activityMeta(activityId),
+      ConditionExpression: '#ownerId = :userId AND attribute_exists(#deletingAt)',
+      ExpressionAttributeNames: { '#ownerId': 'ownerId', '#deletingAt': 'deletingAt' },
+      ExpressionAttributeValues: { ':userId': userId },
+    },
+  });
+  const work = attachmentDeletionWork(userId, record, false, now);
+  builder.add(attachmentDeletionPut(work));
+  await transactWrite(builder.build(), {
+    operation: 'stageActivityAttachmentDeletion',
+    onConditionFailed: (index) =>
+      index === activityConditionIndex
+        ? new ActivityUnavailableForAttachmentError()
+        : undefined,
+  });
+  return work;
 }
 
 /**
@@ -397,25 +485,8 @@ export async function unlinkAttachment(
     });
   }
 
-  const work: AttachmentDeletion = {
-    userId,
-    activityId,
-    attachmentId,
-    key: record.key,
-    coverCleared: clearCover,
-    createdAt: now,
-  };
-  builder.add({
-    Put: {
-      Item: {
-        ...attachmentDeletionKey(userId, activityId, attachmentId),
-        entity: 'AttachmentDeletion',
-        ...work,
-        schemaVersion: SCHEMA_VERSION,
-      },
-      ConditionExpression: 'attribute_not_exists(pk)',
-    },
-  });
+  const work = attachmentDeletionWork(userId, record, clearCover, now);
+  builder.add(attachmentDeletionPut(work));
 
   await transactWrite(builder.build(), {
     operation: 'unlinkAttachment',

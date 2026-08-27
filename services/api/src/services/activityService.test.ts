@@ -47,6 +47,25 @@ vi.mock('../repositories/listRepository.js', () => ({
   findViewerLinksTo: vi.fn(() => Promise.resolve([])),
 }));
 
+const attachmentCleanup = vi.hoisted(() => ({
+  stage: vi.fn(() => Promise.resolve()),
+  drain: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock('../repositories/attachmentRepository.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../repositories/attachmentRepository.js')
+  >('../repositories/attachmentRepository.js');
+  return { ...actual, stageActivityAttachmentDeletion: attachmentCleanup.stage };
+});
+
+vi.mock('./attachmentService.js', async () => {
+  const actual = await vi.importActual<typeof import('./attachmentService.js')>(
+    './attachmentService.js',
+  );
+  return { ...actual, drainActivityAttachmentDeletions: attachmentCleanup.drain };
+});
+
 const repository = await import('../repositories/activityRepository.js');
 const listRepository = await import('../repositories/listRepository.js');
 
@@ -82,6 +101,10 @@ beforeEach(() => {
   vi.mocked(repository.listPrepTaskPointers).mockResolvedValue([]);
   vi.mocked(listRepository.findViewerLinksTo).mockReset();
   vi.mocked(listRepository.findViewerLinksTo).mockResolvedValue([]);
+  attachmentCleanup.stage.mockReset();
+  attachmentCleanup.stage.mockResolvedValue(undefined);
+  attachmentCleanup.drain.mockReset();
+  attachmentCleanup.drain.mockResolvedValue(undefined);
 });
 
 /**
@@ -618,6 +641,43 @@ describe('removeActivity replay recovery', () => {
     updatedAt: NOW,
     schemaVersion: 1,
   } as Activity;
+
+  it('stages and drains permanent attachment media before deleting Activity rows', async () => {
+    const attachment = {
+      pk: `ACT#${PLAN}`,
+      sk: 'ATT#att_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+      entity: 'Attachment',
+      attachmentId: 'att_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+      activityId: PLAN,
+      key: `u/${USER}/01J8XKQ2M4N5P6R7S8T9V0W1X2.jpg`,
+      contentType: 'image/jpeg',
+      byteSize: 2048,
+      createdAt: NOW,
+      quotaSlot: 3,
+      schemaVersion: 1,
+    } as StoredItem;
+    vi.mocked(repository.getActivityMeta).mockResolvedValue(meta as never);
+    vi.mocked(repository.getActivityPartitionStrong).mockResolvedValue([
+      meta,
+      attachment,
+    ]);
+
+    await removeActivity(USER, PLAN, NOW);
+
+    expect(attachmentCleanup.stage).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({
+        attachmentId: attachment.attachmentId,
+        key: attachment.key,
+        quotaSlot: 3,
+      }),
+      NOW,
+    );
+    expect(attachmentCleanup.drain).toHaveBeenCalledWith(USER, PLAN);
+    expect(attachmentCleanup.drain.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(repository.deleteActivity).mock.invocationCallOrder[0] ?? 0,
+    );
+  });
 
   it('retries after child cleanup while META still authorises, then ends at not_found', async () => {
     vi.mocked(repository.getActivityMeta)
