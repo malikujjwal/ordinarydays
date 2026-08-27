@@ -361,6 +361,15 @@ export const motion = {
 | Screen transition | platform default, capped at `max` | platform |
 | Swipe action tracking | none — it follows the finger | — |
 
+> **Sheet present / dismiss is unimplemented on web** — recorded 2026-08-27 (P3-26). The
+> animation was never this component's: it was React Native Web's `Modal` fading its own
+> container, at RNW's 250 ms rather than `slow`, and outside `useMotion()`'s reach. That
+> `Modal` also withholds `role="dialog"` and its focus trap until the fade ends, and the end
+> event never arrives — measured in Chromium, `role: null` two seconds after mount, which axe
+> reports as a **critical** `aria-allowed-attr` on every sheet. `Sheet` therefore passes no
+> animation type on web, and a present animation this table can hold true belongs to `Sheet`
+> itself, gated by `useMotion()` like every other row. Native is unaffected.
+
 **Reduce Motion.** `useReducedMotion()` from Reanimated gates every one of these:
 transitions become cross-fades, insert/remove animations are removed, the toast appears
 without sliding. Swipe tracking is unaffected — direct manipulation is not decorative
