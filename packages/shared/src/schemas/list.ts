@@ -121,14 +121,14 @@ export const list = z
     rankRepairId: z.string().min(1).optional(),
     behaviourMigrationId: z.string().min(1).optional(),
     archived: z.boolean(),
-    updatedAt: z.string().min(1),
+    updatedAt: instant.transform((value): string => value),
     /**
      * Required, and deliberately not `.optional()` (P3-46). Nothing is deployed, so there is
      * no row without it — and an optional branch here would be a permanent `?? updatedAt`
      * fallback in every reader, which is exactly the display/precondition confusion the two
      * fields exist to end.
      */
-    lastItemActivityAt: z.string().min(1),
+    lastItemActivityAt: instant.transform((value): string => value),
   })
   .meta({ id: 'List' });
 

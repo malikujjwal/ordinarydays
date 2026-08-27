@@ -1,8 +1,10 @@
+import { instant } from '@od/shared/schemas';
 import type { ListItemDetails, ListUndoResult } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import { undoTokenMatches, undoTokenOperationId } from '../lib/undoToken.js';
 import {
+  acceptListUndoOperation,
   applyListSettingsInverse,
   consumeListUndoOperation,
   getListMeta,
@@ -202,6 +204,7 @@ export async function undoListOperation(
   now: string,
   receiptFor: ReceiptFor,
 ): Promise<ListUndoResult> {
+  const acceptedRequestAt = instant.parse(now);
   const access = await assertListAccess(userId, listId, 'write');
   const operationId = undoTokenOperationId(undoToken);
   if (operationId === undefined) return EXPIRED;
@@ -209,20 +212,34 @@ export async function undoListOperation(
   const operation = await getListUndoOperation(userId, listId, access.index, operationId);
   if (operation === undefined) return EXPIRED;
   if (!undoTokenMatches(undoToken, operation.tokenHash)) return EXPIRED;
-  if (!withinRetention(operation, now)) return EXPIRED;
+  if (!withinRetention(operation, acceptedRequestAt)) return EXPIRED;
   // Single use, and the storage condition below is the enforcement; this is the early answer.
   if (operation.consumed) return NOT_APPLICABLE;
 
-  const compensate = { operationId: operation.operationId, now, receiptFor };
-
   try {
+    const acceptedAt =
+      operation.kind === 'clear_checked' || operation.kind === 'uncheck_all'
+        ? await acceptListUndoOperation(
+            userId,
+            listId,
+            access.index,
+            operation.operationId,
+            acceptedRequestAt,
+          )
+        : acceptedRequestAt;
+    const compensate = {
+      operationId: operation.operationId,
+      now: acceptedAt,
+      receiptFor,
+    };
+
     if (operation.kind === 'settings') {
       return await applySettings(
         userId,
         listId,
         access.index,
         operation,
-        now,
+        acceptedRequestAt,
         receiptFor,
       );
     }
@@ -232,7 +249,7 @@ export async function undoListOperation(
         listId,
         access.index,
         operation,
-        now,
+        acceptedRequestAt,
         receiptFor,
       );
     }

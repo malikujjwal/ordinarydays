@@ -245,6 +245,12 @@ activity read carry image bytes. S3 + CloudFront is the boring correct answer.
 
 **How it is configured.**
 
+The stacks always synthesise both distributions so their complete pre-domain shape remains
+testable, but they are deliberately `Enabled: false` until the corresponding custom hostname
+and ACM certificate are configured. The default CloudFront certificate is fixed to a legacy
+TLS policy; there is therefore no supported `*.cloudfront.net` serving phase. Adding the
+domain and certificate enables the distribution in the same deployment under TLS 1.2.
+
 - Price class `PRICE_CLASS_100` (North America + Europe). Cheaper, and our users are not
   yet elsewhere. Change when they are.
 - HTTP/2 and HTTP/3 on, `viewerProtocolPolicy: REDIRECT_TO_HTTPS`, TLS 1.2 minimum.

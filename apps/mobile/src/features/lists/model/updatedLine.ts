@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import { differenceInCalendarDays, parseISO } from 'date-fns';
 
@@ -35,11 +36,11 @@ const WEEK = 7;
 
 export function updatedLine(
   lastItemActivityAt: string,
-  now: Date,
+  now: Instant,
   timezone: TimeZone,
 ): string {
-  const then = toWallDate(lastItemActivityAt as Instant, timezone);
-  const today = toWallDate(now.toISOString() as Instant, timezone);
+  const then = toWallDate(instant.parse(lastItemActivityAt), timezone);
+  const today = toWallDate(now, timezone);
   const days = differenceInCalendarDays(parseISO(today), parseISO(then));
 
   // Clamped at zero: a clock that is behind the server's writes should read as `today`, not as

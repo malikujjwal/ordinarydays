@@ -1,19 +1,42 @@
 import { describe, expect, it } from 'vitest';
+import { parseWallDate } from '../../schemas/common.js';
 import type { FetchLike, HttpClientConfig } from '../http.js';
 import { createHttpClient, nullTokenProvider } from '../http.js';
 import {
   continuePastWindow,
   emptyPlansStore,
   getPlans,
-  isRangeCovered,
-  itemsOn,
+  isRangeCovered as isRangeCoveredForDate,
+  itemsOn as itemsOnDate,
   mergePlansResponse,
-  missingRanges,
+  missingRanges as missingRangesForDate,
   type PlansData,
   type PlansDataFor,
   type PlansItem,
   type PlansPastWindowRequest,
 } from './plans.js';
+
+const date = parseWallDate;
+
+function itemsOn(store: Parameters<typeof itemsOnDate>[0], value: string) {
+  return itemsOnDate(store, date(value));
+}
+
+function isRangeCovered(
+  store: Parameters<typeof isRangeCoveredForDate>[0],
+  from: string,
+  through: string,
+) {
+  return isRangeCoveredForDate(store, date(from), date(through));
+}
+
+function missingRanges(
+  store: Parameters<typeof missingRangesForDate>[0],
+  from: string,
+  through: string,
+) {
+  return missingRangesForDate(store, date(from), date(through));
+}
 
 /**
  * The Plans reader and its date-keyed store (P3-24, amended 2026-08-25).
@@ -148,8 +171,8 @@ describe('getPlans request shapes', () => {
     await getPlans(client, {
       mode: 'upcoming_window',
       tz: 'UTC',
-      upcomingFrom: '2026-09-01',
-      upcomingTo: '2026-09-30',
+      upcomingFrom: date('2026-09-01'),
+      upcomingTo: date('2026-09-30'),
     });
 
     expect(calls[0]?.url).toBe(
@@ -165,8 +188,8 @@ describe('getPlans request shapes', () => {
     await getPlans(client, {
       mode: 'past_window',
       tz: 'UTC',
-      pastFrom: '2026-07-27',
-      pastBefore: '2026-09-01',
+      pastFrom: date('2026-07-27'),
+      pastBefore: date('2026-09-01'),
     });
 
     expect(calls[0]?.url).toBe(
@@ -189,8 +212,8 @@ describe('getPlans request shapes', () => {
       mode: 'past_window',
       tz: 'UTC',
       continuation: {
-        pastFrom: '2026-07-27',
-        pastBefore: '2026-09-01',
+        pastFrom: date('2026-07-27'),
+        pastBefore: date('2026-09-01'),
         cursor: 'cur/1',
       },
     });
@@ -223,19 +246,32 @@ describe('getPlans request shapes', () => {
  * a `@ts-expect-error` that does not error is itself an error.
  */
 describe('the Past request type', () => {
+  it('requires validated dates at the request boundary', () => {
+    expect(() => date('2026-02-30')).toThrow();
+
+    const unvalidated: PlansPastWindowRequest = {
+      mode: 'past_window',
+      tz: 'UTC',
+      // @ts-expect-error raw strings must cross the validated WallDate constructor first.
+      pastFrom: '2026-08-01',
+      pastBefore: date('2026-09-01'),
+    };
+    expect(unvalidated.mode).toBe('past_window');
+  });
+
   it('accepts a landing, and accepts a continuation', () => {
     const landing: PlansPastWindowRequest = {
       mode: 'past_window',
       tz: 'UTC',
-      pastFrom: '2026-08-01',
-      pastBefore: '2026-09-01',
+      pastFrom: date('2026-08-01'),
+      pastBefore: date('2026-09-01'),
     };
     const continued: PlansPastWindowRequest = {
       mode: 'past_window',
       tz: 'UTC',
       continuation: {
-        pastFrom: '2026-08-01',
-        pastBefore: '2026-09-01',
+        pastFrom: date('2026-08-01'),
+        pastBefore: date('2026-09-01'),
         cursor: 'c1',
       },
     };
@@ -251,11 +287,11 @@ describe('the Past request type', () => {
     const both: PlansPastWindowRequest = {
       mode: 'past_window',
       tz: 'UTC',
-      pastFrom: '2026-08-01',
-      pastBefore: '2026-09-01',
+      pastFrom: date('2026-08-01'),
+      pastBefore: date('2026-09-01'),
       continuation: {
-        pastFrom: '2026-08-01',
-        pastBefore: '2026-09-01',
+        pastFrom: date('2026-08-01'),
+        pastBefore: date('2026-09-01'),
         cursor: 'c1',
       },
     };
@@ -269,8 +305,8 @@ describe('continuePastWindow', () => {
     const request: PlansPastWindowRequest = {
       mode: 'past_window',
       tz: 'UTC',
-      pastFrom: '2026-08-01',
-      pastBefore: '2026-09-01',
+      pastFrom: date('2026-08-01'),
+      pastBefore: date('2026-09-01'),
     };
 
     expect(
@@ -288,8 +324,8 @@ describe('continuePastWindow', () => {
     const request: PlansPastWindowRequest = {
       mode: 'past_window',
       tz: 'UTC',
-      pastFrom: '2026-08-01',
-      pastBefore: '2026-09-01',
+      pastFrom: date('2026-08-01'),
+      pastBefore: date('2026-09-01'),
     };
 
     expect(
@@ -371,7 +407,7 @@ describe('the date-keyed store', () => {
       warnings: [],
     });
 
-    expect(second.byDate.has('2026-08-15')).toBe(false);
+    expect(second.byDate.has(date('2026-08-15'))).toBe(false);
     expect(isRangeCovered(second, '2026-08-01', '2026-08-31')).toBe(true);
   });
 
@@ -389,7 +425,7 @@ describe('the date-keyed store', () => {
       ]),
     );
 
-    expect(moved.byDate.has('2026-08-15')).toBe(false);
+    expect(moved.byDate.has(date('2026-08-15'))).toBe(false);
     expect(itemsOn(moved, '2026-08-20').map((row) => row.activityId)).toEqual([ACT_A]);
   });
 
@@ -407,7 +443,7 @@ describe('the date-keyed store', () => {
       warnings: [],
     });
 
-    expect(page2.byDate.get('2026-08-15')?.map((row) => row.activityId)).toEqual([
+    expect(page2.byDate.get(date('2026-08-15'))?.map((row) => row.activityId)).toEqual([
       ACT_A,
       ACT_B,
     ]);
@@ -418,7 +454,7 @@ describe('the date-keyed store', () => {
       pastPage: {},
       warnings: [],
     });
-    expect(again.byDate.get('2026-08-15')).toHaveLength(2);
+    expect(again.byDate.get(date('2026-08-15'))).toHaveLength(2);
   });
 
   /**

@@ -676,8 +676,10 @@ resource is emitted.
 access blocked; a CloudFront distribution with Origin Access Control (not OAI);
 `PRICE_CLASS_100`; HTTP/2 and HTTP/3; `REDIRECT_TO_HTTPS`; TLS 1.2 minimum; default root
 object `index.html`. The edge certificate and the alternate domain name are added only when
-`cfg.domain` is set; until Phase 5 the distribution is reachable on its
-`*.cloudfront.net` name.
+`cfg.domain` is set. Until Phase 5 the distribution is present only as a disabled, synthable
+definition: it is not reachable on its `*.cloudfront.net` name because CloudFront's default
+certificate cannot meet the TLS 1.2 minimum. Phase 5 adds the custom hostname and certificate
+and enables it in the same deployment.
 
 Two cache policies: `/_expo/static/*` gets `max-age=31536000, immutable`; `*.html` gets
 `max-age=0, must-revalidate`.

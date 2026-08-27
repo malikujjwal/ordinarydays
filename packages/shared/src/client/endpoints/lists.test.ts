@@ -3,6 +3,7 @@ import type { FetchLike, HttpClientConfig } from '../http.js';
 import { ApiError, createHttpClient, nullTokenProvider } from '../http.js';
 import {
   bulkCreateListItems,
+  clearCheckedListItems,
   createListItem,
   deleteListItem,
   getListItem,
@@ -10,6 +11,7 @@ import {
   getListItems,
   patchListItem,
   scheduleListItem,
+  uncheckAllListItems,
 } from './listItems.js';
 import {
   behaviourConfirmationFrom,
@@ -446,6 +448,25 @@ describe('list items', () => {
       undoToken: 'tok',
       undoExpiresAt: '2026-08-26T10:00:06.000Z',
     });
+  });
+
+  it.each([
+    ['clear-checked', clearCheckedListItems],
+    ['uncheck-all', uncheckAllListItems],
+  ] as const)('calls the replay-protected %s action', async (action, call) => {
+    const result = {
+      affectedCount: 7,
+      undoToken: 'tok-bulk',
+      undoExpiresAt: '2026-08-26T10:00:10.000Z',
+    };
+    const { client, calls } = makeClient([ok(result)]);
+
+    await expect(call(client, LIST_ID, 'bulk-key')).resolves.toEqual(result);
+
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.url).toBe(`https://api.test/v1/lists/${LIST_ID}/${action}`);
+    expect(calls[0]?.headers['Idempotency-Key']).toBe('bulk-key');
+    expect(calls[0]?.body).toBeUndefined();
   });
 
   describe('the exact read used for collision reconciliation', () => {

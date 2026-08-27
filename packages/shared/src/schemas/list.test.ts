@@ -167,6 +167,13 @@ describe('the stored List', () => {
     expect(list.safeParse(storedList).success).toBe(true);
   });
 
+  it.each(['updatedAt', 'lastItemActivityAt'] as const)(
+    'rejects a malformed visible timestamp in %s',
+    (field) => {
+      expect(list.safeParse({ ...storedList, [field]: 'yesterday' }).success).toBe(false);
+    },
+  );
+
   it('accepts legacy META without itemVersion and validates the counter when present', () => {
     expect(list.safeParse(storedList).success).toBe(true);
     expect(list.safeParse({ ...storedList, itemVersion: 0 }).success).toBe(true);

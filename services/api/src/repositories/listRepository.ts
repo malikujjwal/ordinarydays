@@ -7,6 +7,7 @@ import {
 import {
   activity as activitySchema,
   defaultSlot as defaultSlotSchema,
+  instant,
   listBehaviour as listBehaviourSchema,
   listIndex as listIndexSchema,
   listItemActivityLink as listItemActivityLinkSchema,
@@ -15,6 +16,7 @@ import {
   listMember as listMemberSchema,
   list as listSchema,
 } from '@od/shared/schemas';
+import type { Instant } from '@od/shared/time';
 import type {
   Activity,
   DefaultSlot,
@@ -1204,6 +1206,8 @@ export interface ListUndoOperation {
   /** The **UI** offer deadline. Never consulted when deciding whether an inverse may run. */
   readonly undoExpiresAt: string;
   readonly affectedItemIds: readonly string[];
+  /** First accepted compensation instant, reused if a chunked inverse resumes. */
+  readonly acceptedAt?: Instant;
   readonly inverse?: ListSettingsInverse;
   readonly preconditions?: ListSettingsPreconditions;
   readonly consumed: boolean;
@@ -1224,6 +1228,7 @@ const listUndoSchema = z.object({
   tokenHash: z.string().min(1),
   undoExpiresAt: z.string().min(1),
   affectedItemIds: z.array(z.string().min(1)).default([]),
+  acceptedAt: instant.optional(),
   inverse: settingsInverseSchema.optional(),
   preconditions: settingsPreconditionsSchema.optional(),
   consumed: z.boolean(),
@@ -1250,6 +1255,39 @@ export async function getListUndoOperation(
   if (row === undefined) return undefined;
   const parsed = listUndoSchema.parse(row);
   return parsed.listId === listId ? (parsed as ListUndoOperation) : undefined;
+}
+
+/** Persists and returns the first instant at which a chunked compensation was accepted. */
+export async function acceptListUndoOperation(
+  userId: string,
+  listId: string,
+  access: ListAccessGrant,
+  operationId: string,
+  now: Instant,
+): Promise<Instant> {
+  assertListAccessGrant(userId, listId, access);
+  try {
+    const row = await updateItem<StoredItem>(listUndo(listId, operationId), {
+      expression: 'SET #acceptedAt = if_not_exists(#acceptedAt, :now)',
+      names: {
+        '#acceptedAt': 'acceptedAt',
+        '#operationId': 'operationId',
+        '#consumed': 'consumed',
+      },
+      values: { ':now': now, ':operationId': operationId, ':false': false },
+      condition: '#operationId = :operationId AND #consumed = :false',
+    });
+    if (row === undefined) throw new ListUndoNotApplicableError();
+    const acceptedAt = listUndoSchema.parse(row).acceptedAt;
+    if (acceptedAt === undefined)
+      throw new Error('Undo acceptance timestamp was not stored.');
+    return acceptedAt;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      throw new ListUndoNotApplicableError();
+    }
+    throw error;
+  }
 }
 
 function settingsUndoItem(
@@ -3815,6 +3853,10 @@ export interface BulkItemOperationWork {
   readonly itemIds: readonly string[];
   /** How many of them are done. A retry resumes here. */
   readonly cursor: number;
+  /** First accepted request instant; every resumed chunk reuses it. */
+  readonly acceptedAt?: Instant;
+  /** Legacy work rows use their creation instant to seed `acceptedAt` on first resume. */
+  readonly createdAt: Instant;
   readonly undoToken: string;
   readonly undoExpiresAt: string;
   readonly receipt?: IdempotencyReceipt;
@@ -3826,6 +3868,8 @@ const bulkOperationSchema = z.object({
   kind: z.enum(['clear_checked', 'uncheck_all']),
   itemIds: z.array(z.string().min(1)).default([]),
   cursor: z.number().int().nonnegative(),
+  acceptedAt: instant.optional(),
+  createdAt: instant,
   undoToken: z.string().min(1),
   undoExpiresAt: z.string().min(1),
   receipt: z
@@ -3841,6 +3885,22 @@ const bulkOperationSchema = z.object({
     .optional(),
 });
 
+function parseBulkItemOperationWork(value: unknown): BulkItemOperationWork {
+  const parsed = bulkOperationSchema.parse(value);
+  return {
+    listId: parsed.listId,
+    operationId: parsed.operationId,
+    kind: parsed.kind,
+    itemIds: parsed.itemIds,
+    cursor: parsed.cursor,
+    ...(parsed.acceptedAt === undefined ? {} : { acceptedAt: parsed.acceptedAt }),
+    createdAt: parsed.createdAt,
+    undoToken: parsed.undoToken,
+    undoExpiresAt: parsed.undoExpiresAt,
+    ...(parsed.receipt === undefined ? {} : { receipt: parsed.receipt }),
+  };
+}
+
 /** The outstanding work for one operation, or `undefined` once it has finished. */
 export async function getBulkItemOperation(
   listId: string,
@@ -3849,9 +3909,40 @@ export async function getBulkItemOperation(
   const row = await getItem<StoredItem>(listBulkOperation(listId, operationId), {
     consistentRead: true,
   });
-  return row === undefined
-    ? undefined
-    : (bulkOperationSchema.parse(row) as BulkItemOperationWork);
+  return row === undefined ? undefined : parseBulkItemOperationWork(row);
+}
+
+type AcceptedBulkItemOperationWork = BulkItemOperationWork & {
+  readonly acceptedAt: Instant;
+};
+
+/** Upgrades a pre-`acceptedAt` work row without changing a timestamp already installed. */
+async function acceptBulkItemOperation(
+  work: BulkItemOperationWork,
+): Promise<AcceptedBulkItemOperationWork> {
+  const acceptedAt = work.createdAt;
+  try {
+    const row = await updateItem<StoredItem>(
+      listBulkOperation(work.listId, work.operationId),
+      {
+        expression: 'SET #acceptedAt = if_not_exists(#acceptedAt, :now)',
+        names: { '#acceptedAt': 'acceptedAt', '#operationId': 'operationId' },
+        values: { ':now': acceptedAt, ':operationId': work.operationId },
+        condition: '#operationId = :operationId',
+      },
+    );
+    if (row === undefined) throw new BulkOperationContendedError();
+    const accepted = parseBulkItemOperationWork(row);
+    if (accepted.acceptedAt === undefined) {
+      throw new Error('Bulk operation acceptance timestamp was not stored.');
+    }
+    return { ...accepted, acceptedAt: accepted.acceptedAt };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      throw new BulkOperationContendedError();
+    }
+    throw error;
+  }
 }
 
 /** What the service decides when an operation is **new**; a resume uses what was recorded. */
@@ -3902,17 +3993,21 @@ export async function runBulkCheckedOperation(
 ): Promise<BulkOperationResult> {
   const state = await readMutationState(userId, listId, access);
 
-  let work = await getBulkItemOperation(listId, options.operationId);
-  if (work === undefined) {
+  const storedWork = await getBulkItemOperation(listId, options.operationId);
+  let work: AcceptedBulkItemOperationWork;
+  if (storedWork === undefined) {
     const checked = (await readAllItemsUnfenced(listId)).filter((item) => item.checked);
     const itemIds = checked.map((item) => item.itemId);
     const plan = options.plan(itemIds);
+    const acceptedAt = instant.parse(options.now);
     work = {
       listId,
       operationId: options.operationId,
       kind: options.kind,
       itemIds,
       cursor: 0,
+      acceptedAt,
+      createdAt: acceptedAt,
       undoToken: plan.undoToken,
       undoExpiresAt: plan.undoExpiresAt,
       ...(plan.receipt === undefined ? {} : { receipt: plan.receipt }),
@@ -3952,10 +4047,15 @@ export async function runBulkCheckedOperation(
           index === 0 ? new ListNotFoundError() : new BulkOperationContendedError(),
       },
     );
+  } else {
+    work =
+      storedWork.acceptedAt === undefined
+        ? await acceptBulkItemOperation(storedWork)
+        : { ...storedWork, acceptedAt: storedWork.acceptedAt };
   }
 
   while (work.cursor < work.itemIds.length) {
-    work = await applyBulkChunk(state.list, work, options.now);
+    work = await applyBulkChunk(state.list, work, work.acceptedAt);
   }
   await finishBulkOperation(work);
 
@@ -3977,9 +4077,9 @@ export class BulkOperationContendedError extends Error {
 /** Applies the next bounded slice and advances the stored cursor in the same transaction. */
 async function applyBulkChunk(
   list: List,
-  work: BulkItemOperationWork,
-  now: string,
-): Promise<BulkItemOperationWork> {
+  work: AcceptedBulkItemOperationWork,
+  now: Instant,
+): Promise<AcceptedBulkItemOperationWork> {
   const { listId, operationId } = work;
   const remaining = work.itemIds.slice(work.cursor);
   const current = new Map(
@@ -4186,10 +4286,9 @@ async function applyBulkChunk(
         /**
          * **One value for the whole operation, not one per chunk** (§P3-46: a bulk operation
          * bumps this once, not once per item). `now` arrives from `runBulkCheckedOperation`'s
-         * single `options.now`, read once at the edge, so every chunk of one request writes
-         * the identical instant and the field moves exactly once however many transactions
-         * the operation needs. A *resumed* operation writes its own later instant, which is
-         * honest — the rest of the list changed then.
+         * stored `acceptedAt`, read once at the edge and persisted before any chunk, so every
+         * chunk and every resumed request writes the identical instant and the field moves
+         * exactly once however many transactions the operation needs.
          */
         UpdateExpression:
           work.kind === 'uncheck_all'

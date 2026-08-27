@@ -95,6 +95,16 @@ describe('the generated document', () => {
     ]);
   });
 
+  it('distinguishes an unknown attachment id from a known upload with unusable bytes', () => {
+    const confirm = document.paths?.['/v1/activities/{id}/attachments']?.post;
+    const badRequest = confirm?.responses?.['400']?.description ?? '';
+    const notFound = confirm?.responses?.['404']?.description ?? '';
+
+    expect(badRequest).toContain('owns the pending upload');
+    expect(badRequest).toContain('never uploaded');
+    expect(notFound).toContain('no pending or linked attachment');
+  });
+
   it('carries a servers block with the local URL', () => {
     expect(document.servers).toEqual([
       { url: 'http://localhost:3000', description: 'Local development' },

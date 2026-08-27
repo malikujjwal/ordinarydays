@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import { hashUndoToken, mintUndoToken } from '../lib/undoToken.js';
@@ -23,6 +24,7 @@ vi.mock('../repositories/listRepository.js', async () => {
   >('../repositories/listRepository.js');
   return {
     ...actual,
+    acceptListUndoOperation: vi.fn(() => Promise.resolve('2026-08-24T09:00:00.000Z')),
     getListMeta: vi.fn(),
     getListUndoOperation: vi.fn(),
     applyListSettingsInverse: vi.fn(() => Promise.resolve()),
@@ -45,7 +47,8 @@ const { undoListOperation } = await import('./listUndoService.js');
 
 const USER = 'usr_local_dev';
 const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
-const NOW = '2026-08-24T09:00:00.000Z';
+const NOW = instant.parse('2026-08-24T09:00:00.000Z');
+const RETRY_AT = instant.parse('2026-08-24T09:05:00.000Z');
 const GRANT = { listId: LIST, userId: USER, role: 'owner' } as unknown as ListAccessGrant;
 
 const RECEIPT: IdempotencyReceipt = {
@@ -90,10 +93,12 @@ beforeEach(() => {
   vi.mocked(repository.readAllListItems).mockResolvedValue([]);
   vi.mocked(repository.restoreListItems).mockResolvedValue([]);
   vi.mocked(repository.recheckListItems).mockResolvedValue(0);
+  vi.mocked(repository.acceptListUndoOperation).mockResolvedValue(NOW);
 });
 
-const undo = (token: string) =>
-  undoListOperation(USER, LIST, token, NOW, receiptFor as never);
+const undoAt = (token: string, now: string) =>
+  undoListOperation(USER, LIST, token, now, receiptFor as never);
+const undo = (token: string) => undoAt(token, NOW);
 
 describe('resolving the token', () => {
   /**
@@ -189,6 +194,52 @@ describe('dispatching on the recorded kind', () => {
       'itm_a',
       'itm_b',
     ]);
+  });
+
+  it('reuses the first accepted instant when a bulk Undo resumes', async () => {
+    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a'] });
+    const acceptedAt = instant.parse('2026-08-24T08:59:30.000Z');
+    vi.mocked(repository.acceptListUndoOperation).mockResolvedValue(acceptedAt);
+
+    await undo(token);
+
+    expect(vi.mocked(repository.recheckListItems).mock.calls[0]?.[4]).toMatchObject({
+      now: acceptedAt,
+    });
+  });
+
+  it('keeps that instant after a compensation chunk crashes and a later request resumes', async () => {
+    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a'] });
+    const acceptedAt = instant.parse('2026-08-24T08:59:30.000Z');
+    vi.mocked(repository.acceptListUndoOperation).mockResolvedValue(acceptedAt);
+    // The first rejection represents a later repository chunk failing after an earlier one
+    // committed; the next service invocation is the post-restart request with a changed clock.
+    vi.mocked(repository.recheckListItems)
+      .mockRejectedValueOnce(new Error('process stopped after a committed chunk'))
+      .mockResolvedValueOnce(1);
+
+    await expect(undoAt(token, NOW)).rejects.toThrow('process stopped');
+    await expect(undoAt(token, RETRY_AT)).resolves.toEqual({
+      outcome: 'applied',
+      affectedCount: 1,
+    });
+
+    expect(
+      vi.mocked(repository.acceptListUndoOperation).mock.calls.map((call) => call[4]),
+    ).toEqual([NOW, RETRY_AT]);
+    expect(
+      vi.mocked(repository.recheckListItems).mock.calls.map((call) => call[4].now),
+    ).toEqual([acceptedAt, acceptedAt]);
+  });
+
+  it('answers no_longer_applicable when a concurrent replay spends the bulk Undo', async () => {
+    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a'] });
+    vi.mocked(repository.acceptListUndoOperation).mockRejectedValue(
+      new repository.ListUndoNotApplicableError(),
+    );
+
+    await expect(undo(token)).resolves.toEqual({ outcome: 'no_longer_applicable' });
+    expect(repository.recheckListItems).not.toHaveBeenCalled();
   });
 
   it('applies a settings inverse and reports one list changed', async () => {

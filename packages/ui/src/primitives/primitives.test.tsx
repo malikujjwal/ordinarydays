@@ -163,6 +163,15 @@ describe('every primitive renders', () => {
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDefined();
   });
 
+  it('renders an API request id as selectable support text', () => {
+    wrap(<Toast message="Could not save" tone="error" requestId="req_toast" />);
+
+    expect(screen.getByTestId('toast-request-id').textContent).toBe('req_toast');
+    expect(screen.getByTestId('toast-request-id').getAttribute('user-select')).not.toBe(
+      'none',
+    );
+  });
+
   it('Skeleton', () => {
     wrap(<Skeleton shape="row" count={2} />);
     expect(screen.getByRole('progressbar', { name: 'Loading' })).toBeDefined();

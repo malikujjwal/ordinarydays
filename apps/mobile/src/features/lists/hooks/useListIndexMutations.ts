@@ -1,6 +1,9 @@
 import {
+  ApiError,
   deleteList,
+  deleteListForReplay,
   type ListPage,
+  NetworkError,
   patchList,
   undoListOperation,
 } from '@od/shared/client';
@@ -20,7 +23,7 @@ import {
 } from '@/features/lists/model/archiveUndoToast';
 import { useClock } from '@/hooks/useClock';
 import { apiClient } from '@/lib/apiClient';
-import { useToast } from '@/stores/toast';
+import { type ToastMessage, useToast } from '@/stores/toast';
 import { LISTS_KEY } from './keys';
 
 export interface ListIndexMutations {
@@ -43,6 +46,28 @@ interface ListQuerySnapshot {
 interface ListSnapshot {
   readonly listId: string;
   readonly queries: readonly ListQuerySnapshot[];
+}
+
+function retryable(error: unknown): boolean {
+  return (
+    error instanceof NetworkError ||
+    (error instanceof ApiError && (error.status === 429 || error.status >= 500))
+  );
+}
+
+function failureToast(error: unknown, message: string, retry: () => void): ToastMessage {
+  const displayedMessage =
+    error instanceof ApiError &&
+    error.status === 429 &&
+    error.retryAfterSeconds !== undefined
+      ? `Too many requests. Try again in ${error.retryAfterSeconds} seconds.`
+      : message;
+  return {
+    message: displayedMessage,
+    tone: 'error',
+    ...(error instanceof ApiError ? { requestId: error.requestId } : {}),
+    ...(retryable(error) ? { action: { label: 'Retry', onPress: retry } } : {}),
+  };
 }
 
 function projectList(
@@ -150,8 +175,11 @@ export function useListIndexMutations(): ListIndexMutations {
     },
   });
   const remove = useMutation({
-    mutationFn: (list: List) => deleteList(apiClient, list.listId),
-    onMutate: async (list) => {
+    mutationFn: ({ list, replay }: { list: List; replay: boolean }) =>
+      replay
+        ? deleteListForReplay(apiClient, list.listId)
+        : deleteList(apiClient, list.listId),
+    onMutate: async ({ list }) => {
       await queryClient.cancelQueries({ queryKey: LISTS_KEY });
       const snapshot = snapshotLists(queryClient, list.listId);
       projectList(queryClient, list.listId, undefined);
@@ -162,17 +190,16 @@ export function useListIndexMutations(): ListIndexMutations {
     },
   });
 
-  const onArchive = useCallback(
-    (list: List) => {
-      // A new action owns the singleton confirmation slot, even if its server-side
-      // Undo offer has expired before the response arrives.
+  const mutateArchived = useCallback(
+    (list: List, archived: boolean, idempotencyKey: string, offerUndo: boolean) => {
+      // Acceptance owns the singleton slot synchronously, before this request can settle.
       dismissToast();
       setArchived.mutate(
-        { list, archived: true, idempotencyKey: randomUUID() },
+        { list, archived, idempotencyKey },
         {
           onSuccess: (result) => {
             refresh();
-            if (!('undoToken' in result)) return;
+            if (!offerUndo || !('undoToken' in result)) return;
             const duration = remainingArchiveUndoMs(result.undoExpiresAt, clock);
             if (duration === undefined) return;
             showUndo(
@@ -181,73 +208,103 @@ export function useListIndexMutations(): ListIndexMutations {
                 duration,
                 undoExpiresAt: result.undoExpiresAt,
                 onUndo: () => {
-                  void (async () => {
-                    await queryClient.cancelQueries({ queryKey: LISTS_KEY });
-                    const snapshot = snapshotLists(queryClient, list.listId);
-                    projectList(queryClient, list.listId, (current) => ({
-                      ...current,
-                      archived: false,
-                    }));
-                    try {
-                      const undone = await undoListOperation(
-                        apiClient,
-                        list.listId,
-                        result.undoToken,
-                        randomUUID(),
-                      );
-                      if (undone.outcome === 'applied') {
-                        refresh();
-                      } else {
+                  const inverseIdempotencyKey = randomUUID();
+                  const runUndo = () => {
+                    dismissToast();
+                    void (async () => {
+                      await queryClient.cancelQueries({ queryKey: LISTS_KEY });
+                      const snapshot = snapshotLists(queryClient, list.listId);
+                      projectList(queryClient, list.listId, (current) => ({
+                        ...current,
+                        archived: false,
+                      }));
+                      try {
+                        const undone = await undoListOperation(
+                          apiClient,
+                          list.listId,
+                          result.undoToken,
+                          inverseIdempotencyKey,
+                        );
+                        if (undone.outcome === 'applied') {
+                          refresh();
+                        } else {
+                          restoreLists(queryClient, snapshot);
+                          show({
+                            message: `Couldn't undo archiving "${list.title}."`,
+                            tone: 'error',
+                          });
+                        }
+                      } catch (error) {
                         restoreLists(queryClient, snapshot);
-                        show({
-                          message: `Couldn't undo archiving "${list.title}."`,
-                          tone: 'error',
-                        });
+                        show(
+                          failureToast(
+                            error,
+                            `Couldn't undo archiving "${list.title}."`,
+                            runUndo,
+                          ),
+                        );
                       }
-                    } catch {
-                      restoreLists(queryClient, snapshot);
-                      show({
-                        message: `Couldn't undo archiving "${list.title}."`,
-                        tone: 'error',
-                      });
-                    }
-                  })();
+                    })();
+                  };
+                  runUndo();
                 },
                 onCommit: () => undefined,
               }),
             );
           },
-          onError: () =>
-            show({ message: `Couldn't archive "${list.title}."`, tone: 'error' }),
+          onError: (error) =>
+            show(
+              failureToast(
+                error,
+                `Couldn't ${archived ? 'archive' : 'restore'} "${list.title}."`,
+                () => mutateArchived(list, archived, idempotencyKey, offerUndo),
+              ),
+            ),
         },
       );
     },
     [clock, dismissToast, queryClient, refresh, setArchived, show, showUndo],
   );
 
-  const onRestore = useCallback(
-    (list: List) => {
-      setArchived.mutate(
-        { list, archived: false, idempotencyKey: randomUUID() },
+  const mutateDelete = useCallback(
+    (list: List, replay = false) => {
+      // As with archive/restore, the accepted action commits any predecessor immediately.
+      dismissToast();
+      remove.mutate(
+        { list, replay },
         {
           onSuccess: refresh,
-          onError: () =>
-            show({ message: `Couldn't restore "${list.title}."`, tone: 'error' }),
+          onError: (error) =>
+            show(
+              failureToast(error, `Couldn't delete "${list.title}."`, () =>
+                mutateDelete(list, true),
+              ),
+            ),
         },
       );
     },
-    [refresh, setArchived, show],
+    [dismissToast, refresh, remove, show],
+  );
+
+  const onArchive = useCallback(
+    (list: List) => {
+      mutateArchived(list, true, randomUUID(), true);
+    },
+    [mutateArchived],
+  );
+
+  const onRestore = useCallback(
+    (list: List) => {
+      mutateArchived(list, false, randomUUID(), false);
+    },
+    [mutateArchived],
   );
 
   const onDelete = useCallback(
     (list: List) => {
-      remove.mutate(list, {
-        onSuccess: refresh,
-        onError: () =>
-          show({ message: `Couldn't delete "${list.title}."`, tone: 'error' }),
-      });
+      mutateDelete(list);
     },
-    [refresh, remove, show],
+    [mutateDelete],
   );
 
   return { onArchive, onRestore, onDelete };

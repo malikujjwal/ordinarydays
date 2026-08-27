@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
@@ -13,7 +14,7 @@ import { ListIndexRow } from './ListIndexRow';
  */
 
 const UTC = 'UTC' as TimeZone;
-const NOW = new Date('2026-08-26T12:00:00.000Z');
+const NOW = instant.parse('2026-08-26T12:00:00.000Z');
 
 const list = (overrides: Partial<List> = {}): List => ({
   listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',

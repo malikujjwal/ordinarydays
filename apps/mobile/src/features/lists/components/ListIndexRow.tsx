@@ -1,4 +1,4 @@
-import type { TimeZone } from '@od/shared/time';
+import type { Instant, TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { Card, IconTile, ProgressBar, Text, templateIcons, useTheme } from '@od/ui';
 import { View } from 'react-native';
@@ -45,8 +45,8 @@ import { updatedLine } from '../model/updatedLine';
  */
 export interface ListIndexRowProps {
   list: List;
-  /** The clock, from the screen. Pure by rule — §4.3 keeps `new Date()` at the edge. */
-  now: Date;
+  /** The clock, from the screen. Pure by rule — §4.3 keeps clock reads at the edge. */
+  now: Instant;
   timezone: TimeZone;
   onPress: () => void;
   /** Archived rows render de-emphasised in their own group; the data is identical. */

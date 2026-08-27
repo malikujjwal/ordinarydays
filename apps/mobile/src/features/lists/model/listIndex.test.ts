@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { instant } from '@od/shared/schemas';
 import { fixedClock, type Instant, type TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { describe, expect, it } from 'vitest';
@@ -102,7 +103,7 @@ describe('the icon tint', () => {
 });
 
 describe('the updated line', () => {
-  const now = new Date('2026-08-26T12:00:00.000Z');
+  const now = instant.parse('2026-08-26T12:00:00.000Z');
 
   it.each([
     ['2026-08-26T00:10:00.000Z', 'Updated today'],
@@ -121,7 +122,7 @@ describe('the updated line', () => {
    * not `today` for another twenty-three hours.
    */
   it('crosses midnight rather than counting hours', () => {
-    const justAfterMidnight = new Date('2026-08-26T00:10:00.000Z');
+    const justAfterMidnight = instant.parse('2026-08-26T00:10:00.000Z');
     expect(updatedLine('2026-08-25T23:50:00.000Z', justAfterMidnight, UTC)).toBe(
       'Updated yesterday',
     );
@@ -129,6 +130,10 @@ describe('the updated line', () => {
 
   it('reads today when the clock is behind the write', () => {
     expect(updatedLine('2026-08-27T09:00:00.000Z', now, UTC)).toBe('Updated today');
+  });
+
+  it('refuses a malformed stored timestamp before rendering it', () => {
+    expect(() => updatedLine('yesterday', now, UTC)).toThrow();
   });
 });
 
@@ -247,6 +252,14 @@ describe('the archive undo toast', () => {
 
     expect(
       remainingArchiveUndoMs('2026-08-27T13:59:59.999Z' as Instant, clock),
+    ).toBeUndefined();
+  });
+
+  it('does not offer a zero-length server window', () => {
+    const clock = fixedClock(instant.parse('2026-08-27T14:00:00.000Z'));
+
+    expect(
+      remainingArchiveUndoMs(instant.parse('2026-08-27T14:00:00.000Z'), clock),
     ).toBeUndefined();
   });
 

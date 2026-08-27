@@ -14,6 +14,7 @@ import { create } from 'zustand';
  */
 export interface ToastMessage {
   message: string;
+  requestId?: string;
   tone?: 'neutral' | 'error';
   action?: { label: string; onPress: () => void };
   duration?: number;

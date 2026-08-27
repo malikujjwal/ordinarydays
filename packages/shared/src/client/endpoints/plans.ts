@@ -1,6 +1,8 @@
 import type { z } from 'zod';
+import { parseWallDate } from '../../schemas/common.js';
 import { envelope } from '../../schemas/envelope.js';
 import { type PlansDay, plansData } from '../../schemas/plans.js';
+import type { WallDate } from '../../time/index.js';
 import type { HttpClient } from '../http.js';
 
 /**
@@ -17,9 +19,6 @@ export type PlansData = z.infer<typeof plansData>;
 
 /** One row of a day. Derived from {@link PlansDay} so there is no second import to drift. */
 export type PlansItem = PlansDay['items'][number];
-
-/** A `YYYY-MM-DD` viewer-local wall date. Never an instant, never a `Date`. */
-export type WallDate = string;
 
 /**
  * A continuation of one bounded Past grid.
@@ -342,7 +341,9 @@ function isoFromUtcMillis(millis: number): WallDate {
   const month = monthPrime + (monthPrime < 10 ? 3 : -9);
   const year = yearOfEra + era * 400 + (month <= 2 ? 1 : 0);
 
-  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  return parseWallDate(
+    `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+  );
 }
 
 /**
@@ -397,16 +398,16 @@ export function mergePlansResponse(
 
   if (data.mode === 'initial' || data.mode === 'upcoming_window') {
     authoritative.push({
-      from: data.upcomingWindow.from,
-      through: data.upcomingWindow.through,
+      from: parseWallDate(data.upcomingWindow.from),
+      through: parseWallDate(data.upcomingWindow.through),
     });
     exhaustive.push(...data.upcoming);
   }
 
   if (data.mode === 'past_window') {
     authoritative.push({
-      from: data.pastCoverage.coveredFrom,
-      through: data.pastCoverage.coveredThrough,
+      from: parseWallDate(data.pastCoverage.coveredFrom),
+      through: parseWallDate(data.pastCoverage.coveredThrough),
     });
     // A row outside the exhausted interval is still a real row, but it arrived from a range
     // this response did not finish, so it merges on the unbounded terms.
@@ -430,10 +431,11 @@ export function mergePlansResponse(
     }
   }
 
-  for (const day of exhaustive) byDate.set(day.date, [...day.items]);
+  for (const day of exhaustive) byDate.set(parseWallDate(day.date), [...day.items]);
 
   for (const day of partial) {
-    const existing = byDate.get(day.date) ?? [];
+    const date = parseWallDate(day.date);
+    const existing = byDate.get(date) ?? [];
     const merged = [...existing];
     const positions = new Map(merged.map((item, index) => [identity(item), index]));
     for (const item of day.items) {
@@ -446,7 +448,7 @@ export function mergePlansResponse(
         merged[at] = item;
       }
     }
-    byDate.set(day.date, merged);
+    byDate.set(date, merged);
   }
 
   covered.push(...authoritative);

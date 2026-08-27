@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { MAX_UPLOAD_BYTES } from '../constants.js';
-import { ulidId } from './common.js';
+import { instant, ulidId } from './common.js';
 
 /**
  * The upload half of attachments (`api-contract.md` §2.6, P3-21).
@@ -102,7 +102,7 @@ export const attachment = z
     key: z.string().min(1),
     contentType: uploadContentType,
     byteSize: z.number().int().positive(),
-    createdAt: z.string().min(1),
+    createdAt: instant.transform((value): string => value),
     schemaVersion: z.literal(1),
   })
   .meta({ id: 'Attachment' });

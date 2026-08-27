@@ -1,4 +1,5 @@
 import { MAX_LEXO_RANK_LENGTH, MAX_LIST_ITEMS } from '@od/shared';
+import { instant } from '@od/shared/schemas';
 import type {
   Activity,
   List,
@@ -306,6 +307,7 @@ describe('the bulk checked operations', () => {
       operationId: 'blk_op',
       kind: 'clear_checked',
       cursor: 0,
+      acceptedAt: LATER,
       undoToken: 'blk_op.secret',
       undoExpiresAt: LATER,
     });
@@ -331,11 +333,13 @@ describe('the bulk checked operations', () => {
           ...keys.listBulkOperation(LIST_ID, 'blk_op'),
           entity: 'ListBulkOperation',
           schemaVersion: 1,
+          createdAt: NOW,
           listId: LIST_ID,
           operationId: 'blk_op',
           kind: 'clear_checked',
           itemIds: checkedItems(2).map((value) => value.itemId),
           cursor: 1,
+          acceptedAt: NOW,
           undoToken: 'blk_op.first-attempt-secret',
           undoExpiresAt: NOW,
           receipt,
@@ -361,6 +365,57 @@ describe('the bulk checked operations', () => {
     expect(written('ListUndo')).toHaveLength(0);
     // Only the item the cursor had not reached.
     expect(written('ListItemTombstone')).toHaveLength(1);
+    const resumedMeta = transacted().find(
+      (entry) =>
+        entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk &&
+        String(entry.Update.UpdateExpression).includes('lastItemActivityAt'),
+    )?.Update;
+    expect(resumedMeta?.ExpressionAttributeValues?.[':lastItemActivityAt']).toBe(NOW);
+  });
+
+  it('upgrades legacy work from its original creation instant before resuming', async () => {
+    seedChecked(2);
+    const legacyWork = {
+      ...keys.listBulkOperation(LIST_ID, 'blk_op'),
+      entity: 'ListBulkOperation',
+      schemaVersion: 1,
+      createdAt: NOW,
+      listId: LIST_ID,
+      operationId: 'blk_op',
+      kind: 'clear_checked' as const,
+      itemIds: checkedItems(2).map((value) => value.itemId),
+      cursor: 1,
+      undoToken: 'blk_op.legacy-secret',
+      undoExpiresAt: NOW,
+      receipt,
+    };
+    vi.mocked(base.getItem).mockImplementation(async (key) => {
+      if (key.sk === keys.listMeta(LIST_ID).sk) return listRow({ itemCount: 2 });
+      if (key.sk === keys.listBulkOperation(LIST_ID, 'blk_op').sk) return legacyWork;
+      return undefined;
+    });
+    vi.mocked(base.updateItem).mockResolvedValue({
+      ...legacyWork,
+      acceptedAt: NOW,
+    });
+
+    await repository.runBulkCheckedOperation(ALICE, LIST_ID, access, {
+      operationId: 'blk_op',
+      kind: 'clear_checked',
+      now: LATER,
+      plan: vi.fn(plan),
+    });
+
+    expect(vi.mocked(base.updateItem).mock.calls[0]?.[1]).toMatchObject({
+      expression: 'SET #acceptedAt = if_not_exists(#acceptedAt, :now)',
+      values: { ':now': NOW, ':operationId': 'blk_op' },
+    });
+    const resumedMeta = transacted().find(
+      (entry) =>
+        entry.Update?.Key?.sk === keys.listMeta(LIST_ID).sk &&
+        String(entry.Update.UpdateExpression).includes('lastItemActivityAt'),
+    )?.Update;
+    expect(resumedMeta?.ExpressionAttributeValues?.[':lastItemActivityAt']).toBe(NOW);
   });
 
   /** Every deleted row was checked, so none of them was contributing to `uncheckedCount`. */
@@ -596,6 +651,38 @@ describe('the settings inverse', () => {
     await expect(
       repository.getListUndoOperation(ALICE, LIST_ID, access, 'op_missing'),
     ).resolves.toBeUndefined();
+  });
+
+  it('persists the first accepted instant for a resumable bulk Undo', async () => {
+    vi.mocked(base.updateItem).mockResolvedValue({
+      ...keys.listUndo(LIST_ID, 'op_bulk'),
+      entity: 'ListUndo',
+      listId: LIST_ID,
+      operationId: 'op_bulk',
+      kind: 'clear_checked',
+      tokenHash: 'hash',
+      undoExpiresAt: LATER,
+      acceptedAt: NOW,
+      affectedItemIds: [ITEM_A],
+      consumed: false,
+      ttl: 2_000_000_000,
+    });
+
+    await expect(
+      repository.acceptListUndoOperation(
+        ALICE,
+        LIST_ID,
+        access,
+        'op_bulk',
+        instant.parse(LATER),
+      ),
+    ).resolves.toBe(NOW);
+
+    expect(vi.mocked(base.updateItem).mock.calls[0]?.[1]).toMatchObject({
+      expression: 'SET #acceptedAt = if_not_exists(#acceptedAt, :now)',
+      values: { ':now': LATER, ':operationId': 'op_bulk', ':false': false },
+      condition: '#operationId = :operationId AND #consumed = :false',
+    });
   });
 });
 

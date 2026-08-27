@@ -1,3 +1,4 @@
+import type { Instant } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import {
   EmptyState,
@@ -60,7 +61,7 @@ const SCROLL_FETCH_RATIO = 0.8;
 
 export interface ListsScreenProps {
   /** The clock, read at the route. §4.3 keeps `new Date()` out of anything testable. */
-  now: Date;
+  now: Instant;
   /** Signed-in user, for the owner/member swipe branch. Undefined before `me` resolves. */
   viewerUserId?: string;
   onOpenList: (listId: string) => void;
@@ -159,12 +160,13 @@ export function ListsScreen({
   );
 
   const columns = breakpoint === 'compact' ? 1 : 2;
-  const showEmpty = mayShowEmptyState({
-    visibleCount: active.length,
-    hasMore: view.hasMore,
-    isFetching: view.isLoadingMore,
-    hasLoadedOnce: view.status !== 'pending',
-  });
+  const showEmpty =
+    mayShowEmptyState({
+      visibleCount: active.length,
+      hasMore: view.hasMore,
+      isFetching: view.isLoadingMore,
+      hasLoadedOnce: view.status !== 'pending',
+    }) && view.status !== 'error';
 
   const renderCard = (list: List, dimmed: boolean) => (
     <View
@@ -260,16 +262,27 @@ export function ListsScreen({
             )}
           </View>
         ) : view.message === undefined ? null : (
-          <Touchable
-            accessibilityRole="button"
-            accessibilityLabel="Couldn't refresh. Try again."
-            onPress={view.refetch}
-            testID="lists-refresh-failed"
-          >
-            <Text variant="footnote" color="danger">
-              Couldn't refresh. Try again.
-            </Text>
-          </Touchable>
+          <View testID="lists-refresh-failed">
+            <Touchable
+              accessibilityRole="button"
+              accessibilityLabel="Couldn't refresh. Try again."
+              onPress={view.refetch}
+            >
+              <Text variant="footnote" color="danger">
+                Couldn't refresh. Try again.
+              </Text>
+            </Touchable>
+            {view.requestId === undefined ? null : (
+              <Text
+                variant="footnote"
+                color="textSecondary"
+                selectable
+                testID="lists-refresh-request-id"
+              >
+                {view.requestId}
+              </Text>
+            )}
+          </View>
         )}
 
         {view.status === 'pending' ? (

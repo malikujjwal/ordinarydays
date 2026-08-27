@@ -17,10 +17,10 @@ export function useListIndexMutations(): ListIndexMutations {
   );
   const showUndo = useToast((store) => store.showUndo);
   const show = useToast((store) => store.show);
+  const dismissToast = useToast((store) => store.dismiss);
 
   const queueArchive = useCallback(
-    async (list: List, archived: boolean) => {
-      const intentId = randomUUID();
+    async (list: List, archived: boolean, intentId: string) => {
       await state.account.transactions.run(
         (transaction) => service.setArchived(transaction, list, archived, intentId),
         'interactive',
@@ -31,37 +31,45 @@ export function useListIndexMutations(): ListIndexMutations {
     [service, state.account.transactions, state.sync],
   );
 
-  const onArchive = useCallback(
-    (list: List) => {
-      void queueArchive(list, true)
+  const runArchive = useCallback(
+    (list: List, archived: boolean, intentId: string, offerUndo: boolean) => {
+      // The accepted action takes the singleton slot before durable append can settle.
+      dismissToast();
+      void queueArchive(list, archived, intentId)
         .then((originalIntentId) => {
+          if (!offerUndo) return;
           showUndo(
             archivedListToast({
               title: list.title,
               onUndo: () => {
                 const inverseIntentId = randomUUID();
-                void state.account.transactions
-                  .run(
-                    (transaction) =>
-                      service.undoArchive(
-                        transaction,
-                        list.listId,
-                        originalIntentId,
-                        inverseIntentId,
-                      ),
-                    'interactive',
-                  )
-                  .then((result) => {
-                    if (result.kind === 'queued') {
-                      state.sync.request('accepted-action');
-                    }
-                  })
-                  .catch(() =>
-                    show({
-                      message: `Couldn't undo archiving "${list.title}."`,
-                      tone: 'error',
-                    }),
-                  );
+                const runUndo = () => {
+                  dismissToast();
+                  void state.account.transactions
+                    .run(
+                      (transaction) =>
+                        service.undoArchive(
+                          transaction,
+                          list.listId,
+                          originalIntentId,
+                          inverseIntentId,
+                        ),
+                      'interactive',
+                    )
+                    .then((result) => {
+                      if (result.kind === 'queued') {
+                        state.sync.request('accepted-action');
+                      }
+                    })
+                    .catch(() =>
+                      show({
+                        message: `Couldn't undo archiving "${list.title}."`,
+                        tone: 'error',
+                        action: { label: 'Retry', onPress: runUndo },
+                      }),
+                    );
+                };
+                runUndo();
               },
               onCommit: () => {
                 void state.account.transactions.run(
@@ -74,34 +82,66 @@ export function useListIndexMutations(): ListIndexMutations {
           );
         })
         .catch(() =>
-          show({ message: `Couldn't archive "${list.title}."`, tone: 'error' }),
+          show({
+            message: `Couldn't ${archived ? 'archive' : 'restore'} "${list.title}."`,
+            tone: 'error',
+            action: {
+              label: 'Retry',
+              onPress: () => runArchive(list, archived, intentId, offerUndo),
+            },
+          }),
         );
     },
-    [queueArchive, service, show, showUndo, state.account.transactions, state.sync],
+    [
+      dismissToast,
+      queueArchive,
+      service,
+      show,
+      showUndo,
+      state.account.transactions,
+      state.sync,
+    ],
+  );
+
+  const runDelete = useCallback(
+    (list: List, intentId: string) => {
+      dismissToast();
+      void state.account.transactions
+        .run((transaction) => service.remove(transaction, list, intentId), 'interactive')
+        .then(() => state.sync.request('accepted-action'))
+        .catch(() =>
+          show({
+            message: `Couldn't delete "${list.title}."`,
+            tone: 'error',
+            action: {
+              label: 'Retry',
+              onPress: () => runDelete(list, intentId),
+            },
+          }),
+        );
+    },
+    [dismissToast, service, show, state.account.transactions, state.sync],
+  );
+
+  const onArchive = useCallback(
+    (list: List) => {
+      runArchive(list, true, randomUUID(), true);
+    },
+    [runArchive],
   );
 
   const onRestore = useCallback(
     (list: List) => {
-      void queueArchive(list, false).catch(() =>
-        show({ message: `Couldn't restore "${list.title}."`, tone: 'error' }),
-      );
+      runArchive(list, false, randomUUID(), false);
     },
-    [queueArchive, show],
+    [runArchive],
   );
 
   const onDelete = useCallback(
     (list: List) => {
-      void state.account.transactions
-        .run(
-          (transaction) => service.remove(transaction, list, randomUUID()),
-          'interactive',
-        )
-        .then(() => state.sync.request('accepted-action'))
-        .catch(() =>
-          show({ message: `Couldn't delete "${list.title}."`, tone: 'error' }),
-        );
+      runDelete(list, randomUUID());
     },
-    [service, show, state.account.transactions, state.sync],
+    [runDelete],
   );
 
   return { onArchive, onRestore, onDelete };

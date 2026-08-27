@@ -713,7 +713,7 @@ deleted once the activity is scheduled. Guests cannot suggest; they read and RSV
 | Method | Path | Notes |
 | --- | --- | --- |
 | `POST` | `/v1/attachments/upload-url` | `{ contentType, byteSize }` → `{ attachmentId, uploadUrl, key }`. Creates the caller's durable pending-upload record, then returns a presigned S3 `PUT`, 5-minute expiry, 10 MB cap, image MIME types only. |
-| `POST` | `/v1/activities/:id/attachments` | Confirm the upload and link it. Confirmation marks the pending record before permanent copy and is resumable/repairable at every cross-store crash point. |
+| `POST` | `/v1/activities/:id/attachments` | Confirm the upload and link it. Confirmation marks the pending record before permanent copy and is resumable/repairable at every cross-store crash point. An unknown id in the caller's pending/linked records is `404`; a known pending upload whose bytes are absent or contradict its declaration is `400 validation_failed`. |
 | `DELETE` | `/v1/activities/:id/attachments/:attachmentId` | |
 
 `Set as cover` is `PATCH /v1/activities/:id { primaryAttachmentId }`; the server validates

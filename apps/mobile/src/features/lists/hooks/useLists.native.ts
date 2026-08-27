@@ -1,3 +1,4 @@
+import { ApiError } from '@od/shared/client';
 import type { TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { useQueryClient } from '@tanstack/react-query';
@@ -35,6 +36,17 @@ interface NativeListsView {
   readonly status: 'pending' | 'success' | 'error';
   readonly lists: readonly List[];
   readonly message?: string;
+  readonly requestId?: string;
+}
+
+function describe(error: unknown): { message: string; requestId?: string } {
+  if (error instanceof ApiError) {
+    return {
+      message: error.status >= 500 ? 'Something went wrong.' : error.message,
+      requestId: error.requestId,
+    };
+  }
+  return { message: error instanceof Error ? error.message : "Couldn't load this." };
 }
 
 function requireListsDependencies() {
@@ -155,10 +167,12 @@ export function useLists(): ListsView {
     } catch (error) {
       if (!active.current || !isCurrentSession(state)) return;
       const lists = committed ?? latest.current;
+      const failure = describe(error);
       setView({
         status: lists.length > 0 ? 'success' : 'error',
         lists,
-        message: error instanceof Error ? error.message : "Couldn't load this.",
+        message: failure.message,
+        ...(failure.requestId === undefined ? {} : { requestId: failure.requestId }),
       });
     }
   }, [loadCommitted, pullLists, state]);

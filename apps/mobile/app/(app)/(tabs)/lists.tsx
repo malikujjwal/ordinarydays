@@ -1,6 +1,7 @@
 import { type Href, useRouter } from 'expo-router';
 import { ListsScreen } from '@/features/lists/components/ListsScreen';
 import { useListIndexMutations } from '@/features/lists/hooks/useListIndexMutations';
+import { useClock } from '@/hooks/useClock';
 
 /**
  * `/lists` — the Lists tab (P3-25).
@@ -21,11 +22,12 @@ import { useListIndexMutations } from '@/features/lists/hooks/useListIndexMutati
  */
 export default function ListsTab() {
   const router = useRouter();
+  const clock = useClock();
   const { onArchive, onRestore, onDelete } = useListIndexMutations();
 
   return (
     <ListsScreen
-      now={new Date()}
+      now={clock.now()}
       onOpenList={(listId) => router.push(`/lists/${listId}` as Href)}
       onNewList={() => router.push('/lists/new' as Href)}
       onArchive={onArchive}

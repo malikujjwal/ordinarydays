@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Instant, TimeZone } from '../time/types.js';
+import type { Instant, TimeZone, WallDate } from '../time/types.js';
 
 /**
  * The primitives every other schema composes. Declared once, here.
@@ -16,6 +16,14 @@ import type { Instant, TimeZone } from '../time/types.js';
  * feeds recurrence expansion, where an impossible date becomes an impossible occurrence.
  */
 export const isoDate = z.iso.date();
+
+/** A validated calendar date carrying the nominal wall-date type. */
+export const wallDate = isoDate.transform((value) => value as WallDate);
+
+/** Validates an ISO calendar date before introducing the nominal wall-date type. */
+export function parseWallDate(value: string): WallDate {
+  return wallDate.parse(value);
+}
 
 /** An absolute ISO-8601 moment, branded only after boundary validation. */
 export const instant = z.iso.datetime().transform((value) => value as Instant);

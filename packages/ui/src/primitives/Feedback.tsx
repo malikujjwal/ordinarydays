@@ -150,10 +150,12 @@ export function EmptyState({ heading, body, action, testID }: EmptyStateProps) {
 
 export interface ToastProps {
   message: string;
+  /** API correlation id, when the failure crossed the server boundary. */
+  requestId?: string;
   action?: { label: string; onPress: () => void };
   tone?: 'neutral' | 'error';
-  /** Normally 6 s (10 s for bulk); callers may pass a shorter server deadline. */
-  duration?: number;
+  /** The two product-owned toast windows. Server deadlines are enforced by the host. */
+  duration?: 6000 | 10000;
   onDismiss?: () => void;
   testID?: string;
 }
@@ -167,6 +169,7 @@ export interface ToastProps {
  */
 export function Toast({
   message,
+  requestId,
   action,
   tone = 'neutral',
   duration = 6000,
@@ -200,9 +203,21 @@ export function Toast({
         theme.elevation('e4'),
       ]}
     >
-      <Text variant="subhead" color={tone === 'error' ? 'danger' : 'textPrimary'}>
-        {message}
-      </Text>
+      <View style={{ flex: 1, gap: theme.space[1] }}>
+        <Text variant="subhead" color={tone === 'error' ? 'danger' : 'textPrimary'}>
+          {message}
+        </Text>
+        {requestId === undefined ? null : (
+          <Text
+            variant="footnote"
+            color="textSecondary"
+            selectable
+            testID="toast-request-id"
+          >
+            {requestId}
+          </Text>
+        )}
+      </View>
       {action === undefined ? null : (
         <Touchable
           accessibilityRole="button"

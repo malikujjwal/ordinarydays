@@ -1,3 +1,4 @@
+import { ApiError } from '@od/shared/client';
 import type { List } from '@od/shared/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
@@ -138,6 +139,34 @@ describe('the native Lists reader', () => {
     expect(result.current.lists).toHaveLength(1);
     // Rows survived, so this is a refresh failure rather than a load failure.
     expect(result.current.status).toBe('success');
+  });
+
+  it('preserves an API request id but does not invent one for local failures', async () => {
+    install({
+      snapshots: [{ lists: [list('Groceries')], commitRevision: 1 }],
+      pullLists: () =>
+        Promise.reject(
+          new ApiError(
+            'internal',
+            'An unexpected error occurred.',
+            500,
+            'req_native_lists',
+          ),
+        ),
+    });
+    const first = mount();
+
+    await waitFor(() => expect(first.result.current.requestId).toBe('req_native_lists'));
+    expect(first.result.current.message).toBe('Something went wrong.');
+
+    first.unmount();
+    install({
+      snapshots: [{ lists: [list('Groceries')], commitRevision: 1 }],
+      pullLists: () => Promise.reject(new Error('SQLite unavailable')),
+    });
+    const local = mount();
+    await waitFor(() => expect(local.result.current.message).toBe('SQLite unavailable'));
+    expect(local.result.current.requestId).toBeUndefined();
   });
 
   it('becomes an error only when there is nothing committed to keep', async () => {

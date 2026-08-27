@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
@@ -18,7 +19,7 @@ const view = vi.hoisted(() => ({ current: {} as ListsView }));
 vi.mock('../hooks/useLists', () => ({ useLists: () => view.current }));
 
 const UTC = 'UTC' as TimeZone;
-const NOW = new Date('2026-08-26T12:00:00.000Z');
+const NOW = instant.parse('2026-08-26T12:00:00.000Z');
 
 const list = (id: string, overrides: Partial<List> = {}): List => ({
   listId: `lst_01J8XKQ2M4N5P6R7S8T9V0W${id}`,
@@ -375,11 +376,18 @@ describe('loading and failure', () => {
 
   /** §5.3: with cached rows the content stays and the failure is a line above it. */
   it('keeps rows on a failed refresh', () => {
-    setView({ lists: [list(idAt(0))], message: 'Network down' });
+    setView({
+      lists: [list(idAt(0))],
+      message: 'Network down',
+      requestId: 'req_refresh_failure',
+    });
     mount();
 
     expect(screen.getByText(`List ${idAt(0)}`)).toBeTruthy();
     expect(screen.getByTestId('lists-refresh-failed')).toBeTruthy();
+    expect(screen.getByTestId('lists-refresh-request-id').textContent).toBe(
+      'req_refresh_failure',
+    );
   });
 
   it('becomes an error screen when there is nothing to keep', () => {
@@ -393,6 +401,7 @@ describe('loading and failure', () => {
 
     expect(screen.getByTestId('lists-error')).toBeTruthy();
     expect(screen.getByText("Couldn't load this.")).toBeTruthy();
+    expect(screen.queryByTestId('lists-empty')).toBeNull();
     expect(screen.queryByText('Something went wrong.')).toBeNull();
     expect(screen.getByTestId('lists-error-request-id').textContent).toBe(
       'req_lists_failure',

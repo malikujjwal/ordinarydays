@@ -105,6 +105,9 @@ export function ToastHost() {
     >
       <Toast
         message={current.message}
+        {...(current.kind !== 'message' || current.requestId === undefined
+          ? {}
+          : { requestId: current.requestId })}
         {...(current.kind === 'message' && current.tone !== undefined
           ? { tone: current.tone }
           : {})}

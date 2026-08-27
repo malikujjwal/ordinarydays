@@ -1966,14 +1966,16 @@ registry.registerPath({
     },
     400: {
       description:
-        'The id names no pending upload, its object was never uploaded or has expired past ' +
-        'the one-day `tmp/` lifecycle, or this activity already holds ' +
+        'The caller owns the pending upload, but its object was never uploaded, does not ' +
+        'match the declared type or length, has expired past the one-day `tmp/` lifecycle, ' +
+        'is already confirming toward another activity, or this activity already holds ' +
         '`MAX_ATTACHMENTS_PER_ACTIVITY` (20) images. Nothing is written.',
       content: { 'application/json': { schema: errorResponse } },
     },
     404: {
       description:
-        'No such activity for this caller. Also the answer for another user’s ' +
+        'No such activity for this caller, or no pending or linked attachment with this id ' +
+        'exists in the caller’s partition. This is also the answer for another user’s ' +
         '`attachmentId`: the object key is derived from the **caller’s** id, so it cannot ' +
         'resolve to somebody else’s upload.',
       content: { 'application/json': { schema: errorResponse } },

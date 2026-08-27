@@ -239,6 +239,45 @@ export function deleteListItem(
     .then((response) => response.data);
 }
 
+function runBulkCheckedAction(
+  client: HttpClient,
+  listId: string,
+  action: 'clear-checked' | 'uncheck-all',
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ReversibleItemMutation> {
+  return client
+    .request({
+      method: 'POST',
+      path: `/v1/lists/${listId}/${action}`,
+      schema: reversibleItemMutationResponse,
+      headers: { 'Idempotency-Key': idempotencyKey },
+      replayProtected: true,
+      ...(signal === undefined ? {} : { signal }),
+    })
+    .then((response) => response.data);
+}
+
+/** `POST /v1/lists/:id/clear-checked` — deletes the checked set under one Undo token. */
+export function clearCheckedListItems(
+  client: HttpClient,
+  listId: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ReversibleItemMutation> {
+  return runBulkCheckedAction(client, listId, 'clear-checked', idempotencyKey, signal);
+}
+
+/** `POST /v1/lists/:id/uncheck-all` — unchecks the checked set under one Undo token. */
+export function uncheckAllListItems(
+  client: HttpClient,
+  listId: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ReversibleItemMutation> {
+  return runBulkCheckedAction(client, listId, 'uncheck-all', idempotencyKey, signal);
+}
+
 /**
  * `POST /v1/lists/:id/items/:itemId/schedule` — the optional bridge to Activities.
  *

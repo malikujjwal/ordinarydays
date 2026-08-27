@@ -5,7 +5,11 @@ import type {
   RequestUploadUrlInput,
   RequestUploadUrlResult,
 } from '../types/attachment.js';
-import { requestUploadUrlInput, requestUploadUrlResult } from './attachment.js';
+import {
+  attachment,
+  requestUploadUrlInput,
+  requestUploadUrlResult,
+} from './attachment.js';
 
 /**
  * The schema and the type describe one shape. Nothing forces them to agree, so this does —
@@ -122,5 +126,24 @@ describe('the upload-url result', () => {
   it('takes a bare object key, not a URL', () => {
     expect(requestUploadUrlResult.safeParse({ ...valid, key: '' }).success).toBe(false);
     expect(valid.key.startsWith('tmp/')).toBe(true);
+  });
+});
+
+describe('the linked attachment', () => {
+  const linked = {
+    attachmentId: 'att_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+    activityId: 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+    key: 'u/usr_a/01.jpg',
+    contentType: 'image/jpeg',
+    byteSize: 2048,
+    createdAt: '2026-08-26T12:00:00.000Z',
+    schemaVersion: 1,
+  } as const;
+
+  it('accepts an ISO instant and rejects arbitrary visible timestamp text', () => {
+    expect(attachment.safeParse(linked).success).toBe(true);
+    expect(attachment.safeParse({ ...linked, createdAt: 'yesterday' }).success).toBe(
+      false,
+    );
   });
 });
