@@ -73,10 +73,34 @@ describe('nothing is selected until the user taps', () => {
     expect(draft().target).toEqual({ objectKind: 'plan', type: 'custom' });
   });
 
-  /** `List item` stays visible so the mental model holds, and has no destination in Phase 1. */
-  it('choosing List item reaches the form step with no target', () => {
+  /**
+   * `List item` advances to its own required chooser, exactly as `plan` does, and fixes no
+   * destination on the way (P3-27, criterion 33).
+   */
+  it('choosing List item reaches the list picker with no target', () => {
     draft().chooseObject('listItem');
+    expect(draft().step).toBe('listPicker');
+    expect(draft().target).toBeUndefined();
+  });
+
+  it('fixes the list the user tapped, and only that', () => {
+    draft().chooseObject('listItem');
+    draft().chooseList('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
+
     expect(draft().step).toBe('form');
+    expect(draft().target).toEqual({
+      objectKind: 'listItem',
+      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+    });
+  });
+
+  /** Back drops the destination: returning to a picker pre-selected is still a selection. */
+  it('returns to the picker with no destination retained', () => {
+    draft().chooseObject('listItem');
+    draft().chooseList('lst_01J8XKQ2M4N5P6R7S8T9V0W1X2');
+    draft().back();
+
+    expect(draft().step).toBe('listPicker');
     expect(draft().target).toBeUndefined();
   });
 });

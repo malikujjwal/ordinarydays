@@ -27,7 +27,7 @@ import { getRandomBytes } from 'expo-crypto';
  * for no benefit; separate witnesses keep each sequence byte-identical to what a caller of
  * the previous single-prefix generator would have received.
  */
-export type CanonicalIdPrefix = 'act' | 'lst';
+export type CanonicalIdPrefix = 'act' | 'lst' | 'itm';
 
 const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 

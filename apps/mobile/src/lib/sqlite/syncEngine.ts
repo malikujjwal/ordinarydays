@@ -4,6 +4,7 @@ import {
   type AgendaQuery,
   activityCompletionResult,
   activity as activitySchema,
+  listItemView,
   listView,
   scheduleActivityResult,
   timeZone,
@@ -30,6 +31,11 @@ import {
 } from '@/lib/sqlite/agendaCoverage';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
+import type {
+  ListItemPageState,
+  ListItemRow,
+  ListItemsRepository,
+} from '@/lib/sqlite/listItemsRepository';
 import type { ListsRepository } from '@/lib/sqlite/listsRepository';
 import type { OutboxIntent, OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
@@ -66,6 +72,10 @@ export interface NativeSyncEngine {
   pullAnytime?(): Promise<readonly ActivityListItem[]>;
   /** Drains every List pointer page and replaces the materialized index (P3-25). */
   pullLists?(): Promise<readonly List[]>;
+  /** META plus the fenced first item page, replacing this list's projection (P3-27). */
+  pullListDetail?(listId: string): Promise<void>;
+  /** The next item page, merged into the projection page one installed. */
+  pullListItemPage?(listId: string): Promise<void>;
   stop(): void;
 }
 
@@ -134,6 +144,31 @@ function listFromResponse(response: unknown): List | undefined {
   const parsed = listView.safeParse(nested === undefined ? response : nested);
   return parsed.success ? (parsed.data as List) : undefined;
 }
+
+function listItemFromResponse(response: unknown): ListItemRow | undefined {
+  const nested = field(response, 'item');
+  const parsed = listItemView.safeParse(nested === undefined ? response : nested);
+  return parsed.success ? (parsed.data as ListItemRow) : undefined;
+}
+
+/**
+ * A fence, not a failure: repair, behaviour migration or a `rankVersion` change between the
+ * cursor's issue and its use (§P3-27, criterion 36).
+ *
+ * The distinction is the whole of the recovery contract. A `409` is an edit conflict the user
+ * has to resolve; this is the server saying the pages it was handing out belong to a
+ * generation that no longer exists, and the answer is to keep what is committed, drop every
+ * cursor and start again.
+ */
+function isItemPageFence(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 503;
+}
+
+/** The fence's own default, for a `503` that arrives without a `Retry-After` header. */
+const DEFAULT_RETRY_AFTER_MS = 1_000;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 const OCCURRENCE_MUTATIONS = new Set([
   'complete',
@@ -243,6 +278,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
   private cycleError: Error | undefined;
   private anytimeRunning: Promise<readonly ActivityListItem[]> | undefined;
   private listsRunning: Promise<readonly List[]> | undefined;
+  private readonly itemsRunning = new Map<string, Promise<void>>();
   private readonly push: ActivityPushAdapter;
   private readonly reconciler: RecurrenceReconciler;
 
@@ -257,6 +293,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     private readonly anytime?: AnytimeRepository,
     private readonly lists?: ListsRepository,
     listPushTransport?: ListPushTransport,
+    private readonly listItems?: ListItemsRepository,
   ) {
     this.push = new ActivityPushAdapter(pushTransport, listPushTransport);
     this.reconciler = new RecurrenceReconciler(
@@ -359,7 +396,10 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       return false;
     }
     if (intent.mutationKey[0] === 'list') {
-      return this.recoverRejectedListIntent(intent);
+      // An item rejection rolled its own row back already; there is no List index to refresh.
+      return intent.mutationKey[1] === 'item-create'
+        ? true
+        : this.recoverRejectedListIntent(intent);
     }
     if (intent.recoveryRequired !== true) return false;
     const occurrenceDate = occurrenceDateFromIntent(intent);
@@ -633,6 +673,144 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       await lists.replaceCanonical(transaction, rows, protectedListIds);
     });
     return lists.read();
+  }
+
+  /**
+   * Installs page one, replacing whatever this device held for the list (§P3-27).
+   *
+   * Page one is the only page whose arrival proves the projection it belongs to is current,
+   * which is why it replaces and every later page merges. A fence answers by keeping the
+   * committed rows, discarding every cursor, waiting the server's `Retry-After` and asking
+   * once more — and installing nothing at all until that succeeds.
+   */
+  async pullListDetail(listId: string): Promise<void> {
+    return this.singleFlightItems(listId, async () => {
+      try {
+        await this.installFirstItemPage(listId);
+      } catch (error) {
+        if (!isItemPageFence(error)) throw error;
+        await this.discardItemCursors(listId);
+        await sleep(
+          error.retryAfterSeconds === undefined
+            ? DEFAULT_RETRY_AFTER_MS
+            : error.retryAfterSeconds * 1000,
+        );
+        await this.installFirstItemPage(listId);
+      }
+    });
+  }
+
+  /**
+   * The next page, merged by `itemId`.
+   *
+   * A fence here is the same contract from further in: the pages already committed stay, the
+   * cursor that produced this failure is discarded along with every other, and recovery
+   * restarts at page one rather than splicing a post-repair page into pre-repair ones.
+   */
+  async pullListItemPage(listId: string): Promise<void> {
+    return this.singleFlightItems(listId, async () => {
+      const items = this.requireItems();
+      const page = await items.pageState(listId);
+      const cursor = page?.nextCursor;
+      if (cursor === undefined) return;
+      try {
+        await this.mergeNextItemPage(listId, cursor);
+      } catch (error) {
+        if (!isItemPageFence(error)) throw error;
+        await this.discardItemCursors(listId);
+        await sleep(
+          error.retryAfterSeconds === undefined
+            ? DEFAULT_RETRY_AFTER_MS
+            : error.retryAfterSeconds * 1000,
+        );
+        await this.installFirstItemPage(listId);
+      }
+    });
+  }
+
+  private async installFirstItemPage(listId: string): Promise<void> {
+    const items = this.requireItems();
+    const lists = this.lists;
+    const pullDetail = this.pull.listDetail;
+    if (lists === undefined || pullDetail === undefined) {
+      throw new Error('Native list item state is not ready.');
+    }
+    const detail = await this.serialNetwork(() => pullDetail(listId));
+    const page: ListItemPageState = {
+      rankVersion: detail.list.rankVersion,
+      ...(detail.nextCursor === undefined ? {} : { nextCursor: detail.nextCursor }),
+      complete: detail.nextCursor === undefined,
+    };
+    await this.transactions.run(async (transaction) => {
+      const protectedItemIds = await this.outbox.protectedListItemIds(
+        listId,
+        transaction.database,
+      );
+      await lists.installCanonicalRow(transaction, detail.list);
+      await items.replaceFirstPage(
+        transaction,
+        listId,
+        detail.items,
+        page,
+        protectedItemIds,
+      );
+    });
+  }
+
+  private async mergeNextItemPage(listId: string, cursor: string): Promise<void> {
+    const items = this.requireItems();
+    const pullPage = this.pull.listItemsPage;
+    if (pullPage === undefined) throw new Error('Native list item state is not ready.');
+    const next = await this.serialNetwork(() => pullPage(listId, cursor));
+    await this.transactions.run(async (transaction) => {
+      /*
+       * Re-read inside the writer: the cursor may have been discarded by a fence recovery
+       * while this page was in flight, and merging into a projection that no longer expects
+       * it is precisely the splice the contract forbids.
+       */
+      const current = await items.pageState(listId, transaction.database);
+      if (current?.nextCursor !== cursor) return;
+      const protectedItemIds = await this.outbox.protectedListItemIds(
+        listId,
+        transaction.database,
+      );
+      await items.mergePage(
+        transaction,
+        listId,
+        next.items,
+        {
+          rankVersion: current.rankVersion,
+          ...(next.nextCursor === undefined ? {} : { nextCursor: next.nextCursor }),
+          complete: next.nextCursor === undefined,
+        },
+        protectedItemIds,
+      );
+    });
+  }
+
+  private async discardItemCursors(listId: string): Promise<void> {
+    const items = this.requireItems();
+    await this.transactions.run((transaction) =>
+      items.invalidatePages(transaction, listId),
+    );
+  }
+
+  /** One drain per list at a time, so a focus effect and a scroll cannot race two pages in. */
+  private singleFlightItems(listId: string, task: () => Promise<void>): Promise<void> {
+    const running = this.itemsRunning.get(listId);
+    if (running !== undefined) return running;
+    const started = task().finally(() => {
+      if (this.itemsRunning.get(listId) === started) this.itemsRunning.delete(listId);
+    });
+    this.itemsRunning.set(listId, started);
+    return started;
+  }
+
+  private requireItems(): ListItemsRepository {
+    if (this.listItems === undefined) {
+      throw new Error('Native list item state is not ready.');
+    }
+    return this.listItems;
   }
 
   private async pullAllLists(): Promise<readonly List[]> {
@@ -973,6 +1151,18 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         intent.orderingKey,
         intent.seq,
       );
+      if (intent.mutationKey[1] === 'item-create') {
+        const item = listItemFromResponse(response);
+        if (item?.itemId !== intent.entityId) {
+          throw new Error('List item creation acknowledged a different item.');
+        }
+        // Server truth over the optimistic row: the rank it allocated, and the provenance
+        // and revision fences only it can resolve.
+        await this.requireItems().acceptCreated(transaction, item);
+        await this.outbox.acknowledge(transaction.database, intent.intentId);
+        transaction.changed('outbox');
+        return;
+      }
       const canonical = listFromResponse(response);
       if (intent.mutationKey[1] === 'create') {
         if (canonical?.listId !== intent.entityId) {
@@ -984,7 +1174,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
          * catalogue itself. A later local write for this list owns the row instead; its own
          * settlement installs what the server made of it.
          */
-        if (later.length === 0) await lists.acceptCreated(transaction, canonical);
+        if (later.length === 0) await lists.installCanonicalRow(transaction, canonical);
         await this.outbox.rebaseNextQueuedListPatch(
           transaction.database,
           intent.orderingKey,
@@ -1245,6 +1435,10 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     intent: OutboxIntent,
     failure: Error,
   ): Promise<void> {
+    if (intent.mutationKey[1] === 'item-create') {
+      await this.rollbackPermanentItemRejection(intent, failure);
+      return;
+    }
     let rows: readonly List[] | undefined;
     try {
       rows = await this.pullAllLists();
@@ -1284,6 +1478,34 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         } else {
           await this.lists?.upsertCanonical(transaction, canonical, position);
         }
+      }
+      transaction.changed('outbox');
+    });
+  }
+
+  /**
+   * A rejected item create leaves nothing to reconcile: the server refused it, so the row it
+   * was showing is the only copy that ever existed and it goes with the rejection.
+   *
+   * No authoritative read is needed or wanted — there is no server item to read — so the
+   * receipt carries no `recoveryRequired` and Discard may retire the intent directly. Retry
+   * re-projects the row from the durable payload.
+   */
+  private async rollbackPermanentItemRejection(
+    intent: OutboxIntent,
+    failure: Error,
+  ): Promise<void> {
+    const items = this.requireItems();
+    const listId = field(intent.variables, 'listId');
+    await this.transactions.run(async (transaction) => {
+      await this.outbox.needsAttention(
+        transaction.database,
+        intent.intentId,
+        rejectedAttention(failure, false),
+        failure.message,
+      );
+      if (typeof listId === 'string') {
+        await items.removeCanonical(transaction, listId, intent.entityId);
       }
       transaction.changed('outbox');
     });
@@ -1427,12 +1649,13 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     intent: OutboxIntent,
     error: unknown,
   ): Promise<'not_applicable' | 'recovered' | 'parked' | 'retry'> {
-    if (
-      intent.mutationKey[1] !== 'create' ||
-      !(error instanceof ApiError) ||
-      error.status !== 409
-    ) {
+    const create =
+      intent.mutationKey[1] === 'create' || intent.mutationKey[1] === 'item-create';
+    if (!create || !(error instanceof ApiError) || error.status !== 409) {
       return 'not_applicable';
+    }
+    if (intent.mutationKey[1] === 'item-create') {
+      return this.recoverListItemCreateCollision(intent);
     }
     if (intent.mutationKey[0] === 'list') {
       return this.recoverListCreateCollision(intent);
@@ -1535,7 +1758,69 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           intent.orderingKey,
           intent.seq,
         );
-        if (later.length === 0) await lists.acceptCreated(transaction, canonical);
+        if (later.length === 0) await lists.installCanonicalRow(transaction, canonical);
+        await this.outbox.acknowledge(transaction.database, intent.intentId);
+        transaction.changed('outbox');
+      });
+      return 'recovered';
+    } catch (recoveryError) {
+      if (!(recoveryError instanceof ApiError) || recoveryError.status !== 404) {
+        const failure =
+          recoveryError instanceof Error
+            ? recoveryError
+            : new Error(String(recoveryError));
+        this.cycleError ??= failure;
+        await this.transactions.run(async (transaction) => {
+          await this.outbox.requeue(
+            transaction.database,
+            intent.intentId,
+            queuedError(failure),
+          );
+          transaction.changed('outbox');
+        });
+        this.scheduleRetry();
+        return 'retry';
+      }
+      await this.transactions.run(async (transaction) => {
+        await this.outbox.needsAttention(
+          transaction.database,
+          intent.intentId,
+          { kind: 'parked', reason: 'ambiguous_collision' },
+          'This never synced.',
+        );
+        transaction.changed('outbox');
+      });
+      return 'parked';
+    }
+  }
+
+  /**
+   * The item analogue of the List create-collision path (§P3-08, ADR-055).
+   *
+   * The same three outcomes, decided by one exact read: `200` means this device's minted id
+   * already names an item on this list, so the create landed and its canonical row is adopted;
+   * `404` is genuinely ambiguous — the create may never have arrived, or may have arrived and
+   * been deleted, and a tombstoned id answers identically — so it parks for an explicit Retry
+   * or Discard; anything else is transport and requeues.
+   *
+   * **No automatic re-mint**, which is what stops a deleted row coming back to life.
+   */
+  private async recoverListItemCreateCollision(
+    intent: OutboxIntent,
+  ): Promise<'recovered' | 'parked' | 'retry'> {
+    const items = this.requireItems();
+    const pullItem = this.pull.listItem;
+    const listId = field(intent.variables, 'listId');
+    if (pullItem === undefined || typeof listId !== 'string') {
+      throw new Error('Native list item state is not ready.');
+    }
+    try {
+      const canonical = await this.serialNetwork(() => pullItem(listId, intent.entityId));
+      if (canonical.itemId !== intent.entityId) {
+        throw new Error('Item collision recovery answered for a different item.');
+      }
+      await this.transactions.run(async (transaction) => {
+        await items.acceptCreated(transaction, canonical);
         await this.outbox.acknowledge(transaction.database, intent.intentId);
         transaction.changed('outbox');
       });

@@ -3,6 +3,7 @@ import type { ActivityRepository } from '@/lib/sqlite/activityRepository';
 import type { AgendaRepository } from '@/lib/sqlite/agendaRepository';
 import type { AnytimeRepository } from '@/lib/sqlite/anytimeRepository';
 import type { SqliteDatabase } from '@/lib/sqlite/database';
+import type { ListItemsRepository } from '@/lib/sqlite/listItemsRepository';
 import type { ListsRepository } from '@/lib/sqlite/listsRepository';
 import type { OutboxRepository } from '@/lib/sqlite/outbox';
 import type { OutboxPresentationStore } from '@/lib/sqlite/outboxPresentationStore';
@@ -27,6 +28,8 @@ export interface NativeActivityState {
   readonly anytime?: AnytimeRepository;
   /** The SQLite-owned Lists index, including optimistic outbox projections. */
   readonly lists?: ListsRepository;
+  /** The item slice behind list detail, scoped and subscribed per list (P3-27). */
+  readonly listItems?: ListItemsRepository;
   readonly outbox: OutboxRepository;
   readonly outboxPresentation: OutboxPresentationStore;
   readonly coordinator: NativeActivityActionCoordinator;

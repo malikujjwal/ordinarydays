@@ -508,14 +508,66 @@ describe('Plan', () => {
   });
 });
 
+/**
+ * `List item` requires a visible destination before any field or capture exists, and the final
+ * action names it (criterion 33, §P3-27). Both halves are asserted from the chooser inward.
+ */
 describe('List item', () => {
-  it('is honoured as a choice and creates nothing in Phase 1', () => {
-    mount();
+  const destinations = {
+    lists: [
+      { listId: 'lst_01J0000000000000000000000A', title: 'Groceries' },
+      { listId: 'lst_01J0000000000000000000000B', title: 'Restaurants to try' },
+    ],
+    status: 'success' as const,
+    refetch: vi.fn(),
+  };
+
+  it('asks which list before there is a field to type into', () => {
+    mount(() => {}, { listDestinations: destinations });
     tapChoice('List item');
 
-    expect(screen.getByText('Lists are coming soon.')).toBeDefined();
-    expect(screen.queryByLabelText('Title')).toBeNull();
+    expect(screen.getByTestId('list-destination-chooser')).toBeDefined();
+    // No title field, so there is no text for anything to classify.
+    expect(screen.queryByLabelText('Item')).toBeNull();
+    expect(screen.queryByTestId('compose-form')).toBeNull();
     expect(sent).toHaveLength(0);
+  });
+
+  it('pre-selects no list, however many there are', () => {
+    mount(() => {}, { listDestinations: destinations });
+    tapChoice('List item');
+
+    for (const list of destinations.lists) {
+      const row = screen.getByTestId(`list-destination-${list.listId}`);
+      expect(row.getAttribute('aria-selected')).toBeNull();
+      expect(row.getAttribute('aria-pressed')).toBeNull();
+    }
+  });
+
+  it('opens the form only after a list is chosen, and names it on the write', () => {
+    mount(() => {}, { listDestinations: destinations });
+    tapChoice('List item');
+    fireEvent.click(
+      screen.getByTestId('list-destination-lst_01J0000000000000000000000B'),
+    );
+
+    expect(screen.getByTestId('compose-form')).toBeDefined();
+    expect(screen.getByTestId('compose-target-heading').textContent).toBe('List item');
+    expect(
+      screen.getByRole('button', { name: 'Add to Restaurants to try' }),
+    ).toBeDefined();
+  });
+
+  it('offers New list after the lists, never before them', () => {
+    mount(() => {}, { listDestinations: destinations });
+    tapChoice('List item');
+
+    const rows = screen
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label'));
+    expect(rows.indexOf('New list, Choose a style, then name it')).toBeGreaterThan(
+      rows.indexOf('Groceries, Add this item to this list'),
+    );
   });
 });
 

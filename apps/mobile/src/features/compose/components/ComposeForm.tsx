@@ -143,6 +143,14 @@ export function ComposeForm({
 
 export interface ComposeSaveBarProps {
   target: CreationTarget;
+  /**
+   * The destination a List item is bound for, so the button can name it (criterion 33).
+   *
+   * Absent for Task and Plan, whose labels are fixed, and absent for an item whose list name
+   * has not resolved yet — `saveLabel` then reads `Add to list`, which is what the form shows
+   * while the name loads and never a destination it chose.
+   */
+  listName?: string;
   /** Whether the named write is available. `title` alone; see `canSave`. */
   saveEnabled: boolean;
   attachmentUri: string | undefined;
@@ -163,6 +171,7 @@ export interface ComposeSaveBarProps {
  */
 export function ComposeSaveBar({
   target,
+  listName,
   saveEnabled,
   attachmentUri,
   onSave,
@@ -174,7 +183,7 @@ export function ComposeSaveBar({
   return (
     <View style={{ gap: theme.space[3] }}>
       <Button
-        label={saveLabel(target)}
+        label={saveLabel(target, listName)}
         size="lg"
         fullWidth
         onPress={onSave}

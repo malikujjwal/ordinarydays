@@ -1,15 +1,21 @@
-import { Button, Close, IconButton, ScreenShell, useTheme } from '@od/ui';
+import { MAX_NOTES_LEN } from '@od/shared/constants';
+import { Button, Close, Field, IconButton, ScreenShell, useTheme } from '@od/ui';
 import { useState } from 'react';
 import { View } from 'react-native';
+import { CaptureRow } from '@/features/compose/components/CaptureRow';
 import { ComposeForm, ComposeSaveBar } from '@/features/compose/components/ComposeForm';
 import { DiscardPrompt } from '@/features/compose/components/DiscardPrompt';
-import { ListItemPlaceholder } from '@/features/compose/components/ListItemPlaceholder';
+import {
+  type ListDestination,
+  ListDestinationChooser,
+} from '@/features/compose/components/ListDestinationChooser';
 import { ObjectChooser } from '@/features/compose/components/ObjectChooser';
 import { PlanKindChooser } from '@/features/compose/components/PlanKindChooser';
 import { TypedFields } from '@/features/compose/forms/TypedFields';
 import { useCreateActivity } from '@/features/compose/hooks/useCreateActivity';
 import { titleLabel } from '@/features/compose/model/fields';
 import { canSave, successToast } from '@/features/compose/model/targets';
+import { useAddListItem } from '@/hooks/useAddListItem';
 import {
   type EventDraftDefaults,
   hasContent,
@@ -43,6 +49,21 @@ export interface ComposeScreenProps {
   timezone: string;
   /** Resolves the profile-backed defaults only when the user chooses Event. */
   loadEventDefaults?: () => Promise<EventDraftDefaults | undefined>;
+  /**
+   * The lists `List item` may be added to, supplied by the route (P3-27).
+   *
+   * Injected for the same reason `loadEventDefaults` is, plus one this feature cannot get
+   * around: the lists belong to another feature slice, and `no-cross-feature-imports` makes
+   * the route the one place allowed to see both. It is server pointer order, unfiltered —
+   * nothing here re-sorts it, and there is no default to fall back to (criterion 33).
+   */
+  listDestinations?: {
+    readonly lists: readonly ListDestination[];
+    readonly status: 'pending' | 'success' | 'error';
+    readonly refetch: () => void;
+  };
+  /** Opens P3-26's creation sheet; the route wires its `onCreated` back to `chooseList`. */
+  onCreateList?: () => void;
 }
 
 export function ComposeScreen({
@@ -50,12 +71,20 @@ export function ComposeScreen({
   today,
   timezone,
   loadEventDefaults,
+  listDestinations,
+  onCreateList,
 }: ComposeScreenProps) {
   const theme = useTheme();
   const draft = useComposeDraft();
   const showToast = useToast((s) => s.show);
   const create = useCreateActivity();
+  const addItem = useAddListItem();
   const [discardOpen, setDiscardOpen] = useState(false);
+  const itemTarget = draft.target?.objectKind === 'listItem' ? draft.target : undefined;
+  const destinationTitle =
+    itemTarget === undefined
+      ? undefined
+      : listDestinations?.lists.find((list) => list.listId === itemTarget.listId)?.title;
 
   function choosePlanKind(type: Parameters<typeof draft.choosePlanKind>[0]) {
     if (type !== 'event' || loadEventDefaults === undefined) {
@@ -105,12 +134,32 @@ export function ComposeScreen({
     showToast({ message: successToast(target, draft.schedule, today) });
   }
 
+  /**
+   * Adds the item and closes, the same shape `save` has.
+   *
+   * The path id is the list on the button, and it comes from the target the user chose —
+   * there is no branch here that could reach a default or a recent destination.
+   */
+  async function addToList() {
+    if (itemTarget === undefined) return;
+    const note = draft.notes.trim();
+    const added = await addItem.add(itemTarget.listId, {
+      title: draft.title.trim(),
+      ...(note === '' ? {} : { note }),
+    });
+    if (!added) return;
+    draft.reset();
+    onClose();
+    showToast({ message: `Added to ${destinationTitle ?? 'list'}` });
+  }
+
   const showBack = draft.step !== 'object';
-  /** The one step that has an Activity target to write, and so the one that has a footer. */
+  /** Every step with a fixed target to write, and so the steps that have a footer. */
   const activityForm =
     draft.step === 'form' &&
     draft.target !== undefined &&
     draft.target.objectKind !== 'listItem';
+  const itemForm = draft.step === 'form' && draft.target?.objectKind === 'listItem';
 
   const header = (
     <View
@@ -164,15 +213,18 @@ export function ComposeScreen({
       <ScreenShell
         header={header}
         measure="reading"
-        {...(activityForm && draft.target !== undefined
+        {...(draft.target !== undefined && (activityForm || itemForm)
           ? {
               footer: (
                 <ComposeSaveBar
                   target={draft.target}
                   saveEnabled={canSave({ title: draft.title, notes: draft.notes })}
                   attachmentUri={draft.attachmentUri}
-                  onSave={() => void save()}
-                  isSaving={create.isSaving}
+                  onSave={() => void (itemForm ? addToList() : save())}
+                  isSaving={itemForm ? addItem.isAdding : create.isSaving}
+                  {...(destinationTitle === undefined
+                    ? {}
+                    : { listName: destinationTitle })}
                 />
               ),
             }
@@ -183,12 +235,56 @@ export function ComposeScreen({
             <ObjectChooser onChoose={draft.chooseObject} />
           ) : draft.step === 'planKind' ? (
             <PlanKindChooser onChoose={choosePlanKind} />
-          ) : draft.target === undefined || draft.target.objectKind === 'listItem' ? (
-            // `form` with no Activity target is reachable by exactly one route: `List item`,
-            // which has no destination to fix in Phase 1. The store leaves `target` undefined
-            // there; the `listItem` arm is named as well so the narrowing below is the
-            // compiler's rather than a comment's.
-            <ListItemPlaceholder onBack={() => draft.back()} />
+          ) : draft.step === 'listPicker' ? (
+            /*
+             * `List item`'s required destination, before any field exists (criterion 33).
+             * With no injected source there is nothing to choose from, so the step says so
+             * rather than inventing one.
+             */
+            <ListDestinationChooser
+              lists={listDestinations?.lists ?? []}
+              status={listDestinations?.status ?? 'pending'}
+              onChoose={draft.chooseList}
+              onCreateList={() => onCreateList?.()}
+              onRetry={() => listDestinations?.refetch()}
+            />
+          ) : draft.target === undefined ? null : draft.target.objectKind ===
+            'listItem' ? (
+            /*
+             * The item form: title, note and the capture stubs — which receive the chosen
+             * `listId` and can never return a different one (`activities.md` §2.3).
+             * Location and the typed per-behaviour fields are P3-29's.
+             */
+            <ComposeForm
+              target={draft.target}
+              fields={{ title: draft.title, notes: draft.notes }}
+              titleLabel="Item"
+              typedFields={
+                <View style={{ gap: theme.space[6] }}>
+                  {/* §5.7's one optional field for every behaviour. */}
+                  <Field
+                    label="Note"
+                    value={draft.notes}
+                    onChangeText={draft.setNotes}
+                    multiline
+                    maxLength={MAX_NOTES_LEN}
+                    testID="compose-item-note"
+                  />
+                  <CaptureRow
+                    sourceUrl={draft.sourceUrl}
+                    onSourceUrlChange={draft.setSourceUrl}
+                    attachmentUri={draft.attachmentUri}
+                    onAttach={draft.attachImage}
+                    onClearAttachment={draft.clearAttachment}
+                  />
+                </View>
+              }
+              onTitleChange={draft.setTitle}
+              onChangeTarget={() => draft.back()}
+              errorMessage={addItem.errorMessage}
+              errorRequestId={undefined}
+              fieldErrors={{}}
+            />
           ) : (
             <ComposeForm
               target={draft.target}
