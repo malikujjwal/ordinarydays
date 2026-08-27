@@ -217,7 +217,7 @@ export async function undoListOperation(
   if (operation.consumed) return NOT_APPLICABLE;
 
   try {
-    const acceptedAt =
+    const acceptance =
       operation.kind === 'clear_checked' || operation.kind === 'uncheck_all'
         ? await acceptListUndoOperation(
             userId,
@@ -226,10 +226,11 @@ export async function undoListOperation(
             operation.operationId,
             acceptedRequestAt,
           )
-        : acceptedRequestAt;
+        : { acceptedAt: acceptedRequestAt, completedCount: 0 };
     const compensate = {
       operationId: operation.operationId,
-      now: acceptedAt,
+      now: acceptance.acceptedAt,
+      previouslyAffectedCount: acceptance.completedCount,
       receiptFor,
     };
 
@@ -275,7 +276,10 @@ export async function undoListOperation(
       operation.affectedItemIds,
       compensate,
     );
-    return { outcome: 'applied', affectedCount: restored.length };
+    return {
+      outcome: 'applied',
+      affectedCount: acceptance.completedCount + restored.length,
+    };
   } catch (error) {
     /**
      * The conditions this compensation ran under have moved. Every one of them is a

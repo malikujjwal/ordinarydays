@@ -1,6 +1,6 @@
 import type { List } from '@od/shared/types';
 import { randomUUID } from 'expo-crypto';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { archivedListToast } from '@/features/lists/model/archiveUndoToast';
 import { ListTransactionService } from '@/lib/sqlite/listTransactions';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
@@ -18,6 +18,7 @@ export function useListIndexMutations(): ListIndexMutations {
   const showUndo = useToast((store) => store.showUndo);
   const show = useToast((store) => store.show);
   const dismissToast = useToast((store) => store.dismiss);
+  const latestPublication = useRef(0);
 
   const queueArchive = useCallback(
     async (list: List, archived: boolean, intentId: string) => {
@@ -33,17 +34,19 @@ export function useListIndexMutations(): ListIndexMutations {
 
   const runArchive = useCallback(
     (list: List, archived: boolean, intentId: string, offerUndo: boolean) => {
+      const publication = ++latestPublication.current;
       // The accepted action takes the singleton slot before durable append can settle.
       dismissToast();
       void queueArchive(list, archived, intentId)
         .then((originalIntentId) => {
-          if (!offerUndo) return;
+          if (!offerUndo || publication !== latestPublication.current) return;
           showUndo(
             archivedListToast({
               title: list.title,
               onUndo: () => {
                 const inverseIntentId = randomUUID();
                 const runUndo = () => {
+                  const undoPublication = ++latestPublication.current;
                   dismissToast();
                   void state.account.transactions
                     .run(
@@ -61,13 +64,14 @@ export function useListIndexMutations(): ListIndexMutations {
                         state.sync.request('accepted-action');
                       }
                     })
-                    .catch(() =>
+                    .catch(() => {
+                      if (undoPublication !== latestPublication.current) return;
                       show({
                         message: `Couldn't undo archiving "${list.title}."`,
                         tone: 'error',
                         action: { label: 'Retry', onPress: runUndo },
-                      }),
-                    );
+                      });
+                    });
                 };
                 runUndo();
               },
@@ -81,7 +85,8 @@ export function useListIndexMutations(): ListIndexMutations {
             }),
           );
         })
-        .catch(() =>
+        .catch(() => {
+          if (publication !== latestPublication.current) return;
           show({
             message: `Couldn't ${archived ? 'archive' : 'restore'} "${list.title}."`,
             tone: 'error',
@@ -89,8 +94,8 @@ export function useListIndexMutations(): ListIndexMutations {
               label: 'Retry',
               onPress: () => runArchive(list, archived, intentId, offerUndo),
             },
-          }),
-        );
+          });
+        });
     },
     [
       dismissToast,
@@ -105,11 +110,13 @@ export function useListIndexMutations(): ListIndexMutations {
 
   const runDelete = useCallback(
     (list: List, intentId: string) => {
+      const publication = ++latestPublication.current;
       dismissToast();
       void state.account.transactions
         .run((transaction) => service.remove(transaction, list, intentId), 'interactive')
         .then(() => state.sync.request('accepted-action'))
-        .catch(() =>
+        .catch(() => {
+          if (publication !== latestPublication.current) return;
           show({
             message: `Couldn't delete "${list.title}."`,
             tone: 'error',
@@ -117,8 +124,8 @@ export function useListIndexMutations(): ListIndexMutations {
               label: 'Retry',
               onPress: () => runDelete(list, intentId),
             },
-          }),
-        );
+          });
+        });
     },
     [dismissToast, service, show, state.account.transactions, state.sync],
   );

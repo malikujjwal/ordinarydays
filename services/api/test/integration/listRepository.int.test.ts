@@ -9,6 +9,7 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { instant } from '@od/shared/schemas';
 import type { Activity, List, ListItem } from '@od/shared/types';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
@@ -33,8 +34,8 @@ const accessByListId = new Map<string, ListAccessGrant>();
 
 const ALICE = 'usr_int_lists_alice';
 const BEN = 'usr_int_lists_ben';
-const NOW = '2026-08-23T14:00:00.000Z';
-const LATER = '2026-08-23T14:01:00.000Z';
+const NOW = instant.parse('2026-08-23T14:00:00.000Z');
+const LATER = instant.parse('2026-08-23T14:01:00.000Z');
 
 beforeAll(async () => {
   repository = await import('../../src/repositories/listRepository.js');

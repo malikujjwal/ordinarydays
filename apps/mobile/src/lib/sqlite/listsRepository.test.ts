@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
@@ -34,8 +35,8 @@ const list = (overrides: Partial<List> = {}): List => ({
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-24T09:00:00.000Z',
-  lastItemActivityAt: '2026-08-25T18:30:00.000Z',
+  updatedAt: instant.parse('2026-08-24T09:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-25T18:30:00.000Z'),
   ...overrides,
 });
 

@@ -166,10 +166,9 @@ describe('every primitive renders', () => {
   it('renders an API request id as selectable support text', () => {
     wrap(<Toast message="Could not save" tone="error" requestId="req_toast" />);
 
-    expect(screen.getByTestId('toast-request-id').textContent).toBe('req_toast');
-    expect(screen.getByTestId('toast-request-id').getAttribute('user-select')).not.toBe(
-      'none',
-    );
+    const requestId = screen.getByText('req_toast');
+    expect(requestId.textContent).toBe('req_toast');
+    expect(requestId.getAttribute('user-select')).not.toBe('none');
   });
 
   it('Skeleton', () => {

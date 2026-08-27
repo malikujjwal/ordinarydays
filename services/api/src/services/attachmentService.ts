@@ -3,6 +3,7 @@ import {
   MAX_UNRESOLVED_UPLOADS,
   PENDING_UPLOAD_CLEANUP_DAYS,
 } from '@od/shared/constants';
+import { instant } from '@od/shared/schemas';
 import type {
   Attachment,
   DeletedAttachment,
@@ -377,7 +378,7 @@ function toAttachmentRow(
     key: record.finalKey,
     contentType: record.contentType,
     byteSize: record.byteSize,
-    createdAt,
+    createdAt: instant.parse(createdAt),
     schemaVersion: 1,
   };
 }

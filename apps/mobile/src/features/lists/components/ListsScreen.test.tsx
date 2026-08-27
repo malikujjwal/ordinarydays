@@ -36,8 +36,8 @@ const list = (id: string, overrides: Partial<List> = {}): List => ({
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-24T09:00:00.000Z',
-  lastItemActivityAt: '2026-08-26T09:00:00.000Z',
+  updatedAt: instant.parse('2026-08-24T09:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-26T09:00:00.000Z'),
   ...overrides,
 });
 
@@ -385,9 +385,7 @@ describe('loading and failure', () => {
 
     expect(screen.getByText(`List ${idAt(0)}`)).toBeTruthy();
     expect(screen.getByTestId('lists-refresh-failed')).toBeTruthy();
-    expect(screen.getByTestId('lists-refresh-request-id').textContent).toBe(
-      'req_refresh_failure',
-    );
+    expect(screen.getByText('req_refresh_failure')).toBeTruthy();
   });
 
   it('becomes an error screen when there is nothing to keep', () => {
@@ -401,11 +399,9 @@ describe('loading and failure', () => {
 
     expect(screen.getByTestId('lists-error')).toBeTruthy();
     expect(screen.getByText("Couldn't load this.")).toBeTruthy();
-    expect(screen.queryByTestId('lists-empty')).toBeNull();
+    expect(screen.queryByText('No lists yet')).toBeNull();
     expect(screen.queryByText('Something went wrong.')).toBeNull();
-    expect(screen.getByTestId('lists-error-request-id').textContent).toBe(
-      'req_lists_failure',
-    );
+    expect(screen.getByText('req_lists_failure')).toBeTruthy();
     expect(screen.getByText('Try again')).toBeTruthy();
   });
 });

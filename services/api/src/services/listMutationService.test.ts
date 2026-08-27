@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { List, ListBehaviourConfirmation, ListItem } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../lib/errors.js';
@@ -56,7 +57,7 @@ const { changeListBehaviour, drainBehaviourMigration, drainListWork, withListWor
 
 const USER = 'usr_local_dev';
 const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
-const NOW = '2026-08-24T09:00:00.000Z';
+const NOW = instant.parse('2026-08-24T09:00:00.000Z');
 /**
  * Generated rather than written as a literal, like every other request in this suite. A UUID
  * spelled out beside a constant called `KEY` reads as a credential to a secret scanner, and
@@ -525,7 +526,7 @@ describe('binding the confirmation to what is actually there', () => {
 describe('the checks before anything is installed', () => {
   it('409s a stale If-Match with the current version, installing nothing', async () => {
     vi.mocked(repository.getListMeta).mockResolvedValue(
-      list({ updatedAt: '2026-08-24T10:00:00.000Z' }),
+      list({ updatedAt: instant.parse('2026-08-24T10:00:00.000Z') }),
     );
 
     await expect(change()).rejects.toMatchObject({
@@ -578,7 +579,7 @@ describe('the checks before anything is installed', () => {
   it('409s when a drained migration moved the version it was holding', async () => {
     vi.mocked(repository.getListMeta)
       .mockResolvedValueOnce(list({ behaviourMigrationId: 'op_someone_else' }))
-      .mockResolvedValue(list({ updatedAt: '2026-08-24T11:00:00.000Z' }));
+      .mockResolvedValue(list({ updatedAt: instant.parse('2026-08-24T11:00:00.000Z') }));
     vi.mocked(repository.getBehaviourMigrationWork).mockResolvedValue(undefined);
 
     await expect(change()).rejects.toMatchObject({ code: 'conflict' });

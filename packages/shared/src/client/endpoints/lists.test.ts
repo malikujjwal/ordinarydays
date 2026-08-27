@@ -346,7 +346,10 @@ describe('undoListOperation', () => {
     // Strictly the token. A client never sends deleted row contents back as authority.
     expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({ undoToken: 'tok-1' });
     expect(calls[0]?.headers['Idempotency-Key']).toBe('undo-key');
-    expect(result).toEqual({ outcome: 'applied', affectedCount: 3 });
+    expect(result).toEqual({
+      data: { outcome: 'applied', affectedCount: 3 },
+      meta: { requestId: REQUEST_ID },
+    });
   });
 
   it.each(['expired', 'no_longer_applicable'] as const)(
@@ -356,7 +359,8 @@ describe('undoListOperation', () => {
       const { client } = makeClient([ok({ outcome })]);
 
       await expect(undoListOperation(client, LIST_ID, 'tok', 'k')).resolves.toEqual({
-        outcome,
+        data: { outcome },
+        meta: { requestId: REQUEST_ID },
       });
     },
   );

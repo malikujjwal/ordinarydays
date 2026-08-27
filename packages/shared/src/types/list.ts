@@ -1,4 +1,5 @@
 import type { UserId } from '../schemas/common.js';
+import type { Instant } from '../time/index.js';
 import type { DefaultSlot } from './user.js';
 
 /**
@@ -99,7 +100,7 @@ export interface List {
   behaviourMigrationId?: string;
   archived: boolean;
   /** Backs `If-Match` on list-level edits. Moves only when the List row itself changes. */
-  updatedAt: string;
+  updatedAt: Instant;
   /**
    * The last write to any **item** in this list. Renders the Lists index's `Updated today`
    * line (`design-system.md` §7.2) and **backs nothing** (`data-model.md` §4.6).
@@ -115,7 +116,7 @@ export interface List {
    * concurrency token every open list-settings sheet is holding — the same split ADR-039 made
    * between an Activity's `lastActivityAt` and `updatedAt`, for the same reason.
    */
-  lastItemActivityAt: string;
+  lastItemActivityAt: Instant;
 }
 
 /**

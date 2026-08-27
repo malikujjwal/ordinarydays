@@ -1208,6 +1208,8 @@ export interface ListUndoOperation {
   readonly affectedItemIds: readonly string[];
   /** First accepted compensation instant, reused if a chunked inverse resumes. */
   readonly acceptedAt?: Instant;
+  /** Compensation rows committed before this request, preserved across process restarts. */
+  readonly completedCount: number;
   readonly inverse?: ListSettingsInverse;
   readonly preconditions?: ListSettingsPreconditions;
   readonly consumed: boolean;
@@ -1229,6 +1231,7 @@ const listUndoSchema = z.object({
   undoExpiresAt: z.string().min(1),
   affectedItemIds: z.array(z.string().min(1)).default([]),
   acceptedAt: instant.optional(),
+  completedCount: z.number().int().nonnegative().default(0),
   inverse: settingsInverseSchema.optional(),
   preconditions: settingsPreconditionsSchema.optional(),
   consumed: z.boolean(),
@@ -1257,14 +1260,19 @@ export async function getListUndoOperation(
   return parsed.listId === listId ? (parsed as ListUndoOperation) : undefined;
 }
 
-/** Persists and returns the first instant at which a chunked compensation was accepted. */
+export interface ListUndoAcceptance {
+  readonly acceptedAt: Instant;
+  readonly completedCount: number;
+}
+
+/** Persists the first acceptance instant and returns resumable compensation progress. */
 export async function acceptListUndoOperation(
   userId: string,
   listId: string,
   access: ListAccessGrant,
   operationId: string,
   now: Instant,
-): Promise<Instant> {
+): Promise<ListUndoAcceptance> {
   assertListAccessGrant(userId, listId, access);
   try {
     const row = await updateItem<StoredItem>(listUndo(listId, operationId), {
@@ -1278,10 +1286,11 @@ export async function acceptListUndoOperation(
       condition: '#operationId = :operationId AND #consumed = :false',
     });
     if (row === undefined) throw new ListUndoNotApplicableError();
-    const acceptedAt = listUndoSchema.parse(row).acceptedAt;
+    const accepted = listUndoSchema.parse(row);
+    const acceptedAt = accepted.acceptedAt;
     if (acceptedAt === undefined)
       throw new Error('Undo acceptance timestamp was not stored.');
-    return acceptedAt;
+    return { acceptedAt, completedCount: accepted.completedCount };
   } catch (error) {
     if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
       throw new ListUndoNotApplicableError();
@@ -3571,27 +3580,63 @@ function bulkUndoItem(
     undoExpiresAt: options.undoExpiresAt,
     ttl: ttlFor(options.now),
     consumed: false,
+    completedCount: 0,
   });
 }
 
 /** Marks one operation used, and fails if it already was. Single-use, enforced in storage. */
-function consumeUndoAction(listId: string, operationId: string, now: string) {
+function consumeUndoAction(
+  listId: string,
+  operationId: string,
+  now: string,
+  completedCount?: number,
+) {
   return {
     Update: {
       Key: listUndo(listId, operationId),
-      UpdateExpression: 'SET #consumed = :true, #consumedAt = :now, #updatedAt = :now',
+      UpdateExpression: `SET #consumed = :true, #consumedAt = :now, #updatedAt = :now${completedCount === undefined ? '' : ' ADD #completedCount :completedCount'}`,
       ConditionExpression: '#operationId = :operationId AND #consumed = :false',
       ExpressionAttributeNames: {
         '#operationId': 'operationId',
         '#consumed': 'consumed',
         '#consumedAt': 'consumedAt',
         '#updatedAt': 'updatedAt',
+        ...(completedCount === undefined ? {} : { '#completedCount': 'completedCount' }),
       },
       ExpressionAttributeValues: {
         ':operationId': operationId,
         ':false': false,
         ':true': true,
         ':now': now,
+        ...(completedCount === undefined ? {} : { ':completedCount': completedCount }),
+      },
+    },
+  } as const;
+}
+
+/** Records one committed compensation chunk without spending the operation. */
+function recordUndoProgressAction(
+  listId: string,
+  operationId: string,
+  now: string,
+  completedCount: number,
+) {
+  return {
+    Update: {
+      Key: listUndo(listId, operationId),
+      UpdateExpression: 'SET #updatedAt = :now ADD #completedCount :completedCount',
+      ConditionExpression: '#operationId = :operationId AND #consumed = :false',
+      ExpressionAttributeNames: {
+        '#operationId': 'operationId',
+        '#consumed': 'consumed',
+        '#updatedAt': 'updatedAt',
+        '#completedCount': 'completedCount',
+      },
+      ExpressionAttributeValues: {
+        ':operationId': operationId,
+        ':false': false,
+        ':now': now,
+        ':completedCount': completedCount,
       },
     },
   } as const;
@@ -4370,6 +4415,11 @@ export interface CompensateOptions {
   readonly receiptFor?: (affectedCount: number) => IdempotencyReceipt;
 }
 
+interface ResumableCompensateOptions extends CompensateOptions {
+  /** Count already committed by an earlier process before this resume. */
+  readonly previouslyAffectedCount?: number;
+}
+
 /**
  * Re-checks the members of an `uncheck-all` set that still exist (§P3-10).
  *
@@ -4382,7 +4432,7 @@ export async function recheckListItems(
   listId: string,
   access: ListAccessGrant,
   itemIds: readonly string[],
-  options: CompensateOptions,
+  options: ResumableCompensateOptions,
 ): Promise<number> {
   await readMutationState(userId, listId, access);
   const wanted = new Set(itemIds);
@@ -4391,6 +4441,7 @@ export async function recheckListItems(
   );
   const chunks = costedChunks(surviving, () => 2);
   const lastIndex = chunks.length - 1;
+  const affectedCount = (options.previouslyAffectedCount ?? 0) + surviving.length;
 
   /**
    * The retry wraps **one chunk**, never the whole compensation.
@@ -4473,10 +4524,18 @@ export async function recheckListItems(
         },
       });
       // The operation is spent by the transaction that finishes it, never before.
-      if (isLast)
-        builder.add(consumeUndoAction(listId, options.operationId, options.now));
+      builder.add(
+        isLast
+          ? consumeUndoAction(listId, options.operationId, options.now, chunk.length)
+          : recordUndoProgressAction(
+              listId,
+              options.operationId,
+              options.now,
+              chunk.length,
+            ),
+      );
       if (isLast && options.receiptFor !== undefined) {
-        builder.addReserved(receiptItem(options.receiptFor(surviving.length)));
+        builder.addReserved(receiptItem(options.receiptFor(affectedCount)));
       }
 
       await transactWrite(builder.build(), {
@@ -4489,16 +4548,20 @@ export async function recheckListItems(
     });
   }
 
-  if (chunks.length === 0) await consumeOnly(listId, options);
+  if (chunks.length === 0) await consumeOnly(listId, options, affectedCount);
   /**
    * The count is the set this attempt found to compensate, decided before any of it ran, so a
    * chunk-level retry cannot shrink it half way through.
    */
-  return surviving.length;
+  return affectedCount;
 }
 
 /** Spends an operation whose inverse touched nothing that still exists. */
-async function consumeOnly(listId: string, options: CompensateOptions): Promise<void> {
+async function consumeOnly(
+  listId: string,
+  options: CompensateOptions,
+  affectedCount = 0,
+): Promise<void> {
   const builder = new TransactionBuilder(
     'consumeListUndo',
     options.receiptFor === undefined ? 0 : 1,
@@ -4507,7 +4570,7 @@ async function consumeOnly(listId: string, options: CompensateOptions): Promise<
     consumeUndoAction(listId, options.operationId, options.now),
   );
   if (options.receiptFor !== undefined) {
-    builder.addReserved(receiptItem(options.receiptFor(0)));
+    builder.addReserved(receiptItem(options.receiptFor(affectedCount)));
   }
   await transactWrite(builder.build(), {
     operation: 'consumeListUndo',
@@ -4547,11 +4610,11 @@ export async function restoreListItems(
   listId: string,
   access: ListAccessGrant,
   itemIds: readonly string[],
-  options: RestoreListItemOptions,
+  options: RestoreListItemOptions & ResumableCompensateOptions,
 ): Promise<ListItem[]> {
   const state = await readMutationState(userId, listId, access);
   if (itemIds.length === 0) {
-    await consumeOnly(listId, options);
+    await consumeOnly(listId, options, options.previouslyAffectedCount ?? 0);
     return [];
   }
   {
@@ -4565,7 +4628,14 @@ export async function restoreListItems(
         (tombstone) =>
           tombstone.listId === listId && tombstone.operationId === options.operationId,
       );
-    if (tombstones.length === 0) throw new ListUndoNotApplicableError();
+    if (tombstones.length === 0) {
+      const previouslyAffectedCount = options.previouslyAffectedCount ?? 0;
+      if (previouslyAffectedCount === 0) throw new ListUndoNotApplicableError();
+      await consumeOnly(listId, options, previouslyAffectedCount);
+      return [];
+    }
+
+    const affectedCount = (options.previouslyAffectedCount ?? 0) + tombstones.length;
 
     const entries = await Promise.all(
       tombstones.map(async (tombstone) => ({
@@ -4655,8 +4725,16 @@ export async function restoreListItems(
           });
         }
 
-        if (isLast)
-          builder.add(consumeUndoAction(listId, options.operationId, options.now));
+        builder.add(
+          isLast
+            ? consumeUndoAction(listId, options.operationId, options.now, chunk.length)
+            : recordUndoProgressAction(
+                listId,
+                options.operationId,
+                options.now,
+                chunk.length,
+              ),
+        );
         const nextVersion = version + 1;
         builder.add({
           Update: {
@@ -4685,7 +4763,7 @@ export async function restoreListItems(
         const metaIndex = builder.length - 1;
         const receiptIndex = builder.length;
         if (isLast && options.receiptFor !== undefined) {
-          builder.addReserved(receiptItem(options.receiptFor(tombstones.length)));
+          builder.addReserved(receiptItem(options.receiptFor(affectedCount)));
         }
 
         await transactWrite(builder.build(), {
@@ -4718,7 +4796,10 @@ export async function restoreListItem(
   itemId: string,
   options: RestoreListItemOptions,
 ): Promise<ListItem> {
-  const [restored] = await restoreListItems(userId, listId, access, [itemId], options);
+  const [restored] = await restoreListItems(userId, listId, access, [itemId], {
+    ...options,
+    previouslyAffectedCount: 0,
+  });
   if (restored === undefined) throw new ListUndoNotApplicableError();
   return restored;
 }

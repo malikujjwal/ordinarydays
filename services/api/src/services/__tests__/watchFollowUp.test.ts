@@ -1,4 +1,4 @@
-import { completionFollowUp } from '@od/shared/schemas';
+import { completionFollowUp, instant } from '@od/shared/schemas';
 import type {
   Activity,
   ActivityDetails,
@@ -31,7 +31,7 @@ const ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const OTHER_ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X3';
 const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X4';
 const ITEM = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X5';
-const NOW = '2026-08-25T09:00:00.000Z';
+const NOW = instant.parse('2026-08-25T09:00:00.000Z');
 
 class StaleLink extends Error {}
 class ReadFence extends Error {}

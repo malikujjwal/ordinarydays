@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { ThemeProvider } from '@od/ui';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -19,9 +20,9 @@ const list = (overrides: Partial<List> = {}): List => ({
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-24T09:00:00.000Z',
+  updatedAt: instant.parse('2026-08-24T09:00:00.000Z'),
   // Later than `updatedAt`: the list was renamed, then used (P3-46).
-  lastItemActivityAt: '2026-08-25T18:30:00.000Z',
+  lastItemActivityAt: instant.parse('2026-08-25T18:30:00.000Z'),
   ...overrides,
 });
 

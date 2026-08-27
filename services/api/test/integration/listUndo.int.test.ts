@@ -1,4 +1,5 @@
 import { MAX_AUTOMATIC_INTENT_AGE_DAYS } from '@od/shared';
+import { instant } from '@od/shared/schemas';
 import type { List, ListItem } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { useTestTable } from './harness.js';
@@ -36,7 +37,7 @@ let base: Base;
 let keys: Keys;
 
 const DEV = 'usr_local_dev';
-const NOW = '2026-08-24T09:00:00.000Z';
+const NOW = instant.parse('2026-08-24T09:00:00.000Z');
 const ACTIVITY = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X7';
 
 beforeAll(async () => {
@@ -532,6 +533,48 @@ describe('a bulk operation interrupted part-way', () => {
     expect(
       (await partitionRows(list.listId)).filter((row) => row.entity === 'ListUndo'),
     ).toHaveLength(1);
+  });
+
+  it('reports every committed restore chunk after a process restart', async () => {
+    const list = await seedList();
+    const ids = await seedMany(list.listId);
+    const cleared = await (
+      await request('POST', `/v1/lists/${list.listId}/clear-checked`)
+    ).json();
+    const [operationId] = String(cleared.data.undoToken).split('.');
+    if (operationId === undefined || operationId.length === 0) {
+      throw new Error('The Undo token has no operation id.');
+    }
+    const access = await repository.getListPointer(DEV, list.listId);
+    if (access === undefined) throw new Error('The owner List pointer is missing.');
+
+    await repository.acceptListUndoOperation(DEV, list.listId, access, operationId, NOW);
+    await repository.restoreListItems(DEV, list.listId, access, ids.slice(0, 48), {
+      operationId,
+      now: NOW,
+    });
+
+    // The direct call above stands in for committed chunks; reopen the same durable operation
+    // as it would look when the process died before reaching the remaining tombstones.
+    const reopened = await base.updateItem<Record<string, unknown>>(
+      keys.listUndo(list.listId, operationId),
+      {
+        expression: 'SET #consumed = :false REMOVE #consumedAt',
+        names: { '#consumed': 'consumed', '#consumedAt': 'consumedAt' },
+        values: { ':false': false },
+      },
+    );
+    expect(reopened?.completedCount).toBe(48);
+
+    const resumed = await request('POST', `/v1/lists/${list.listId}/undo`, {
+      undoToken: cleared.data.undoToken,
+    });
+
+    expect((await resumed.json()).data).toEqual({
+      outcome: 'applied',
+      affectedCount: MANY,
+    });
+    expect(await storedItems(list.listId)).toHaveLength(MANY);
   });
 });
 

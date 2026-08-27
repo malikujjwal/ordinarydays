@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ApiError, NetworkError } from '@od/shared/client';
-import type { CreateActivityInput } from '@od/shared/schemas';
+import { type CreateActivityInput, instant } from '@od/shared/schemas';
 import type { Activity, List } from '@od/shared/types';
 import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -3643,8 +3643,8 @@ describe('serialized native convergence guard', () => {
       memberCount: 1,
       rankVersion: 0,
       archived: false,
-      updatedAt: '2026-08-19T00:00:00.000Z',
-      lastItemActivityAt: '2026-08-19T00:00:00.000Z',
+      updatedAt: instant.parse('2026-08-19T00:00:00.000Z'),
+      lastItemActivityAt: instant.parse('2026-08-19T00:00:00.000Z'),
     };
     const lists = new ListsRepository(database, new RepositorySubscriptions());
     const listService = new ListTransactionService(outbox, lists);
@@ -3714,13 +3714,13 @@ describe('serialized native convergence guard', () => {
       memberCount: 1,
       rankVersion: 0,
       archived: false,
-      updatedAt: '2026-08-19T00:00:00.000Z',
-      lastItemActivityAt: '2026-08-19T00:00:00.000Z',
+      updatedAt: instant.parse('2026-08-19T00:00:00.000Z'),
+      lastItemActivityAt: instant.parse('2026-08-19T00:00:00.000Z'),
     };
     const acknowledged = {
       ...list,
       archived: true,
-      updatedAt: '2026-08-20T00:00:00.000Z',
+      updatedAt: instant.parse('2026-08-20T00:00:00.000Z'),
     };
     const lists = new ListsRepository(database, new RepositorySubscriptions());
     const listService = new ListTransactionService(outbox, lists);
@@ -3788,13 +3788,13 @@ describe('serialized native convergence guard', () => {
       memberCount: 1,
       rankVersion: 0,
       archived: true,
-      updatedAt: '2026-08-19T00:01:00.000Z',
-      lastItemActivityAt: '2026-08-19T00:00:00.000Z',
+      updatedAt: instant.parse('2026-08-19T00:01:00.000Z'),
+      lastItemActivityAt: instant.parse('2026-08-19T00:00:00.000Z'),
     };
     const restored = {
       ...archived,
       archived: false,
-      updatedAt: '2026-08-19T00:02:00.000Z',
+      updatedAt: instant.parse('2026-08-19T00:02:00.000Z'),
     };
     const lists = new ListsRepository(database, new RepositorySubscriptions());
     const listService = new ListTransactionService(outbox, lists);

@@ -1,4 +1,3 @@
-import { instant } from '@od/shared/schemas';
 import { type Instant, type TimeZone, toWallDate } from '@od/shared/time';
 import { differenceInCalendarDays, parseISO } from 'date-fns';
 
@@ -35,11 +34,11 @@ import { differenceInCalendarDays, parseISO } from 'date-fns';
 const WEEK = 7;
 
 export function updatedLine(
-  lastItemActivityAt: string,
+  lastItemActivityAt: Instant,
   now: Instant,
   timezone: TimeZone,
 ): string {
-  const then = toWallDate(instant.parse(lastItemActivityAt), timezone);
+  const then = toWallDate(lastItemActivityAt, timezone);
   const today = toWallDate(now, timezone);
   const days = differenceInCalendarDays(parseISO(today), parseISO(then));
 

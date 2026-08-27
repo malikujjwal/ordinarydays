@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { List, User } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { profileDefaultToClear, resolveListSlot } from './listSlotService.js';
@@ -42,8 +43,8 @@ const list = (listId: string, slot: List['slot'], archived = false): List => ({
   memberCount: 1,
   rankVersion: 1,
   archived,
-  updatedAt: '2026-08-24T12:00:00.000Z',
-  lastItemActivityAt: '2026-08-24T12:00:00.000Z',
+  updatedAt: instant.parse('2026-08-24T12:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-24T12:00:00.000Z'),
 });
 
 /** One page of the list index, in pointer order. */

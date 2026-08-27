@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
 import { MAX_UPLOAD_BYTES } from '../constants.js';
+import type { Instant } from '../time/index.js';
 import type {
   RequestUploadUrlInput,
   RequestUploadUrlResult,
@@ -145,5 +146,9 @@ describe('the linked attachment', () => {
     expect(attachment.safeParse({ ...linked, createdAt: 'yesterday' }).success).toBe(
       false,
     );
+  });
+
+  it('keeps createdAt branded after validation', () => {
+    expectTypeOf<z.infer<typeof attachment>['createdAt']>().toEqualTypeOf<Instant>();
   });
 });

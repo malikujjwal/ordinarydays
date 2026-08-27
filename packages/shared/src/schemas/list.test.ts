@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import { MAX_LIST_ITEMS, MAX_SOURCE_LABEL_LEN } from '../constants.js';
+import type { Instant } from '../time/index.js';
 import type { DeletedList } from '../types/deletedList.js';
 import type {
   List,
@@ -75,6 +76,11 @@ describe('the schema and the interface are the same shape', () => {
 
   it('List is assignable both ways', () => {
     expectTypeOf<z.infer<typeof list>>().toEqualTypeOf<List>();
+  });
+
+  it('keeps visible list timestamps branded after validation', () => {
+    expectTypeOf<z.infer<typeof list>['updatedAt']>().toEqualTypeOf<Instant>();
+    expectTypeOf<z.infer<typeof list>['lastItemActivityAt']>().toEqualTypeOf<Instant>();
   });
 
   it('ListIndex is assignable both ways', () => {

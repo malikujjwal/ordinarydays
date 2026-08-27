@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,9 +51,19 @@ const LIST: List = {
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-26T09:00:00.000Z',
-  lastItemActivityAt: '2026-08-26T08:00:00.000Z',
+  updatedAt: instant.parse('2026-08-26T09:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-26T08:00:00.000Z'),
 };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((accept, refuse) => {
+    resolve = accept;
+    reject = refuse;
+  });
+  return { promise, resolve, reject };
+}
 
 beforeEach(() => {
   calls.commit.mockReset();
@@ -80,6 +91,37 @@ function retryCurrentToast(): void {
 }
 
 describe('native List index mutations', () => {
+  it('does not let an older archive publish Undo after a newer action settles', async () => {
+    const older = deferred<void>();
+    const newer = deferred<void>();
+    calls.run.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    calls.uuid.mockReturnValueOnce('older-intent').mockReturnValueOnce('newer-intent');
+    const packing = {
+      ...LIST,
+      listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0DEF',
+      title: 'Packing',
+    };
+    const mounted = renderHook(() => useListIndexMutations());
+
+    act(() => mounted.result.current.onArchive(LIST));
+    act(() => mounted.result.current.onArchive(packing));
+
+    act(() => newer.resolve());
+    await waitFor(() =>
+      expect(useToast.getState().current).toMatchObject({
+        kind: 'undo',
+        message: 'Packing archived',
+      }),
+    );
+
+    act(() => older.resolve());
+    await waitFor(() => expect(calls.sync).toHaveBeenCalledTimes(2));
+    expect(useToast.getState().current).toMatchObject({
+      kind: 'undo',
+      message: 'Packing archived',
+    });
+  });
+
   it.each([
     ['archive', (actions: ListIndexMutations) => actions.onArchive(LIST)],
     [

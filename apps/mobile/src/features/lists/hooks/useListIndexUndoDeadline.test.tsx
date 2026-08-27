@@ -1,4 +1,5 @@
 import type { ListPage } from '@od/shared/client';
+import { instant } from '@od/shared/schemas';
 import { fixedClock, type Instant } from '@od/shared/time';
 import type { List, ListSettingsMutation } from '@od/shared/types';
 import {
@@ -40,8 +41,8 @@ const LIST: List = {
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-26T09:00:00.000Z',
-  lastItemActivityAt: '2026-08-26T08:00:00.000Z',
+  updatedAt: instant.parse('2026-08-26T09:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-26T08:00:00.000Z'),
 };
 
 const NOW = '2026-08-27T14:00:00.000Z' as Instant;

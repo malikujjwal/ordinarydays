@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
@@ -30,8 +31,8 @@ const LIST: List = {
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-26T12:00:00.000Z',
-  lastItemActivityAt: '2026-08-26T12:00:00.000Z',
+  updatedAt: instant.parse('2026-08-26T12:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-26T12:00:00.000Z'),
 };
 
 describe('native List transactional outbox', () => {
@@ -193,7 +194,7 @@ describe('native List transactional outbox', () => {
     const acknowledged = {
       ...LIST,
       archived: true,
-      updatedAt: '2026-08-26T12:01:00.000Z',
+      updatedAt: instant.parse('2026-08-26T12:01:00.000Z'),
     };
     await transactions.run((transaction) =>
       lists.applySettings(transaction, acknowledged),
@@ -243,7 +244,10 @@ describe('native List transactional outbox', () => {
       // The rejection rollback restored the server value before the user selected Retry.
       await lists.setArchivedLocal(transaction, LIST.listId, false);
     });
-    const recovered = { ...LIST, updatedAt: '2026-08-26T12:05:00.000Z' };
+    const recovered = {
+      ...LIST,
+      updatedAt: instant.parse('2026-08-26T12:05:00.000Z'),
+    };
     const sync = {
       request: vi.fn(),
       recoverRejectedIntent: vi.fn(async () => {
@@ -312,7 +316,10 @@ describe('native List transactional outbox', () => {
       );
       await lists.setArchivedLocal(transaction, LIST.listId, false);
     });
-    const recovered = { ...LIST, updatedAt: '2026-08-26T12:06:00.000Z' };
+    const recovered = {
+      ...LIST,
+      updatedAt: instant.parse('2026-08-26T12:06:00.000Z'),
+    };
     const sync = {
       request: vi.fn(),
       recoverRejectedIntent: vi.fn(async () => {

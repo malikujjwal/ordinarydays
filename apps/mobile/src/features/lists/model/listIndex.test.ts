@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { instant } from '@od/shared/schemas';
 import { fixedClock, type Instant, type TimeZone } from '@od/shared/time';
 import type { List } from '@od/shared/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   archivedListToast,
   remainingArchiveUndoMs,
@@ -34,8 +34,8 @@ const list = (overrides: Partial<List> = {}): List => ({
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-24T09:00:00.000Z',
-  lastItemActivityAt: '2026-08-26T18:30:00.000Z',
+  updatedAt: instant.parse('2026-08-24T09:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-26T18:30:00.000Z'),
   ...overrides,
 });
 
@@ -106,15 +106,19 @@ describe('the updated line', () => {
   const now = instant.parse('2026-08-26T12:00:00.000Z');
 
   it.each([
-    ['2026-08-26T00:10:00.000Z', 'Updated today'],
-    ['2026-08-25T23:50:00.000Z', 'Updated yesterday'],
-    ['2026-08-23T09:00:00.000Z', 'Updated 3 days ago'],
-    ['2026-08-18T09:00:00.000Z', 'Updated last week'],
-    ['2026-08-05T09:00:00.000Z', 'Updated 3 weeks ago'],
-    ['2026-05-05T09:00:00.000Z', 'Updated 3 months ago'],
-    ['2024-05-05T09:00:00.000Z', 'Updated over a year ago'],
+    [instant.parse('2026-08-26T00:10:00.000Z'), 'Updated today'],
+    [instant.parse('2026-08-25T23:50:00.000Z'), 'Updated yesterday'],
+    [instant.parse('2026-08-23T09:00:00.000Z'), 'Updated 3 days ago'],
+    [instant.parse('2026-08-18T09:00:00.000Z'), 'Updated last week'],
+    [instant.parse('2026-08-05T09:00:00.000Z'), 'Updated 3 weeks ago'],
+    [instant.parse('2026-05-05T09:00:00.000Z'), 'Updated 3 months ago'],
+    [instant.parse('2024-05-05T09:00:00.000Z'), 'Updated over a year ago'],
   ])('renders %s as %s', (stamp, expected) => {
     expect(updatedLine(stamp, now, UTC)).toBe(expected);
+  });
+
+  it('accepts only branded instants', () => {
+    expectTypeOf(updatedLine).parameter(0).toEqualTypeOf<Instant>();
   });
 
   /**
@@ -123,17 +127,15 @@ describe('the updated line', () => {
    */
   it('crosses midnight rather than counting hours', () => {
     const justAfterMidnight = instant.parse('2026-08-26T00:10:00.000Z');
-    expect(updatedLine('2026-08-25T23:50:00.000Z', justAfterMidnight, UTC)).toBe(
-      'Updated yesterday',
-    );
+    expect(
+      updatedLine(instant.parse('2026-08-25T23:50:00.000Z'), justAfterMidnight, UTC),
+    ).toBe('Updated yesterday');
   });
 
   it('reads today when the clock is behind the write', () => {
-    expect(updatedLine('2026-08-27T09:00:00.000Z', now, UTC)).toBe('Updated today');
-  });
-
-  it('refuses a malformed stored timestamp before rendering it', () => {
-    expect(() => updatedLine('yesterday', now, UTC)).toThrow();
+    expect(updatedLine(instant.parse('2026-08-27T09:00:00.000Z'), now, UTC)).toBe(
+      'Updated today',
+    );
   });
 });
 

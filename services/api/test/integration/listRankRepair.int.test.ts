@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { List, ListItem } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { useTestTable } from './harness.js';
@@ -26,8 +27,8 @@ let keys: Keys;
 let repair: RepairService;
 
 const DEV = 'usr_local_dev';
-const NOW = '2026-08-24T09:00:00.000Z';
-const LATER = '2026-08-24T09:05:00.000Z';
+const NOW = instant.parse('2026-08-24T09:00:00.000Z');
+const LATER = instant.parse('2026-08-24T09:05:00.000Z');
 
 /** `MAX_DRAIN_CHUNKS` (8) × `RANK_REPAIR_CHUNK` (25). One request cannot exceed this. */
 const ONE_REQUEST_OF_REPAIR = 200;

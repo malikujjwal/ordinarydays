@@ -41,8 +41,8 @@ const LIST_ID = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const ITEM_A = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const ITEM_B = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X3';
 const ACTIVITY_ID = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X4';
-const NOW = '2026-08-23T14:00:00.000Z';
-const LATER = '2026-08-23T14:01:00.000Z';
+const NOW = instant.parse('2026-08-23T14:00:00.000Z');
+const LATER = instant.parse('2026-08-23T14:01:00.000Z');
 
 const list = (overrides: Partial<List> = {}): List => ({
   listId: LIST_ID,
@@ -524,6 +524,56 @@ describe('the bulk checked operations', () => {
     ).toBe(true);
   });
 
+  it('includes committed chunks when a re-check resumes after a crash', async () => {
+    vi.mocked(base.getItem).mockImplementation(async (key) =>
+      key.sk === keys.listMeta(LIST_ID).sk ? listRow() : undefined,
+    );
+    vi.mocked(base.queryAll).mockImplementation(async (_key, options) =>
+      options?.skPrefix === 'ITEM#'
+        ? [itemRow(item({ itemId: SURVIVOR, rank: 'a0', checked: false }))]
+        : [],
+    );
+    const receiptFor = vi.fn(() => receipt);
+
+    await expect(
+      repository.recheckListItems(ALICE, LIST_ID, access, [SURVIVOR], {
+        operationId: 'op_bulk',
+        now: LATER,
+        previouslyAffectedCount: 2,
+        receiptFor,
+      }),
+    ).resolves.toBe(3);
+    expect(receiptFor).toHaveBeenCalledWith(3);
+  });
+
+  it('records each non-final re-check chunk on the retained Undo operation', async () => {
+    const rows = checkedItems(49).map((value) => itemRow({ ...value, checked: false }));
+    vi.mocked(base.getItem).mockImplementation(async (key) =>
+      key.sk === keys.listMeta(LIST_ID).sk ? listRow() : undefined,
+    );
+    vi.mocked(base.queryAll).mockImplementation(async (_key, options) =>
+      options?.skPrefix === 'ITEM#' ? rows : [],
+    );
+
+    await repository.recheckListItems(
+      ALICE,
+      LIST_ID,
+      access,
+      rows.map((row) => String(row.itemId)),
+      { operationId: 'op_bulk', now: LATER },
+    );
+
+    const firstTransaction = vi.mocked(tx.transactWrite).mock.calls[0]?.[0] ?? [];
+    const progress = firstTransaction.find(
+      (entry) => entry.Update?.Key?.sk === keys.listUndo(LIST_ID, 'op_bulk').sk,
+    )?.Update;
+    expect(progress?.UpdateExpression).toContain('ADD #completedCount');
+    expect(progress?.ExpressionAttributeValues).toMatchObject({
+      ':completedCount': 48,
+    });
+    expect(progress?.ExpressionAttributeValues).not.toHaveProperty(':true');
+  });
+
   /** An operation whose every affected item has gone is still spent, exactly once. */
   it('spends the operation when nothing survives to re-check', async () => {
     vi.mocked(base.getItem).mockImplementation(async (key) =>
@@ -664,6 +714,7 @@ describe('the settings inverse', () => {
       undoExpiresAt: LATER,
       acceptedAt: NOW,
       affectedItemIds: [ITEM_A],
+      completedCount: 2,
       consumed: false,
       ttl: 2_000_000_000,
     });
@@ -676,7 +727,7 @@ describe('the settings inverse', () => {
         'op_bulk',
         instant.parse(LATER),
       ),
-    ).resolves.toBe(NOW);
+    ).resolves.toEqual({ acceptedAt: NOW, completedCount: 2 });
 
     expect(vi.mocked(base.updateItem).mock.calls[0]?.[1]).toMatchObject({
       expression: 'SET #acceptedAt = if_not_exists(#acceptedAt, :now)',
@@ -1469,6 +1520,42 @@ describe('delete, restore and cascade', () => {
     expect(items?.[5]?.Update?.ExpressionAttributeValues).toMatchObject({
       ':expectedVersion': 3,
       ':nextVersion': 4,
+    });
+  });
+
+  it('includes committed restore chunks in the final receipt after a crash', async () => {
+    const snapshot = item({ checked: true });
+    const tombstone = {
+      ...keys.listItemTombstone(LIST_ID, ITEM_A),
+      entity: 'ListItemTombstone',
+      schemaVersion: 1,
+      listId: LIST_ID,
+      itemId: ITEM_A,
+      operationId: 'op_clear',
+      snapshot,
+    };
+    vi.mocked(base.getItem).mockImplementation(async (key) =>
+      key.sk === keys.listMeta(LIST_ID).sk ? listRow({ rankVersion: 3 }) : undefined,
+    );
+    vi.mocked(base.batchGetItems)
+      .mockResolvedValueOnce([tombstone])
+      .mockResolvedValue([]);
+    const receiptFor = vi.fn(() => receipt);
+
+    await expect(
+      repository.restoreListItems(ALICE, LIST_ID, access, [ITEM_A], {
+        operationId: 'op_clear',
+        now: LATER,
+        previouslyAffectedCount: 2,
+        receiptFor,
+      }),
+    ).resolves.toEqual([snapshot]);
+    expect(receiptFor).toHaveBeenCalledWith(3);
+    const consume = transacted().find(
+      (entry) => entry.Update?.Key?.sk === keys.listUndo(LIST_ID, 'op_clear').sk,
+    )?.Update;
+    expect(consume?.ExpressionAttributeValues).toMatchObject({
+      ':completedCount': 1,
     });
   });
 

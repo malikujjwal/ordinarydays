@@ -1,4 +1,5 @@
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
+import { instant } from '@od/shared/schemas';
 import type { List, ListItem } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { documents, TEST_TABLE, useTestTable } from './harness.js';
@@ -26,7 +27,7 @@ let repository: Repository;
 
 const DEV = 'usr_local_dev';
 const BEN = 'usr_int_items_ben';
-const NOW = '2026-08-24T09:00:00.000Z';
+const NOW = instant.parse('2026-08-24T09:00:00.000Z');
 
 beforeAll(async () => {
   createApp = (await import('../../src/app.js')).createApp;

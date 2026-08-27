@@ -1,4 +1,5 @@
 import { ApiError } from '@od/shared/client';
+import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
@@ -45,8 +46,8 @@ const list = (title: string): List => ({
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-24T09:00:00.000Z',
-  lastItemActivityAt: '2026-08-26T09:00:00.000Z',
+  updatedAt: instant.parse('2026-08-24T09:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-26T09:00:00.000Z'),
 });
 
 interface Harness {

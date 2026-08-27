@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { Activity, List, ListItem } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../lib/errors.js';
@@ -72,9 +73,9 @@ const TORTILLAS = 'ing_01J8XKQ2M4N5P6R7S8T9V0W1A2';
 const ITEM_ONE = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B1';
 const ITEM_TWO = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1B2';
 /** A Sunday, five days after `NOW`, so §7.5 rule 1 applies. */
-const NOW = '2026-08-18T09:00:00.000Z';
+const NOW = instant.parse('2026-08-18T09:00:00.000Z');
 const SUNDAY = '2026-08-23';
-const READ_AT = '2026-08-17T09:00:00.000Z';
+const READ_AT = instant.parse('2026-08-17T09:00:00.000Z');
 
 const meal = (overrides: Partial<Activity> = {}): Activity =>
   ({

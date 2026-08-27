@@ -5,6 +5,7 @@ import {
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { MAX_ATTACHMENTS_PER_ACTIVITY } from '@od/shared/constants';
+import { instant } from '@od/shared/schemas';
 import type { Attachment } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -24,7 +25,7 @@ const ddbMock = mockClient(DynamoDBDocumentClient);
 const USER = 'usr_local_dev';
 const ACT = 'act_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const ATT = 'att_01J8XKQ2M4N5P6R7S8T9V0W1X3';
-const NOW = '2026-08-26T12:00:00.000Z';
+const NOW = instant.parse('2026-08-26T12:00:00.000Z');
 
 const items = () =>
   ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems ?? [];

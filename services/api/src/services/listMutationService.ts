@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { UNDO_OFFER_SECONDS } from '@od/shared';
-import type { ChangeListBehaviourInput, PatchListInput } from '@od/shared/schemas';
+import {
+  type ChangeListBehaviourInput,
+  instant,
+  type PatchListInput,
+} from '@od/shared/schemas';
 import type {
   List,
   ListBehaviour,
@@ -665,7 +669,7 @@ export async function patchListSettings(
       ...list,
       ...(input.title === undefined ? {} : { title: input.title }),
       ...changed,
-      updatedAt: now,
+      updatedAt: instant.parse(now),
     },
     ...(reversible ? { undo } : {}),
   };
@@ -748,7 +752,7 @@ function migratedList(list: List, work: BehaviourMigrationWork): List {
     behaviour: work.toBehaviour,
     rankVersion: work.rankVersion + 1,
     itemVersion: (list.itemVersion ?? 0) + 1,
-    updatedAt: work.committedAt,
+    updatedAt: instant.parse(work.committedAt),
   };
   delete visible.behaviourMigrationId;
   delete visible.rankRepairId;
@@ -993,7 +997,7 @@ export async function changeListBehaviour(
       behaviour: input.behaviour,
       rankVersion: list.rankVersion + 1,
       itemVersion: (list.itemVersion ?? 0) + 1,
-      updatedAt: now,
+      updatedAt: instant.parse(now),
     },
     ...(undo === undefined ? {} : { undo }),
   };

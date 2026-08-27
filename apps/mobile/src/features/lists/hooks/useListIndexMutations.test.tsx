@@ -1,4 +1,5 @@
 import { ApiError, type ListPage, NetworkError } from '@od/shared/client';
+import { instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import {
   type InfiniteData,
@@ -45,8 +46,8 @@ const LIST: List = {
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-26T09:00:00.000Z',
-  lastItemActivityAt: '2026-08-26T08:00:00.000Z',
+  updatedAt: instant.parse('2026-08-26T09:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-26T08:00:00.000Z'),
 };
 
 function deferred<T>() {
@@ -265,9 +266,45 @@ describe('web List index mutations', () => {
       expect(useToast.getState().current).toMatchObject({
         message: 'Too many requests. Try again in 30 seconds.',
         requestId: 'req_rate_limit',
-        action: { label: 'Retry' },
       }),
     );
+    expect(useToast.getState().current).not.toHaveProperty('action');
+  });
+
+  it('uses the required forbidden copy and does not offer Retry', async () => {
+    calls.patch.mockRejectedValueOnce(
+      new ApiError('forbidden', 'Server wording.', 403, 'req_forbidden'),
+    );
+    const mounted = setup();
+
+    act(() => mounted.result.current.onArchive(LIST));
+
+    await waitFor(() =>
+      expect(useToast.getState().current).toMatchObject({
+        message: 'Only the person who made this plan can change that.',
+        requestId: 'req_forbidden',
+      }),
+    );
+    expect(useToast.getState().current).not.toHaveProperty('action');
+    expect(cached(mounted.client)).toEqual([LIST]);
+  });
+
+  it('removes a missing row and uses the required not-found copy', async () => {
+    calls.patch.mockRejectedValueOnce(
+      new ApiError('not_found', 'Server wording.', 404, 'req_not_found'),
+    );
+    const mounted = setup();
+
+    act(() => mounted.result.current.onArchive(LIST));
+
+    await waitFor(() =>
+      expect(useToast.getState().current).toMatchObject({
+        message: "This isn't here any more.",
+        requestId: 'req_not_found',
+      }),
+    );
+    expect(useToast.getState().current).not.toHaveProperty('action');
+    expect(cached(mounted.client)).toEqual([]);
   });
 
   it('retries Undo with its original inverse identity and preserves the request id', async () => {
@@ -284,7 +321,10 @@ describe('web List index mutations', () => {
       .mockRejectedValueOnce(
         new ApiError('internal', 'No response.', 500, 'req_undo_list'),
       )
-      .mockResolvedValueOnce({ outcome: 'applied', affectedCount: 1 });
+      .mockResolvedValueOnce({
+        data: { outcome: 'applied', affectedCount: 1 },
+        meta: { requestId: 'req_undo_replay' },
+      });
     const mounted = setup();
 
     act(() => mounted.result.current.onArchive(LIST));
@@ -304,6 +344,53 @@ describe('web List index mutations', () => {
       'inverse-identity',
     ]);
     expect(calls.uuid).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows the successful response request id when Undo is no longer applicable', async () => {
+    calls.patch.mockResolvedValueOnce({
+      list: { ...LIST, archived: true },
+      undoToken: 'undo-token',
+      undoExpiresAt: '2999-08-26T10:00:06.000Z',
+    });
+    calls.undo.mockResolvedValueOnce({
+      data: { outcome: 'no_longer_applicable' },
+      meta: { requestId: 'req_semantic_undo' },
+    });
+    const mounted = setup();
+
+    act(() => mounted.result.current.onArchive(LIST));
+    await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
+    act(() => useToast.getState().undo());
+
+    await waitFor(() =>
+      expect(useToast.getState().current).toMatchObject({
+        message: `Couldn't undo archiving "${LIST.title}."`,
+        requestId: 'req_semantic_undo',
+      }),
+    );
+  });
+
+  it('removes a row when Undo learns that the list is missing', async () => {
+    calls.patch.mockResolvedValueOnce({
+      list: { ...LIST, archived: true },
+      undoToken: 'undo-token',
+      undoExpiresAt: '2999-08-26T10:00:06.000Z',
+    });
+    calls.undo.mockRejectedValueOnce(
+      new ApiError('not_found', 'Server wording.', 404, 'req_undo_missing'),
+    );
+    const mounted = setup();
+
+    act(() => mounted.result.current.onArchive(LIST));
+    await waitFor(() => expect(useToast.getState().current?.kind).toBe('undo'));
+    act(() => useToast.getState().undo());
+
+    await waitFor(() => expect(cached(mounted.client)).toEqual([]));
+    expect(useToast.getState().current).toMatchObject({
+      message: "This isn't here any more.",
+      requestId: 'req_undo_missing',
+    });
+    expect(useToast.getState().current).not.toHaveProperty('action');
   });
 
   it.each(['restore', 'delete'] as const)(

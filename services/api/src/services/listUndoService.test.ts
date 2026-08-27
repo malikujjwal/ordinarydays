@@ -24,7 +24,12 @@ vi.mock('../repositories/listRepository.js', async () => {
   >('../repositories/listRepository.js');
   return {
     ...actual,
-    acceptListUndoOperation: vi.fn(() => Promise.resolve('2026-08-24T09:00:00.000Z')),
+    acceptListUndoOperation: vi.fn(() =>
+      Promise.resolve({
+        acceptedAt: instant.parse('2026-08-24T09:00:00.000Z'),
+        completedCount: 0,
+      }),
+    ),
     getListMeta: vi.fn(),
     getListUndoOperation: vi.fn(),
     applyListSettingsInverse: vi.fn(() => Promise.resolve()),
@@ -71,6 +76,7 @@ const operation = (overrides: Partial<ListUndoOperation> = {}): ListUndoOperatio
   // Deliberately in the past: the UI window is over, and it must change nothing here.
   undoExpiresAt: '2026-08-24T08:00:00.000Z',
   affectedItemIds: ['itm_a', 'itm_b'],
+  completedCount: 0,
   consumed: false,
   ttl: Math.floor(Date.parse(NOW) / 1000) + 60 * 60 * 24,
   ...overrides,
@@ -93,7 +99,10 @@ beforeEach(() => {
   vi.mocked(repository.readAllListItems).mockResolvedValue([]);
   vi.mocked(repository.restoreListItems).mockResolvedValue([]);
   vi.mocked(repository.recheckListItems).mockResolvedValue(0);
-  vi.mocked(repository.acceptListUndoOperation).mockResolvedValue(NOW);
+  vi.mocked(repository.acceptListUndoOperation).mockResolvedValue({
+    acceptedAt: NOW,
+    completedCount: 0,
+  });
 });
 
 const undoAt = (token: string, now: string) =>
@@ -196,10 +205,39 @@ describe('dispatching on the recorded kind', () => {
     ]);
   });
 
+  it('includes already committed restore chunks in the logical Undo count', async () => {
+    const token = live({ kind: 'clear_checked', affectedItemIds: ['itm_a', 'itm_b'] });
+    vi.mocked(repository.acceptListUndoOperation).mockResolvedValue({
+      acceptedAt: NOW,
+      completedCount: 1,
+    });
+    vi.mocked(repository.restoreListItems).mockResolvedValue([
+      {
+        itemId: 'itm_b',
+        listId: LIST,
+        rank: 'V',
+        itemRevision: 0,
+        title: 'B',
+        checked: true,
+      },
+    ]);
+
+    await expect(undo(token)).resolves.toEqual({
+      outcome: 'applied',
+      affectedCount: 2,
+    });
+    expect(vi.mocked(repository.restoreListItems).mock.calls[0]?.[4]).toMatchObject({
+      previouslyAffectedCount: 1,
+    });
+  });
+
   it('reuses the first accepted instant when a bulk Undo resumes', async () => {
     const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a'] });
     const acceptedAt = instant.parse('2026-08-24T08:59:30.000Z');
-    vi.mocked(repository.acceptListUndoOperation).mockResolvedValue(acceptedAt);
+    vi.mocked(repository.acceptListUndoOperation).mockResolvedValue({
+      acceptedAt,
+      completedCount: 0,
+    });
 
     await undo(token);
 
@@ -209,19 +247,21 @@ describe('dispatching on the recorded kind', () => {
   });
 
   it('keeps that instant after a compensation chunk crashes and a later request resumes', async () => {
-    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a'] });
+    const token = live({ kind: 'uncheck_all', affectedItemIds: ['itm_a', 'itm_b'] });
     const acceptedAt = instant.parse('2026-08-24T08:59:30.000Z');
-    vi.mocked(repository.acceptListUndoOperation).mockResolvedValue(acceptedAt);
+    vi.mocked(repository.acceptListUndoOperation)
+      .mockResolvedValueOnce({ acceptedAt, completedCount: 0 })
+      .mockResolvedValueOnce({ acceptedAt, completedCount: 1 });
     // The first rejection represents a later repository chunk failing after an earlier one
     // committed; the next service invocation is the post-restart request with a changed clock.
     vi.mocked(repository.recheckListItems)
       .mockRejectedValueOnce(new Error('process stopped after a committed chunk'))
-      .mockResolvedValueOnce(1);
+      .mockResolvedValueOnce(2);
 
     await expect(undoAt(token, NOW)).rejects.toThrow('process stopped');
     await expect(undoAt(token, RETRY_AT)).resolves.toEqual({
       outcome: 'applied',
-      affectedCount: 1,
+      affectedCount: 2,
     });
 
     expect(
@@ -230,6 +270,11 @@ describe('dispatching on the recorded kind', () => {
     expect(
       vi.mocked(repository.recheckListItems).mock.calls.map((call) => call[4].now),
     ).toEqual([acceptedAt, acceptedAt]);
+    expect(
+      vi
+        .mocked(repository.recheckListItems)
+        .mock.calls.map((call) => call[4].previouslyAffectedCount),
+    ).toEqual([0, 1]);
   });
 
   it('answers no_longer_applicable when a concurrent replay spends the bulk Undo', async () => {

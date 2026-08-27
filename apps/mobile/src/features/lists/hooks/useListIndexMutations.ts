@@ -2,8 +2,8 @@ import {
   ApiError,
   deleteList,
   deleteListForReplay,
+  isRetryable,
   type ListPage,
-  NetworkError,
   patchList,
   undoListOperation,
 } from '@od/shared/client';
@@ -48,25 +48,22 @@ interface ListSnapshot {
   readonly queries: readonly ListQuerySnapshot[];
 }
 
-function retryable(error: unknown): boolean {
-  return (
-    error instanceof NetworkError ||
-    (error instanceof ApiError && (error.status === 429 || error.status >= 500))
-  );
-}
-
 function failureToast(error: unknown, message: string, retry: () => void): ToastMessage {
-  const displayedMessage =
-    error instanceof ApiError &&
-    error.status === 429 &&
-    error.retryAfterSeconds !== undefined
-      ? `Too many requests. Try again in ${error.retryAfterSeconds} seconds.`
-      : message;
+  let displayedMessage = message;
+  if (error instanceof ApiError) {
+    if (error.status === 403) {
+      displayedMessage = 'Only the person who made this plan can change that.';
+    } else if (error.status === 404) {
+      displayedMessage = "This isn't here any more.";
+    } else if (error.status === 429 && error.retryAfterSeconds !== undefined) {
+      displayedMessage = `Too many requests. Try again in ${error.retryAfterSeconds} seconds.`;
+    }
+  }
   return {
     message: displayedMessage,
     tone: 'error',
     ...(error instanceof ApiError ? { requestId: error.requestId } : {}),
-    ...(retryable(error) ? { action: { label: 'Retry', onPress: retry } } : {}),
+    ...(isRetryable(error) ? { action: { label: 'Retry', onPress: retry } } : {}),
   };
 }
 
@@ -167,8 +164,13 @@ export function useListIndexMutations(): ListIndexMutations {
       projectList(queryClient, list.listId, (current) => ({ ...current, archived }));
       return { snapshot };
     },
-    onError: (_error, _variables, context) => {
-      if (context !== undefined) restoreLists(queryClient, context.snapshot);
+    onError: (error, variables, context) => {
+      if (error instanceof ApiError && error.status === 404) {
+        projectList(queryClient, variables.list.listId, undefined);
+        refresh();
+      } else if (context !== undefined) {
+        restoreLists(queryClient, context.snapshot);
+      }
     },
     onSuccess: (result) => {
       projectList(queryClient, result.list.listId, () => result.list);
@@ -185,8 +187,13 @@ export function useListIndexMutations(): ListIndexMutations {
       projectList(queryClient, list.listId, undefined);
       return { snapshot };
     },
-    onError: (_error, _variables, context) => {
-      if (context !== undefined) restoreLists(queryClient, context.snapshot);
+    onError: (error, variables, context) => {
+      if (error instanceof ApiError && error.status === 404) {
+        projectList(queryClient, variables.list.listId, undefined);
+        refresh();
+      } else if (context !== undefined) {
+        restoreLists(queryClient, context.snapshot);
+      }
     },
   });
 
@@ -225,17 +232,23 @@ export function useListIndexMutations(): ListIndexMutations {
                           result.undoToken,
                           inverseIdempotencyKey,
                         );
-                        if (undone.outcome === 'applied') {
+                        if (undone.data.outcome === 'applied') {
                           refresh();
                         } else {
                           restoreLists(queryClient, snapshot);
                           show({
                             message: `Couldn't undo archiving "${list.title}."`,
                             tone: 'error',
+                            requestId: undone.meta.requestId,
                           });
                         }
                       } catch (error) {
-                        restoreLists(queryClient, snapshot);
+                        if (error instanceof ApiError && error.status === 404) {
+                          projectList(queryClient, list.listId, undefined);
+                          refresh();
+                        } else {
+                          restoreLists(queryClient, snapshot);
+                        }
                         show(
                           failureToast(
                             error,

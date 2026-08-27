@@ -31,8 +31,8 @@ const list = (overrides: Partial<List> = {}): List => ({
   memberCount: 1,
   rankVersion: 0,
   archived: false,
-  updatedAt: '2026-08-24T09:00:00.000Z',
-  lastItemActivityAt: '2026-08-26T18:30:00.000Z',
+  updatedAt: instant.parse('2026-08-24T09:00:00.000Z'),
+  lastItemActivityAt: instant.parse('2026-08-26T18:30:00.000Z'),
   ...overrides,
 });
 
@@ -102,7 +102,7 @@ describe('the count line and the progress bar', () => {
 
 describe('the updated line', () => {
   it('renders lastItemActivityAt', () => {
-    mount(list({ lastItemActivityAt: '2026-08-26T09:00:00.000Z' }));
+    mount(list({ lastItemActivityAt: instant.parse('2026-08-26T09:00:00.000Z') }));
 
     expect(screen.getByText('Updated today')).toBeTruthy();
   });
@@ -115,8 +115,8 @@ describe('the updated line', () => {
   it('does not move when only updatedAt does', () => {
     mount(
       list({
-        updatedAt: '2026-08-26T11:59:00.000Z',
-        lastItemActivityAt: '2026-08-20T09:00:00.000Z',
+        updatedAt: instant.parse('2026-08-26T11:59:00.000Z'),
+        lastItemActivityAt: instant.parse('2026-08-20T09:00:00.000Z'),
       }),
     );
 

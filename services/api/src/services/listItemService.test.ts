@@ -1,3 +1,4 @@
+import { instant } from '@od/shared/schemas';
 import type { List, ListItem } from '@od/shared/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../lib/errors.js';
@@ -96,7 +97,7 @@ const service = await import('./listItemService.js');
 const USER = 'usr_local_dev';
 const LIST = 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2';
 const ITEM = 'itm_01J8XKQ2M4N5P6R7S8T9V0W1X3';
-const NOW = '2026-08-24T09:00:00.000Z';
+const NOW = instant.parse('2026-08-24T09:00:00.000Z');
 
 const aList = (overrides: Partial<List> = {}): List => ({
   listId: LIST,

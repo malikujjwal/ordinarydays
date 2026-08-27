@@ -48,6 +48,7 @@ export type ListView = z.infer<typeof listView>;
 export type ListDetail = z.infer<typeof listDetail>;
 export type ListSettingsMutation = z.infer<typeof listSettingsMutation>;
 export type ListUndoResult = z.infer<typeof listUndoResult>;
+export type ListUndoResponse = z.infer<typeof listUndoResponse>;
 export type ListPage = z.infer<typeof listPageResponse>;
 
 /**
@@ -307,18 +308,16 @@ export function undoListOperation(
   undoToken: string,
   idempotencyKey: string,
   signal?: AbortSignal,
-): Promise<ListUndoResult> {
-  return client
-    .request({
-      method: 'POST',
-      path: `/v1/lists/${listId}/undo`,
-      schema: listUndoResponse,
-      body: { undoToken },
-      headers: { 'Idempotency-Key': idempotencyKey },
-      replayProtected: true,
-      ...(signal === undefined ? {} : { signal }),
-    })
-    .then((response) => response.data);
+): Promise<ListUndoResponse> {
+  return client.request({
+    method: 'POST',
+    path: `/v1/lists/${listId}/undo`,
+    schema: listUndoResponse,
+    body: { undoToken },
+    headers: { 'Idempotency-Key': idempotencyKey },
+    replayProtected: true,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 export type { ChangeListBehaviourInput, CreateListInput, PatchListInput };

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { instant } from '@od/shared/schemas';
 import type { List, ListBehaviourConfirmation, ListItem } from '@od/shared/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { BehaviourMigrationWork } from '../../src/repositories/listRepository.js';
@@ -29,7 +30,7 @@ let base: Base;
 let keys: Keys;
 
 const DEV = 'usr_local_dev';
-const NOW = '2026-08-24T09:00:00.000Z';
+const NOW = instant.parse('2026-08-24T09:00:00.000Z');
 
 beforeAll(async () => {
   createApp = (await import('../../src/app.js')).createApp;

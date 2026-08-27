@@ -1,6 +1,6 @@
 import { MAX_OWNED_LISTS } from '@od/shared';
 import { LIST_TEMPLATES } from '@od/shared/lists';
-import type { CreateListInput } from '@od/shared/schemas';
+import { type CreateListInput, instant } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
 import { AppError } from '../lib/errors.js';
 import type { IdempotencyReceipt } from '../lib/idempotency.js';
@@ -113,14 +113,14 @@ export async function createListFromTemplate(
     rankVersion: 0,
     itemVersion: 0,
     archived: false,
-    updatedAt: now,
+    updatedAt: instant.parse(now),
     /**
      * Seeded equal to `createdAt` (P3-46). A brand-new list has had no item written to it, so
      * the honest answer to "when was this last used" is "when it was made" — and the Lists
      * index renders this field, so leaving it to the first item write would give a fresh card
      * nothing to say.
      */
-    lastItemActivityAt: now,
+    lastItemActivityAt: instant.parse(now),
   };
 
   try {

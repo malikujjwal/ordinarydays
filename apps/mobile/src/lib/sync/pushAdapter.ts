@@ -163,7 +163,9 @@ export const sharedListPushTransport: ListPushTransport = {
     patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey),
   remove: (listId) => deleteListForReplay(apiClient, listId),
   undo: (listId, undoToken, idempotencyKey) =>
-    undoListOperation(apiClient, listId, undoToken, idempotencyKey),
+    undoListOperation(apiClient, listId, undoToken, idempotencyKey).then(
+      (response) => response.data,
+    ),
 };
 
 function variables(intent: OutboxIntent): object {

@@ -102,7 +102,7 @@ export const attachment = z
     key: z.string().min(1),
     contentType: uploadContentType,
     byteSize: z.number().int().positive(),
-    createdAt: instant.transform((value): string => value),
+    createdAt: instant,
     schemaVersion: z.literal(1),
   })
   .meta({ id: 'Attachment' });
