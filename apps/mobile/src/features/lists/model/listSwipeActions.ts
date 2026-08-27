@@ -18,13 +18,13 @@ import type { List } from '@od/shared/types';
  *
  * §3.2 keys these on the **pointer's** `role`, and `GET /v1/lists` does not serialize it: the
  * response is the `META` row, and `listView` has no `role` field. Ownership is therefore
- * derived from `ownerId` against the signed-in user, which is exactly equivalent while every
- * list is single-member (Phase 6 adds the rest).
+ * derived from `ownerId` against the signed-in user. The screen exposes the member arm only
+ * when Phase 6's self-membership DELETE callback is installed; it must never route Leave to
+ * the owner-only list DELETE as a fallback.
  *
  * Taking the role as an argument rather than deriving it inside is what makes Phase 6 one
  * branch instead of a rewrite: when the pointer's role is available, the caller passes it and
- * nothing here changes. The `member` arm is already written for that reason, and is
- * unreachable today — deliberately, and asserted as such.
+ * nothing here changes.
  */
 
 export type ListRowRole = 'owner' | 'member';

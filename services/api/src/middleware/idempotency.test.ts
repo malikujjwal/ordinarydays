@@ -24,6 +24,7 @@ let errorHandler: typeof import('./errorHandler.js')['errorHandler'];
 
 const REGISTRY: readonly RouteEntry[] = [
   { method: 'POST', pattern: '/v1/things', auth: 'authenticated', mutates: true },
+  { method: 'PATCH', pattern: '/v1/things/:id', auth: 'authenticated', mutates: true },
   {
     method: 'POST',
     pattern: '/v1/capture/parse',
@@ -71,6 +72,7 @@ function buildApp(options: {
       }),
   );
   app.post('/v1/capture/parse', (c) => c.json({ data: 'draft' }));
+  app.patch('/v1/things/:id', (c) => c.json({ data: c.req.param('id') }));
   return app;
 }
 
@@ -105,6 +107,22 @@ describe('mutating POST classification', () => {
 
   it('explicitly permits a read-only POST stub without a key', async () => {
     expect((await post(buildApp({}), '/v1/capture/parse')).status).toBe(200);
+  });
+
+  it('also enforces an explicitly replay-protected PATCH', async () => {
+    const app = buildApp({});
+    const missing = await app.fetch(
+      new Request('http://localhost/v1/things/one', { method: 'PATCH' }),
+    );
+    const keyed = await app.fetch(
+      new Request('http://localhost/v1/things/one', {
+        method: 'PATCH',
+        headers: { 'Idempotency-Key': KEY },
+      }),
+    );
+
+    expect(missing.status).toBe(400);
+    expect(keyed.status).toBe(200);
   });
 });
 

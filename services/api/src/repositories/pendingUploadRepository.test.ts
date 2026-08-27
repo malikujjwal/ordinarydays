@@ -23,6 +23,7 @@ const ddbMock = mockClient(DynamoDBDocumentClient);
 
 const USER = 'usr_local_dev';
 const ID = 'att_01J8XKQ2M4N5P6R7S8T9V0W1X2';
+const NOW = '2026-08-26T12:00:00.000Z';
 
 const sentPut = () =>
   ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[0]?.Put;
@@ -141,6 +142,8 @@ describe('putPendingUpload', () => {
       pk: `USER#${USER}`,
       sk: 'UPLOAD_SLOT#03',
       attachmentId: ID,
+      createdAt: NOW,
+      updatedAt: NOW,
     });
     expect(writes[1]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
   });

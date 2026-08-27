@@ -141,6 +141,8 @@ export function getList(
  * `ifMatch` is **required** and carries the `updatedAt` the client read. An optional parameter
  * would mean a patch that silently wins every race, and the server answers `validation_failed`
  * when it is missing — so an optional one here would only move the failure later.
+ * `idempotencyKey` is equally required: archive can return an opaque server-authored Undo token,
+ * and replaying a lost response must recover that exact token rather than infer an inverse.
  *
  * The `undoToken` is present only when the change recorded an inverse: a rename alone returns
  * none, because renaming a list has no undo row in `interaction-contract.md` §4.1. That is why
@@ -151,6 +153,7 @@ export function patchList(
   listId: string,
   patch: PatchListInput,
   ifMatch: string,
+  idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<ListSettingsMutation> {
   return client
@@ -159,7 +162,7 @@ export function patchList(
       path: `/v1/lists/${listId}`,
       schema: listSettingsResponse,
       body: patch,
-      headers: { 'If-Match': ifMatch },
+      headers: { 'If-Match': ifMatch, 'Idempotency-Key': idempotencyKey },
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
@@ -167,38 +170,18 @@ export function patchList(
 
 /**
  * Replay-safe List settings write for a durable native outbox.
- * A lost success response is adopted when the current canonical row already contains the
- * intended patch; a genuinely competing edit keeps its original 409.
+ * The server's receipt is the sole replay authority because only it retains the opaque Undo
+ * token. Matching current fields is not proof that this operation authored them.
  */
 export async function patchListForReplay(
   client: HttpClient,
   listId: string,
   patch: PatchListInput,
   ifMatch: string,
+  idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<ListSettingsMutation> {
-  try {
-    return await patchList(client, listId, patch, ifMatch, signal);
-  } catch (error) {
-    if (!(error instanceof ApiError) || error.status !== 409) throw error;
-    const current = (await getList(client, listId, {}, signal)).list;
-    if (patch.title !== undefined && current.title !== patch.title) throw error;
-    if (patch.archived !== undefined && current.archived !== patch.archived) throw error;
-    if (patch.slot !== undefined && (current.slot ?? null) !== patch.slot) throw error;
-    if (
-      patch.capabilities?.checkable !== undefined &&
-      current.capabilities.checkable !== patch.capabilities.checkable
-    ) {
-      throw error;
-    }
-    if (
-      patch.capabilities?.supportsLocation !== undefined &&
-      current.capabilities.supportsLocation !== patch.capabilities.supportsLocation
-    ) {
-      throw error;
-    }
-    return { list: current };
-  }
+  return patchList(client, listId, patch, ifMatch, idempotencyKey, signal);
 }
 
 /**

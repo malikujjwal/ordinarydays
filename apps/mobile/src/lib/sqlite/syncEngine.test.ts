@@ -8,7 +8,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNodeSqliteFactory } from '../../../test/node-sqlite';
 import type { ActivityPullAdapter } from '../sync/pullAdapter';
-import type { ActivityPushTransport } from '../sync/pushAdapter';
+import type { ActivityPushTransport, ListPushTransport } from '../sync/pushAdapter';
 import type { TargetedAgendaTransport } from '../sync/reconciliation';
 import { NativeActivityActionCoordinator } from './actionCoordinator';
 import { ActivityRepository } from './activityRepository';
@@ -3695,5 +3695,92 @@ describe('serialized native convergence guard', () => {
     expect(await lists.read()).toEqual([list]);
     expect(sync.request).toHaveBeenCalledWith('manual');
     recoveryEngine.stop();
+  });
+
+  it('settles an acknowledged archive Undo without re-entering the network lane', async () => {
+    if (database === undefined) throw new Error('missing List Undo database');
+    const archived: List = {
+      listId: 'lst_01J0000000000000000000000B',
+      ownerId: OWNER,
+      behaviour: 'collection',
+      templateKey: 'groceries',
+      title: 'Groceries',
+      icon: 'cart',
+      emptyStateCopy: 'Add something to buy.',
+      capabilities: { checkable: true, supportsLocation: false },
+      slot: null,
+      itemCount: 3,
+      uncheckedCount: 2,
+      memberCount: 1,
+      rankVersion: 0,
+      archived: true,
+      updatedAt: '2026-08-19T00:01:00.000Z',
+      lastItemActivityAt: '2026-08-19T00:00:00.000Z',
+    };
+    const restored = {
+      ...archived,
+      archived: false,
+      updatedAt: '2026-08-19T00:02:00.000Z',
+    };
+    const lists = new ListsRepository(database, new RepositorySubscriptions());
+    const listService = new ListTransactionService(outbox, lists);
+    await transactions.run(async (transaction) => {
+      await lists.replaceCanonical(transaction, [archived]);
+      await outbox.createListArchiveUndoOffer(
+        transaction.database,
+        'acknowledged-archive',
+        archived.listId,
+      );
+      await outbox.recordListArchiveUndoToken(
+        transaction.database,
+        'acknowledged-archive',
+        'server-undo-token',
+        '2026-08-19T00:01:06.000Z',
+      );
+      await listService.undoArchive(
+        transaction,
+        archived.listId,
+        'acknowledged-archive',
+        'accepted-list-undo',
+      );
+    });
+    const undo = vi.fn(async () => ({ affectedCount: 1 }));
+    const listPush: ListPushTransport = {
+      patch: async () => {
+        throw new Error('unexpected List PATCH');
+      },
+      remove: async () => {
+        throw new Error('unexpected List DELETE');
+      },
+      undo,
+    };
+    const listsPage = vi.fn(async () => ({ data: [restored] }));
+    const sync = new SerializedNativeSyncEngine(
+      transactions,
+      outbox,
+      activities,
+      agenda,
+      pushTransport(),
+      { ...pullAdapter(), listsPage },
+      targetedTransport(),
+      anytime,
+      lists,
+      listPush,
+    );
+
+    await sync.syncNow();
+    sync.stop();
+
+    expect(undo).toHaveBeenCalledWith(
+      archived.listId,
+      'server-undo-token',
+      'accepted-list-undo',
+    );
+    expect(listsPage).toHaveBeenCalledTimes(1);
+    expect(await lists.read()).toEqual([restored]);
+    expect(await outbox.all()).toEqual([]);
+    expect(
+      await outbox.listArchiveUndoOffer(database, 'acknowledged-archive'),
+    ).toBeUndefined();
   });
 });

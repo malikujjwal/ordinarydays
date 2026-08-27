@@ -20,11 +20,13 @@ export function useListIndexMutations(): ListIndexMutations {
 
   const queueArchive = useCallback(
     async (list: List, archived: boolean) => {
+      const intentId = randomUUID();
       await state.account.transactions.run(
-        (transaction) => service.setArchived(transaction, list, archived, randomUUID()),
+        (transaction) => service.setArchived(transaction, list, archived, intentId),
         'interactive',
       );
       state.sync.request('accepted-action');
+      return intentId;
     },
     [service, state.account.transactions, state.sync],
   );
@@ -32,16 +34,42 @@ export function useListIndexMutations(): ListIndexMutations {
   const onArchive = useCallback(
     (list: List) => {
       void queueArchive(list, true)
-        .then(() => {
+        .then((originalIntentId) => {
           showUndo(
             archivedListToast({
               title: list.title,
               onUndo: () => {
-                void queueArchive(list, false).catch(() =>
-                  show({ message: `Couldn't restore "${list.title}."`, tone: 'error' }),
+                const inverseIntentId = randomUUID();
+                void state.account.transactions
+                  .run(
+                    (transaction) =>
+                      service.undoArchive(
+                        transaction,
+                        list.listId,
+                        originalIntentId,
+                        inverseIntentId,
+                      ),
+                    'interactive',
+                  )
+                  .then((result) => {
+                    if (result.kind === 'queued') {
+                      state.sync.request('accepted-action');
+                    }
+                  })
+                  .catch(() =>
+                    show({
+                      message: `Couldn't undo archiving "${list.title}."`,
+                      tone: 'error',
+                    }),
+                  );
+              },
+              onCommit: () => {
+                void state.account.transactions.run(
+                  (transaction) =>
+                    service.commitArchiveUndoOffer(transaction, originalIntentId),
+                  'interactive',
                 );
               },
-              onCommit: () => undefined,
             }),
           );
         })
@@ -49,7 +77,7 @@ export function useListIndexMutations(): ListIndexMutations {
           show({ message: `Couldn't archive "${list.title}."`, tone: 'error' }),
         );
     },
-    [queueArchive, show, showUndo],
+    [queueArchive, service, show, showUndo, state.account.transactions, state.sync],
   );
 
   const onRestore = useCallback(

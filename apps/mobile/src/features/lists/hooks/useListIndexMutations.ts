@@ -23,8 +23,15 @@ export function useListIndexMutations(): ListIndexMutations {
     void queryClient.invalidateQueries({ queryKey: LISTS_KEY });
   }, [queryClient]);
   const setArchived = useMutation({
-    mutationFn: ({ list, archived }: { list: List; archived: boolean }) =>
-      patchList(apiClient, list.listId, { archived }, list.updatedAt),
+    mutationFn: ({
+      list,
+      archived,
+      idempotencyKey,
+    }: {
+      list: List;
+      archived: boolean;
+      idempotencyKey: string;
+    }) => patchList(apiClient, list.listId, { archived }, list.updatedAt, idempotencyKey),
   });
   const remove = useMutation({
     mutationFn: (list: List) => deleteList(apiClient, list.listId),
@@ -33,7 +40,7 @@ export function useListIndexMutations(): ListIndexMutations {
   const onArchive = useCallback(
     (list: List) => {
       setArchived.mutate(
-        { list, archived: true },
+        { list, archived: true, idempotencyKey: randomUUID() },
         {
           onSuccess: (result) => {
             refresh();
@@ -64,7 +71,7 @@ export function useListIndexMutations(): ListIndexMutations {
   const onRestore = useCallback(
     (list: List) => {
       setArchived.mutate(
-        { list, archived: false },
+        { list, archived: false, idempotencyKey: randomUUID() },
         {
           onSuccess: refresh,
           onError: () =>

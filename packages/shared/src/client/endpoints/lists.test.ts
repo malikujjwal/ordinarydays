@@ -224,10 +224,12 @@ describe('patchList', () => {
       LIST_ID,
       { capabilities: { checkable: false } },
       '2026-08-26T10:00:00.000Z',
+      'patch-key-1',
     );
 
     expect(calls[0]?.method).toBe('PATCH');
     expect(calls[0]?.headers['If-Match']).toBe('2026-08-26T10:00:00.000Z');
+    expect(calls[0]?.headers['Idempotency-Key']).toBe('patch-key-1');
     expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({
       capabilities: { checkable: false },
     });
@@ -238,7 +240,13 @@ describe('patchList', () => {
   it('parses a rename, which records no inverse and offers no token', async () => {
     const { client } = makeClient([ok({ list: LIST })]);
 
-    const result = await patchList(client, LIST_ID, { title: 'Big shop' }, 'v1');
+    const result = await patchList(
+      client,
+      LIST_ID,
+      { title: 'Big shop' },
+      'v1',
+      'patch-key-2',
+    );
 
     expect('undoToken' in result).toBe(false);
   });

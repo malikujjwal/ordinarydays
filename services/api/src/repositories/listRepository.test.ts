@@ -627,6 +627,12 @@ describe('identity and list storage', () => {
       ':sourceOwner': ALICE,
       ':plan': 'plan',
     });
+    expect(items?.[4]?.ConditionCheck?.ConditionExpression).toContain(
+      'attribute_not_exists(#deletingAt)',
+    );
+    expect(items?.[4]?.ConditionCheck?.ExpressionAttributeNames).toMatchObject({
+      '#deletingAt': 'deletingAt',
+    });
     expect(items?.[5]?.ConditionCheck?.Key).toEqual(
       keys.activityTombstone(sourceActivityId),
     );
@@ -802,6 +808,23 @@ describe('identity and list storage', () => {
       ConditionExpression: expect.stringContaining('#updatedAt = :expectedUpdatedAt'),
       UpdateExpression: expect.stringContaining('#archived = :archived'),
     });
+  });
+
+  it('stores the replay receipt in the same transaction as a settings patch', async () => {
+    mockLiveList(list({ archived: true, updatedAt: LATER }));
+
+    await repository.patchListMeta(
+      ALICE,
+      LIST_ID,
+      access,
+      { archived: true },
+      NOW,
+      LATER,
+      { idempotencyReceipt: receipt },
+    );
+
+    const [writes] = vi.mocked(tx.transactWrite).mock.calls[0] ?? [];
+    expect(writes?.at(-1)).toEqual({ Put: { Item: { receipt: true } } });
   });
 });
 

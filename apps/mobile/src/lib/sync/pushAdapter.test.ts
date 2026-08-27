@@ -49,12 +49,33 @@ function transport(called: (name: string, values: readonly unknown[]) => void) {
 
 describe('ActivityPushAdapter', () => {
   it.each([
-    ['patch', { listId: LIST, input: { archived: true }, ifMatch: 'v1' }, 'patch'],
+    [
+      'patch',
+      {
+        listId: LIST,
+        intentId: 'patch-list',
+        idempotencyKey: 'patch-list',
+        input: { archived: true },
+        ifMatch: 'v1',
+      },
+      'patch',
+    ],
     ['delete', { listId: LIST, intentId: 'delete-list' }, 'remove'],
+    [
+      'undo',
+      {
+        listId: LIST,
+        intentId: 'undo-list',
+        idempotencyKey: 'undo-list',
+        undoToken: 'undo-token',
+      },
+      'undo',
+    ],
   ] as const)('dispatches durable List %s intents', async (name, variables, method) => {
     const listTransport: ListPushTransport = {
       patch: vi.fn(async () => ({})),
       remove: vi.fn(async () => ({})),
+      undo: vi.fn(async () => ({})),
     };
     const adapter = new ActivityPushAdapter(
       transport(() => undefined),

@@ -300,6 +300,41 @@ describe('row actions', () => {
     expect(screen.queryByText(/^Delete "/)).toBeNull();
   });
 
+  it('routes member Leave only to the membership callback, with leave-specific impact copy', () => {
+    const row = list(idAt(0), {
+      ownerId: 'usr_someone_else',
+      title: 'Groceries',
+      itemCount: 14,
+      memberCount: 2,
+    });
+    setView({ lists: [row] });
+    const onLeave = vi.fn();
+    const { onDelete } = mount({ onLeave });
+
+    revealActions(row.listId);
+    fireEvent.click(screen.getByTestId('list-swipe-leave'));
+
+    const dialog = within(screen.getByTestId('list-delete-confirm'));
+    expect(dialog.getByText('Leave "Groceries"?')).toBeTruthy();
+    expect(dialog.getByText('This removes the list from your Lists.')).toBeTruthy();
+    expect(dialog.getByText(/all 14 items on it/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('confirm-accept'));
+
+    expect(onLeave).toHaveBeenCalledWith(expect.objectContaining({ listId: row.listId }));
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it('does not expose Leave until the self-membership endpoint is installed', () => {
+    const row = list(idAt(0), { ownerId: 'usr_someone_else' });
+    setView({ lists: [row] });
+    mount();
+
+    revealActions(row.listId);
+
+    expect(screen.queryByTestId('list-swipe-leave')).toBeNull();
+    expect(screen.queryByTestId('list-swipe-delete')).toBeNull();
+  });
+
   /** Archived rows are inert: their one action is Restore. */
   it('offers no swipe actions on an archived row', () => {
     const row = list(idAt(1), { archived: true });

@@ -263,6 +263,19 @@ describe('the generated document', () => {
     });
   });
 
+  it('publishes both required List settings guards as header parameters', () => {
+    expect(document.paths?.['/v1/lists/{id}']?.patch?.parameters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'If-Match', in: 'header', required: true }),
+        expect.objectContaining({
+          name: 'Idempotency-Key',
+          in: 'header',
+          required: true,
+        }),
+      ]),
+    );
+  });
+
   /**
    * The generator reads the shared Zod schemas, so this is the assertion that the spec and
    * the code cannot diverge: `stage` is an enum in `schemas/health.ts`, and if someone adds

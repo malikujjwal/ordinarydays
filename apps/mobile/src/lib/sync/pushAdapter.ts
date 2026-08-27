@@ -13,6 +13,7 @@ import {
   skipActivity,
   snoozeActivity,
   uncompleteActivity,
+  undoListOperation,
   unsnoozeActivity,
 } from '@od/shared/client';
 import {
@@ -90,8 +91,14 @@ export interface ActivityPushTransport {
 }
 
 export interface ListPushTransport {
-  patch(listId: string, input: PatchListInput, ifMatch: string): Promise<unknown>;
+  patch(
+    listId: string,
+    input: PatchListInput,
+    ifMatch: string,
+    idempotencyKey: string,
+  ): Promise<unknown>;
   remove(listId: string): Promise<unknown>;
+  undo(listId: string, undoToken: string, idempotencyKey: string): Promise<unknown>;
 }
 
 /** A persisted payload that cannot become valid by waiting for connectivity or retrying. */
@@ -152,9 +159,11 @@ export const sharedActivityPushTransport: ActivityPushTransport = {
 };
 
 export const sharedListPushTransport: ListPushTransport = {
-  patch: (listId, input, ifMatch) =>
-    patchListForReplay(apiClient, listId, input, ifMatch),
+  patch: (listId, input, ifMatch, idempotencyKey) =>
+    patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey),
   remove: (listId) => deleteListForReplay(apiClient, listId),
+  undo: (listId, undoToken, idempotencyKey) =>
+    undoListOperation(apiClient, listId, undoToken, idempotencyKey),
 };
 
 function variables(intent: OutboxIntent): object {
@@ -309,9 +318,20 @@ export class ActivityPushAdapter {
         listId,
         parsePersisted(patchListInput, field(value, 'input')),
         requiredString(field(value, 'ifMatch'), 'ifMatch'),
+        requiredString(
+          field(value, 'idempotencyKey') ?? field(value, 'intentId'),
+          'idempotencyKey',
+        ),
       );
     }
     if (name === 'delete') return this.listTransport.remove(listId);
+    if (name === 'undo') {
+      return this.listTransport.undo(
+        listId,
+        requiredString(field(value, 'undoToken'), 'undoToken'),
+        requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
+      );
+    }
     throw new DurableActivityIntentError(
       `Unsupported native List mutation: ${name ?? ''}.`,
     );

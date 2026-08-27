@@ -52,6 +52,8 @@ const mocks = {
   activityFromPartition: vi.fn(),
   markActivityDeleting: vi.fn(() => Promise.resolve()),
   deleteActivity: vi.fn((_u: string, _a: string, _o?: unknown) => Promise.resolve()),
+  stageActivityAttachmentDeletion: vi.fn(() => Promise.resolve()),
+  drainActivityAttachmentDeletions: vi.fn(() => Promise.resolve()),
   findViewerLinksTo: vi.fn(() => Promise.resolve([])),
   batchGetViewerLinks: vi.fn(() => Promise.resolve([])),
   /**
@@ -105,6 +107,23 @@ vi.mock('../../repositories/listRepository.js', () => ({
   ListNotFoundError: class extends Error {},
   ListReadFenceError: class extends Error {},
 }));
+
+vi.mock('../../repositories/attachmentRepository.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../repositories/attachmentRepository.js')>();
+  return {
+    ...actual,
+    stageActivityAttachmentDeletion: mocks.stageActivityAttachmentDeletion,
+  };
+});
+
+vi.mock('../attachmentService.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../attachmentService.js')>();
+  return {
+    ...actual,
+    drainActivityAttachmentDeletions: mocks.drainActivityAttachmentDeletions,
+  };
+});
 
 vi.mock('../authz.js', () => ({
   assertActivityAccess: mocks.assertActivityAccess,
@@ -186,6 +205,8 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) mock.mockReset();
   mocks.listParticipants.mockResolvedValue([] as never);
   mocks.patchActivity.mockResolvedValue(undefined as never);
+  mocks.stageActivityAttachmentDeletion.mockResolvedValue(undefined as never);
+  mocks.drainActivityAttachmentDeletions.mockResolvedValue(undefined as never);
   mocks.findViewerLinksTo.mockResolvedValue([] as never);
   mocks.getOccurrence.mockResolvedValue(undefined as never);
   mocks.putOccurrence.mockResolvedValue(undefined as never);

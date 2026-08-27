@@ -219,16 +219,15 @@ interface CachedGetResponse {
 /**
  * Whether this request may be sent twice.
  *
- * `GET` is safe by definition. A `POST` is safe **only** with an `Idempotency-Key`, because
- * that key is what lets the server return the stored response instead of creating a second
- * row (`api-contract.md` §1). Everything else is not retried: a `PATCH` carries `If-Match`
- * and a retry would fail the concurrency check with a `409` that looks like someone else's
- * edit, and a `DELETE` retried after a partial failure is indistinguishable from a delete
- * of something recreated in between.
+ * `GET` is safe by definition. A `POST` or `PATCH` is safe **only** with an
+ * `Idempotency-Key`, because that key lets the server return the stored response instead of
+ * applying the write again. An ordinary `PATCH` carrying only `If-Match` is not retried: its
+ * second attempt would fail with a misleading `409`. A `DELETE` retried after a partial
+ * failure is indistinguishable from deleting something recreated in between.
  */
 function isRetryableRequest(method: string, headers: Record<string, string>): boolean {
   if (method === 'GET') return true;
-  if (method !== 'POST') return false;
+  if (method !== 'POST' && method !== 'PATCH') return false;
   return Object.keys(headers).some((h) => h.toLowerCase() === 'idempotency-key');
 }
 

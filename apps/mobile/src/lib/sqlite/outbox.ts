@@ -61,6 +61,16 @@ export interface CanonicalOutboxGuards {
   readonly reconcilingActivityIds: ReadonlySet<string>;
 }
 
+export interface ListArchiveUndoOffer {
+  readonly originalIntentId: string;
+  readonly currentIntentId: string;
+  readonly listId: string;
+  readonly inverseIntentId?: string;
+  readonly undoToken?: string;
+  readonly undoExpiresAt?: string;
+  readonly createdAt: number;
+}
+
 export class OutboxFullError extends Error {
   constructor() {
     super("You're offline and there's a lot waiting to sync.");
@@ -437,13 +447,252 @@ export class OutboxRepository {
     const rows = await database.all(
       `SELECT DISTINCT entity_id FROM outbox_intents
        WHERE json_extract(mutation_key_json, '$[0]') = 'list'
-         AND status IN ('queued', 'in_flight', 'needs_attention');`,
+         AND status IN ('queued', 'in_flight', 'needs_attention')
+         AND NOT (
+           status = 'needs_attention'
+           AND (
+             attention_kind = 'rejected'
+             OR (attention_kind = 'parked' AND attention_reason = 'predecessor_rejected')
+           )
+         );`,
     );
     return new Set(
       rows
         .map((row) => stringValue(row, 'entity_id'))
         .filter((value): value is string => value !== undefined),
     );
+  }
+
+  async createListArchiveUndoOffer(
+    database: SqliteExecutor,
+    originalIntentId: string,
+    listId: string,
+    createdAt = Date.now(),
+  ): Promise<void> {
+    await database.run(
+      `INSERT OR IGNORE INTO list_archive_undo_offers
+         (original_intent_id, current_intent_id, list_id, created_at)
+       VALUES (?, ?, ?, ?);`,
+      [originalIntentId, originalIntentId, listId, createdAt],
+    );
+  }
+
+  async listArchiveUndoOffer(
+    database: SqliteReader,
+    intentId: string,
+  ): Promise<ListArchiveUndoOffer | undefined> {
+    const row = await database.first(
+      `SELECT * FROM list_archive_undo_offers
+       WHERE original_intent_id = ? OR current_intent_id = ? LIMIT 1;`,
+      [intentId, intentId],
+    );
+    if (row === undefined) return undefined;
+    const originalIntentId = stringValue(row, 'original_intent_id');
+    const listId = stringValue(row, 'list_id');
+    const currentIntentId = stringValue(row, 'current_intent_id');
+    const createdAt = numberValue(row, 'created_at');
+    if (
+      originalIntentId === undefined ||
+      currentIntentId === undefined ||
+      listId === undefined ||
+      createdAt === undefined
+    ) {
+      throw new OutboxInvariantError(intentId);
+    }
+    const inverseIntentId = stringValue(row, 'inverse_intent_id');
+    const undoToken = stringValue(row, 'undo_token');
+    const undoExpiresAt = stringValue(row, 'undo_expires_at');
+    return {
+      originalIntentId,
+      currentIntentId,
+      listId,
+      createdAt,
+      ...(inverseIntentId === undefined ? {} : { inverseIntentId }),
+      ...(undoToken === undefined ? {} : { undoToken }),
+      ...(undoExpiresAt === undefined ? {} : { undoExpiresAt }),
+    };
+  }
+
+  async linkListArchiveUndoIntent(
+    database: SqliteExecutor,
+    originalIntentId: string,
+    inverseIntentId: string,
+  ): Promise<void> {
+    const result = await database.run(
+      `UPDATE list_archive_undo_offers SET inverse_intent_id = ?
+       WHERE original_intent_id = ? AND inverse_intent_id IS NULL;`,
+      [inverseIntentId, originalIntentId],
+    );
+    if (result.changes !== 1) throw new OutboxInvariantError(originalIntentId);
+  }
+
+  async clearListArchiveUndoOffer(
+    database: SqliteExecutor,
+    originalIntentId: string,
+    onlyWhenUnaccepted = false,
+  ): Promise<void> {
+    await database.run(
+      `DELETE FROM list_archive_undo_offers WHERE original_intent_id = ?${
+        onlyWhenUnaccepted ? ' AND inverse_intent_id IS NULL' : ''
+      };`,
+      [originalIntentId],
+    );
+  }
+
+  async expireUnacceptedListArchiveUndoOffers(
+    database: SqliteExecutor,
+    createdBefore: number,
+  ): Promise<number> {
+    const result = await database.run(
+      `DELETE FROM list_archive_undo_offers
+       WHERE inverse_intent_id IS NULL AND created_at < ?;`,
+      [createdBefore],
+    );
+    return result.changes;
+  }
+
+  /** Installs the server token on an accepted dependent before its archive dependency clears. */
+  async recordListArchiveUndoToken(
+    database: SqliteExecutor,
+    currentIntentId: string,
+    undoToken: string,
+    undoExpiresAt: string,
+  ): Promise<void> {
+    const offer = await this.listArchiveUndoOffer(database, currentIntentId);
+    if (offer === undefined) return;
+    await database.run(
+      `UPDATE list_archive_undo_offers SET undo_token = ?, undo_expires_at = ?
+       WHERE original_intent_id = ?;`,
+      [undoToken, undoExpiresAt, offer.originalIntentId],
+    );
+    if (offer.inverseIntentId === undefined) return;
+    const inverse = await this.get(database, offer.inverseIntentId);
+    if (
+      inverse?.status !== 'queued' ||
+      inverse.mutationKey[0] !== 'list' ||
+      inverse.mutationKey[1] !== 'undo'
+    ) {
+      throw new OutboxInvariantError(offer.inverseIntentId);
+    }
+    const variables = record(inverse.variables);
+    if (variables === undefined) throw new OutboxInvariantError(inverse.intentId);
+    const rebasedVariables = { ...variables, undoToken };
+    const semanticKey = outboxSemanticKey({
+      intentId: inverse.intentId,
+      mutationKey: inverse.mutationKey,
+      variables: rebasedVariables,
+      entityId: inverse.entityId,
+      orderingKey: inverse.orderingKey,
+      ...(inverse.dependsOnIntentId === undefined
+        ? {}
+        : { dependsOnIntentId: inverse.dependsOnIntentId }),
+      ...(inverse.compensationForIntentId === undefined
+        ? {}
+        : { compensationForIntentId: inverse.compensationForIntentId }),
+    });
+    await database.run(
+      `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?
+       WHERE intent_id = ? AND status = 'queued';`,
+      [JSON.stringify(rebasedVariables), semanticKey, inverse.intentId],
+    );
+  }
+
+  /** Refreshes a rejected List PATCH from the authoritative row before user-directed Retry. */
+  async rebaseListPatchIntent(
+    database: SqliteExecutor,
+    intentId: string,
+    serverVersion: string,
+  ): Promise<OutboxIntent> {
+    const intent = await this.get(database, intentId);
+    if (
+      intent?.status !== 'queued' ||
+      intent.mutationKey[0] !== 'list' ||
+      intent.mutationKey[1] !== 'patch'
+    ) {
+      throw new OutboxInvariantError(intentId);
+    }
+    const variables = record(intent.variables);
+    if (variables === undefined || typeof variables.ifMatch !== 'string') {
+      throw new OutboxInvariantError(intentId);
+    }
+    const rebasedVariables = { ...variables, ifMatch: serverVersion };
+    const semanticKey = outboxSemanticKey({
+      intentId: intent.intentId,
+      mutationKey: intent.mutationKey,
+      variables: rebasedVariables,
+      entityId: intent.entityId,
+      orderingKey: intent.orderingKey,
+      ...(intent.dependsOnIntentId === undefined
+        ? {}
+        : { dependsOnIntentId: intent.dependsOnIntentId }),
+      ...(intent.compensationForIntentId === undefined
+        ? {}
+        : { compensationForIntentId: intent.compensationForIntentId }),
+    });
+    await database.run(
+      `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?
+       WHERE intent_id = ? AND status = 'queued';`,
+      [JSON.stringify(rebasedVariables), semanticKey, intentId],
+    );
+    const rebased = await this.get(database, intentId);
+    if (rebased === undefined) throw new OutboxInvariantError(intentId);
+    return rebased;
+  }
+
+  /** Moves an archive offer and any accepted compensation to the identity chosen by Retry. */
+  async reidentifyListArchiveUndoOffer(
+    database: SqliteExecutor,
+    previousIntentId: string,
+    freshIntentId: string,
+  ): Promise<void> {
+    const offer = await this.listArchiveUndoOffer(database, previousIntentId);
+    if (offer === undefined) return;
+    if (offer.inverseIntentId !== undefined) {
+      const inverse = await this.get(database, offer.inverseIntentId);
+      if (
+        inverse === undefined ||
+        inverse.mutationKey[0] !== 'list' ||
+        inverse.mutationKey[1] !== 'undo' ||
+        (inverse.status !== 'queued' &&
+          !(
+            inverse.status === 'needs_attention' &&
+            inverse.attention?.kind === 'parked' &&
+            inverse.attention.reason === 'predecessor_rejected'
+          ))
+      ) {
+        throw new OutboxInvariantError(offer.inverseIntentId);
+      }
+      const variables = record(inverse.variables);
+      if (variables?.originalIntentId !== offer.originalIntentId) {
+        throw new OutboxInvariantError(inverse.intentId);
+      }
+      const semanticKey = outboxSemanticKey({
+        intentId: inverse.intentId,
+        mutationKey: inverse.mutationKey,
+        variables,
+        entityId: inverse.entityId,
+        orderingKey: inverse.orderingKey,
+        ...(inverse.dependsOnIntentId === undefined
+          ? {}
+          : { dependsOnIntentId: inverse.dependsOnIntentId }),
+        ...(inverse.compensationForIntentId === undefined
+          ? {}
+          : { compensationForIntentId: inverse.compensationForIntentId }),
+      });
+      await database.run(
+        `UPDATE outbox_intents SET semantic_key = ?, status = 'queued', attempts = 0,
+           last_error = NULL, attention_kind = NULL, attention_reason = NULL,
+           attention_status = NULL, attention_code = NULL, attention_details_json = NULL
+         WHERE intent_id = ?;`,
+        [semanticKey, inverse.intentId],
+      );
+    }
+    const moved = await database.run(
+      `UPDATE list_archive_undo_offers SET current_intent_id = ?
+       WHERE current_intent_id = ?;`,
+      [freshIntentId, previousIntentId],
+    );
+    if (moved.changes !== 1) throw new OutboxInvariantError(previousIntentId);
   }
 
   async laterInOrdering(
@@ -960,6 +1209,11 @@ export class OutboxRepository {
        )
        DELETE FROM outbox_intents WHERE intent_id IN (SELECT intent_id FROM doomed);`,
       [intentId],
+    );
+    await database.run(
+      `DELETE FROM list_archive_undo_offers
+       WHERE current_intent_id = ? OR inverse_intent_id = ?;`,
+      [intentId, intentId],
     );
     return true;
   }

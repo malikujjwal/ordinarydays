@@ -91,6 +91,7 @@ bounded `BatchGetItem`, never a scan or one read per List.
 | Occurrence override | `ACT#<activityId>` | `OCC#<yyyy-mm-dd>` | `Occurrence` |
 | Inbound occurrence-move marker | `ACT#<activityId>` | `MOVE#<yyyy-mm-dd>` | `OccurrenceMoveMarker` |
 | Attachment | `ACT#<activityId>` | `ATT#<attachmentId>` | `Attachment` |
+| Attachment quota slot | `ACT#<activityId>` | `ATT_SLOT#<00..19>` | `AttachmentQuotaSlot` — internal fixed-cap claim |
 | Child pointer | `ACT#<activityId>` | `SUB#<childActivityId>` | `ChildPointer` |
 | Source-list reverse pointer | `ACT#<activityId>` | `SOURCE_LIST#<listId>` | `SourceListPointer` — id-only access projection |
 | **Reminder** | `ACT#<activityId>` | `REM#<userId>#<reminderId>` | `Reminder` — **per user** |
@@ -134,6 +135,8 @@ guesses an occurrence for a recurring prep task.
 | Settlement | `USER#<userId>` | `SETTLE#<personId>#<isoTs>#<settlementId>` | `Settlement` |
 | Push device | `USER#<userId>` | `DEVICE#<deviceId>` | `Device` |
 | Pending attachment upload | `USER#<userId>` | `UPLOAD#<attachmentId>` | `PendingUpload` — internal cross-store confirmation state |
+| Pending-upload quota slot | `USER#<userId>` | `UPLOAD_SLOT#<00..19>` | `PendingUploadQuotaSlot` — internal fixed-cap claim |
+| Confirmed-media deletion work | `USER#<userId>` | `MEDIA_DELETE#<activityId>#<attachmentId>` | `AttachmentDeletion` — internal S3 cleanup state |
 | Custom-activity shortcut | `USER#<userId>` | `SHORTCUT#<shortcutId>` | `Shortcut` (Phase 9) |
 
 `Balance` is keyed by `(personId, currency)` because expenses are never converted between
@@ -831,6 +834,35 @@ interface Attachment {               // ACT#<activityId> / ATT#<attachmentId>
   createdAt: string;
   schemaVersion: number;
 }
+
+interface AttachmentQuotaSlot {       // ACT#<activityId> / ATT_SLOT#<00..19>; internal
+  attachmentId: string;
+  activityId: string;
+  quotaSlot: number;
+  createdAt: string;
+  updatedAt: string;
+  schemaVersion: number;
+}
+
+interface PendingUploadQuotaSlot {    // USER#<userId> / UPLOAD_SLOT#<00..19>; internal
+  attachmentId: string;
+  userId: string;
+  quotaSlot: number;
+  createdAt: string;
+  updatedAt: string;
+  schemaVersion: number;
+}
+
+interface AttachmentDeletion {        // USER#<userId> / MEDIA_DELETE#<activityId>#<attachmentId>
+  userId: string;
+  activityId: string;
+  attachmentId: string;
+  key: string;
+  coverCleared: boolean;
+  createdAt: string;
+  updatedAt: string;
+  schemaVersion: number;
+}
 ```
 
 The upload-url mutation writes `PendingUpload` before returning a presigned URL. Confirm
@@ -843,6 +875,11 @@ records): expired `awaiting_upload` rows delete their temporary object and row; 
 deletes both keys before its row. No DynamoDB Stream or scheduled worker is required in this
 phase. A crash after copy is therefore durably tracked, while a crash after linking can leave
 at most a temporary object for the S3 lifecycle rule.
+
+Both 20-row caps are enforced by conditionally claiming one of twenty fixed quota-slot rows
+in the same transaction as the pending or linked record. Preflight counts are advisory only;
+a concurrent twenty-first request cannot commit without a free slot. Unlink/cleanup deletes
+the matching slot atomically with its domain row.
 
 ### 4.4 Type-specific details
 
@@ -1602,9 +1639,9 @@ Constraints:
 ## 7. Write paths that touch multiple items
 
 Use `TransactWriteItems` for these. They are the only places transactions are required.
-Every operation reached through a mutating POST includes the conditional
-`IDEM#<userId>#<key>` response receipt in its main transaction (P2-38); transaction-size
-calculations reserve one item for it. A multi-phase operation additionally writes a
+Every replay-protected mutation — every mutating POST and the List settings PATCH — includes
+the conditional `IDEM#<userId>#<key>` response receipt in its main transaction (P2-38);
+transaction-size calculations reserve one item for it. A multi-phase operation additionally writes a
 `CLEANUP#<userId>#<key>` item in that main transaction and reserves a second item. Replay
 executes no second main domain write; it drains receipt-linked cleanup before returning the stored
 status/body.
@@ -1612,10 +1649,12 @@ status/body.
 | Operation | Items written |
 | --- | --- |
 | Post a feed entry | `ACT#/UPD#<createdAt>#<updateId>` plus `ACT#/META` and every owner/participant `USER#/IDX#` carrying the new `lastActivityAt`, and the idempotency receipt — one transaction (P3-19). META is conditioned on the `updatedAt` the write read, and `updatedAt` itself is byte-identical afterwards: a comment must never `409` an owner's open edit sheet. A **system** entry is a single `UPD#` put with no META write at all, joined to the transaction of the change it records. |
-| Create activity (attach half) | The parent's `childCount` increment is conditional on `attribute_exists(pk) AND childCount < MAX_PREP_TASKS_PER_PLAN AND objectKind = 'plan'` (P3-18 review). The kind term pairs with the conversion row below: because the counter moves by `ADD` and does not advance `updatedAt`, neither write can see the other through `updatedAt` alone, so each conditions on the attribute the other changes. The decrement is not kind-gated — a child must always be able to clean up after itself. |
+| Create activity (attach half) | The parent's `childCount` increment is conditional on `attribute_exists(pk) AND childCount < MAX_PREP_TASKS_PER_PLAN AND objectKind = 'plan' AND attribute_not_exists(deletingAt)` (P3-18 review). The kind term pairs with the conversion row below: because the counter moves by `ADD` and does not advance `updatedAt`, neither write can see the other through `updatedAt` alone, so each conditions on the attribute the other changes. The delete marker term fences the child out of an active parent cascade. The decrement is not kind-gated — a child must always be able to clean up after itself. |
 | Convert a Plan to a Task | `ACT#/META` and every index row, conditional on **both** the read `updatedAt` and the `childCount` the 409 guard validated (P3-18 review). Pinning the count is what stops a prep task attached between the read and the write from being silently orphaned onto a Task by a stale whole-item `Put` that still satisfies `updatedAt`. |
 | Create activity | `ACT#/META`, `USER#<owner>/IDX#`, one `ACT#/REM#<owner>#<id>` per supplied reminder, and — when `parentActivityId` is set — `ACT#<parent>/SUB#<child>` with `isRecurring` plus the parent's `ACT#<parent>/META` `childCount` increment, conditioned on the parent existing and being under `MAX_PREP_TASKS_PER_PLAN` (**amended in P1-09**: §3.1 already required the pointer to be written when an activity is given a parent, and this row listed only the first two; **amended in P3-18**: the counter joins the same transaction, so the cap is a condition rather than a precheck and the pointer can never outlive the count) |
-| Create list | Conditional `LIST#/META`, owner `USER#/LIST#` pointer and list-tombstone absence check, plus `ACT#<sourceActivityId>/SOURCE_LIST#<listId>` when sourced from a Plan; the POST receipt joins the same transaction |
+| Create reminder | Put the caller-owned `ACT#/REM#<userId>#<reminderId>`, condition-check `ACT#/META` still exists without `deletingAt`, and store the POST receipt in the same transaction. |
+| Create list | Conditional `LIST#/META`, owner `USER#/LIST#` pointer and list-tombstone absence check, plus `ACT#<sourceActivityId>/SOURCE_LIST#<listId>` when sourced from a live Plan whose META has no `deletingAt`; the POST receipt joins the same transaction |
+| Change List settings | Under `If-Match`, update `LIST#/META`, write `UNDO#<operationId>` when an additive field actually moved, conditionally clear the prior profile default when the slot changed, and store the exact response receipt — including its opaque Undo token — in the same transaction. |
 | Create list item | Read neighbours and `rankVersion`; conditionally write `LIST#/ITEM#<rank>#<itemId>` and `LIST#/ITEMID#<itemId>` locator with the same initial `itemRevision`, condition-check item-tombstone and both migration/repair gates absent, and advance META counters, `rankVersion` and `itemVersion`. On version conflict re-read and retry. Bulk allocates an ordered sequence under one version advance per receipt-aware chunk. |
 | Patch list item fields | Resolve the locator/ranked row, update only supplied fields while conditionally advancing the row and locator's matching `itemRevision`, atomically advance `META.itemVersion`, and require both migration/repair gates absent. A condition conflict is retried internally against current truth; no client `If-Match` and no unrelated field replacement. |
 | Reorder list item | Delete the old ranked row only at the revision read, put that freshly read row at the new rank with the next revision, conditionally move the locator from the same rank/revision, and conditionally advance `META.rankVersion` plus `META.itemVersion` with both gates absent. On any conflict re-read the row/neighbours and retry. No other ListItem changes during normal reorder. |
@@ -1625,9 +1664,9 @@ status/body.
 | Uncheck all | Change only currently checked items to unchecked, advance `itemVersion` once per applied chunk, and write one single-use, replay-retained `UNDO#<operationId>` containing exactly those item ids; bounded receipt-aware chunks preserve one logical operation |
 | Meal ingredients to a list | **One transaction** (P3-17). Selections are classified by normalized-title group. Per matching **unchecked** row, update the rendered `sourceLabel` plus storage-only activity-keyed `sourceProvenance` under that row's `itemRevision`; per created group, use the ordinary conditional item/identity puts and tombstone check; and per supplied id absorbed by a labelled/grouped outcome, conditionally put a permanent alias in the same authoritative `ITEMID#` namespace. A created identity and every alias store the exact source Activity, ingredient and original outcome; only that exact tuple is a replay. The META `rankVersion`, `itemVersion` and counters advance; one conditional `ACT#/META` `SET details.ingredients[i].addedToListId` per selected row is conditioned on its resolved `ingredientId` still occupying that index and on the meal's read `updatedAt`, which it also advances; the idempotency receipt joins the same write. For `n <= 30` selections and `g` destination groups, creates cost `3g` while aliases/extensions replace rather than add another three actions per grouped selection; the worst case remains `3n + 4 = 94`. The META condition names both **snapshot generations** and the service validates `behaviour = collection` plus capacity from that exact basis, so a create, rename, check, delete or completed behaviour migration landing after preflight cancels or refuses the operation instead of laundering a stale decision into a commit. A condition failure re-runs the entire read/classify/build cycle. A bound replay target answers its own ingredient even after rename/check, but it may absorb fresh same-title selections only while it is still unchecked and its normalized title still matches. Every supplied id remains occupied by its no-TTL `ITEMID#` record even after the receipt expires or an alias target is deleted. |
 | Undo List operation | Resolve a retained, unused opaque token to `UNDO#<operationId>`; a compensation spends it in the **same transaction** that applies the inverse — including the behaviour-upgrade migration's final transaction — so no crash can leave a spent inverse looking unspent; `undoExpiresAt` governs only whether the client may offer a new Undo, not whether an already accepted durable inverse may replay. For delete, conditionally recreate the same ranked rows and locators, advance `rankVersion` and `itemVersion`, restore still-live viewer links and Activity provenance while advancing those Activities' `updatedAt`, delete matching item tombstones and update counters; for `uncheck-all`, recheck only affected ids that still exist and advance `itemVersion`; for an additive settings/archive change, apply its recorded inverse only while the exact preconditions still hold. Behaviour-upgrade compensation removes only defaults that operation created and bypasses the ordinary destructive-downgrade confirmation. Retention-expired, mismatched, edited or reused operations write nothing. |
-| Request attachment upload | Drain the caller's bounded pending set, then put `USER#<u>/UPLOAD#<attachmentId>` with declared temporary/final keys, type, size, `awaiting_upload` state and one-day `cleanupAfter` before returning the presigned URL. Reject more than 20 unresolved rows. |
-| Confirm attachment | Record the target Activity and mark the pending upload `confirming`, copy and verify the final object, then transactionally put `ACT#<a>/ATT#<attachmentId>` and delete the pending row; retry or the caller's next bounded drain resumes. Expired cleanup deletes both object keys before deleting a row. |
-| Delete attachment | One transaction deletes `ACT#<a>/ATT#<attachmentId>` and — **only when that attachment is the activity’s `primaryAttachmentId`** — removes that field from `ACT#<a>/META` in the same write, conditioned on it still naming this attachment, so the hero can never point at an image that is gone. The row goes before the object: while the row exists the image is rendered, so the worst interruption leaves an unreferenced object for the lifecycle rule rather than a hero whose bytes are missing. Neither `lastActivityAt` nor `icsSequence` moves; `updatedAt` moves only on the write that clears the cover, because that is an edit to a field on the Activity itself. |
+| Request attachment upload | Drain the caller's bounded pending set, then transactionally put `USER#<u>/UPLOAD#<attachmentId>` with declared temporary/final keys, type, size, `awaiting_upload` state and one-day `cleanupAfter` plus one conditional `UPLOAD_SLOT#<00..19>` claim before returning the presigned URL. No preflight race can admit more than 20 unresolved rows. |
+| Confirm attachment | Record the target Activity and mark the pending upload `confirming`, copy and verify the final object, then transactionally put `ACT#<a>/ATT#<attachmentId>` plus a conditional `ATT_SLOT#<00..19>` claim and delete the pending row plus its upload slot. A retry that finds the exact already-linked attachment transactionally stores this request's receipt against that immutable row, so concurrent adoption cannot return success without a replay record. Retry or the caller's next bounded drain resumes. Expired cleanup deletes both object keys before deleting a row. |
+| Delete attachment | One transaction deletes `ACT#<a>/ATT#<attachmentId>` and its `ATT_SLOT#` claim, writes durable `USER#<u>/MEDIA_DELETE#<activityId>#<attachmentId>` work, and — **only when that attachment is the activity’s `primaryAttachmentId`** — removes that field from `ACT#<a>/META` in the same write, conditioned on it still naming this attachment. The service deletes the permanent object and only then removes the work row; retries and Activity deletion drain the same work. The hero can therefore never point at a deleted row, and a crash cannot make confirmed media cleanup undiscoverable. Neither `lastActivityAt` nor `icsSequence` moves; `updatedAt` moves only on the write that clears the cover, because that is an edit to a field on the Activity itself. |
 | Schedule / reschedule | One main transaction writes `ACT#/META` plus `USER#<u>/IDX#` for owner **and every participating user** (the GSI1 bucket, sort key, projected timezone and status may change), plus `ACT#<parent>/SUB#<child>` when a prep task's derived status changes. An occurrence-only cross-day move instead writes its nominal `OCC#` override plus destination `MOVE#` marker and never META. RSVP reset follows §7.1: it may join through 45 participants; above that the main transaction writes `rsvpResetPending`, receipt and `CLEANUP#` work, then bounded idempotent phases rewrite participants and clear the marker. Unscheduling's main transaction similarly persists receipt + reminder-delete cleanup before bounded deletion. A timed → date-only change normalises sub-day reminder offsets, using persisted cleanup when the fan-out cannot fit. None of those reminder rows is falsely claimed to be atomic with META/index state. |
 | Add participant (app user) | `ACT#/PART#`, `USER#<invitee>/IDX#`, `USER#<owner>/PLINK#`, `USER#<invitee>/PLINK#`, counter update on `ACT#/META` |
 | Add participant (guest) | `ACT#/PART#`, `USER#<owner>/PERSON#`, `USER#<owner>/PLINK#`, `INVITE#<token>/META` |
@@ -1650,7 +1689,7 @@ status/body.
 | Complete / skip an occurrence | `ACT#/OCC#<date>` only (put or delete as appropriate). Never the series. |
 | Cross-day occurrence reschedule / snooze / unsnooze | Nominal `ACT#/OCC#<date>` plus the destination `ACT#/MOVE#<date>` marker in one transaction; replacing a destination also removes the prior marker reference. Never the series. Same-day snooze remains one `OCC#` write. |
 | Snooze / unsnooze a non-recurring one-off | Update or delete `ACT#/META.snoozedUntil`; never create an `OCC#` row |
-| Delete activity | First query child Expenses: any non-empty `settlementIdByPersonId` makes the whole operation `409 settlement_conflict` with no tombstone or write. After explicit Undo clears them, the cascade begins: when the activity is itself a prep task, remove the parent's `ACT#<parent>/SUB#<child>` pointer and decrement `childCount` in one conditional transaction — the half of the cascade that lives in the *parent's* partition, idempotent so an interrupted delete resumes without double-counting (P3-18) — then use `SOURCE_LIST#` rows to clear matching `List.sourceActivityId` values without deleting Lists — one conditional `UpdateItem` per List, conditional on that List still naming **this** Plan, run **before** the projections are deleted so an interrupted delete can re-read the ids and resume; the clear removes the attribute without advancing `List.updatedAt`, because the behaviour-migration finisher pins `expectedUpdatedAt` in its durable work record and a bumped version would fail that condition permanently, stranding the marker and gating the list into `503` (P3-49) — then delete child rows and external pointers (`EXPENSE#` locators, every `USER#/IDX#` + `PLINK#`, and matching `LNK#` pointers) first, and delete `ACT#/META` **last**. Until that final delete a retry can re-authorise and resume the bounded idempotent cascade; after it, a replayed `404` is success. |
+| Delete activity | First query child Expenses: any non-empty `settlementIdByPersonId` makes the whole operation `409 settlement_conflict` with no tombstone or write. After explicit Undo clears them, the cascade marks META with `deletingAt`; every prep-child create, reminder create and sourced-list create condition-checks that marker absent, so no new subordinate write can enter behind the cascade. When the activity is itself a prep task, remove the parent's `ACT#<parent>/SUB#<child>` pointer and decrement `childCount` in one conditional transaction — the half of the cascade that lives in the *parent's* partition, idempotent so an interrupted delete resumes without double-counting (P3-18) — then use `SOURCE_LIST#` rows to clear matching `List.sourceActivityId` values without deleting Lists — one conditional `UpdateItem` per List, conditional on that List still naming **this** Plan, run **before** the projections are deleted so an interrupted delete can re-read the ids and resume; the clear removes the attribute without advancing `List.updatedAt`, because the behaviour-migration finisher pins `expectedUpdatedAt` in its durable work record and a bumped version would fail that condition permanently, stranding the marker and gating the list into `503` (P3-49). Attachment rows are staged into durable `MEDIA_DELETE#` work, each permanent object is deleted, and that work is drained before META can disappear. Then delete the remaining child rows and external pointers (`EXPENSE#` locators, every `USER#/IDX#` + `PLINK#`, and matching `LNK#` pointers) first, and delete `ACT#/META` **last**. Until that final delete a retry can re-authorise and resume the bounded idempotent cascade; after it, a replayed `404` is success. |
 
 Participant fan-out is bounded: **cap participants at 50 per activity** in v1. Enforce it
 in validation. The cap alone does **not** keep every write under DynamoDB's 100-item

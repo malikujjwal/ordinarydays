@@ -50,6 +50,8 @@ const listActivityAttachmentDeletions =
   vi.fn<(userId: string, activityId: string) => Promise<AttachmentDeletion[]>>();
 const getAttachmentDeletion = vi.fn<() => Promise<AttachmentDeletion | undefined>>();
 const completeAttachmentDeletion = vi.fn<(work: AttachmentDeletion) => Promise<void>>();
+const recordLinkedAttachmentReceipt =
+  vi.fn<(record: unknown, receipt: unknown) => Promise<void>>();
 const getActivityMeta = vi.fn<(id: string, opts?: unknown) => Promise<unknown>>();
 const assertActivityAccess =
   vi.fn<(u: string, a: string, l: string) => Promise<{ activity: unknown }>>();
@@ -89,6 +91,8 @@ vi.mock('../repositories/attachmentRepository.js', async () => {
     getAttachmentDeletion: () => getAttachmentDeletion(),
     completeAttachmentDeletion: (work: AttachmentDeletion) =>
       completeAttachmentDeletion(work),
+    recordLinkedAttachmentReceipt: (record: unknown, receipt: unknown) =>
+      recordLinkedAttachmentReceipt(record, receipt),
   };
 });
 
@@ -697,18 +701,17 @@ describe('confirmAttachment', () => {
       expect(linkAttachment).not.toHaveBeenCalled();
     });
 
-    /**
-     * The receipt is still built on that path — it is what sets the response body — but no
-     * receipt row is stored, because nothing was written. Same shape as the bridge's adopt
-     * path.
-     */
-    it('builds the response body but stores no receipt when already linked', async () => {
-      getAttachment.mockResolvedValue({ attachmentId: ATT, activityId: ACT });
-      const receiptFor = vi.fn(() => ({ key: 'k' }) as never);
+    /** The adopted row and this request's replay receipt are pinned in one transaction. */
+    it('stores the response receipt while adopting an already-linked row', async () => {
+      const already = { attachmentId: ATT, activityId: ACT };
+      const receipt = { key: 'k' } as never;
+      getAttachment.mockResolvedValue(already);
+      const receiptFor = vi.fn(() => receipt);
 
       await confirmAttachment(USER, ACT, ATT, NOW, { receiptFor });
 
       expect(receiptFor).toHaveBeenCalledTimes(1);
+      expect(recordLinkedAttachmentReceipt).toHaveBeenCalledWith(already, receipt);
       expect(linkAttachment).not.toHaveBeenCalled();
     });
 
@@ -720,6 +723,7 @@ describe('confirmAttachment', () => {
       const attachment = await confirmAttachment(USER, ACT, ATT, NOW, { receiptFor });
 
       expect(receiptFor).toHaveBeenCalledWith(attachment);
+      expect(recordLinkedAttachmentReceipt).not.toHaveBeenCalled();
       expect(linkAttachment).toHaveBeenCalledWith(
         USER,
         attachment,
@@ -745,7 +749,8 @@ describe('confirmAttachment', () => {
         '../repositories/attachmentRepository.js'
       );
       linkAttachment.mockRejectedValueOnce(new AttachmentAlreadyLinkedError());
-      const receiptFor = vi.fn(() => ({ key: 'k' }) as never);
+      const receipt = { key: 'k' } as never;
+      const receiptFor = vi.fn(() => receipt);
 
       await expect(confirmAttachment(USER, ACT, ATT, NOW, { receiptFor })).resolves.toBe(
         winner,
@@ -753,6 +758,7 @@ describe('confirmAttachment', () => {
 
       expect(receiptFor).toHaveBeenCalledTimes(2);
       expect(receiptFor).toHaveBeenLastCalledWith(winner);
+      expect(recordLinkedAttachmentReceipt).toHaveBeenCalledWith(winner, receipt);
     });
   });
 

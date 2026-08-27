@@ -914,8 +914,11 @@ describe('prep-task pointer and parent counter', () => {
     await createActivity(ALICE, activity({ parentActivityId: PARENT }));
 
     expect(counterFor(PARENT)?.ConditionExpression).toBe(
-      'attribute_exists(pk) AND #childCount < :cap AND #objectKind = :plan',
+      'attribute_exists(pk) AND #childCount < :cap AND #objectKind = :plan AND attribute_not_exists(#deletingAt)',
     );
+    expect(counterFor(PARENT)?.ExpressionAttributeNames).toMatchObject({
+      '#deletingAt': 'deletingAt',
+    });
   });
 
   /**

@@ -1,3 +1,4 @@
+import { UNDO_OFFER_SECONDS } from '@od/shared';
 import type { OutboxRepository } from '@/lib/sqlite/outbox';
 import type { SerializedTransactionRunner } from '@/lib/sqlite/transaction';
 
@@ -8,7 +9,11 @@ export function recoverAbandonedOutbox(
 ): Promise<number> {
   return transactions.run(async (transaction) => {
     const recovered = await outbox.recoverAbandoned(transaction.database);
-    if (recovered > 0) transaction.changed('outbox');
+    const expiredOffers = await outbox.expireUnacceptedListArchiveUndoOffers(
+      transaction.database,
+      Date.now() - UNDO_OFFER_SECONDS * 1000,
+    );
+    if (recovered > 0 || expiredOffers > 0) transaction.changed('outbox');
     return recovered;
   });
 }

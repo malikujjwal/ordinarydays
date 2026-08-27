@@ -322,4 +322,23 @@ describe('versioned SQLite migrations', () => {
       ),
     ).toBe(false);
   });
+
+  it('adds the durable bridge from archive acknowledgement to native Undo', async () => {
+    if (database === undefined) throw new Error('Test database was not opened.');
+    await runMigrations(database, FOUNDATION_MIGRATIONS.slice(0, 11));
+
+    expect(
+      await database.first(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'list_archive_undo_offers';",
+      ),
+    ).toBeUndefined();
+
+    await runMigrations(database, FOUNDATION_MIGRATIONS);
+
+    expect(
+      await database.first(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'list_archive_undo_offers';",
+      ),
+    ).toEqual({ name: 'list_archive_undo_offers' });
+  });
 });

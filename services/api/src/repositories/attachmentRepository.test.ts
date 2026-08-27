@@ -14,6 +14,7 @@ import {
   linkAttachment,
   listActivityAttachmentDeletions,
   listAttachments,
+  recordLinkedAttachmentReceipt,
   stageActivityAttachmentDeletion,
   unlinkAttachment,
 } from './attachmentRepository.js';
@@ -142,6 +143,8 @@ describe('linkAttachment', () => {
       pk: `ACT#${ACT}`,
       sk: 'ATT_SLOT#03',
       attachmentId: ATT,
+      createdAt: NOW,
+      updatedAt: NOW,
     });
     expect(items()[2]?.ConditionCheck?.Key).toEqual({ pk: `ACT#${ACT}`, sk: 'META' });
     expect(items()[3]?.Delete?.Key).toEqual({
@@ -177,6 +180,30 @@ describe('linkAttachment', () => {
 
     expect(items()).toHaveLength(6);
     expect(String(items()[5]?.Put?.Item?.pk)).toBe(`IDEM#${USER}#idem-key`);
+  });
+
+  it('condition-checks an adopted row while storing the re-confirm receipt', async () => {
+    await recordLinkedAttachmentReceipt(record(), {
+      userId: USER,
+      key: 'adopt-key',
+      route: 'POST /v1/activities/:id/attachments',
+      status: 201,
+      body: '{}',
+      ttl: 1,
+      createdAt: NOW,
+    });
+
+    expect(items()).toHaveLength(2);
+    expect(items()[0]?.ConditionCheck).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: `ATT#${ATT}` },
+      ConditionExpression:
+        'attribute_exists(pk) AND #key = :key AND #createdAt = :createdAt',
+      ExpressionAttributeValues: { ':key': record().key, ':createdAt': NOW },
+    });
+    expect(items()[1]?.Put?.Item).toMatchObject({
+      pk: `IDEM#${USER}#adopt-key`,
+      entity: 'Idempotency',
+    });
   });
 });
 
@@ -266,6 +293,8 @@ describe('Activity attachment cascade staging', () => {
       entity: 'AttachmentDeletion',
       attachmentId: ATT,
       key: record().key,
+      createdAt: NOW,
+      updatedAt: NOW,
     });
   });
 

@@ -5,6 +5,7 @@ import { AppError } from '../lib/errors.js';
 import { entityTag } from '../lib/etag.js';
 import { requireUserId } from '../middleware/identity.js';
 import { patchListSettings } from '../services/listMutationService.js';
+import { idempotentJson } from './idempotentResponse.js';
 import { toListSettings } from './toList.js';
 
 /**
@@ -23,9 +24,9 @@ import { toListSettings } from './toList.js';
  * spurious `409`s. A settings change is the opposite case — one row, whole-object semantics,
  * and a user looking at a settings sheet they opened some time ago.
  *
- * There is no `Idempotency-Key`. A `PATCH` here is idempotent by construction: it names the
- * version it is replacing, so a retry either lands the same values or is told the version
- * moved. Behaviour changes are the exception and have their own replay-protected `POST`.
+ * `Idempotency-Key` preserves the exact settings response, including the opaque Undo token.
+ * `If-Match` alone cannot do that: after a lost response, the version has moved and the token
+ * cannot be reconstructed from the canonical List row.
  */
 export const PATCH_LIST_PATH = '/:id';
 
@@ -43,16 +44,15 @@ export async function patchListHandler(
     ]);
   }
 
-  const result = await patchListSettings(
-    requireUserId(c),
-    c.req.param('id'),
-    patch,
-    entityTag(header.trim()),
-    now,
-  );
-
-  return c.json({
-    data: toListSettings(result),
-    meta: { requestId: c.get('requestId') },
+  return idempotentJson(c, 200, async (receiptFor) => {
+    const result = await patchListSettings(
+      requireUserId(c),
+      c.req.param('id'),
+      patch,
+      entityTag(header.trim()),
+      now,
+      { receiptFor: (stored) => receiptFor(toListSettings(stored)) },
+    );
+    return toListSettings(result);
   });
 }

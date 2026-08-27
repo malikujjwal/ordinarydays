@@ -124,7 +124,11 @@ const patch = (
   app.fetch(
     new Request(`http://localhost/v1/lists/${LST}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', ...headers },
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': crypto.randomUUID(),
+        ...headers,
+      },
       body: JSON.stringify(body),
     }),
   );
@@ -187,6 +191,19 @@ describe('PATCH /v1/lists/:id — the additive settings', () => {
     expect(body.error.code).toBe('validation_failed');
     expect(body.error.details[0].path).toBe('If-Match');
     expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
+  it('requires an Idempotency-Key so a lost Undo response can be replayed', async () => {
+    const res = await createApp().fetch(
+      new Request(`http://localhost/v1/lists/${LST}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'If-Match': UPDATED_AT },
+        body: JSON.stringify({ archived: true }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.details[0].path).toBe('Idempotency-Key');
   });
 
   it.each([
@@ -703,8 +720,7 @@ describe('the route registry', () => {
     });
   });
 
-  /** A settings `PATCH` is guarded by `If-Match`, so it needs no receipt of its own. */
-  it('registers the settings PATCH without replay protection', async () => {
+  it('registers settings PATCH as replay-protected because its Undo token is opaque', async () => {
     const { ROUTE_REGISTRY } = await import('../middleware/routeRegistry.js');
 
     expect(
@@ -712,6 +728,11 @@ describe('the route registry', () => {
         (candidate) =>
           candidate.method === 'PATCH' && candidate.pattern === '/v1/lists/:id',
       ),
-    ).toEqual({ method: 'PATCH', pattern: '/v1/lists/:id', auth: 'authenticated' });
+    ).toEqual({
+      method: 'PATCH',
+      pattern: '/v1/lists/:id',
+      auth: 'authenticated',
+      mutates: true,
+    });
   });
 });

@@ -86,7 +86,13 @@ const seed = (
   ddbMock.on(GetCommand).callsFake((input) => ({
     Item: byId[String(input.Key.pk).replace('ACT#', '')],
   }));
-  ddbMock.on(QueryCommand).resolves({ Items: partition as never });
+  ddbMock.on(QueryCommand).callsFake((input) => ({
+    // Activity deletion also drains caller-owned MEDIA_DELETE# work. Keep that user-partition
+    // query separate from the Activity partition this fixture is meant to return.
+    Items: String(input.ExpressionAttributeValues?.[':pk'] ?? '').startsWith('USER#')
+      ? []
+      : (partition as never),
+  }));
   ddbMock.on(BatchWriteCommand).resolves({});
   ddbMock.on(TransactWriteCommand).resolves({});
   ddbMock.on(UpdateCommand).resolves({});

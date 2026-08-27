@@ -420,11 +420,15 @@ function childCountDelta(parentActivityId: string, delta: 1 | -1): TransactItem 
        */
       ConditionExpression:
         delta === 1
-          ? 'attribute_exists(pk) AND #childCount < :cap AND #objectKind = :plan'
+          ? 'attribute_exists(pk) AND #childCount < :cap AND #objectKind = :plan AND attribute_not_exists(#deletingAt)'
           : 'attribute_exists(pk) AND #childCount > :zero',
       ExpressionAttributeNames:
         delta === 1
-          ? { '#childCount': 'childCount', '#objectKind': 'objectKind' }
+          ? {
+              '#childCount': 'childCount',
+              '#objectKind': 'objectKind',
+              '#deletingAt': 'deletingAt',
+            }
           : { '#childCount': 'childCount' },
       ExpressionAttributeValues:
         delta === 1

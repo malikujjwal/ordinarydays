@@ -565,6 +565,21 @@ describe('retries', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('retries a PATCH when its receipt key makes the exact response replayable', async () => {
+    const { client, calls } = makeClient([{ status: 500, body: undefined }]);
+
+    await client
+      .request({
+        ...health(),
+        method: 'PATCH',
+        body: { a: 1 },
+        headers: { 'If-Match': 'v1', 'Idempotency-Key': 'b0e1…' },
+      })
+      .catch(() => undefined);
+
+    expect(calls).toHaveLength(MAX_RETRIES + 1);
+  });
+
   it('reuses one correlation id across a retry, so the attempts correlate in the logs', async () => {
     const { client, calls } = makeClient([
       { status: 500, body: undefined },

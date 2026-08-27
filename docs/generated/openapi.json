@@ -9346,7 +9346,7 @@
       },
       "patch": {
         "summary": "Change a list’s title, capabilities, default slot or archived state",
-        "description": "Requires `If-Match` carrying the `updatedAt` the client read; omitting it is `400`, not `428`, because the error union is closed. Everything this route changes is **additive in both directions** and applies immediately with no confirmation: turning `checkable` off retains every item’s `checked` value and turning `supportsLocation` off retains every stored location, so re-enabling either restores exactly what was there. `capabilities` is a partial patch of the two flags. `slot` is nullable — `null` clears it — and changing or clearing it removes the caller’s `defaultLists[oldSlot]` in the same transaction, but only while that slot still names this list, so a newer destination chosen on another device survives. The body is strict: `behaviour` belongs to the replay-protected action below and `templateKey` is immutable provenance, so either one is a `400` naming it. A change that actually moves something answers with a settings Undo token; a rename alone does not, because renaming a list has no undo offer. A member may rename; only the owner may change capabilities, slot or archived state.",
+        "description": "Requires `If-Match` carrying the `updatedAt` the client read and an `Idempotency-Key`; omitting either is `400`. The receipt preserves the exact opaque Undo token if a successful response is lost. `If-Match` omission is `400`, not `428`, because the error union is closed. Everything this route changes is **additive in both directions** and applies immediately with no confirmation: turning `checkable` off retains every item’s `checked` value and turning `supportsLocation` off retains every stored location, so re-enabling either restores exactly what was there. `capabilities` is a partial patch of the two flags. `slot` is nullable — `null` clears it — and changing or clearing it removes the caller’s `defaultLists[oldSlot]` in the same transaction, but only while that slot still names this list, so a newer destination chosen on another device survives. The body is strict: `behaviour` belongs to the replay-protected action below and `templateKey` is immutable provenance, so either one is a `400` naming it. A change that actually moves something answers with a settings Undo token; a rename alone does not, because renaming a list has no undo offer. A member may rename; only the owner may change capabilities, slot or archived state.",
         "tags": [
           "lists"
         ],
@@ -9359,6 +9359,28 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The current List updatedAt value read by the client."
+            },
+            "required": true,
+            "description": "The current List updatedAt value read by the client.",
+            "name": "If-Match",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+              "description": "A UUID identifying this logical settings mutation."
+            },
+            "required": true,
+            "description": "A UUID identifying this logical settings mutation.",
+            "name": "Idempotency-Key",
+            "in": "header"
           }
         ],
         "requestBody": {
@@ -9409,7 +9431,7 @@
             }
           },
           "400": {
-            "description": "A missing `If-Match`, an empty body, or a field this route does not accept — `behaviour` and `templateKey` among them.",
+            "description": "A missing `If-Match` or `Idempotency-Key`, an empty body, or a field this route does not accept — `behaviour` and `templateKey` among them.",
             "content": {
               "application/json": {
                 "schema": {

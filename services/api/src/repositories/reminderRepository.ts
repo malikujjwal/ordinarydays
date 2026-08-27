@@ -3,7 +3,7 @@ import type { Reminder } from '@od/shared/types';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import { deleteItem, queryAll } from './base.js';
 import { receiptItem } from './idempotencyRepository.js';
-import { reminder as reminderKey, reminderPrefix } from './keys.js';
+import { activityMeta, reminder as reminderKey, reminderPrefix } from './keys.js';
 import type { StoredItem } from './migrate.js';
 import { TransactionBuilder, transactWrite } from './tx.js';
 
@@ -31,23 +31,32 @@ export async function createForUser(
   now: string,
   idempotencyReceipt: IdempotencyReceipt,
 ): Promise<void> {
-  const builder = new TransactionBuilder('createReminder', 1).add({
-    Put: {
-      Item: {
-        ...reminderKey(activityId, userId, reminder.reminderId),
-        entity: ENTITY,
-        reminderId: reminder.reminderId,
-        activityId,
-        userId,
-        offsetMinutes: reminder.offsetMinutes,
-        channel: reminder.channel,
-        createdAt: now,
-        updatedAt: now,
-        schemaVersion: SCHEMA_VERSION,
+  const builder = new TransactionBuilder('createReminder', 1).add(
+    {
+      Put: {
+        Item: {
+          ...reminderKey(activityId, userId, reminder.reminderId),
+          entity: ENTITY,
+          reminderId: reminder.reminderId,
+          activityId,
+          userId,
+          offsetMinutes: reminder.offsetMinutes,
+          channel: reminder.channel,
+          createdAt: now,
+          updatedAt: now,
+          schemaVersion: SCHEMA_VERSION,
+        },
+        ConditionExpression: 'attribute_not_exists(pk)',
       },
-      ConditionExpression: 'attribute_not_exists(pk)',
     },
-  });
+    {
+      ConditionCheck: {
+        Key: activityMeta(activityId),
+        ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(#deletingAt)',
+        ExpressionAttributeNames: { '#deletingAt': 'deletingAt' },
+      },
+    },
+  );
   const receiptIndex = builder.length;
   builder.addReserved(receiptItem(idempotencyReceipt));
   await transactWrite(builder.build(), {

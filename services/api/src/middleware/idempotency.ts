@@ -10,13 +10,13 @@ import { loadReceipt } from '../repositories/idempotencyRepository.js';
 import { ROUTE_REGISTRY, type RouteEntry } from './routeRegistry.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MIDDLEWARE_METHOD = 'ALL';
 
 function entryFor(
   registry: readonly RouteEntry[],
   matched: readonly { method: string; path: string }[] | undefined,
+  requestMethod: string,
 ): RouteEntry | undefined {
-  const route = matched?.find((candidate) => candidate.method !== MIDDLEWARE_METHOD);
+  const route = matched?.find((candidate) => candidate.method === requestMethod);
   if (route === undefined) return undefined;
   return registry.find(
     (entry) => entry.method === route.method && entry.pattern === route.path,
@@ -58,9 +58,8 @@ export function createIdempotency(options: IdempotencyOptions = {}) {
   }
 
   return createMiddleware<AppEnv>(async (c, next) => {
-    if (c.req.method !== 'POST') return next();
-    const entry = entryFor(registry, c.req.matchedRoutes);
-    if (entry?.method !== 'POST' || !entry.mutates) return next();
+    const entry = entryFor(registry, c.req.matchedRoutes, c.req.method);
+    if (entry?.mutates !== true) return next();
 
     const key = c.req.header('Idempotency-Key');
     if (key === undefined || !UUID.test(key)) {

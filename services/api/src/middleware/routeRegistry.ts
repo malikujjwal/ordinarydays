@@ -48,11 +48,12 @@ interface RouteEntryBase {
    */
 }
 
-/** Every POST is explicitly classified so a new mutation cannot silently bypass replay. */
+/** Every POST is classified; the List settings PATCH opts into replay protection as well. */
 export type RouteEntry =
   | (RouteEntryBase & { readonly method: 'POST'; readonly mutates: boolean })
+  | (RouteEntryBase & { readonly method: 'PATCH'; readonly mutates?: boolean })
   | (RouteEntryBase & {
-      readonly method: Exclude<RouteMethod, 'POST'>;
+      readonly method: Exclude<RouteMethod, 'POST' | 'PATCH'>;
       readonly mutates?: never;
     });
 
@@ -219,7 +220,7 @@ export const ROUTE_REGISTRY: readonly RouteEntry[] = [
   { method: 'GET', pattern: '/v1/lists', auth: 'authenticated' },
   { method: 'POST', pattern: '/v1/lists', auth: 'authenticated', mutates: true },
   { method: 'GET', pattern: '/v1/lists/:id', auth: 'authenticated' },
-  { method: 'PATCH', pattern: '/v1/lists/:id', auth: 'authenticated' },
+  { method: 'PATCH', pattern: '/v1/lists/:id', auth: 'authenticated', mutates: true },
   {
     method: 'POST',
     pattern: '/v1/lists/:id/behaviour',

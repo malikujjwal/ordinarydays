@@ -96,7 +96,12 @@ describe('createForUser', () => {
       schemaVersion: 1,
     });
     expect(items?.[0]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
-    expect(items?.[1]?.Put?.Item?.entity).toBe('Idempotency');
+    expect(items?.[1]?.ConditionCheck).toMatchObject({
+      Key: { pk: `ACT#${ACTIVITY_ID}`, sk: 'META' },
+      ConditionExpression: 'attribute_exists(pk) AND attribute_not_exists(#deletingAt)',
+      ExpressionAttributeNames: { '#deletingAt': 'deletingAt' },
+    });
+    expect(items?.[2]?.Put?.Item?.entity).toBe('Idempotency');
   });
 });
 

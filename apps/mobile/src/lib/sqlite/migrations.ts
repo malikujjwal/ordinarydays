@@ -414,6 +414,29 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         CREATE INDEX list_rows_position ON list_rows (position, list_id);
       `),
   },
+  {
+    version: 12,
+    name: 'durable-list-archive-undo',
+    /**
+     * Bridges the archive acknowledgement's opaque server token to the six-second native
+     * Undo offer. The inverse may be accepted while the archive is still in flight, so the
+     * row links both durable intents until settlement installs the token on the dependent.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE list_archive_undo_offers (
+          original_intent_id TEXT PRIMARY KEY NOT NULL,
+          current_intent_id TEXT UNIQUE NOT NULL,
+          list_id TEXT NOT NULL,
+          inverse_intent_id TEXT,
+          undo_token TEXT,
+          undo_expires_at TEXT,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX list_archive_undo_offers_list
+          ON list_archive_undo_offers (list_id, created_at);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

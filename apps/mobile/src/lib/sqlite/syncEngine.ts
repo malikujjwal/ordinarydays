@@ -37,7 +37,11 @@ import {
   type ActivityPullAdapter,
   sharedActivityPullAdapter,
 } from '@/lib/sync/pullAdapter';
-import { ActivityPushAdapter, type ActivityPushTransport } from '@/lib/sync/pushAdapter';
+import {
+  ActivityPushAdapter,
+  type ActivityPushTransport,
+  type ListPushTransport,
+} from '@/lib/sync/pushAdapter';
 import {
   RecurrenceReconciler,
   sharedTargetedAgendaTransport,
@@ -244,8 +248,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     private readonly targeted: TargetedAgendaTransport = sharedTargetedAgendaTransport,
     private readonly anytime?: AnytimeRepository,
     private readonly lists?: ListsRepository,
+    listPushTransport?: ListPushTransport,
   ) {
-    this.push = new ActivityPushAdapter(pushTransport);
+    this.push = new ActivityPushAdapter(pushTransport, listPushTransport);
     this.reconciler = new RecurrenceReconciler(
       transactions,
       outbox,
@@ -714,7 +719,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       const response = await this.serialNetwork(() => this.push.execute(intent));
       if (intent.mutationKey[0] === 'list') {
         phase = 'settlement';
-        await this.settleListIntent(intent, response);
+        const canonicalRows =
+          intent.mutationKey[1] === 'undo' ? await this.pullAllLists() : undefined;
+        await this.settleListIntent(intent, response, canonicalRows);
         this.retryIndex = 0;
         return 'continue';
       }
@@ -945,7 +952,11 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     }
   }
 
-  private async settleListIntent(intent: OutboxIntent, response: unknown): Promise<void> {
+  private async settleListIntent(
+    intent: OutboxIntent,
+    response: unknown,
+    canonicalRows?: readonly List[],
+  ): Promise<void> {
     const lists = this.lists;
     if (lists === undefined) throw new Error('Native Lists state is not ready.');
     await this.transactions.run(async (transaction) => {
@@ -960,11 +971,56 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           throw new Error('List settings acknowledgement omitted its canonical List.');
         }
         if (later.length === 0) await lists.applySettings(transaction, canonical);
+        const archived = field(field(intent.variables, 'input'), 'archived');
+        if (archived === true) {
+          const undoToken = field(response, 'undoToken');
+          const undoExpiresAt = field(response, 'undoExpiresAt');
+          if (typeof undoToken !== 'string' || typeof undoExpiresAt !== 'string') {
+            throw new Error('List archive acknowledgement omitted its Undo receipt.');
+          }
+          await this.outbox.recordListArchiveUndoToken(
+            transaction.database,
+            intent.intentId,
+            undoToken,
+            undoExpiresAt,
+          );
+        }
         await this.outbox.rebaseNextQueuedListPatch(
           transaction.database,
           intent.orderingKey,
           intent.seq,
           canonical.updatedAt,
+        );
+      } else if (intent.mutationKey[1] === 'undo') {
+        if (canonicalRows === undefined) {
+          throw new Error('List Undo settlement omitted its canonical index.');
+        }
+        const position = canonicalRows.findIndex(
+          (candidate) => candidate.listId === intent.entityId,
+        );
+        const canonical = position < 0 ? undefined : canonicalRows[position];
+        if (later.length === 0) {
+          if (canonical === undefined) {
+            await lists.removeCanonical(transaction, intent.entityId);
+          } else {
+            await lists.upsertCanonical(transaction, canonical, position);
+          }
+        }
+        if (canonical !== undefined) {
+          await this.outbox.rebaseNextQueuedListPatch(
+            transaction.database,
+            intent.orderingKey,
+            intent.seq,
+            canonical.updatedAt,
+          );
+        }
+        const originalIntentId = field(intent.variables, 'originalIntentId');
+        if (typeof originalIntentId !== 'string') {
+          throw new Error('List Undo intent omitted its original archive identity.');
+        }
+        await this.outbox.clearListArchiveUndoOffer(
+          transaction.database,
+          originalIntentId,
         );
       }
       await this.outbox.acknowledge(transaction.database, intent.intentId);

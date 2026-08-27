@@ -35,6 +35,7 @@ import {
   listActivityAttachmentDeletions,
   listAttachmentDeletions,
   listStoredAttachments,
+  recordLinkedAttachmentReceipt,
   unlinkAttachment,
 } from '../repositories/attachmentRepository.js';
 import {
@@ -562,10 +563,9 @@ export interface ConfirmAttachmentOptions {
   /**
    * Builds the replay receipt from the finished row.
    *
-   * Called on **both** paths, because it is what sets the response body — but its result is
-   * stored only by the write path. An already-linked id answers from the row that is already
-   * there and stores no receipt, exactly as the schedule bridge's adopt path does: a replay
-   * of the same key finds no receipt, short-circuits again, and answers identically.
+   * Called on **both** paths, because it sets the response body and supplies the receipt each
+   * successful mutating POST must commit. An already-linked id condition-checks the row it
+   * adopted while storing that request's receipt, so a later delete cannot change its replay.
    */
   readonly receiptFor?: (attachment: Attachment) => IdempotencyReceipt;
   readonly log?: Logger;
@@ -589,7 +589,8 @@ export async function confirmAttachment(
    */
   const existing = await getAttachment(activityId, attachmentId);
   if (existing !== undefined) {
-    options.receiptFor?.(existing);
+    const receipt = options.receiptFor?.(existing);
+    if (receipt !== undefined) await recordLinkedAttachmentReceipt(existing, receipt);
     return existing;
   }
 
@@ -643,10 +644,12 @@ export async function confirmAttachment(
   );
 
   // A concurrent confirm can win after this request has precomputed its response receipt.
-  // The losing transaction returns that canonical row; rebuild only the in-memory response
-  // body so both callers see the winner's exact timestamp. Its transaction did not commit,
-  // so this second receipt is deliberately not written.
-  if (linked !== linkedRow) options.receiptFor?.(linked);
+  // The loser adopts that canonical row and records its own response against it; this matters
+  // when the two logical requests used distinct idempotency keys.
+  if (linked !== linkedRow) {
+    const receipt = options.receiptFor?.(linked);
+    if (receipt !== undefined) await recordLinkedAttachmentReceipt(linked, receipt);
+  }
 
   /**
    * Last, and its failure is not the caller's problem: the attachment exists and is linked.

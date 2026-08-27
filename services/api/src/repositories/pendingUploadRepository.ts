@@ -188,6 +188,8 @@ export async function putPendingUpload(
           attachmentId: record.attachmentId,
           userId: record.userId,
           quotaSlot: record.quotaSlot,
+          createdAt: record.createdAt,
+          updatedAt: record.createdAt,
           schemaVersion: SCHEMA_VERSION,
         },
         ConditionExpression: 'attribute_not_exists(pk)',

@@ -125,6 +125,18 @@ const activityId = ulidId('act');
 const reminderId = ulidId('rem');
 const listId = ulidId('lst');
 const itemId = ulidId('itm');
+const listSettingsHeaders = z.object({
+  'If-Match': z
+    .string()
+    .min(1)
+    .meta({ description: 'The current List updatedAt value read by the client.' }),
+  'Idempotency-Key': z
+    .string()
+    .regex(
+      /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/,
+    )
+    .meta({ description: 'A UUID identifying this logical settings mutation.' }),
+});
 
 /**
  * The OpenAPI document, generated from the **same Zod schemas both sides import**
@@ -1083,7 +1095,9 @@ registry.registerPath({
   path: '/v1/lists/{id}',
   summary: 'Change a list’s title, capabilities, default slot or archived state',
   description:
-    'Requires `If-Match` carrying the `updatedAt` the client read; omitting it is `400`, ' +
+    'Requires `If-Match` carrying the `updatedAt` the client read and an ' +
+    '`Idempotency-Key`; omitting either is `400`. The receipt preserves the exact opaque ' +
+    'Undo token if a successful response is lost. `If-Match` omission is `400`, ' +
     'not `428`, because the error union is closed. Everything this route changes is ' +
     '**additive in both directions** and applies immediately with no confirmation: ' +
     'turning `checkable` off retains every item\u2019s `checked` value and turning ' +
@@ -1101,6 +1115,7 @@ registry.registerPath({
   tags: ['lists'],
   request: {
     params: z.object({ id: listId }),
+    headers: listSettingsHeaders,
     body: { content: { 'application/json': { schema: patchListInput } } },
   },
   responses: {
@@ -1110,7 +1125,7 @@ registry.registerPath({
     },
     400: {
       description:
-        'A missing `If-Match`, an empty body, or a field this route does not accept — ' +
+        'A missing `If-Match` or `Idempotency-Key`, an empty body, or a field this route does not accept — ' +
         '`behaviour` and `templateKey` among them.',
       content: { 'application/json': { schema: errorResponse } },
     },

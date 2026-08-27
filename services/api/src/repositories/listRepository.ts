@@ -500,10 +500,11 @@ export async function createList(
             ConditionCheck: {
               Key: activityMeta(list.sourceActivityId),
               ConditionExpression:
-                'attribute_exists(pk) AND #ownerId = :sourceOwner AND #objectKind = :plan',
+                'attribute_exists(pk) AND #ownerId = :sourceOwner AND #objectKind = :plan AND attribute_not_exists(#deletingAt)',
               ExpressionAttributeNames: {
                 '#ownerId': 'ownerId',
                 '#objectKind': 'objectKind',
+                '#deletingAt': 'deletingAt',
               },
               ExpressionAttributeValues: { ':sourceOwner': userId, ':plan': 'plan' },
             },
@@ -1288,6 +1289,8 @@ export interface PatchListMetaOptions {
    * removed a default it left standing.
    */
   readonly undoFor?: (removedDefault?: RemovedListDefault) => ListSettingsUndo;
+  /** Replay receipt for the durable settings PATCH. */
+  readonly idempotencyReceipt?: IdempotencyReceipt;
 }
 
 /**
@@ -1334,18 +1337,18 @@ export async function patchListMeta(
   for (;;) {
     const removedDefault =
       clearDefault === undefined ? undefined : { slot: clearDefault.slot, listId };
-    const builder = new TransactionBuilder('patchListMeta').add(
-      listDeletionGate(listId),
-      {
-        Update: {
-          Key: listMeta(listId),
-          UpdateExpression: `SET ${sets.join(', ')}`,
-          ExpressionAttributeNames: names,
-          ExpressionAttributeValues: values,
-          ConditionExpression: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
-        },
+    const builder = new TransactionBuilder(
+      'patchListMeta',
+      options.idempotencyReceipt === undefined ? 0 : 1,
+    ).add(listDeletionGate(listId), {
+      Update: {
+        Key: listMeta(listId),
+        UpdateExpression: `SET ${sets.join(', ')}`,
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
+        ConditionExpression: `#updatedAt = :expectedUpdatedAt AND ${GATES_ABSENT}`,
       },
-    );
+    });
     if (options.undoFor !== undefined) {
       builder.add({
         Put: {
@@ -1358,12 +1361,19 @@ export async function patchListMeta(
     if (clearDefault !== undefined) {
       builder.add(removeDefaultListTransactItem(userId, clearDefault.slot, listId));
     }
+    const receiptIndex = builder.length;
+    if (options.idempotencyReceipt !== undefined) {
+      builder.addReserved(receiptItem(options.idempotencyReceipt));
+    }
 
     try {
       await transactWrite(builder.build(), {
         operation: 'patchListMeta',
         onConditionFailed: (index) => {
           if (index === 0) return new ListNotFoundError();
+          if (index === receiptIndex && options.idempotencyReceipt !== undefined) {
+            return new IdempotencyRaceError();
+          }
           return index === profileIndex ? new StaleProfileDefaultError() : undefined;
         },
       });

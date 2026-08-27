@@ -204,6 +204,8 @@ export async function linkAttachment(
           attachmentId: record.attachmentId,
           activityId: record.activityId,
           quotaSlot: options.quotaSlot,
+          createdAt: record.createdAt,
+          updatedAt: record.createdAt,
           schemaVersion: SCHEMA_VERSION,
         },
         ConditionExpression: 'attribute_not_exists(pk)',
@@ -243,6 +245,29 @@ export async function linkAttachment(
         ? new IdempotencyRaceError()
         : undefined;
     },
+  });
+}
+
+/** Records a successful re-confirm against the exact linked row it adopted. */
+export async function recordLinkedAttachmentReceipt(
+  record: Attachment,
+  idempotencyReceipt: IdempotencyReceipt,
+): Promise<void> {
+  const builder = new TransactionBuilder('recordLinkedAttachmentReceipt', 1).add({
+    ConditionCheck: {
+      Key: attachmentKey(record.activityId, record.attachmentId),
+      ConditionExpression:
+        'attribute_exists(pk) AND #key = :key AND #createdAt = :createdAt',
+      ExpressionAttributeNames: { '#key': 'key', '#createdAt': 'createdAt' },
+      ExpressionAttributeValues: { ':key': record.key, ':createdAt': record.createdAt },
+    },
+  });
+  const receiptIndex = builder.length;
+  builder.addReserved(receiptItem(idempotencyReceipt));
+  await transactWrite(builder.build(), {
+    operation: 'recordLinkedAttachmentReceipt',
+    onConditionFailed: (index) =>
+      index === receiptIndex ? new IdempotencyRaceError() : undefined,
   });
 }
 
@@ -350,6 +375,7 @@ function attachmentDeletionPut(work: AttachmentDeletion) {
         ...attachmentDeletionKey(work.userId, work.activityId, work.attachmentId),
         entity: 'AttachmentDeletion',
         ...work,
+        updatedAt: work.createdAt,
         schemaVersion: SCHEMA_VERSION,
       },
       ConditionExpression: 'attribute_not_exists(pk)',

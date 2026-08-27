@@ -22,6 +22,7 @@ import {
   partitionByArchived,
   shouldDrainMore,
 } from '../model/indexDrain';
+import { leaveListConfirmation } from '../model/leaveConfirmation';
 import {
   type ListSwipeAction,
   listSwipeActions,
@@ -68,6 +69,8 @@ export interface ListsScreenProps {
   onArchive: (list: List) => void;
   onRestore: (list: List) => void;
   onDelete: (list: List) => void;
+  /** Phase 6 supplies the self-membership DELETE. Until then member actions stay hidden. */
+  onLeave?: (list: List) => void;
 }
 
 export function ListsScreen({
@@ -78,6 +81,7 @@ export function ListsScreen({
   onArchive,
   onRestore,
   onDelete,
+  onLeave,
 }: ListsScreenProps) {
   const theme = useTheme();
   const breakpoint = useBreakpoint();
@@ -85,7 +89,9 @@ export function ListsScreen({
   const effectiveViewerUserId = viewerUserId ?? view.viewerUserId;
   const [menuOpen, setMenuOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<List | undefined>(undefined);
+  const [pendingDestructive, setPendingDestructive] = useState<
+    { readonly list: List; readonly action: 'delete' | 'leave' } | undefined
+  >(undefined);
 
   const { active, archived } = useMemo(
     () => partitionByArchived(view.lists),
@@ -138,9 +144,14 @@ export function ListsScreen({
     (list: List, action: ListSwipeAction) => {
       if (action.name === 'archive') onArchive(list);
       // Destructive actions never act from the gesture: §1a.1's dialog is the commit point.
-      if (action.name === 'delete' || action.name === 'leave') setPendingDelete(list);
+      if (
+        action.name === 'delete' ||
+        (action.name === 'leave' && onLeave !== undefined)
+      ) {
+        setPendingDestructive({ list, action: action.name });
+      }
     },
-    [onArchive],
+    [onArchive, onLeave],
   );
 
   const columns = breakpoint === 'compact' ? 1 : 2;
@@ -170,7 +181,13 @@ export function ListsScreen({
         onPress={() => onOpenList(list.listId)}
         dimmed={dimmed}
         testID={`list-card-${list.listId}`}
-        actions={dimmed ? [] : listSwipeActions(roleFor(list, effectiveViewerUserId))}
+        actions={
+          dimmed || effectiveViewerUserId === undefined
+            ? []
+            : roleFor(list, effectiveViewerUserId) === 'member' && onLeave === undefined
+              ? []
+              : listSwipeActions(roleFor(list, effectiveViewerUserId))
+        }
         onAction={(action) => dispatch(list, action)}
       />
     </View>
@@ -294,14 +311,22 @@ export function ListsScreen({
         }}
       />
 
-      {pendingDelete === undefined ? null : (
+      {pendingDestructive === undefined ? null : (
         <ConfirmDialog
           open
-          confirmation={deleteListConfirmation(pendingDelete)}
-          onCancel={() => setPendingDelete(undefined)}
+          confirmation={
+            pendingDestructive.action === 'delete'
+              ? deleteListConfirmation(pendingDestructive.list)
+              : leaveListConfirmation(pendingDestructive.list)
+          }
+          onCancel={() => setPendingDestructive(undefined)}
           onConfirm={() => {
-            onDelete(pendingDelete);
-            setPendingDelete(undefined);
+            if (pendingDestructive.action === 'delete') {
+              onDelete(pendingDestructive.list);
+            } else {
+              onLeave?.(pendingDestructive.list);
+            }
+            setPendingDestructive(undefined);
           }}
           testID="list-delete-confirm"
         />

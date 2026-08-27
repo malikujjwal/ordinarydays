@@ -287,6 +287,16 @@ export class NativeActivityActionCoordinator {
     clock: ProjectionClock,
   ): Promise<NativeActionResult> {
     try {
+      const blocked = await this.transactions.run((transaction) =>
+        this.outbox.get(transaction.database, intentId),
+      );
+      if (
+        blocked?.status === 'needs_attention' &&
+        blocked.mutationKey[0] === 'list' &&
+        !(await this.sync.recoverRejectedIntent(intentId))
+      ) {
+        throw new Error("Couldn't refresh the latest List before retrying.");
+      }
       const { value: intent, commitRevision } = await this.transactions.runCommitted(
         async (transaction) => {
           const current = await this.outbox.get(transaction.database, intentId);
@@ -347,7 +357,15 @@ export class NativeActivityActionCoordinator {
             if (this.listService === undefined) {
               throw new Error('Native List retry state is not ready.');
             }
-            await this.listService.reprojectRetry(transaction, retried);
+            await this.outbox.reidentifyListArchiveUndoOffer(
+              transaction.database,
+              intentId,
+              freshIntentId,
+            );
+            const projected = await this.listService.reprojectRetry(transaction, retried);
+            transaction.changed('outbox');
+            transaction.changed('anytime');
+            return projected;
           } else {
             await this.service.reprojectRetry(
               transaction,

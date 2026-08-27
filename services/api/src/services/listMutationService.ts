@@ -586,6 +586,9 @@ export async function patchListSettings(
   input: PatchListInput,
   ifMatch: string,
   now: string,
+  options: {
+    readonly receiptFor?: (result: ListSettingsResult) => IdempotencyReceipt;
+  } = {},
 ): Promise<ListSettingsResult> {
   const access = await assertListAccess(userId, listId, 'write');
   assertMayPatch(access, input);
@@ -625,9 +628,9 @@ export async function patchListSettings(
   const clearsDefault = 'slot' in changed ? profileDefaultToClear(list) : undefined;
 
   /**
-   * A server-minted id, unlike the behaviour migration's. Nothing about this write is
-   * resumable across requests, so there is nothing for a replay to recognise: the `If-Match`
-   * already makes a retry either land the same values or be told the version moved.
+   * A server-minted id, unlike the behaviour migration's. The atomic request receipt binds
+   * this exact operation and token to the client's key; `If-Match` alone could only report
+   * that the version moved after a lost response, not recover this opaque token.
    */
   const operationId = newListOperationId();
   const undo = undoOffer(operationId, now);
@@ -657,6 +660,16 @@ export async function patchListSettings(
     },
   });
 
+  const result: ListSettingsResult = {
+    list: {
+      ...list,
+      ...(input.title === undefined ? {} : { title: input.title }),
+      ...changed,
+      updatedAt: now,
+    },
+    ...(reversible ? { undo } : {}),
+  };
+
   await write(
     userId,
     listId,
@@ -670,6 +683,9 @@ export async function patchListSettings(
     {
       ...(clearsDefault === undefined ? {} : { clearProfileDefault: clearsDefault }),
       ...(reversible ? { undoFor: undoFrom } : {}),
+      ...(options.receiptFor === undefined
+        ? {}
+        : { idempotencyReceipt: options.receiptFor(result) }),
     },
   );
 
@@ -678,15 +694,7 @@ export async function patchListSettings(
    * version it replaced, so the committed row is this one; asking storage for it again would
    * cost two more strong reads to be told what the condition already guaranteed.
    */
-  return {
-    list: {
-      ...list,
-      ...(input.title === undefined ? {} : { title: input.title }),
-      ...changed,
-      updatedAt: now,
-    },
-    ...(reversible ? { undo } : {}),
-  };
+  return result;
 }
 
 /**
