@@ -3925,6 +3925,24 @@ describe('serialized native convergence guard', () => {
       );
     }
 
+    /**
+     * The engine as the coordinator may hold it: authoritative recovery is real, but the
+     * `request` that follows an accepted Retry or Discard is a spy.
+     *
+     * Without this the drain that wake starts outlives the test and reaches a database the
+     * next `afterEach` has already closed — an unhandled rejection attributed to whichever
+     * test happens to be running by then. The same shape the rejected-rollback test uses.
+     */
+    function recoveryOnly(
+      engine: SerializedNativeSyncEngine,
+    ): SerializedNativeSyncEngine {
+      return {
+        request: vi.fn(),
+        recoverRejectedIntent: (intentId: string) =>
+          engine.recoverRejectedIntent(intentId),
+      } as unknown as SerializedNativeSyncEngine;
+    }
+
     function listPushTransport(create: ListPushTransport['create']): ListPushTransport {
       return {
         create,
@@ -4072,7 +4090,7 @@ describe('serialized native convergence guard', () => {
         transactions,
         service,
         outbox,
-        sync,
+        recoveryOnly(sync),
         undefined,
         listService,
         () => freshListId,
@@ -4131,7 +4149,7 @@ describe('serialized native convergence guard', () => {
         transactions,
         service,
         outbox,
-        sync,
+        recoveryOnly(sync),
         undefined,
         listService,
         () => 'lst_01J0000000000000000000000F',
