@@ -367,6 +367,53 @@ export const FOUNDATION_MIGRATIONS: readonly SqliteMigration[] = [
         ALTER TABLE agenda_rows DROP COLUMN projection_fence_version;
       `),
   },
+  {
+    version: 11,
+    name: 'native-lists-index',
+    /**
+     * The Lists index's materialized `META` rows (P3-25, ADR-057).
+     *
+     * **Columns, not a JSON blob**, on the `anytime_rows` precedent: every field here is one
+     * the card renders or the index filters on, and a blob would make `archived` — the
+     * client-side filter the whole screen turns on — unqueryable without parsing every row.
+     *
+     * `position` is **the server's pointer order**, stored as the ordinal the page arrived in.
+     * `ListIndex` carries `role` and `addedAt` only (ADR-042) and stores no rank, so there is
+     * nothing else a faithful order could come from and no client sort that could be right;
+     * `interaction-contract.md` §3.2 says the index is not reorderable for the same reason.
+     * Persisting the ordinal is what lets a subscription read rows back in that order without
+     * the screen re-deriving it.
+     *
+     * `last_item_activity_at` is stored beside `updated_at` rather than instead of it: the
+     * card renders the first (P3-46) and `If-Match` carries the second, and a table holding
+     * one would force a refetch to do the other.
+     */
+    apply: (database) =>
+      database.exec(`
+        CREATE TABLE list_rows (
+          list_id TEXT PRIMARY KEY NOT NULL,
+          position INTEGER NOT NULL,
+          owner_id TEXT NOT NULL,
+          behaviour TEXT NOT NULL,
+          template_key TEXT NOT NULL,
+          title TEXT NOT NULL,
+          icon TEXT NOT NULL,
+          empty_state_copy TEXT NOT NULL,
+          checkable INTEGER NOT NULL CHECK (checkable IN (0, 1)),
+          supports_location INTEGER NOT NULL CHECK (supports_location IN (0, 1)),
+          slot TEXT,
+          source_activity_id TEXT,
+          item_count INTEGER NOT NULL,
+          unchecked_count INTEGER NOT NULL,
+          member_count INTEGER NOT NULL,
+          rank_version INTEGER NOT NULL,
+          archived INTEGER NOT NULL CHECK (archived IN (0, 1)),
+          updated_at TEXT NOT NULL,
+          last_item_activity_at TEXT NOT NULL
+        );
+        CREATE INDEX list_rows_position ON list_rows (position, list_id);
+      `),
+  },
 ];
 
 function validatePlan(migrations: readonly SqliteMigration[]): void {

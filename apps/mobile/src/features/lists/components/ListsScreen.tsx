@@ -1,0 +1,313 @@
+import type { List } from '@od/shared/types';
+import {
+  EmptyState,
+  IconButton,
+  MoreHorizontal,
+  SectionHeader,
+  Skeleton,
+  Text,
+  Touchable,
+  useBreakpoint,
+  useTheme,
+} from '@od/ui';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ScrollView, View } from 'react-native';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { TabScreen } from '@/components/TabScreen';
+import { useLists } from '../hooks/useLists';
+import { archivedListToast } from '../model/archiveUndoToast';
+import { deleteListConfirmation } from '../model/deleteConfirmation';
+import {
+  mayShowEmptyState,
+  partitionByArchived,
+  shouldDrainMore,
+} from '../model/indexDrain';
+import {
+  type ListSwipeAction,
+  listSwipeActions,
+  roleFor,
+} from '../model/listSwipeActions';
+import { ListIndexMenu } from './ListIndexMenu';
+import { SwipeableListCard } from './SwipeableListCard';
+
+/**
+ * The Lists tab (`plans-and-lists.md` §5.6, §5.9, `design-system.md` §7.2, §P3-25).
+ *
+ * ## `Show archived` is a filter, never a second request
+ *
+ * `GET /v1/lists` pages **every** access pointer, archived included, and does not filter. So
+ * both groups come from one materialized set: toggling reuses pages already loaded and only
+ * then continues the same bounded drain. A second endpoint would mean two cursors over one
+ * order, and an archived list restored on another device would appear in neither until both
+ * happened to refresh.
+ *
+ * ## Filtering is not pagination completion
+ *
+ * This is the rule the screen exists to get right. A page can contribute **zero visible rows
+ * and still have a cursor** — fifty archived pointers first, active lists behind them. So the
+ * drain keeps asking while the *active filtered view* cannot fill the viewport and a cursor
+ * remains, and `No lists yet` is legal only after the cursor is exhausted. The decisions live
+ * in `model/indexDrain.ts` so they can be tested without a viewport; what lives here is the
+ * scheduling, one page per effect, never a loop.
+ */
+
+/** Roughly how many cards fill a screen. The drain's floor — never a page size. */
+const VIEWPORT_ROWS = 8;
+
+/** Auto-fetch at 80 % scroll depth (`interaction-contract.md` §5.1). */
+const SCROLL_FETCH_RATIO = 0.8;
+
+export interface ListsScreenProps {
+  /** The clock, read at the route. §4.3 keeps `new Date()` out of anything testable. */
+  now: Date;
+  /** Signed-in user, for the owner/member swipe branch. Undefined before `me` resolves. */
+  viewerUserId?: string;
+  onOpenList: (listId: string) => void;
+  /** Opens P3-26's creation sheet. This screen creates nothing. */
+  onNewList: () => void;
+  onArchive: (list: List) => void;
+  onRestore: (list: List) => void;
+  onDelete: (list: List) => void;
+}
+
+export function ListsScreen({
+  now,
+  viewerUserId,
+  onOpenList,
+  onNewList,
+  onArchive,
+  onRestore,
+  onDelete,
+}: ListsScreenProps) {
+  const theme = useTheme();
+  const breakpoint = useBreakpoint();
+  const view = useLists();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<List | undefined>(undefined);
+
+  const { active, archived } = useMemo(
+    () => partitionByArchived(view.lists),
+    [view.lists],
+  );
+
+  /**
+   * The drain, scheduled rather than looped.
+   *
+   * One page per effect run: the page lands, the effect re-runs on the new count, and it asks
+   * again only if the filtered view still cannot fill. §P3-25 requires the synchronous work per
+   * render cycle to be bounded, and a `while` here would be precisely the thing it forbids — a
+   * hundred archived pointers would page the whole account inside one commit.
+   *
+   * The visible count is the **active** group's, or both groups' when archived are shown,
+   * because that is what "the active filtered view" means to the person looking at it.
+   */
+  const visibleCount = showArchived ? active.length + archived.length : active.length;
+
+  useEffect(() => {
+    if (
+      shouldDrainMore({
+        visibleCount,
+        viewportRows: VIEWPORT_ROWS,
+        hasMore: view.hasMore,
+        isFetching: view.isLoadingMore,
+      })
+    ) {
+      view.loadMore();
+    }
+  }, [visibleCount, view.hasMore, view.isLoadingMore, view.loadMore]);
+
+  const onScroll = useCallback(
+    (event: {
+      nativeEvent: {
+        contentOffset: { y: number };
+        contentSize: { height: number };
+        layoutMeasurement: { height: number };
+      };
+    }) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const depth =
+        (contentOffset.y + layoutMeasurement.height) / Math.max(1, contentSize.height);
+      if (depth >= SCROLL_FETCH_RATIO) view.loadMore();
+    },
+    [view.loadMore],
+  );
+
+  const dispatch = useCallback(
+    (list: List, action: ListSwipeAction) => {
+      if (action.name === 'archive') onArchive(list);
+      // Destructive actions never act from the gesture: §1a.1's dialog is the commit point.
+      if (action.name === 'delete' || action.name === 'leave') setPendingDelete(list);
+    },
+    [onArchive],
+  );
+
+  const columns = breakpoint === 'compact' ? 1 : 2;
+  const showEmpty = mayShowEmptyState({
+    visibleCount: active.length,
+    hasMore: view.hasMore,
+    isFetching: view.isLoadingMore,
+    hasLoadedOnce: view.status !== 'pending',
+  });
+
+  const renderCard = (list: List, dimmed: boolean) => (
+    <View
+      key={list.listId}
+      style={{
+        // A 2-up grid from `medium` (§7.2). Flex basis rather than a measured width so the
+        // cards reflow with the window instead of after it.
+        // `DimensionValue` accepts a percentage string; the two literals keep it that type
+        // rather than a widened template string.
+        flexBasis: columns === 1 ? ('100%' as const) : ('50%' as const),
+        padding: theme.space[2],
+      }}
+    >
+      <SwipeableListCard
+        list={list}
+        now={now}
+        timezone={view.timezone}
+        onPress={() => onOpenList(list.listId)}
+        dimmed={dimmed}
+        testID={`list-card-${list.listId}`}
+        actions={dimmed ? [] : listSwipeActions(roleFor(list, viewerUserId))}
+        onAction={(action) => dispatch(list, action)}
+      />
+    </View>
+  );
+
+  return (
+    <TabScreen
+      title="Lists"
+      testID="lists-screen"
+      bleedBody
+      headerAction={
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space[3] }}>
+          {/* `+ New list` is a text action in the header, not a FAB (§7.2). */}
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="New list"
+            onPress={onNewList}
+            testID="lists-new"
+          >
+            <Text variant="footnoteStrong" color="textAction">
+              + New list
+            </Text>
+          </Touchable>
+          <IconButton
+            icon={MoreHorizontal}
+            label="More"
+            onPress={() => setMenuOpen(true)}
+            testID="lists-menu"
+          />
+        </View>
+      }
+    >
+      <ScrollView
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingHorizontal: theme.space[2] }}
+        testID="lists-scroll"
+      >
+        {view.isOffline ? (
+          <Text variant="footnote" color="textSecondary">
+            You're offline. Showing saved data.
+          </Text>
+        ) : null}
+
+        {/*
+          §5.3's two failure classes, kept apart. With rows on screen the cached content stays
+          and the failure is a line above it; with nothing to keep, the screen itself is the
+          error and offers `Try again`.
+        */}
+        {view.status === 'error' && view.lists.length === 0 ? (
+          <EmptyState
+            heading={view.message ?? "Couldn't load this."}
+            action={{ label: 'Try again', onPress: view.refetch }}
+            testID="lists-error"
+          />
+        ) : view.message === undefined ? null : (
+          <Touchable
+            accessibilityRole="button"
+            accessibilityLabel="Couldn't refresh. Try again."
+            onPress={view.refetch}
+            testID="lists-refresh-failed"
+          >
+            <Text variant="footnote" color="danger">
+              Couldn't refresh. Try again.
+            </Text>
+          </Touchable>
+        )}
+
+        {view.status === 'pending' ? (
+          <View testID="lists-loading" style={{ paddingTop: theme.space[5] }}>
+            <Skeleton shape="row" count={5} />
+          </View>
+        ) : showEmpty ? (
+          /* §5.9, verbatim. `No lists yet` states literal absence, which §5.2 allows. */
+          <EmptyState
+            heading="No lists yet"
+            body="Keep things you want to remember, track, or organise together."
+            action={{ label: 'New list', onPress: onNewList }}
+            testID="lists-empty"
+          />
+        ) : (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+            {active.map((list) => renderCard(list, false))}
+          </View>
+        )}
+
+        {showArchived && archived.length > 0 ? (
+          <View style={{ gap: theme.space[2] }}>
+            <SectionHeader title="Archived" count={archived.length} />
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              {archived.map((list) => (
+                <View key={list.listId} style={{ width: '100%' }}>
+                  {renderCard(list, true)}
+                  {/* One tap to restore, per §5.6. The row itself stays inert. */}
+                  <Touchable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Restore ${list.title}`}
+                    onPress={() => onRestore(list)}
+                    testID={`list-restore-${list.listId}`}
+                    style={{ paddingHorizontal: theme.space[4] }}
+                  >
+                    <Text variant="footnoteStrong" color="textAction">
+                      Restore
+                    </Text>
+                  </Touchable>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
+      </ScrollView>
+
+      <ListIndexMenu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        showingArchived={showArchived}
+        archivedCount={archived.length}
+        onToggleArchived={() => {
+          setShowArchived((current) => !current);
+          setMenuOpen(false);
+        }}
+      />
+
+      {pendingDelete === undefined ? null : (
+        <ConfirmDialog
+          open
+          confirmation={deleteListConfirmation(pendingDelete)}
+          onCancel={() => setPendingDelete(undefined)}
+          onConfirm={() => {
+            onDelete(pendingDelete);
+            setPendingDelete(undefined);
+          }}
+          testID="list-delete-confirm"
+        />
+      )}
+    </TabScreen>
+  );
+}
+
+/** Re-exported for the route, which assembles the archive toast around the mutation. */
+export { archivedListToast };

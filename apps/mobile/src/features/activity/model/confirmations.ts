@@ -1,5 +1,6 @@
 import { type ChangeTarget, changeActivityKind } from '@od/shared';
 import type { Activity, ActivityType, PlanType } from '@od/shared/types';
+import type { Confirmation } from '@/components/ConfirmDialog';
 import { planKindLabel } from '@/lib/planKinds';
 
 /**
@@ -19,22 +20,9 @@ import { planKindLabel } from '@/lib/planKinds';
  * - **Deletions always confirm**, even when the thing being deleted is empty — so
  *   `deleteConfirmation` always returns one.
  */
-export interface Confirmation {
-  /** Names the object and the change: `Delete "Paris weekend"?` */
-  heading: string;
-  /** `This removes:` for a deletion, `This will remove:` for a change (§6.3, §6.4). */
-  removesLead: string;
-  /**
-   * One entry is rendered as a prose sentence after the lead; several are rendered as a
-   * list. Deletion names its losses in a sentence and a kind change lists them by field,
-   * which is how `activities.md` §6.3 and §6.4 write them.
-   */
-  removes: string[];
-  /** Present whenever anything survives (§1a.1: "the `Keeps:` line, whenever anything does"). */
-  keeps?: string;
-  /** The destructive button. **Repeats the verb** — never `OK`, never `Continue`. */
-  confirmLabel: string;
-}
+
+/** Re-exported so this module stays the one import an Activity confirmation needs. */
+export type { Confirmation };
 
 /** `a, b and c` — no Oxford comma, matching the copy in `activities.md` §6.4. */
 function sentenceList(parts: readonly string[]): string {

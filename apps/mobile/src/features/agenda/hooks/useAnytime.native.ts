@@ -6,7 +6,7 @@ import { useCallback, useRef, useState } from 'react';
 import { completionCommitGateFor } from '@/features/agenda/completionCommitGate';
 import { useIsOffline } from '@/hooks/usePendingIntents';
 import { requireActiveNativeState } from '@/lib/sqlite/nativeState';
-import { resolveAgendaTimezone } from '../timezone';
+import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 
 interface AnytimeView {
   readonly status: 'pending' | 'success' | 'error';
@@ -46,7 +46,7 @@ export function useAnytime() {
   );
   const isOffline = useIsOffline();
   const queryClient = useQueryClient();
-  const timezone = resolveAgendaTimezone(queryClient);
+  const timezone = resolveViewerTimezone(queryClient);
   const [view, setView] = useState<AnytimeView>({ status: 'pending', items: [] });
   const active = useRef(false);
   const generation = useRef(0);

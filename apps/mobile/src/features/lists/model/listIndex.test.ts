@@ -1,0 +1,311 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import type { TimeZone } from '@od/shared/time';
+import type { List } from '@od/shared/types';
+import { describe, expect, it } from 'vitest';
+import { archivedListToast, SETTINGS_UNDO_DURATION_MS } from './archiveUndoToast';
+import { deleteListConfirmation } from './deleteConfirmation';
+import { mayShowEmptyState, partitionByArchived, shouldDrainMore } from './indexDrain';
+import { behaviourTint, checkedProgress, countLine, showsCheckedCount } from './listCard';
+import { listSwipeActions, roleFor } from './listSwipeActions';
+import { updatedLine } from './updatedLine';
+
+/** The pure rules behind the Lists index (§P3-25, `design-system.md` §7.2). */
+
+const UTC = 'UTC' as TimeZone;
+
+const list = (overrides: Partial<List> = {}): List => ({
+  listId: 'lst_01J8XKQ2M4N5P6R7S8T9V0W1X2',
+  ownerId: 'usr_local_dev',
+  behaviour: 'collection',
+  templateKey: 'groceries',
+  title: 'Groceries',
+  icon: 'cart',
+  emptyStateCopy: 'Add something to buy.',
+  capabilities: { checkable: true, supportsLocation: false },
+  slot: 'groceries',
+  itemCount: 12,
+  uncheckedCount: 7,
+  memberCount: 1,
+  rankVersion: 0,
+  archived: false,
+  updatedAt: '2026-08-24T09:00:00.000Z',
+  lastItemActivityAt: '2026-08-26T18:30:00.000Z',
+  ...overrides,
+});
+
+describe('the count line', () => {
+  it('appends the checked count on a checkable collection', () => {
+    expect(countLine(list())).toBe('12 items · 5 checked');
+  });
+
+  it('says items alone on a collection that is not checkable', () => {
+    expect(
+      countLine(list({ capabilities: { checkable: false, supportsLocation: false } })),
+    ).toBe('12 items');
+  });
+
+  /**
+   * **The retained-flag case**, and the reason the gate is two-part. A behaviour change from
+   * `collection` to `watch` leaves `checkable: true` and its `checked` values in place; reading
+   * only the capability would draw a count for state the list detail shows no checkbox for.
+   */
+  it('says items alone on a watch list that kept checkable: true', () => {
+    const watch = list({ behaviour: 'watch' });
+
+    expect(showsCheckedCount(watch)).toBe(false);
+    expect(countLine(watch)).toBe('12 items');
+    expect(checkedProgress(watch)).toBeUndefined();
+  });
+
+  it('is singular for one item', () => {
+    expect(
+      countLine(
+        list({
+          itemCount: 1,
+          uncheckedCount: 1,
+          capabilities: { checkable: false, supportsLocation: false },
+        }),
+      ),
+    ).toBe('1 item');
+  });
+
+  /** The two counts converge independently; a card is not the place to surface that. */
+  it('clamps a checked count the two counters disagree about', () => {
+    expect(countLine(list({ itemCount: 3, uncheckedCount: 9 }))).toBe(
+      '3 items · 0 checked',
+    );
+  });
+});
+
+describe('the progress bar', () => {
+  it('is the checked fraction on a checkable collection', () => {
+    expect(checkedProgress(list())).toBeCloseTo(5 / 12);
+  });
+
+  /** No bar at all, rather than a bar at zero: an empty track reads as unstarted progress. */
+  it('is absent on an empty list', () => {
+    expect(checkedProgress(list({ itemCount: 0, uncheckedCount: 0 }))).toBeUndefined();
+  });
+});
+
+describe('the icon tint', () => {
+  it('comes from behaviour, never from the template', () => {
+    expect(behaviourTint('collection')).toBe('task');
+    expect(behaviourTint('watch')).toBe('watch');
+    expect(behaviourTint('meals')).toBe('meal');
+  });
+});
+
+describe('the updated line', () => {
+  const now = new Date('2026-08-26T12:00:00.000Z');
+
+  it.each([
+    ['2026-08-26T00:10:00.000Z', 'Updated today'],
+    ['2026-08-25T23:50:00.000Z', 'Updated yesterday'],
+    ['2026-08-23T09:00:00.000Z', 'Updated 3 days ago'],
+    ['2026-08-18T09:00:00.000Z', 'Updated last week'],
+    ['2026-08-05T09:00:00.000Z', 'Updated 3 weeks ago'],
+    ['2026-05-05T09:00:00.000Z', 'Updated 3 months ago'],
+    ['2024-05-05T09:00:00.000Z', 'Updated over a year ago'],
+  ])('renders %s as %s', (stamp, expected) => {
+    expect(updatedLine(stamp, now, UTC)).toBe(expected);
+  });
+
+  /**
+   * Calendar days, not 24-hour windows. Something written at 23:50 is `yesterday` at 00:10,
+   * not `today` for another twenty-three hours.
+   */
+  it('crosses midnight rather than counting hours', () => {
+    const justAfterMidnight = new Date('2026-08-26T00:10:00.000Z');
+    expect(updatedLine('2026-08-25T23:50:00.000Z', justAfterMidnight, UTC)).toBe(
+      'Updated yesterday',
+    );
+  });
+
+  it('reads today when the clock is behind the write', () => {
+    expect(updatedLine('2026-08-27T09:00:00.000Z', now, UTC)).toBe('Updated today');
+  });
+});
+
+describe('the auto-drain rule', () => {
+  const base = { visibleCount: 0, viewportRows: 8, hasMore: true, isFetching: false };
+
+  /**
+   * The bug the rule exists for: a page of fifty archived pointers contributes no visible rows
+   * and still has a cursor. Stopping there would show `No lists yet` over a page never followed.
+   */
+  it('keeps going while the filtered view is empty and a cursor remains', () => {
+    expect(shouldDrainMore(base)).toBe(true);
+  });
+
+  it('stops once the filtered view can fill the viewport', () => {
+    expect(shouldDrainMore({ ...base, visibleCount: 8 })).toBe(false);
+  });
+
+  it('stops when the cursor is exhausted', () => {
+    expect(shouldDrainMore({ ...base, hasMore: false })).toBe(false);
+  });
+
+  it('does not stack a request while one is in flight', () => {
+    expect(shouldDrainMore({ ...base, isFetching: true })).toBe(false);
+  });
+});
+
+describe('the empty state gate', () => {
+  const base = {
+    visibleCount: 0,
+    hasMore: false,
+    isFetching: false,
+    hasLoadedOnce: true,
+  };
+
+  it('allows `No lists yet` only after the cursor is exhausted', () => {
+    expect(mayShowEmptyState(base)).toBe(true);
+    expect(mayShowEmptyState({ ...base, hasMore: true })).toBe(false);
+  });
+
+  it('does not flash between pages', () => {
+    expect(mayShowEmptyState({ ...base, isFetching: true })).toBe(false);
+  });
+
+  it('waits for the first load', () => {
+    expect(mayShowEmptyState({ ...base, hasLoadedOnce: false })).toBe(false);
+  });
+});
+
+describe('the archived partition', () => {
+  it('splits the two groups and preserves server order within each', () => {
+    const rows = [
+      { id: 'a', archived: false },
+      { id: 'b', archived: true },
+      { id: 'c', archived: false },
+      { id: 'd', archived: true },
+    ];
+
+    const { active, archived } = partitionByArchived(rows);
+
+    expect(active.map((row) => row.id)).toEqual(['a', 'c']);
+    expect(archived.map((row) => row.id)).toEqual(['b', 'd']);
+  });
+});
+
+describe('the swipe actions', () => {
+  it('gives an owner Archive and Delete, in that order', () => {
+    expect(listSwipeActions('owner').map((action) => action.label)).toEqual([
+      'Archive',
+      'Delete',
+    ]);
+  });
+
+  /** Written for Phase 6 and unreachable today — the arm exists so it is one branch, not a rewrite. */
+  it('gives a member Leave', () => {
+    expect(listSwipeActions('member').map((action) => action.label)).toEqual(['Leave']);
+  });
+
+  it('derives the role from ownerId while the pointer role is unserialized', () => {
+    expect(roleFor(list(), 'usr_local_dev')).toBe('owner');
+    expect(roleFor(list(), 'usr_someone_else')).toBe('member');
+    // Before `me` resolves, the safe reading is the one that offers no destructive action.
+    expect(roleFor(list(), undefined)).toBe('member');
+  });
+
+  it('marks the destructive ones, so no full swipe can commit them', () => {
+    expect(listSwipeActions('owner').map((action) => action.destructive)).toEqual([
+      false,
+      true,
+    ]);
+  });
+});
+
+describe('the archive undo toast', () => {
+  it('offers the six-second settings window, not the ten-second bulk one', () => {
+    expect(SETTINGS_UNDO_DURATION_MS).toBe(6000);
+    expect(
+      archivedListToast({
+        title: 'Groceries',
+        onUndo: () => undefined,
+        onCommit: () => undefined,
+      }),
+    ).toMatchObject({ message: 'Groceries archived', duration: 6000 });
+  });
+});
+
+describe('the delete confirmation', () => {
+  /**
+   * §1a.1: a dialog reading `Are you sure?` is a defect, not a style choice. Every number is
+   * real, the verb is repeated, and the `Keeps:` line states what survives.
+   */
+  it('names the losses and repeats the verb', () => {
+    const confirmation = deleteListConfirmation(list({ itemCount: 12 }));
+
+    expect(confirmation.heading).toBe('Delete "Groceries"?');
+    expect(confirmation.removes).toEqual(['12 items']);
+    expect(confirmation.confirmLabel).toBe('Delete list');
+    expect(confirmation.keeps).toContain('plans you made from this list stay');
+  });
+
+  it('counts other members, excluding the owner', () => {
+    expect(deleteListConfirmation(list({ memberCount: 4 })).removes).toEqual([
+      '12 items',
+      'the list for 3 other people',
+    ]);
+  });
+
+  it('says nothing about members on a list of one', () => {
+    expect(deleteListConfirmation(list({ memberCount: 1 })).removes).toEqual([
+      '12 items',
+    ]);
+  });
+});
+
+/**
+ * **The renderer never reaches for the catalogue** (ADR-031, ADR-032, §P3-25, §P3-28).
+ *
+ * `check-forbidden.mjs`'s `list-templates-are-creation-data` already fails the build on the
+ * `LIST_TEMPLATES` symbol anywhere in `apps/`. This adds the half that check cannot see: no
+ * file in this feature may **resolve `templateKey`** either. A list's card must render from the
+ * fields copied onto the row at creation, so that editing a template a year later cannot
+ * silently change a list made from it.
+ *
+ * `templateKey` may be *stored* and *passed through* — the repository writes the column and the
+ * schema carries it — so the assertion is about indexing with it, which is what a lookup looks
+ * like.
+ */
+describe('the catalogue is not reachable from the Lists feature', () => {
+  const featureRoot = join(__dirname, '..');
+
+  function sourceFiles(directory: string): string[] {
+    return readdirSync(directory).flatMap((entry) => {
+      const full = join(directory, entry);
+      if (statSync(full).isDirectory()) return sourceFiles(full);
+      return /\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry) ? [full] : [];
+    });
+  }
+
+  const files = sourceFiles(featureRoot);
+
+  /**
+   * Code only, matching `check-forbidden.mjs`'s own `codeOnly` rule and for its stated reason:
+   * "Prose may cite the rule; only code that touches the array is a violation." Without this,
+   * the doc comments explaining *why* the catalogue is unreachable would themselves fail —
+   * which teaches the next author to delete the explanation.
+   */
+  const withoutComments = (source: string): string =>
+    source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+  it('has files to check', () => {
+    expect(files.length).toBeGreaterThan(5);
+  });
+
+  it.each(files)('%s names no LIST_TEMPLATES', (file) => {
+    expect(withoutComments(readFileSync(file, 'utf8'))).not.toContain('LIST_TEMPLATES');
+  });
+
+  it.each(files)('%s resolves nothing by templateKey', (file) => {
+    const code = withoutComments(readFileSync(file, 'utf8'));
+    // `[templateKey]`, `[list.templateKey]`, `.get(templateKey)` — any lookup keyed by it.
+    expect(code).not.toMatch(/\[[^\]\n]*templateKey[^\]\n]*\]/);
+    expect(code).not.toMatch(/\.get\([^)\n]*templateKey/);
+  });
+});

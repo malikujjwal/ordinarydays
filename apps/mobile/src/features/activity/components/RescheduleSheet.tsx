@@ -12,7 +12,7 @@ import {
 } from '@od/ui';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
-import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
   formatQuickDate,
   formatScheduleChange,

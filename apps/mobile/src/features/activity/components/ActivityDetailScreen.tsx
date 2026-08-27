@@ -28,11 +28,11 @@ import {
 } from '@od/ui';
 import { useEffect, useState } from 'react';
 import { View } from 'react-native';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { PassedPlanResolutionSheet } from '@/components/PassedPlanResolutionSheet';
 import { PendingNotice } from '@/components/PendingNotice';
 import { SnoozeSheet } from '@/components/SnoozeSheet';
 import { ChangeKindSheet } from '@/features/activity/components/ChangeKindSheet';
-import { ConfirmDialog } from '@/features/activity/components/ConfirmDialog';
 import { OverflowMenu } from '@/features/activity/components/OverflowMenu';
 import {
   ReminderSheet,
