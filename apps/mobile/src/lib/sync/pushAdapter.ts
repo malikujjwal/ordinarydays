@@ -2,6 +2,7 @@ import {
   completeActivity,
   convertRecurrence,
   createActivity,
+  createList,
   createReminder,
   deleteActivityForReplay,
   deleteListForReplay,
@@ -19,8 +20,10 @@ import {
 import {
   type CompleteActivityInput,
   type CreateActivityInput,
+  type CreateListInput,
   completeActivityInput,
   createActivityInput,
+  createListInput,
   type PatchActivityInput,
   type PatchListInput,
   patchActivityInput,
@@ -91,6 +94,7 @@ export interface ActivityPushTransport {
 }
 
 export interface ListPushTransport {
+  create(input: CreateListInput, idempotencyKey: string): Promise<unknown>;
   patch(
     listId: string,
     input: PatchListInput,
@@ -159,6 +163,7 @@ export const sharedActivityPushTransport: ActivityPushTransport = {
 };
 
 export const sharedListPushTransport: ListPushTransport = {
+  create: (input, idempotencyKey) => createList(apiClient, input, idempotencyKey),
   patch: (listId, input, ifMatch, idempotencyKey) =>
     patchListForReplay(apiClient, listId, input, ifMatch, idempotencyKey),
   remove: (listId) => deleteListForReplay(apiClient, listId),
@@ -313,6 +318,17 @@ export class ActivityPushAdapter {
     if (listId !== intent.entityId) {
       throw new DurableActivityIntentError(
         'Durable List intent entity identity does not match its payload.',
+      );
+    }
+    if (name === 'create') {
+      /*
+       * The minted `lst_` travels inside the body, so the payload's own id is what the entity
+       * check above has already agreed with. The idempotency key is the durable intent's, and
+       * both are reused verbatim by every transport retry (§P3-05).
+       */
+      return this.listTransport.create(
+        parsePersisted(createListInput, field(value, 'input')),
+        requiredString(field(value, 'idempotencyKey'), 'idempotencyKey'),
       );
     }
     if (name === 'patch') {

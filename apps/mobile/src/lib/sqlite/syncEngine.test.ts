@@ -3737,6 +3737,9 @@ describe('serialized native convergence guard', () => {
     });
     const patch = vi.fn(async () => ({ list: acknowledged }));
     const listPush: ListPushTransport = {
+      create: async () => {
+        throw new Error('unexpected List POST');
+      },
       patch,
       remove: async () => {
         throw new Error('unexpected List DELETE');
@@ -3820,6 +3823,9 @@ describe('serialized native convergence guard', () => {
     });
     const undo = vi.fn(async () => ({ affectedCount: 1 }));
     const listPush: ListPushTransport = {
+      create: async () => {
+        throw new Error('unexpected List POST');
+      },
       patch: async () => {
         throw new Error('unexpected List PATCH');
       },
@@ -3856,5 +3862,288 @@ describe('serialized native convergence guard', () => {
     expect(
       await outbox.listArchiveUndoOffer(database, 'acknowledged-archive'),
     ).toBeUndefined();
+  });
+
+  describe('the durable List create (§P3-26, §P3-05)', () => {
+    const LIST_ID = 'lst_01J0000000000000000000000D';
+    const SEED = {
+      behaviour: 'collection',
+      capabilities: { checkable: true, supportsLocation: false },
+      slot: 'groceries',
+      icon: 'cart',
+      emptyStateCopy: 'Add something to buy.',
+    } as const;
+    const CREATE = {
+      listId: LIST_ID,
+      intentId: 'create-costco-run',
+      idempotencyKey: 'create-costco-run',
+      input: { listId: LIST_ID, title: 'Costco run', templateKey: 'groceries' },
+      seed: SEED,
+    };
+
+    /** What the server made of it: its own owner, timestamps and copied catalogue values. */
+    const canonical = (): List => ({
+      listId: LIST_ID,
+      ownerId: OWNER,
+      behaviour: 'collection',
+      templateKey: 'groceries',
+      title: 'Costco run',
+      icon: 'cart',
+      emptyStateCopy: 'Add something to buy.',
+      capabilities: { checkable: true, supportsLocation: false },
+      slot: 'groceries',
+      itemCount: 0,
+      uncheckedCount: 0,
+      memberCount: 1,
+      rankVersion: 0,
+      archived: false,
+      updatedAt: instant.parse('2026-08-27T09:20:00.000Z'),
+      lastItemActivityAt: instant.parse('2026-08-27T09:20:00.000Z'),
+    });
+
+    function listHarness(currentDatabase: SqliteDatabase) {
+      const lists = new ListsRepository(currentDatabase, new RepositorySubscriptions());
+      return { lists, listService: new ListTransactionService(outbox, lists) };
+    }
+
+    function engine(
+      lists: ListsRepository,
+      listPush: ListPushTransport,
+      pull: Partial<ActivityPullAdapter> = {},
+    ) {
+      return new SerializedNativeSyncEngine(
+        transactions,
+        outbox,
+        activities,
+        agenda,
+        pushTransport(),
+        { ...pullAdapter(), ...pull },
+        targetedTransport(),
+        anytime,
+        lists,
+        listPush,
+      );
+    }
+
+    function listPushTransport(create: ListPushTransport['create']): ListPushTransport {
+      return {
+        create,
+        patch: async () => {
+          throw new Error('unexpected List PATCH');
+        },
+        remove: async () => {
+          throw new Error('unexpected List DELETE');
+        },
+        undo: async () => {
+          throw new Error('unexpected List Undo');
+        },
+      };
+    }
+
+    it('replaces the optimistic copy with server truth on acknowledgement', async () => {
+      if (database === undefined) throw new Error('missing List create database');
+      const { lists, listService } = listHarness(database);
+      await transactions.run((transaction) =>
+        listService.create(
+          transaction,
+          OWNER,
+          CREATE,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        ),
+      );
+      const create = vi.fn(async () => canonical());
+      const sync = engine(lists, listPushTransport(create));
+
+      await sync.syncNow();
+      sync.stop();
+
+      expect(create).toHaveBeenCalledWith(CREATE.input, 'create-costco-run');
+      expect(await lists.read()).toEqual([canonical()]);
+      expect(await outbox.all()).toEqual([]);
+    });
+
+    /**
+     * §P3-05's rule, asserted where it can actually fail: a transport retry reuses **both**
+     * the minted `lst_` and the mutation id. A fresh id on a retry is how one confirmed
+     * create becomes two lists.
+     */
+    it('reuses the minted list and mutation ids across a transport retry', async () => {
+      if (database === undefined) throw new Error('missing List retry database');
+      const { lists, listService } = listHarness(database);
+      await transactions.run((transaction) =>
+        listService.create(
+          transaction,
+          OWNER,
+          CREATE,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        ),
+      );
+      let attempts = 0;
+      const create = vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) throw new NetworkError('offline', undefined);
+        return canonical();
+      });
+      const sync = engine(lists, listPushTransport(create));
+
+      await expect(sync.syncNow()).rejects.toThrow();
+      await sync.syncNow();
+      sync.stop();
+
+      expect(create.mock.calls).toEqual([
+        [CREATE.input, 'create-costco-run'],
+        [CREATE.input, 'create-costco-run'],
+      ]);
+      expect(await lists.read()).toEqual([canonical()]);
+    });
+
+    /**
+     * `409` says only that the id is taken. One exact read decides it, and a `200` means the
+     * create landed and its response was lost — so the canonical row is adopted rather than
+     * the create being sent again under a second identity.
+     */
+    it('adopts the canonical list when a collision turns out to be its own', async () => {
+      if (database === undefined) throw new Error('missing List collision database');
+      const { lists, listService } = listHarness(database);
+      await transactions.run((transaction) =>
+        listService.create(
+          transaction,
+          OWNER,
+          CREATE,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        ),
+      );
+      const list = vi.fn(async () => canonical());
+      const sync = engine(
+        lists,
+        listPushTransport(async () => {
+          throw new ApiError('conflict', 'That id is taken.', 409, 'req-collision');
+        }),
+        { list },
+      );
+
+      await sync.syncNow();
+      sync.stop();
+
+      expect(list).toHaveBeenCalledWith(LIST_ID);
+      expect(await lists.read()).toEqual([canonical()]);
+      expect(await outbox.all()).toEqual([]);
+    });
+
+    /**
+     * The other half: a `404` means the id names something this caller cannot see, which no
+     * retry resolves. The intent parks, the row the user made stays visible, and the account
+     * banner offers Retry and Discard — **nothing re-mints on its own**.
+     */
+    it('parks an ambiguous collision and re-mints only when Retry is tapped', async () => {
+      if (database === undefined) throw new Error('missing List parked database');
+      const { lists, listService } = listHarness(database);
+      await transactions.run((transaction) =>
+        listService.create(
+          transaction,
+          OWNER,
+          CREATE,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        ),
+      );
+      const create = vi.fn(async () => {
+        throw new ApiError('conflict', 'That id is taken.', 409, 'req-collision');
+      });
+      const sync = engine(lists, listPushTransport(create), {
+        list: async () => {
+          throw new ApiError('not_found', "This isn't here any more.", 404, 'req-404');
+        },
+      });
+
+      await sync.syncNow();
+
+      // Parked, not rejected: `needs_attention` is what the banner selects on, and the row
+      // stays protected from canonical drains while the user decides.
+      expect(await outbox.get(database, 'create-costco-run')).toMatchObject({
+        status: 'needs_attention',
+        attention: { kind: 'parked', reason: 'ambiguous_collision' },
+      });
+      expect((await lists.read())[0]).toMatchObject({ listId: LIST_ID });
+      expect(create).toHaveBeenCalledTimes(1);
+
+      const freshListId = 'lst_01J0000000000000000000000E';
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        sync,
+        undefined,
+        listService,
+        () => freshListId,
+      );
+
+      const retried = await coordinator.retryBlocked(
+        'create-costco-run',
+        'retry-costco-run',
+        clock,
+      );
+      sync.stop();
+
+      expect(retried.kind).toBe('accepted');
+      // The local list and its queued payload both moved onto the fresh identity.
+      expect(await outbox.get(database, 'create-costco-run')).toBeUndefined();
+      expect(await outbox.get(database, 'retry-costco-run')).toMatchObject({
+        status: 'queued',
+        entityId: freshListId,
+        orderingKey: `list:${freshListId}`,
+        variables: {
+          listId: freshListId,
+          idempotencyKey: 'retry-costco-run',
+          input: { listId: freshListId, title: 'Costco run', templateKey: 'groceries' },
+        },
+      });
+      expect((await lists.read()).map((row) => row.listId)).toEqual([freshListId]);
+    });
+
+    /** Discard retires the parked create and takes its optimistic row with it. */
+    it('discards a parked collision without leaving the row behind', async () => {
+      if (database === undefined) throw new Error('missing List discard database');
+      const { lists, listService } = listHarness(database);
+      await transactions.run((transaction) =>
+        listService.create(
+          transaction,
+          OWNER,
+          CREATE,
+          instant.parse('2026-08-27T09:19:00.000Z'),
+        ),
+      );
+      const sync = engine(
+        lists,
+        listPushTransport(async () => {
+          throw new ApiError('conflict', 'That id is taken.', 409, 'req-collision');
+        }),
+        {
+          list: async () => {
+            throw new ApiError('not_found', "This isn't here any more.", 404, 'req-404');
+          },
+          listsPage: async () => ({ data: [] }),
+        },
+      );
+      await sync.syncNow();
+      const coordinator = new NativeActivityActionCoordinator(
+        OWNER,
+        transactions,
+        service,
+        outbox,
+        sync,
+        undefined,
+        listService,
+        () => 'lst_01J0000000000000000000000F',
+      );
+
+      await expect(coordinator.discardBlocked('create-costco-run', clock)).resolves.toBe(
+        true,
+      );
+      sync.stop();
+
+      expect(await outbox.all()).toEqual([]);
+      expect(await lists.read()).toEqual([]);
+    });
   });
 });

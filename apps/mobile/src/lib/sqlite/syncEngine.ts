@@ -121,9 +121,17 @@ function activityFromResponse(response: unknown): Activity | undefined {
   return parsed.success ? (parsed.data as Activity) : undefined;
 }
 
+/**
+ * The canonical List out of an acknowledgement, whichever envelope it arrived in.
+ *
+ * A settings write answers `{ list, undoToken? }`; `POST /v1/lists` answers the List itself.
+ * Falling back to the response — the shape `activityFromResponse` has always used — keeps one
+ * reader for both rather than a per-mutation unwrapper, and a response that is neither still
+ * fails to parse, which every caller already treats as a missing acknowledgement.
+ */
 function listFromResponse(response: unknown): List | undefined {
-  const candidate = field(response, 'list');
-  const parsed = listView.safeParse(candidate);
+  const nested = field(response, 'list');
+  const parsed = listView.safeParse(nested === undefined ? response : nested);
   return parsed.success ? (parsed.data as List) : undefined;
 }
 
@@ -966,7 +974,24 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         intent.seq,
       );
       const canonical = listFromResponse(response);
-      if (intent.mutationKey[1] === 'patch') {
+      if (intent.mutationKey[1] === 'create') {
+        if (canonical?.listId !== intent.entityId) {
+          throw new Error('List creation acknowledged a different list.');
+        }
+        /*
+         * Server truth replaces the optimistic copy — `ownerId`, the real timestamps and the
+         * behaviour/capabilities/icon/empty-state values the server resolved from the
+         * catalogue itself. A later local write for this list owns the row instead; its own
+         * settlement installs what the server made of it.
+         */
+        if (later.length === 0) await lists.acceptCreated(transaction, canonical);
+        await this.outbox.rebaseNextQueuedListPatch(
+          transaction.database,
+          intent.orderingKey,
+          intent.seq,
+          canonical.updatedAt,
+        );
+      } else if (intent.mutationKey[1] === 'patch') {
         if (canonical?.listId !== intent.entityId) {
           throw new Error('List settings acknowledgement omitted its canonical List.');
         }
@@ -1409,6 +1434,9 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     ) {
       return 'not_applicable';
     }
+    if (intent.mutationKey[0] === 'list') {
+      return this.recoverListCreateCollision(intent);
+    }
     try {
       const detail = await this.serialNetwork(() =>
         this.pull.activity({ kind: 'activity', activityId: intent.entityId }),
@@ -1466,6 +1494,76 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
           transaction,
           intent.entityId,
           'needs_attention',
+        );
+        transaction.changed('outbox');
+      });
+      return 'parked';
+    }
+  }
+
+  /**
+   * The List analogue of the Activity create-collision path (§P3-05, ADR-055).
+   *
+   * A `409` on a create says only that the minted id is taken; it deliberately carries no
+   * metadata about what took it. One exact read decides it:
+   *
+   * - **`200`** — this account already owns that list, so the create landed and its response
+   *   was lost. The canonical row is adopted and the intent acknowledged. Nothing is written
+   *   twice, because the server did the writing.
+   * - **`404`** — the id names something this caller cannot see. That is not resolvable by
+   *   waiting, so the intent parks as `ambiguous_collision` and the account banner offers
+   *   Retry and Discard. **Nothing re-mints automatically**: a create the user confirmed once
+   *   must not silently become a second list on a schedule they never saw.
+   * - Anything else is transport, so it requeues and the backoff owns it.
+   */
+  private async recoverListCreateCollision(
+    intent: OutboxIntent,
+  ): Promise<'recovered' | 'parked' | 'retry'> {
+    const lists = this.lists;
+    const pullList = this.pull.list;
+    if (lists === undefined || pullList === undefined) {
+      throw new Error('Native Lists state is not ready.');
+    }
+    try {
+      const canonical = await this.serialNetwork(() => pullList(intent.entityId));
+      if (canonical.listId !== intent.entityId) {
+        throw new Error('List collision recovery answered for a different list.');
+      }
+      await this.transactions.run(async (transaction) => {
+        const later = await this.outbox.laterInOrdering(
+          transaction.database,
+          intent.orderingKey,
+          intent.seq,
+        );
+        if (later.length === 0) await lists.acceptCreated(transaction, canonical);
+        await this.outbox.acknowledge(transaction.database, intent.intentId);
+        transaction.changed('outbox');
+      });
+      return 'recovered';
+    } catch (recoveryError) {
+      if (!(recoveryError instanceof ApiError) || recoveryError.status !== 404) {
+        const failure =
+          recoveryError instanceof Error
+            ? recoveryError
+            : new Error(String(recoveryError));
+        this.cycleError ??= failure;
+        await this.transactions.run(async (transaction) => {
+          await this.outbox.requeue(
+            transaction.database,
+            intent.intentId,
+            queuedError(failure),
+          );
+          transaction.changed('outbox');
+        });
+        this.scheduleRetry();
+        return 'retry';
+      }
+      await this.transactions.run(async (transaction) => {
+        await this.outbox.needsAttention(
+          transaction.database,
+          intent.intentId,
+          { kind: 'parked', reason: 'ambiguous_collision' },
+          'This never synced.',
         );
         transaction.changed('outbox');
       });

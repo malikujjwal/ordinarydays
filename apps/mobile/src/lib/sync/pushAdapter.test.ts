@@ -60,6 +60,24 @@ describe('ActivityPushAdapter', () => {
       },
       'patch',
     ],
+    [
+      // The minted `lst_` travels in the body and is reused verbatim on every retry (§P3-05).
+      'create',
+      {
+        listId: LIST,
+        intentId: 'create-list',
+        idempotencyKey: 'create-list',
+        input: { listId: LIST, title: 'Costco run', templateKey: 'groceries' },
+        seed: {
+          behaviour: 'collection',
+          capabilities: { checkable: true, supportsLocation: false },
+          slot: 'groceries',
+          icon: 'cart',
+          emptyStateCopy: 'Add something to buy.',
+        },
+      },
+      'create',
+    ],
     ['delete', { listId: LIST, intentId: 'delete-list' }, 'remove'],
     [
       'undo',
@@ -73,6 +91,7 @@ describe('ActivityPushAdapter', () => {
     ],
   ] as const)('dispatches durable List %s intents', async (name, variables, method) => {
     const listTransport: ListPushTransport = {
+      create: vi.fn(async () => ({})),
       patch: vi.fn(async () => ({})),
       remove: vi.fn(async () => ({})),
       undo: vi.fn(async () => ({})),

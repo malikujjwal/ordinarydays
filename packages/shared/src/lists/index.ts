@@ -11,8 +11,14 @@
  * `listTemplateChoices` is the projection the creation sheet renders, and is the only one of
  * the two a client should normally reach for: it carries the displayed fields and nothing a
  * renderer could mistake for stored-List state.
+ *
+ * `listTemplateSeed` is the other half of creation — the fields a create copies — and is
+ * narrower still: `check-forbidden.mjs`'s `template-seed-is-creation-only` limits it to the
+ * durable-create path, because reading those fields for a list that already exists is the
+ * failure ADR-032 exists to prevent.
  */
 
+export { type ListTemplateSeed, listTemplateSeed } from './creationSeed.js';
 export { formatIngredientTitle } from './formatIngredientTitle.js';
 export { type LabelSourceMeal, provenanceLabel } from './provenanceLabel.js';
 export {
