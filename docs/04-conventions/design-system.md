@@ -368,7 +368,15 @@ export const motion = {
 > event never arrives — measured in Chromium, `role: null` two seconds after mount, which axe
 > reports as a **critical** `aria-allowed-attr` on every sheet. `Sheet` therefore passes no
 > animation type on web, and a present animation this table can hold true belongs to `Sheet`
-> itself, gated by `useMotion()` like every other row. Native is unaffected.
+> itself, gated by `useMotion()` like every other row. Native is unaffected. **Owned by
+> P3-50**, which builds this row on both platforms; the accessibility fix stays either way.
+
+> **A frame in a product doc does not place a control** — settled 2026-08-27 (founder), on
+> the divergence raised in P3-26's PR and recorded in
+> [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §5.4. Those drawings
+> are canonical for which controls exist and what they say; where a modal's dismissal and
+> commit controls sit is §6.1's, so they go in the sheet's fixed `actions` slot and dismissal
+> stays the one `✕` every exit path converges on.
 
 **Reduce Motion.** `useReducedMotion()` from Reanimated gates every one of these:
 transitions become cross-fades, insert/remove animations are removed, the toast appears
