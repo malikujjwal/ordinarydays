@@ -35,8 +35,13 @@ import { nextCanonicalId } from '@/lib/canonicalIds';
  * ability to confirm it (`CLAUDE.md` rule 2).
  */
 
-/** Which screen of the modal is showing. `object` is always where it opens. */
-export type ComposeStep = 'object' | 'planKind' | 'form';
+/**
+ * Which screen of the modal is showing. `object` is always where it opens.
+ *
+ * `listPicker` is `List item`'s required second choice, the same shape `planKind` is: a
+ * destination the user names before any field exists (`activities.md` §2.2, criterion 33).
+ */
+export type ComposeStep = 'object' | 'planKind' | 'listPicker' | 'form';
 
 /** Profile-backed values that belong to a newly chosen Event draft. */
 export interface EventDraftDefaults {
@@ -60,8 +65,8 @@ export interface ComposeDraftState {
   /**
    * The fixed target, or `undefined` while the user is still choosing.
    *
-   * `listItem` needs a `listId` it cannot get in Phase 1, so choosing `List item` moves to
-   * the Phase 3 placeholder and leaves this `undefined` rather than inventing one.
+   * `listItem` carries the `listId` the user picked; until they pick one this stays
+   * `undefined` rather than holding a destination nobody chose.
    */
   target: CreationTarget | undefined;
   /** A locally picked image. Phase 3 uploads it; Phase 1 shows it and blocks save with it. */
@@ -74,6 +79,8 @@ export interface ComposeDraftState {
   idempotencyKey: string | undefined;
   /** Permanent identity minted with the durable create and sent unchanged to the server. */
   activityId: string | undefined;
+  /** The List item's permanent `itm_`, minted on the same terms (P3-27). */
+  itemId: string | undefined;
 
   /** `activities.md` §4's Date / Time / End time, for every type that has them. */
   schedule: DraftSchedule;
@@ -87,6 +94,8 @@ export interface ComposeDraftState {
   openTodayTask: (date: WallDate) => void;
   chooseObject: (choice: ObjectChoice) => void;
   choosePlanKind: (type: PlanType, eventDefaults?: EventDraftDefaults) => void;
+  /** The one place `target` can become a List item, and the only input is a chosen list. */
+  chooseList: (listId: string) => void;
   back: () => void;
   setTitle: (title: string) => void;
   setNotes: (notes: string) => void;
@@ -106,6 +115,8 @@ export interface ComposeDraftState {
   takeIdempotencyKey: () => string;
   /** Returns the permanent `act_` ULID for this logical create. */
   takeActivityId: () => string;
+  /** Returns the permanent `itm_` ULID for this logical item create. */
+  takeItemId: () => string;
   reset: () => void;
 }
 
@@ -118,6 +129,7 @@ const EMPTY = {
   attachmentUri: undefined,
   idempotencyKey: undefined,
   activityId: undefined,
+  itemId: undefined,
   schedule: EMPTY_SCHEDULE,
   location: EMPTY_LOCATION,
   reminderOffset: undefined,
@@ -129,6 +141,7 @@ const EMPTY = {
   | 'openTodayTask'
   | 'chooseObject'
   | 'choosePlanKind'
+  | 'chooseList'
   | 'back'
   | 'setTitle'
   | 'setNotes'
@@ -145,6 +158,7 @@ const EMPTY = {
   | 'setDetails'
   | 'takeIdempotencyKey'
   | 'takeActivityId'
+  | 'takeItemId'
   | 'reset'
 >;
 
@@ -159,6 +173,7 @@ const edited = (patch: Partial<ComposeDraftState>) => ({
   ...patch,
   idempotencyKey: undefined,
   activityId: undefined,
+  itemId: undefined,
 });
 
 function withEventDefaults(
@@ -219,9 +234,22 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
       set({ step: 'planKind', target: undefined });
       return;
     }
-    // `List item` keeps the mental model stable and routes to the Phase 3 placeholder.
-    set({ step: 'form', target: undefined });
+    /*
+     * `List item` advances to its own required chooser and leaves the target unfixed, exactly
+     * as `plan` does. There is no destination until the user names one — no default, no
+     * recent, no `defaultLists` (criterion 33, ADR-033).
+     */
+    set({ step: 'listPicker', target: undefined });
   },
+
+  /**
+   * The one place `target` can become a List item.
+   *
+   * Its only input is a list the user tapped. Nothing about the title reaches here, and there
+   * is no parameter through which a remembered or default destination could.
+   */
+  chooseList: (listId) =>
+    set({ step: 'form', target: { objectKind: 'listItem', listId } }),
 
   /**
    * The one place `target` can become a Plan, and where re-choosing a kind runs **P1-17's
@@ -289,13 +317,20 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
    */
   back: () => {
     const { step, target } = get();
-    if (step === 'planKind') {
+    if (step === 'planKind' || step === 'listPicker') {
       set({ step: 'object', target: undefined });
       return;
     }
     if (step === 'form') {
+      // Back to the chooser that produced this target, and the target is dropped: returning
+      // to a picker with the previous destination still fixed would be a pre-selection.
       set({
-        step: target?.objectKind === 'plan' ? 'planKind' : 'object',
+        step:
+          target?.objectKind === 'plan'
+            ? 'planKind'
+            : target?.objectKind === 'listItem'
+              ? 'listPicker'
+              : 'object',
         target: undefined,
       });
     }
@@ -421,6 +456,14 @@ export const useComposeDraft = create<ComposeDraftState>()((set, get) => ({
     const activityId = nextCanonicalId('act');
     set({ activityId });
     return activityId;
+  },
+
+  takeItemId: () => {
+    const existing = get().itemId;
+    if (existing !== undefined) return existing;
+    const itemId = nextCanonicalId('itm');
+    set({ itemId });
+    return itemId;
   },
 
   reset: () => set({ ...EMPTY }),

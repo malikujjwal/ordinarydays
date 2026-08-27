@@ -44,6 +44,17 @@ export interface FieldProps {
    */
   accessibilityLabel?: string;
   /**
+   * Return commits, for a field that is a **rapid-entry row** rather than part of a form.
+   *
+   * `plans-and-lists.md` §5.6's inline add row is the case: Return activates the write and the
+   * field stays focused so the next item can be typed straight away. Supplying this sets the
+   * return key to `done` and, unless `submitBlurs`, keeps the keyboard up — a row that
+   * dismissed itself would make a shopping list several taps longer than it needs to be.
+   */
+  onSubmitEditing?: () => void;
+  /** Let Return dismiss the keyboard after committing. Off, because rapid entry is the point. */
+  submitBlurs?: boolean;
+  /**
    * Focuses the input on mount, for a step whose whole purpose is typing into it.
    *
    * Used where the field is the step — the title step of the list creation sheet opens with
@@ -77,6 +88,8 @@ export function Field({
   label,
   accessibilityLabel,
   autoFocus = false,
+  onSubmitEditing,
+  submitBlurs = false,
   value,
   onChangeText,
   placeholder,
@@ -126,6 +139,13 @@ export function Field({
             })}
         editable={!disabled}
         autoFocus={autoFocus}
+        {...(onSubmitEditing === undefined
+          ? {}
+          : {
+              onSubmitEditing,
+              returnKeyType: 'done' as const,
+              blurOnSubmit: submitBlurs,
+            })}
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}

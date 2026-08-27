@@ -157,8 +157,18 @@ export class ListItemsRepository {
     return this.subscriptions.subscribe(this.scope(listId), listener);
   }
 
-  async read(listId: string): Promise<readonly ListItemRow[]> {
-    return readItemRows(this.reader, listId);
+  /**
+   * The committed rows, in order.
+   *
+   * `reader` is explicit for the same reason `ListsRepository.getLocal`'s is: a write that
+   * derives from current state — the rank an appended item takes — must read inside its own
+   * transaction, not from the default connection's snapshot.
+   */
+  async read(
+    listId: string,
+    reader: SqliteReader = this.reader,
+  ): Promise<readonly ListItemRow[]> {
+    return readItemRows(reader, listId);
   }
 
   async pageState(

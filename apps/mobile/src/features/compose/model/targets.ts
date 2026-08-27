@@ -1,5 +1,9 @@
 import type { CreationTarget } from '@od/shared/client';
-import { type CreateActivityInput, createRecurrence } from '@od/shared/schemas';
+import {
+  type CreateActivityInput,
+  type CreateListItemInput,
+  createRecurrence,
+} from '@od/shared/schemas';
 import type { Recurrence } from '@od/shared/types';
 import { format, parseISO } from 'date-fns';
 import {
@@ -231,6 +235,37 @@ export function toCreateActivityInput(
   }
 
   return undefined;
+}
+
+/**
+ * Builds the item request from a fixed List-item target (P3-27).
+ *
+ * The counterpart to {@link toCreateActivityInput}, and separate for the reason that one
+ * returns `undefined` for this arm: a List item is not an Activity, goes to a list-scoped
+ * route, and carries none of the schedule, reminder or recurrence a form collects for one.
+ *
+ * **Title and note only.** Location and the typed per-behaviour fields belong to the item
+ * sheet (P3-29) and §5.7's capability rules; sending them from a form that never asked the
+ * list what it supports is how a `collection` acquires a season number.
+ *
+ * `itemId` is the caller's minted `itm_`, because the native path names the row before the
+ * server has seen it. The list is **not** a parameter here — it is the path id, taken from
+ * the target the user explicitly chose, so there is nowhere in this function for a default
+ * destination to enter (criterion 33).
+ */
+export function toCreateListItemInput(
+  target: CreationTarget,
+  fields: CommonDraftFields,
+  itemId?: string,
+): CreateListItemInput | undefined {
+  if (target.objectKind !== 'listItem') return undefined;
+  const title = fields.title.trim();
+  const notes = fields.notes.trim();
+  return {
+    ...(itemId === undefined ? {} : { itemId }),
+    title,
+    ...(notes === '' ? {} : { note: notes }),
+  };
 }
 
 /**
