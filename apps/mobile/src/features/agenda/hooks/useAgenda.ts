@@ -8,8 +8,8 @@ import { AppState } from 'react-native';
 import { useClock } from '@/hooks/useClock';
 import { loadAgendaWithReconciliation } from '@/lib/agendaCache';
 import { apiClient } from '@/lib/apiClient';
+import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 import { agendaKey, TODAY_AGENDA_INCLUDE } from '../keys';
-import { resolveAgendaTimezone } from '../timezone';
 
 const ME_QUERY_KEY = ['me'] as const;
 
@@ -40,7 +40,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
     queryFn: ({ signal }) => getMe(apiClient, signal),
     enabled: false,
   });
-  const timezone = resolveAgendaTimezone(queryClient);
+  const timezone = resolveViewerTimezone(queryClient);
   const today =
     options.now === undefined
       ? clock.todayIn(timezone)

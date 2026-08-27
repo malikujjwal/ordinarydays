@@ -15,8 +15,8 @@ import {
 import type { AgendaInvalidation } from '@/lib/sqlite/agendaRepository';
 import { recordNativePerformanceMetric } from '@/lib/sqlite/nativePerformance';
 import { getActiveNativeState, requireActiveNativeState } from '@/lib/sqlite/nativeState';
+import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 import { TODAY_AGENDA_INCLUDE } from '../keys';
-import { resolveAgendaTimezone } from '../timezone';
 
 export interface AgendaWindow {
   from: AgendaQuery['from'];
@@ -71,7 +71,7 @@ export function useAgenda(options: UseAgendaOptions = {}) {
   const navigation = useNavigation();
   const queryClient = useQueryClient();
   const clock = useClock();
-  const timezone = resolveAgendaTimezone(queryClient);
+  const timezone = resolveViewerTimezone(queryClient);
   const today =
     options.now === undefined
       ? clock.todayIn(timezone)

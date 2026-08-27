@@ -27,7 +27,6 @@ import { applyPatch } from '@/features/agenda/model/applyPatch';
 import { applyReschedule } from '@/features/agenda/model/applyReschedule';
 import { applySkip } from '@/features/agenda/model/applySkip';
 import { applySnooze } from '@/features/agenda/model/applySnooze';
-import { resolveAgendaTimezone } from '@/features/agenda/timezone';
 import { apiClient } from '@/lib/apiClient';
 import {
   type ActivityMutationTag,
@@ -35,6 +34,7 @@ import {
   changesRecurrenceTopology,
 } from '@/lib/mutationKeys';
 import { activityDetailKey, activityKey } from '@/lib/queryKeys';
+import { resolveViewerTimezone } from '@/lib/viewerTimezone';
 
 const AGENDA_KEY = ['agenda'] as const;
 /**
@@ -895,7 +895,7 @@ function seedPendingTodayWindow(
   mintedAt: string,
   clock: AgendaProjectionClock,
 ): ReturnType<typeof agendaKey> | undefined {
-  const timezone = resolveAgendaTimezone(client);
+  const timezone = resolveViewerTimezone(client);
   const tomorrow = addWallDays(clock.today, 1);
   const key = agendaKey(clock.today, tomorrow, timezone, TODAY_AGENDA_INCLUDE);
   if (client.getQueryData<AgendaData>(key) !== undefined) return undefined;
@@ -1193,7 +1193,7 @@ function activityFrom(data: unknown): Activity | undefined {
 }
 
 function agendaClock(client: QueryClient): AgendaProjectionClock {
-  const timezone = resolveAgendaTimezone(client);
+  const timezone = resolveViewerTimezone(client);
   const now = new Date().toISOString() as Instant;
   return {
     today: toWallDate(now, timezone),
