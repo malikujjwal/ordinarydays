@@ -14,8 +14,10 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
  * mutation to save a read on the few that are ever undone.
  *
  * So the token is `<operationId>.<secret>`: the first half addresses one `GetItem`, the second
- * half is 32 random bytes and is what actually authorises. Only the hash of the whole token is
- * stored, so a leaked work record still cannot be replayed into an Undo.
+ * half is 32 random bytes and is what actually authorises. Only the hash of the whole token
+ * enters the retained `UNDO#` authority. Resumable work and the user-scoped exact-response
+ * receipt may hold bounded plaintext copies so an interrupted operation or lost success can
+ * still return the token it originally promised.
  *
  * **It stays opaque to the client.** Nothing outside this module parses it, the API never
  * documents its shape, and a client that split it would gain an operation id that authorises
@@ -34,7 +36,11 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 const SEPARATOR = '.';
 
 export interface MintedUndoToken {
-  /** Handed to the client, once. The server never stores it. */
+  /**
+   * Handed to the client. The retained `UNDO#` record stores only its hash; bounded
+   * operation work and exact-response receipts may hold the token so a lost response can
+   * still be replayed byte-for-byte.
+   */
   readonly token: string;
   /** What the `UNDO#` record holds instead. */
   readonly tokenHash: string;
@@ -44,7 +50,7 @@ export function hashUndoToken(token: string): string {
   return createHash('sha256').update(token).digest('base64url');
 }
 
-/** Mints the token for one operation. The caller stores only `tokenHash`. */
+/** Mints one token; callers persist only `tokenHash` as the retained Undo authority. */
 export function mintUndoToken(operationId: string): MintedUndoToken {
   const token = `${operationId}${SEPARATOR}${randomBytes(32).toString('base64url')}`;
   return { token, tokenHash: hashUndoToken(token) };

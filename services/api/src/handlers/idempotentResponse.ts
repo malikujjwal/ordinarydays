@@ -3,6 +3,7 @@ import type { AppEnv } from '../app-env.js';
 import { AppError } from '../lib/errors.js';
 import {
   type CleanupRef,
+  DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS,
   IDEMPOTENCY_TTL_SECONDS,
   type IdempotencyReceipt,
 } from '../lib/idempotency.js';
@@ -15,6 +16,14 @@ export interface IdempotentJsonOptions {
    * A selector keeps retention scoped to response variants that actually need the exception.
    */
   readonly receiptTtlSeconds?: number | ((data: unknown) => number);
+}
+
+/** Keeps only responses carrying an opaque Undo offer for the durable replay window. */
+export function undoAwareReceiptTtlSeconds(data: unknown): number {
+  if (typeof data !== 'object' || data === null) return IDEMPOTENCY_TTL_SECONDS;
+  return 'undoToken' in data && 'undoExpiresAt' in data
+    ? DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS
+    : IDEMPOTENCY_TTL_SECONDS;
 }
 
 /**

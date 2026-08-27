@@ -2,6 +2,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
   GetCommand,
+  PutCommand,
   QueryCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
@@ -110,6 +111,7 @@ const seedItems = (rows: Record<string, unknown>[]) => {
 
 beforeEach(async () => {
   ddbMock.reset();
+  ddbMock.on(PutCommand).resolves({});
   ddbMock.on(TransactWriteCommand).resolves({});
   ddbMock.on(QueryCommand).resolves({ Items: [] });
   vi.resetModules();
@@ -180,6 +182,12 @@ const undoWrite = () =>
 
 const receiptWrite = () =>
   transacted().find((entry) => entry.Put?.Item?.entity === 'Idempotency')?.Put?.Item;
+
+const directReceiptWrite = () =>
+  ddbMock
+    .commandCalls(PutCommand)
+    .map((call) => call.args[0].input.Item as Record<string, unknown> | undefined)
+    .find((item) => item?.entity === 'Idempotency');
 
 const profileUpdate = () =>
   transacted().find((entry) => entry.Update?.Key?.pk === `USER#${DEV}`)?.Update;
@@ -373,7 +381,7 @@ describe('PATCH /v1/lists/:id — the additive settings', () => {
     expect(undo?.inverse).toEqual({ capabilities: { checkable: true } });
     expect(undo?.preconditions).toEqual({ capabilities: { checkable: false } });
     expect(undo?.consumed).toBe(false);
-    // Only the hash is stored: a leaked work row must not be replayable into an Undo.
+    // Only the hash enters this retained Undo row; the exact-response receipt is separate.
     expect(JSON.stringify(undo)).not.toContain('undoToken');
   });
 
@@ -597,6 +605,22 @@ describe('POST /v1/lists/:id/behaviour — the refusals', () => {
     expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
   });
 
+  it('retains a lossless behaviour Undo response for the durable outbox window', async () => {
+    seedGets([pointerRow(), listMetaRow()]);
+    seedItems([]);
+
+    await postBehaviour(createApp(), { behaviour: 'watch' });
+
+    const work = transacted().find(
+      (entry) => entry.Put?.Item?.entity === 'ListBehaviourMigration',
+    )?.Put?.Item;
+    const receipt = work?.receipt as Record<string, unknown> | undefined;
+    expect(receipt).toBeDefined();
+    expect(
+      Number(receipt?.ttl) - Math.floor(Date.parse(String(receipt?.createdAt)) / 1000),
+    ).toBe(MAX_AUTOMATIC_INTENT_AGE_DAYS * 24 * 60 * 60);
+  });
+
   it('answers with current truth, and no Undo offer, when it is already there', async () => {
     seedGets([pointerRow(), listMetaRow({ behaviour: 'watch' })]);
 
@@ -611,6 +635,11 @@ describe('POST /v1/lists/:id/behaviour — the refusals', () => {
         (entry) => entry.Put?.Item?.entity === 'ListBehaviourMigration',
       ),
     ).toHaveLength(0);
+    const receipt = directReceiptWrite();
+    expect(receipt).toBeDefined();
+    expect(
+      Number(receipt?.ttl) - Math.floor(Date.parse(String(receipt?.createdAt)) / 1000),
+    ).toBe(IDEMPOTENCY_TTL_SECONDS);
   });
 });
 

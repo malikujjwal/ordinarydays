@@ -309,7 +309,7 @@ describe('the bulk checked operations', () => {
       undoToken: 'blk_op.secret',
       undoExpiresAt: LATER,
     });
-    // Deleted by the transaction that finishes, so the plaintext token's life is the run.
+    // Deleted by the finishing transaction, bounding the work row's plaintext-token copy.
     expect(
       transacted().some(
         (entry) => entry.Delete?.Key?.sk === keys.listBulkOperation(LIST_ID, 'blk_op').sk,

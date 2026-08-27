@@ -5,7 +5,7 @@ import { AppError } from '../lib/errors.js';
 import { entityTag } from '../lib/etag.js';
 import { requireUserId } from '../middleware/identity.js';
 import { changeListBehaviour } from '../services/listMutationService.js';
-import { idempotentJson } from './idempotentResponse.js';
+import { idempotentJson, undoAwareReceiptTtlSeconds } from './idempotentResponse.js';
 import { toListSettings } from './toList.js';
 
 /**
@@ -37,15 +37,19 @@ export async function changeListBehaviourHandler(
   }
 
   const listId = c.req.param('id');
-  return idempotentJson(c, 200, async (receiptFor, key) =>
-    changeListBehaviour(
-      requireUserId(c),
-      listId,
-      input,
-      entityTag(header.trim()),
-      key,
-      now,
-      (result) => receiptFor(toListSettings(result)),
-    ),
+  return idempotentJson(
+    c,
+    200,
+    async (receiptFor, key) =>
+      changeListBehaviour(
+        requireUserId(c),
+        listId,
+        input,
+        entityTag(header.trim()),
+        key,
+        now,
+        (result) => receiptFor(toListSettings(result)),
+      ),
+    { receiptTtlSeconds: undoAwareReceiptTtlSeconds },
   );
 }

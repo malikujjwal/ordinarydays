@@ -1098,7 +1098,8 @@ registry.registerPath({
     'Requires `If-Match` carrying the `updatedAt` the client read and an ' +
     '`Idempotency-Key`; omitting either is `400`. The receipt preserves the exact opaque ' +
     'Undo token if a successful response is lost. A response carrying that token is retained ' +
-    'through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, matching durable client replay; a tokenless ' +
+    'through `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days), matching durable client replay; ' +
+    'a tokenless ' +
     'response keeps the ordinary 24-hour receipt window. `If-Match` omission is `400`, ' +
     'not `428`, because the error union is closed. Everything this route changes is ' +
     '**additive in both directions** and applies immediately with no confirmation: ' +
@@ -1162,7 +1163,10 @@ registry.registerPath({
     '`503 internal` with `Retry-After: 1`. The final transaction alone flips the ' +
     'behaviour, advances `rankVersion` \u2014 so item cursors issued before the ' +
     'migration are rejected rather than resumed \u2014 records the Undo inverse and the ' +
-    'receipt, and clears the marker. `collection` to `watch` gives every item ' +
+    'receipt, and clears the marker. A lossless response carrying an Undo token is retained ' +
+    'through `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days), matching durable client replay; a ' +
+    'tokenless no-op or confirmed destructive response keeps the ordinary 24-hour receipt ' +
+    'window. `collection` to `watch` gives every item ' +
     '`watchStatus: "want"` and `collection` to `meals` an empty ingredient list; both ' +
     'are additive and answer with a 6-second Undo offer. Leaving `watch` or `meals` ' +
     'for anything else \u2014 `watch` to `meals` included \u2014 is destructive. The first ' +

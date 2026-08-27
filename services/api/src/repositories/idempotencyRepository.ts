@@ -38,11 +38,11 @@ export function receiptItem(receipt: IdempotencyReceipt): TransactItem {
 /**
  * Writes the receipt on its own, for an operation that turned out to have nothing left to do.
  *
- * The one caller is P3-08's bulk replay: after the original receipt expires, a batch whose
- * every stable item id is already committed writes no domain rows, and without this the
- * operation would record no receipt and re-resolve the whole batch on the next replay. The
- * conditional put is the same one {@link receiptItem} contributes to a transaction, so a
- * concurrent first attempt still races on it rather than overwriting a committed response.
+ * Callers are operations with no domain row left to change: P3-08's fully reconciled bulk
+ * replay and P3-09's already-set behaviour. Without this put, either would record no receipt
+ * and repeat its deciding reads on the next replay. The conditional put is the same one
+ * {@link receiptItem} contributes to a transaction, so a concurrent first attempt still
+ * races on it rather than overwriting a committed response.
  */
 export async function writeReceiptOnly(receipt: IdempotencyReceipt): Promise<void> {
   const item = receiptItem(receipt).Put;

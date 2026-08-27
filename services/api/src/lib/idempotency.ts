@@ -18,7 +18,10 @@ export interface IdempotencyReceipt {
   readonly key: string;
   readonly route: string;
   readonly status: number;
-  /** The successful response body, stored and replayed byte-for-byte. */
+  /**
+   * The successful response body, stored and replayed byte-for-byte. It can contain an
+   * opaque Undo token when exact replay is the only way to recover a lost success.
+   */
   readonly body: string;
   readonly ttl: number;
   readonly createdAt: string;

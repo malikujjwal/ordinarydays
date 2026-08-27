@@ -389,9 +389,10 @@ describe('deleting an item', () => {
    * The token **addresses** the operation it belongs to (P3-10): the undo route receives a
    * token and nothing else, and resolving it any other way would cost either a second index
    * or a read that grows with a month of the user's activity. The secret half is what
-   * authorises, and only the hash of the whole thing is ever stored.
+   * authorises, and only the hash of the whole thing enters the retained `UNDO#` operation.
+   * The exact-response receipt is a separate, bounded replay copy of the returned token.
    */
-  it('mints a token addressing its operation, stores only its hash, and offers six seconds', async () => {
+  it('mints a token addressing its operation, hashes its retained authority, and offers six seconds', async () => {
     const result = await service.removeItem(USER, LIST, ITEM, NOW);
 
     expect(result.affectedCount).toBe(1);

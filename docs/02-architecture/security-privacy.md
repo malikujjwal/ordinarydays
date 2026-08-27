@@ -248,7 +248,13 @@ Notes on the choices that are not obvious:
 | IP address | **PII** | Rate-limit counters only, **SHA-256 hashed** | Abuse prevention on the public surface | Length of the rate-limit window (≤ 1 hour), then TTL-deleted |
 | Request logs | Operational | CloudWatch Logs | Debugging | **14 days dev, 30 days prod**, then automatic deletion |
 | Invite tokens | **Capability** | `INVITE#<token>` | Public plan access | 90 days after the plan date, then TTL + 30 days |
-| Idempotency records | Operational | `IDEM#<userId>#<key>` | Duplicate suppression and exact-response replay | 24 hours via TTL; List settings receipts carrying durable Undo authority use `MAX_AUTOMATIC_INTENT_AGE_DAYS` |
+| Idempotency records | Operational; exact responses inherit **Personal content** or **Capability** classification from their body | `IDEM#<userId>#<key>` | Duplicate suppression and exact-response replay | 24 hours via TTL; `PATCH /v1/lists/:id` and lossless `POST /v1/lists/:id/behaviour` receipts carrying durable Undo authority use `MAX_AUTOMATIC_INTENT_AGE_DAYS` (30 days) |
+
+An `UNDO#` operation stores only the token hash used to authorise an inverse. The exact-response
+receipt is a deliberate bounded exception: exact replay cannot reconstruct the opaque token, so
+the user-scoped receipt retains the plaintext capability until its 30-day TTL. A resumable
+multi-phase work row may also hold the token while the operation runs, then the finishing
+transaction deletes that work-row copy as it installs the receipt and hash-only Undo operation.
 
 **Data we deliberately do not collect:** device location, contacts from the phone's address
 book, phone numbers of the account holder, date of birth, gender, payment details, health

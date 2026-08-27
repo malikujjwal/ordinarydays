@@ -935,9 +935,10 @@ export async function changeListBehaviour(
 
   /**
    * Already there. Either a genuine no-op or a replay that arrives after somebody else's
-   * drain committed this operation, and both answer with current truth. The Undo offer is
-   * absent by construction: its token lived in the work record the finisher deleted, and a
-   * server that minted a fresh one would be handing out a compensation nothing recorded.
+   * drain committed another key's operation, and both answer with current truth. This key's
+   * response has no Undo offer by construction: the originating token remains replayable only
+   * under its originating receipt, and minting a fresh one here would hand out a compensation
+   * nothing recorded.
    */
   if (list.behaviour === input.behaviour) {
     const settled: ListSettingsResult = { list };

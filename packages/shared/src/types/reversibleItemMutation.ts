@@ -7,8 +7,10 @@
  * accepted remains valid for `MAX_AUTOMATIC_INTENT_AGE_DAYS`, so an Undo accepted offline
  * cannot expire in transit.
  *
- * `undoToken` is opaque. Only its hash is stored, and the client hands it back to
- * `POST /v1/lists/:id/undo` (P3-10) rather than sending deleted row contents as authority.
+ * `undoToken` is opaque. The retained `UNDO#` operation stores only its hash, and the client
+ * hands the token back to `POST /v1/lists/:id/undo` (P3-10) rather than sending deleted row
+ * contents as authority. A bounded, user-scoped exact-response receipt may also retain the
+ * token through `MAX_AUTOMATIC_INTENT_AGE_DAYS` so a lost success can be replayed exactly.
  */
 export interface ReversibleItemMutation {
   affectedCount: number;

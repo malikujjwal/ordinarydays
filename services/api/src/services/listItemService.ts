@@ -537,9 +537,10 @@ async function moveItem(
  * P3-13 writes the first one but whose shape the snapshot already carries — and a
  * single-use `UNDO#` record. **Restoration is P3-10's endpoint**, not this one.
  *
- * The token is minted here and only its **hash** is stored, so a leaked work record cannot
- * be replayed into an Undo, and the client hands the token back rather than sending deleted
- * row contents as authority.
+ * The token is minted here and only its **hash** enters the retained `UNDO#` authority, so
+ * leaking that row does not reveal the capability. The exact-response receipt may retain a
+ * bounded copy of the returned token, and the client hands it back rather than sending
+ * deleted row contents as authority.
  */
 export async function removeItem(
   userId: string,

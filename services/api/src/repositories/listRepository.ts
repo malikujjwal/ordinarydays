@@ -1150,7 +1150,7 @@ export interface ListSettingsPreconditions {
 export interface ListSettingsUndo {
   readonly operationId: string;
   readonly kind: 'settings' | 'behaviour_upgrade';
-  /** Only the hash is stored: a leaked work row must not be replayable into an Undo. */
+  /** Only the hash enters this retained Undo row; the exact-response receipt is separate. */
   readonly tokenHash: string;
   readonly undoExpiresAt: string;
   readonly inverse: ListSettingsInverse;
@@ -2955,12 +2955,14 @@ export interface BehaviourMigrationLoss {
  * blocked read that completes somebody else's migration leaves no receipt at all, and the
  * client's replay finds none — and then fails its own `If-Match`, because finishing moved
  * `updatedAt`. The operation would have succeeded while its author was told it conflicted,
- * with the Undo token gone along with the work row.
+ * with the Undo token unreachable after the work row was deleted, if the receipt were omitted.
  *
- * The Undo token is held here in the clear, and only here: the row is internal, never
- * serialised, and deleted by the same transaction that stores its hash. The alternative —
- * minting a fresh token per attempt — would make the answer depend on which request happened
- * to commit, which is the one thing this record exists to prevent.
+ * The Undo token is held here in the clear while the migration runs: the row is internal,
+ * never serialised, and deleted by the same transaction that stores its hash and the bounded
+ * exact-response receipt. The retained `UNDO#` authority stores only the hash; the receipt
+ * keeps the capability-bearing response long enough to recover a lost success. Minting a
+ * fresh token per attempt would make the answer depend on which request happened to commit,
+ * which is the one thing this record exists to prevent.
  *
  * **No `ttl`.** Every other internal row here expires with the replay window, and this one
  * must not: its `META` marker has no expiry, so a work record that aged out would leave a
@@ -3800,9 +3802,10 @@ export async function deleteListItem(
  * snapshot it is working through, how far it got, and the receipt the last chunk will store.
  * A retry finds it and finishes the same operation, with the same answer.
  *
- * The token is held in the clear, and only here: the row is internal, never serialised, and
- * **deleted by the transaction that finishes the operation** — so its plaintext lives for the
- * seconds the run takes, not for the thirty days the `UNDO#` record is retained.
+ * The token is held in the clear here while the operation runs: the row is internal, never
+ * serialised, and **deleted by the transaction that finishes the operation**, bounding this
+ * temporary copy to the run. The transaction installs the bounded exact-response receipt
+ * that can replay the token; the retained `UNDO#` authority stores only its hash.
  */
 export interface BulkItemOperationWork {
   readonly listId: string;
@@ -3883,8 +3886,9 @@ export interface BulkOperationResult {
  *    crash here leaves an operation that reverses nothing — which is what it did.
  * 2. Bounded chunks apply the change and advance the stored cursor in the same transaction, so
  *    a crash resumes at a chunk boundary and never half-applies one item.
- * 3. One final transaction stores the response receipt and deletes the work record, so the
- *    plaintext token it was holding goes with it.
+ * 3. One final transaction stores the response receipt and deletes the work record, so its
+ *    temporary plaintext-token copy goes with it. The bounded receipt remains for exact
+ *    response replay; the retained `UNDO#` authority holds only the hash.
  *
  * Each chunk re-reads its items' current revisions rather than trusting the snapshot's. The
  * ids are what the operation recorded and will reverse; the revisions are how it writes them
@@ -4236,8 +4240,8 @@ async function applyBulkChunk(
  *
  * The receipt lands **here**, with the last chunk, so a replay that arrives before the
  * operation is done finds none and resumes it rather than being told it succeeded. Deleting
- * the work record in the same transaction is what bounds the plaintext token's life to the
- * run itself.
+ * the work record in the same transaction bounds that row's plaintext-token copy to the run;
+ * the capability-bearing receipt then owns the bounded copy needed for exact replay.
  */
 async function finishBulkOperation(work: BulkItemOperationWork): Promise<void> {
   const builder = new TransactionBuilder(

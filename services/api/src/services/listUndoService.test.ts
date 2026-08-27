@@ -323,9 +323,10 @@ describe('the behaviour-upgrade inverse', () => {
 
 describe('the token itself', () => {
   /**
-   * Only the hash is stored, so a leaked work record cannot be replayed into an Undo — and
-   * the addressable half is what lets one `GetItem` find the operation without a second index
-   * or a query across a month of retained ones.
+   * Only the hash enters the retained Undo record, so leaking that row does not reveal the
+   * capability — and the addressable half is what lets one `GetItem` find the operation
+   * without a second index or a query across a month of retained ones. Exact-response
+   * receipts are the separate, bounded replay copy of tokens returned to clients.
    */
   it('addresses its operation and hides its secret behind a hash', () => {
     const { token, tokenHash } = mintUndoToken('op_abc');
