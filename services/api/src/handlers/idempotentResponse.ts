@@ -10,8 +10,11 @@ import {
 type SuccessStatus = 200 | 201 | 202 | 204;
 
 export interface IdempotentJsonOptions {
-  /** Overrides the ordinary 24-hour receipt window for a longer-lived response contract. */
-  readonly receiptTtlSeconds?: number;
+  /**
+   * Overrides the ordinary 24-hour receipt window for a longer-lived response contract.
+   * A selector keeps retention scoped to response variants that actually need the exception.
+   */
+  readonly receiptTtlSeconds?: number | ((data: unknown) => number);
 }
 
 /**
@@ -49,14 +52,16 @@ export async function idempotentJson(
   let body: string | undefined;
   await operation((data, cleanupRef) => {
     body = JSON.stringify({ data, meta: { requestId: c.get('requestId') } });
+    const configuredTtl = options.receiptTtlSeconds;
+    const receiptTtlSeconds =
+      typeof configuredTtl === 'function' ? configuredTtl(data) : configuredTtl;
     return {
       userId,
       key,
       route,
       status,
       body,
-      ttl:
-        Math.floor(nowMs / 1000) + (options.receiptTtlSeconds ?? IDEMPOTENCY_TTL_SECONDS),
+      ttl: Math.floor(nowMs / 1000) + (receiptTtlSeconds ?? IDEMPOTENCY_TTL_SECONDS),
       createdAt: new Date(nowMs).toISOString(),
       ...(cleanupRef === undefined ? {} : { cleanupRef }),
     };

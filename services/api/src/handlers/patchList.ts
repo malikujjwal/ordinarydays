@@ -3,7 +3,10 @@ import type { Context } from 'hono';
 import type { AppEnv } from '../app-env.js';
 import { AppError } from '../lib/errors.js';
 import { entityTag } from '../lib/etag.js';
-import { DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS } from '../lib/idempotency.js';
+import {
+  DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS,
+  IDEMPOTENCY_TTL_SECONDS,
+} from '../lib/idempotency.js';
 import { requireUserId } from '../middleware/identity.js';
 import { patchListSettings } from '../services/listMutationService.js';
 import { idempotentJson } from './idempotentResponse.js';
@@ -33,6 +36,13 @@ export const PATCH_LIST_PATH = '/:id';
 
 const MISSING = 'This edit needs an If-Match header carrying the version you loaded.';
 
+function settingsReceiptTtlSeconds(data: unknown): number {
+  if (typeof data !== 'object' || data === null) return IDEMPOTENCY_TTL_SECONDS;
+  return 'undoToken' in data && 'undoExpiresAt' in data
+    ? DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS
+    : IDEMPOTENCY_TTL_SECONDS;
+}
+
 export async function patchListHandler(
   c: Context<AppEnv, typeof PATCH_LIST_PATH>,
   patch: PatchListInput,
@@ -59,6 +69,6 @@ export async function patchListHandler(
       );
       return toListSettings(result);
     },
-    { receiptTtlSeconds: DURABLE_OUTBOX_IDEMPOTENCY_TTL_SECONDS },
+    { receiptTtlSeconds: settingsReceiptTtlSeconds },
   );
 }

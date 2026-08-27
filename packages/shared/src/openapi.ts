@@ -1097,7 +1097,9 @@ registry.registerPath({
   description:
     'Requires `If-Match` carrying the `updatedAt` the client read and an ' +
     '`Idempotency-Key`; omitting either is `400`. The receipt preserves the exact opaque ' +
-    'Undo token if a successful response is lost. `If-Match` omission is `400`, ' +
+    'Undo token if a successful response is lost. A response carrying that token is retained ' +
+    'through `MAX_AUTOMATIC_INTENT_AGE_DAYS`, matching durable client replay; a tokenless ' +
+    'response keeps the ordinary 24-hour receipt window. `If-Match` omission is `400`, ' +
     'not `428`, because the error union is closed. Everything this route changes is ' +
     '**additive in both directions** and applies immediately with no confirmation: ' +
     'turning `checkable` off retains every item\u2019s `checked` value and turning ' +

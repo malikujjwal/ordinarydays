@@ -620,9 +620,10 @@ new dynamodb.Table(this, 'Main', {
 ```
 
 TTL deletion consumes **no write capacity** — it is free. Everything ephemeral uses it:
-idempotency records (24 h), rate-limit counters (window length), invite tokens (expiry +
-30 days), soft-deleted profiles (30 days). Deleting these with an explicit `DeleteItem`
-would cost a write unit each.
+idempotency records (24 h, except List settings responses carrying durable Undo authority,
+which use `MAX_AUTOMATIC_INTENT_AGE_DAYS`), rate-limit counters (window length), invite
+tokens (expiry + 30 days), soft-deleted profiles (30 days). Deleting these with an explicit
+`DeleteItem` would cost a write unit each.
 
 ### 5.8 CloudWatch alarms with a cost purpose
 

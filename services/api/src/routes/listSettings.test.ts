@@ -17,6 +17,7 @@ process.env.WEB_ORIGINS = 'http://localhost:8081';
 process.env.LOG_LEVEL = 'fatal';
 
 import type { createApp as CreateApp } from '../app.js';
+import { IDEMPOTENCY_TTL_SECONDS } from '../lib/idempotency.js';
 import { idempotency } from '../repositories/keys.js';
 
 /**
@@ -219,6 +220,16 @@ describe('PATCH /v1/lists/:id — the additive settings', () => {
     expect(
       Number(receipt?.ttl) - Math.floor(Date.parse(String(receipt?.createdAt)) / 1000),
     ).toBe(MAX_AUTOMATIC_INTENT_AGE_DAYS * 24 * 60 * 60);
+  });
+
+  it('keeps a tokenless settings response on the ordinary receipt window', async () => {
+    await patch(createApp(), { title: 'Trader Joe’s' });
+
+    const receipt = receiptWrite();
+    expect(receipt).toBeDefined();
+    expect(
+      Number(receipt?.ttl) - Math.floor(Date.parse(String(receipt?.createdAt)) / 1000),
+    ).toBe(IDEMPOTENCY_TTL_SECONDS);
   });
 
   it('replays the winner when the List version and same-key receipt both lose', async () => {
