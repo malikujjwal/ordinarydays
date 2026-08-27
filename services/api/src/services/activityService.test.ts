@@ -34,10 +34,13 @@ vi.mock('../repositories/activityRepository.js', () => ({
   listParticipants: vi.fn(() => Promise.resolve([])),
   listPrepTaskPointers: vi.fn(() => Promise.resolve([])),
   deleteActivity: vi.fn(() => Promise.resolve()),
+  markActivityDeleting: vi.fn(() => Promise.resolve()),
   detachChildFromParent: vi.fn(() => Promise.resolve()),
   StaleViewerLinkError: class extends Error {},
   ParentUnavailableError: class extends Error {},
   ActivityIdUnavailableError: class extends Error {},
+  PendingAttachmentsUnavailableError: class extends Error {},
+  CoverAttachmentUnavailableError: class extends Error {},
 }));
 
 vi.mock('../repositories/listRepository.js', () => ({
@@ -71,6 +74,8 @@ beforeEach(() => {
   vi.mocked(repository.listParticipants).mockResolvedValue([]);
   vi.mocked(repository.deleteActivity).mockReset();
   vi.mocked(repository.deleteActivity).mockResolvedValue(undefined);
+  vi.mocked(repository.markActivityDeleting).mockReset();
+  vi.mocked(repository.markActivityDeleting).mockResolvedValue(undefined);
   vi.mocked(repository.detachChildFromParent).mockReset();
   vi.mocked(repository.detachChildFromParent).mockResolvedValue(undefined);
   vi.mocked(repository.listPrepTaskPointers).mockReset();

@@ -30,6 +30,7 @@ export interface ListsView {
   /** Every pointer loaded so far, in server order, unfiltered. */
   readonly lists: readonly List[];
   readonly timezone: TimeZone;
+  readonly viewerUserId?: string;
   readonly refetch: () => void;
   /** True while another page is in flight — a drain must not stack requests. */
   readonly isLoadingMore: boolean;
@@ -55,7 +56,7 @@ export function useLists(): ListsView {
   const me = useQuery({
     queryKey: ME_QUERY_KEY,
     queryFn: ({ signal }) => getMe(apiClient, signal),
-    enabled: false,
+    enabled: true,
   });
 
   const query = useInfiniteQuery({
@@ -77,6 +78,7 @@ export function useLists(): ListsView {
     lists: (query.data?.pages ?? []).flatMap((page) => page.data) as List[],
     timezone: (me.data?.timezone ??
       Intl.DateTimeFormat().resolvedOptions().timeZone) as TimeZone,
+    ...(me.data?.userId === undefined ? {} : { viewerUserId: me.data.userId }),
     refetch: () => void query.refetch(),
     isLoadingMore: query.isFetchingNextPage,
     isOffline: query.fetchStatus === 'paused',

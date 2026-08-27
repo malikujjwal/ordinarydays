@@ -418,7 +418,11 @@ describe('the activity-scoped attachment routes', () => {
     /** A repeat is `404`, which for the caller means "already gone". */
     it('404s an id that names no attachment on this activity', async () => {
       ddbMock.on(GetCommand).callsFake((input) => ({
-        Item: String(input.Key?.sk).startsWith('ATT#') ? undefined : meta(),
+        Item:
+          String(input.Key?.sk).startsWith('ATT#') ||
+          String(input.Key?.sk).startsWith('MEDIA_DELETE#')
+            ? undefined
+            : meta(),
       }));
 
       const response = await remove();

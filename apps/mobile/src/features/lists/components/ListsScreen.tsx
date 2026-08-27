@@ -82,6 +82,7 @@ export function ListsScreen({
   const theme = useTheme();
   const breakpoint = useBreakpoint();
   const view = useLists();
+  const effectiveViewerUserId = viewerUserId ?? view.viewerUserId;
   const [menuOpen, setMenuOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<List | undefined>(undefined);
@@ -169,7 +170,7 @@ export function ListsScreen({
         onPress={() => onOpenList(list.listId)}
         dimmed={dimmed}
         testID={`list-card-${list.listId}`}
-        actions={dimmed ? [] : listSwipeActions(roleFor(list, viewerUserId))}
+        actions={dimmed ? [] : listSwipeActions(roleFor(list, effectiveViewerUserId))}
         onAction={(action) => dispatch(list, action)}
       />
     </View>

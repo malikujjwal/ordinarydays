@@ -4,6 +4,7 @@ import {
   type AgendaQuery,
   activityCompletionResult,
   activity as activitySchema,
+  listView,
   scheduleActivityResult,
   timeZone,
 } from '@od/shared/schemas';
@@ -114,6 +115,12 @@ function activityFromResponse(response: unknown): Activity | undefined {
   const parsed = activitySchema.safeParse(candidate);
   // Zod's optional output uses `T | undefined`; the domain model uses property absence.
   return parsed.success ? (parsed.data as Activity) : undefined;
+}
+
+function listFromResponse(response: unknown): List | undefined {
+  const candidate = field(response, 'list');
+  const parsed = listView.safeParse(candidate);
+  return parsed.success ? (parsed.data as List) : undefined;
 }
 
 const OCCURRENCE_MUTATIONS = new Set([
@@ -603,6 +610,18 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     if (lists === undefined || pullListsPage === undefined) {
       throw new Error('Native Lists state is not ready.');
     }
+    const rows = await this.pullAllLists();
+    await this.transactions.run(async (transaction) => {
+      const protectedListIds = await this.outbox.protectedListIds(transaction.database);
+      await lists.replaceCanonical(transaction, rows, protectedListIds);
+    });
+    return lists.read();
+  }
+
+  private async pullAllLists(): Promise<readonly List[]> {
+    const pullListsPage = this.pull.listsPage;
+    if (pullListsPage === undefined)
+      throw new Error('Native Lists transport is not ready.');
     const rows: List[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
@@ -619,10 +638,7 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
         seenCursors.add(cursor);
       }
     } while (cursor !== undefined);
-    await this.transactions.run((transaction) =>
-      lists.replaceCanonical(transaction, rows),
-    );
-    return lists.read();
+    return rows;
   }
 
   stop(): void {
@@ -692,6 +708,12 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     let phase: 'push' | 'settlement' = 'push';
     try {
       const response = await this.serialNetwork(() => this.push.execute(intent));
+      if (intent.mutationKey[0] === 'list') {
+        phase = 'settlement';
+        await this.settleListIntent(intent, response);
+        this.retryIndex = 0;
+        return 'continue';
+      }
       const pushedActivity = activityFromResponse(response);
       let createdDetail: ActivityDetail | undefined;
       if (
@@ -919,11 +941,42 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
     }
   }
 
+  private async settleListIntent(intent: OutboxIntent, response: unknown): Promise<void> {
+    const lists = this.lists;
+    if (lists === undefined) throw new Error('Native Lists state is not ready.');
+    await this.transactions.run(async (transaction) => {
+      const later = await this.outbox.laterInOrdering(
+        transaction.database,
+        intent.orderingKey,
+        intent.seq,
+      );
+      const canonical = listFromResponse(response);
+      if (intent.mutationKey[1] === 'patch') {
+        if (canonical?.listId !== intent.entityId) {
+          throw new Error('List settings acknowledgement omitted its canonical List.');
+        }
+        if (later.length === 0) await lists.applySettings(transaction, canonical);
+        await this.outbox.rebaseNextQueuedListPatch(
+          transaction.database,
+          intent.orderingKey,
+          intent.seq,
+          canonical.updatedAt,
+        );
+      }
+      await this.outbox.acknowledge(transaction.database, intent.intentId);
+      transaction.changed('outbox');
+    });
+  }
+
   /** Restores the last server truth before exposing a permanent rejection for recovery. */
   private async rollbackPermanentRejection(
     intent: OutboxIntent,
     failure: Error,
   ): Promise<void> {
+    if (intent.mutationKey[0] === 'list') {
+      await this.rollbackPermanentListRejection(intent, failure);
+      return;
+    }
     const occurrenceDate = occurrenceDateFromIntent(intent);
     const target: ActivityDetailTarget =
       occurrenceDate === undefined
@@ -1095,6 +1148,54 @@ export class SerializedNativeSyncEngine implements NativeSyncEngine {
       this.pullRequested = true;
       this.requested = true;
     }
+  }
+
+  private async rollbackPermanentListRejection(
+    intent: OutboxIntent,
+    failure: Error,
+  ): Promise<void> {
+    let rows: readonly List[] | undefined;
+    try {
+      rows = await this.pullAllLists();
+    } catch (error) {
+      if (__DEV__) {
+        console.warn('native_list_rejection_rollback_read_failed', {
+          intentId: intent.intentId,
+          message: message(error),
+        });
+      }
+    }
+
+    const canonical = rows?.find((list) => list.listId === intent.entityId);
+    const position = rows?.findIndex((list) => list.listId === intent.entityId) ?? -1;
+    await this.transactions.run(async (transaction) => {
+      await this.outbox.needsAttention(
+        transaction.database,
+        intent.intentId,
+        rejectedAttention(failure, rows === undefined),
+        failure.message,
+      );
+      for (const later of await this.outbox.laterInOrdering(
+        transaction.database,
+        intent.orderingKey,
+        intent.seq,
+      )) {
+        await this.outbox.needsAttention(
+          transaction.database,
+          later.intentId,
+          { kind: 'parked', reason: 'predecessor_rejected' },
+          'An earlier change for this list was rejected.',
+        );
+      }
+      if (rows !== undefined) {
+        if (canonical === undefined) {
+          await this.lists?.removeCanonical(transaction, intent.entityId);
+        } else {
+          await this.lists?.upsertCanonical(transaction, canonical, position);
+        }
+      }
+      transaction.changed('outbox');
+    });
   }
 
   private async pullKnownCoverage(): Promise<Error | undefined> {

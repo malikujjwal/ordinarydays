@@ -14,6 +14,7 @@ import { scheduleListItem } from './listScheduleService.js';
  */
 vi.mock('../repositories/activityRepository.js', () => ({
   ActivityIdUnavailableError: class extends Error {},
+  PendingAttachmentsUnavailableError: class extends Error {},
   activityFromPartition: vi.fn(),
   createActivity: vi.fn(),
   getActivityPartitionStrong: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('./authz.js', () => ({ assertListAccess: vi.fn() }));
 vi.mock('./attachmentService.js', () => ({
   assertAttachmentsConfirmable: vi.fn(),
   confirmAttachments: vi.fn(async () => []),
+  unconfirmableAttachments: vi.fn(() => new AppError('validation_failed', 'bad upload')),
 }));
 
 const activityRepository = await import('../repositories/activityRepository.js');
@@ -291,6 +293,7 @@ describe('what the bridge refuses, before it writes anything', () => {
       [attachmentId],
       NOW,
     );
+    expect(written()?.[2]?.confirmAttachmentIds).toEqual([attachmentId]);
   });
 
   it('accepts an empty attachmentIds, which asks for nothing', async () => {

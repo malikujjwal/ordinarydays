@@ -1,16 +1,22 @@
 import { MAX_ATTACHMENTS_PER_ACTIVITY } from '@od/shared/constants';
 import { attachment as attachmentSchema } from '@od/shared/schemas';
 import type { Attachment } from '@od/shared/types';
+import { z } from 'zod';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
-import { getItem, query } from './base.js';
+import { deleteItem, getItem, query } from './base.js';
 import { receiptItem } from './idempotencyRepository.js';
 import {
   activityMeta,
+  attachmentDeletion as attachmentDeletionKey,
+  attachmentDeletionPrefix,
   attachment as attachmentKey,
   attachmentPrefix,
+  attachmentQuotaSlot,
   pendingUpload as pendingUploadKey,
+  pendingUploadQuotaSlot,
 } from './keys.js';
 import type { StoredItem } from './migrate.js';
+import type { PendingUpload } from './pendingUploadRepository.js';
 import { TransactionBuilder, transactWrite } from './tx.js';
 
 /**
@@ -41,7 +47,24 @@ export function toAttachment(row: unknown): Attachment {
   return attachmentSchema.parse(row) as Attachment;
 }
 
-function attachmentItem(record: Attachment): StoredItem {
+export type StoredAttachment = Attachment & { readonly quotaSlot?: number };
+
+function toStoredAttachment(row: StoredItem): StoredAttachment {
+  const attachment = toAttachment(row);
+  const quotaSlot = z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_ATTACHMENTS_PER_ACTIVITY - 1)
+    .optional()
+    .parse(row.quotaSlot);
+  return {
+    ...attachment,
+    ...(quotaSlot === undefined ? {} : { quotaSlot }),
+  };
+}
+
+function attachmentItem(record: Attachment, quotaSlot: number): StoredItem {
   return {
     ...attachmentKey(record.activityId, record.attachmentId),
     entity: ENTITY,
@@ -51,6 +74,7 @@ function attachmentItem(record: Attachment): StoredItem {
     contentType: record.contentType,
     byteSize: record.byteSize,
     createdAt: record.createdAt,
+    quotaSlot,
     schemaVersion: SCHEMA_VERSION,
   };
 }
@@ -67,6 +91,15 @@ function attachmentItem(record: Attachment): StoredItem {
  * without it would look exactly like the confirmation having failed.
  */
 export async function listAttachments(activityId: string): Promise<Attachment[]> {
+  return (await listStoredAttachments(activityId)).map(
+    ({ quotaSlot: _slot, ...row }) => row,
+  );
+}
+
+/** Internal collection including the quota slot that must be released on unlink. */
+export async function listStoredAttachments(
+  activityId: string,
+): Promise<StoredAttachment[]> {
   const prefix = attachmentPrefix(activityId);
   const page = await query<StoredItem>(
     { pk: prefix.pk },
@@ -76,7 +109,7 @@ export async function listAttachments(activityId: string): Promise<Attachment[]>
       consistentRead: true,
     },
   );
-  return page.items.map(toAttachment);
+  return page.items.map(toStoredAttachment);
 }
 
 /** One attachment by id, or `undefined`. Strongly consistent for the same two reasons. */
@@ -88,6 +121,44 @@ export async function getAttachment(
     consistentRead: true,
   });
   return row === undefined ? undefined : toAttachment(row);
+}
+
+/** Internal exact read including the fixed quota slot. */
+export async function getStoredAttachment(
+  activityId: string,
+  attachmentId: string,
+): Promise<StoredAttachment | undefined> {
+  const row = await getItem<StoredItem>(attachmentKey(activityId, attachmentId), {
+    consistentRead: true,
+  });
+  return row === undefined ? undefined : toStoredAttachment(row);
+}
+
+export class AttachmentAlreadyLinkedError extends Error {
+  constructor() {
+    super('The attachment was linked by another request.');
+    this.name = 'AttachmentAlreadyLinkedError';
+  }
+}
+
+export class AttachmentSlotUnavailableError extends Error {
+  constructor() {
+    super('The selected attachment quota slot is no longer available.');
+    this.name = 'AttachmentSlotUnavailableError';
+  }
+}
+
+export class ActivityUnavailableForAttachmentError extends Error {
+  constructor() {
+    super('The Activity is unavailable for attachment changes.');
+    this.name = 'ActivityUnavailableForAttachmentError';
+  }
+}
+
+export interface LinkAttachmentOptions {
+  readonly pendingUpload: Pick<PendingUpload, 'attachmentId' | 'quotaSlot'>;
+  readonly quotaSlot: number;
+  readonly idempotencyReceipt?: IdempotencyReceipt;
 }
 
 /**
@@ -112,32 +183,130 @@ export async function getAttachment(
 export async function linkAttachment(
   userId: string,
   record: Attachment,
-  idempotencyReceipt?: IdempotencyReceipt,
+  options: LinkAttachmentOptions,
 ): Promise<void> {
   const builder = new TransactionBuilder(
     'linkAttachment',
-    idempotencyReceipt === undefined ? 0 : 1,
+    options.idempotencyReceipt === undefined ? 0 : 1,
   ).add(
     {
       Put: {
-        Item: attachmentItem(record),
+        Item: attachmentItem(record, options.quotaSlot),
         ConditionExpression: 'attribute_not_exists(pk)',
+      },
+    },
+    {
+      Put: {
+        Item: {
+          ...attachmentQuotaSlot(record.activityId, options.quotaSlot),
+          entity: 'AttachmentQuotaSlot',
+          attachmentId: record.attachmentId,
+          activityId: record.activityId,
+          quotaSlot: options.quotaSlot,
+          schemaVersion: SCHEMA_VERSION,
+        },
+        ConditionExpression: 'attribute_not_exists(pk)',
+      },
+    },
+    {
+      ConditionCheck: {
+        Key: activityMeta(record.activityId),
+        ConditionExpression:
+          'attribute_exists(pk) AND #ownerId = :userId AND attribute_not_exists(#deletingAt)',
+        ExpressionAttributeNames: {
+          '#ownerId': 'ownerId',
+          '#deletingAt': 'deletingAt',
+        },
+        ExpressionAttributeValues: { ':userId': userId },
       },
     },
     { Delete: { Key: pendingUploadKey(userId, record.attachmentId) } },
   );
+  if (options.pendingUpload.quotaSlot !== undefined) {
+    builder.add({
+      Delete: { Key: pendingUploadQuotaSlot(userId, options.pendingUpload.quotaSlot) },
+    });
+  }
   const receiptIndex = builder.length;
-  if (idempotencyReceipt !== undefined) {
-    builder.addReserved(receiptItem(idempotencyReceipt));
+  if (options.idempotencyReceipt !== undefined) {
+    builder.addReserved(receiptItem(options.idempotencyReceipt));
   }
 
   await transactWrite(builder.build(), {
     operation: 'linkAttachment',
-    onConditionFailed: (index) =>
-      idempotencyReceipt !== undefined && index === receiptIndex
+    onConditionFailed: (index) => {
+      if (index === 0) return new AttachmentAlreadyLinkedError();
+      if (index === 1) return new AttachmentSlotUnavailableError();
+      if (index === 2) return new ActivityUnavailableForAttachmentError();
+      return options.idempotencyReceipt !== undefined && index === receiptIndex
         ? new IdempotencyRaceError()
-        : undefined,
+        : undefined;
+    },
   });
+}
+
+export interface AttachmentDeletion {
+  readonly userId: string;
+  readonly activityId: string;
+  readonly attachmentId: string;
+  readonly key: string;
+  readonly coverCleared: boolean;
+  readonly createdAt: string;
+}
+
+const storedAttachmentDeletion = z.object({
+  userId: z.string().min(1),
+  activityId: z.string().min(1),
+  attachmentId: z.string().min(1),
+  key: z.string().min(1),
+  coverCleared: z.boolean(),
+  createdAt: z.string().min(1),
+});
+
+function toAttachmentDeletion(row: StoredItem): AttachmentDeletion {
+  return storedAttachmentDeletion.parse(row);
+}
+
+export async function getAttachmentDeletion(
+  userId: string,
+  activityId: string,
+  attachmentId: string,
+): Promise<AttachmentDeletion | undefined> {
+  const row = await getItem<StoredItem>(
+    attachmentDeletionKey(userId, activityId, attachmentId),
+    { consistentRead: true },
+  );
+  return row === undefined ? undefined : toAttachmentDeletion(row);
+}
+
+export async function listAttachmentDeletions(
+  userId: string,
+): Promise<AttachmentDeletion[]> {
+  const prefix = attachmentDeletionPrefix(userId);
+  const page = await query<StoredItem>(
+    { pk: prefix.pk },
+    {
+      skPrefix: prefix.skPrefix,
+      limit: MAX_ATTACHMENTS_PER_ACTIVITY,
+      consistentRead: true,
+    },
+  );
+  return page.items.map(toAttachmentDeletion);
+}
+
+export async function completeAttachmentDeletion(
+  work: Pick<AttachmentDeletion, 'userId' | 'activityId' | 'attachmentId'>,
+): Promise<void> {
+  await deleteItem(
+    attachmentDeletionKey(work.userId, work.activityId, work.attachmentId),
+  );
+}
+
+export class AttachmentCoverChangedError extends Error {
+  constructor() {
+    super('The Activity cover changed while the attachment was being removed.');
+    this.name = 'AttachmentCoverChangedError';
+  }
 }
 
 /**
@@ -166,15 +335,17 @@ export async function linkAttachment(
  * exists, and `If-Match` is how it finds out.
  */
 export async function unlinkAttachment(
-  activityId: string,
-  attachmentId: string,
+  userId: string,
+  record: StoredAttachment,
   /**
    * Present exactly when this attachment is the cover. `now` is a parameter and not a clock
    * read: `coding-standards.md` §4.3 bans an implicit clock inside anything that has to be
    * testable, and the service already holds the request's instant.
    */
-  clearCover?: { readonly now: string },
-): Promise<void> {
+  clearCover: boolean,
+  now: string,
+): Promise<AttachmentDeletion> {
+  const { activityId, attachmentId } = record;
   const builder = new TransactionBuilder('unlinkAttachment').add({
     Delete: {
       Key: attachmentKey(activityId, attachmentId),
@@ -182,23 +353,74 @@ export async function unlinkAttachment(
     },
   });
 
-  if (clearCover !== undefined) {
+  if (record.quotaSlot !== undefined) {
+    builder.add({ Delete: { Key: attachmentQuotaSlot(activityId, record.quotaSlot) } });
+  }
+
+  const activityConditionIndex = builder.length;
+  if (clearCover) {
     builder.add({
       Update: {
         Key: activityMeta(activityId),
         UpdateExpression: 'REMOVE #primaryAttachmentId SET #updatedAt = :now',
-        ConditionExpression: '#primaryAttachmentId = :attachmentId',
+        ConditionExpression:
+          '#ownerId = :userId AND #primaryAttachmentId = :attachmentId AND attribute_not_exists(#deletingAt)',
         ExpressionAttributeNames: {
+          '#ownerId': 'ownerId',
           '#primaryAttachmentId': 'primaryAttachmentId',
           '#updatedAt': 'updatedAt',
+          '#deletingAt': 'deletingAt',
         },
         ExpressionAttributeValues: {
+          ':userId': userId,
           ':attachmentId': attachmentId,
-          ':now': clearCover.now,
+          ':now': now,
+        },
+      },
+    });
+  } else {
+    builder.add({
+      ConditionCheck: {
+        Key: activityMeta(activityId),
+        ConditionExpression:
+          '#ownerId = :userId AND attribute_not_exists(#deletingAt) AND (attribute_not_exists(#primaryAttachmentId) OR #primaryAttachmentId <> :attachmentId)',
+        ExpressionAttributeNames: {
+          '#ownerId': 'ownerId',
+          '#deletingAt': 'deletingAt',
+          '#primaryAttachmentId': 'primaryAttachmentId',
+        },
+        ExpressionAttributeValues: {
+          ':userId': userId,
+          ':attachmentId': attachmentId,
         },
       },
     });
   }
 
-  await transactWrite(builder.build(), { operation: 'unlinkAttachment' });
+  const work: AttachmentDeletion = {
+    userId,
+    activityId,
+    attachmentId,
+    key: record.key,
+    coverCleared: clearCover,
+    createdAt: now,
+  };
+  builder.add({
+    Put: {
+      Item: {
+        ...attachmentDeletionKey(userId, activityId, attachmentId),
+        entity: 'AttachmentDeletion',
+        ...work,
+        schemaVersion: SCHEMA_VERSION,
+      },
+      ConditionExpression: 'attribute_not_exists(pk)',
+    },
+  });
+
+  await transactWrite(builder.build(), {
+    operation: 'unlinkAttachment',
+    onConditionFailed: (index) =>
+      index === activityConditionIndex ? new AttachmentCoverChangedError() : undefined,
+  });
+  return work;
 }

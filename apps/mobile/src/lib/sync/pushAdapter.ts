@@ -4,9 +4,11 @@ import {
   createActivity,
   createReminder,
   deleteActivityForReplay,
+  deleteListForReplay,
   deleteReminderForReplay,
   duplicateActivity,
   patchActivityForReplay,
+  patchListForReplay,
   scheduleActivity,
   skipActivity,
   snoozeActivity,
@@ -19,7 +21,9 @@ import {
   completeActivityInput,
   createActivityInput,
   type PatchActivityInput,
+  type PatchListInput,
   patchActivityInput,
+  patchListInput,
   type ReminderInput,
   reminderInput,
   type ScheduleActivityInput,
@@ -85,6 +89,11 @@ export interface ActivityPushTransport {
   deleteReminder(activityId: string, reminderId: string): Promise<unknown>;
 }
 
+export interface ListPushTransport {
+  patch(listId: string, input: PatchListInput, ifMatch: string): Promise<unknown>;
+  remove(listId: string): Promise<unknown>;
+}
+
 /** A persisted payload that cannot become valid by waiting for connectivity or retrying. */
 class DurableActivityIntentError extends Error {
   readonly status = 422;
@@ -142,6 +151,12 @@ export const sharedActivityPushTransport: ActivityPushTransport = {
     deleteReminderForReplay(apiClient, activityId, reminderId),
 };
 
+export const sharedListPushTransport: ListPushTransport = {
+  patch: (listId, input, ifMatch) =>
+    patchListForReplay(apiClient, listId, input, ifMatch),
+  remove: (listId) => deleteListForReplay(apiClient, listId),
+};
+
 function variables(intent: OutboxIntent): object {
   if (typeof intent.variables !== 'object' || intent.variables === null) {
     throw new DurableActivityIntentError(
@@ -162,9 +177,11 @@ function requiredString(value: unknown, name: string): string {
 export class ActivityPushAdapter {
   constructor(
     private readonly transport: ActivityPushTransport = sharedActivityPushTransport,
+    private readonly listTransport: ListPushTransport = sharedListPushTransport,
   ) {}
 
   async execute(intent: OutboxIntent): Promise<unknown> {
+    if (intent.mutationKey[0] === 'list') return this.executeList(intent);
     if (intent.mutationKey[0] !== 'activity') {
       throw new DurableActivityIntentError(
         `Unsupported native outbox domain: ${intent.mutationKey[0] ?? ''}.`,
@@ -275,6 +292,28 @@ export class ActivityPushAdapter {
     }
     throw new DurableActivityIntentError(
       `Unsupported native Activity mutation: ${name ?? ''}.`,
+    );
+  }
+
+  private executeList(intent: OutboxIntent): Promise<unknown> {
+    const name = intent.mutationKey[1];
+    const value = variables(intent);
+    const listId = requiredString(field(value, 'listId') ?? intent.entityId, 'listId');
+    if (listId !== intent.entityId) {
+      throw new DurableActivityIntentError(
+        'Durable List intent entity identity does not match its payload.',
+      );
+    }
+    if (name === 'patch') {
+      return this.listTransport.patch(
+        listId,
+        parsePersisted(patchListInput, field(value, 'input')),
+        requiredString(field(value, 'ifMatch'), 'ifMatch'),
+      );
+    }
+    if (name === 'delete') return this.listTransport.remove(listId);
+    throw new DurableActivityIntentError(
+      `Unsupported native List mutation: ${name ?? ''}.`,
     );
   }
 }

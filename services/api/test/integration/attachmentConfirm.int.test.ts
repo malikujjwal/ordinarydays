@@ -157,6 +157,32 @@ async function attachmentRows(activityId: string): Promise<Record<string, unknow
   return (result.Items ?? []) as Record<string, unknown>[];
 }
 
+async function seedAttachmentRows(activityId: string, count: number): Promise<void> {
+  const { PutCommand } = await import('@aws-sdk/lib-dynamodb');
+  for (let i = 0; i < count; i += 1) {
+    // A real prefixed ULID: the row is read back through the shared schema, which rejects
+    // anything else — a seed the code could never have written proves nothing.
+    const seeded = `att_01J8XKQ2M4N5P6R7S8T9V0${String(i).padStart(4, '0')}`;
+    await documents.send(
+      new PutCommand({
+        TableName: TEST_TABLE,
+        Item: {
+          pk: `ACT#${activityId}`,
+          sk: `ATT#${seeded}`,
+          entity: 'Attachment',
+          attachmentId: seeded,
+          activityId,
+          key: `u/${USER}/seed_${i}.jpg`,
+          contentType: 'image/jpeg',
+          byteSize: 4,
+          createdAt: '2026-08-26T09:00:00.000Z',
+          schemaVersion: 1,
+        },
+      }),
+    );
+  }
+}
+
 async function metaRow(activityId: string): Promise<Record<string, unknown>> {
   const { GetCommand } = await import('@aws-sdk/lib-dynamodb');
   const result = await documents.send(
@@ -250,6 +276,25 @@ describe('confirming an upload onto a plan', () => {
     expect(await attachmentRows(activityId)).toHaveLength(1);
   });
 
+  it('converges two concurrent confirms of the same upload', async () => {
+    const grant = await uploadedAttachment();
+
+    const [first, second] = await Promise.all([
+      post(`/v1/activities/${activityId}/attachments`, {
+        attachmentId: grant.attachmentId,
+      }),
+      post(`/v1/activities/${activityId}/attachments`, {
+        attachmentId: grant.attachmentId,
+      }),
+    ]);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(second.body.data).toEqual(first.body.data);
+    expect(await attachmentRows(activityId)).toHaveLength(1);
+    expect(await pendingRows()).toEqual([]);
+  });
+
   it('embeds the attachment in the plan detail read', async () => {
     const grant = await uploadedAttachment();
     await post(`/v1/activities/${activityId}/attachments`, {
@@ -320,29 +365,7 @@ describe('confirming an upload onto a plan', () => {
     it('400s the 21st', async () => {
       // Seed the cap directly: twenty presign-upload-confirm cycles would be twenty round
       // trips to prove a number the service reads in one.
-      const { PutCommand } = await import('@aws-sdk/lib-dynamodb');
-      for (let i = 0; i < MAX_ATTACHMENTS_PER_ACTIVITY; i += 1) {
-        // A real prefixed ULID: the row is read back through the shared schema, which
-        // rejects anything else — a seed the code could never have written proves nothing.
-        const seeded = `att_01J8XKQ2M4N5P6R7S8T9V0${String(i).padStart(4, '0')}`;
-        await documents.send(
-          new PutCommand({
-            TableName: TEST_TABLE,
-            Item: {
-              pk: `ACT#${activityId}`,
-              sk: `ATT#${seeded}`,
-              entity: 'Attachment',
-              attachmentId: seeded,
-              activityId,
-              key: `u/${USER}/seed_${i}.jpg`,
-              contentType: 'image/jpeg',
-              byteSize: 4,
-              createdAt: '2026-08-26T09:00:00.000Z',
-              schemaVersion: 1,
-            },
-          }),
-        );
-      }
+      await seedAttachmentRows(activityId, MAX_ATTACHMENTS_PER_ACTIVITY);
       const grant = await uploadedAttachment();
 
       const confirmed = await post(`/v1/activities/${activityId}/attachments`, {
@@ -356,6 +379,26 @@ describe('confirming an upload onto a plan', () => {
       expect(await attachmentRows(activityId)).toHaveLength(MAX_ATTACHMENTS_PER_ACTIVITY);
       // The permanent copy never happened.
       expect(await headObject(grant.key.slice('tmp/'.length))).toBeUndefined();
+    });
+
+    it('atomically admits only one of two concurrent twentieth attachments', async () => {
+      await seedAttachmentRows(activityId, MAX_ATTACHMENTS_PER_ACTIVITY - 1);
+      const [firstGrant, secondGrant] = await Promise.all([
+        uploadedAttachment(),
+        uploadedAttachment(),
+      ]);
+
+      const results = await Promise.all([
+        post(`/v1/activities/${activityId}/attachments`, {
+          attachmentId: firstGrant.attachmentId,
+        }),
+        post(`/v1/activities/${activityId}/attachments`, {
+          attachmentId: secondGrant.attachmentId,
+        }),
+      ]);
+
+      expect(results.map(({ status }) => status).sort()).toEqual([201, 400]);
+      expect(await attachmentRows(activityId)).toHaveLength(MAX_ATTACHMENTS_PER_ACTIVITY);
     });
   });
 

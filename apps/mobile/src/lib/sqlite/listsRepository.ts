@@ -1,6 +1,6 @@
 import { listView } from '@od/shared/schemas';
 import type { List } from '@od/shared/types';
-import type { SqliteReader, SqliteRow } from '@/lib/sqlite/database';
+import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
 import type {
   RepositoryInvalidationMetadata,
@@ -11,13 +11,9 @@ import type { TransactionContext } from '@/lib/sqlite/transaction';
 /**
  * The SQLite-owned Lists index (P3-25, ADR-057).
  *
- * ## Read-side only, deliberately
- *
- * This repository materializes what `GET /v1/lists` returns and serves it through
- * subscriptions. It has **no create path and no outbox involvement** — P3-26 owns creation and
- * joins the transactional outbox there. `replaceCanonical` is the only writer, and it is the
- * sync engine's. Saying so here rather than only in the pull request is what stops the next
- * task adding a local insert beside it and quietly making this a second write authority.
+ * The sync engine installs canonical pages, while user-visible archive/restore/delete actions
+ * project through this repository in the same SQLite transaction as their outbox intent.
+ * Canonical pulls preserve those protected rows until acknowledgement or rejection settles.
  *
  * ## TanStack is not the native domain authority
  *
@@ -87,6 +83,53 @@ async function readListRows(reader: SqliteReader): Promise<readonly List[]> {
   return rows.map(fromRow);
 }
 
+async function writeListRow(
+  database: SqliteExecutor,
+  list: List,
+  position: number,
+): Promise<void> {
+  await database.run(
+    `INSERT INTO list_rows (
+      list_id, position, owner_id, behaviour, template_key, title, icon,
+      empty_state_copy, checkable, supports_location, slot, source_activity_id,
+      item_count, unchecked_count, member_count, rank_version, archived,
+      updated_at, last_item_activity_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(list_id) DO UPDATE SET
+      position=excluded.position, owner_id=excluded.owner_id,
+      behaviour=excluded.behaviour, template_key=excluded.template_key,
+      title=excluded.title, icon=excluded.icon,
+      empty_state_copy=excluded.empty_state_copy,
+      checkable=excluded.checkable, supports_location=excluded.supports_location,
+      slot=excluded.slot, source_activity_id=excluded.source_activity_id,
+      item_count=excluded.item_count, unchecked_count=excluded.unchecked_count,
+      member_count=excluded.member_count, rank_version=excluded.rank_version,
+      archived=excluded.archived, updated_at=excluded.updated_at,
+      last_item_activity_at=excluded.last_item_activity_at;`,
+    [
+      list.listId,
+      position,
+      list.ownerId,
+      list.behaviour,
+      list.templateKey,
+      list.title,
+      list.icon,
+      list.emptyStateCopy,
+      list.capabilities.checkable ? 1 : 0,
+      list.capabilities.supportsLocation ? 1 : 0,
+      list.slot ?? null,
+      list.sourceActivityId ?? null,
+      list.itemCount,
+      list.uncheckedCount,
+      list.memberCount,
+      list.rankVersion,
+      list.archived ? 1 : 0,
+      list.updatedAt,
+      list.lastItemActivityAt,
+    ],
+  );
+}
+
 export interface ListsCommittedSnapshot {
   readonly lists: readonly List[];
   readonly commitRevision: number;
@@ -103,6 +146,14 @@ export class ListsRepository {
 
   subscribe(listener: (metadata: RepositoryInvalidationMetadata) => void): () => void {
     return this.subscriptions.subscribe(this.scope, listener);
+  }
+
+  /** Exact committed row for a transaction that needs the current server precondition. */
+  async getLocal(reader: SqliteReader, listId: string): Promise<List | undefined> {
+    const row = await reader.first('SELECT * FROM list_rows WHERE list_id = ?;', [
+      listId,
+    ]);
+    return row === undefined ? undefined : fromRow(row);
   }
 
   async read(): Promise<readonly List[]> {
@@ -134,38 +185,21 @@ export class ListsRepository {
   async replaceCanonical(
     transaction: TransactionContext,
     lists: readonly List[],
+    protectedListIds: ReadonlySet<string> = new Set(),
   ): Promise<void> {
-    await transaction.database.run('DELETE FROM list_rows;');
-    for (const [position, list] of lists.entries()) {
+    if (protectedListIds.size === 0) {
+      await transaction.database.run('DELETE FROM list_rows;');
+    } else {
+      const protectedIds = [...protectedListIds];
       await transaction.database.run(
-        `INSERT INTO list_rows (
-          list_id, position, owner_id, behaviour, template_key, title, icon,
-          empty_state_copy, checkable, supports_location, slot, source_activity_id,
-          item_count, unchecked_count, member_count, rank_version, archived,
-          updated_at, last_item_activity_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        [
-          list.listId,
-          position,
-          list.ownerId,
-          list.behaviour,
-          list.templateKey,
-          list.title,
-          list.icon,
-          list.emptyStateCopy,
-          list.capabilities.checkable ? 1 : 0,
-          list.capabilities.supportsLocation ? 1 : 0,
-          list.slot ?? null,
-          list.sourceActivityId ?? null,
-          list.itemCount,
-          list.uncheckedCount,
-          list.memberCount,
-          list.rankVersion,
-          list.archived ? 1 : 0,
-          list.updatedAt,
-          list.lastItemActivityAt,
-        ],
+        `DELETE FROM list_rows WHERE list_id NOT IN (${protectedIds.map(() => '?').join(', ')});`,
+        protectedIds,
       );
+    }
+    for (const [position, list] of lists.entries()) {
+      if (!protectedListIds.has(list.listId)) {
+        await writeListRow(transaction.database, list, position);
+      }
     }
     transaction.changed(this.scope);
   }
@@ -202,6 +236,29 @@ export class ListsRepository {
         list.lastItemActivityAt,
         list.listId,
       ],
+    );
+    transaction.changed(this.scope);
+  }
+
+  /** Installs one authoritative row at its server-page ordinal after a rejected intent. */
+  async upsertCanonical(
+    transaction: TransactionContext,
+    list: List,
+    position: number,
+  ): Promise<void> {
+    await writeListRow(transaction.database, list, position);
+    transaction.changed(this.scope);
+  }
+
+  /** Optimistic archive/restore projection committed with its outbox intent. */
+  async setArchivedLocal(
+    transaction: TransactionContext,
+    listId: string,
+    archived: boolean,
+  ): Promise<void> {
+    await transaction.database.run(
+      'UPDATE list_rows SET archived = ? WHERE list_id = ?;',
+      [archived ? 1 : 0, listId],
     );
     transaction.changed(this.scope);
   }

@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OutboxIntent } from '@/lib/sqlite/outbox';
-import { ActivityPushAdapter, type ActivityPushTransport } from './pushAdapter';
+import {
+  ActivityPushAdapter,
+  type ActivityPushTransport,
+  type ListPushTransport,
+} from './pushAdapter';
 
 const ACTIVITY = 'act_01J0000000000000000000000A';
 const REMINDER = 'rem_01J0000000000000000000000A';
+const LIST = 'lst_01J0000000000000000000000A';
 
 function intent(name: string, variables: unknown): OutboxIntent {
   return {
@@ -43,6 +48,27 @@ function transport(called: (name: string, values: readonly unknown[]) => void) {
 }
 
 describe('ActivityPushAdapter', () => {
+  it.each([
+    ['patch', { listId: LIST, input: { archived: true }, ifMatch: 'v1' }, 'patch'],
+    ['delete', { listId: LIST, intentId: 'delete-list' }, 'remove'],
+  ] as const)('dispatches durable List %s intents', async (name, variables, method) => {
+    const listTransport: ListPushTransport = {
+      patch: vi.fn(async () => ({})),
+      remove: vi.fn(async () => ({})),
+    };
+    const adapter = new ActivityPushAdapter(
+      transport(() => undefined),
+      listTransport,
+    );
+    await adapter.execute({
+      ...intent(name, variables),
+      mutationKey: ['list', name],
+      entityId: LIST,
+      orderingKey: `list:${LIST}`,
+    });
+    expect(listTransport[method]).toHaveBeenCalled();
+  });
+
   it.each([
     {
       mutation: 'create',

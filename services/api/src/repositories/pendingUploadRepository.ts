@@ -4,7 +4,11 @@ import { z } from 'zod';
 import { IdempotencyRaceError, type IdempotencyReceipt } from '../lib/idempotency.js';
 import { deleteItem, getItem, query, updateItem } from './base.js';
 import { receiptItem } from './idempotencyRepository.js';
-import { pendingUpload as pendingUploadKey, pendingUploadPrefix } from './keys.js';
+import {
+  pendingUpload as pendingUploadKey,
+  pendingUploadPrefix,
+  pendingUploadQuotaSlot,
+} from './keys.js';
 import type { StoredItem } from './migrate.js';
 import { TransactionBuilder, transactWrite } from './tx.js';
 
@@ -75,6 +79,8 @@ export interface PendingUpload {
   readonly activityId?: string;
   readonly createdAt: string;
   readonly cleanupAfter: string;
+  /** Internal fixed slot used to enforce the unresolved-upload cap atomically. */
+  readonly quotaSlot?: number;
 }
 
 /**
@@ -96,6 +102,12 @@ const storedPendingUpload = z.object({
   activityId: z.string().min(1).optional(),
   createdAt: z.string().min(1),
   cleanupAfter: z.string().min(1),
+  quotaSlot: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_UNRESOLVED_UPLOADS - 1)
+    .optional(),
 });
 
 /**
@@ -119,7 +131,16 @@ function toPendingUpload(row: StoredItem): PendingUpload {
     ...(parsed.activityId === undefined ? {} : { activityId: parsed.activityId }),
     createdAt: parsed.createdAt,
     cleanupAfter: parsed.cleanupAfter,
+    ...(parsed.quotaSlot === undefined ? {} : { quotaSlot: parsed.quotaSlot }),
   };
+}
+
+/** A concurrent request claimed the selected quota slot before this transaction committed. */
+export class PendingUploadSlotUnavailableError extends Error {
+  constructor() {
+    super('The selected pending-upload quota slot is no longer available.');
+    this.name = 'PendingUploadSlotUnavailableError';
+  }
 }
 
 /**
@@ -149,6 +170,7 @@ export async function putPendingUpload(
     ...(record.activityId === undefined ? {} : { activityId: record.activityId }),
     createdAt: record.createdAt,
     cleanupAfter: record.cleanupAfter,
+    ...(record.quotaSlot === undefined ? {} : { quotaSlot: record.quotaSlot }),
     schemaVersion: SCHEMA_VERSION,
   };
 
@@ -156,6 +178,22 @@ export async function putPendingUpload(
     'putPendingUpload',
     idempotencyReceipt === undefined ? 0 : 1,
   ).add({ Put: { Item: item, ConditionExpression: 'attribute_not_exists(pk)' } });
+  const slotIndex = record.quotaSlot === undefined ? undefined : builder.length;
+  if (record.quotaSlot !== undefined) {
+    builder.add({
+      Put: {
+        Item: {
+          ...pendingUploadQuotaSlot(record.userId, record.quotaSlot),
+          entity: 'PendingUploadQuotaSlot',
+          attachmentId: record.attachmentId,
+          userId: record.userId,
+          quotaSlot: record.quotaSlot,
+          schemaVersion: SCHEMA_VERSION,
+        },
+        ConditionExpression: 'attribute_not_exists(pk)',
+      },
+    });
+  }
   const receiptIndex = builder.length;
   if (idempotencyReceipt !== undefined) {
     builder.addReserved(receiptItem(idempotencyReceipt));
@@ -163,10 +201,12 @@ export async function putPendingUpload(
 
   await transactWrite(builder.build(), {
     operation: 'putPendingUpload',
-    onConditionFailed: (index) =>
-      idempotencyReceipt !== undefined && index === receiptIndex
+    onConditionFailed: (index) => {
+      if (index === slotIndex) return new PendingUploadSlotUnavailableError();
+      return idempotencyReceipt !== undefined && index === receiptIndex
         ? new IdempotencyRaceError()
-        : undefined,
+        : undefined;
+    },
   });
 }
 
@@ -260,6 +300,20 @@ export async function markPendingConfirming(
 export async function deletePendingUpload(
   userId: string,
   attachmentId: string,
+  quotaSlot?: number,
 ): Promise<void> {
-  await deleteItem(pendingUploadKey(userId, attachmentId));
+  if (quotaSlot === undefined) {
+    await deleteItem(pendingUploadKey(userId, attachmentId));
+    return;
+  }
+
+  await transactWrite(
+    new TransactionBuilder('deletePendingUpload')
+      .add(
+        { Delete: { Key: pendingUploadKey(userId, attachmentId) } },
+        { Delete: { Key: pendingUploadQuotaSlot(userId, quotaSlot) } },
+      )
+      .build(),
+    { operation: 'deletePendingUpload' },
+  );
 }

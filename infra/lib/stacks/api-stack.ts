@@ -115,7 +115,7 @@ export class ApiStack extends cdk.Stack {
 
     this.fn.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['s3:PutObject', 's3:GetObject'],
+        actions: ['s3:PutObject', 's3:GetObject', 's3:DeleteObject'],
         resources: [
           data.mediaBucket.arnForObjects('u/*'),
           data.mediaBucket.arnForObjects('tmp/*'),

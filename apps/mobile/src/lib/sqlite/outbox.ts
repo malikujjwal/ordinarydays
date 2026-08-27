@@ -430,6 +430,22 @@ export class OutboxRepository {
     ).map(intentFromRow);
   }
 
+  /** List rows whose optimistic projection must survive a canonical index pull. */
+  async protectedListIds(
+    database: SqliteReader = this.reader,
+  ): Promise<ReadonlySet<string>> {
+    const rows = await database.all(
+      `SELECT DISTINCT entity_id FROM outbox_intents
+       WHERE json_extract(mutation_key_json, '$[0]') = 'list'
+         AND status IN ('queued', 'in_flight', 'needs_attention');`,
+    );
+    return new Set(
+      rows
+        .map((row) => stringValue(row, 'entity_id'))
+        .filter((value): value is string => value !== undefined),
+    );
+  }
+
   async laterInOrdering(
     database: SqliteReader,
     orderingKey: string,
@@ -596,6 +612,43 @@ export class OutboxRepository {
       ...(successor.compensationForIntentId === undefined
         ? {}
         : { compensationForIntentId: successor.compensationForIntentId }),
+    });
+    const result = await database.run(
+      `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?
+       WHERE intent_id = ? AND status = 'queued';`,
+      [JSON.stringify(rebasedVariables), semanticKey, successor.intentId],
+    );
+    return result.changes === 1;
+  }
+
+  /** Carries a server-authored List version to the next queued settings patch. */
+  async rebaseNextQueuedListPatch(
+    database: SqliteExecutor,
+    orderingKey: string,
+    seq: number,
+    serverVersion: string,
+  ): Promise<boolean> {
+    const row = await database.first(
+      `SELECT * FROM outbox_intents
+       WHERE ordering_key = ? AND seq > ? AND status = 'queued'
+         AND json_extract(mutation_key_json, '$[0]') = 'list'
+         AND json_extract(mutation_key_json, '$[1]') = 'patch'
+       ORDER BY seq LIMIT 1;`,
+      [orderingKey, seq],
+    );
+    if (row === undefined) return false;
+    const successor = intentFromRow(row);
+    const variables = record(successor.variables);
+    if (variables === undefined || typeof variables.ifMatch !== 'string') {
+      throw new OutboxInvariantError(successor.intentId);
+    }
+    const rebasedVariables = { ...variables, ifMatch: serverVersion };
+    const semanticKey = outboxSemanticKey({
+      intentId: successor.intentId,
+      mutationKey: successor.mutationKey,
+      variables: rebasedVariables,
+      entityId: successor.entityId,
+      orderingKey: successor.orderingKey,
     });
     const result = await database.run(
       `UPDATE outbox_intents SET variables_json = ?, semantic_key = ?

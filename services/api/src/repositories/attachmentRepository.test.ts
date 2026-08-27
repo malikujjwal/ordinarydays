@@ -8,6 +8,7 @@ import { MAX_ATTACHMENTS_PER_ACTIVITY } from '@od/shared/constants';
 import type { Attachment } from '@od/shared/types';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import {
   getAttachment,
   linkAttachment,
@@ -34,6 +35,12 @@ const record = (overrides: Partial<Attachment> = {}): Attachment => ({
   createdAt: NOW,
   schemaVersion: 1,
   ...overrides,
+});
+
+const linkOptions = (idempotencyReceipt?: IdempotencyReceipt) => ({
+  pendingUpload: { attachmentId: ATT, quotaSlot: 4 },
+  quotaSlot: 3,
+  ...(idempotencyReceipt === undefined ? {} : { idempotencyReceipt }),
 });
 
 /** A stored row, with the storage attributes a real one carries. */
@@ -113,9 +120,9 @@ describe('linkAttachment', () => {
    * row strands the permanent object with nothing pointing at it.
    */
   it('writes the row and consumes the pending record in one transaction', async () => {
-    await linkAttachment(USER, record());
+    await linkAttachment(USER, record(), linkOptions());
 
-    expect(items()).toHaveLength(2);
+    expect(items()).toHaveLength(5);
     expect(items()[0]?.Put?.Item).toEqual({
       pk: `ACT#${ACT}`,
       sk: `ATT#${ATT}`,
@@ -126,41 +133,56 @@ describe('linkAttachment', () => {
       contentType: 'image/jpeg',
       byteSize: 2048,
       createdAt: NOW,
+      quotaSlot: 3,
       schemaVersion: 1,
     });
-    expect(items()[1]?.Delete?.Key).toEqual({
+    expect(items()[1]?.Put?.Item).toMatchObject({
+      pk: `ACT#${ACT}`,
+      sk: 'ATT_SLOT#03',
+      attachmentId: ATT,
+    });
+    expect(items()[2]?.ConditionCheck?.Key).toEqual({ pk: `ACT#${ACT}`, sk: 'META' });
+    expect(items()[3]?.Delete?.Key).toEqual({
       pk: `USER#${USER}`,
       sk: `UPLOAD#${ATT}`,
+    });
+    expect(items()[4]?.Delete?.Key).toEqual({
+      pk: `USER#${USER}`,
+      sk: 'UPLOAD_SLOT#04',
     });
   });
 
   /** A retry racing itself cannot write a second row for one id. */
   it('refuses to overwrite an existing row', async () => {
-    await linkAttachment(USER, record());
+    await linkAttachment(USER, record(), linkOptions());
     expect(items()[0]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
   });
 
   it('adds the receipt to the same transaction when there is one', async () => {
-    await linkAttachment(USER, record(), {
-      userId: USER,
-      key: 'idem-key',
-      route: 'POST /v1/activities/:id/attachments',
-      status: 201,
-      body: '{}',
-      ttl: 1,
-      createdAt: NOW,
-    });
+    await linkAttachment(
+      USER,
+      record(),
+      linkOptions({
+        userId: USER,
+        key: 'idem-key',
+        route: 'POST /v1/activities/:id/attachments',
+        status: 201,
+        body: '{}',
+        ttl: 1,
+        createdAt: NOW,
+      }),
+    );
 
-    expect(items()).toHaveLength(3);
-    expect(String(items()[2]?.Put?.Item?.pk)).toBe(`IDEM#${USER}#idem-key`);
+    expect(items()).toHaveLength(6);
+    expect(String(items()[5]?.Put?.Item?.pk)).toBe(`IDEM#${USER}#idem-key`);
   });
 });
 
 describe('unlinkAttachment', () => {
   it('deletes only the row when this attachment is not the cover', async () => {
-    await unlinkAttachment(ACT, ATT);
+    await unlinkAttachment(USER, { ...record(), quotaSlot: 3 }, false, NOW);
 
-    expect(items()).toHaveLength(1);
+    expect(items()).toHaveLength(4);
     expect(items()[0]?.Delete?.Key).toEqual({ pk: `ACT#${ACT}`, sk: `ATT#${ATT}` });
     expect(items()[0]?.Delete?.ConditionExpression).toBe('attribute_exists(pk)');
   });
@@ -170,18 +192,25 @@ describe('unlinkAttachment', () => {
    * points at an attachment that is gone.
    */
   it('clears the cover in the same transaction, conditioned on it still being this one', async () => {
-    await unlinkAttachment(ACT, ATT, { now: NOW });
+    await unlinkAttachment(USER, { ...record(), quotaSlot: 3 }, true, NOW);
 
-    expect(items()).toHaveLength(2);
-    const update = items()[1]?.Update;
+    expect(items()).toHaveLength(4);
+    const update = items()[2]?.Update;
     expect(update?.Key).toEqual({ pk: `ACT#${ACT}`, sk: 'META' });
     expect(update?.UpdateExpression).toBe(
       'REMOVE #primaryAttachmentId SET #updatedAt = :now',
     );
-    expect(update?.ConditionExpression).toBe('#primaryAttachmentId = :attachmentId');
-    expect(update?.ExpressionAttributeValues).toEqual({
+    expect(update?.ConditionExpression).toContain('#primaryAttachmentId = :attachmentId');
+    expect(update?.ExpressionAttributeValues).toMatchObject({
+      ':userId': USER,
       ':attachmentId': ATT,
       ':now': NOW,
+    });
+    expect(items()[3]?.Put?.Item).toMatchObject({
+      pk: `USER#${USER}`,
+      attachmentId: ATT,
+      key: record().key,
+      coverCleared: true,
     });
   });
 
@@ -192,7 +221,7 @@ describe('unlinkAttachment', () => {
    * attachment at all (P3-22 edge cases).
    */
   it('moves neither lastActivityAt nor icsSequence', async () => {
-    await unlinkAttachment(ACT, ATT, { now: NOW });
+    await unlinkAttachment(USER, { ...record(), quotaSlot: 3 }, true, NOW);
 
     const serialised = JSON.stringify(items());
     expect(serialised).not.toContain('lastActivityAt');

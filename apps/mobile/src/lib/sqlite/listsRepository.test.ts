@@ -132,6 +132,28 @@ describe('the native Lists SQLite index', () => {
     expect(await repository.read()).toHaveLength(1);
   });
 
+  it('preserves optimistic rows protected by unresolved List intents during a pull', async () => {
+    if (database === undefined) throw new Error('test database not open');
+    const { repository, transactions } = harness(database);
+    const protectedList = withId('A11', { archived: true });
+    await transactions.run((transaction) =>
+      repository.replaceCanonical(transaction, [protectedList, withId('B11')]),
+    );
+
+    await transactions.run((transaction) =>
+      repository.replaceCanonical(
+        transaction,
+        [withId('A11', { archived: false }), withId('C11')],
+        new Set([protectedList.listId]),
+      ),
+    );
+
+    const rows = await repository.read();
+    expect(rows.find((row) => row.listId === protectedList.listId)?.archived).toBe(true);
+    expect(rows.some((row) => row.listId === withId('B11').listId)).toBe(false);
+    expect(rows.some((row) => row.listId === withId('C11').listId)).toBe(true);
+  });
+
   it('notifies the lists scope so a subscription re-reads', async () => {
     if (database === undefined) throw new Error('test database not open');
     const { repository, transactions } = harness(database);

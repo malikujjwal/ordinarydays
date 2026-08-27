@@ -15,6 +15,7 @@ import {
   listPendingUploads,
   newAttachmentId,
   type PendingUpload,
+  PendingUploadSlotUnavailableError,
   putPendingUpload,
 } from './pendingUploadRepository.js';
 
@@ -129,6 +130,32 @@ describe('putPendingUpload', () => {
     expect(
       ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems,
     ).toHaveLength(1);
+  });
+
+  it('claims a fixed quota slot atomically with a new pending row', async () => {
+    await putPendingUpload(record({ quotaSlot: 3 }));
+    const writes =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems ?? [];
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.Put?.Item).toMatchObject({
+      pk: `USER#${USER}`,
+      sk: 'UPLOAD_SLOT#03',
+      attachmentId: ID,
+    });
+    expect(writes[1]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
+  });
+
+  it('maps a lost quota-slot race so the service can select another slot', async () => {
+    ddbMock.on(TransactWriteCommand).rejects(
+      new TransactionCanceledException({
+        $metadata: {},
+        message: 'cancelled',
+        CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+    await expect(putPendingUpload(record({ quotaSlot: 3 }))).rejects.toBeInstanceOf(
+      PendingUploadSlotUnavailableError,
+    );
   });
 
   /**
@@ -252,5 +279,15 @@ describe('deletePendingUpload', () => {
   it('does not fail when the row is already gone', async () => {
     await deletePendingUpload(USER, ID);
     expect(sentDelete()?.ConditionExpression).toBeUndefined();
+  });
+
+  it('releases a fixed quota slot in the same transaction', async () => {
+    await deletePendingUpload(USER, ID, 3);
+    const writes =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems ?? [];
+    expect(writes.map((item) => item.Delete?.Key)).toEqual([
+      { pk: `USER#${USER}`, sk: `UPLOAD#${ID}` },
+      { pk: `USER#${USER}`, sk: 'UPLOAD_SLOT#03' },
+    ]);
   });
 });

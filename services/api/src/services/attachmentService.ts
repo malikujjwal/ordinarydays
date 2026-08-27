@@ -22,9 +22,17 @@ import {
 } from '../lib/s3.js';
 import { getActivityMeta } from '../repositories/activityRepository.js';
 import {
+  ActivityUnavailableForAttachmentError,
+  AttachmentAlreadyLinkedError,
+  AttachmentCoverChangedError,
+  AttachmentSlotUnavailableError,
+  completeAttachmentDeletion,
   getAttachment,
+  getAttachmentDeletion,
+  getStoredAttachment,
   linkAttachment,
-  listAttachments,
+  listAttachmentDeletions,
+  listStoredAttachments,
   unlinkAttachment,
 } from '../repositories/attachmentRepository.js';
 import {
@@ -35,6 +43,7 @@ import {
   markPendingConfirming,
   newAttachmentId,
   type PendingUpload,
+  PendingUploadSlotUnavailableError,
   putPendingUpload,
 } from '../repositories/pendingUploadRepository.js';
 import { assertActivityAccess } from './authz.js';
@@ -74,6 +83,7 @@ const DRAINED = 'pending_upload_drained';
 const REPAIRED = 'pending_upload_repaired';
 const ABANDONED = 'pending_upload_abandoned';
 const TMP_DELETE_FAILED = 'attachment_tmp_delete_failed';
+const MEDIA_DELETE_REPAIRED = 'attachment_delete_repaired';
 
 /**
  * The one answer for every way an id fails to become an attachment.
@@ -98,6 +108,88 @@ function unconfirmable(path: string): AppError {
   return new AppError('validation_failed', UNCONFIRMABLE, [
     { path, message: UNCONFIRMABLE },
   ]);
+}
+
+/** Shared create/schedule mapping for a pending-row condition lost at commit time. */
+export function unconfirmableAttachments(): AppError {
+  return unconfirmable('attachmentIds');
+}
+
+function availableQuotaSlot(
+  rows: readonly { readonly quotaSlot?: number }[],
+  cap: number,
+): number | undefined {
+  const occupied = new Set(
+    rows
+      .map((row) => row.quotaSlot)
+      .filter((slot): slot is number => slot !== undefined && slot >= 0 && slot < cap),
+  );
+  let legacyRows = rows.filter((row) => row.quotaSlot === undefined).length;
+  for (let slot = 0; slot < cap; slot += 1) {
+    if (occupied.has(slot)) continue;
+    if (legacyRows > 0) {
+      legacyRows -= 1;
+      continue;
+    }
+    return slot;
+  }
+  return undefined;
+}
+
+async function linkPendingAttachment(
+  userId: string,
+  record: PendingUpload,
+  linkedRow: Attachment,
+  idempotencyReceipt?: IdempotencyReceipt,
+): Promise<Attachment> {
+  for (let attempt = 0; attempt <= MAX_ATTACHMENTS_PER_ACTIVITY; attempt += 1) {
+    const existing = await getAttachment(linkedRow.activityId, linkedRow.attachmentId);
+    if (existing !== undefined) return existing;
+
+    const attachments = await listStoredAttachments(linkedRow.activityId);
+    const quotaSlot = availableQuotaSlot(attachments, MAX_ATTACHMENTS_PER_ACTIVITY);
+    if (quotaSlot === undefined) {
+      throw new AppError('validation_failed', TOO_MANY_ATTACHMENTS, [
+        { path: 'attachmentId', message: TOO_MANY_ATTACHMENTS },
+      ]);
+    }
+
+    try {
+      await linkAttachment(userId, linkedRow, {
+        pendingUpload: record,
+        quotaSlot,
+        ...(idempotencyReceipt === undefined ? {} : { idempotencyReceipt }),
+      });
+      return linkedRow;
+    } catch (error) {
+      if (error instanceof AttachmentSlotUnavailableError) continue;
+      if (error instanceof AttachmentAlreadyLinkedError) {
+        const winner = await getAttachment(linkedRow.activityId, linkedRow.attachmentId);
+        if (winner !== undefined) return winner;
+      }
+      throw error;
+    }
+  }
+
+  throw new AppError(
+    'conflict',
+    'This changed while the image was being attached. Try again.',
+  );
+}
+
+/** Finishes durable confirmed-media deletes. S3 deletion is idempotent. */
+export async function drainAttachmentDeletions(
+  userId: string,
+  log?: Logger,
+): Promise<void> {
+  for (const work of await listAttachmentDeletions(userId)) {
+    await deleteObject(work.key);
+    await completeAttachmentDeletion(work);
+    log?.info(
+      { event: MEDIA_DELETE_REPAIRED, userId, attachmentId: work.attachmentId },
+      'attachment deletion completed after a crash',
+    );
+  }
 }
 
 export interface RequestUploadUrlOptions {
@@ -156,7 +248,7 @@ async function resolveConfirming(
   const existing = await getAttachment(activityId, record.attachmentId);
   if (existing !== undefined) {
     await deleteObject(record.tmpKey);
-    await deletePendingUpload(userId, record.attachmentId);
+    await deletePendingUpload(userId, record.attachmentId, record.quotaSlot);
     log?.info(
       { event: REPAIRED, userId, attachmentId: record.attachmentId },
       'confirmation completed after a crash',
@@ -165,19 +257,47 @@ async function resolveConfirming(
   }
 
   const activity = await getActivityMeta(activityId, { consistentRead: true });
-  const copied = await headObject(record.finalKey);
+  let copied = await headObject(record.finalKey);
 
-  if (activity !== undefined && activity.ownerId === userId && copied !== undefined) {
-    await linkAttachment(
-      userId,
-      toAttachmentRow(record, activity.activityId, new Date(nowMs).toISOString()),
-    );
-    await deleteObject(record.tmpKey);
-    log?.info(
-      { event: REPAIRED, userId, attachmentId: record.attachmentId },
-      'confirmation completed after a crash',
-    );
-    return true;
+  if (activity !== undefined && activity.ownerId === userId) {
+    if (copied === undefined) {
+      const uploaded = await headObject(record.tmpKey);
+      if (
+        uploaded !== undefined &&
+        uploaded.contentType === record.contentType &&
+        uploaded.byteSize === record.byteSize
+      ) {
+        await copyObject(record.tmpKey, record.finalKey);
+        copied = await headObject(record.finalKey);
+      }
+    }
+
+    if (
+      copied !== undefined &&
+      copied.contentType === record.contentType &&
+      copied.byteSize === record.byteSize
+    ) {
+      try {
+        await linkPendingAttachment(
+          userId,
+          record,
+          toAttachmentRow(record, activity.activityId, new Date(nowMs).toISOString()),
+        );
+        await deleteObject(record.tmpKey);
+        log?.info(
+          { event: REPAIRED, userId, attachmentId: record.attachmentId },
+          'confirmation completed after a crash',
+        );
+        return true;
+      } catch (error) {
+        if (
+          !(error instanceof ActivityUnavailableForAttachmentError) &&
+          !(error instanceof AppError && error.code === 'validation_failed')
+        ) {
+          throw error;
+        }
+      }
+    }
   }
 
   /**
@@ -187,7 +307,7 @@ async function resolveConfirming(
    */
   await deleteObject(record.finalKey);
   await deleteObject(record.tmpKey);
-  await deletePendingUpload(userId, record.attachmentId);
+  await deletePendingUpload(userId, record.attachmentId, record.quotaSlot);
   log?.info(
     { event: ABANDONED, userId, attachmentId: record.attachmentId },
     'confirmation had no home and both keys were removed',
@@ -234,9 +354,10 @@ function toAttachmentRow(
  * is finished or cleaned by {@link resolveConfirming}. That path is P3-22's, and it is what
  * turns the crash window between the object store and the database from a leak into a state.
  *
- * An **unexpired** record of either kind is work that may still be in flight — a URL the
- * client is uploading to, or a confirmation running in another request — so it is left alone
- * and counted live. Repairing a confirmation that is still running would race it.
+ * An **unexpired `awaiting_upload`** record is work that may still be in flight, so it is left
+ * alone and counted live. A `confirming` record is always safe to drive forward immediately:
+ * the copy is idempotent and the transactional link converges concurrent attempts on the same
+ * attachment to the already-linked winner.
  *
  * ## Why a request pays for this
  *
@@ -257,18 +378,18 @@ export async function drainPendingUploads(
   let live = 0;
 
   for (const record of records) {
-    if (Date.parse(record.cleanupAfter) > nowMs) {
-      live += 1;
-      continue;
-    }
-
     if (record.state === 'confirming') {
       if (!(await resolveConfirming(userId, record, nowMs, log))) live += 1;
       continue;
     }
 
+    if (Date.parse(record.cleanupAfter) > nowMs) {
+      live += 1;
+      continue;
+    }
+
     await deleteObject(record.tmpKey);
-    await deletePendingUpload(userId, record.attachmentId);
+    await deletePendingUpload(userId, record.attachmentId, record.quotaSlot);
     // `attachmentId` is a server-minted opaque id and carries nothing about the person or
     // the picture, so it is safe to log (`security-privacy.md` §3). The key is not logged:
     // it is the secret media is served under (ADR-023).
@@ -308,8 +429,10 @@ export async function requestUploadUrl(
 ): Promise<RequestUploadUrlResult> {
   const nowMs = Date.parse(now);
 
-  const live = await drainPendingUploads(userId, nowMs, options.log);
-  if (live >= MAX_UNRESOLVED_UPLOADS) {
+  await drainAttachmentDeletions(userId, options.log);
+  await drainPendingUploads(userId, nowMs, options.log);
+  let pending = await listPendingUploads(userId);
+  if (pending.length >= MAX_UNRESOLVED_UPLOADS) {
     throw new AppError('validation_failed', TOO_MANY_PENDING, [
       { path: 'attachmentId', message: TOO_MANY_PENDING },
     ]);
@@ -318,7 +441,7 @@ export async function requestUploadUrl(
   const attachmentId = newAttachmentId();
   const ulid = attachmentUlid(attachmentId);
 
-  const record: PendingUpload = {
+  const record: Omit<PendingUpload, 'quotaSlot'> = {
     attachmentId,
     userId,
     tmpKey: tmpObjectKey(userId, ulid, input.contentType),
@@ -341,9 +464,23 @@ export async function requestUploadUrl(
 
   const result: RequestUploadUrlResult = { attachmentId, uploadUrl, key: record.tmpKey };
 
-  await putPendingUpload(record, options.receiptFor?.(result));
+  for (let attempt = 0; attempt <= MAX_UNRESOLVED_UPLOADS; attempt += 1) {
+    const quotaSlot = availableQuotaSlot(pending, MAX_UNRESOLVED_UPLOADS);
+    if (quotaSlot === undefined) {
+      throw new AppError('validation_failed', TOO_MANY_PENDING, [
+        { path: 'attachmentId', message: TOO_MANY_PENDING },
+      ]);
+    }
+    try {
+      await putPendingUpload({ ...record, quotaSlot }, options.receiptFor?.(result));
+      return result;
+    } catch (error) {
+      if (!(error instanceof PendingUploadSlotUnavailableError)) throw error;
+      pending = await listPendingUploads(userId);
+    }
+  }
 
-  return result;
+  throw new AppError('conflict', 'Uploads changed while reserving space. Try again.');
 }
 
 /**
@@ -417,13 +554,9 @@ export async function confirmAttachment(
   const record = await getPendingUpload(userId, attachmentId);
   if (record === undefined) throw unconfirmable('attachmentId');
 
-  /**
-   * The cap is checked against the strongly consistent collection, after the already-linked
-   * short-circuit above — so re-confirming the twentieth attachment answers with it rather
-   * than refusing it as a twenty-first.
-   */
-  const linked = await listAttachments(activityId);
-  if (linked.length >= MAX_ATTACHMENTS_PER_ACTIVITY) {
+  // Fast refusal avoids copying bytes when the bounded collection is already full. The
+  // quota-slot Put in linkPendingAttachment remains the atomic authority for races.
+  if ((await listStoredAttachments(activityId)).length >= MAX_ATTACHMENTS_PER_ACTIVITY) {
     throw new AppError('validation_failed', TOO_MANY_ATTACHMENTS, [
       { path: 'attachmentId', message: TOO_MANY_ATTACHMENTS },
     ]);
@@ -459,7 +592,19 @@ export async function confirmAttachment(
   }
 
   const linkedRow = toAttachmentRow(record, activityId, now);
-  await linkAttachment(userId, linkedRow, options.receiptFor?.(linkedRow));
+  const prospectiveReceipt = options.receiptFor?.(linkedRow);
+  const linked = await linkPendingAttachment(
+    userId,
+    record,
+    linkedRow,
+    prospectiveReceipt,
+  );
+
+  // A concurrent confirm can win after this request has precomputed its response receipt.
+  // The losing transaction returns that canonical row; rebuild only the in-memory response
+  // body so both callers see the winner's exact timestamp. Its transaction did not commit,
+  // so this second receipt is deliberately not written.
+  if (linked !== linkedRow) options.receiptFor?.(linked);
 
   /**
    * Last, and its failure is not the caller's problem: the attachment exists and is linked.
@@ -473,7 +618,7 @@ export async function confirmAttachment(
     );
   });
 
-  return linkedRow;
+  return linked;
 }
 
 /**
@@ -497,17 +642,45 @@ export async function deleteAttachment(
   attachmentId: string,
   now: string,
 ): Promise<DeletedAttachment> {
-  const access = await assertActivityAccess(userId, activityId, 'owner');
+  let access = await assertActivityAccess(userId, activityId, 'owner');
+  let stored = await getStoredAttachment(activityId, attachmentId);
 
-  const stored = await getAttachment(activityId, attachmentId);
-  if (stored === undefined) throw new AppError('not_found', ATTACHMENT_NOT_FOUND);
+  if (stored === undefined) {
+    const outstanding = await getAttachmentDeletion(userId, activityId, attachmentId);
+    if (outstanding === undefined) throw new AppError('not_found', ATTACHMENT_NOT_FOUND);
+    await deleteObject(outstanding.key);
+    await completeAttachmentDeletion(outstanding);
+    return { attachmentId, coverCleared: outstanding.coverCleared };
+  }
 
-  const isCover = access.activity.primaryAttachmentId === attachmentId;
-  await unlinkAttachment(activityId, attachmentId, isCover ? { now } : undefined);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const isCover = access.activity.primaryAttachmentId === attachmentId;
+    try {
+      const work = await unlinkAttachment(userId, stored, isCover, now);
+      await deleteObject(work.key);
+      await completeAttachmentDeletion(work);
+      return { attachmentId, coverCleared: work.coverCleared };
+    } catch (error) {
+      if (!(error instanceof AttachmentCoverChangedError)) throw error;
+      access = await assertActivityAccess(userId, activityId, 'owner');
+      const fresh = await getStoredAttachment(activityId, attachmentId);
+      if (fresh === undefined) {
+        const outstanding = await getAttachmentDeletion(userId, activityId, attachmentId);
+        if (outstanding !== undefined) {
+          await deleteObject(outstanding.key);
+          await completeAttachmentDeletion(outstanding);
+          return { attachmentId, coverCleared: outstanding.coverCleared };
+        }
+        throw new AppError('not_found', ATTACHMENT_NOT_FOUND);
+      }
+      stored = fresh;
+    }
+  }
 
-  await deleteObject(stored.key);
-
-  return { attachmentId, coverCleared: isCover };
+  throw new AppError(
+    'conflict',
+    'The cover changed while the image was removed. Try again.',
+  );
 }
 
 /**

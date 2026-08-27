@@ -151,6 +151,12 @@ export const attachmentPrefix = (activityId: string) => ({
   skPrefix: 'ATT#',
 });
 
+/** One of the fixed slots that makes the per-Activity attachment cap atomic. */
+export const attachmentQuotaSlot = (activityId: string, slot: number) => ({
+  pk: activityPk(activityId),
+  sk: `ATT_SLOT#${String(slot).padStart(2, '0')}`,
+});
+
 /** A thin prep-task pointer, so plan detail renders children from the same `Query`. */
 export const childPointer = (activityId: string, childActivityId: string) => ({
   pk: activityPk(activityId),
@@ -358,6 +364,28 @@ export const pendingUpload = (userId: string, attachmentId: string) => ({
 export const pendingUploadPrefix = (userId: string) => ({
   pk: userPk(userId),
   skPrefix: 'UPLOAD#',
+});
+
+/** One of the fixed slots that makes the caller's unresolved-upload cap atomic. */
+export const pendingUploadQuotaSlot = (userId: string, slot: number) => ({
+  pk: userPk(userId),
+  sk: `UPLOAD_SLOT#${String(slot).padStart(2, '0')}`,
+});
+
+/** Durable S3 deletion work created atomically with unlinking an attachment. */
+export const attachmentDeletion = (
+  userId: string,
+  activityId: string,
+  attachmentId: string,
+) => ({
+  pk: userPk(userId),
+  sk: `MEDIA_DELETE#${activityId}#${attachmentId}`,
+});
+
+/** Every outstanding confirmed-media deletion owned by one caller. */
+export const attachmentDeletionPrefix = (userId: string) => ({
+  pk: userPk(userId),
+  skPrefix: 'MEDIA_DELETE#',
 });
 
 /** Phase 9. */

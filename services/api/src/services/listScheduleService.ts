@@ -12,6 +12,7 @@ import {
   activityFromPartition,
   createActivity,
   getActivityPartitionStrong,
+  PendingAttachmentsUnavailableError,
 } from '../repositories/activityRepository.js';
 import { batchGetViewerLinks, getListItem } from '../repositories/listRepository.js';
 import {
@@ -21,7 +22,11 @@ import {
   SHARING_SOON,
   toSchedule,
 } from './activityService.js';
-import { assertAttachmentsConfirmable, confirmAttachments } from './attachmentService.js';
+import {
+  assertAttachmentsConfirmable,
+  confirmAttachments,
+  unconfirmableAttachments,
+} from './attachmentService.js';
 import { assertListAccess } from './authz.js';
 
 /**
@@ -177,6 +182,9 @@ export async function scheduleListItem(
         offsetMinutes: row.offsetMinutes,
       })),
       listItemLink: viewerLink,
+      ...(input.attachmentIds === undefined
+        ? {}
+        : { confirmAttachmentIds: input.attachmentIds }),
       ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(result) }),
     });
   } catch (error) {
@@ -202,6 +210,9 @@ export async function scheduleListItem(
        */
       receiptFor?.(adopted);
       return adopted;
+    }
+    if (error instanceof PendingAttachmentsUnavailableError) {
+      throw unconfirmableAttachments();
     }
     throw error;
   }

@@ -4,6 +4,7 @@ import {
   GetCommand,
   QueryCommand,
   TransactWriteCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { mockClient } from 'aws-sdk-client-mock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -88,6 +89,7 @@ const seed = (
   ddbMock.on(QueryCommand).resolves({ Items: partition as never });
   ddbMock.on(BatchWriteCommand).resolves({});
   ddbMock.on(TransactWriteCommand).resolves({});
+  ddbMock.on(UpdateCommand).resolves({});
 };
 
 beforeEach(async () => {

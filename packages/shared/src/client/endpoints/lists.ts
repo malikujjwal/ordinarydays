@@ -166,6 +166,42 @@ export function patchList(
 }
 
 /**
+ * Replay-safe List settings write for a durable native outbox.
+ * A lost success response is adopted when the current canonical row already contains the
+ * intended patch; a genuinely competing edit keeps its original 409.
+ */
+export async function patchListForReplay(
+  client: HttpClient,
+  listId: string,
+  patch: PatchListInput,
+  ifMatch: string,
+  signal?: AbortSignal,
+): Promise<ListSettingsMutation> {
+  try {
+    return await patchList(client, listId, patch, ifMatch, signal);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 409) throw error;
+    const current = (await getList(client, listId, {}, signal)).list;
+    if (patch.title !== undefined && current.title !== patch.title) throw error;
+    if (patch.archived !== undefined && current.archived !== patch.archived) throw error;
+    if (patch.slot !== undefined && (current.slot ?? null) !== patch.slot) throw error;
+    if (
+      patch.capabilities?.checkable !== undefined &&
+      current.capabilities.checkable !== patch.capabilities.checkable
+    ) {
+      throw error;
+    }
+    if (
+      patch.capabilities?.supportsLocation !== undefined &&
+      current.capabilities.supportsLocation !== patch.capabilities.supportsLocation
+    ) {
+      throw error;
+    }
+    return { list: current };
+  }
+}
+
+/**
  * `POST /v1/lists/:id/behaviour` — the replay-protected behaviour change.
  *
  * Both headers are required and neither is decoration. `If-Match` is the concurrency check
@@ -244,6 +280,20 @@ export function deleteList(
       ...(signal === undefined ? {} : { signal }),
     })
     .then((response) => response.data);
+}
+
+/** A 404 is success only for replay of this client's own durable delete intent. */
+export async function deleteListForReplay(
+  client: HttpClient,
+  listId: string,
+  signal?: AbortSignal,
+): Promise<{ listId: string }> {
+  try {
+    return await deleteList(client, listId, signal);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { listId };
+    throw error;
+  }
 }
 
 /**

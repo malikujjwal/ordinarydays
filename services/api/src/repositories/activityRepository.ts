@@ -36,6 +36,7 @@ import {
   activityMeta,
   activityPartition,
   activityTombstone,
+  attachment as attachmentKey,
   childPointer,
   childPointerPrefix,
   gsi1Anytime,
@@ -46,6 +47,7 @@ import {
   listItemActivityLink,
   occurrence,
   participantPrefix,
+  pendingUpload as pendingUploadKey,
   reminder as reminderKey,
 } from './keys.js';
 import { listItemActivityLinkRow } from './listLinkRow.js';
@@ -342,6 +344,15 @@ export interface CreateOptions {
    * checked, hidden or given an Activity id (`agent-playbook.md` §6.8).
    */
   readonly listItemLink?: ListItemActivityLink;
+  /** Pending uploads durably targeted at this Activity in the create transaction. */
+  readonly confirmAttachmentIds?: readonly string[];
+}
+
+export class PendingAttachmentsUnavailableError extends Error {
+  constructor() {
+    super('One or more pending uploads can no longer be confirmed.');
+    this.name = 'PendingAttachmentsUnavailableError';
+  }
 }
 
 /**
@@ -506,6 +517,25 @@ export async function createActivity(
     );
   }
 
+  const confirmationIndices = new Set<number>();
+  for (const attachmentId of options.confirmAttachmentIds ?? []) {
+    confirmationIndices.add(items.length);
+    items.push({
+      Update: {
+        Key: pendingUploadKey(userId, attachmentId),
+        UpdateExpression: 'SET #state = :confirming, #activityId = :activityId',
+        ConditionExpression:
+          'attribute_exists(pk) AND (#state = :awaiting OR (#state = :confirming AND #activityId = :activityId))',
+        ExpressionAttributeNames: { '#state': 'state', '#activityId': 'activityId' },
+        ExpressionAttributeValues: {
+          ':confirming': 'confirming',
+          ':awaiting': 'awaiting_upload',
+          ':activityId': activity.activityId,
+        },
+      },
+    });
+  }
+
   const builder = new TransactionBuilder(
     'createActivity',
     options.idempotencyReceipt === undefined ? 0 : 1,
@@ -526,6 +556,7 @@ export async function createActivity(
     onConditionFailed: (index) => {
       if (index === 0 || index === 1) return new ActivityIdUnavailableError();
       if (index === parentCounterIndex) return new ParentUnavailableError();
+      if (confirmationIndices.has(index)) return new PendingAttachmentsUnavailableError();
       return options.idempotencyReceipt !== undefined && index === receiptIndex
         ? new IdempotencyRaceError()
         : undefined;
@@ -589,13 +620,14 @@ export function putActivityMeta(
     Put: {
       Item: stamp(ENTITY.activity, next, { ...activityMeta(next.activityId), ...next }),
       ConditionExpression:
-        '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents',
+        '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents AND attribute_not_exists(#deletingAt)',
       ExpressionAttributeNames: {
         '#updatedAt': 'updatedAt',
         '#lastActivityAt': 'lastActivityAt',
         '#participantCount': 'participantCount',
         '#childCount': 'childCount',
         '#expenseTotalCents': 'expenseTotalCents',
+        '#deletingAt': 'deletingAt',
       },
       ExpressionAttributeValues: {
         ':expected': expectedUpdatedAt,
@@ -727,6 +759,15 @@ export interface PatchOptions extends CreateOptions {
   readonly extraItems?: readonly TransactItem[];
   /** Rebuilds an idempotency receipt if a discussion-state retry changes the response. */
   readonly idempotencyReceiptFor?: (activity: Activity) => IdempotencyReceipt;
+  /** A non-null cover selection, condition-checked against the linked row atomically. */
+  readonly coverAttachmentId?: string;
+}
+
+export class CoverAttachmentUnavailableError extends Error {
+  constructor() {
+    super('The selected cover attachment is no longer linked.');
+    this.name = 'CoverAttachmentUnavailableError';
+  }
 }
 
 const ACTIVITY_META_MERGE_ATTEMPTS = 3;
@@ -878,13 +919,14 @@ async function patchActivityOnce(
       Put: {
         Item: stamp(ENTITY.activity, next, { ...activityMeta(next.activityId), ...next }),
         ConditionExpression:
-          '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents',
+          '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents AND attribute_not_exists(#deletingAt)',
         ExpressionAttributeNames: {
           '#updatedAt': 'updatedAt',
           '#lastActivityAt': 'lastActivityAt',
           '#participantCount': 'participantCount',
           '#childCount': 'childCount',
           '#expenseTotalCents': 'expenseTotalCents',
+          '#deletingAt': 'deletingAt',
         },
         ExpressionAttributeValues: {
           ':expected': expectedUpdatedAt,
@@ -905,6 +947,17 @@ async function patchActivityOnce(
   const viewerLinkIndices = new Set(
     (options.clearViewerLinks ?? []).map((_link, offset) => offset + 1),
   );
+
+  const coverGuardIndex =
+    options.coverAttachmentId === undefined ? undefined : items.length;
+  if (options.coverAttachmentId !== undefined) {
+    items.push({
+      ConditionCheck: {
+        Key: attachmentKey(next.activityId, options.coverAttachmentId),
+        ConditionExpression: 'attribute_exists(pk)',
+      },
+    });
+  }
 
   /**
    * **A whole-item `Put`, and never a `Delete` beside it.**
@@ -1038,6 +1091,7 @@ async function patchActivityOnce(
     onConditionFailed: (index) => {
       if (index === 0) return new ActivityMetaConflictError();
       if (viewerLinkIndices.has(index)) return new StaleViewerLinkError();
+      if (index === coverGuardIndex) return new CoverAttachmentUnavailableError();
       if (counterIndices.has(index)) return new ParentUnavailableError();
       if (index === occurrenceGuardIndex) {
         return new AppError(
@@ -1142,13 +1196,14 @@ async function writeScheduleOnce(
           ...(options.rsvpResetPending === true ? { rsvpResetPending: true } : {}),
         }),
         ConditionExpression:
-          '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents',
+          '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents AND attribute_not_exists(#deletingAt)',
         ExpressionAttributeNames: {
           '#updatedAt': 'updatedAt',
           '#lastActivityAt': 'lastActivityAt',
           '#participantCount': 'participantCount',
           '#childCount': 'childCount',
           '#expenseTotalCents': 'expenseTotalCents',
+          '#deletingAt': 'deletingAt',
         },
         ExpressionAttributeValues: {
           ':expected': options.previous.updatedAt,
@@ -1288,10 +1343,12 @@ export function touchLastActivity(
        * participant, prep-task or expense counter cannot be rolled back by the stale META
        * snapshot from which this discussion write was composed.
        */
-      ConditionExpression: '#updatedAt = :expected AND #lastActivityAt = :expectedLast',
+      ConditionExpression:
+        '#updatedAt = :expected AND #lastActivityAt = :expectedLast AND attribute_not_exists(#deletingAt)',
       ExpressionAttributeNames: {
         '#updatedAt': 'updatedAt',
         '#lastActivityAt': 'lastActivityAt',
+        '#deletingAt': 'deletingAt',
       },
       ExpressionAttributeValues: {
         ':expected': activity.updatedAt,
@@ -1343,6 +1400,24 @@ export interface DeleteOptions {
    * resume, and a pointer left behind after META would be a dead link nothing could clean up.
    */
   readonly clearViewerLinks?: readonly ListItemActivityLink[];
+}
+
+/**
+ * Closes the create/link-versus-delete race before the delete snapshots the partition.
+ * Link transactions condition-check this marker, so every link either precedes the marker
+ * and is included in the snapshot, or follows it and is rejected.
+ */
+export async function markActivityDeleting(
+  userId: string,
+  activityId: string,
+  now: string,
+): Promise<void> {
+  await updateItem(activityMeta(activityId), {
+    expression: 'SET #deletingAt = if_not_exists(#deletingAt, :now)',
+    names: { '#deletingAt': 'deletingAt', '#ownerId': 'ownerId' },
+    values: { ':now': now, ':userId': userId },
+    condition: 'attribute_exists(pk) AND #ownerId = :userId',
+  });
 }
 
 /**

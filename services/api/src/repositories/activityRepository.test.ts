@@ -19,6 +19,7 @@ import {
   listOverdueTaskCandidates,
   listPrepTaskPointers,
   localDateTime,
+  markActivityDeleting,
   newActivityId,
   newReminderId,
   patchActivity,
@@ -153,6 +154,24 @@ describe('delete ordering', () => {
   });
 });
 
+describe('activity deletion fence', () => {
+  it('marks META before a partition snapshot can race a new attachment link', async () => {
+    ddbMock.on(UpdateCommand).resolves({});
+
+    await markActivityDeleting(ALICE, ACT, '2026-08-26T12:00:00.000Z');
+
+    expect(ddbMock.commandCalls(UpdateCommand)[0]?.args[0].input).toMatchObject({
+      Key: { pk: `ACT#${ACT}`, sk: 'META' },
+      UpdateExpression: 'SET #deletingAt = if_not_exists(#deletingAt, :now)',
+      ConditionExpression: 'attribute_exists(pk) AND #ownerId = :userId',
+      ExpressionAttributeValues: {
+        ':now': '2026-08-26T12:00:00.000Z',
+        ':userId': ALICE,
+      },
+    });
+  });
+});
+
 const sentItems = () =>
   (ddbMock.commandCalls(TransactWriteCommand).at(-1)?.args[0]?.input.TransactItems ??
     []) as Array<
@@ -230,7 +249,8 @@ describe('touchLastActivity transaction composition', () => {
       expect(meta).toMatchObject({
         Key: { pk: `ACT#${ACT}`, sk: 'META' },
         UpdateExpression: 'SET #lastActivityAt = :at',
-        ConditionExpression: '#updatedAt = :expected AND #lastActivityAt = :expectedLast',
+        ConditionExpression:
+          '#updatedAt = :expected AND #lastActivityAt = :expectedLast AND attribute_not_exists(#deletingAt)',
         ExpressionAttributeValues: {
           ':at': touchedAt,
           ':expected': subject.updatedAt,
@@ -470,6 +490,21 @@ describe('create composes one transaction', () => {
       false,
     );
   });
+
+  it('marks pending attachments confirming in the same transaction as META', async () => {
+    await createActivity(ALICE, activity(), {
+      confirmAttachmentIds: ['att_01J8XKQ2M4N5P6R7S8T9V0W1X3'],
+    });
+
+    expect(sentItems().at(-1)?.Update).toMatchObject({
+      Key: {
+        pk: `USER#${ALICE}`,
+        sk: 'UPLOAD#att_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+      },
+      UpdateExpression: 'SET #state = :confirming, #activityId = :activityId',
+      ConditionExpression: expect.stringContaining('#state = :awaiting'),
+    });
+  });
 });
 
 describe('patch', () => {
@@ -481,7 +516,7 @@ describe('patch', () => {
 
     expect(sentItems()[0]?.Put).toMatchObject({
       ConditionExpression:
-        '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents',
+        '#updatedAt = :expected AND #lastActivityAt = :expectedLastActivityAt AND #participantCount = :expectedParticipantCount AND #childCount = :expectedChildCount AND #expenseTotalCents = :expectedExpenseTotalCents AND attribute_not_exists(#deletingAt)',
       ExpressionAttributeValues: {
         ':expected': previous.updatedAt,
         ':expectedLastActivityAt': previous.lastActivityAt,
@@ -489,6 +524,27 @@ describe('patch', () => {
         ':expectedChildCount': previous.childCount,
         ':expectedExpenseTotalCents': previous.expenseTotalCents,
       },
+    });
+  });
+
+  it('condition-checks a selected cover row in the same transaction', async () => {
+    const previous = activity();
+    await patchActivity(
+      ALICE,
+      activity({ primaryAttachmentId: 'att_01J8XKQ2M4N5P6R7S8T9V0W1X3' }),
+      previous.updatedAt,
+      {
+        previous,
+        coverAttachmentId: 'att_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+      },
+    );
+
+    expect(sentItems()[1]?.ConditionCheck).toMatchObject({
+      Key: {
+        pk: `ACT#${ACT}`,
+        sk: 'ATT#att_01J8XKQ2M4N5P6R7S8T9V0W1X3',
+      },
+      ConditionExpression: 'attribute_exists(pk)',
     });
   });
 

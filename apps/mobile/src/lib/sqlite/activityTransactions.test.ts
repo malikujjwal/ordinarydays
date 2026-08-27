@@ -113,6 +113,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     };
     setActiveNativeState({
       sessionId: 'activity-transactions-reminder-session',
+      ownerUserId: OWNER,
       account: {
         accountNamespace: OWNER,
         filename: 'slice.sqlite',
@@ -1405,6 +1406,7 @@ describe('Activity/Agenda transactional SQLite slice', () => {
     if (database === undefined) throw new Error('Test database was not opened.');
     setActiveNativeState({
       sessionId: 'activity-transactions-refresh-session',
+      ownerUserId: OWNER,
       account: {
         accountNamespace: OWNER,
         filename: 'slice.sqlite',

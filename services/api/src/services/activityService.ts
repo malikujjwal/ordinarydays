@@ -42,6 +42,7 @@ import type { IdempotencyReceipt } from '../lib/idempotency.js';
 import type { Logger } from '../lib/logger.js';
 import {
   ActivityIdUnavailableError,
+  CoverAttachmentUnavailableError,
   deleteActivity as deleteActivityRows,
   detachChildFromParent,
   getActivityMeta,
@@ -50,9 +51,11 @@ import {
   listByBucket as listBucket,
   listParticipants,
   listPrepTaskPointers,
+  markActivityDeleting,
   newActivityId,
   newReminderId,
   ParentUnavailableError,
+  PendingAttachmentsUnavailableError,
   type PrepTaskPointer,
   createActivity as putActivity,
   patchActivity as putPatch,
@@ -70,6 +73,7 @@ import {
   assertCoverIsLinked,
   confirmAttachments,
   drainPendingUploads,
+  unconfirmableAttachments,
 } from './attachmentService.js';
 import {
   assertActivityAccess,
@@ -557,10 +561,16 @@ export async function createActivity(
        * agenda read has to go and find it.
        */
       ...(parent === undefined ? {} : { taskSubtitle: parent.title }),
+      ...(input.attachmentIds === undefined
+        ? {}
+        : { confirmAttachmentIds: input.attachmentIds }),
       ...(receiptFor === undefined ? {} : { idempotencyReceipt: receiptFor(result) }),
     });
   } catch (error) {
     if (error instanceof ActivityIdUnavailableError) throw idUnavailable();
+    if (error instanceof PendingAttachmentsUnavailableError) {
+      throw unconfirmableAttachments();
+    }
     if (error instanceof ParentUnavailableError && input.parentActivityId !== undefined) {
       throw await parentRejected(input.parentActivityId);
     }
@@ -995,10 +1005,16 @@ export async function patchActivity(
         ...(current.objectKind === 'plan' && next.objectKind === 'task'
           ? { expectedChildCount: current.childCount }
           : {}),
+        ...(typeof patch.primaryAttachmentId === 'string'
+          ? { coverAttachmentId: patch.primaryAttachmentId }
+          : {}),
       },
       convertedListLink,
     );
   } catch (error) {
+    if (error instanceof CoverAttachmentUnavailableError) {
+      await assertCoverIsLinked(activityId, patch.primaryAttachmentId);
+    }
     if (error instanceof ParentUnavailableError && next.parentActivityId !== undefined) {
       throw await parentRejected(next.parentActivityId);
     }
@@ -1623,6 +1639,7 @@ export async function removeActivity(
   now: string,
 ): Promise<string> {
   await assertActivityAccess(userId, activityId, 'owner');
+  await markActivityDeleting(userId, activityId, now);
 
   /**
    * **Strongly consistent, because a delete acts on what it reads** (P3-15).

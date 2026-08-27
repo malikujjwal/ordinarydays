@@ -61,6 +61,7 @@ function install({ snapshots, pullLists = () => Promise.resolve([]) }: Harness) 
   );
 
   const state = {
+    ownerUserId: 'usr_local_dev',
     lists: {
       readSnapshot,
       subscribe: (next: (metadata: RepositoryInvalidationMetadata) => void) => {
@@ -99,6 +100,7 @@ describe('the native Lists reader', () => {
     await waitFor(() => expect(result.current.lists).toHaveLength(1));
     expect(result.current.lists[0]?.title).toBe('Groceries');
     expect(result.current.status).toBe('success');
+    expect(result.current.viewerUserId).toBe('usr_local_dev');
   });
 
   /**

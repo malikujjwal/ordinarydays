@@ -20,11 +20,12 @@ export interface NativeAccountState {
 
 export interface NativeActivityState {
   readonly sessionId: string;
+  readonly ownerUserId: string;
   readonly account: NativeAccountState;
   readonly activities: ActivityRepository;
   readonly agenda: AgendaRepository;
   readonly anytime?: AnytimeRepository;
-  /** The Lists index (P3-25). Read-side only; creation joins the outbox in P3-26. */
+  /** The SQLite-owned Lists index, including optimistic outbox projections. */
   readonly lists?: ListsRepository;
   readonly outbox: OutboxRepository;
   readonly outboxPresentation: OutboxPresentationStore;

@@ -3,6 +3,10 @@ import {
   MAX_UNRESOLVED_UPLOADS,
 } from '@od/shared/constants';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  AttachmentDeletion,
+  StoredAttachment,
+} from '../repositories/attachmentRepository.js';
 import type { PendingUpload } from '../repositories/pendingUploadRepository.js';
 
 /**
@@ -31,9 +35,19 @@ const markPendingConfirming =
 const getAttachment = vi.fn<(a: string, b: string) => Promise<unknown>>();
 const listAttachments = vi.fn<(activityId: string) => Promise<unknown[]>>();
 const linkAttachment =
-  vi.fn<(userId: string, record: unknown, receipt?: unknown) => Promise<void>>();
+  vi.fn<(userId: string, record: unknown, options: unknown) => Promise<void>>();
 const unlinkAttachment =
-  vi.fn<(a: string, b: string, cover?: { now: string }) => Promise<void>>();
+  vi.fn<
+    (
+      userId: string,
+      record: StoredAttachment,
+      clearCover: boolean,
+      now: string,
+    ) => Promise<AttachmentDeletion>
+  >();
+const listAttachmentDeletions = vi.fn<() => Promise<AttachmentDeletion[]>>();
+const getAttachmentDeletion = vi.fn<() => Promise<AttachmentDeletion | undefined>>();
+const completeAttachmentDeletion = vi.fn<(work: AttachmentDeletion) => Promise<void>>();
 const getActivityMeta = vi.fn<(id: string, opts?: unknown) => Promise<unknown>>();
 const assertActivityAccess =
   vi.fn<(u: string, a: string, l: string) => Promise<{ activity: unknown }>>();
@@ -49,14 +63,30 @@ vi.mock('../lib/s3.js', async () => {
   };
 });
 
-vi.mock('../repositories/attachmentRepository.js', () => ({
-  getAttachment: (a: string, b: string) => getAttachment(a, b),
-  listAttachments: (activityId: string) => listAttachments(activityId),
-  linkAttachment: (userId: string, record: unknown, receipt?: unknown) =>
-    linkAttachment(userId, record, receipt),
-  unlinkAttachment: (a: string, b: string, cover?: { now: string }) =>
-    unlinkAttachment(a, b, cover),
-}));
+vi.mock('../repositories/attachmentRepository.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../repositories/attachmentRepository.js')
+  >('../repositories/attachmentRepository.js');
+  return {
+    ...actual,
+    getAttachment: (a: string, b: string) => getAttachment(a, b),
+    getStoredAttachment: (a: string, b: string) => getAttachment(a, b),
+    listAttachments: (activityId: string) => listAttachments(activityId),
+    listStoredAttachments: (activityId: string) => listAttachments(activityId),
+    linkAttachment: (userId: string, value: unknown, options: unknown) =>
+      linkAttachment(userId, value, options),
+    unlinkAttachment: (
+      userId: string,
+      value: StoredAttachment,
+      clearCover: boolean,
+      now: string,
+    ) => unlinkAttachment(userId, value, clearCover, now),
+    listAttachmentDeletions: () => listAttachmentDeletions(),
+    getAttachmentDeletion: () => getAttachmentDeletion(),
+    completeAttachmentDeletion: (work: AttachmentDeletion) =>
+      completeAttachmentDeletion(work),
+  };
+});
 
 vi.mock('../repositories/activityRepository.js', () => ({
   getActivityMeta: (id: string, opts?: unknown) => getActivityMeta(id, opts),
@@ -90,6 +120,7 @@ const {
   assertCoverIsLinked,
   confirmAttachment,
   deleteAttachment,
+  drainAttachmentDeletions,
   drainPendingUploads,
   requestUploadUrl,
 } = await import('./attachmentService.js');
@@ -160,11 +191,57 @@ beforeEach(() => {
   markPendingConfirming.mockResolvedValue();
   getAttachment.mockResolvedValue(undefined);
   listAttachments.mockResolvedValue([]);
+  listAttachmentDeletions.mockResolvedValue([]);
+  getAttachmentDeletion.mockResolvedValue(undefined);
+  completeAttachmentDeletion.mockResolvedValue();
   linkAttachment.mockResolvedValue();
-  unlinkAttachment.mockResolvedValue();
+  unlinkAttachment.mockImplementation(async (_userId, value, clearCover, now) => ({
+    userId: USER,
+    activityId: value.activityId,
+    attachmentId: value.attachmentId,
+    key: value.key,
+    coverCleared: clearCover,
+    createdAt: now,
+  }));
   getActivityMeta.mockResolvedValue({ activityId: ACT, ownerId: USER });
   assertActivityAccess.mockResolvedValue({
     activity: { activityId: ACT, ownerId: USER },
+  });
+});
+
+describe('drainAttachmentDeletions', () => {
+  it('deletes the durable object before completing its work record', async () => {
+    const work: AttachmentDeletion = {
+      userId: USER,
+      activityId: ACT,
+      attachmentId: ATT,
+      key: `u/${USER}/deleted.jpg`,
+      coverCleared: false,
+      createdAt: NOW,
+    };
+    const order: string[] = [];
+    listAttachmentDeletions.mockResolvedValue([work]);
+    deleteObject.mockImplementation(async () => {
+      order.push('object');
+    });
+    completeAttachmentDeletion.mockImplementation(async () => {
+      order.push('work-record');
+    });
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await drainAttachmentDeletions(USER, log as never);
+
+    expect(order).toEqual(['object', 'work-record']);
+    expect(deleteObject).toHaveBeenCalledWith(work.key);
+    expect(completeAttachmentDeletion).toHaveBeenCalledWith(work);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'attachment_delete_repaired',
+        userId: USER,
+        attachmentId: ATT,
+      }),
+      'attachment deletion completed after a crash',
+    );
   });
 });
 
@@ -200,20 +277,16 @@ describe('drainPendingUploads', () => {
     expect(deletePendingUpload).not.toHaveBeenCalled();
   });
 
-  /**
-   * An **unexpired** record of either kind is work that may still be in flight — a URL the
-   * client is uploading to, or a confirmation running in another request. Repairing one
-   * would race it.
-   */
-  it('leaves an unexpired confirming record alone', async () => {
+  /** Confirming work is idempotent and is repaired without waiting for its cleanup date. */
+  it('repairs an unexpired confirming record immediately', async () => {
     listPendingUploads.mockResolvedValue([
       record({ state: 'confirming', activityId: ACT }),
     ]);
 
-    await expect(drainPendingUploads(USER, NOW_MS)).resolves.toBe(1);
+    await expect(drainPendingUploads(USER, NOW_MS)).resolves.toBe(0);
 
-    expect(getAttachment).not.toHaveBeenCalled();
-    expect(deleteObject).not.toHaveBeenCalled();
+    expect(getAttachment).toHaveBeenCalled();
+    expect(linkAttachment).toHaveBeenCalled();
   });
 
   describe('an expired confirming record (P3-22)', () => {
@@ -356,7 +429,7 @@ describe('requestUploadUrl', () => {
 
     const result = await requestUploadUrl(USER, input, NOW);
 
-    expect(order).toEqual(['drain', 'presign', 'put']);
+    expect(order).toEqual(['drain', 'drain', 'presign', 'put']);
     expect(result.uploadUrl).toBe('https://store.example/tmp?X-Amz-Signature=abc');
   });
 
@@ -455,10 +528,12 @@ describe('requestUploadUrl', () => {
      * lock a user out for a day with nothing able to release them.
      */
     it('counts what survives the drain, not what was read', async () => {
-      listPendingUploads.mockResolvedValue([
-        ...Array.from({ length: MAX_UNRESOLVED_UPLOADS - 1 }, (_, i) => live(i)),
-        expired(1),
-      ]);
+      const survivors = Array.from({ length: MAX_UNRESOLVED_UPLOADS - 1 }, (_, i) =>
+        live(i),
+      );
+      listPendingUploads
+        .mockResolvedValueOnce([...survivors, expired(1)])
+        .mockResolvedValueOnce(survivors);
 
       await expect(requestUploadUrl(USER, input, NOW)).resolves.toMatchObject({
         key: expect.stringContaining('tmp/'),
@@ -587,7 +662,39 @@ describe('confirmAttachment', () => {
       const attachment = await confirmAttachment(USER, ACT, ATT, NOW, { receiptFor });
 
       expect(receiptFor).toHaveBeenCalledWith(attachment);
-      expect(linkAttachment).toHaveBeenCalledWith(USER, attachment, receipt);
+      expect(linkAttachment).toHaveBeenCalledWith(
+        USER,
+        attachment,
+        expect.objectContaining({ idempotencyReceipt: receipt }),
+      );
+    });
+
+    it('rebuilds the response body from the canonical winner of a duplicate race', async () => {
+      const winner = {
+        attachmentId: ATT,
+        activityId: ACT,
+        key: `u/${USER}/winner.jpg`,
+        contentType: 'image/jpeg',
+        byteSize: 2048,
+        createdAt: '2026-08-26T11:59:59.000Z',
+        schemaVersion: 1,
+      };
+      getAttachment
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(winner);
+      const { AttachmentAlreadyLinkedError } = await import(
+        '../repositories/attachmentRepository.js'
+      );
+      linkAttachment.mockRejectedValueOnce(new AttachmentAlreadyLinkedError());
+      const receiptFor = vi.fn(() => ({ key: 'k' }) as never);
+
+      await expect(confirmAttachment(USER, ACT, ATT, NOW, { receiptFor })).resolves.toBe(
+        winner,
+      );
+
+      expect(receiptFor).toHaveBeenCalledTimes(2);
+      expect(receiptFor).toHaveBeenLastCalledWith(winner);
     });
   });
 
@@ -701,6 +808,14 @@ describe('deleteAttachment', () => {
     const order: string[] = [];
     unlinkAttachment.mockImplementation(async () => {
       order.push('row');
+      return {
+        userId: USER,
+        activityId: ACT,
+        attachmentId: ATT,
+        key: `u/${USER}/01.jpg`,
+        coverCleared: false,
+        createdAt: NOW,
+      };
     });
     deleteObject.mockImplementation(async () => {
       order.push('object');
@@ -726,7 +841,12 @@ describe('deleteAttachment', () => {
       coverCleared: true,
     });
 
-    expect(unlinkAttachment).toHaveBeenCalledWith(ACT, ATT, { now: NOW });
+    expect(unlinkAttachment).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ activityId: ACT, attachmentId: ATT }),
+      true,
+      NOW,
+    );
   });
 
   it('leaves the cover alone when a different attachment is it', async () => {
@@ -736,7 +856,12 @@ describe('deleteAttachment', () => {
 
     await deleteAttachment(USER, ACT, ATT, NOW);
 
-    expect(unlinkAttachment).toHaveBeenCalledWith(ACT, ATT, undefined);
+    expect(unlinkAttachment).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ activityId: ACT, attachmentId: ATT }),
+      false,
+      NOW,
+    );
   });
 
   it('is owner-only', async () => {

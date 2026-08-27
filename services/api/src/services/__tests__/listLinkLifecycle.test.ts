@@ -50,6 +50,7 @@ const mocks = {
   putActivityMeta: vi.fn(),
   getActivityPartition: vi.fn(() => Promise.resolve([])),
   activityFromPartition: vi.fn(),
+  markActivityDeleting: vi.fn(() => Promise.resolve()),
   deleteActivity: vi.fn((_u: string, _a: string, _o?: unknown) => Promise.resolve()),
   findViewerLinksTo: vi.fn(() => Promise.resolve([])),
   batchGetViewerLinks: vi.fn(() => Promise.resolve([])),
@@ -88,6 +89,7 @@ vi.mock('../../repositories/activityRepository.js', () => ({
   getActivityPartitionStrong: mocks.getActivityPartitionStrong,
   StaleViewerLinkError: StaleLink,
   activityFromPartition: mocks.activityFromPartition,
+  markActivityDeleting: mocks.markActivityDeleting,
   deleteActivity: mocks.deleteActivity,
 }));
 

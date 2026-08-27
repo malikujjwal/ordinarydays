@@ -202,6 +202,7 @@ describe('the execution role', () => {
     const policies = JSON.stringify(prod.findResources('AWS::IAM::Policy'));
     expect(policies).toContain('u/*');
     expect(policies).toContain('tmp/*');
+    expect(policies).toContain('s3:DeleteObject');
 
     const s3Statements = Object.values(prod.findResources('AWS::IAM::Policy')).flatMap(
       (p) =>

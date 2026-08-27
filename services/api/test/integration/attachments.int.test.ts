@@ -335,14 +335,8 @@ describe('the bounded drain', () => {
     expect(await pendingRows()).toHaveLength(2);
   });
 
-  /**
-   * **Deferred to P3-22 on purpose.** A `confirming` row may already have a permanent copy
-   * behind it; completing or cleaning one needs the confirm path's Activity read and
-   * transaction. Until that lands the row is left in place and counted live, which is the
-   * safe direction — an untouched row is discoverable work, a prematurely deleted one is the
-   * permanent orphan the record exists to prevent.
-   */
-  it('never touches a confirming record, even an expired one', async () => {
+  /** A contradictory `confirming` row without a target is preserved for inspection. */
+  it('leaves a corrupt confirming record alone', async () => {
     const key = `tmp/u/${USER}/${randomUUID()}.jpg`;
     await putObjectDirectly(key, 'image/jpeg', BYTES);
     await seedPending({
@@ -387,6 +381,15 @@ describe('the twenty-record cap', () => {
     await seedLive(MAX_UNRESOLVED_UPLOADS - 1);
 
     expect((await requestUrl()).status).toBe(201);
+    expect(await pendingRows()).toHaveLength(MAX_UNRESOLVED_UPLOADS);
+  });
+
+  it('atomically admits only one of two concurrent twentieth uploads', async () => {
+    await seedLive(MAX_UNRESOLVED_UPLOADS - 1);
+
+    const results = await Promise.all([requestUrl(), requestUrl()]);
+
+    expect(results.map(({ status }) => status).sort()).toEqual([201, 400]);
     expect(await pendingRows()).toHaveLength(MAX_UNRESOLVED_UPLOADS);
   });
 

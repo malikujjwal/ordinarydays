@@ -80,7 +80,7 @@ async function startSession(
     account.subscriptions,
     account.projections,
   );
-  /* P3-25. Read-side only: the sync engine's drain is its one writer until P3-26. */
+  /* Canonical drains and transactional List intents share this one repository. */
   const lists = new ListsRepository(
     account.database,
     account.subscriptions,
@@ -189,6 +189,7 @@ async function startSession(
   };
   setActiveNativeState({
     sessionId,
+    ownerUserId,
     account,
     activities,
     agenda,

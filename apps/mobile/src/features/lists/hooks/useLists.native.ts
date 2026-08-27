@@ -19,11 +19,8 @@ import type { ListsView } from './useLists';
  * of the pivot: a screen that fell back to a query cache would hold a second copy of the truth,
  * and the two would disagree precisely when it mattered — offline, or mid-sync.
  *
- * ## Read-side only
- *
- * There is no create path here and no outbox involvement. P3-26 adds creation and joins the
- * transactional outbox at that point; until then the sync engine's drain is the only writer of
- * `list_rows`.
+ * Mutations are deliberately outside this reader, in the platform-specific mutation hook;
+ * native actions update these subscribed rows transactionally with their outbox intents.
  *
  * ## `hasMore` is always false, and that is not a shortcut
  *
@@ -185,6 +182,7 @@ export function useLists(): ListsView {
   return {
     ...view,
     timezone: timezone as TimeZone,
+    viewerUserId: state.ownerUserId,
     refetch: () => void refetch(),
     isLoadingMore: false,
     isOffline,
