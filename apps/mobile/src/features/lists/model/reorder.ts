@@ -33,8 +33,8 @@ import type { RowList } from './listItemRow';
  *
  * ## The request carries a position; the rank is the server's
  *
- * `afterItemId` is the id of the item now immediately above, absent for the head, and it is
- * the **only** position that travels. {@link ReorderPlan.rank} is a provisional local value for
+ * `afterItemId` is the id of the item now immediately above — **`null` for the head** — and it
+ * is the **only** position that travels. {@link ReorderPlan.rank} is a provisional local value for
  * the optimistic row and is never sent — the same arrangement `pendingListItem.ts` records for
  * an appended create, using the same `lexoRankBetween` the server runs, and replaced wholesale
  * by the rank the server allocates under its own `rankVersion`.
@@ -46,8 +46,19 @@ export type ReorderList = Pick<RowList, 'behaviour'>;
 /** What one drag asks for. */
 export interface ReorderPlan {
   readonly itemId: string;
-  /** The id of the item now immediately above. **Absent for the head** — never `null`. */
-  readonly afterItemId?: string;
+  /**
+   * The id of the item now immediately above, or `null` for the head.
+   *
+   * **Never absent.** §P3-30's prose says "absent for the head", but `patchListItemInput` says
+   * the opposite in as many words — "`null` moves the item to the front… **absent means no
+   * reorder at all**, which is why it is nullable rather than merely optional" — and
+   * `listItems.int.test.ts` proves it end to end by sending `null` to move a row to the top.
+   * `api-contract.md` §2.7 outranks a phase doc on mechanics (playbook §2), and it is also the
+   * only reading under which a drag to the head does anything. Raised in this PR.
+   *
+   * A plan always requests a reorder, so this is always present. There is no third state.
+   */
+  readonly afterItemId: string | null;
   /**
    * A provisional rank for the optimistic row. **Display only, never sent.**
    *
@@ -119,7 +130,12 @@ export function reorderRange(
   const tail = positions.at(-1);
   // A group of one: the only position it may occupy is the one it is already in.
   if (head === undefined || tail === undefined) return { first: from, last: from };
-  return { first: head, last: tail + 1 };
+  /*
+   * Widened to include the row's own index, always. Staying put is a position every drag may
+   * reach — it is what a cancelled drag *is* — and a range that excluded it would stop the
+   * finger from putting a row back where it came from.
+   */
+  return { first: Math.min(head, from), last: Math.max(tail + 1, from) };
 }
 
 /**
@@ -153,7 +169,7 @@ export function planReorder(
   const rank = provisionalRank(above?.rank, below?.rank);
   return {
     itemId,
-    ...(above === undefined ? {} : { afterItemId: above.itemId }),
+    afterItemId: above?.itemId ?? null,
     ...(rank === undefined ? {} : { rank }),
   };
 }
@@ -194,19 +210,25 @@ export function dropIndex(
   fromIndex: number,
   translationY: number,
 ): number {
-  const dragged = heights[fromIndex] ?? 0;
   let top = 0;
   for (let at = 0; at < fromIndex; at += 1) top += heights[at] ?? 0;
-  const centre = top + translationY + dragged / 2;
+  const centre = top + translationY + (heights[fromIndex] ?? 0) / 2;
 
+  /*
+   * `offset` walks the **laid-out** rows, the dragged one's own slot included, because that is
+   * where the other rows actually are while the finger is down. `index` counts only the rows
+   * passed, which is the insertion index in the array with the dragged row removed — the two
+   * frames the rest of this module works in, kept apart deliberately.
+   */
   let offset = 0;
   let index = 0;
   for (let at = 0; at < heights.length; at += 1) {
-    if (at === fromIndex) continue;
     const height = heights[at] ?? 0;
-    if (offset + height / 2 >= centre) break;
+    if (at !== fromIndex) {
+      if (offset + height / 2 >= centre) break;
+      index += 1;
+    }
     offset += height;
-    index += 1;
   }
   return index;
 }

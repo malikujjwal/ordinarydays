@@ -21,7 +21,7 @@ import {
   mayShowEmptyState,
 } from '../model/listDetail';
 import { openInMaps } from '../model/openInMaps';
-import { reorderRange } from '../model/reorder';
+import { orderedItems, reorderRange } from '../model/reorder';
 import { AddItemRow } from './AddItemRow';
 import { ListHeaderMenu } from './ListHeaderMenu';
 import { ListItemRow } from './ListItemRow';
@@ -205,7 +205,14 @@ export function ListDetailScreen({ listId, onBack }: ListDetailScreenProps) {
            * gesture second-guesses.
            */
           <ReorderableList
-            items={view.items}
+            /*
+             * Sorted here as well as by the projection, and deliberately: `(rank, itemId)` is
+             * the order both platforms already produce, and passing it through the one exported
+             * comparator on the way to the screen means a restored, legacy or seeded duplicate
+             * rank renders identically on two devices whichever order it reached them in
+             * (acceptance criterion 29). It is a no-op on an already-ordered projection.
+             */
+            items={orderedItems(view.items)}
             keyOf={(item) => item.itemId}
             rangeOf={(itemId) => reorderRange(list, view.items, itemId)}
             onDrop={reorder.drop}

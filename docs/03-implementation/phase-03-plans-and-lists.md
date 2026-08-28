@@ -1978,8 +1978,16 @@ open its linked Plan, assert the Plan title is unchanged; the CI grep for templa
 
 ### P3-30 — Drag to reorder
 
-**Files.** `apps/mobile/src/features/lists/reorder.ts`, wiring in the list screen and
-`ListItemRow.tsx`.
+**Files.** `apps/mobile/src/features/lists/model/reorder.ts` (the feature's pure models live
+in `model/`, as `listItemRow.ts` and `listDetail.ts` already do),
+`apps/mobile/src/features/lists/components/ReorderableList{,.web}.tsx`,
+`apps/mobile/src/features/lists/hooks/useReorderItems.ts`, and wiring in the list screen.
+
+`ListItemRow.tsx` is **not** touched: the drag wraps the row rather than entering it, which is
+what keeps P3-28's one renderer one renderer. The projection hooks gain a single `applyRank`,
+and `ListItemsRepository` a single `setRankLocal`, because the optimistic drop, the server's
+answer and the revert are one write with three values and native's is a SQLite transaction
+(ADR-057).
 
 **What to build.** Long-press starts the drag (the interaction contract's supporting
 rule); dropping issues **one** `PATCH /v1/lists/:id/items/:itemId` carrying `afterItemId`
@@ -2022,6 +2030,44 @@ connection message, and issues and enqueues nothing. A concurrent-move test forc
 `rankVersion` conflict and proves the retry uses fresh neighbours. A fixture with restored or legacy
 duplicate ranks renders in `compareListItems` order both times it is shuffled; render test that the drag cannot cross
 a watch group heading; a no-op drop issues no request.
+
+The `rankVersion` conflict and its retry are the **server's**, and they are tested there:
+`listRepository.test.ts` forces the conflict and `listItems.int.test.ts` proves a reorder is one
+transaction of four domain actions that advances the version. The client has no part in that
+retry — it sends one position and reads one answer — so it is referenced from here rather than
+re-tested against a mock of the thing being asserted.
+
+**Decisions and corrections recorded while building this (2026-08-28), each raised in its PR.**
+
+- **A drag to the head sends `afterItemId: null`, not an absent field.** This section says
+  "absent for the head", but
+  [`../02-architecture/api-contract.md#27-lists`](../02-architecture/api-contract.md#27-lists)
+  §2.7 and `patchListItemInput` both say the opposite in as many words — "`null` moves the item
+  to the front… absent means **no reorder at all**, which is why it is nullable rather than
+  merely optional" — and `listItems.int.test.ts` moves a row to the top by sending `null`. The
+  architecture doc wins on mechanics (playbook §2), and it is also the only reading under which
+  a drag to the head does anything. **This section's prose should be amended to say `null`.**
+- **The request carries no `Idempotency-Key`.** This section says "an online request still
+  carries its stable `Idempotency-Key`", but §2.7 and `routes/lists.ts` both say only the
+  mutating `POST`s take that header, and `patchListItem` deliberately sends none because the
+  route is not replay-protected. A reorder is idempotent by construction anyway — `afterItemId`
+  is an absolute position — so the stable per-drag key is held on the client, where it makes a
+  `Retry` re-send *that* drag rather than a second one, and refuses a `Retry` the user has
+  already superseded with another drag.
+- **A provisional local rank is computed for the optimistic row and never sent.** "The client
+  never computes or sends a rank" is read as *never sends*, which is the reading P3-27 already
+  established in merged code: `pendingListItem.ts` runs the same `lexoRankBetween` for an
+  appended create, stores it, and lets acknowledgement replace it. Equal adjacent ranks make the
+  computation impossible, and that is handled rather than worked around — the row simply does
+  not move until the server answers.
+- **Web's drag handle is also a keyboard grab.** §7.1 ends with "hover-revealed controls are
+  always **also** reachable by keyboard and are never the only path to an action", and a pointer
+  drag is unreachable without a pointer. `Return` picks a row up, `↑`/`↓` move it, `Return`
+  drops it and `Escape` puts it back — one drag and one request, not one request per keypress.
+  §7.2's arrows still move focus between rows everywhere else; the override lasts only while a
+  row is deliberately held.
+- **The watch range always includes the row's own position**, so a drag can put a row back where
+  it came from even when its group has one member. Refusing that would stop a cancelled drag.
 
 ---
 

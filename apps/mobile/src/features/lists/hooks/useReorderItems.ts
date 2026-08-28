@@ -31,9 +31,10 @@ import {
  *
  * ## One request, and it carries a position
  *
- * `afterItemId` and nothing else. The client never sends a rank: the server allocates it under
- * its own `rankVersion` (P3-03/P3-08), and a client that sent one would be allocating in a
- * keyspace it cannot see. The optimistic row's provisional rank stays on the device.
+ * `afterItemId` and nothing else — `null` for the head, because absent means *no reorder* on
+ * this route. The client never sends a rank: the server allocates it under its own
+ * `rankVersion` (P3-03/P3-08), and a client that sent one would be allocating in a keyspace it
+ * cannot see. The optimistic row's provisional rank stays on the device.
  *
  * ## The key is stable for the whole drag, including its Retry
  *
@@ -132,8 +133,12 @@ export function useReorderItems({
         if (activeDrag.current !== dragId) return;
         if (plan.rank !== undefined) applyRank(itemId, plan.rank);
         void patchListItem(apiClient, listId, itemId, {
-          // The position, and only the position. A rank here would be the client allocating.
-          ...(plan.afterItemId === undefined ? {} : { afterItemId: plan.afterItemId }),
+          /*
+           * The position, and only the position. A rank here would be the client allocating in
+           * a keyspace it cannot see — and an *absent* `afterItemId` would be no reorder at
+           * all, which is why the head sends `null` rather than nothing.
+           */
+          afterItemId: plan.afterItemId,
         })
           .then((moved) => {
             if (activeDrag.current !== dragId) return;
