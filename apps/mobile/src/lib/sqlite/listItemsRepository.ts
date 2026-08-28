@@ -1,7 +1,7 @@
 import { compareListItems } from '@od/shared/rank';
 import { listItemView } from '@od/shared/schemas';
 import { systemClock } from '@od/shared/time';
-import type { ListItem } from '@od/shared/types';
+import type { ListItemView } from '@od/shared/types';
 import type { SqliteExecutor, SqliteReader, SqliteRow } from '@/lib/sqlite/database';
 import type { RevisionedProjectionReader } from '@/lib/sqlite/projectionReader';
 import type {
@@ -34,13 +34,19 @@ import type { TransactionContext } from '@/lib/sqlite/transaction';
  */
 
 /**
- * The item a client holds: the stored shape minus its two storage-only fields.
+ * The item a client holds.
  *
- * Derived from the domain type rather than restated, so it is `listItemView`'s twin by
- * construction — `itemRevision` is a server-resolved retry fence and `sourceProvenance` is the
- * structure behind `sourceLabel`, and neither is ever serialised (`data-model.md` §4.6).
+ * `ListItemView` verbatim — the shared type that already means "the stored shape minus the two
+ * storage-only fields". P3-27 restated its `Omit` here; a second declaration of one shape is a
+ * second place for it to drift, so this is an alias and the name stays only because the
+ * repository's callers read better with a row-shaped one.
+ *
+ * The alias is only correct while this table carries **nothing the view does not**, and it
+ * does not: `list_items`' ten columns are exactly the view's ten fields, `fromRow` parses
+ * through `listItemView`, and neither `itemRevision` nor `sourceProvenance` is stored. A
+ * storage-only column added later needs its own type again rather than a widened alias.
  */
-export type ListItemRow = Omit<ListItem, 'itemRevision' | 'sourceProvenance'>;
+export type ListItemRow = ListItemView;
 
 function text(row: SqliteRow, column: string): string | undefined {
   const value = row[column];

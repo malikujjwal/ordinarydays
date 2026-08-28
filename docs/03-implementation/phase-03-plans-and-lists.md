@@ -138,7 +138,7 @@ Today's Anytime list and is not a backlog with a counter on it.
 | P3-26 | The template-first list creation sheet | mobile | P3-25, P3-07 | no | M |
 | P3-27 | List detail screen and the inline add row | mobile | P3-25 | no | L |
 | P3-28 | The capability-driven item renderer | mobile | P3-27 | no | M |
-| P3-29 | List item sheet | mobile | P3-28, P3-10 | no | M |
+| P3-29 | List item sheet, and the shared item PATCH pipeline | mobile | P3-28, P3-10, P3-08 | no | M |
 | P3-30 | Drag to reorder | mobile | P3-27, P3-03 | no | M |
 | P3-31 | Watch behaviour: grouped items and progress UI | mobile | P3-28, P3-16 | no | M |
 | P3-32 | Inline List title edit; settings for capabilities, slot and behaviour | mobile | P3-27, P3-09 | no | M |
@@ -1900,9 +1900,18 @@ assertion — or a grep test in CI — that the file contains no template key st
 
 ---
 
-### P3-29 — List item sheet
+### P3-29 — List item sheet, and the shared item PATCH pipeline
 
-**Files.** `apps/mobile/src/features/lists/ItemSheet.tsx`.
+> **Amended 2026-08-28 (founder).** This task also owns the **one** item mutation path, web and
+> native, and both callers of it: the sheet's field edits and **P3-28's row checkbox**. That is
+> a clarification rather than added scope — the sheet already committed optimistic item
+> `PATCH`es, and the checkbox is the same write with one field — but it needed saying, because
+> the phase table had no task that owned check/uncheck and P3-28 shipped the control
+> deliberately disabled while none existed. Raised in P3-28's PR.
+
+**Files.** `apps/mobile/src/features/lists/ItemSheet.tsx`,
+`apps/mobile/src/hooks/usePatchListItem{,.native}.ts` (or wherever two features can share it,
+per `repo-structure.md` §3.2).
 
 **What to build.** The sheet opened by tapping an item row's body (U1). Per
 [`../01-product/plans-and-lists.md`](../01-product/plans-and-lists.md) §5.6: title, note,
@@ -1924,8 +1933,22 @@ exactly as P3-28's renderer is — no template-key comparison, same CI grep:
   `schedule.date`**, the state line renders with its own tap target opening the Activity
   (§6.2). An unscheduled link remains stored but has no state line.
 
-Each field edit commits one optimistic `PATCH /v1/lists/:id/items/:itemId`. Item writes
-carry no `If-Match` and last write wins per field (§5.11.5). `Plan this item` opens P3-33
+Each field edit commits one optimistic `PATCH /v1/lists/:id/items/:itemId`, **through the one
+mutation path this task builds**. Three rules bind every caller of it, the checkbox included:
+
+- **The absolute value, never a toggle.** A checkbox sends `checked: next` — the value the row
+  was displaying, flipped once, here — and never `checked: !checked` computed at the server or
+  from a re-read. §5.11.5's first row is the reason: two people ticking `Milk` at the same
+  moment, one of them offline in a shop, must end with it checked once, with no flicker and no
+  un-tick when the queue drains. A set is idempotent and survives the offline queue with no
+  merge logic; a toggle does not.
+- **No `If-Match`.** Item writes are per-field last-write-wins (§5.11.5's recorded decision);
+  optimistic concurrency on a checkbox produces constant spurious `409`s in exactly the
+  situation the feature exists for.
+- **Durable and replayable on native**, on the P3-27 pattern: the visible change and its outbox
+  intent commit in one SQLite transaction, ordered behind that list's other work, with a stable
+  mutation id so a replay after the idempotency receipt expires is the same write rather than a
+  second one. Web stays online-first. `Plan this item` opens P3-33
 and is one action among several, never the primary one (§5.1). `Delete` deletes with **no
 confirmation** and returns P3-10's opaque token for a 6-second undo that restores the same
 item id, previous rank, live viewer links and Activity provenance
@@ -1940,6 +1963,9 @@ Focus lands on the first control, is trapped, and returns to the row on close
   target defaults over an old-behaviour row or serialises a migration-internal mixed shape.
 - Renaming an item with a `viewerLink` renames the item only; the Plan title is
   independent after creation (P3-14).
+- Checking an item from the row and editing a field in the sheet are the **same** durable
+  write with different fields. A test that ticks a row offline, backgrounds and replays must
+  produce one `PATCH`, and the row must not un-tick when the queue drains.
 - A status change made here regroups the row when the user returns to the list, at its
   rank within the new group (P3-31).
 

@@ -601,13 +601,21 @@ not obvious from the label.
 | List item, list is `checkable` | 1. Checkbox<br>2. Row body | 1. `Chicken, not checked`<br>2. `Chicken, from Sunday dinner` | `checkbox`, `button` | `Plan this item`, `Delete` |
 | List item, list is not `checkable` | 1. Row body<br>2. State line | 1. `Zahav`<br>2. `Planned Saturday 7:00 PM, open plan` | `button`, `button` | `Plan this item`, `Delete` |
 | List item with a place (`supportsLocation`) | 1. Row body<br>2. Address line | 1. `Zahav, 237 St James Place`<br>2. `237 St James Place, open in Maps` | `button`, `button` | `Plan this item`, `Delete` |
-| `watch` list item | 1. Row body | `Severance, watching, season 2 episode 4, next session Friday 8:00 PM` | `button` | `Plan this item`, `Mark watched`, `Delete` |
+| `watch` list item | 1. Row body<br>2. State line | 1. `Severance, watching, season 2 episode 4`<br>2. `Next session Friday 8:00 PM, open plan` | `button`, `button` | `Plan this item`, `Mark watched`, `Delete` |
 | Person row | 1. Row body<br>2. Balance chip | 1. `Alice, 3 upcoming together` or `Priya, in 2 lists with you`<br>2. `Alice owes you 42 dollars 50, see the expenses` | `button`, `button` | `Plan something`, `Delete` |
 | Balance line | 1. Line | `Alice owes you 42 dollars 50. See the expenses behind this.` | `button` | — |
 | Expense row | 1. Row body | `Hotel, 340 dollars, you paid, split 3 ways` | `button` | `Edit`, `Delete` |
 | Participant row | 1. Row body | `Alice, going` / `Chloe, invited, guest` | `button` | `Resend invite`, `Copy link`, `Remove` |
 | Notification row | 1. Row body | `Alice invited you. Dinner at Zahav, Saturday 9 August 7:00 PM. Unread.` | `button` | `Mark read`, `Delete` |
 | Section header | 1. Header | `Up next`, `Schedule`, `Anytime`, `Earlier today` | `header` | — |
+
+> **The `watch` row's state line is its own element** — corrected 2026-08-28 (founder), on the
+> discrepancy raised in P3-28's PR. That row used to fold `next session Friday 8:00 PM` into the
+> body label while the two rows above it made the state line a separate element, and P3-34
+> requires "two separate accessibility elements" because the two targets go to two different
+> screens: the body opens the item, the state line opens the Activity. One label carrying both
+> would announce the session twice and offer only one destination. The split above is the rule
+> for **every** list-item row, whatever its behaviour.
 
 Rules:
 
