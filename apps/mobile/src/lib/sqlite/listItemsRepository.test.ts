@@ -252,7 +252,7 @@ describe('the SQLite item slice', () => {
       // The server allocated its own rank under its own `rankVersion`.
       const canonical = { ...pending, rank: 'm' };
       await transactions.run((transaction) =>
-        items.acceptCreated(transaction, canonical),
+        items.installAcknowledged(transaction, canonical),
       );
 
       expect(await items.read(LIST)).toEqual([canonical]);

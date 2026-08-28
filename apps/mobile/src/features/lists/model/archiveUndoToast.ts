@@ -1,6 +1,6 @@
-import { UNDO_OFFER_SECONDS } from '@od/shared';
 import type { Clock, Instant } from '@od/shared/time';
 import type { UndoToastMessage } from '@/stores/toast';
+import { remainingUndoOfferMs, UNDO_OFFER_DURATION_MS } from './undoOffer';
 
 /**
  * The toast an archive offers (`plans-and-lists.md` §5.6, `interaction-contract.md` §4).
@@ -26,22 +26,22 @@ import type { UndoToastMessage } from '@/stores/toast';
  * at 5.9 seconds on a slow connection is not a race the client has to win.
  */
 
-/** The six-second window a settings mutation gets, in the toast store's own units. */
-export const SETTINGS_UNDO_DURATION_MS = (UNDO_OFFER_SECONDS * 1000) as 6000;
-
 /**
- * Converts the server's absolute offer deadline into the time the client can still display.
- * The cap protects the six-second interaction contract if the device clock trails the server.
+ * The six-second window a settings mutation gets, in the toast store's own units.
+ *
+ * The number and its clamp moved to `undoOffer.ts` in P3-29, when deleting one item needed the
+ * same pair. These two names stay because the archive call sites read better with them, and
+ * because a settings window that ever *stopped* being the standard one would be a change to
+ * make here rather than everywhere.
  */
+export const SETTINGS_UNDO_DURATION_MS = UNDO_OFFER_DURATION_MS;
+
+/** {@link remainingUndoOfferMs}, under the name archiving has always called it. */
 export function remainingArchiveUndoMs(
   undoExpiresAt: Instant,
   clock: Clock,
 ): number | undefined {
-  const remaining = Math.min(
-    SETTINGS_UNDO_DURATION_MS,
-    Date.parse(undoExpiresAt) - Date.parse(clock.now()),
-  );
-  return Number.isFinite(remaining) && remaining > 0 ? remaining : undefined;
+  return remainingUndoOfferMs(undoExpiresAt, clock);
 }
 
 export interface ArchiveUndoToastInput {

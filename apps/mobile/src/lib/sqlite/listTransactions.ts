@@ -190,12 +190,12 @@ export class ListTransactionService {
     return appended.intent;
   }
 
-  /** Installs the server's item over the optimistic row once its create is acknowledged. */
+  /** Installs the server's item over the optimistic row once its write is acknowledged. */
   async acceptCreatedItem(
     transaction: TransactionContext,
-    item: Parameters<ListItemsRepository['acceptCreated']>[1],
+    item: Parameters<ListItemsRepository['installAcknowledged']>[1],
   ): Promise<void> {
-    await this.requireItems().acceptCreated(transaction, item);
+    await this.requireItems().installAcknowledged(transaction, item);
   }
 
   /** Moves one unsynced item onto a freshly minted identity after an explicit Retry. */
